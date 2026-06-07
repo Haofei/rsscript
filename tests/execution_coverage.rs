@@ -72,7 +72,7 @@ fn vm_coverage_gap_is_explicit() {
 #[test]
 fn parity_fixture_annotations_cover_supported_vm_features() {
     let report = vm_coverage_report();
-    let source = std::fs::read_to_string("tests/interpreter.rs")
+    let source = std::fs::read_to_string("tests/vm_eval.rs")
         .expect("VM parity test source should be readable");
     let annotated = parity_features_from_source(&source);
     let required = report
@@ -91,7 +91,7 @@ fn parity_fixture_annotations_cover_supported_vm_features() {
     );
     assert!(
         stale.is_empty(),
-        "parity fixture annotations not recognized as supported interpreter features: {stale:?}"
+        "parity fixture annotations not recognized as supported VM features: {stale:?}"
     );
 }
 

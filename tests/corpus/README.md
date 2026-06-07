@@ -55,7 +55,7 @@ all aspects" stays enforced rather than aspirational.
 
 - `tests/properties.rs` — property-based differential checks (VM vs a Rust
   oracle) via `proptest`.
-- `tests/vm.rs` / `tests/interpreter.rs` — focused VM/parity unit tests (the
+- `tests/vm.rs` / `tests/vm_eval.rs` — focused VM/parity unit tests (the
   corpus is the preferred home for new end-to-end execution cases).
 - `src/native_plugin/` + `native-abi/` unit tests — the dynamic native bridge.
 

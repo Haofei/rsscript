@@ -1,3 +1,8 @@
+//! Register-VM execution tests: drive `eval`/`eval_package` (source -> run) for
+//! single files and packages, plus async and native-host-binding parity against
+//! the compiled backend. (Despite the historical name, RSScript has one VM; this
+//! is the eval-level companion to `vm.rs`'s compile-level tests.)
+
 mod common;
 
 use base64::Engine;
@@ -168,7 +173,7 @@ async fn main() -> Result<Unit, TimerError> {
     return Ok(Unit)
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-async-await.rss",
         "rsscript_parity_async_await",
         source,
@@ -197,7 +202,7 @@ fn main() -> Result<Unit, TimerError> {
     return Ok(Unit)
 }
 "#;
-    assert_interpreter_matches_backend("parity-select.rss", "rsscript_parity_select", source);
+    assert_vm_eval_matches_backend("parity-select.rss", "rsscript_parity_select", source);
 }
 
 #[test]
@@ -226,7 +231,7 @@ fn main() -> Result<Unit, String> {
     return Ok(Unit)
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-task-group.rss",
         "rsscript_parity_task_group",
         source,
@@ -250,7 +255,7 @@ async fn main() -> Result<Unit, FileError> {
     return Ok(Unit)
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-async-file.rss",
         "rsscript_parity_async_file",
         source,
@@ -311,7 +316,7 @@ async fn main() -> Result<Unit, String> {
     return Ok(Unit)
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-async-process.rss",
         "rsscript_parity_async_process",
         source,
@@ -985,8 +990,8 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:WebSocket.recv_text runtime:WebSocket.send_bytes runtime:WebSocket.send_text
 // parity: runtime:WebSocketError.message
 // parity: runtime:Yaml.parse runtime:Yaml.parse_file
-fn assert_interpreter_matches_backend(name: &str, package: &str, source: &str) {
-    assert_interpreter_matches_backend_with_args(name, package, source, &[]);
+fn assert_vm_eval_matches_backend(name: &str, package: &str, source: &str) {
+    assert_vm_eval_matches_backend_with_args(name, package, source, &[]);
 }
 
 fn run_with_large_stack(test: impl FnOnce() + Send + 'static) {
@@ -1162,23 +1167,23 @@ fn websocket_write_test_frame(socket: &mut std::net::TcpStream, opcode: u8, payl
         .expect("server should write websocket frame");
 }
 
-fn assert_interpreter_matches_backend_with_args(
+fn assert_vm_eval_matches_backend_with_args(
     name: &str,
     package: &str,
     source: &str,
     args: &[&str],
 ) {
-    assert_interpreter_matches_backend_with_distinct_args(name, package, source, args, args);
+    assert_vm_eval_matches_backend_with_distinct_args(name, package, source, args, args);
 }
 
-fn assert_interpreter_matches_backend_with_distinct_args(
+fn assert_vm_eval_matches_backend_with_distinct_args(
     name: &str,
     package: &str,
     source: &str,
     interpreter_args: &[&str],
     backend_args: &[&str],
 ) {
-    assert_interpreter_matches_backend_internal(
+    assert_vm_eval_matches_backend_internal(
         name,
         package,
         source,
@@ -1188,14 +1193,14 @@ fn assert_interpreter_matches_backend_with_distinct_args(
     );
 }
 
-fn assert_interpreter_matches_backend_with_distinct_args_allowing_unused_mut_warning(
+fn assert_vm_eval_matches_backend_with_distinct_args_allowing_unused_mut_warning(
     name: &str,
     package: &str,
     source: &str,
     interpreter_args: &[&str],
     backend_args: &[&str],
 ) {
-    assert_interpreter_matches_backend_internal(
+    assert_vm_eval_matches_backend_internal(
         name,
         package,
         source,
@@ -1205,7 +1210,7 @@ fn assert_interpreter_matches_backend_with_distinct_args_allowing_unused_mut_war
     );
 }
 
-fn assert_interpreter_matches_backend_internal(
+fn assert_vm_eval_matches_backend_internal(
     name: &str,
     package: &str,
     source: &str,
@@ -1295,7 +1300,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-arithmetic.rss",
         "rsscript_parity_arithmetic",
         source,
@@ -1325,7 +1330,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend("parity-strings.rss", "rsscript_parity_strings", source);
+    assert_vm_eval_matches_backend("parity-strings.rss", "rsscript_parity_strings", source);
 }
 
 #[test]
@@ -1350,7 +1355,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend("parity-struct.rss", "rsscript_parity_struct", source);
+    assert_vm_eval_matches_backend("parity-struct.rss", "rsscript_parity_struct", source);
 }
 
 #[test]
@@ -1406,7 +1411,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-option-result.rss",
         "rsscript_parity_opt_res",
         source,
@@ -1573,7 +1578,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-option-result-helpers.rss",
         "rsscript_parity_option_result_helpers",
         source,
@@ -1601,7 +1606,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend("parity-while.rss", "rsscript_parity_while", source);
+    assert_vm_eval_matches_backend("parity-while.rss", "rsscript_parity_while", source);
 }
 
 #[test]
@@ -1639,7 +1644,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend("parity-sum.rss", "rsscript_parity_sum", source);
+    assert_vm_eval_matches_backend("parity-sum.rss", "rsscript_parity_sum", source);
 }
 
 #[test]
@@ -1654,7 +1659,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend("parity-logging.rss", "rsscript_parity_logging", source);
+    assert_vm_eval_matches_backend("parity-logging.rss", "rsscript_parity_logging", source);
 }
 
 #[test]
@@ -1693,7 +1698,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-environment-function.rss",
         "rsscript_parity_environment_function",
         source,
@@ -1724,7 +1729,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-cancellation.rss",
         "rsscript_parity_cancellation",
         source,
@@ -1747,7 +1752,7 @@ fn main() -> Result<Unit, DbError> {
     return Ok(Unit)
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-db-connection.rss",
         "rsscript_parity_db_connection",
         source,
@@ -1789,7 +1794,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend_with_distinct_args_allowing_unused_mut_warning(
+    assert_vm_eval_matches_backend_with_distinct_args_allowing_unused_mut_warning(
         "parity-resource-drop-cleanup.rss",
         "rsscript_parity_resource_drop_cleanup",
         source,
@@ -1855,7 +1860,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend_with_distinct_args_allowing_unused_mut_warning(
+    assert_vm_eval_matches_backend_with_distinct_args_allowing_unused_mut_warning(
         "parity-resource-pool-stats.rss",
         "rsscript_parity_resource_pool_stats",
         source,
@@ -1891,7 +1896,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-string-scalar.rss",
         "rsscript_parity_string_scalar",
         source,
@@ -1953,7 +1958,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-string-option.rss",
         "rsscript_parity_string_option",
         source,
@@ -1978,7 +1983,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-string-collections.rss",
         "rsscript_parity_string_collections",
         source,
@@ -2024,7 +2029,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-string-view.rss",
         "rsscript_parity_string_view",
         source,
@@ -2079,7 +2084,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend("parity-char.rss", "rsscript_parity_char", source);
+    assert_vm_eval_matches_backend("parity-char.rss", "rsscript_parity_char", source);
 }
 
 #[test]
@@ -2097,7 +2102,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-string-builder.rss",
         "rsscript_parity_string_builder",
         source,
@@ -2131,7 +2136,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend("parity-list.rss", "rsscript_parity_list", source);
+    assert_vm_eval_matches_backend("parity-list.rss", "rsscript_parity_list", source);
 }
 
 #[test]
@@ -2155,7 +2160,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend("parity-map.rss", "rsscript_parity_map", source);
+    assert_vm_eval_matches_backend("parity-map.rss", "rsscript_parity_map", source);
 }
 
 #[test]
@@ -2198,7 +2203,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-persistent-map.rss",
         "rsscript_parity_persistent_map",
         source,
@@ -2284,7 +2289,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-        assert_interpreter_matches_backend("parity-path.rss", "rsscript_parity_path", source);
+        assert_vm_eval_matches_backend("parity-path.rss", "rsscript_parity_path", source);
     });
 }
 
@@ -2299,7 +2304,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend("parity-url.rss", "rsscript_parity_url", source);
+    assert_vm_eval_matches_backend("parity-url.rss", "rsscript_parity_url", source);
 }
 
 #[test]
@@ -2354,7 +2359,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend("parity-encoding.rss", "rsscript_parity_encoding", source);
+    assert_vm_eval_matches_backend("parity-encoding.rss", "rsscript_parity_encoding", source);
 }
 
 #[test]
@@ -2408,7 +2413,7 @@ fn main() -> Result<Unit, FileError> {
     return Ok(Unit)
 }
 "#;
-    assert_interpreter_matches_backend("parity-env.rss", "rsscript_parity_env", source);
+    assert_vm_eval_matches_backend("parity-env.rss", "rsscript_parity_env", source);
 }
 
 #[test]
@@ -2467,7 +2472,7 @@ fn main() -> Result<Unit, ConfigError> {
 }
 "#;
 
-    assert_interpreter_matches_backend_with_distinct_args(
+    assert_vm_eval_matches_backend_with_distinct_args(
         "parity-config.rss",
         "rsscript_parity_config",
         source,
@@ -2519,7 +2524,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend("parity-regex.rss", "rsscript_parity_regex", source);
+    assert_vm_eval_matches_backend("parity-regex.rss", "rsscript_parity_regex", source);
 }
 
 #[test]
@@ -2569,7 +2574,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend_with_args(
+    assert_vm_eval_matches_backend_with_args(
         "parity-args.rss",
         "rsscript_parity_args",
         source,
@@ -2589,7 +2594,7 @@ fn main() -> Result<Unit, HttpError> {
     return Ok(Unit)
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-request-response.rss",
         "rsscript_parity_request_response",
         source,
@@ -2639,7 +2644,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend("parity-http-sync.rss", "rsscript_parity_http_sync", source);
+    assert_vm_eval_matches_backend("parity-http-sync.rss", "rsscript_parity_http_sync", source);
 }
 
 #[test]
@@ -2714,7 +2719,7 @@ async fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-http-async.rss",
         "rsscript_parity_http_async",
         source,
@@ -2747,7 +2752,7 @@ async fn main() -> Result<Unit, HttpError> {
     return Ok(Unit)
 }
 "#;
-        assert_interpreter_matches_backend_with_distinct_args_allowing_unused_mut_warning(
+        assert_vm_eval_matches_backend_with_distinct_args_allowing_unused_mut_warning(
             "parity-http-response.rss",
             "rsscript_parity_http_response",
             source,
@@ -2791,7 +2796,7 @@ async fn main() -> Result<Unit, WebSocketError> {
     return Ok(Unit)
 }
 "#;
-        assert_interpreter_matches_backend_with_distinct_args_allowing_unused_mut_warning(
+        assert_vm_eval_matches_backend_with_distinct_args_allowing_unused_mut_warning(
             "parity-websocket.rss",
             "rsscript_parity_websocket",
             source,
@@ -2835,7 +2840,7 @@ async fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-async-socket.rss",
         "rsscript_parity_async_socket",
         source,
@@ -2872,7 +2877,7 @@ async fn main() -> Result<Unit, TcpError> {
     return Ok(Unit)
 }
 "#;
-    assert_interpreter_matches_backend_with_distinct_args_allowing_unused_mut_warning(
+    assert_vm_eval_matches_backend_with_distinct_args_allowing_unused_mut_warning(
         "parity-tcp-stream.rss",
         "rsscript_parity_tcp_stream",
         source,
@@ -2903,7 +2908,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-http-request.rss",
         "rsscript_parity_http_request",
         source,
@@ -3083,7 +3088,7 @@ fn main() -> Result<Unit, FileError> {
     return Ok(Unit)
 }
 "#;
-        assert_interpreter_matches_backend_with_distinct_args(
+        assert_vm_eval_matches_backend_with_distinct_args(
             "parity-fs.rss",
             "rsscript_parity_fs",
             source,
@@ -3150,7 +3155,7 @@ fn main() -> Result<Unit, CsvError> {
     return Ok(Unit)
 }
 "#;
-    assert_interpreter_matches_backend_with_distinct_args(
+    assert_vm_eval_matches_backend_with_distinct_args(
         "parity-csv.rss",
         "rsscript_parity_csv",
         source,
@@ -3201,7 +3206,7 @@ fn main() -> Result<Unit, FileError> {
 }
 "#;
 
-    assert_interpreter_matches_backend_with_distinct_args_allowing_unused_mut_warning(
+    assert_vm_eval_matches_backend_with_distinct_args_allowing_unused_mut_warning(
         "parity-tempdir.rss",
         "rsscript_parity_tempdir",
         source,
@@ -3232,7 +3237,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-bytes-json.rss",
         "rsscript_parity_bytes_json",
         source,
@@ -3257,7 +3262,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-assert-hash-bytes.rss",
         "rsscript_parity_assert_hash_bytes",
         source,
@@ -3300,7 +3305,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-diff-patch.rss",
         "rsscript_parity_diff_patch",
         source,
@@ -3419,7 +3424,7 @@ fn main() -> Result<Unit, String> {
     return Ok(Unit)
 }
 "#;
-    assert_interpreter_matches_backend("parity-process.rss", "rsscript_parity_process", source);
+    assert_vm_eval_matches_backend("parity-process.rss", "rsscript_parity_process", source);
 }
 
 #[test]
@@ -3447,7 +3452,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend("parity-buffer.rss", "rsscript_parity_buffer", source);
+    assert_vm_eval_matches_backend("parity-buffer.rss", "rsscript_parity_buffer", source);
 }
 
 #[test]
@@ -3485,7 +3490,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-list-mutating.rss",
         "rsscript_parity_list_mutating",
         source,
@@ -3525,7 +3530,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-list-non-closure.rss",
         "rsscript_parity_list_non_closure",
         source,
@@ -3678,7 +3683,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-list-closure.rss",
         "rsscript_parity_list_closure",
         source,
@@ -3785,7 +3790,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-        assert_interpreter_matches_backend(
+        assert_vm_eval_matches_backend(
             "parity-pipeline.rss",
             "rsscript_parity_pipeline",
             source,
@@ -3830,7 +3835,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-map-mutating.rss",
         "rsscript_parity_map_mutating",
         source,
@@ -3929,7 +3934,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-map-closure.rss",
         "rsscript_parity_map_closure",
         source,
@@ -3994,7 +3999,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend("parity-set.rss", "rsscript_parity_set", source);
+    assert_vm_eval_matches_backend("parity-set.rss", "rsscript_parity_set", source);
 }
 
 #[test]
@@ -4040,7 +4045,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-sorted-set.rss",
         "rsscript_parity_sorted_set",
         source,
@@ -4100,7 +4105,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-sorted-map.rss",
         "rsscript_parity_sorted_map",
         source,
@@ -4165,7 +4170,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend("parity-deque.rss", "rsscript_parity_deque", source);
+    assert_vm_eval_matches_backend("parity-deque.rss", "rsscript_parity_deque", source);
 }
 
 #[test]
@@ -4180,7 +4185,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend("parity-duration.rss", "rsscript_parity_duration", source);
+    assert_vm_eval_matches_backend("parity-duration.rss", "rsscript_parity_duration", source);
 }
 
 #[test]
@@ -4203,7 +4208,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend("parity-deadline.rss", "rsscript_parity_deadline", source);
+    assert_vm_eval_matches_backend("parity-deadline.rss", "rsscript_parity_deadline", source);
 }
 
 #[test]
@@ -4218,7 +4223,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend("parity-counter.rss", "rsscript_parity_counter", source);
+    assert_vm_eval_matches_backend("parity-counter.rss", "rsscript_parity_counter", source);
 }
 
 #[test]
@@ -4235,7 +4240,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend("parity-cache.rss", "rsscript_parity_cache", source);
+    assert_vm_eval_matches_backend("parity-cache.rss", "rsscript_parity_cache", source);
 }
 
 #[test]
@@ -4371,7 +4376,7 @@ async fn main() -> Result<Unit, ChannelError> {
     return Ok(Unit)
 }
 "#;
-    assert_interpreter_matches_backend_with_distinct_args_allowing_unused_mut_warning(
+    assert_vm_eval_matches_backend_with_distinct_args_allowing_unused_mut_warning(
         "parity-channel-sync.rss",
         "rsscript_parity_channel_sync",
         source,
@@ -4420,7 +4425,7 @@ fn main() -> Result<Unit, ImageError> {
     return Ok(Unit)
 }
 "#;
-    assert_interpreter_matches_backend_with_distinct_args(
+    assert_vm_eval_matches_backend_with_distinct_args(
         "parity-image.rss",
         "rsscript_parity_image",
         source,
@@ -4448,7 +4453,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend("parity-ord.rss", "rsscript_parity_ord", source);
+    assert_vm_eval_matches_backend("parity-ord.rss", "rsscript_parity_ord", source);
 }
 
 #[test]
@@ -4469,7 +4474,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend("parity-clock.rss", "rsscript_parity_clock", source);
+    assert_vm_eval_matches_backend("parity-clock.rss", "rsscript_parity_clock", source);
 }
 
 #[test]
@@ -4537,7 +4542,7 @@ fn main() -> Result<Unit, JsonError> {
     return Ok(Unit)
 }
 "#;
-        assert_interpreter_matches_backend(
+        assert_vm_eval_matches_backend(
             "parity-json-builder-array.rss",
             "rsscript_parity_json_builder_array",
             source,
@@ -4632,7 +4637,7 @@ fn main() -> Result<Unit, JsonError> {
     return Ok(Unit)
 }
 "#;
-    assert_interpreter_matches_backend("parity-json-path.rss", "rsscript_parity_json_path", source);
+    assert_vm_eval_matches_backend("parity-json-path.rss", "rsscript_parity_json_path", source);
 }
 
 #[test]
@@ -4721,7 +4726,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-json-result.rss",
         "rsscript_parity_json_result",
         source,
@@ -4792,7 +4797,7 @@ fn main() -> Result<Unit, JsonError> {
 }
 "#;
 
-    assert_interpreter_matches_backend_with_distinct_args(
+    assert_vm_eval_matches_backend_with_distinct_args(
         "parity-parse-files.rss",
         "rsscript_parity_parse_files",
         source,
@@ -4852,7 +4857,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend("parity-with-try.rss", "rsscript_parity_with_try", source);
+    assert_vm_eval_matches_backend("parity-with-try.rss", "rsscript_parity_with_try", source);
 }
 
 #[test]
@@ -4920,7 +4925,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-try-short-circuit.rss",
         "rsscript_parity_try_short_circuit",
         source,
@@ -4945,7 +4950,7 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_vm_eval_matches_backend(
         "parity-bool-short-circuit.rss",
         "rsscript_parity_bool_short_circuit",
         source,
