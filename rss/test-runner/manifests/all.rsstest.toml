@@ -28,27 +28,15 @@ paths = [
 ]
 
 [[tests]]
-name = "rsscript tests pass"
+# Run every workspace crate's tests in one global parallel pool (all cores).
+# Includes the rsscript unit/integration tests, the differential corpus + property
+# suites (which build the compiled backend for parity fixtures), the runtime and
+# native-abi crates, and the native adapter crates.
+name = "workspace tests pass (nextest)"
 kind = "command_success"
 command = "cargo"
-# Includes the differential corpus + property suites, which build the compiled
-# backend for parity fixtures, so allow extra time.
-timeout_ms = 300000
-args = ["test", "-q", "-p", "rsscript"]
-
-[[tests]]
-name = "runtime tests pass"
-kind = "command_success"
-command = "cargo"
-timeout_ms = 60000
-args = ["test", "-q", "-p", "rsscript-runtime"]
-
-[[tests]]
-name = "native-abi crate tests pass"
-kind = "command_success"
-command = "cargo"
-timeout_ms = 60000
-args = ["test", "-q", "-p", "rss-native-abi"]
+timeout_ms = 600000
+args = ["nextest", "run", "--workspace", "--no-fail-fast"]
 
 [[tests]]
 name = "rss binary builds"

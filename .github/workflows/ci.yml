@@ -19,5 +19,8 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
       - name: Check
         run: cargo run --quiet --bin rss -- test --all

@@ -1,0 +1,21 @@
+# cargo-nextest configuration.
+#
+# nextest schedules every test case across all test binaries in one global
+# parallel pool (cargo test runs binaries serially), so the suite uses all cores.
+# On a 24-core box this runs the rsscript suite in ~100s vs ~240s for cargo test.
+#
+#   cargo nextest run            # all crates, all cores
+#   cargo nextest run -p rsscript
+
+[profile.default]
+# Default test-threads is the logical CPU count; left implicit.
+# Parity tests build the compiled backend, so give slow ones room before warning
+# and only terminate a truly hung test.
+slow-timeout = { period = "120s", terminate-after = 4 }
+fail-fast = false
+
+[profile.ci]
+fail-fast = false
+# Retry once to absorb rare flakiness in the network-server parity tests.
+retries = 1
+failure-output = "immediate-final"
