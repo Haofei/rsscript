@@ -3666,7 +3666,7 @@ fn capability_fact(
             provider: Some("rsscript".to_owned()),
             service: None,
             action: None,
-            resource: Some(subject.id.clone()),
+            resource: None, // presence-level: scoped by subject, not a resource
             constraints,
         }),
         value: FactValue::True,
@@ -4486,7 +4486,7 @@ fn native_scan_capability_fact(
             provider: Some("rsscript".to_owned()),
             service: Some("native_rust_source_scan".to_owned()),
             action: None,
-            resource: Some(subject.id.clone()),
+            resource: None, // presence-level: scoped by subject, not a resource
             constraints: HashMap::new(),
         }),
         value: FactValue::True,

@@ -584,7 +584,7 @@ fn runtime_grants() -> Vec<Fact> {
         runtime_grant(
             "fact.mock_runtime.network_client",
             CapabilityCategory::NetworkClient,
-            None,
+            Some("rsscript"),
             Some("native_rust_source_scan"),
         ),
     ]

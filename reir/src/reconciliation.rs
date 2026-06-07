@@ -214,25 +214,44 @@ fn capability_covers(granted: &Capability, required: &Capability) -> bool {
 
 fn optional_field_covers(granted: Option<&str>, required: Option<&str>) -> bool {
     match (granted, required) {
+        // The requirement does not constrain this dimension.
         (_, None) => true,
-        (None, Some(_)) => true,
+        // An explicit wildcard grant covers any specific requirement.
+        (Some("*"), Some(_)) => true,
         (Some(granted), Some(required)) => granted == required,
+        // A grant that does not name this field is UNKNOWN, not a wildcard: it
+        // cannot prove it covers a requirement that names a specific value.
+        (None, Some(_)) => false,
     }
 }
 
 fn action_covers(granted: Option<&str>, required: Option<&str>) -> bool {
     match (granted, required) {
+        // An explicit wildcard grant covers any required action.
+        (Some("*"), _) => true,
         (Some(granted), Some(required)) => granted == required,
-        (None, _) => true,
+        // Both unconstrained.
+        (None, None) => true,
+        // A grant with no action is unknown, not a wildcard — it does not cover a
+        // requirement that names a specific action.
+        (None, Some(_)) => false,
+        // A grant scoped to a specific action does not cover an unconstrained
+        // (broad) requirement.
         (Some(_), None) => false,
     }
 }
 
 fn resource_covers(granted: Option<&str>, required: Option<&str>) -> bool {
     match (granted, required) {
-        (None, _) => true,
+        // Both unconstrained.
+        (None, None) => true,
+        // A grant with no resource is unknown, not a wildcard — it does not cover
+        // a requirement that names a specific resource.
+        (None, Some(_)) => false,
+        // A grant scoped to a specific resource covers an unconstrained requirement.
         (Some(_), None) => true,
         (Some(granted), Some(required)) if granted == required => true,
+        // Explicit prefix wildcard, e.g. `arn:aws:s3:::bucket/*`.
         (Some(granted), Some(required)) if granted.ends_with('*') => {
             required.starts_with(&granted[..granted.len() - 1])
         }
@@ -243,7 +262,10 @@ fn resource_covers(granted: Option<&str>, required: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::CapabilityCategory;
+    use crate::{
+        AcquisitionMode, CapabilityCategory, Confidence, ConfidenceLevel, Fact, FactKind, FactRole,
+        FactValue, Precision, Subject, SubjectKind,
+    };
     use std::collections::HashMap;
 
     fn capability(service: &str) -> Capability {
@@ -264,5 +286,103 @@ mod tests {
             &capability("dynamodb"),
             &capability("s3")
         ));
+    }
+
+    fn broad(category: CapabilityCategory) -> Capability {
+        Capability {
+            category,
+            provider: None,
+            service: None,
+            action: None,
+            resource: None,
+            constraints: HashMap::new(),
+        }
+    }
+
+    fn wildcard(category: CapabilityCategory, provider: &str) -> Capability {
+        Capability {
+            category,
+            provider: Some(provider.to_owned()),
+            service: Some("*".to_owned()),
+            action: Some("*".to_owned()),
+            resource: Some("*".to_owned()),
+            constraints: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn category_only_grant_does_not_cover_specific_requirement() {
+        // The classic bypass: a broad `object_storage.write` grant must NOT
+        // satisfy a requirement that names a specific provider/service/action/resource.
+        let grant = broad(CapabilityCategory::ObjectStorageWrite);
+        let required = capability("s3");
+        assert!(!capability_covers(&grant, &required));
+    }
+
+    #[test]
+    fn missing_grant_fields_are_unknown_not_wildcard() {
+        // Each specific field on the requirement must be matched by the grant.
+        let required = capability("s3");
+        let mut missing_provider = capability("s3");
+        missing_provider.provider = None;
+        assert!(!capability_covers(&missing_provider, &required));
+        let mut missing_action = capability("s3");
+        missing_action.action = None;
+        assert!(!capability_covers(&missing_action, &required));
+        let mut missing_resource = capability("s3");
+        missing_resource.resource = None;
+        assert!(!capability_covers(&missing_resource, &required));
+    }
+
+    #[test]
+    fn explicit_wildcard_grant_covers_specific_requirement() {
+        // Breadth must be explicit (`*`), and then it does cover.
+        let grant = wildcard(CapabilityCategory::ObjectStorageWrite, "aws");
+        let required = capability("s3");
+        assert!(capability_covers(&grant, &required));
+    }
+
+    #[test]
+    fn category_level_grant_covers_category_level_requirement() {
+        // Genuinely broad-on-both (e.g. runtime.native / network.client) still works.
+        let grant = broad(CapabilityCategory::RuntimeNative);
+        let required = broad(CapabilityCategory::RuntimeNative);
+        assert!(capability_covers(&grant, &required));
+    }
+
+    #[test]
+    fn category_only_requirement_reports_missing_against_specific_grant_only() {
+        // A category-only requirement is broad; a specific grant does not cover it.
+        let required = vec![Fact {
+            schema: "reir.fact.v0.1".to_string(),
+            id: "req.broad".to_string(),
+            kind: FactKind::Capability,
+            role: Some(FactRole::Required),
+            subject: Subject {
+                kind: SubjectKind::Package,
+                id: "pkg".to_string(),
+                name: None,
+                package: None,
+            },
+            capability: Some(broad(CapabilityCategory::ObjectStorageWrite)),
+            value: FactValue::True,
+            confidence: Confidence {
+                level: ConfidenceLevel::Authoritative,
+                source: None,
+            },
+            acquisition_mode: AcquisitionMode::PackageMetadata,
+            precision: Precision::Category,
+            evidence: Vec::new(),
+            unknown_reason: None,
+        }];
+        let granted = vec![Fact {
+            capability: Some(capability("s3")),
+            ..required[0].clone()
+        }];
+        let results = reconcile_capabilities(&required, &granted);
+        assert!(results.iter().any(|r| matches!(
+            r.kind,
+            ReconciliationKind::MissingCapability
+        )));
     }
 }
