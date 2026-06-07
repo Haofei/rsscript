@@ -4739,11 +4739,8 @@ fn check_fresh_return_type(analyzer: &mut Analyzer<'_>, function: &FunctionDecl)
     };
     let target = fresh_return_target_type(return_ty);
     match analyzer.hir.type_kind(&target.name) {
-        // `fresh` is a shallow newly-created-shell guarantee: valid for struct,
-        // sum, and class constructors (a freshly created class instance). Only a
-        // `resource` (an opaque managed handle) can't be `fresh`.
-        Some(HirTypeKind::Struct | HirTypeKind::Sum | HirTypeKind::Class) | None => {}
-        Some(HirTypeKind::Resource) => {
+        Some(HirTypeKind::Struct) | Some(HirTypeKind::Sum) | None => {}
+        Some(HirTypeKind::Class) | Some(HirTypeKind::Resource) => {
             invalid_fresh_return_type_diagnostic(analyzer, function, target);
         }
     }
