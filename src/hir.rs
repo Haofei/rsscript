@@ -3986,7 +3986,7 @@ fn update(cache: mut RetainedImageStore, config: mut Config, path: read Path) ->
         assert!(matches!(
             resolution,
             CallResolution::Resolved {
-                kind: ResolvedCalleeKind::BuiltinFunction,
+                kind: ResolvedCalleeKind::UserFunction,
                 ..
             }
         ));

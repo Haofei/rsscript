@@ -1515,7 +1515,7 @@ fn main() -> Unit {
         diagnostics.iter().any(|diagnostic| {
             diagnostic.code == "RS0209"
                 && diagnostic.summary
-                    == "variant match pattern `Some` cannot match scalar type `String`."
+                    == "match pattern `Some` cannot match scrutinee type `String`."
         }),
         "{diagnostics:?}"
     );

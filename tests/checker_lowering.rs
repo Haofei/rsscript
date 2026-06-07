@@ -6684,7 +6684,7 @@ fn load(id: read Int) -> Result<String, NetworkError> {
     // Each async-let constructs a pending and a result slot; the group drives
     // them together with one concurrent poll loop; awaits read the cached result.
     assert!(
-        lowered.contains("let mut __rsscript_pending_user = fetch_user(&id);"),
+        lowered.contains("let mut __rsscript_pending_user = fetch_user(id);"),
         "async let should construct (not run) the pending, got:\n{lowered}"
     );
     assert!(
