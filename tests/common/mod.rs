@@ -520,37 +520,51 @@ pub fn assert_vm_eval_matches_backend_internal(
     let eval = reg_vm_eval_source_main_with_args(name, source, interpreter_args.iter().copied())
         .unwrap_or_else(|error| panic!("interpreter eval failed for {name}: {error:?}"));
 
-    let runtime_path = format!("{}/runtime", env!("CARGO_MANIFEST_DIR"));
-    let lowered = lower_source_to_rust_package(name, source, package, &runtime_path)
-        .expect("parity fixture should lower");
-    let package_dir = unique_temp_dir(package);
-    write_generated_rust_package(&package_dir, &lowered).expect("generated package should write");
+    // Cache the compiled backend's (stdout, stderr) keyed by source + args, so
+    // reruns skip the (dominant) generated-crate rebuild. Same approach as vm.rs.
+    let cache_dir =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("target/rsscript-corpus-compiled-cache");
+    let _ = fs::create_dir_all(&cache_dir);
+    let key = compiled_cache_key(name, source, backend_args);
+    let stdout_path = cache_dir.join(format!("{key}.stdout"));
+    let stderr_path = cache_dir.join(format!("{key}.stderr"));
+    let (stdout, stderr) = if let (Ok(out), Ok(err)) = (
+        fs::read_to_string(&stdout_path),
+        fs::read_to_string(&stderr_path),
+    ) {
+        (out, err)
+    } else {
+        let runtime_path = format!("{}/runtime", env!("CARGO_MANIFEST_DIR"));
+        let lowered = lower_source_to_rust_package(name, source, package, &runtime_path)
+            .expect("parity fixture should lower");
+        let package_dir = unique_temp_dir(package);
+        write_generated_rust_package(&package_dir, &lowered)
+            .expect("generated package should write");
+        let output = Command::new("cargo")
+            .arg("run")
+            .arg("--quiet")
+            .arg("--manifest-path")
+            .arg(package_dir.join("Cargo.toml"))
+            .arg("--")
+            .args(backend_args)
+            .env(
+                "CARGO_TARGET_DIR",
+                format!("{}/target/rsscript-generated-test", env!("CARGO_MANIFEST_DIR")),
+            )
+            .output()
+            .expect("generated Rust package should run");
+        let stdout = String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n");
+        let stderr = String::from_utf8_lossy(&output.stderr).replace("\r\n", "\n");
+        let _ = fs::remove_dir_all(&package_dir);
+        assert!(
+            output.status.success(),
+            "backend run failed for {name}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+        let _ = fs::write(&stdout_path, &stdout);
+        let _ = fs::write(&stderr_path, &stderr);
+        (stdout, stderr)
+    };
 
-    let output = Command::new("cargo")
-        .arg("run")
-        .arg("--quiet")
-        .arg("--manifest-path")
-        .arg(package_dir.join("Cargo.toml"))
-        .arg("--")
-        .args(backend_args)
-        .env(
-            "CARGO_TARGET_DIR",
-            format!(
-                "{}/target/rsscript-generated-test",
-                env!("CARGO_MANIFEST_DIR")
-            ),
-        )
-        .output()
-        .expect("generated Rust package should run");
-
-    let stdout = String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n");
-    let stderr = String::from_utf8_lossy(&output.stderr).replace("\r\n", "\n");
-    let _ = fs::remove_dir_all(&package_dir);
-
-    assert!(
-        output.status.success(),
-        "backend run failed for {name}\nstdout:\n{stdout}\nstderr:\n{stderr}"
-    );
     assert_eq!(stdout, eval.stdout, "stdout divergence for {name}");
     if allow_unused_mut_warning && eval.stderr.is_empty() && stderr.contains("unused_mut") {
         assert!(
