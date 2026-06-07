@@ -8386,3 +8386,41 @@ fn package_source_collection_rejects_symlink_escape() {
         "expected a symlink rejection error, got: {error}"
     );
 }
+
+#[test]
+fn package_metadata_fails_closed_on_error_diagnostics() {
+    // A package with a parse error must not write authoritative review/REIR
+    // artifacts that downstream gates would consume as evidence.
+    let dir = common::unique_temp_dir("rsscript-package-metadata-failclosed");
+    fs::create_dir_all(dir.join("interface")).expect("interface dir");
+    fs::write(
+        dir.join("rsspkg.toml"),
+        "[package]\nname = \"bad\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[interfaces]\npaths = [\"interface\"]\n",
+    )
+    .expect("manifest");
+    // Malformed declaration -> error diagnostic.
+    fs::write(
+        dir.join("interface/lib.rssi"),
+        "native fn Broken.x(sql: read String -> String\n",
+    )
+    .expect("interface");
+
+    let report = package_metadata(&dir, false).expect("metadata should produce a report");
+    let reir_written = dir.join("review/reir/rsscript.json").exists();
+    let _ = fs::remove_dir_all(&dir);
+
+    assert!(!report.ok, "metadata of an erroring package must not be ok");
+    assert!(!report.written, "authoritative artifacts must not be written");
+    assert!(
+        !reir_written,
+        "REIR bundle must not be written for an erroring package"
+    );
+    assert!(
+        report
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("refused to write")),
+        "report should explain the fail-closed decision: {:?}",
+        report.reasons
+    );
+}

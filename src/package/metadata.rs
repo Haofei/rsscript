@@ -44,6 +44,12 @@ fn package_metadata_inner(
     let reir_json = format_package_review_reir_json(&review);
     let mut mismatches = Vec::new();
 
+    // Fail closed: a package with error diagnostics must not produce authoritative
+    // review/REIR artifacts on disk — downstream gates consume those facts and
+    // would treat invalid source as evidence.
+    let error_count = review.summary.errors;
+    let blocked_by_errors = error_count > 0;
+
     if verify {
         verify_artifact(
             "package_review",
@@ -52,7 +58,7 @@ fn package_metadata_inner(
             &mut mismatches,
         );
         verify_artifact("reir_bundle", &reir_path, &reir_json, &mut mismatches);
-    } else if !dry_run {
+    } else if !dry_run && !blocked_by_errors {
         create_parent_dir(&metadata_path, "metadata path")?;
         create_parent_dir(&reir_path, "REIR path")?;
         fs::write(&metadata_path, metadata_json)
@@ -61,19 +67,27 @@ fn package_metadata_inner(
             .map_err(|error| format!("failed to write {}: {error}", reir_path.display()))?;
     }
 
-    let ok =
-        review.summary.errors == 0 && review.risk != PackageRisk::Unknown && mismatches.is_empty();
+    let wrote = !dry_run && !verify && !blocked_by_errors;
+    let mut reasons = review.reasons;
+    if blocked_by_errors && !dry_run && !verify {
+        reasons.push(format!(
+            "refused to write authoritative review/REIR artifacts: package has {error_count} \
+             error diagnostic(s); fix them and re-run"
+        ));
+    }
+
+    let ok = error_count == 0 && review.risk != PackageRisk::Unknown && mismatches.is_empty();
     Ok(PackageMetadataReport {
         package: review.package,
         package_dir: package_dir.display().to_string(),
         metadata_path: metadata_path.display().to_string(),
         reir_path: reir_path.display().to_string(),
         dry_run,
-        written: !dry_run && !verify,
+        written: wrote,
         verified: verify && mismatches.is_empty(),
         ok,
         risk: review.risk,
-        reasons: review.reasons,
+        reasons,
         mismatches,
         metadata,
     })
