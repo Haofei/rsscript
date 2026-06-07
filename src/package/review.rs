@@ -884,6 +884,7 @@ fn propagate_package_capability(
             PackageReviewCapability {
                 function: function.clone(),
                 binding_symbol: seed.binding_symbol.clone(),
+                risk: crate::capability_risk(&seed.category),
                 category: seed.category.clone(),
                 provider: seed.provider.clone(),
                 service: seed.service.clone(),

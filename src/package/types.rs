@@ -474,6 +474,8 @@ pub struct PackageReviewCapability {
     pub function: String,
     pub binding_symbol: String,
     pub category: String,
+    /// Default risk of `category` from the canonical taxonomy (unknown -> high).
+    pub risk: crate::CapabilityRisk,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
