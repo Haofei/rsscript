@@ -6,7 +6,7 @@ version = "0.1.0"
 source = "path+rss/async"
 checksum = "sha256:f914a2d48f62d3e5d75a4c38464121a1083ee010d601dfbf73115583e3368c9c"
 interface_hash = "sha256:3b8cb6475d2dc480c4c0372183e1f6810521377170a00b2269e5d7a3d8a6969c"
-review_hash = "sha256:9ea9be9c8adcd29464138b918688bb9352368b2ea3aff00c85dee155c08145f9"
+review_hash = "sha256:8f752099ba99c720c8058d569cc3b660dedaf1c21ec2a585ae0e6a2657edfe16"
 features = []
 
 [metadata]

@@ -4,10 +4,10 @@ version = 1
 name = "rss-core-cli"
 version = "0.1.0"
 source = "path+rss/core/cli"
-checksum = "sha256:d8e00c918feac67c291e08a1d9278f1c6a350335df5c5feda0934331283aab80"
+checksum = "sha256:a8401e90961c8e6a7f394cba65476ed053c0fe2642b57e83e2b0f22acb301aff"
 interface_hash = "sha256:4f052e08055a890f184a6077af38285c9fa7a70053ec687326f16c53fe8b269b"
-review_hash = "sha256:02d674c35483eba36d71977d6804abf13b0157913849975119f27254c36caea7"
-native_hash = "sha256:47065cff06d26a623783c647d734bf849fc83332f467c11fb9de30976e746f2e"
+review_hash = "sha256:90b04f52ba72bb3256cc26f050799998199c4607f9fa1c7dbcb4ddf35962b8c7"
+native_hash = "sha256:919bed8bf7bb5b02e56b1fb1795ff30a34b6860dbaf8400fe01d6a168bf1796c"
 features = []
 
 [metadata]

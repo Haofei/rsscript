@@ -6,7 +6,7 @@ version = "0.1.0"
 source = "path+rss/chat-completions"
 checksum = "sha256:81e2795715fab39d6de89715ca6bf03579554742bb7a07b9c70493fc10449ee2"
 interface_hash = "sha256:a9b13f9a056d1dbb90d9ed3b7e45797eb28806843ba5fc5f4467eb59d4748b4c"
-review_hash = "sha256:a8a8d0987f4bc4b2198535b1b3a49c8ab3ff1f8a62aef36162e028fab5223083"
+review_hash = "sha256:7a5df14deccde0abb08388fa79772f47df93e9517d6d290eae0f81e86c17003a"
 features = []
 
 [[package]]

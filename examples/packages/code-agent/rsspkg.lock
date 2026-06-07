@@ -33,7 +33,7 @@ version = "0.1.0"
 source = "path+rss/async"
 checksum = "sha256:f914a2d48f62d3e5d75a4c38464121a1083ee010d601dfbf73115583e3368c9c"
 interface_hash = "sha256:3b8cb6475d2dc480c4c0372183e1f6810521377170a00b2269e5d7a3d8a6969c"
-review_hash = "sha256:9ea9be9c8adcd29464138b918688bb9352368b2ea3aff00c85dee155c08145f9"
+review_hash = "sha256:8f752099ba99c720c8058d569cc3b660dedaf1c21ec2a585ae0e6a2657edfe16"
 features = []
 
 [[package]]
@@ -51,7 +51,7 @@ version = "0.1.0"
 source = "path+rss/chat-completions"
 checksum = "sha256:81e2795715fab39d6de89715ca6bf03579554742bb7a07b9c70493fc10449ee2"
 interface_hash = "sha256:a9b13f9a056d1dbb90d9ed3b7e45797eb28806843ba5fc5f4467eb59d4748b4c"
-review_hash = "sha256:a8a8d0987f4bc4b2198535b1b3a49c8ab3ff1f8a62aef36162e028fab5223083"
+review_hash = "sha256:7a5df14deccde0abb08388fa79772f47df93e9517d6d290eae0f81e86c17003a"
 features = []
 
 [metadata]

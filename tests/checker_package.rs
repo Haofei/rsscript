@@ -5132,6 +5132,58 @@ native fn Native.two(message: read String) -> String
 }
 
 #[test]
+fn package_lock_review_hash_tracks_capability_provider_swap() {
+    // Same code, same capability category — only the provider changes. The lock
+    // must still notice (provider pinning), otherwise a supply-chain provider
+    // swap would be invisible to review.
+    let old_dir = common::unique_temp_dir("rsscript-package-lock-provider-old");
+    let new_dir = common::unique_temp_dir("rsscript-package-lock-provider-new");
+    let manifest = |provider: &str| {
+        format!(
+            r#"[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_native"
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+
+[[review.capability_bindings]]
+symbol = "Native.write"
+category = "database.write"
+provider = "{provider}"
+"#
+        )
+    };
+    let source = r#"features: native
+
+native fn Native.write(message: read String) -> String
+    effects(native)
+"#;
+    let bindings = r#"[bindings]
+"Native.write" = "rss_native::write"
+"#;
+    common::write_package_fixture(&old_dir, "0.1.0", &manifest("trusted-db"), source);
+    common::write_package_fixture(&new_dir, "0.1.0", &manifest("rogue-db"), source);
+    for dir in [&old_dir, &new_dir] {
+        fs::create_dir_all(dir.join("native")).expect("native dir should be created");
+        fs::write(dir.join("native/bindings.rssbind.toml"), bindings)
+            .expect("native bindings should be written");
+    }
+
+    let old_lock = lock_package_dir(&old_dir).expect("old package lock should succeed");
+    let new_lock = lock_package_dir(&new_dir).expect("new package lock should succeed");
+    let _ = fs::remove_dir_all(&old_dir);
+    let _ = fs::remove_dir_all(&new_dir);
+
+    assert_ne!(
+        old_lock.packages[0].review_hash,
+        new_lock.packages[0].review_hash,
+        "a capability provider swap must change the review hash"
+    );
+}
+
+#[test]
 fn package_lock_review_hash_tracks_await_live_across_changes() {
     let old_dir = common::unique_temp_dir("rsscript-package-lock-await-live-old");
     let new_dir = common::unique_temp_dir("rsscript-package-lock-await-live-new");
