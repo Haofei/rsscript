@@ -10,12 +10,13 @@ members = [
     "lsp",
     "runtime",
     "reir",
+    "native-abi",
     "rss/core/cli/native/rust",
     "rss/core/crypto/native/rust",
     "rss/core/http-server/native/rust",
     "rss/rayon/native/rust",
     "rss/adapters/sqlite/native/rust",
-    "rss/adapters/sqlx/native/rust",
+    "rss/adapters/sqlx-ffi/native/rust",
 ]
 
 [[bin]]
@@ -24,6 +25,7 @@ path = "src/main.rs"
 
 [dependencies]
 reir = { path = "reir" }
+rss-native-abi = { path = "native-abi", features = ["host"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"

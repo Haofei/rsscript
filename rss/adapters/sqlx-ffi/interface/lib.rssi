@@ -1,0 +1,16 @@
+features: native
+
+// Internal FFI surface for the sqlx adapter: the only `native` boundary, mapped
+// onto the `sqlx`-backed Rust crate. Not meant for direct app use -- import the
+// `rss-sqlx` facade package and call the plain-RSS `Sqlx.*` wrappers instead.
+//
+// `url` is a sqlx connection string whose scheme selects the backend (`sqlite:`
+// or `postgres:`). Queries read the first column of each row as text.
+native fn SqlxFfi.execute(url: read String, sql: read String) -> Result<Unit, String>
+    effects(native)
+
+native fn SqlxFfi.query_strings(url: read String, sql: read String) -> Result<fresh List<String>, String>
+    effects(native)
+
+native fn SqlxFfi.query_one_string(url: read String, sql: read String) -> Result<Option<String>, String>
+    effects(native)

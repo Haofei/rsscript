@@ -1,0 +1,39 @@
+[package]
+name = "rss-sqlx-ffi"
+version = "0.1.0"
+edition = "2026"
+
+[interfaces]
+paths = ["interface"]
+
+[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_sqlx_native"
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+
+[[review.capability_bindings]]
+symbol = "SqlxFfi.execute"
+category = "database.write"
+provider = "sqlx"
+service = "sql"
+action = "execute"
+resource = "url"
+
+[[review.capability_bindings]]
+symbol = "SqlxFfi.query_strings"
+category = "database.read"
+provider = "sqlx"
+service = "sql"
+action = "select"
+resource = "url"
+
+[[review.capability_bindings]]
+symbol = "SqlxFfi.query_one_string"
+category = "database.read"
+provider = "sqlx"
+service = "sql"
+action = "select"
+resource = "url"

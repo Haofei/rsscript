@@ -1,0 +1,4 @@
+[bindings]
+"SqlxFfi.execute" = "rss_sqlx_native::execute"
+"SqlxFfi.query_strings" = "rss_sqlx_native::query_strings"
+"SqlxFfi.query_one_string" = "rss_sqlx_native::query_one_string"

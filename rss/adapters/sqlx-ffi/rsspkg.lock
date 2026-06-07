@@ -1,15 +1,6 @@
 version = 1
 
 [[package]]
-name = "rss-sqlx"
-version = "0.1.0"
-source = "path+rss/adapters/sqlx"
-checksum = "sha256:dce3642d7461d50578ff50f2a3acdbbf5c2025f8b2d6469fd4e2a6da4ce7afd6"
-interface_hash = "sha256:935904192acaccbdc3c64aa474b2c1e1b4677d848f09f3597e94b70f97de8ddd"
-review_hash = "sha256:ae684210751824572f7578671d909d4660229eac2f548c542d17474fac246ae9"
-features = []
-
-[[package]]
 name = "rss-sqlx-ffi"
 version = "0.1.0"
 source = "path+rss/adapters/sqlx-ffi"

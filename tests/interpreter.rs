@@ -123,17 +123,25 @@ fn main() -> String {
 }
 
 #[test]
-fn eval_reports_unsupported_runtime_intrinsic() {
+fn eval_runs_random_int_runtime_intrinsic() {
+    // `Random.int` is a register-VM built-in intrinsic: evaluation succeeds and
+    // returns a value within the requested range.
     let source = r#"
 fn main() -> Int {
     return Random.int(min: 0, max: 10)
 }
 "#;
 
-    let error = eval_source_main("eval-unsupported.rss", source)
-        .expect_err("unsupported intrinsic should fail");
+    let output =
+        eval_source_main("eval-random-int.rss", source).expect("Random.int should evaluate");
 
-    assert!(matches!(error, EvalError::Runtime(message) if message.contains("Random.int")));
+    let Some(NativeValue::Int(value)) = output.native_value else {
+        panic!("expected an Int result, got {output:?}");
+    };
+    assert!(
+        (0..=10).contains(&value),
+        "Random.int returned {value}, outside [0, 10]"
+    );
 }
 
 #[test]

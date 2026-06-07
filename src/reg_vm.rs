@@ -74,6 +74,15 @@ pub fn reg_vm_eval_package_main_with_args_and_native_bindings(
     args: impl IntoIterator<Item = impl Into<String>>,
     native_bindings: impl IntoIterator<Item = (impl Into<String>, NativeInterpreterFn)>,
 ) -> Result<EvalOutput, EvalError> {
+    reg_vm_compile_package(package_dir)?
+        .eval_main_with_args_and_native_bindings(args, native_bindings)
+}
+
+/// Compile a multi-file package (its merged sources plus dependency and builtin
+/// interfaces) into a reusable VM executable. Native functions are resolved at
+/// run time via the `native_bindings` passed to the eval call, so this can be
+/// compiled once and executed repeatedly (e.g. for benchmarking).
+pub fn reg_vm_compile_package(package_dir: &Path) -> Result<RegVmExecutable, EvalError> {
     let input = package_lowering_input(package_dir).map_err(EvalError::Runtime)?;
     let mut interface_refs = builtin_interfaces()
         .map(|(path, contents)| (path.to_string(), contents.to_string()))
@@ -111,9 +120,6 @@ pub fn reg_vm_eval_package_main_with_args_and_native_bindings(
     let hir = Hir::from_syntax_with_interfaces(&program, &interface_programs);
     Ok(RegVmExecutable {
         unit: Rc::new(RegUnit::lower(&hir)?),
-    })
-    .and_then(|executable| {
-        executable.eval_main_with_args_and_native_bindings(args, native_bindings)
     })
 }
 
@@ -457,6 +463,10 @@ enum RegInstr {
         dst: Reg,
         key: String,
         args: Vec<Reg>,
+        /// Positions within `args` whose corresponding parameter is `mut`. After
+        /// the call the host writes the mutated value back to those arg
+        /// registers, so native in-place mutation propagates to the caller.
+        mut_args: Vec<usize>,
     },
     #[allow(dead_code)]
     CallClosure {
@@ -2229,10 +2239,12 @@ impl RegLowerer<'_> {
                 let mut native_args = Vec::with_capacity(arg_regs.len() + 1);
                 native_args.push(receiver_reg);
                 native_args.extend(arg_regs);
+                let mut_args = self.native_mut_arg_positions(Some(namespace), method);
                 self.emit(RegInstr::CallNative {
                     dst,
                     key: format!("{}.{}", type_root_name(namespace), type_root_name(method)),
                     args: native_args,
+                    mut_args,
                 });
                 return Ok(dst);
             }
@@ -2429,10 +2441,12 @@ impl RegLowerer<'_> {
                         args: arg_regs,
                     });
                 } else if self.is_native_function(None, name) {
+                    let mut_args = self.native_mut_arg_positions(None, name);
                     self.emit(RegInstr::CallNative {
                         dst,
                         key: type_root_name(name).to_string(),
                         args: arg_regs,
+                        mut_args,
                     });
                 } else if type_root_name(name) == "Some" {
                     if arg_regs.len() != 1 {
@@ -3706,10 +3720,27 @@ impl RegLowerer<'_> {
                     ("Weak", "from") => RegIntrinsic::WeakFrom,
                     ("Weak", "upgrade") => RegIntrinsic::WeakUpgrade,
                     _ => {
+                        let qualified_key = format!("{namespace_root}.{name_root}");
+                        // Native declarations also appear in `function_ids` (with
+                        // empty bodies), so dispatch them as native boundaries
+                        // first. A user-defined qualified function (e.g.
+                        // `pub fn Sqlx.execute`) is never native, so it falls
+                        // through to the `function_ids` lookup below.
                         if self.is_native_function(Some(namespace_root), name_root) {
+                            let mut_args =
+                                self.native_mut_arg_positions(Some(namespace_root), name_root);
                             self.emit(RegInstr::CallNative {
                                 dst,
-                                key: format!("{namespace_root}.{name_root}"),
+                                key: qualified_key,
+                                args: arg_regs,
+                                mut_args,
+                            });
+                            return Ok(dst);
+                        }
+                        if let Some(function) = self.function_ids.get(&qualified_key).copied() {
+                            self.emit(RegInstr::CallKnown {
+                                dst,
+                                function,
                                 args: arg_regs,
                             });
                             return Ok(dst);
@@ -3755,6 +3786,24 @@ impl RegLowerer<'_> {
         self.hir
             .resolve_function(namespace, type_root_name(name))
             .is_some_and(|signature| signature.is_native && !signature.is_builtin)
+    }
+
+    /// Parameter positions of a native function that are `mut`. These map to
+    /// `CallNative` arg positions (the arg list is positional, with the receiver
+    /// at index 0 for receiver calls), so the host can write mutated values back.
+    fn native_mut_arg_positions(&self, namespace: Option<&str>, name: &str) -> Vec<usize> {
+        self.hir
+            .resolve_function(namespace, type_root_name(name))
+            .map(|signature| {
+                signature
+                    .params
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, param)| param.effect == Some(ParamEffect::Mut))
+                    .map(|(index, _)| index)
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     fn variant_match(&mut self, value: &HirExpr, arms: &[HirMatchArm]) -> Result<bool, EvalError> {
@@ -5520,8 +5569,13 @@ impl RegVm {
                         }
                     }
                 }
-                RegInstr::CallNative { dst, key, args } => {
-                    let result = self.call_native_key(key, args, base)?;
+                RegInstr::CallNative {
+                    dst,
+                    key,
+                    args,
+                    mut_args,
+                } => {
+                    let result = self.call_native_key(key, args, mut_args, base)?;
                     self.set_reg(base + *dst, result);
                 }
                 RegInstr::CallClosure { dst, closure, args } => {
@@ -6304,19 +6358,52 @@ impl RegVm {
         Ok(true)
     }
 
-    fn call_native_key(&self, key: &str, args: &[Reg], base: usize) -> Result<VmValue, EvalError> {
+    fn call_native_key(
+        &mut self,
+        key: &str,
+        args: &[Reg],
+        mut_args: &[usize],
+        base: usize,
+    ) -> Result<VmValue, EvalError> {
         let Some(function) = self.native_bindings.get(key).copied() else {
             return Err(EvalError::Runtime(format!(
                 "reg VM native function `{key}` has no host binding."
             )));
         };
-        let args = args
+        let arg_values = args
             .iter()
             .map(|reg| native_value_from_vm_value(self.reg(base + *reg).clone()))
             .collect::<Result<Vec<_>, _>>()?;
-        function(args)
-            .map(vm_value_from_native_value)
-            .map_err(|error| EvalError::Runtime(format!("native host binding failed: {error}")))
+        let raw = function(arg_values)
+            .map_err(|error| EvalError::Runtime(format!("native host binding failed: {error}")))?;
+
+        // No `mut` params: the binding returns its result directly.
+        if mut_args.is_empty() {
+            return Ok(vm_value_from_native_value(raw));
+        }
+
+        // With `mut` params the shim returns an envelope `List[result, mutated...]`
+        // where the mutated values are in `mut_args` order. Write each mutated
+        // value back to its arg register so the caller observes the mutation.
+        let NativeValue::List(mut envelope) = raw else {
+            return Err(EvalError::Runtime(format!(
+                "native binding `{key}` was expected to return a mutation envelope."
+            )));
+        };
+        if envelope.len() != mut_args.len() + 1 {
+            return Err(EvalError::Runtime(format!(
+                "native binding `{key}` returned {} envelope entries, expected {}.",
+                envelope.len(),
+                mut_args.len() + 1
+            )));
+        }
+        let mutated: Vec<NativeValue> = envelope.split_off(1);
+        let result = vm_value_from_native_value(envelope.pop().unwrap_or(NativeValue::Unit));
+        for (position, value) in mut_args.iter().zip(mutated) {
+            let reg = base + args[*position];
+            self.set_reg(reg, vm_value_from_native_value(value));
+        }
+        Ok(result)
     }
 
     fn call_closure_from_regs(
@@ -12864,11 +12951,23 @@ fn native_value_from_vm_value(value: VmValue) -> Result<NativeValue, EvalError> 
         VmValue::Managed(_) => Err(EvalError::Runtime(
             "reg VM native argument stayed managed after unwrapping.".to_string(),
         )),
-        VmValue::OptionSome(_) | VmValue::OptionNone | VmValue::Closure(_) => {
-            Err(EvalError::Runtime(
-                "reg VM cannot pass Option or Closure to native host binding.".to_string(),
-            ))
+        // Mirror the return direction: bridge `Option` as a `Some`/`None`
+        // variant so native bindings can accept it.
+        VmValue::OptionSome(value) => {
+            let mut fields = BTreeMap::new();
+            fields.insert("value".to_string(), native_value_from_vm_value(*value)?);
+            Ok(NativeValue::Variant {
+                name: "Some".to_string(),
+                fields,
+            })
         }
+        VmValue::OptionNone => Ok(NativeValue::Variant {
+            name: "None".to_string(),
+            fields: BTreeMap::new(),
+        }),
+        VmValue::Closure(_) => Err(EvalError::Runtime(
+            "reg VM cannot pass Closure to native host binding.".to_string(),
+        )),
     }
 }
 
@@ -12903,6 +13002,17 @@ fn vm_value_from_native_value(value: NativeValue) -> VmValue {
                 .map(|(field, value)| (field, vm_value_from_native_value(value)))
                 .collect(),
         })),
+        // `Option` is a dedicated VM value, not a generic variant, so a native
+        // binding returning `Some(_)`/`None` must round-trip to `OptionSome`/
+        // `OptionNone` for `match`/`?` to recognize it.
+        NativeValue::Variant { name, mut fields } if name == "Some" => {
+            let value = fields
+                .remove("value")
+                .map(vm_value_from_native_value)
+                .unwrap_or(VmValue::Unit);
+            VmValue::OptionSome(Box::new(value))
+        }
+        NativeValue::Variant { name, .. } if name == "None" => VmValue::OptionNone,
         NativeValue::Variant { name, fields } => VmValue::Variant(Rc::new(VmStruct {
             name: Rc::from(name.as_str()),
             fields: fields

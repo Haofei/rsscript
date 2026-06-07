@@ -1,0 +1,60 @@
+// Drive the sqlx adapter end to end: create a table, insert rows, and read
+// them back through `query_strings` / `query_one_string`. The same checks run
+// against SQLite (always) and Postgres (only when RSS_SQLX_TEST_POSTGRES_URL is
+// set), so the pooled native bindings are exercised over both backends.
+fn check_backend(url: read String) -> Result<Unit, String> {
+    Sqlx.execute(url: read url, sql: read "drop table if exists rss_sqlx_item")?
+    Sqlx.execute(url: read url, sql: read "create table rss_sqlx_item(name text)")?
+    Sqlx.execute(url: read url, sql: read "insert into rss_sqlx_item values ('a'), ('b')")?
+
+    let names = Sqlx.query_strings(
+        url: read url,
+        sql: read "select name from rss_sqlx_item order by name",
+    )?
+    Assert.equal_int(left: List.len(list: read names), right: 2)
+    let first = List.get(list: read names, index: 0)
+    let second = List.get(list: read names, index: 1)
+    Assert.equal(left: read first, right: read "a")
+    Assert.equal(left: read second, right: read "b")
+
+    match Sqlx.query_one_string(
+        url: read url,
+        sql: read "select name from rss_sqlx_item order by name",
+    )? {
+        Some(one) => {
+            Assert.equal(left: read one, right: read "a")
+        }
+        None => {
+            return Err("expected at least one row from sqlx query_one_string")
+        }
+    }
+
+    return Ok(Unit)
+}
+
+fn sqlite_url() -> fresh String {
+    let temp = Env.temp_dir()
+    let db_path = Path.join(base: read temp, child: read "rss-sqlx-smoke.db")
+    let db_string = Path.to_string(path: read db_path)
+    let prefixed = String.concat(left: read "sqlite://", right: read db_string)
+
+    return String.concat(left: read prefixed, right: read "?mode=rwc")
+}
+
+fn main() -> Result<Unit, String> {
+    let url = sqlite_url()
+    check_backend(url: read url)?
+    Log.write(message: read "sqlx sqlite backend ok")
+
+    match Env.get(name: read "RSS_SQLX_TEST_POSTGRES_URL") {
+        Some(pg_url) => {
+            check_backend(url: read pg_url)?
+            Log.write(message: read "sqlx postgres backend ok")
+        }
+        None => {
+            Log.write(message: read "skipping sqlx postgres backend: RSS_SQLX_TEST_POSTGRES_URL not set")
+        }
+    }
+
+    return Ok(Unit)
+}

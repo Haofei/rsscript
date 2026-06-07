@@ -1,0 +1,20 @@
+features: native, local
+
+// Verifies the VM's `mut` native-bridge write-back: `Rayon.sort_int` sorts its
+// `mut List<Int>` in place, and the mutation must be visible to the caller after
+// the call returns.
+
+fn main() -> Unit {
+    local values = List<Int>.new()
+    List.push<Int>(list: mut values, value: read 3)
+    List.push<Int>(list: mut values, value: read 1)
+    List.push<Int>(list: mut values, value: read 2)
+
+    Rayon.sort_int(values: mut values)
+
+    Assert.equal_int(left: List.get<Int>(list: read values, index: 0), right: 1)
+    Assert.equal_int(left: List.get<Int>(list: read values, index: 1), right: 2)
+    Assert.equal_int(left: List.get<Int>(list: read values, index: 2), right: 3)
+
+    return Unit
+}

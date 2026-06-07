@@ -1,0 +1,20 @@
+features: native, local
+
+// Exercises rayon's read-only native fns through the VM's dynamic loader:
+// `List<Int>` arguments and an `Int` return crossing the generated shim.
+
+fn main() -> Unit {
+    local values = List<Int>.new()
+    List.push<Int>(list: mut values, value: read 1)
+    List.push<Int>(list: mut values, value: read 2)
+    List.push<Int>(list: mut values, value: read 3)
+    List.push<Int>(list: mut values, value: read 4)
+
+    let sum = Rayon.sum_int(values: read values)
+    Assert.equal_int(left: sum, right: 10)
+
+    let squares = Rayon.sum_squares(values: read values)
+    Assert.equal_int(left: squares, right: 30)
+
+    return Unit
+}

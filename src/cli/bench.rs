@@ -3,7 +3,8 @@ use std::process::{Command, ExitCode};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rsscript::{
-    EvalError, format_diagnostics_human, reg_vm_compile_source, reg_vm_eval_source_main_with_args,
+    EvalError, NativeInterpreterFn, RegVmExecutable, format_diagnostics_human,
+    reg_vm_compile_package, reg_vm_compile_source, reg_vm_eval_source_main_with_args,
     write_generated_rust_package,
 };
 
@@ -287,33 +288,23 @@ fn reg_vm_source_once(path: &str, source: &str, args: &[&str]) -> Result<(), Str
 }
 
 fn run_reg_vm_internal_bench(options: &BenchOptions<'_>) -> Result<BenchResult, String> {
-    if is_package_directory(options.path) {
-        return Err("rss bench --mode vm-internal only supports single-file inputs.".to_string());
-    }
-    let source = std::fs::read_to_string(options.path)
-        .map_err(|error| format!("failed to read {}: {error}", options.path))?;
-    let executable = reg_vm_compile_source(options.path, &source).map_err(|error| match error {
-        EvalError::Diagnostics(diagnostics) => format_diagnostics_human(&diagnostics),
-        EvalError::Runtime(error) => error,
-    })?;
-    for _ in 0..options.warmup {
+    let (executable, bindings) = compile_vm_internal_target(options)?;
+    let run_once = || {
         executable
-            .eval_main_with_args(options.program_args.iter().copied())
-            .map_err(|error| match error {
-                EvalError::Diagnostics(diagnostics) => format_diagnostics_human(&diagnostics),
-                EvalError::Runtime(error) => error,
-            })?;
+            .eval_main_with_args_and_native_bindings(
+                options.program_args.iter().copied(),
+                bindings.iter().map(|(key, func)| (key.clone(), *func)),
+            )
+            .map_err(format_eval_error)
+    };
+    for _ in 0..options.warmup {
+        run_once()?;
     }
 
     let mut measurements = Vec::with_capacity(options.iterations);
     for _ in 0..options.iterations {
         let start = Instant::now();
-        executable
-            .eval_main_with_args(options.program_args.iter().copied())
-            .map_err(|error| match error {
-                EvalError::Diagnostics(diagnostics) => format_diagnostics_human(&diagnostics),
-                EvalError::Runtime(error) => error,
-            })?;
+        run_once()?;
         measurements.push(start.elapsed());
     }
     Ok(summarize_measurements(
@@ -324,6 +315,42 @@ fn run_reg_vm_internal_bench(options: &BenchOptions<'_>) -> Result<BenchResult, 
         options.warmup,
         &measurements,
     ))
+}
+
+/// Compile the VM-internal benchmark target once, returning the executable plus
+/// the native host bindings it needs. Single-file inputs compile their source
+/// directly and need no native bindings; package inputs compile the merged
+/// package and dynamically load native bindings for any `native fn`s they call.
+fn compile_vm_internal_target(
+    options: &BenchOptions<'_>,
+) -> Result<(RegVmExecutable, Vec<(String, NativeInterpreterFn)>), String> {
+    if is_package_directory(options.path) {
+        let executable =
+            reg_vm_compile_package(Path::new(options.path)).map_err(format_eval_error)?;
+        let bindings = load_package_native_bindings(options.path)?;
+        Ok((executable, bindings))
+    } else {
+        let source = std::fs::read_to_string(options.path)
+            .map_err(|error| format!("failed to read {}: {error}", options.path))?;
+        let executable =
+            reg_vm_compile_source(options.path, &source).map_err(format_eval_error)?;
+        Ok((executable, Vec::new()))
+    }
+}
+
+fn format_eval_error(error: EvalError) -> String {
+    match error {
+        EvalError::Diagnostics(diagnostics) => format_diagnostics_human(&diagnostics),
+        EvalError::Runtime(error) => error,
+    }
+}
+
+/// Dynamically load the native host bindings a package needs to run in the VM,
+/// generating and building a cdylib shim on demand (no-op for pure-RSS packages).
+fn load_package_native_bindings(
+    package_path: &str,
+) -> Result<Vec<(String, NativeInterpreterFn)>, String> {
+    rsscript::load_package_native_bindings(Path::new(package_path))
 }
 
 fn run_generated_bench(options: &BenchOptions<'_>) -> Result<BenchResult, String> {

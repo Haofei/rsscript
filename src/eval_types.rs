@@ -1,6 +1,9 @@
-use std::collections::BTreeMap;
-
 use crate::diagnostic::Diagnostic;
+
+// The native bridge value type and host-function signature live in the shared
+// `rss-native-abi` crate so dynamically loaded plugin cdylibs agree on their
+// layout. Re-exported so existing `eval_types::NativeValue` paths stay stable.
+pub use rss_native_abi::{NativeInterpreterFn, NativeValue};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvalOutput {
@@ -16,34 +19,6 @@ pub enum EvalError {
     Diagnostics(Vec<Diagnostic>),
     Runtime(String),
 }
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum NativeValue {
-    Unit,
-    Int(i64),
-    Float(f64),
-    Bool(bool),
-    String(String),
-    Char(char),
-    Bytes(Vec<u8>),
-    List(Vec<NativeValue>),
-    Map(Vec<(NativeValue, NativeValue)>),
-    Json(serde_json::Value),
-    Struct {
-        name: String,
-        fields: BTreeMap<String, NativeValue>,
-    },
-    Variant {
-        name: String,
-        fields: BTreeMap<String, NativeValue>,
-    },
-    Native {
-        type_name: String,
-        id: i64,
-    },
-}
-
-pub type NativeInterpreterFn = fn(Vec<NativeValue>) -> Result<NativeValue, String>;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct CoverageBucket {

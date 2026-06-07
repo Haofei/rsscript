@@ -1,0 +1,18 @@
+[package]
+name = "rss-native-abi"
+version = "0.1.0"
+edition = "2024"
+description = "Shared value + registry ABI for RSScript native bindings (host and dynamically loaded plugin cdylibs)"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "rss_native_abi"
+
+[dependencies]
+serde_json = { version = "1", features = ["preserve_order"] }
+libloading = { version = "0.8", optional = true }
+
+[features]
+# Enabled by the host (interpreter) to pull in the cdylib loader. Plugins depend
+# on this crate without the feature, so they don't compile libloading.
+host = ["dep:libloading"]

@@ -1,4 +1,0 @@
-[bindings]
-"Sqlx.execute" = "rss_sqlx_native::execute"
-"Sqlx.query_strings" = "rss_sqlx_native::query_strings"
-"Sqlx.query_one_string" = "rss_sqlx_native::query_one_string"

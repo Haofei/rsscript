@@ -1,0 +1,71 @@
+features: local
+
+// sqlx + SQLite benchmark workload, used to compare the same program across the
+// RSS register VM, the RSS->Rust compiled backend, and (via the sibling native
+// baseline) hand-written Rust.
+//
+// Each hot-loop iteration runs `select name from bench_item`, which returns
+// `rows` rows, so the per-call cost includes marshaling a `rows`-element
+// List<String> back across the native bridge. Raising `rows` makes each query
+// heavier (more SQLite work + more result marshaling); raising the loop count
+// (arg 0) runs more queries. The SQLite work is identical across all three
+// modes, so the difference between them is RSS execution + bridge overhead.
+
+fn arg_int(index: Int, default: Int) -> Int {
+    let raw = Args.get_or_default(index: index, default: read String.from_int(value: default))
+    match String.parse_int(value: read raw) {
+        Some(value) => {
+            return value
+        }
+        None => {
+            return default
+        }
+    }
+}
+
+fn db_url() -> fresh String {
+    let temp = Env.temp_dir()
+    let db_path = Path.join(base: read temp, child: read "rss-sqlx-bench.db")
+    let db_string = Path.to_string(path: read db_path)
+    let prefixed = String.concat(left: read "sqlite://", right: read db_string)
+
+    return String.concat(left: read prefixed, right: read "?mode=rwc")
+}
+
+fn setup(url: read String, rows: Int) -> Result<Unit, String> {
+    Sqlx.execute(url: read url, sql: read "drop table if exists bench_item")?
+    Sqlx.execute(url: read url, sql: read "create table bench_item(name text)")?
+    let mut index = 0
+    while index < rows {
+        Sqlx.execute(url: read url, sql: read "insert into bench_item values ('x')")?
+        index = index + 1
+    }
+
+    return Ok(Unit)
+}
+
+fn run_queries(url: read String, limit: Int) -> Result<Int, String> {
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        let names = Sqlx.query_strings(
+            url: read url,
+            sql: read "select name from bench_item",
+        )?
+        total = total + List.len(list: read names)
+        index = index + 1
+    }
+
+    return Ok(total)
+}
+
+fn main() -> Result<Unit, String> {
+    let url = db_url()
+    let limit = arg_int(index: 0, default: 500)
+    let rows = arg_int(index: 1, default: 200)
+    setup(url: read url, rows: rows)?
+    let total = run_queries(url: read url, limit: limit)?
+    Log.write(message: read String.from_int(value: total))
+
+    return Ok(Unit)
+}
