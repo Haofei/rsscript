@@ -193,7 +193,7 @@ pub struct CiGateOutput {
     pub review_decision: CiReviewDecision,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CiGateStatus {
     Pass,
@@ -269,11 +269,47 @@ pub struct CiReviewDecision {
     pub missing_summary: Vec<String>,
 }
 
-/// Produce CI gate JSON output from reconciliation results.
+/// Which reconciliation states fail the CI gate. Absence of evidence (unknown)
+/// and over-grant (excess) are off by default for backwards compatibility, but a
+/// protected-branch gate should turn them on.
+#[derive(Debug, Clone, Copy)]
+pub struct CiGatePolicy {
+    pub fail_on_missing: bool,
+    pub fail_on_unknown: bool,
+    pub fail_on_excess: bool,
+}
+
+impl Default for CiGatePolicy {
+    fn default() -> Self {
+        Self {
+            fail_on_missing: true,
+            fail_on_unknown: false,
+            fail_on_excess: false,
+        }
+    }
+}
+
+/// Produce CI gate JSON output from reconciliation results, failing only on
+/// missing capabilities (the default policy).
 pub fn format_ci_gate_output(
     required_facts: &[Fact],
     granted_facts: &[Fact],
     reconciliations: &[Reconciliation],
+) -> CiGateOutput {
+    format_ci_gate_output_with_policy(
+        required_facts,
+        granted_facts,
+        reconciliations,
+        CiGatePolicy::default(),
+    )
+}
+
+/// Produce CI gate JSON output, failing on the states selected by `policy`.
+pub fn format_ci_gate_output_with_policy(
+    required_facts: &[Fact],
+    granted_facts: &[Fact],
+    reconciliations: &[Reconciliation],
+    policy: CiGatePolicy,
 ) -> CiGateOutput {
     let missing: Vec<_> = reconciliations
         .iter()
@@ -312,7 +348,10 @@ pub fn format_ci_gate_output(
         0.0
     };
 
-    let status = if !missing.is_empty() {
+    let fail = (policy.fail_on_missing && !missing.is_empty())
+        || (policy.fail_on_unknown && !unknown_facts.is_empty())
+        || (policy.fail_on_excess && !excess.is_empty());
+    let status = if fail {
         CiGateStatus::Fail
     } else if !unknown_facts.is_empty() {
         CiGateStatus::Warn
@@ -1404,6 +1443,46 @@ mod tests {
         assert_eq!(output.granted_capabilities[0].id, granted.id);
         assert!(output.unknown_capabilities.is_empty());
         assert_eq!(output.required_capabilities[0].confidence, "inferred");
+    }
+
+    #[test]
+    fn ci_gate_fail_on_excess_policy_blocks_overgrant() {
+        let granted = capability_fact("fact.grant.extra", FactRole::Granted, FactValue::True);
+        let excess = Reconciliation {
+            schema: "reir.reconciliation.v0.1".to_string(),
+            id: "recon.excess.extra".to_string(),
+            kind: ReconciliationKind::ExcessCapability,
+            status: ReconciliationStatus::Warn,
+            target: None,
+            subject_chain: None,
+            required_fact: None,
+            granted_facts: vec![granted.id.clone()],
+            observed_fact: None,
+            capability: granted.capability.clone(),
+            risk: None,
+            evidence: vec![],
+        };
+
+        // Default policy: an excess (over-privilege) grant does not fail the gate.
+        let default_out = format_ci_gate_output(
+            &[],
+            std::slice::from_ref(&granted),
+            std::slice::from_ref(&excess),
+        );
+        assert_ne!(default_out.status, CiGateStatus::Fail);
+
+        // With fail_on_excess, over-privilege blocks.
+        let strict = format_ci_gate_output_with_policy(
+            &[],
+            std::slice::from_ref(&granted),
+            std::slice::from_ref(&excess),
+            CiGatePolicy {
+                fail_on_missing: true,
+                fail_on_unknown: false,
+                fail_on_excess: true,
+            },
+        );
+        assert_eq!(strict.status, CiGateStatus::Fail);
     }
 
     #[test]

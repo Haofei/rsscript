@@ -287,6 +287,7 @@ fn try_run_report_pr(args: &[String]) -> Result<(ExitCode, String), CliError> {
     let mut granted = None;
     let mut target = None;
     let mut ci_json = false;
+    let mut policy = reir::CiGatePolicy::default();
     let mut index = 0;
 
     while index < args.len() {
@@ -295,6 +296,9 @@ fn try_run_report_pr(args: &[String]) -> Result<(ExitCode, String), CliError> {
             "--granted" => granted = Some(take_value(args, &mut index, "--granted")?),
             "--target" => target = Some(take_value(args, &mut index, "--target")?),
             "--ci-json" => ci_json = true,
+            "--fail-on-unknown" => policy.fail_on_unknown = true,
+            "--fail-on-excess" => policy.fail_on_excess = true,
+            "--allow-missing" => policy.fail_on_missing = false,
             unknown => {
                 return Err(CliError::usage(format!(
                     "unknown report-pr flag `{unknown}`"
@@ -314,12 +318,13 @@ fn try_run_report_pr(args: &[String]) -> Result<(ExitCode, String), CliError> {
         target.as_deref(),
     );
 
+    let ci_output = reir::format_ci_gate_output_with_policy(
+        &required_bundle.facts,
+        &granted_bundle.facts,
+        &reconciliations,
+        policy,
+    );
     let output = if ci_json {
-        let ci_output = reir::format_ci_gate_output(
-            &required_bundle.facts,
-            &granted_bundle.facts,
-            &reconciliations,
-        );
         reir::format_ci_gate_json(&ci_output)
     } else {
         format_pr_review_comment(
@@ -328,7 +333,14 @@ fn try_run_report_pr(args: &[String]) -> Result<(ExitCode, String), CliError> {
             &reconciliations,
         )
     };
-    Ok((exit_for_reconciliations(&reconciliations), output))
+    // The exit code follows the (policy-aware) gate status so --fail-on-excess /
+    // --fail-on-unknown actually block, not just annotate.
+    let exit = if ci_output.status == reir::CiGateStatus::Fail {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    };
+    Ok((exit, output))
 }
 
 fn try_run_reconcile(args: &[String]) -> Result<ExitCode, CliError> {
