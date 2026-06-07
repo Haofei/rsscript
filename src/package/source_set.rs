@@ -542,10 +542,22 @@ fn collect_rsscript_files_excluding(
     for entry in entries {
         let entry = entry
             .map_err(|error| format!("failed to read entry in {}: {error}", path.display()))?;
+        // `file_type()` does NOT follow symlinks (unlike `Path::is_dir`/`is_file`).
+        // Reject symlinked entries so a package cannot point review/lock/metadata
+        // at files outside its own root (symlink escape).
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("failed to stat entry in {}: {error}", path.display()))?;
+        if file_type.is_symlink() {
+            return Err(format!(
+                "refusing to follow symlink in package source tree: {}",
+                entry.path().display()
+            ));
+        }
         let path = entry.path();
-        if path.is_dir() {
+        if file_type.is_dir() {
             collect_rsscript_files_excluding(&path, excluded_roots, files)?;
-        } else if super::is_rsscript_source_path(&path) {
+        } else if file_type.is_file() && super::is_rsscript_source_path(&path) {
             files.push(path);
         }
     }

@@ -8354,3 +8354,35 @@ platform-env = {{ path = "{}", platform_provided = true }}
         })
     }));
 }
+
+#[cfg(unix)]
+#[test]
+fn package_source_collection_rejects_symlink_escape() {
+    use std::os::unix::fs::symlink;
+
+    let dir = common::unique_temp_dir("rsscript-package-symlink");
+    fs::create_dir_all(dir.join("interface")).expect("interface dir");
+    fs::write(
+        dir.join("rsspkg.toml"),
+        "[package]\nname = \"sym\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[interfaces]\npaths = [\"interface\"]\n",
+    )
+    .expect("manifest");
+    fs::write(dir.join("interface/lib.rssi"), "pub fn Sym.ok() -> Unit\n").expect("interface");
+
+    // A secret outside the package the symlink will try to pull into review.
+    let outside = common::unique_temp_dir("rsscript-package-symlink-outside");
+    fs::create_dir_all(&outside).expect("outside dir");
+    let secret = outside.join("secret.rssi");
+    fs::write(&secret, "pub fn Secret.leak() -> Unit\n").expect("secret");
+    symlink(&secret, dir.join("interface/evil.rssi")).expect("symlink");
+
+    let result = review_package_dir(&dir);
+    let _ = fs::remove_dir_all(&dir);
+    let _ = fs::remove_dir_all(&outside);
+
+    let error = result.expect_err("a symlinked source file must be rejected, not followed");
+    assert!(
+        error.contains("symlink"),
+        "expected a symlink rejection error, got: {error}"
+    );
+}
