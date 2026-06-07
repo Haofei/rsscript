@@ -461,6 +461,24 @@ pub fn format_package_diff_human(diff: &PackageDiff) -> String {
             diff.old_review.await_sites, diff.new_review.await_sites
         ));
     }
+    if !diff.capability_changes.is_empty() {
+        output.push_str("capability changes:\n");
+        for change in &diff.capability_changes {
+            let sign = match change.change {
+                crate::package::types::PackageCapabilityChangeKind::Added => "+",
+                crate::package::types::PackageCapabilityChangeKind::Removed => "-",
+            };
+            let risk = match change.risk {
+                crate::CapabilityRisk::High => "high",
+                crate::CapabilityRisk::Medium => "medium",
+                crate::CapabilityRisk::Low => "low",
+            };
+            output.push_str(&format!(
+                "  {sign} [{risk}] {} via {}\n",
+                change.category, change.binding_symbol
+            ));
+        }
+    }
     for change in &diff.manifest_changes {
         output.push_str(&format!(
             "{} {}: {} -> {} ({})\n",

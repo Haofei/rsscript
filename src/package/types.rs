@@ -95,8 +95,26 @@ pub struct PackageDiff {
     pub reasons: Vec<String>,
     pub manifest_changes: Vec<PackageManifestChange>,
     pub interface_changes: Vec<PackageInterfaceChange>,
+    /// Distinct capabilities added/removed between the two versions — the
+    /// "what powers did this change introduce" view.
+    pub capability_changes: Vec<PackageCapabilityChange>,
     pub old_review: PackageReviewSummary,
     pub new_review: PackageReviewSummary,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PackageCapabilityChangeKind {
+    Added,
+    Removed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageCapabilityChange {
+    pub change: PackageCapabilityChangeKind,
+    pub category: String,
+    pub binding_symbol: String,
+    pub risk: crate::CapabilityRisk,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

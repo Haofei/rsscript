@@ -14,7 +14,8 @@ use super::contract::{
 };
 use super::source_set::{ManifestNativeRust, PackageSource, load_package};
 use super::{
-    Manifest, PackageDiff, PackageInterfaceChange, PackageInterfaceChangeKind,
+    Manifest, PackageCapabilityChange, PackageCapabilityChangeKind, PackageDiff,
+    PackageInterfaceChange, PackageInterfaceChangeKind,
     PackageManifestChange, PackageReviewAwaitBoundary, PackageReviewAwaitSite,
     PackageReviewFileKind, PackageRisk, feature_values_label,
     package_feature_may_change_boundary_risk, package_identity, package_risk_label,
@@ -71,9 +72,22 @@ pub fn diff_package_dirs(old_dir: &Path, new_dir: &Path) -> Result<PackageDiff, 
         old_review.await_sites.as_slice(),
         new_review.await_sites.as_slice(),
     );
+    let capability_changes =
+        diff_package_capabilities(&old_review.capabilities, &new_review.capabilities);
+
     let mut reasons = package_diff_reasons(&manifest_changes, &interface_changes);
     if await_sites_changed {
         reasons.push("await site review metadata changed".to_string());
+    }
+    for change in &capability_changes {
+        if change.change == PackageCapabilityChangeKind::Added
+            && change.risk == crate::CapabilityRisk::High
+        {
+            reasons.push(format!(
+                "new high-risk capability `{}` via {}",
+                change.category, change.binding_symbol
+            ));
+        }
     }
     if old_review.risk != new_review.risk {
         reasons.push(format!(
@@ -99,9 +113,64 @@ pub fn diff_package_dirs(old_dir: &Path, new_dir: &Path) -> Result<PackageDiff, 
         reasons,
         manifest_changes,
         interface_changes,
+        capability_changes,
         old_review: old_review.summary,
         new_review: new_review.summary,
     })
+}
+
+/// Distinct capabilities (by category + binding symbol) added or removed between
+/// two package versions, high-risk first.
+fn diff_package_capabilities(
+    old: &[crate::package::types::PackageReviewCapability],
+    new: &[crate::package::types::PackageReviewCapability],
+) -> Vec<PackageCapabilityChange> {
+    use std::collections::BTreeMap;
+    fn distinct(
+        capabilities: &[crate::package::types::PackageReviewCapability],
+    ) -> BTreeMap<(String, String), crate::CapabilityRisk> {
+        let mut map = BTreeMap::new();
+        for capability in capabilities {
+            map.entry((capability.category.clone(), capability.binding_symbol.clone()))
+                .or_insert(capability.risk);
+        }
+        map
+    }
+    let old_set = distinct(old);
+    let new_set = distinct(new);
+    let mut changes = Vec::new();
+    for ((category, binding_symbol), risk) in &new_set {
+        if !old_set.contains_key(&(category.clone(), binding_symbol.clone())) {
+            changes.push(PackageCapabilityChange {
+                change: PackageCapabilityChangeKind::Added,
+                category: category.clone(),
+                binding_symbol: binding_symbol.clone(),
+                risk: *risk,
+            });
+        }
+    }
+    for ((category, binding_symbol), risk) in &old_set {
+        if !new_set.contains_key(&(category.clone(), binding_symbol.clone())) {
+            changes.push(PackageCapabilityChange {
+                change: PackageCapabilityChangeKind::Removed,
+                category: category.clone(),
+                binding_symbol: binding_symbol.clone(),
+                risk: *risk,
+            });
+        }
+    }
+    let rank = |risk: crate::CapabilityRisk| match risk {
+        crate::CapabilityRisk::High => 0u8,
+        crate::CapabilityRisk::Medium => 1,
+        crate::CapabilityRisk::Low => 2,
+    };
+    changes.sort_by(|a, b| {
+        rank(a.risk)
+            .cmp(&rank(b.risk))
+            .then_with(|| a.category.cmp(&b.category))
+            .then_with(|| a.binding_symbol.cmp(&b.binding_symbol))
+    });
+    changes
 }
 
 fn compare_package_identity(
@@ -645,5 +714,58 @@ fn manifest_change(
         before,
         after,
         risk,
+    }
+}
+
+#[cfg(test)]
+mod capability_diff_tests {
+    use super::*;
+    use crate::CapabilityRisk;
+    use crate::package::types::PackageReviewCapability;
+
+    fn cap(binding: &str, category: &str, risk: CapabilityRisk) -> PackageReviewCapability {
+        PackageReviewCapability {
+            function: binding.to_string(),
+            binding_symbol: binding.to_string(),
+            category: category.to_string(),
+            risk,
+            provider: None,
+            service: None,
+            action: None,
+            resource: None,
+            call_chain: vec![binding.to_string()],
+            span: None,
+            unknown_reason: None,
+        }
+    }
+
+    #[test]
+    fn reports_added_and_removed_capabilities_high_risk_first() {
+        let old = vec![cap("Db.read", "database.read", CapabilityRisk::Medium)];
+        let new = vec![
+            cap("Db.read", "database.read", CapabilityRisk::Medium),
+            cap("Db.write", "database.write", CapabilityRisk::High),
+            cap("Net.get", "network.client", CapabilityRisk::High),
+        ];
+        let changes = diff_package_capabilities(&old, &new);
+        // Two high-risk additions, sorted high-first by category.
+        assert_eq!(changes.len(), 2);
+        assert!(changes.iter().all(|c| c.change == PackageCapabilityChangeKind::Added));
+        assert_eq!(changes[0].category, "database.write");
+        assert_eq!(changes[0].risk, CapabilityRisk::High);
+        assert_eq!(changes[1].category, "network.client");
+    }
+
+    #[test]
+    fn dedups_per_binding_and_detects_removal() {
+        let old = vec![
+            cap("Db.write", "database.write", CapabilityRisk::High),
+            cap("Db.write", "database.write", CapabilityRisk::High),
+        ];
+        let new: Vec<PackageReviewCapability> = vec![];
+        let changes = diff_package_capabilities(&old, &new);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].change, PackageCapabilityChangeKind::Removed);
+        assert_eq!(changes[0].binding_symbol, "Db.write");
     }
 }
