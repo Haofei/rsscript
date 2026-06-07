@@ -1,0 +1,22 @@
+[package]
+name = "demo-data"
+version = "0.1.0"
+edition = "2026"
+
+[interfaces]
+paths = ["interface"]
+
+[native.rust]
+enabled = true
+path = "native/rust"
+crate = "demo_native"
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+
+# Each native boundary declares the capability it grants, from the canonical
+# taxonomy (src/capability.rs). Today this package only reads a database.
+[[review.capability_bindings]]
+symbol = "Db.query"
+category = "database.read"
+provider = "sqlite"

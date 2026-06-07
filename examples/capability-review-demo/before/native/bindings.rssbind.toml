@@ -1,0 +1,2 @@
+[bindings]
+"Db.query" = "demo_native::query"

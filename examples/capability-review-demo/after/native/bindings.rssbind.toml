@@ -1,0 +1,3 @@
+[bindings]
+"Db.query" = "demo_native::query"
+"Net.fetch" = "demo_native::fetch"

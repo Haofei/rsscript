@@ -1,0 +1,7 @@
+features: native
+
+native fn Db.query(sql: read String) -> String
+    effects(native)
+
+native fn Net.fetch(url: read String) -> String
+    effects(native)

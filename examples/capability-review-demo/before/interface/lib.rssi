@@ -1,0 +1,4 @@
+features: native
+
+native fn Db.query(sql: read String) -> String
+    effects(native)
