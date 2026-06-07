@@ -2441,6 +2441,20 @@ impl<'a> RustLowerer<'a> {
                         DataEffect::Read => format!("&{}", self.lower_expr(receiver)),
                         DataEffect::Take => self.lower_expr(receiver),
                     };
+                    // Runtime intrinsics / native fns take their args by reference
+                    // (even `Copy` ones), so for those callees honor the parameter
+                    // effect for named args too. Protocol/user receiver calls are
+                    // not native targets and keep their by-value `Copy` handling.
+                    let native_target_callee = Callee::Qualified {
+                        namespace: namespace.clone(),
+                        name: method.to_string(),
+                    };
+                    let is_native_target = runtime_intrinsic_target(&native_target_callee).is_some()
+                        || self
+                            .native_bindings
+                            .contains_key(&native_boundary_function_key(&format!(
+                                "{namespace}.{method}"
+                            )));
                     let lowered_args = args
                         .iter()
                         .enumerate()
@@ -2452,7 +2466,12 @@ impl<'a> RustLowerer<'a> {
                                 arg.name.as_deref(),
                                 index,
                             ) {
-                                if arg.name.is_none()
+                                // Only `Copy` named args to native targets need the
+                                // effect-based `&` (they'd otherwise pass by value to a
+                                // by-reference intrinsic); non-Copy named args keep their
+                                // existing lowering (which handles String/Json cleanly).
+                                if (arg.name.is_none()
+                                    || (is_native_target && is_copy_type_ref(&expected)))
                                     && let Some(effect) = self.receiver_call_expected_arg_effect(
                                         &namespace, method, index,
                                     )
