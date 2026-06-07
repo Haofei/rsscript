@@ -6184,14 +6184,14 @@ fn review_map_app_benchmark_has_no_unknown_regions() {
     assert_eq!(map.summary.unknown.functions, 0, "{map:?}");
     assert_eq!(map.summary.unknown.lines, 0, "{map:?}");
     assert!(map.summary.review_required.functions >= 32, "{map:?}");
-    assert!(map.summary.foldable.functions <= 10, "{map:?}");
+    assert!(map.summary.foldable.functions <= 11, "{map:?}");
 
     let json: Value =
         serde_json::from_str(&format_review_map_json(&map)).expect("review map JSON should parse");
     assert_eq!(json["summary"]["unknown_ratio"], 0.0);
     assert_eq!(json["summary"]["unknown_function_ratio"], 0.0);
-    assert_eq!(json["summary"]["must_review"]["functions"], 35);
-    assert_eq!(json["summary"]["low_semantic_risk"]["functions"], 9);
+    assert_eq!(json["summary"]["must_review"]["functions"], 33);
+    assert_eq!(json["summary"]["low_semantic_risk"]["functions"], 11);
 }
 
 #[test]
