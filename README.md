@@ -67,16 +67,29 @@ raw artifact.
 ## GitHub Action
 
 ```yaml
-- uses: Haofei/rsscript/.github/actions/rsscript-review@main
+# Pin to a release SHA for a trusted gate; @main is a mutable ref.
+- uses: Haofei/rsscript/.github/actions/rsscript-review@<commit-sha>
   with:
     head: my-service/
     grants: infra/prod-grants.reir.json
     target: prod
+    # Fail closed by default: missing, unknown (absence of evidence), and
+    # excess (over-privilege) all block. Override per input if you must.
+    fail-on-missing: 'true'
+    fail-on-unknown: 'true'
+    fail-on-excess: 'true'
 ```
 
-The action posts a PR comment with the review decision and exits non-zero on missing capabilities.
-For production use, pin this action to a commit SHA. The toolchain and artifact
-schemas are still `0.1.x` prototype surfaces.
+The action posts a PR comment with the review decision and exits non-zero when
+capability reconciliation fails under the policy above.
+
+> **Not a production enforcement gate yet.** The toolchain and artifact schemas
+> are `0.1.x` prototype surfaces. Before relying on this to authorize a deploy:
+> pin the action to a release SHA (not `@main`), do not depend on ambient
+> `rss`/`reir` binaries on `PATH` (the action warns when it finds them), keep the
+> fail-on-unknown / fail-on-excess defaults on, and pair it with an independent
+> native/capability audit — capability bindings are author declarations unless
+> separately verified.
 
 ## Install
 

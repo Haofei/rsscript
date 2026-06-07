@@ -16,7 +16,15 @@ inputs:
     required: false
     default: 'true'
   fail-on-missing:
-    description: 'Fail the action if capabilities are missing'
+    description: 'Fail the action if required capabilities are missing'
+    required: false
+    default: 'true'
+  fail-on-unknown:
+    description: 'Fail the action if capabilities are unknown (absence of evidence). Recommended true for protected branches.'
+    required: false
+    default: 'true'
+  fail-on-excess:
+    description: 'Fail the action if granted capabilities exceed requirements (over-privilege). Recommended true for protected branches.'
     required: false
     default: 'true'
 
@@ -41,12 +49,16 @@ runs:
       shell: bash
       run: |
         if ! command -v rss &> /dev/null || ! command -v reir &> /dev/null; then
-          echo "::group::Building RSScript from source"
+          echo "::group::Building RSScript from the pinned action checkout"
           RSSCRIPT_ACTION_ROOT="$(cd "$GITHUB_ACTION_PATH/../../.." && pwd)"
           cargo build --quiet --release --manifest-path "$RSSCRIPT_ACTION_ROOT/Cargo.toml" --bin rss -p rsscript
           cargo build --quiet --release --manifest-path "$RSSCRIPT_ACTION_ROOT/Cargo.toml" --bin reir -p reir
           echo "$RSSCRIPT_ACTION_ROOT/target/release" >> $GITHUB_PATH
           echo "::endgroup::"
+        else
+          # Ambient binaries are not provenance-pinned. For a protected gate, pin
+          # this action to a release SHA so the toolchain is built from that ref.
+          echo "::warning::Using rss/reir already on PATH. These are not provenance-pinned; pin this action to a release SHA for a trusted supply-chain gate ($(command -v rss), $(command -v reir))."
         fi
 
     - name: Run RSScript and REIR review
@@ -56,6 +68,9 @@ runs:
         INPUT_HEAD: ${{ inputs.head }}
         INPUT_GRANTS: ${{ inputs.grants }}
         INPUT_TARGET: ${{ inputs.target }}
+        INPUT_FAIL_ON_MISSING: ${{ inputs.fail-on-missing }}
+        INPUT_FAIL_ON_UNKNOWN: ${{ inputs.fail-on-unknown }}
+        INPUT_FAIL_ON_EXCESS: ${{ inputs.fail-on-excess }}
       run: |
         TEMP_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/rsscript-review.XXXXXX")"
         PACKAGE_REVIEW_JSON="$TEMP_DIR/package-review.json"
@@ -85,11 +100,18 @@ runs:
           --package-check "$PACKAGE_CHECK_JSON" \
           --out "$REQUIRED_REIR_JSON"
 
+        # Build the policy flags from inputs so the gate fails closed by default.
+        REPORT_FLAGS=()
+        [ "$INPUT_FAIL_ON_MISSING" = "true" ] || REPORT_FLAGS+=(--allow-missing)
+        [ "$INPUT_FAIL_ON_UNKNOWN" = "true" ] && REPORT_FLAGS+=(--fail-on-unknown)
+        [ "$INPUT_FAIL_ON_EXCESS" = "true" ] && REPORT_FLAGS+=(--fail-on-excess)
+
         set +e
         reir report-pr \
           --required "$REQUIRED_REIR_JSON" \
           --granted "$INPUT_GRANTS" \
-          --target "$INPUT_TARGET" > "$REVIEW_OUTPUT_FILE"
+          --target "$INPUT_TARGET" \
+          "${REPORT_FLAGS[@]}" > "$REVIEW_OUTPUT_FILE"
         EXIT_CODE=$?
         set -e
         cp "$REVIEW_OUTPUT_FILE" "$COMMENT_FILE"
@@ -109,6 +131,7 @@ runs:
           --required "$REQUIRED_REIR_JSON" \
           --granted "$INPUT_GRANTS" \
           --target "$INPUT_TARGET" \
+          "${REPORT_FLAGS[@]}" \
           --ci-json > "$CI_JSON_FILE"
         CI_JSON_EXIT_CODE=$?
         set -e
@@ -149,11 +172,11 @@ runs:
             --body-file "$COMMENT_FILE"
         fi
 
-    - name: Gate on missing capabilities
-      if: inputs.fail-on-missing == 'true'
+    - name: Gate on capability reconciliation
+      if: ${{ inputs.fail-on-missing == 'true' || inputs.fail-on-unknown == 'true' || inputs.fail-on-excess == 'true' }}
       shell: bash
       run: |
         if [ "${{ steps.review.outputs.status }}" = "fail" ]; then
-          echo "::error::RSScript review found missing deployment capabilities. See PR comment for details."
+          echo "::error::RSScript review failed capability reconciliation (missing/unknown/excess per policy). See PR comment for details."
           exit 1
         fi
