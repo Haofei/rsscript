@@ -215,7 +215,50 @@ pub fn format_package_review_human(review: &PackageReview) -> String {
     output.push_str(&format_package_review_await_sites_human(
         &review.await_sites,
     ));
+    output.push_str(&format_package_review_capabilities_human(
+        &review.capabilities,
+    ));
     output.push_str(&format_package_review_exports_human(&review.exports));
+    output
+}
+
+/// Distinct capabilities the package requires, ranked high-risk first, so a
+/// reviewer sees the powers (and any unrecognized ones) at a glance.
+fn format_package_review_capabilities_human(
+    capabilities: &[crate::package::types::PackageReviewCapability],
+) -> String {
+    if capabilities.is_empty() {
+        return String::new();
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let mut rows: Vec<(u8, String)> = Vec::new();
+    for capability in capabilities {
+        if !seen.insert((capability.category.clone(), capability.binding_symbol.clone())) {
+            continue;
+        }
+        let (rank, label) = match capability.risk {
+            crate::CapabilityRisk::High => (0u8, "high"),
+            crate::CapabilityRisk::Medium => (1, "medium"),
+            crate::CapabilityRisk::Low => (2, "low"),
+        };
+        let mut line = format!(
+            "  [{label}] {} via {}",
+            capability.category, capability.binding_symbol
+        );
+        if let Some(provider) = &capability.provider {
+            line.push_str(&format!(" (provider {provider})"));
+        }
+        if let Some(reason) = &capability.unknown_reason {
+            line.push_str(&format!("  -- {reason}"));
+        }
+        rows.push((rank, line));
+    }
+    rows.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    let mut output = String::from("capabilities (by risk):\n");
+    for (_, line) in rows {
+        output.push_str(&line);
+        output.push('\n');
+    }
     output
 }
 
