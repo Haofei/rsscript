@@ -767,6 +767,17 @@ fn package_review_capabilities(
 
     if let Some(review) = manifest.review.as_ref() {
         for binding in &review.capability_bindings {
+            // A binding must use a canonical capability category; an unrecognized
+            // one is surfaced for review (same channel as an unbound native facade)
+            // so the taxonomy stays meaningful and reproducible.
+            let unknown_reason = if crate::is_known_capability_category(&binding.category) {
+                None
+            } else {
+                Some(format!(
+                    "capability binding uses unrecognized category `{}`",
+                    binding.category
+                ))
+            };
             propagate_package_capability(
                 &call_graph,
                 &mut capabilities,
@@ -779,7 +790,7 @@ fn package_review_capabilities(
                     action: binding.action.clone(),
                     resource: binding.resource.clone(),
                     span: call_graph.function_spans.get(&binding.symbol).cloned(),
-                    unknown_reason: None,
+                    unknown_reason,
                 },
             );
         }

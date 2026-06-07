@@ -9,6 +9,7 @@
 
 mod analyzer;
 pub mod bbom;
+mod capability;
 mod checks;
 mod core_index;
 mod diagnostic;
@@ -36,6 +37,10 @@ pub use analyzer::{
     analyze_source_with_interfaces_without_core, analyze_source_without_core,
     analyze_sources_with_interfaces, analyze_sources_with_interfaces_without_core,
     analyze_syntax_source, core_interfaces, standard_package_interfaces,
+};
+pub use capability::{
+    CAPABILITY_CATEGORIES, CapabilityCategory, CapabilityRisk, capability_category,
+    capability_risk, is_known_capability_category,
 };
 pub use core_index::core_package_index_json;
 pub use diagnostic::{
