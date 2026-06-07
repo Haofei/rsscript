@@ -5139,6 +5139,72 @@ fn main() -> Result<Unit, TimerError> {
     assert_reg_vm_matches_compiled_backend("reg-vm-select-second-arm.rss", source, []);
 }
 
+#[test]
+fn reg_vm_select_does_not_run_loser_side_effects_like_backend() {
+    // After `select` picks a winner, the losing arm's operation must NOT keep
+    // running and producing side effects. The loser here sleeps longer and then
+    // logs "loser ran"; the winner finishes first. main keeps running (a trailing
+    // sleep yields the scheduler), which is exactly the window in which an
+    // un-cancelled loser would still get scheduled. Expected output: "winner",
+    // then "done" — never "loser ran".
+    let source = r#"
+features: async, native
+
+async fn winner() -> Result<Int, TimerError> {
+    await Timer.sleep(ms: 1)?
+    return Ok(1)
+}
+
+async fn loser() -> Result<Int, TimerError> {
+    await Timer.sleep(ms: 30)?
+    Log.write(message: read "loser ran")
+    return Ok(2)
+}
+
+async fn main() -> Result<Unit, TimerError> {
+    select {
+        _ = await winner()? => {
+            Log.write(message: read "winner")
+        }
+        _ = await loser()? => {
+            Log.write(message: read "loser won")
+        }
+    }
+    await Timer.sleep(ms: 80)?
+    Log.write(message: read "done")
+    return Ok(Unit)
+}
+"#;
+
+    assert_reg_vm_matches_compiled_backend("reg-vm-select-loser-cancel.rss", source, []);
+}
+
+#[test]
+fn reg_vm_task_group_drains_unawaited_async_let_like_backend() {
+    // Structured concurrency: leaving a `task_group` must drain background tasks
+    // spawned by `async let` even when they are never explicitly awaited (here
+    // `async let _ = background()`). The backend drains at the scope boundary, so
+    // "background completed" must print before "after group".
+    let source = r#"
+features: async
+
+async fn background() -> Result<Unit, String> {
+    Log.write(message: read "background completed")
+    return Ok(Unit)
+}
+
+fn main() -> Result<Unit, String> {
+    task_group {
+        async let _ = background()
+    }
+    Log.write(message: read "after group")
+    return Ok(Unit)
+}
+"#;
+
+    assert_reg_vm_matches_compiled_backend("reg-vm-task-group-drain.rss", source, []);
+}
+
 fn assert_reg_vm_matches_compiled_backend<'a>(
     file: &str,
     source: &str,

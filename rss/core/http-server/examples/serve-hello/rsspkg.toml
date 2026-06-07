@@ -1,0 +1,10 @@
+[package]
+name = "rss-core-http-server-serve-hello"
+version = "0.1.0"
+edition = "2026"
+
+[sources]
+paths = ["src"]
+
+[dependencies]
+rss-core-http-server = { path = "../.." }

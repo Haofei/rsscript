@@ -4,9 +4,10 @@ version = 1
 name = "rss-core-http-server"
 version = "0.1.0"
 source = "path+rss/core/http-server"
-checksum = "sha256:50837f1f54a59e6399583aaceb59d3906d0ba10c3d3cbd9836e2ec9f310ea099"
-interface_hash = "sha256:5def63d81feaaea8552bfe2b6920fffff58a104a725fd23c20c7341f458c641a"
-review_hash = "sha256:72a1f8e7bbec13014d8f7df31ed32488987b0faa26734c5d8fe5eb575dfff9fe"
+checksum = "sha256:3ebc663f710ccdcdf2bf07c645d1e00facef74c0bd667ef3a520504744ef1585"
+interface_hash = "sha256:2ed018b976ef74c33e0b0c530c969c742d15d6b4f23a38eaa740c2dbbb25623b"
+review_hash = "sha256:d0c235a8aa8e688b9a5bd85b4a0b0060f6eeb879c14f8ea70a92ca19cb0e503f"
+native_hash = "sha256:d9fa348ab6ec37f1aad0217bd8ad369f42be38bf73b38bc995b465c0c619f547"
 features = []
 
 [metadata]

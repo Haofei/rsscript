@@ -6,6 +6,18 @@ edition = "2026"
 [interfaces]
 paths = ["interface"]
 
-[virtual]
-has_default = false
+[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_http_server_native"
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+
+[[review.capability_bindings]]
+symbol = "HttpServer.serve_static"
+category = "network.server"
 provider = "http"
+service = "http"
+action = "serve"
+resource = "address"

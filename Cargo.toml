@@ -12,8 +12,10 @@ members = [
     "reir",
     "rss/core/cli/native/rust",
     "rss/core/crypto/native/rust",
+    "rss/core/http-server/native/rust",
     "rss/rayon/native/rust",
     "rss/adapters/sqlite/native/rust",
+    "rss/adapters/sqlx/native/rust",
 ]
 
 [[bin]]

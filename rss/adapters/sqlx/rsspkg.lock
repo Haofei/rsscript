@@ -1,0 +1,15 @@
+version = 1
+
+[[package]]
+name = "rss-sqlx"
+version = "0.1.0"
+source = "path+rss/adapters/sqlx"
+checksum = "sha256:c908eebf5eef6ba7b2b5579fdc0716547738801194ae661f1632b971bcd76050"
+interface_hash = "sha256:b77070da595cb161ea15b085dedc7d789f906d9f3cf81f843d440e1395d247e5"
+review_hash = "sha256:65bffcd286c36aed5edcfebb254d4d1c183c5c36c1f06e95de13b2a5521947a6"
+native_hash = "sha256:0427cf5af1e2140e6db183da37b9e46ccf9b3791298f2d95b289639301bfe6ef"
+features = []
+
+[metadata]
+rss_version = "0.1.0"
+created_by = "rsscript pkg"

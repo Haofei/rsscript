@@ -4918,6 +4918,21 @@ impl RegVm {
         }
     }
 
+    /// Cancel every losing `select` arm task once a winner is chosen. A resolved
+    /// `select` keeps only the winner; the backend drops the losing arms' futures
+    /// so they stop immediately, and the VM must do the same — otherwise a loser
+    /// would keep being scheduled at later suspension points, run its remaining
+    /// side effects, and could even abort the whole program with a late error.
+    /// Removing the task slot makes any stale ready-queue entry a no-op and stops
+    /// the scheduler (and sleeper wakeups) from ever resuming it.
+    fn cancel_select_losers(&mut self, handles: &[TaskId], winner: TaskId) {
+        for handle in handles {
+            if *handle != winner {
+                self.tasks.remove(handle);
+            }
+        }
+    }
+
     /// Produce the result of `tid`'s satisfied wait and re-queue it.
     fn resolve_wait(&mut self, tid: TaskId) -> Result<(), EvalError> {
         let wait = self
@@ -4953,7 +4968,8 @@ impl RegVm {
                 value_dst,
             } => {
                 // First finished arm wins; its value goes to `value_dst`, its arm
-                // index to `winner_dst`. Remaining arm tasks are abandoned.
+                // index to `winner_dst`. The losing arms are cancelled (see
+                // `cancel_select_losers`) so they cannot keep running.
                 let (index, task) = handles
                     .iter()
                     .enumerate()
@@ -4965,6 +4981,7 @@ impl RegVm {
                     .get(&task)
                     .and_then(|slot| slot.done.clone())
                     .expect("winning arm value");
+                self.cancel_select_losers(&handles, task);
                 self.write_saved_reg(tid, winner_dst, VmValue::Int(index as i64));
                 self.complete_wait_at(tid, value_dst, value);
             }
@@ -5481,8 +5498,13 @@ impl RegVm {
                         .find(|(_, tid)| self.tasks.get(tid).is_some_and(|s| s.done.is_some()))
                         .map(|(index, tid)| (index, *tid));
                     match ready {
-                        Some((index, tid)) => {
-                            let won = self.tasks.get(&tid).and_then(|s| s.done.clone()).expect("done");
+                        Some((index, won_tid)) => {
+                            let won = self
+                                .tasks
+                                .get(&won_tid)
+                                .and_then(|s| s.done.clone())
+                                .expect("done");
+                            self.cancel_select_losers(&tids, won_tid);
                             self.set_reg(base + *winner, VmValue::Int(index as i64));
                             self.set_reg(base + *value, won);
                         }

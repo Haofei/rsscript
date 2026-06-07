@@ -1202,9 +1202,210 @@ fn lower_hir_stmts(
         }
         Stmt::TaskGroup(stmt) => {
             let mut body_types = value_types.clone();
-            lower_hir_block(hir, function_name, &stmt.body, &mut body_types).statements
+            let mut statements =
+                lower_hir_block(hir, function_name, &stmt.body, &mut body_types).statements;
+            append_task_group_drains(&mut statements);
+            statements
         }
         _ => vec![lower_hir_stmt(hir, function_name, statement, value_types)],
+    }
+}
+
+/// Structured-concurrency drain for a `task_group` body. A `task_group` flattens
+/// into its statements (so every checker pass sees the body transparently), but
+/// the executable backends must still drain `async let` tasks that the scope
+/// spawned and never awaited — leaving the group joins them so background work
+/// runs to completion. The compiled backend does this via its scope guard; the
+/// reg VM has no such boundary after flattening, so we make the drain explicit
+/// here by appending an `await <handle>` for each un-awaited `async let`.
+///
+/// Only un-awaited handles are drained: the `await` checker (RS0030) consumes an
+/// `async let` name the first time it is awaited, so re-awaiting an already-joined
+/// handle would both be rejected and be redundant. Discard (`_`) async-lets can
+/// never be awaited by name, so they are always drained — and are renamed to
+/// unique handles so the appended `await` can reference them (this also fixes
+/// multiple `_` handles colliding on the same register/name).
+fn append_task_group_drains(statements: &mut Vec<HirStmt>) {
+    let awaited = collect_awaited_handle_names(statements);
+    let mut drains = Vec::new();
+    let mut discard_index = 0usize;
+    for statement in statements.iter_mut() {
+        let HirStmt::Let {
+            name,
+            value: Some(_),
+            is_async: true,
+            span,
+            ..
+        } = statement
+        else {
+            continue;
+        };
+        if name == "_" {
+            *name = format!("__rss_task_group_discard_{discard_index}");
+            discard_index += 1;
+        } else if awaited.contains(name) {
+            // Already awaited in the body; the handle is consumed.
+            continue;
+        }
+        let span = span.clone();
+        drains.push(HirStmt::Expr(HirExpr::Await {
+            value: Box::new(HirExpr::Ident {
+                name: name.clone(),
+                type_name: None,
+                span: span.clone(),
+            }),
+            type_name: None,
+            span,
+        }));
+    }
+    statements.extend(drains);
+}
+
+/// Names of `async let` handles the body awaits at least once, so the drain can
+/// skip them. `await x` and `await x?` (which wraps the ident in `Try`/`Effect`)
+/// both count as awaiting `x`.
+fn collect_awaited_handle_names(statements: &[HirStmt]) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for statement in statements {
+        walk_stmt_for_awaits(statement, &mut names);
+    }
+    names
+}
+
+fn walk_stmt_for_awaits(statement: &HirStmt, names: &mut HashSet<String>) {
+    match statement {
+        HirStmt::Let { value, .. } | HirStmt::Return { value, .. } => {
+            if let Some(value) = value {
+                walk_expr_for_awaits(value, names);
+            }
+        }
+        HirStmt::Expr(expr) => walk_expr_for_awaits(expr, names),
+        HirStmt::Assign { target, value, .. } => {
+            walk_expr_for_awaits(target, names);
+            walk_expr_for_awaits(value, names);
+        }
+        HirStmt::With { resource, body, .. } => {
+            walk_expr_for_awaits(resource, names);
+            walk_block_for_awaits(body, names);
+        }
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            walk_expr_for_awaits(condition, names);
+            walk_block_for_awaits(then_body, names);
+            if let Some(else_body) = else_body {
+                walk_block_for_awaits(else_body, names);
+            }
+        }
+        HirStmt::Loop {
+            condition, body, ..
+        } => {
+            if let Some(condition) = condition {
+                walk_expr_for_awaits(condition, names);
+            }
+            walk_block_for_awaits(body, names);
+        }
+        HirStmt::For { iterable, body, .. } => {
+            walk_expr_for_awaits(iterable, names);
+            walk_block_for_awaits(body, names);
+        }
+        HirStmt::Match { value, arms, .. } => {
+            walk_expr_for_awaits(value, names);
+            for arm in arms {
+                if let Some(guard) = &arm.guard {
+                    walk_expr_for_awaits(guard, names);
+                }
+                walk_block_for_awaits(&arm.body, names);
+            }
+        }
+        HirStmt::Select { arms, .. } => {
+            for arm in arms {
+                walk_expr_for_awaits(&arm.operation, names);
+                walk_block_for_awaits(&arm.body, names);
+            }
+        }
+        HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn walk_block_for_awaits(block: &HirBlock, names: &mut HashSet<String>) {
+    for statement in &block.statements {
+        walk_stmt_for_awaits(statement, names);
+    }
+}
+
+fn walk_expr_for_awaits(expr: &HirExpr, names: &mut HashSet<String>) {
+    match expr {
+        HirExpr::Await { value, .. } => {
+            if let Some(name) = awaited_handle_name(value) {
+                names.insert(name);
+            }
+            walk_expr_for_awaits(value, names);
+        }
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
+        HirExpr::ObjectLiteral { fields, .. } => {
+            for field in fields {
+                walk_expr_for_awaits(&field.value, names);
+            }
+        }
+        HirExpr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                walk_expr_for_awaits(&entry.key, names);
+                walk_expr_for_awaits(&entry.value, names);
+            }
+        }
+        HirExpr::ArrayLiteral { items, .. } => {
+            for item in items {
+                walk_expr_for_awaits(item, names);
+            }
+        }
+        HirExpr::Binary { left, right, .. } => {
+            walk_expr_for_awaits(left, names);
+            walk_expr_for_awaits(right, names);
+        }
+        HirExpr::Field { base, .. } => walk_expr_for_awaits(base, names),
+        HirExpr::Index { base, index, .. } => {
+            walk_expr_for_awaits(base, names);
+            walk_expr_for_awaits(index, names);
+        }
+        HirExpr::Call { receiver, args, .. } => {
+            if let Some(receiver) = receiver {
+                walk_expr_for_awaits(&receiver.value, names);
+            }
+            for arg in args {
+                walk_expr_for_awaits(&arg.value, names);
+            }
+        }
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Try { value, .. } => walk_expr_for_awaits(value, names),
+        HirExpr::Closure { body, .. } => walk_block_for_awaits(body, names),
+        HirExpr::Match { value, arms, .. } => {
+            walk_expr_for_awaits(value, names);
+            for arm in arms {
+                if let Some(guard) = &arm.guard {
+                    walk_expr_for_awaits(guard, names);
+                }
+                walk_block_for_awaits(&arm.body, names);
+            }
+        }
+    }
+}
+
+/// Peel `Try`/`Effect` wrappers off an awaited operand to recover the handle
+/// identifier, e.g. the `x` in `await x?`.
+fn awaited_handle_name(expr: &HirExpr) -> Option<String> {
+    match expr {
+        HirExpr::Ident { name, .. } => Some(name.clone()),
+        HirExpr::Try { value, .. } | HirExpr::Effect { value, .. } => awaited_handle_name(value),
+        _ => None,
     }
 }
 
