@@ -525,6 +525,55 @@ fn main() -> Unit {
     common::differential::assert_backends_agree("jit-cross-call.rss", source, &[]);
 }
 
+/// Inlining of callees with **internal control flow** (branches and a loop) — the
+/// native inliner splices the callee body into a fresh register window, remaps its
+/// internal jump targets, and routes each `Return` to the post-call join. `driver`
+/// has a loop (so it is JIT'd) and calls `clampish` (two branches) and `digits`
+/// (a loop). interp == jit == native == force-deopt == compiled.
+#[test]
+fn backends_agree_on_branchy_inlined_calls() {
+    let source = "\
+fn clampish(x: Int, lo: Int, hi: Int) -> Int {
+    if x < lo {
+        return lo
+    }
+    if x > hi {
+        return hi
+    }
+    return x
+}
+
+fn digits(value: Int) -> Int {
+    let mut n = value
+    if n < 0 {
+        n = 0 - n
+    }
+    let mut count = 0
+    while n > 0 {
+        count = count + 1
+        n = n / 10
+    }
+    return count
+}
+
+fn driver(limit: Int) -> Int {
+    let mut total = 0
+    let mut i = 0
+    while i < limit {
+        total = total + clampish(x: read i, lo: read 3, hi: read 17) + digits(value: read i)
+        i = i + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: driver(limit: read 250)))
+    return Unit
+}
+";
+    common::differential::assert_backends_agree("jit-branchy-inline.rss", source, &[]);
+}
+
 /// A function with **float parameters** plus an `Int` loop counter — exercises the
 /// native JIT's unification-based parameter typing (the float params are inferred
 /// `Float` via the `bias` anchor). interp == jit == native == compiled.

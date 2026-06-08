@@ -513,39 +513,38 @@ fn native_offset_regs(instr: &RegInstr, b: usize) -> Option<RegInstr> {
     })
 }
 
-/// If `callee` is a captureless, branch-free **leaf** (no calls; every reachable
-/// instruction is a pure native op ending in a single `Return`), return its body
-/// (the pure instructions, without the `Return`) and the returned register —
-/// inlinable with no control-flow rewriting.
+/// Whether `callee` can be inlined into a native function: captureless, arity
+/// matches, and every reachable instruction is a pure native-subset op, native
+/// control flow (jump/branch), or a `Return`. Unlike the original straight-line
+/// restriction this permits internal branches and loops; calls, suspends,
+/// matches, heap ops and runtime errors still make the caller fall back.
 #[cfg(feature = "native-jit")]
-fn native_straight_line_leaf(callee: &RegFunction, n_args: usize) -> Option<(Vec<RegInstr>, usize)> {
+fn native_callee_inlinable(callee: &RegFunction, n_args: usize) -> bool {
     if callee.captures != 0 || callee.params != n_args {
-        return None;
+        return false;
     }
     let reachable = native_reachable_instructions(&callee.code);
-    let mut body = Vec::new();
-    let mut ret_src = None;
-    for (i, instr) in callee.code.iter().enumerate() {
-        if !reachable[i] {
-            continue;
-        }
-        if ret_src.is_some() {
-            return None; // reachable code after the return → not straight-line
-        }
-        match instr {
-            RegInstr::Return { src } => ret_src = Some(*src),
-            other if native_offset_regs(other, 0).is_some() => body.push(other.clone()),
-            _ => return None, // jump/match/call/runtime-error → not a leaf line
-        }
-    }
-    Some((body, ret_src?))
+    callee.code.iter().enumerate().all(|(i, instr)| {
+        !reachable[i]
+            || matches!(
+                instr,
+                RegInstr::Jump { .. }
+                    | RegInstr::JumpIfBool { .. }
+                    | RegInstr::JumpIfIntCompare { .. }
+                    | RegInstr::Return { .. }
+            )
+            || native_offset_regs(instr, 0).is_some()
+    })
 }
 
-/// Inline straight-line leaf `CallKnown`s into `func`, returning the rewritten
-/// code and new register count — this is what makes a numeric function that calls
-/// small helpers native-eligible (the calls vanish). `None` if any call target is
-/// not inlinable (the function then falls back). Caller jump targets are remapped;
-/// spliced leaf bodies are branch-free.
+/// Inline `CallKnown`s to [`native_callee_inlinable`] callees into `func`,
+/// returning the rewritten code and new register count — this is what makes a
+/// function that calls small helpers native-eligible (the calls vanish). Callees
+/// may now contain internal branches/loops: each is spliced into a fresh register
+/// window, its internal jump targets are remapped, and every `Return` becomes a
+/// `Move` of the result into the call's destination plus a jump to the join point
+/// just past the spliced block. `None` if any call target is not inlinable (the
+/// function then falls back).
 #[cfg(feature = "native-jit")]
 fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<RegInstr>, usize)> {
     if !func
@@ -555,9 +554,27 @@ fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<R
     {
         return Some((func.code.clone(), func.regs));
     }
+
+    /// A jump target to be resolved once all positions are known.
+    enum Fix {
+        /// Target is a caller instruction index (use `index_map`).
+        Caller(usize),
+        /// Target is a callee instruction index within splice `id` (use its `cmap`).
+        Callee { id: usize, callee_target: usize },
+        /// A `Return` jump to the position just past splice `id`'s block.
+        Join(usize),
+    }
+    struct Splice {
+        cmap: Vec<usize>,
+        join: usize,
+    }
+
     let mut new_code: Vec<RegInstr> = Vec::new();
     let mut index_map = vec![0usize; func.code.len()];
+    let mut fixups: Vec<(usize, Fix)> = Vec::new();
+    let mut splices: Vec<Splice> = Vec::new();
     let mut next_reg = func.regs;
+
     for (i, instr) in func.code.iter().enumerate() {
         index_map[i] = new_code.len();
         match instr {
@@ -567,7 +584,9 @@ fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<R
                 args,
             } => {
                 let callee = unit.functions.get(*function)?;
-                let (body, ret_src) = native_straight_line_leaf(callee, args.len())?;
+                if !native_callee_inlinable(callee, args.len()) {
+                    return None;
+                }
                 let base = next_reg;
                 next_reg += callee.regs;
                 for (param, arg) in args.iter().enumerate() {
@@ -576,22 +595,99 @@ fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<R
                         src: *arg,
                     });
                 }
-                for body_instr in &body {
-                    new_code.push(native_offset_regs(body_instr, base)?);
+                let id = splices.len();
+                let reachable = native_reachable_instructions(&callee.code);
+                let mut cmap = vec![0usize; callee.code.len()];
+                for (ci, cinstr) in callee.code.iter().enumerate() {
+                    if !reachable[ci] {
+                        continue;
+                    }
+                    cmap[ci] = new_code.len();
+                    match cinstr {
+                        RegInstr::Return { src } => {
+                            new_code.push(RegInstr::Move {
+                                dst: *dst,
+                                src: base + src,
+                            });
+                            fixups.push((new_code.len(), Fix::Join(id)));
+                            new_code.push(RegInstr::Jump { target: 0 });
+                        }
+                        RegInstr::Jump { target } => {
+                            fixups.push((
+                                new_code.len(),
+                                Fix::Callee {
+                                    id,
+                                    callee_target: *target,
+                                },
+                            ));
+                            new_code.push(RegInstr::Jump { target: 0 });
+                        }
+                        RegInstr::JumpIfBool {
+                            cond,
+                            expected,
+                            target,
+                        } => {
+                            fixups.push((
+                                new_code.len(),
+                                Fix::Callee {
+                                    id,
+                                    callee_target: *target,
+                                },
+                            ));
+                            new_code.push(RegInstr::JumpIfBool {
+                                cond: cond + base,
+                                expected: *expected,
+                                target: 0,
+                            });
+                        }
+                        RegInstr::JumpIfIntCompare {
+                            lhs,
+                            rhs,
+                            op,
+                            expected,
+                            target,
+                        } => {
+                            fixups.push((
+                                new_code.len(),
+                                Fix::Callee {
+                                    id,
+                                    callee_target: *target,
+                                },
+                            ));
+                            new_code.push(RegInstr::JumpIfIntCompare {
+                                lhs: lhs + base,
+                                rhs: rhs + base,
+                                op: *op,
+                                expected: *expected,
+                                target: 0,
+                            });
+                        }
+                        pure => new_code.push(native_offset_regs(pure, base)?),
+                    }
                 }
-                new_code.push(RegInstr::Move {
-                    dst: *dst,
-                    src: base + ret_src,
-                });
+                let join = new_code.len();
+                splices.push(Splice { cmap, join });
+            }
+            RegInstr::Jump { target }
+            | RegInstr::JumpIfBool { target, .. }
+            | RegInstr::JumpIfIntCompare { target, .. } => {
+                fixups.push((new_code.len(), Fix::Caller(*target)));
+                new_code.push(instr.clone());
             }
             other => new_code.push(other.clone()),
         }
     }
-    for instr in &mut new_code {
-        match instr {
-            RegInstr::Jump { target }
-            | RegInstr::JumpIfBool { target, .. }
-            | RegInstr::JumpIfIntCompare { target, .. } => *target = index_map[*target],
+
+    for (pos, fix) in fixups {
+        let target = match fix {
+            Fix::Caller(t) => index_map[t],
+            Fix::Callee { id, callee_target } => splices[id].cmap[callee_target],
+            Fix::Join(id) => splices[id].join,
+        };
+        match &mut new_code[pos] {
+            RegInstr::Jump { target: t }
+            | RegInstr::JumpIfBool { target: t, .. }
+            | RegInstr::JumpIfIntCompare { target: t, .. } => *t = target,
             _ => {}
         }
     }
@@ -5879,8 +5975,8 @@ impl RegVm {
         // parameter type. If a runtime value doesn't match the inferred type, fall
         // back (the static inference assumed otherwise).
         let mut args = Vec::with_capacity(func.params);
-        for index in 0..func.params {
-            let bits = match (param_types[index], self.reg(base + index)) {
+        for (index, param_type) in param_types.iter().enumerate() {
+            let bits = match (param_type, self.reg(base + index)) {
                 (NativeTy::Int, VmValue::Int(value)) => *value,
                 (NativeTy::Float, VmValue::Float(value)) => value.to_bits() as i64,
                 (NativeTy::Bool, VmValue::Bool(value)) => i64::from(*value),
