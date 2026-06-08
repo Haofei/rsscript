@@ -31,11 +31,57 @@ type Term = (char, Vec<Factor>);
 /// A sum-of-products expression.
 type Expr = Vec<Term>;
 
-/// A program: a chain of `let` bindings (each an expression over earlier vars)
-/// plus a final expression that is printed.
+/// A comparison operator (renders to RSScript; evaluated by the oracle).
+#[derive(Debug, Clone, Copy)]
+enum Cmp {
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Eq,
+    Ne,
+}
+
+impl Cmp {
+    fn render(self) -> &'static str {
+        match self {
+            Cmp::Lt => "<",
+            Cmp::Le => "<=",
+            Cmp::Gt => ">",
+            Cmp::Ge => ">=",
+            Cmp::Eq => "==",
+            Cmp::Ne => "!=",
+        }
+    }
+
+    fn eval(self, lhs: i64, rhs: i64) -> bool {
+        match self {
+            Cmp::Lt => lhs < rhs,
+            Cmp::Le => lhs <= rhs,
+            Cmp::Gt => lhs > rhs,
+            Cmp::Ge => lhs >= rhs,
+            Cmp::Eq => lhs == rhs,
+            Cmp::Ne => lhs != rhs,
+        }
+    }
+}
+
+/// A guarded adjustment: `if <lhs> <cmp> <rhs> { acc = acc + <adjustment> }`.
+/// Exercises the JIT's comparison + jump instructions.
+#[derive(Debug, Clone)]
+struct Guard {
+    lhs: Expr,
+    cmp: Cmp,
+    rhs: Expr,
+    adjustment: Expr,
+}
+
+/// A program: a chain of `let` bindings, guarded conditional adjustments, and a
+/// final result — all integer-typed, run inside a JIT-eligible `compute()`.
 #[derive(Debug, Clone)]
 struct Program {
     bindings: Vec<Expr>,
+    guards: Vec<Guard>,
     result: Expr,
 }
 
@@ -74,8 +120,26 @@ fn arb_program() -> impl Strategy<Value = Program> {
             }
             strategy.prop_flat_map(|bindings| {
                 let count = bindings.len();
-                arb_expr(count).prop_map(move |result| Program {
+                let cmp = prop_oneof![
+                    Just(Cmp::Lt),
+                    Just(Cmp::Le),
+                    Just(Cmp::Gt),
+                    Just(Cmp::Ge),
+                    Just(Cmp::Eq),
+                    Just(Cmp::Ne),
+                ];
+                let guard = (arb_expr(count), cmp, arb_expr(count), arb_expr(count)).prop_map(
+                    |(lhs, cmp, rhs, adjustment)| Guard {
+                        lhs,
+                        cmp,
+                        rhs,
+                        adjustment,
+                    },
+                );
+                let guards = prop::collection::vec(guard, 0..=2);
+                (guards, arb_expr(count)).prop_map(move |(guards, result)| Program {
                     bindings: bindings.clone(),
+                    guards,
                     result,
                 })
             })
@@ -90,7 +154,16 @@ fn oracle(program: &Program) -> Option<i64> {
         let value = eval_expr(binding, &vars)?;
         vars.push(value);
     }
-    eval_expr(&program.result, &vars)
+    let mut acc = eval_expr(&program.result, &vars)?;
+    for guard in &program.guards {
+        let lhs = eval_expr(&guard.lhs, &vars)?;
+        let rhs = eval_expr(&guard.rhs, &vars)?;
+        if guard.cmp.eval(lhs, rhs) {
+            let adjustment = eval_expr(&guard.adjustment, &vars)?;
+            acc = acc.checked_add(adjustment)?;
+        }
+    }
+    Some(acc)
 }
 
 fn eval_expr(expr: &Expr, vars: &[i64]) -> Option<i64> {
@@ -147,8 +220,17 @@ fn render(program: &Program) -> String {
     for (index, binding) in program.bindings.iter().enumerate() {
         source.push_str(&format!("    let x{index} = {}\n", render_expr(binding)));
     }
-    source.push_str(&format!("    let result = {}\n", render_expr(&program.result)));
-    source.push_str("    return result\n}\n\n");
+    source.push_str(&format!("    let mut acc = {}\n", render_expr(&program.result)));
+    for guard in &program.guards {
+        source.push_str(&format!(
+            "    if {} {} {} {{\n        acc = acc + {}\n    }}\n",
+            render_expr(&guard.lhs),
+            guard.cmp.render(),
+            render_expr(&guard.rhs),
+            render_expr(&guard.adjustment),
+        ));
+    }
+    source.push_str("    return acc\n}\n\n");
     source.push_str("fn main() -> Unit {\n");
     source.push_str("    Log.write(message: read String.from_int(value: compute()))\n");
     source.push_str("    return Unit\n}\n");
