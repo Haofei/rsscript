@@ -6,6 +6,21 @@ VM interpreter, the JIT, and the compiled (Rust-lowering) backend.
 Design invariants (must hold at every step): see `docs/jit-roadmap.md`.
 Status legend: `[x]` done · `[ ]` todo · `[~]` in progress.
 
+## What kind of JIT is this?
+
+**Method-based (per-function) baseline JIT — not a tracing JIT, not native (yet).**
+
+- **Per-function, not tracing:** it compiles whole functions, deciding eligibility
+  up front. A tracing JIT instead records hot linear execution *traces* (across
+  call/loop boundaries) and compiles those with guards; we don't do that.
+- **Tier-0 = specializing executor:** today it executes the supported instruction
+  subset via a reduced-dispatch loop (`RegVm::run_jit`) that reuses the
+  interpreter's exact semantics, with per-function fallback. This is gap-free but
+  only a modest speedup (no native code, values still boxed `VmValue`).
+- **Next = native method JIT:** Cranelift codegen + unboxed numeric registers in a
+  separate crate (see below) is where real performance comes from. Tracing could
+  be a later alternative/addition, but the method JIT is the chosen path.
+
 ## Done
 
 - [x] **N-way differential framework** — `Backend` trait (interpreter / jit /
@@ -21,7 +36,10 @@ Status legend: `[x]` done · `[ ]` todo · `[~]` in progress.
 - [x] **Covered instruction subset (tier-0):** loads (unit/int/float/bool/string),
   move, deep-copy, manage, int arithmetic/bitwise/shift, int comparisons,
   equal/not-equal, jumps (uncond / if-bool / if-int-compare), get/set field,
-  make struct/variant/list/object/map, return.
+  make struct/variant/list/object/map, option/result (make-some, load-none,
+  unwrap-some, unwrap-variant-value), match (option/result/variant/map-get),
+  make-closure, runtime-error, return.
+- [x] **Option/Result/match coverage** verified three-way across the parity suite.
 - [x] **Out-of-range int literal rejected at the frontend** (RS0033) — keeps the
   three backends consistent.
 
@@ -32,7 +50,7 @@ Status legend: `[x]` done · `[ ]` todo · `[~]` in progress.
   `try_exec_pure(instr, base, &mut ip)` used by both (structural gap-freeness;
   currently the two copies are guarded only by the differential).
 - [ ] Collection get/set + index ops (List/Map get/set) in the eligible subset.
-- [ ] `Match*` (option/result/variant) in the eligible subset.
+- [x] `Match*` (option/result/variant/map-get) in the eligible subset.
 - [ ] Cross-function: let JIT-compiled code call other functions (needs frame
   push integration) — currently any `Call` makes a function fall back.
 - [ ] Float / string / bytes ops parity coverage in the generator.

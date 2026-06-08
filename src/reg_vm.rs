@@ -99,6 +99,16 @@ fn jit_supported_instruction(instr: &RegInstr) -> bool {
             | RegInstr::MakeList { .. }
             | RegInstr::MakeObject { .. }
             | RegInstr::MakeMap { .. }
+            | RegInstr::MakeSome { .. }
+            | RegInstr::LoadNone { .. }
+            | RegInstr::MakeClosure { .. }
+            | RegInstr::MatchOption { .. }
+            | RegInstr::MatchResult { .. }
+            | RegInstr::MatchVariant { .. }
+            | RegInstr::MatchMapGet { .. }
+            | RegInstr::UnwrapSome { .. }
+            | RegInstr::UnwrapVariantValue { .. }
+            | RegInstr::RuntimeError { .. }
             | RegInstr::AddInt { .. }
             | RegInstr::SubInt { .. }
             | RegInstr::MulInt { .. }
@@ -5069,6 +5079,127 @@ impl RegVm {
                     if eval_numeric_compare(*op, l, r)? == *expected {
                         ip = *target;
                     }
+                }
+                RegInstr::MakeSome { dst, value } => {
+                    let value = self.reg(base + *value).clone();
+                    self.set_reg(base + *dst, VmValue::OptionSome(Box::new(value)));
+                }
+                RegInstr::LoadNone { dst } => {
+                    self.set_reg(base + *dst, VmValue::OptionNone);
+                }
+                RegInstr::MakeClosure {
+                    dst,
+                    function: callee,
+                    captures,
+                } => {
+                    let mut captured = Vec::with_capacity(captures.len());
+                    for reg in captures {
+                        captured.push(self.reg(base + *reg).clone());
+                    }
+                    self.set_reg(
+                        base + *dst,
+                        VmValue::Closure(Rc::new(VmClosure {
+                            function: *callee,
+                            captures: captured,
+                        })),
+                    );
+                }
+                RegInstr::MatchOption {
+                    src,
+                    some_ip,
+                    none_ip,
+                } => match self.reg(base + *src) {
+                    VmValue::OptionSome(_) => ip = *some_ip,
+                    VmValue::OptionNone => ip = *none_ip,
+                    other => {
+                        return Err(EvalError::Runtime(format!(
+                            "reg VM Option match expected Option, got `{}`.",
+                            other.display()
+                        )));
+                    }
+                },
+                RegInstr::MatchResult { src, ok_ip, err_ip } => match self.reg(base + *src) {
+                    VmValue::Variant(data) if data.name.as_ref() == "Ok" => ip = *ok_ip,
+                    VmValue::Variant(data) if data.name.as_ref() == "Err" => ip = *err_ip,
+                    other => {
+                        return Err(EvalError::Runtime(format!(
+                            "reg VM Result match expected Result, got `{}`.",
+                            other.display()
+                        )));
+                    }
+                },
+                RegInstr::MatchVariant {
+                    src,
+                    expected,
+                    match_ip,
+                    else_ip,
+                } => match self.reg(base + *src) {
+                    VmValue::Variant(data) if data.name.as_ref() == expected.as_str() => {
+                        ip = *match_ip
+                    }
+                    VmValue::Variant(_) => ip = *else_ip,
+                    other => {
+                        return Err(EvalError::Runtime(format!(
+                            "reg VM variant match expected `{expected}`, got `{}`.",
+                            other.display()
+                        )));
+                    }
+                },
+                RegInstr::MatchMapGet {
+                    map,
+                    key,
+                    value_dst,
+                    some_ip,
+                    none_ip,
+                } => {
+                    let map = expect_map_ref(self.reg(base + *map))?;
+                    let key = map_key_from_value(self.reg(base + *key))?;
+                    if let Some(value) = map.borrow().get(&key).cloned() {
+                        self.set_reg(base + *value_dst, value);
+                        ip = *some_ip;
+                    } else {
+                        ip = *none_ip;
+                    }
+                }
+                RegInstr::UnwrapSome { dst, src } => {
+                    let value = match self.reg(base + *src) {
+                        VmValue::OptionSome(value) => (**value).clone(),
+                        other => {
+                            return Err(EvalError::Runtime(format!(
+                                "reg VM Some binding expected Some, got `{}`.",
+                                other.display()
+                            )));
+                        }
+                    };
+                    self.set_reg(base + *dst, value);
+                }
+                RegInstr::UnwrapVariantValue { dst, src, expected } => {
+                    let value = match self.reg(base + *src) {
+                        VmValue::Variant(data) if data.name.as_ref() == expected.as_str() => data
+                            .fields
+                            .get("value")
+                            .cloned()
+                            .or_else(|| {
+                                (data.fields.len() == 1)
+                                    .then(|| data.fields.values().next().cloned())
+                                    .flatten()
+                            })
+                            .ok_or_else(|| {
+                                EvalError::Runtime(format!(
+                                    "reg VM `{expected}` variant is missing value."
+                                ))
+                            })?,
+                        other => {
+                            return Err(EvalError::Runtime(format!(
+                                "reg VM expected `{expected}` variant, got `{}`.",
+                                other.display()
+                            )));
+                        }
+                    };
+                    self.set_reg(base + *dst, value);
+                }
+                RegInstr::RuntimeError { message } => {
+                    return Err(EvalError::Runtime(message.clone()));
                 }
                 RegInstr::Return { src } => return Ok(self.take_reg(base + *src)),
                 // Eligibility (`jit_supported_instruction`) guarantees only the
