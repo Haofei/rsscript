@@ -175,7 +175,7 @@ pub struct Diagnostic {
     pub fixes: Vec<Fix>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct DiagnosticExplanation {
     pub code: &'static str,
     pub title: &'static str,

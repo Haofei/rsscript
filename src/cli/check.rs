@@ -10,11 +10,20 @@ use rsscript::{
 use super::package::run_package_check;
 use super::{is_package_directory, print_usage, read_interface_sources, required_flag_value};
 
-fn parse_explain_args(args: &[String]) -> Option<&str> {
-    let [flag, code] = args else {
-        return None;
-    };
-    (flag == "--explain").then_some(code.as_str())
+/// Parse `--explain <CODE>` (optionally with `--json`), in any order.
+fn parse_explain_args(args: &[String]) -> Option<(&str, bool)> {
+    let mut saw_explain = false;
+    let mut json = false;
+    let mut code = None;
+    for arg in args {
+        match arg.as_str() {
+            "--explain" => saw_explain = true,
+            "--json" => json = true,
+            other if !other.starts_with("--") => code = Some(other),
+            _ => return None,
+        }
+    }
+    saw_explain.then(|| code.map(|code| (code, json))).flatten()
 }
 #[derive(Debug)]
 pub(crate) struct CheckOptions<'a> {
@@ -74,12 +83,22 @@ fn package_check_option_error(options: &CheckOptions<'_>) -> Option<String> {
     None
 }
 pub(crate) fn run_check(args: &[String]) -> ExitCode {
-    if let Some(code) = parse_explain_args(args) {
+    if let Some((code, json)) = parse_explain_args(args) {
         let Some(explanation) = explain_diagnostic_code(code) else {
             eprintln!("unknown diagnostic code: {code}");
             return ExitCode::from(2);
         };
-        print!("{}", format_diagnostic_explanation(explanation));
+        if json {
+            // Machine-readable explanation for agents. (Per-diagnostic `fixes`
+            // with applicability are already in `rss check --json` output.)
+            println!(
+                "{}",
+                serde_json::to_string(&explanation)
+                    .expect("diagnostic explanation serializes")
+            );
+        } else {
+            print!("{}", format_diagnostic_explanation(explanation));
+        }
         return ExitCode::SUCCESS;
     }
 
