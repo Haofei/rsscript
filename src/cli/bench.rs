@@ -712,7 +712,7 @@ mod tests {
         assert_eq!(
             super::parse_bench_args(&args(&["--mode", "fast", "bench.rss"]))
                 .expect_err("unknown mode should fail"),
-            "invalid benchmark mode `fast`; expected eval, vm, vm-internal, run, release, or release-internal."
+            "invalid benchmark mode `fast`; expected eval, vm, vm-internal, jit-internal, run, release, or release-internal."
         );
         assert_eq!(
             super::parse_bench_args(&args(&["--vm", "fast", "bench.rss"]))
