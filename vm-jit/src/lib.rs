@@ -33,7 +33,23 @@ use cranelift_codegen::ir::{AbiParam, Block, InstBuilder, MemFlags, Value, types
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_jit::{JITBuilder, JITModule};
-use cranelift_module::{Linkage, Module, default_libcall_names};
+use cranelift_module::{FuncId, Linkage, Module, default_libcall_names};
+
+/// Host helper functions the compiled code calls to read heap values (struct
+/// fields, list elements) that don't fit in a scalar register. The `rsscript`
+/// crate supplies these `extern "C"` pointers; they look the value up in a
+/// per-call table the VM populates and return it unboxed as `i64`, signalling any
+/// type/bounds mismatch out-of-band (the VM checks and falls back). The native
+/// code just calls and uses the result.
+#[derive(Clone, Copy)]
+pub struct HostHelpers {
+    /// `(struct_handle, slot) -> i64`: the struct's `slot`-th field as an `Int`.
+    pub field_int: *const u8,
+    /// `(list_handle) -> i64`: list length.
+    pub list_len: *const u8,
+    /// `(list_handle, index) -> i64`: the list element at `index` as an `Int`.
+    pub list_get_int: *const u8,
+}
 
 /// Version of the [`JitInstr`]/[`JitFunction`] IR this crate consumes. The
 /// producer (`rsscript`) translates its private bytecode into this stable,
@@ -185,6 +201,26 @@ pub enum JitInstr {
     /// Unconditionally bail to the interpreter (e.g. a `RuntimeError` instruction:
     /// re-running on the interpreter reproduces the exact error).
     Bail,
+    /// `dst = field[slot]` of the struct/variant handle in `base`, read as `Int`.
+    /// Compiles to a call to [`HostHelpers::field_int`].
+    FieldInt {
+        dst: u32,
+        base: u32,
+        slot: u32,
+    },
+    /// `dst = len` of the list handle in `base`. Calls [`HostHelpers::list_len`].
+    ListLen {
+        dst: u32,
+        base: u32,
+    },
+    /// `dst = list[index]` (as `Int`) of the list handle in `base`. Calls
+    /// [`HostHelpers::list_get_int`]; an out-of-bounds/non-int element makes the
+    /// helper flag a fallback (the VM re-runs on the interpreter).
+    ListGetInt {
+        dst: u32,
+        base: u32,
+        index: u32,
+    },
 }
 
 /// Storage class of a register: an unboxed `i64` (integers and booleans) or an
@@ -196,6 +232,10 @@ pub enum JitInstr {
 pub enum JitValueType {
     Int,
     Float,
+    /// An opaque handle (index into the VM's per-call heap-value table) to a heap
+    /// value — a struct/list/etc. — that can't live in a scalar register. Stored
+    /// as `i64`; only valid as the `base` of a heap-read instruction.
+    Handle,
 }
 
 /// A compilable function: register count, per-register storage class, and the
@@ -235,6 +275,18 @@ fn err(context: &str, e: impl std::fmt::Display) -> JitError {
     JitError(format!("{context}: {e}"))
 }
 
+/// Declare an imported host helper with `n_args` `i64` params and an `i64` result.
+fn declare_import(module: &mut JITModule, name: &str, n_args: usize) -> Result<FuncId, JitError> {
+    let mut sig = module.make_signature();
+    for _ in 0..n_args {
+        sig.params.push(AbiParam::new(types::I64));
+    }
+    sig.returns.push(AbiParam::new(types::I64));
+    module
+        .declare_function(name, Linkage::Import, &sig)
+        .map_err(|e| err("declare import", e))
+}
+
 /// Owns the JIT-compiled machine code. Compiled functions live as long as the
 /// module, so callers keep this alive and invoke by [`CompiledId`].
 pub struct NativeModule {
@@ -243,6 +295,17 @@ pub struct NativeModule {
     fbctx: FunctionBuilderContext,
     funcs: Vec<CompiledAbi>,
     counter: u32,
+    /// Declared host-helper imports (see [`HostHelpers`]).
+    imports: HostFuncs,
+}
+
+/// `FuncId`s of the declared host helpers, resolved into per-function `FuncRef`s
+/// at codegen time.
+#[derive(Clone, Copy)]
+struct HostFuncs {
+    field_int: FuncId,
+    list_len: FuncId,
+    list_get_int: FuncId,
 }
 
 /// Handle to a function compiled into a [`NativeModule`].
@@ -250,7 +313,7 @@ pub struct NativeModule {
 pub struct CompiledId(usize);
 
 impl NativeModule {
-    pub fn new() -> Result<Self, JitError> {
+    pub fn new(helpers: HostHelpers) -> Result<Self, JitError> {
         let mut flags = settings::builder();
         // Plain JIT: no PIC, and optimize for speed (this is the hot path).
         flags
@@ -269,8 +332,17 @@ impl NativeModule {
             .map_err(|e| err("host isa", e))?
             .finish(flags)
             .map_err(|e| err("isa finish", e))?;
-        let builder = JITBuilder::with_isa(isa, default_libcall_names());
-        let module = JITModule::new(builder);
+        let mut builder = JITBuilder::with_isa(isa, default_libcall_names());
+        // Register the host helper addresses so imported calls link to them.
+        builder.symbol("rss_jit_field_int", helpers.field_int);
+        builder.symbol("rss_jit_list_len", helpers.list_len);
+        builder.symbol("rss_jit_list_get_int", helpers.list_get_int);
+        let mut module = JITModule::new(builder);
+        let imports = HostFuncs {
+            field_int: declare_import(&mut module, "rss_jit_field_int", 2)?,
+            list_len: declare_import(&mut module, "rss_jit_list_len", 1)?,
+            list_get_int: declare_import(&mut module, "rss_jit_list_get_int", 2)?,
+        };
         let ctx = module.make_context();
         Ok(Self {
             module,
@@ -278,6 +350,7 @@ impl NativeModule {
             fbctx: FunctionBuilderContext::new(),
             funcs: Vec::new(),
             counter: 0,
+            imports,
         })
     }
 
@@ -294,7 +367,13 @@ impl NativeModule {
             .returns
             .push(AbiParam::new(types::I8));
 
-        build_function(&mut self.ctx.func, &mut self.fbctx, function);
+        build_function(
+            &mut self.ctx.func,
+            &mut self.fbctx,
+            &mut self.module,
+            self.imports,
+            function,
+        );
 
         let name = format!("rss_jit_{}", self.counter);
         self.counter += 1;
@@ -337,9 +416,16 @@ impl NativeModule {
 fn build_function(
     func: &mut cranelift_codegen::ir::Function,
     fbctx: &mut FunctionBuilderContext,
+    module: &mut JITModule,
+    imports: HostFuncs,
     program: &JitFunction,
 ) {
     let mut bcx = FunctionBuilder::new(func, fbctx);
+
+    // Per-function references to the imported host helpers (heap reads call these).
+    let field_int_ref = module.declare_func_in_func(imports.field_int, bcx.func);
+    let list_len_ref = module.declare_func_in_func(imports.list_len, bcx.func);
+    let list_get_int_ref = module.declare_func_in_func(imports.list_get_int, bcx.func);
 
     let n = program.code.len();
     let n_regs = program.n_regs as usize;
@@ -620,6 +706,26 @@ fn build_function(
                 bcx.ins().jump(fallback, &[]);
                 terminated = true;
             }
+            JitInstr::FieldInt { dst, base, slot } => {
+                let handle = bcx.use_var(reg(*base));
+                let slot_v = bcx.ins().iconst(types::I64, i64::from(*slot));
+                let call = bcx.ins().call(field_int_ref, &[handle, slot_v]);
+                let result = bcx.inst_results(call)[0];
+                bcx.def_var(reg(*dst), result);
+            }
+            JitInstr::ListLen { dst, base } => {
+                let handle = bcx.use_var(reg(*base));
+                let call = bcx.ins().call(list_len_ref, &[handle]);
+                let result = bcx.inst_results(call)[0];
+                bcx.def_var(reg(*dst), result);
+            }
+            JitInstr::ListGetInt { dst, base, index } => {
+                let handle = bcx.use_var(reg(*base));
+                let index_v = bcx.use_var(reg(*index));
+                let call = bcx.ins().call(list_get_int_ref, &[handle, index_v]);
+                let result = bcx.inst_results(call)[0];
+                bcx.def_var(reg(*dst), result);
+            }
         }
     }
     if !terminated {
@@ -703,6 +809,26 @@ fn emit_checked_shift(
 mod tests {
     use super::*;
 
+    extern "C" fn noop_field_int(_handle: i64, _slot: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_list_len(_handle: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_list_get_int(_handle: i64, _index: i64) -> i64 {
+        0
+    }
+
+    /// A module with no-op host helpers (these tests exercise only scalar ops).
+    fn module() -> NativeModule {
+        NativeModule::new(HostHelpers {
+            field_int: noop_field_int as *const u8,
+            list_len: noop_list_len as *const u8,
+            list_get_int: noop_list_get_int as *const u8,
+        })
+        .unwrap()
+    }
+
     fn f(n_params: u32, n_regs: u32, code: Vec<JitInstr>) -> JitFunction {
         JitFunction {
             n_params,
@@ -725,7 +851,7 @@ mod tests {
     #[test]
     fn compiles_and_runs_float_arith() {
         use JitValueType::{Float, Int};
-        let mut m = NativeModule::new().unwrap();
+        let mut m = module();
         // fn(a: f64, b: f64) -> f64 { return a * b - a }  regs 0=a,1=b,2=t
         let id = m
             .compile(&ft(
@@ -754,7 +880,7 @@ mod tests {
 
     #[test]
     fn compiles_and_runs_add() {
-        let mut m = NativeModule::new().unwrap();
+        let mut m = module();
         // fn(a, b) { return a + b }   regs: 0=a,1=b,2=tmp
         let id = m
             .compile(&f(
@@ -780,7 +906,7 @@ mod tests {
     fn loop_sum_to_n() {
         // fn(n) { total=0; i=1; while i<=n { total+=i; i+=1 } return total }
         // regs: 0=n, 1=total, 2=i, 3=one
-        let mut m = NativeModule::new().unwrap();
+        let mut m = module();
         let code = vec![
             JitInstr::LoadInt { dst: 1, value: 0 }, // 0 total=0
             JitInstr::LoadInt { dst: 2, value: 1 }, // 1 i=1
@@ -815,7 +941,7 @@ mod tests {
 
     #[test]
     fn div_by_zero_bails() {
-        let mut m = NativeModule::new().unwrap();
+        let mut m = module();
         let id = m
             .compile(&f(
                 2,

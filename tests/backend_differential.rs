@@ -489,6 +489,44 @@ fn main() -> Unit {
     common::differential::assert_backends_agree("ordered-collections.rss", source, &[]);
 }
 
+/// Native heap reads: a loop function with a **struct parameter** (field reads via
+/// `GetFieldSlot`) and a **list parameter** (`List.len`/`List.get`). These compile
+/// natively now via host-helper calls (the struct/list passed as a handle), with
+/// out-of-the-subset reads falling back. interp == jit == native == force-deopt ==
+/// compiled.
+#[test]
+fn backends_agree_on_native_heap_reads() {
+    let source = "\
+struct Vec2 {
+    x: Int,
+    y: Int
+}
+
+fn blend(p: read Vec2, xs: read List<Int>, n: Int) -> Int {
+    let mut acc = 0
+    let mut i = 0
+    let len = List.len<Int>(list: read xs)
+    while i < n {
+        acc = acc + p.x * 2 + p.y
+        if i < len {
+            acc = acc + List.get<Int>(list: read xs, index: i)
+        }
+        acc = acc - i
+        i = i + 1
+    }
+    return acc
+}
+
+fn main() -> Unit {
+    let xs = [10, 20, 30, 40]
+    let total = blend(p: read Vec2(x: 5, y: 9), xs: read xs, n: read 64)
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+";
+    common::differential::assert_backends_agree("jit-native-heap-reads.rss", source, &[]);
+}
+
 /// JIT-eligible functions that call other JIT-eligible functions: the tier-0
 /// executor now drives non-suspending, non-recursive callees in-line. `accumulate`
 /// has a loop (so it is JIT'd) and calls two leaf helpers — interp == jit ==

@@ -305,6 +305,9 @@ enum NativeTy {
     Int,
     Bool,
     Float,
+    /// An opaque handle to a heap value (struct/list) passed as a parameter, used
+    /// only as the base of a heap-read instruction. Stored as `i64` (a table index).
+    Handle,
 }
 
 #[cfg(feature = "native-jit")]
@@ -314,6 +317,7 @@ impl NativeTy {
             // Booleans are stored as `i64` 0/1, like integers.
             NativeTy::Int | NativeTy::Bool => vm_jit::JitValueType::Int,
             NativeTy::Float => vm_jit::JitValueType::Float,
+            NativeTy::Handle => vm_jit::JitValueType::Handle,
         }
     }
 }
@@ -350,6 +354,10 @@ fn native_subset_instruction(instr: &RegInstr) -> bool {
             | RegInstr::JumpIfIntCompare { .. }
             | RegInstr::Return { .. }
             | RegInstr::RuntimeError { .. }
+            // Heap reads via host-helper calls (base must be a handle parameter).
+            | RegInstr::GetFieldSlot { .. }
+            | RegInstr::ListLen { .. }
+            | RegInstr::ListGet { .. }
     )
 }
 
@@ -783,6 +791,21 @@ fn translate_to_native_jit(
                 RegInstr::Move { dst, src } => native_unify(ty, *dst, *src, c),
                 RegInstr::JumpIfBool { cond, .. } => native_set_ty(ty, *cond, NativeTy::Bool, c),
                 RegInstr::JumpIfIntCompare { lhs, rhs, .. } => native_unify(ty, *lhs, *rhs, c),
+                // Heap reads: the base is a handle, the result an Int (the list
+                // index is also an Int).
+                RegInstr::GetFieldSlot { dst, base, .. } => {
+                    native_set_ty(ty, *base, NativeTy::Handle, c)
+                        && native_set_ty(ty, *dst, NativeTy::Int, c)
+                }
+                RegInstr::ListLen { dst, list } => {
+                    native_set_ty(ty, *list, NativeTy::Handle, c)
+                        && native_set_ty(ty, *dst, NativeTy::Int, c)
+                }
+                RegInstr::ListGet { dst, list, index } => {
+                    native_set_ty(ty, *list, NativeTy::Handle, c)
+                        && native_set_ty(ty, *index, NativeTy::Int, c)
+                        && native_set_ty(ty, *dst, NativeTy::Int, c)
+                }
                 _ => true,
             };
             if !ok {
@@ -797,6 +820,9 @@ fn translate_to_native_jit(
     // polymorphic op lowers consistently and native equality matches `VmValue`).
     let numeric = |reg: usize| matches!(ty[reg], Some(NativeTy::Int | NativeTy::Float));
     let same = |a: usize, b: usize| ty[a].is_some() && ty[a] == ty[b];
+    // A handle register must be a *parameter*: handles only enter via the caller's
+    // heap args (`try_native`), never produced by a native instruction.
+    let handle_param = |reg: usize| ty[reg] == Some(NativeTy::Handle) && reg < func.params;
     let r = |reg: usize| reg as u32;
     let cmp = |op: &RegIntCompare| match op {
         RegIntCompare::Less => JitCompare::Lt,
@@ -989,6 +1015,29 @@ fn translate_to_native_jit(
                 JitInstr::Return { src: r(*src) }
             }
             RegInstr::RuntimeError { .. } => JitInstr::Bail,
+            RegInstr::GetFieldSlot { dst, base, slot } => {
+                require(handle_param(*base) && int(*dst))?;
+                JitInstr::FieldInt {
+                    dst: r(*dst),
+                    base: r(*base),
+                    slot: *slot as u32,
+                }
+            }
+            RegInstr::ListLen { dst, list } => {
+                require(handle_param(*list) && int(*dst))?;
+                JitInstr::ListLen {
+                    dst: r(*dst),
+                    base: r(*list),
+                }
+            }
+            RegInstr::ListGet { dst, list, index } => {
+                require(handle_param(*list) && int(*index) && int(*dst))?;
+                JitInstr::ListGetInt {
+                    dst: r(*dst),
+                    base: r(*list),
+                    index: r(*index),
+                }
+            }
             // `native_subset_instruction` already rejected everything else.
             _ => return None,
         };
@@ -5933,11 +5982,120 @@ compile_ms={:.3} run_ms={:.3}",
     }
 }
 
+// --- Native-JIT host helpers ------------------------------------------------
+//
+// Heap values (structs/lists) can't live in the native tier's scalar registers,
+// so the compiled code reads them by calling back into these helpers, passing an
+// opaque handle (an index into a per-call table the VM fills in `try_native`).
+// A read that can't be satisfied (wrong type / out of bounds) sets a bail flag;
+// `try_native` checks it and re-runs the function on the interpreter, preserving
+// the gap-free model. `rsscript` stays `#![forbid(unsafe_code)]`: defining these
+// `extern "C"` functions and taking their addresses needs no `unsafe` — the only
+// `unsafe` (the indirect call) lives in `vm-jit`.
+
+#[cfg(feature = "native-jit")]
+thread_local! {
+    /// Heap values for the in-flight native call, indexed by handle.
+    static JIT_HEAP_ARGS: RefCell<Vec<VmValue>> = const { RefCell::new(Vec::new()) };
+    /// Set when a helper can't satisfy a read → the VM falls back.
+    static JIT_BAILED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_host_helpers() -> vm_jit::HostHelpers {
+    vm_jit::HostHelpers {
+        field_int: rss_jit_field_int as *const u8,
+        list_len: rss_jit_list_len as *const u8,
+        list_get_int: rss_jit_list_get_int as *const u8,
+    }
+}
+
+/// Look up the heap value for `handle` and apply `read`; `None` (→ bail) if the
+/// handle is invalid or the read fails.
+#[cfg(feature = "native-jit")]
+fn jit_heap_read<R>(handle: i64, read: impl FnOnce(&VmValue) -> Option<R>) -> Option<R> {
+    let index = usize::try_from(handle).ok()?;
+    JIT_HEAP_ARGS.with(|args| args.borrow().get(index).and_then(|value| read(value)))
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_struct_field_int(value: &VmValue, slot: usize) -> Option<i64> {
+    match value {
+        VmValue::Struct(data) | VmValue::Variant(data) => match data.fields.get(slot)? {
+            VmValue::Int(v) => Some(*v),
+            _ => None,
+        },
+        VmValue::Managed(inner) => jit_struct_field_int(&inner.borrow(), slot),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_list_len(value: &VmValue) -> Option<i64> {
+    match value {
+        VmValue::List(list) => i64::try_from(list.borrow().len()).ok(),
+        VmValue::Managed(inner) => jit_list_len(&inner.borrow()),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_list_get_int(value: &VmValue, index: i64) -> Option<i64> {
+    match value {
+        VmValue::List(list) => {
+            let index = usize::try_from(index).ok()?;
+            match list.borrow().get(index)? {
+                VmValue::Int(v) => Some(*v),
+                _ => None,
+            }
+        }
+        VmValue::Managed(inner) => jit_list_get_int(&inner.borrow(), index),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_field_int(handle: i64, slot: i64) -> i64 {
+    match usize::try_from(slot)
+        .ok()
+        .and_then(|slot| jit_heap_read(handle, |value| jit_struct_field_int(value, slot)))
+    {
+        Some(value) => value,
+        None => {
+            JIT_BAILED.with(|b| b.set(true));
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_list_len(handle: i64) -> i64 {
+    match jit_heap_read(handle, jit_list_len) {
+        Some(value) => value,
+        None => {
+            JIT_BAILED.with(|b| b.set(true));
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_list_get_int(handle: i64, index: i64) -> i64 {
+    match jit_heap_read(handle, |value| jit_list_get_int(value, index)) {
+        Some(value) => value,
+        None => {
+            JIT_BAILED.with(|b| b.set(true));
+            0
+        }
+    }
+}
+
 #[cfg(feature = "native-jit")]
 impl NativeState {
     fn new(tier_up_threshold: u32, force_bail: bool) -> Result<Self, EvalError> {
         Ok(Self {
-            module: vm_jit::NativeModule::new().map_err(|e| EvalError::Runtime(e.to_string()))?,
+            module: vm_jit::NativeModule::new(jit_host_helpers())
+                .map_err(|e| EvalError::Runtime(e.to_string()))?,
             cache: HashMap::new(),
             counts: HashMap::new(),
             tier_up_threshold,
@@ -6104,16 +6262,33 @@ impl RegVm {
             };
             entry?
         };
-        // Phase 2: unbox each argument to 64 bits according to its inferred
-        // parameter type. If a runtime value doesn't match the inferred type, fall
-        // back (the static inference assumed otherwise).
+        // Phase 2: marshal each argument to 64 bits per its inferred parameter
+        // type. Scalars unbox directly; a `Handle` (struct/list) is registered in
+        // the per-call heap table and passed as its index, for the host helpers to
+        // read. Reset the table + bail flag first.
+        JIT_HEAP_ARGS.with(|table| table.borrow_mut().clear());
+        JIT_BAILED.with(|flag| flag.set(false));
         let mut args = Vec::with_capacity(func.params);
         for (index, param_type) in param_types.iter().enumerate() {
-            let bits = match (param_type, self.reg(base + index)) {
-                (NativeTy::Int, VmValue::Int(value)) => Some(*value),
-                (NativeTy::Float, VmValue::Float(value)) => Some(value.to_bits() as i64),
-                (NativeTy::Bool, VmValue::Bool(value)) => Some(i64::from(*value)),
-                _ => None,
+            let value = self.reg(base + index);
+            let bits = match param_type {
+                NativeTy::Int => match value {
+                    VmValue::Int(value) => Some(*value),
+                    _ => None,
+                },
+                NativeTy::Float => match value {
+                    VmValue::Float(value) => Some(value.to_bits() as i64),
+                    _ => None,
+                },
+                NativeTy::Bool => match value {
+                    VmValue::Bool(value) => Some(i64::from(*value)),
+                    _ => None,
+                },
+                NativeTy::Handle => Some(JIT_HEAP_ARGS.with(|table| {
+                    let mut table = table.borrow_mut();
+                    table.push(value.clone());
+                    (table.len() - 1) as i64
+                })),
             };
             match bits {
                 Some(bits) => args.push(bits),
@@ -6125,15 +6300,21 @@ impl RegVm {
                 }
             }
         }
-        // Phase 3: call. `None` means the native code bailed → fall back. The
-        // 64-bit result is boxed per the function's return type (a float register
-        // stored its `f64` bit pattern).
+        // Phase 3: call. Fall back if the native code bailed at a guard (`None`)
+        // *or* a host helper flagged an unsatisfiable heap read. The 64-bit result
+        // is boxed per the function's return type (a float register stored its
+        // `f64` bit pattern).
         let started = std::time::Instant::now();
         let result = self.native.as_ref()?.module.call(id, &args);
         let elapsed = started.elapsed().as_nanos();
+        let helper_bailed = JIT_BAILED.with(|flag| flag.get());
         let native = self.native.as_mut()?;
         native.stats.run_nanos += elapsed;
         match result {
+            Some(_) if helper_bailed => {
+                native.stats.native_bails += 1;
+                None
+            }
             Some(bits) => {
                 native.stats.native_calls += 1;
                 Some(match ret_type {
