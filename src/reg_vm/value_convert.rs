@@ -317,6 +317,72 @@ pub(super) fn read_field_ref(value: &VmValue, field: &str) -> Result<VmValue, Ev
     }
 }
 
+/// Read a struct/variant field by its precomputed slot (no name lookup).
+pub(super) fn read_field_slot(value: &VmValue, slot: usize) -> Result<VmValue, EvalError> {
+    match value {
+        VmValue::Struct(data) | VmValue::Variant(data) => data.fields.get(slot).cloned().ok_or_else(|| {
+            EvalError::Runtime(format!("reg VM struct field slot {slot} out of range."))
+        }),
+        VmValue::Managed(value) => read_field_slot(&value.borrow(), slot),
+        other => Err(EvalError::Runtime(format!(
+            "reg VM expected Struct for field slot {slot}, got `{}`.",
+            other.display()
+        ))),
+    }
+}
+
+/// Slot-indexed copy-on-write field set (see [`write_field_value_owned`]).
+pub(super) fn write_field_slot_owned(
+    value: VmValue,
+    slot: usize,
+    new_value: VmValue,
+) -> Result<VmValue, EvalError> {
+    match value {
+        VmValue::Struct(mut data) => {
+            write_struct_slot_in_place(&mut data, slot, new_value)?;
+            Ok(VmValue::Struct(data))
+        }
+        VmValue::Variant(mut data) => {
+            write_struct_slot_in_place(&mut data, slot, new_value)?;
+            Ok(VmValue::Variant(data))
+        }
+        VmValue::Managed(inner) => {
+            let current = inner.borrow().clone();
+            let updated = write_field_slot_owned(current, slot, new_value)?;
+            *inner.borrow_mut() = updated;
+            Ok(VmValue::Managed(inner))
+        }
+        other => Err(EvalError::Runtime(format!(
+            "reg VM expected Struct for field slot {slot}, got `{}`.",
+            other.display()
+        ))),
+    }
+}
+
+fn write_struct_slot_in_place(
+    data: &mut Rc<VmStruct>,
+    slot: usize,
+    new_value: VmValue,
+) -> Result<(), EvalError> {
+    if slot >= data.fields.len() {
+        return Err(EvalError::Runtime(format!(
+            "reg VM struct field slot {slot} out of range."
+        )));
+    }
+    if let Some(unique) = Rc::get_mut(data) {
+        unique.fields[slot] = new_value;
+        return Ok(());
+    }
+    let mut fields = data.fields.clone();
+    fields[slot] = new_value;
+    *data = Rc::new(VmStruct::with_layout(
+        Rc::clone(&data.name),
+        Rc::clone(&data.layout),
+        fields,
+    ));
+    Ok(())
+}
+
 /// Return a copy of the struct/variant `value` with `field` set to `new_value`.
 /// Structs are value types, so this rebuilds the struct. A `Managed` wrapper is
 /// updated in place (its interior is shared and mutable by design).

@@ -242,6 +242,8 @@ fn jit_supported_instruction(instr: &RegInstr) -> bool {
             | RegInstr::Manage { .. }
             | RegInstr::GetField { .. }
             | RegInstr::SetField { .. }
+            | RegInstr::GetFieldSlot { .. }
+            | RegInstr::SetFieldSlot { .. }
             | RegInstr::MakeStruct { .. }
             | RegInstr::MakeVariant { .. }
             | RegInstr::MakeList { .. }
@@ -1393,6 +1395,20 @@ enum RegInstr {
         base: Reg,
         name: String,
     },
+    /// Read a struct/variant field by precomputed slot (the lowerer resolved the
+    /// declaration-order index from the static type) — no name lookup at runtime.
+    GetFieldSlot {
+        dst: Reg,
+        base: Reg,
+        slot: usize,
+    },
+    /// Slot-indexed counterpart of `SetField` (copy-on-write by slot).
+    SetFieldSlot {
+        dst: Reg,
+        base: Reg,
+        slot: usize,
+        value: Reg,
+    },
     /// Produce a copy of the struct in `base` with field `name` set to `value`.
     /// Structs are value types, so this rebuilds the struct rather than mutating
     /// in place; nested assignment targets compose these writes back up the path.
@@ -2525,6 +2541,29 @@ impl RegLowerer<'_> {
             .ok_or_else(|| EvalError::Runtime(format!("reg VM cannot resolve local `{name}`.")))
     }
 
+    /// The declaration-order slot of `field` on a statically-known struct/variant
+    /// type, used to emit `GetFieldSlot`/`SetFieldSlot`. `None` (→ name-based
+    /// access) when the base type is unknown or not a registered type. Struct
+    /// construction is canonicalized to this same order (see `MakeStruct`), so the
+    /// runtime layout matches the slot.
+    fn field_slot(&self, base_type: Option<&str>, field: &str) -> Option<usize> {
+        let info = self.hir.type_info(base_type?)?;
+        info.fields_ordered.iter().position(|f| f.name == field)
+    }
+
+    /// Reorder named constructor fields into the type's declaration order so every
+    /// instance of a type shares one field layout (and matches `field_slot`).
+    fn canonicalize_field_order(&self, type_name: &str, fields: &mut [(String, Reg)]) {
+        if let Some(info) = self.hir.type_info(type_name) {
+            fields.sort_by_key(|(name, _)| {
+                info.fields_ordered
+                    .iter()
+                    .position(|f| &f.name == name)
+                    .unwrap_or(usize::MAX)
+            });
+        }
+    }
+
     fn temp(&mut self) -> Reg {
         let reg = self.function.regs;
         self.function.regs += 1;
@@ -2675,18 +2714,27 @@ impl RegLowerer<'_> {
                 self.emit(RegInstr::Move { dst, src: value });
                 Ok(())
             }
-            HirExpr::Field { base, name, .. } => {
+            HirExpr::Field { base, name, access, .. } => {
                 // Read the current container, write an updated copy back into
                 // `base_value` in place, then store that copy into the enclosing
                 // place (value semantics, composes for nested paths).
                 let base_value = self.expr(base)?;
                 let dst = self.temp();
-                self.emit(RegInstr::SetField {
-                    dst,
-                    base: base_value,
-                    name: name.clone(),
-                    value,
-                });
+                if let Some(slot) = self.field_slot(access.base_type.as_deref(), name) {
+                    self.emit(RegInstr::SetFieldSlot {
+                        dst,
+                        base: base_value,
+                        slot,
+                        value,
+                    });
+                } else {
+                    self.emit(RegInstr::SetField {
+                        dst,
+                        base: base_value,
+                        name: name.clone(),
+                        value,
+                    });
+                }
                 self.lower_assign(base, base_value)
             }
             HirExpr::Index { base, index, .. } => {
@@ -3238,14 +3286,21 @@ impl RegLowerer<'_> {
                 self.emit(instr);
                 Ok(dst)
             }
-            HirExpr::Field { base, name, .. } => {
+            HirExpr::Field {
+                base, name, access, ..
+            } => {
+                let slot = self.field_slot(access.base_type.as_deref(), name);
                 let base = self.expr(base)?;
                 let dst = self.temp();
-                self.emit(RegInstr::GetField {
-                    dst,
-                    base,
-                    name: name.clone(),
-                });
+                if let Some(slot) = slot {
+                    self.emit(RegInstr::GetFieldSlot { dst, base, slot });
+                } else {
+                    self.emit(RegInstr::GetField {
+                        dst,
+                        base,
+                        name: name.clone(),
+                    });
+                }
                 Ok(dst)
             }
             HirExpr::Index { base, index, .. } => {
@@ -3670,7 +3725,7 @@ impl RegLowerer<'_> {
                         }
                     }
                 } else {
-                    let fields = args
+                    let mut fields = args
                         .iter()
                         .zip(arg_regs)
                         .map(|(arg, reg)| {
@@ -3682,9 +3737,11 @@ impl RegLowerer<'_> {
                             })
                         })
                         .collect::<Result<Vec<_>, _>>()?;
+                    let type_name = type_root_name(name).to_string();
+                    self.canonicalize_field_order(&type_name, &mut fields);
                     self.emit(RegInstr::MakeStruct {
                         dst,
-                        name: type_root_name(name).to_string(),
+                        name: type_name,
                         fields,
                     });
                 }
@@ -6101,6 +6158,27 @@ impl RegVm {
                 // uniquely owned, or copy-on-writes when shared.
                 let current = self.take_reg(obj_reg);
                 let updated = write_field_value_owned(current, name, new_value)?;
+                self.set_reg(obj_reg, updated);
+                self.set_reg(base + *dst, VmValue::Unit);
+            }
+            RegInstr::GetFieldSlot {
+                dst,
+                base: obj,
+                slot,
+            } => {
+                let value = read_field_slot(self.reg(base + *obj), *slot)?;
+                self.set_reg(base + *dst, value);
+            }
+            RegInstr::SetFieldSlot {
+                dst,
+                base: obj,
+                slot,
+                value,
+            } => {
+                let obj_reg = base + *obj;
+                let new_value = self.reg(base + *value).clone();
+                let current = self.take_reg(obj_reg);
+                let updated = write_field_slot_owned(current, *slot, new_value)?;
                 self.set_reg(obj_reg, updated);
                 self.set_reg(base + *dst, VmValue::Unit);
             }
