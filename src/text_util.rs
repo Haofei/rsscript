@@ -99,26 +99,44 @@ pub(crate) fn clamp_to_char_boundary(value: &str, mut index: usize) -> usize {
     index
 }
 
-/// Split the inside of a generic argument list on top-level commas (commas nested
-/// inside `<...>` are not separators), trimming each argument.
-pub(crate) fn split_type_args(args: &str) -> Vec<&str> {
-    let mut result = Vec::new();
-    let mut depth = 0_i32;
-    let mut start = 0;
+/// The root (non-generic) name of a type: trims, drops a leading `fresh ` marker,
+/// and takes everything before the first `<`. Examples: `List<Int>` → `List`,
+/// `fresh Map<K, V>` → `Map`, `  Foo  ` → `Foo`.
+pub(crate) fn type_root_name(name: &str) -> &str {
+    let trimmed = name.trim();
+    let base = trimmed.strip_prefix("fresh ").unwrap_or(trimmed);
+    base.split_once('<').map_or(base, |(root, _)| root)
+}
+
+/// The top-level generic arguments of a type, or `None` if it isn't generic.
+/// `Map<K, Result<A, B>>` → `["K", "Result<A, B>"]`.
+pub(crate) fn type_arg_names(type_name: &str) -> Option<Vec<&str>> {
+    let (_, rest) = type_name.split_once('<')?;
+    let inner = rest.strip_suffix('>')?;
+    Some(split_top_level_type_args(inner))
+}
+
+/// Split a generic argument list on top-level commas (commas nested inside
+/// `<...>` are not separators), trimming each argument. The single canonical
+/// splitter shared by [`type_arg_names`] and the VM.
+pub(crate) fn split_top_level_type_args(args: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let mut depth = 0usize;
     for (index, ch) in args.char_indices() {
         match ch {
             '<' => depth += 1,
-            '>' => depth -= 1,
+            '>' => depth = depth.saturating_sub(1),
             ',' if depth == 0 => {
-                result.push(args[start..index].trim());
-                start = index + 1;
+                parts.push(args[start..index].trim());
+                start = index + ch.len_utf8();
             }
             _ => {}
         }
     }
-    let last = args[start..].trim();
-    if !last.is_empty() {
-        result.push(last);
+    if start < args.len() {
+        parts.push(args[start..].trim());
     }
-    result
+    parts
 }
+

@@ -98,8 +98,23 @@ don't pull in the codegen dependency). Enable with `--features native-jit`.
   in native code — the function **bails to the interpreter** (the single source of
   truth) instead, which is gap-free because the compiled subset is side-effect-free.
 - [x] `VmValue` ABI for native code: `Int`/`Bool` unbox into `i64` registers,
-  the result boxes back as `Int`. Native runs only when every argument is an
-  `Int`, so all registers are statically `i64` (`Float`/heap stay on fallback).
+  the result boxes back as `Int` or `Float`. Native runs only when every argument
+  is an `Int`, so parameters are statically `i64`; heap values stay on fallback.
+- [x] **Float support** (`f64` register class): the arithmetic/compare opcodes are
+  type-polymorphic, lowering to `iadd`/`fadd`, `icmp`/`fcmp`, etc. by per-register
+  type (the IR carries `reg_types`). Float-computing functions (e.g. the float
+  differential's `compute()`) compile natively. Verified 5-way; **~93× faster**
+  than the interpreter on a float kernel.
+- [x] **Inlining of straight-line leaf calls** (toward Phase-3 speculative
+  inlining): a numeric function that calls small pure helpers is made
+  native-eligible by splicing each branch-free leaf callee into the caller's
+  register window (`native_inline_leaf_calls`), so the call disappears. Verified
+  5-way (`backends_agree_on_cross_function_calls` inlines its helpers); **~135×
+  faster** on a call-in-loop numeric kernel that previously fell back.
+- [x] **Faster VM value representation** (`vm_value::FnvHasher`): struct/variant
+  fields and `Map` values use an FNV-1a hasher instead of SipHash (the VM's maps
+  are never adversarial), speeding the field/key hashing the interpreter does
+  constantly (~5% on map-insert; broad, applies under every backend).
 - [x] Tiering: a per-function hot-call counter (`tier_up_threshold`) defers
   native compilation until a function is hot. (OSR is not applicable to this
   method-at-a-time JIT — whole functions are (re)compiled and re-entered fresh;

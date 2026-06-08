@@ -1,3 +1,4 @@
+use crate::text_util::{split_top_level_type_args, type_arg_names, type_root_name};
 use std::collections::{HashMap, HashSet};
 
 use crate::analyzer::Analyzer;
@@ -6417,26 +6418,6 @@ fn strip_fresh_type(type_name: &str) -> &str {
         .unwrap_or(type_name)
 }
 
-fn split_top_level_type_args(args: &str) -> Vec<&str> {
-    let mut parts = Vec::new();
-    let mut start = 0usize;
-    let mut depth = 0usize;
-    for (index, ch) in args.char_indices() {
-        match ch {
-            '<' => depth += 1,
-            '>' => depth = depth.saturating_sub(1),
-            ',' if depth == 0 => {
-                parts.push(args[start..index].trim());
-                start = index + ch.len_utf8();
-            }
-            _ => {}
-        }
-    }
-    if start < args.len() {
-        parts.push(args[start..].trim());
-    }
-    parts
-}
 
 fn check_resource_pool_lease_stmt(analyzer: &mut Analyzer<'_>, statement: &HirStmt) {
     match statement {
@@ -6714,43 +6695,7 @@ fn is_resource_pool_constructor(callee: &Callee) -> bool {
     is_resource_pool_infallible_constructor(callee) || is_resource_pool_fallible_constructor(callee)
 }
 
-fn type_root_name(type_name: &str) -> &str {
-    let type_name = type_name
-        .trim()
-        .strip_prefix("fresh ")
-        .unwrap_or(type_name.trim());
-    type_name
-        .split_once('<')
-        .map_or(type_name, |(root, _)| root)
-}
 
-fn type_arg_names(type_name: &str) -> Option<Vec<&str>> {
-    let start = type_name.find('<')?;
-    let end = type_name.rfind('>')?;
-    if end <= start {
-        return None;
-    }
-    let inner = &type_name[start + 1..end];
-    let mut args = Vec::new();
-    let mut depth = 0usize;
-    let mut part_start = 0usize;
-    for (index, ch) in inner.char_indices() {
-        match ch {
-            '<' => depth += 1,
-            '>' => depth = depth.saturating_sub(1),
-            ',' if depth == 0 => {
-                args.push(inner[part_start..index].trim());
-                part_start = index + ch.len_utf8();
-            }
-            _ => {}
-        }
-    }
-    let tail = inner[part_start..].trim();
-    if !tail.is_empty() {
-        args.push(tail);
-    }
-    Some(args)
-}
 
 fn is_resource_pool_type(type_name: &str) -> bool {
     type_root_name(type_name) == "ResourcePool"

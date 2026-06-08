@@ -1,3 +1,4 @@
+use crate::text_util::{split_top_level_type_args, type_arg_names, type_root_name};
 use std::collections::{HashMap, HashSet};
 
 use crate::checks;
@@ -4611,24 +4612,6 @@ fn generic_namespace_args(namespace: &str) -> Option<(&str, Vec<&str>)> {
     Some((root, split_top_level_type_args(args)))
 }
 
-fn split_top_level_type_args(args: &str) -> Vec<&str> {
-    let mut result = Vec::new();
-    let mut depth = 0usize;
-    let mut start = 0usize;
-    for (index, ch) in args.char_indices() {
-        match ch {
-            '<' => depth += 1,
-            '>' => depth = depth.saturating_sub(1),
-            ',' if depth == 0 => {
-                result.push(args[start..index].trim());
-                start = index + 1;
-            }
-            _ => {}
-        }
-    }
-    result.push(args[start..].trim());
-    result
-}
 
 fn effect_name(effect: &EffectDecl) -> &str {
     match effect {
@@ -5866,43 +5849,7 @@ fn builtin_value_type_name(name: &str) -> Option<&'static str> {
     }
 }
 
-fn type_root_name(type_name: &str) -> &str {
-    let type_name = type_name
-        .trim()
-        .strip_prefix("fresh ")
-        .unwrap_or(type_name.trim());
-    type_name
-        .split_once('<')
-        .map_or(type_name, |(root, _)| root)
-}
 
-fn type_arg_names(type_name: &str) -> Option<Vec<&str>> {
-    let start = type_name.find('<')?;
-    let end = type_name.rfind('>')?;
-    if end <= start {
-        return None;
-    }
-    let inner = &type_name[start + 1..end];
-    let mut args = Vec::new();
-    let mut depth = 0usize;
-    let mut part_start = 0usize;
-    for (index, ch) in inner.char_indices() {
-        match ch {
-            '<' => depth += 1,
-            '>' => depth = depth.saturating_sub(1),
-            ',' if depth == 0 => {
-                args.push(inner[part_start..index].trim());
-                part_start = index + ch.len_utf8();
-            }
-            _ => {}
-        }
-    }
-    let tail = inner[part_start..].trim();
-    if !tail.is_empty() {
-        args.push(tail);
-    }
-    Some(args)
-}
 
 fn constructor_pattern_is_irrefutable(pattern: &MatchPattern) -> bool {
     match pattern {

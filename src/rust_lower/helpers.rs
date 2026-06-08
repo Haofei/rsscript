@@ -1,3 +1,4 @@
+pub(super) use crate::text_util::{decode_string_token, type_arg_names, type_root_name};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::diagnostic::{Diagnostic, Span, code};
@@ -1492,7 +1493,6 @@ pub(super) fn lower_builtin_value_ident(name: &str) -> Option<&'static str> {
 
 // Re-exported from the shared text utilities (single source of truth); kept at
 // `super` visibility so the rest of `rust_lower` reaches it via `helpers::*`.
-pub(super) use crate::text_util::decode_string_token;
 
 pub(super) fn is_rust_enum_constructor(name: &str) -> bool {
     matches!(name, "Ok" | "Err" | "Some")
@@ -1547,36 +1547,8 @@ pub(super) fn rust_qualified_function_ident(namespace: &str, name: &str) -> Stri
         .join("_")
 }
 
-pub(super) fn type_root_name(name: &str) -> &str {
-    let name = name.trim().strip_prefix("fresh ").unwrap_or(name.trim());
-    name.split('<').next().unwrap_or(name)
-}
 
-pub(super) fn type_arg_names(type_name: &str) -> Option<Vec<&str>> {
-    let inner = type_name
-        .split_once('<')
-        .and_then(|(_, rest)| rest.strip_suffix('>'))?;
-    Some(split_top_level_type_args(inner))
-}
 
-fn split_top_level_type_args(args: &str) -> Vec<&str> {
-    let mut parts = Vec::new();
-    let mut start = 0usize;
-    let mut depth = 0usize;
-    for (index, ch) in args.char_indices() {
-        match ch {
-            '<' => depth += 1,
-            '>' => depth = depth.saturating_sub(1),
-            ',' if depth == 0 => {
-                parts.push(args[start..index].trim());
-                start = index + ch.len_utf8();
-            }
-            _ => {}
-        }
-    }
-    parts.push(args[start..].trim());
-    parts
-}
 
 pub(super) fn rust_path_segment(segment: &str) -> String {
     if let Some((head, tail)) = segment.split_once("::<") {

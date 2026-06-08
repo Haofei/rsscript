@@ -4,6 +4,41 @@ use std::rc::Rc;
 
 use crate::eval_types::NativeValue;
 
+/// FNV-1a (64-bit) hasher. The standard library's `HashMap` uses SipHash, which
+/// is DoS-resistant but slow for the short keys the VM hashes constantly (struct
+/// field names, small map keys). FNV is far faster for these and the VM's maps
+/// are never exposed to adversarial key flooding, so the trade-off is all upside.
+#[derive(Clone, Copy)]
+pub(crate) struct FnvHasher(u64);
+
+impl Default for FnvHasher {
+    fn default() -> Self {
+        FnvHasher(0xcbf2_9ce4_8422_2325)
+    }
+}
+
+impl std::hash::Hasher for FnvHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        let mut hash = self.0;
+        for &byte in bytes {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        self.0 = hash;
+    }
+}
+
+pub(crate) type FnvBuildHasher = std::hash::BuildHasherDefault<FnvHasher>;
+/// Struct/variant field map (field name → value), FNV-hashed.
+pub(crate) type FieldMap = HashMap<String, VmValue, FnvBuildHasher>;
+/// VM `Map` value (key → value), FNV-hashed.
+pub(crate) type ValueMap = HashMap<VmMapKey, VmValue, FnvBuildHasher>;
+
 #[derive(Debug, Clone)]
 pub(crate) enum VmValue {
     Unit,
@@ -15,7 +50,7 @@ pub(crate) enum VmValue {
     String(Rc<String>),
     Json(Rc<serde_json::Value>),
     List(Rc<RefCell<Vec<VmValue>>>),
-    Map(Rc<RefCell<HashMap<VmMapKey, VmValue>>>),
+    Map(Rc<RefCell<ValueMap>>),
     OptionSome(Box<VmValue>),
     OptionNone,
     Struct(Rc<VmStruct>),
@@ -28,7 +63,7 @@ pub(crate) enum VmValue {
 #[derive(Debug, Clone)]
 pub(crate) struct VmStruct {
     pub(crate) name: Rc<str>,
-    pub(crate) fields: HashMap<String, VmValue>,
+    pub(crate) fields: FieldMap,
 }
 
 #[derive(Debug, Clone)]
@@ -165,7 +200,7 @@ impl VmValue {
     }
 }
 
-fn native_fields(fields: &HashMap<String, VmValue>) -> Option<BTreeMap<String, NativeValue>> {
+fn native_fields(fields: &FieldMap) -> Option<BTreeMap<String, NativeValue>> {
     fields
         .iter()
         .map(|(field, value)| Some((field.clone(), value.native_value()?)))

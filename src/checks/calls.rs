@@ -1,3 +1,4 @@
+use crate::text_util::{split_top_level_type_args, type_arg_names, type_root_name};
 use std::collections::{HashMap, HashSet};
 
 use crate::analyzer::Analyzer;
@@ -4588,12 +4589,6 @@ pub(crate) fn unresolved_generic_type(type_name: &str) -> bool {
             .any(|param_type| unresolved_generic_type(param_type))
 }
 
-fn type_arg_names(type_name: &str) -> Option<Vec<&str>> {
-    let inner = type_name
-        .split_once('<')
-        .and_then(|(_, rest)| rest.strip_suffix('>'))?;
-    Some(split_top_level_type_args(inner))
-}
 
 fn builtin_generic_type_params(root: &str) -> Option<Vec<&'static str>> {
     match root {
@@ -4606,36 +4601,7 @@ fn builtin_generic_type_params(root: &str) -> Option<Vec<&'static str>> {
     }
 }
 
-fn split_top_level_type_args(args: &str) -> Vec<&str> {
-    let mut parts = Vec::new();
-    let mut start = 0usize;
-    let mut depth = 0usize;
-    for (index, ch) in args.char_indices() {
-        match ch {
-            '<' => depth += 1,
-            '>' => depth = depth.saturating_sub(1),
-            ',' if depth == 0 => {
-                parts.push(args[start..index].trim());
-                start = index + ch.len_utf8();
-            }
-            _ => {}
-        }
-    }
-    if start < args.len() {
-        parts.push(args[start..].trim());
-    }
-    parts
-}
 
-fn type_root_name(type_name: &str) -> &str {
-    let type_name = type_name
-        .trim()
-        .strip_prefix("fresh ")
-        .unwrap_or(type_name.trim());
-    type_name
-        .split_once('<')
-        .map_or(type_name, |(root, _)| root)
-}
 
 fn hir_expr_span(expr: &HirExpr) -> &Span {
     match expr {

@@ -241,11 +241,15 @@ fn main() -> Result<Unit, String> {
 
 #[test]
 fn parity_async_file_intrinsics() {
-    let source = r#"
+    // Write to a unique path under the OS temp dir, not a relative path: the
+    // in-process VM runs with the repo root as CWD, so a relative file would
+    // litter the working tree on every run. Cleaned up afterwards.
+    let file = common::unique_temp_dir("rsscript-parity-async-file").with_extension("txt");
+    let template = r#"
 features: async, native, local
 
 async fn main() -> Result<Unit, FileError> {
-    let path = Path.from_string(value: read "async-file.txt")
+    let path = Path.from_string(value: read "ASYNC_FILE_PATH")
     await File.write_string_async(path: read path, text: read "hello async")?
     let text = await File.read_all_string_async(path: read path)?
     Log.write(message: read text)
@@ -256,11 +260,13 @@ async fn main() -> Result<Unit, FileError> {
     return Ok(Unit)
 }
 "#;
+    let source = template.replace("ASYNC_FILE_PATH", &file.to_string_lossy());
     common::assert_vm_eval_matches_backend(
         "parity-async-file.rss",
         "rsscript_parity_async_file",
-        source,
+        &source,
     );
+    let _ = std::fs::remove_file(&file);
 }
 
 #[test]

@@ -1,3 +1,4 @@
+use crate::text_util::type_root_name;
 use crate::analyzer::Analyzer;
 use crate::diagnostic::{Diagnostic, code};
 use crate::hir::{HirBlock, HirExpr, HirStmt};
@@ -534,6 +535,3 @@ fn is_numeric_type(type_name: &str) -> bool {
     )
 }
 
-fn type_root_name(type_name: &str) -> &str {
-    type_name.split('<').next().unwrap_or(type_name)
-}

@@ -28,7 +28,7 @@
 //! semantic truth. So the native tier can only ever be *faster*, never different.
 
 use cranelift_codegen::Context;
-use cranelift_codegen::ir::condcodes::IntCC;
+use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::{AbiParam, Block, InstBuilder, MemFlags, Value, types};
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
@@ -60,6 +60,17 @@ impl JitCompare {
             JitCompare::Ge => IntCC::SignedGreaterThanOrEqual,
         }
     }
+
+    /// Ordered float comparison (NaN → false), matching Rust's `<`/`<=`/`>`/`>=`
+    /// on `f64` (the interpreter's float comparison).
+    fn fcc(self) -> FloatCC {
+        match self {
+            JitCompare::Lt => FloatCC::LessThan,
+            JitCompare::Le => FloatCC::LessThanOrEqual,
+            JitCompare::Gt => FloatCC::GreaterThan,
+            JitCompare::Ge => FloatCC::GreaterThanOrEqual,
+        }
+    }
 }
 
 /// One instruction of the JIT IR. Registers are `u32` indices; jump `target`s are
@@ -73,6 +84,10 @@ pub enum JitInstr {
     LoadInt {
         dst: u32,
         value: i64,
+    },
+    LoadFloat {
+        dst: u32,
+        value: f64,
     },
     LoadBool {
         dst: u32,
@@ -172,14 +187,33 @@ pub enum JitInstr {
     Bail,
 }
 
-/// A compilable function: the register count and the instruction stream. Callers
-/// only invoke the compiled code when every argument is an `Int`, so all
-/// registers are statically `i64`; the result is always an `Int`.
+/// Storage class of a register: an unboxed `i64` (integers and booleans) or an
+/// unboxed `f64` (floats). The arithmetic/compare instructions are
+/// type-polymorphic — the same `Add`/`Compare`/… opcode lowers to integer or
+/// float machine ops depending on the operand registers' types (mirroring the
+/// VM, where `AddInt` etc. dispatch on the runtime `VmValue`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JitValueType {
+    Int,
+    Float,
+}
+
+/// A compilable function: register count, per-register storage class, and the
+/// instruction stream. Callers unbox each argument to `i64` bits (an `f64`'s bit
+/// pattern for float registers) and read the result back the same way.
 #[derive(Debug, Clone)]
 pub struct JitFunction {
     pub n_params: u32,
     pub n_regs: u32,
+    /// Storage class per register index (length `n_regs`).
+    pub reg_types: Vec<JitValueType>,
     pub code: Vec<JitInstr>,
+}
+
+impl JitFunction {
+    fn is_float(&self, reg: u32) -> bool {
+        self.reg_types[reg as usize] == JitValueType::Float
+    }
 }
 
 /// The native ABI of every compiled function:
@@ -310,26 +344,36 @@ fn build_function(
     let n = program.code.len();
     let n_regs = program.n_regs as usize;
 
-    // One Cranelift variable per VM register (all i64).
-    let vars: Vec<Variable> = (0..n_regs).map(|_| bcx.declare_var(types::I64)).collect();
+    // One Cranelift variable per VM register, typed by storage class (i64 for
+    // integers/booleans, f64 for floats).
+    let var_ty = |reg: usize| {
+        if program.reg_types[reg] == JitValueType::Float {
+            types::F64
+        } else {
+            types::I64
+        }
+    };
+    let vars: Vec<Variable> = (0..n_regs).map(|i| bcx.declare_var(var_ty(i))).collect();
 
     // Entry: read params from the args array, zero the rest, then jump to the
-    // block for instruction 0.
+    // block for instruction 0. Args are passed as raw 64-bit words; loading a
+    // float register's slot as `f64` reinterprets the caller's `f64::to_bits`.
     let entry = bcx.create_block();
     bcx.append_block_params_for_function_params(entry);
     bcx.switch_to_block(entry);
     let params = bcx.block_params(entry).to_vec();
     let args_ptr = params[0];
     let out_ptr = params[2];
-    for i in 0..program.n_params as usize {
+    for (i, &var) in vars.iter().take(program.n_params as usize).enumerate() {
         let v = bcx
             .ins()
-            .load(types::I64, MemFlags::trusted(), args_ptr, (i as i32) * 8);
-        bcx.def_var(vars[i], v);
+            .load(var_ty(i), MemFlags::trusted(), args_ptr, (i as i32) * 8);
+        bcx.def_var(var, v);
     }
-    let zero = bcx.ins().iconst(types::I64, 0);
-    for v in vars.iter().take(n_regs).skip(program.n_params as usize) {
-        bcx.def_var(*v, zero);
+    let zero_i = bcx.ins().iconst(types::I64, 0);
+    let zero_f = bcx.ins().f64const(0.0);
+    for (i, &var) in vars.iter().enumerate().take(n_regs).skip(program.n_params as usize) {
+        bcx.def_var(var, if var_ty(i) == types::F64 { zero_f } else { zero_i });
     }
 
     // The shared fallback block: "not completed".
@@ -355,10 +399,8 @@ fn build_function(
                     is_leader[i + 1] = true;
                 }
             }
-            JitInstr::Return { .. } | JitInstr::Bail => {
-                if i + 1 < n {
-                    is_leader[i + 1] = true;
-                }
+            JitInstr::Return { .. } | JitInstr::Bail if i + 1 < n => {
+                is_leader[i + 1] = true;
             }
             _ => {}
         }
@@ -396,6 +438,10 @@ fn build_function(
                 let v = bcx.ins().iconst(types::I64, *value);
                 bcx.def_var(reg(*dst), v);
             }
+            JitInstr::LoadFloat { dst, value } => {
+                let v = bcx.ins().f64const(*value);
+                bcx.def_var(reg(*dst), v);
+            }
             JitInstr::LoadBool { dst, value } => {
                 let v = bcx.ins().iconst(types::I64, i64::from(*value));
                 bcx.def_var(reg(*dst), v);
@@ -407,32 +453,58 @@ fn build_function(
             JitInstr::Add { dst, lhs, rhs } => {
                 let a = bcx.use_var(reg(*lhs));
                 let b = bcx.use_var(reg(*rhs));
-                let (res, of) = bcx.ins().sadd_overflow(a, b);
-                let cont = bail_if(&mut bcx, of, fallback);
-                bcx.switch_to_block(cont);
-                bcx.def_var(reg(*dst), res);
+                if program.is_float(*lhs) {
+                    let res = bcx.ins().fadd(a, b);
+                    bcx.def_var(reg(*dst), res);
+                } else {
+                    let (res, of) = bcx.ins().sadd_overflow(a, b);
+                    let cont = bail_if(&mut bcx, of, fallback);
+                    bcx.switch_to_block(cont);
+                    bcx.def_var(reg(*dst), res);
+                }
             }
             JitInstr::Sub { dst, lhs, rhs } => {
                 let a = bcx.use_var(reg(*lhs));
                 let b = bcx.use_var(reg(*rhs));
-                let (res, of) = bcx.ins().ssub_overflow(a, b);
-                let cont = bail_if(&mut bcx, of, fallback);
-                bcx.switch_to_block(cont);
-                bcx.def_var(reg(*dst), res);
+                if program.is_float(*lhs) {
+                    let res = bcx.ins().fsub(a, b);
+                    bcx.def_var(reg(*dst), res);
+                } else {
+                    let (res, of) = bcx.ins().ssub_overflow(a, b);
+                    let cont = bail_if(&mut bcx, of, fallback);
+                    bcx.switch_to_block(cont);
+                    bcx.def_var(reg(*dst), res);
+                }
             }
             JitInstr::Mul { dst, lhs, rhs } => {
                 let a = bcx.use_var(reg(*lhs));
                 let b = bcx.use_var(reg(*rhs));
-                let (res, of) = bcx.ins().smul_overflow(a, b);
-                let cont = bail_if(&mut bcx, of, fallback);
-                bcx.switch_to_block(cont);
-                bcx.def_var(reg(*dst), res);
+                if program.is_float(*lhs) {
+                    let res = bcx.ins().fmul(a, b);
+                    bcx.def_var(reg(*dst), res);
+                } else {
+                    let (res, of) = bcx.ins().smul_overflow(a, b);
+                    let cont = bail_if(&mut bcx, of, fallback);
+                    bcx.switch_to_block(cont);
+                    bcx.def_var(reg(*dst), res);
+                }
             }
             JitInstr::Div { dst, lhs, rhs } => {
-                let res = emit_checked_divrem(&mut bcx, reg(*lhs), reg(*rhs), fallback, false);
-                bcx.def_var(reg(*dst), res);
+                if program.is_float(*lhs) {
+                    // Float division never traps (x/0.0 = ±inf/NaN), matching the
+                    // interpreter, so no bail.
+                    let a = bcx.use_var(reg(*lhs));
+                    let b = bcx.use_var(reg(*rhs));
+                    let res = bcx.ins().fdiv(a, b);
+                    bcx.def_var(reg(*dst), res);
+                } else {
+                    let res = emit_checked_divrem(&mut bcx, reg(*lhs), reg(*rhs), fallback, false);
+                    bcx.def_var(reg(*dst), res);
+                }
             }
             JitInstr::Mod { dst, lhs, rhs } => {
+                // Float modulo is a runtime error in the VM, so only integer
+                // registers reach here (eligibility rejects float `%`).
                 let res = emit_checked_divrem(&mut bcx, reg(*lhs), reg(*rhs), fallback, true);
                 bcx.def_var(reg(*dst), res);
             }
@@ -465,21 +537,33 @@ fn build_function(
             JitInstr::Compare { dst, op, lhs, rhs } => {
                 let a = bcx.use_var(reg(*lhs));
                 let b = bcx.use_var(reg(*rhs));
-                let c = bcx.ins().icmp(op.cc(), a, b);
+                let c = if program.is_float(*lhs) {
+                    bcx.ins().fcmp(op.fcc(), a, b)
+                } else {
+                    bcx.ins().icmp(op.cc(), a, b)
+                };
                 let c64 = bcx.ins().uextend(types::I64, c);
                 bcx.def_var(reg(*dst), c64);
             }
             JitInstr::Equal { dst, lhs, rhs } => {
                 let a = bcx.use_var(reg(*lhs));
                 let b = bcx.use_var(reg(*rhs));
-                let c = bcx.ins().icmp(IntCC::Equal, a, b);
+                let c = if program.is_float(*lhs) {
+                    bcx.ins().fcmp(FloatCC::Equal, a, b)
+                } else {
+                    bcx.ins().icmp(IntCC::Equal, a, b)
+                };
                 let c64 = bcx.ins().uextend(types::I64, c);
                 bcx.def_var(reg(*dst), c64);
             }
             JitInstr::NotEqual { dst, lhs, rhs } => {
                 let a = bcx.use_var(reg(*lhs));
                 let b = bcx.use_var(reg(*rhs));
-                let c = bcx.ins().icmp(IntCC::NotEqual, a, b);
+                let c = if program.is_float(*lhs) {
+                    bcx.ins().fcmp(FloatCC::NotEqual, a, b)
+                } else {
+                    bcx.ins().icmp(IntCC::NotEqual, a, b)
+                };
                 let c64 = bcx.ins().uextend(types::I64, c);
                 bcx.def_var(reg(*dst), c64);
             }
@@ -511,7 +595,11 @@ fn build_function(
             } => {
                 let a = bcx.use_var(reg(*lhs));
                 let b = bcx.use_var(reg(*rhs));
-                let c = bcx.ins().icmp(op.cc(), a, b);
+                let c = if program.is_float(*lhs) {
+                    bcx.ins().fcmp(op.fcc(), a, b)
+                } else {
+                    bcx.ins().icmp(op.cc(), a, b)
+                };
                 let tb = block_for[*target as usize].unwrap();
                 let fb = block_for[i + 1].unwrap();
                 if *expected {
@@ -619,8 +707,49 @@ mod tests {
         JitFunction {
             n_params,
             n_regs,
+            reg_types: vec![JitValueType::Int; n_regs as usize],
             code,
         }
+    }
+
+    /// Like `f` but with explicit per-register storage classes (for float tests).
+    fn ft(n_params: u32, reg_types: Vec<JitValueType>, code: Vec<JitInstr>) -> JitFunction {
+        JitFunction {
+            n_params,
+            n_regs: reg_types.len() as u32,
+            reg_types,
+            code,
+        }
+    }
+
+    #[test]
+    fn compiles_and_runs_float_arith() {
+        use JitValueType::{Float, Int};
+        let mut m = NativeModule::new().unwrap();
+        // fn(a: f64, b: f64) -> f64 { return a * b - a }  regs 0=a,1=b,2=t
+        let id = m
+            .compile(&ft(
+                2,
+                vec![Float, Float, Float],
+                vec![
+                    JitInstr::Mul {
+                        dst: 2,
+                        lhs: 0,
+                        rhs: 1,
+                    },
+                    JitInstr::Sub {
+                        dst: 2,
+                        lhs: 2,
+                        rhs: 0,
+                    },
+                    JitInstr::Return { src: 2 },
+                ],
+            ))
+            .unwrap();
+        let call = |a: f64, b: f64| f64::from_bits(m.call(id, &[a.to_bits() as i64, b.to_bits() as i64]).unwrap() as u64);
+        assert_eq!(call(2.5, 4.0), 2.5 * 4.0 - 2.5);
+        assert_eq!(call(3.0, 0.0), -3.0);
+        let _ = Int; // silence unused in case
     }
 
     #[test]

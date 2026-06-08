@@ -1,3 +1,4 @@
+use crate::text_util::split_top_level_type_args;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::diagnostic::Span;
@@ -2468,26 +2469,6 @@ fn is_fresh_match_scrutinee(expr: &HirExpr) -> bool {
     }
 }
 
-fn split_top_level_type_args(args: &str) -> Vec<&str> {
-    let mut parts = Vec::new();
-    let mut start = 0usize;
-    let mut depth = 0usize;
-    for (index, ch) in args.char_indices() {
-        match ch {
-            '<' => depth += 1,
-            '>' => depth = depth.saturating_sub(1),
-            ',' if depth == 0 => {
-                parts.push(args[start..index].trim());
-                start = index + ch.len_utf8();
-            }
-            _ => {}
-        }
-    }
-    if start < args.len() {
-        parts.push(args[start..].trim());
-    }
-    parts
-}
 
 fn strip_fresh_type(type_name: &str) -> &str {
     type_name

@@ -16,7 +16,8 @@ use sha2::{Digest, Sha256};
 use crate::diagnostic::Severity;
 use crate::eval_types::{EvalError, EvalOutput, NativeInterpreterFn, NativeValue};
 use crate::text_util::{
-    decode_string_token, split_type_args, string_format, string_pad, string_slice_range,
+    decode_string_token, string_format, string_pad, string_slice_range, type_arg_names,
+    type_root_name,
 };
 use crate::hir::{
     Hir, HirBlock, HirCallArg, HirCallReceiver, HirExpr, HirMatchArm, HirStmt, ParamEffect,
@@ -28,7 +29,14 @@ use crate::syntax::ast::{
     BinaryOp, Callee, MatchFieldPattern, MatchLiteral, MatchPattern, merge_programs,
 };
 use crate::syntax::parse_source;
-use crate::vm_value::{VmClosure, VmMapKey, VmNative, VmStruct, VmValue};
+use crate::vm_value::{FieldMap, ValueMap, VmClosure, VmMapKey, VmNative, VmStruct, VmValue};
+
+mod runtime_values;
+mod value_access;
+mod value_convert;
+use runtime_values::*;
+use value_access::*;
+use value_convert::*;
 
 const MS_PER_DAY: i64 = 86_400_000;
 
@@ -294,6 +302,18 @@ fn jit_supported_instruction(instr: &RegInstr) -> bool {
 enum NativeTy {
     Int,
     Bool,
+    Float,
+}
+
+#[cfg(feature = "native-jit")]
+impl NativeTy {
+    fn jit_value_type(self) -> vm_jit::JitValueType {
+        match self {
+            // Booleans are stored as `i64` 0/1, like integers.
+            NativeTy::Int | NativeTy::Bool => vm_jit::JitValueType::Int,
+            NativeTy::Float => vm_jit::JitValueType::Float,
+        }
+    }
 }
 
 /// Whether an instruction is in the *native* JIT subset (integer/boolean/control
@@ -303,6 +323,7 @@ fn native_subset_instruction(instr: &RegInstr) -> bool {
     matches!(
         instr,
         RegInstr::LoadInt { .. }
+            | RegInstr::LoadFloat { .. }
             | RegInstr::LoadBool { .. }
             | RegInstr::Move { .. }
             | RegInstr::DeepCopy { .. }
@@ -347,8 +368,8 @@ fn native_set_ty(ty: &mut [Option<NativeTy>], reg: usize, t: NativeTy, changed: 
 /// graph (sequential fallthrough, jumps, conditional branches). Used to ignore
 /// the lowerer's unreachable defensive tail when judging native eligibility.
 #[cfg(feature = "native-jit")]
-fn native_reachable_instructions(func: &RegFunction) -> Vec<bool> {
-    let n = func.code.len();
+fn native_reachable_instructions(code: &[RegInstr]) -> Vec<bool> {
+    let n = code.len();
     let mut reachable = vec![false; n];
     let mut stack = vec![0usize];
     while let Some(i) = stack.pop() {
@@ -356,7 +377,7 @@ fn native_reachable_instructions(func: &RegFunction) -> Vec<bool> {
             continue;
         }
         reachable[i] = true;
-        match &func.code[i] {
+        match &code[i] {
             RegInstr::Jump { target } => stack.push(*target),
             RegInstr::JumpIfBool { target, .. } | RegInstr::JumpIfIntCompare { target, .. } => {
                 stack.push(*target);
@@ -372,6 +393,198 @@ fn native_reachable_instructions(func: &RegFunction) -> Vec<bool> {
     reachable
 }
 
+/// Clone a *pure* (branch-free, call-free) native-subset instruction with every
+/// register shifted by `base` — used to splice a callee body into the caller's
+/// register window during inlining. `None` for anything outside that pure subset.
+#[cfg(feature = "native-jit")]
+fn native_offset_regs(instr: &RegInstr, b: usize) -> Option<RegInstr> {
+    Some(match instr {
+        RegInstr::LoadInt { dst, value } => RegInstr::LoadInt {
+            dst: dst + b,
+            value: *value,
+        },
+        RegInstr::LoadFloat { dst, value } => RegInstr::LoadFloat {
+            dst: dst + b,
+            value: *value,
+        },
+        RegInstr::LoadBool { dst, value } => RegInstr::LoadBool {
+            dst: dst + b,
+            value: *value,
+        },
+        RegInstr::Move { dst, src } => RegInstr::Move {
+            dst: dst + b,
+            src: src + b,
+        },
+        RegInstr::DeepCopy { reg } => RegInstr::DeepCopy { reg: reg + b },
+        RegInstr::AddInt { dst, lhs, rhs } => RegInstr::AddInt {
+            dst: dst + b,
+            lhs: lhs + b,
+            rhs: rhs + b,
+        },
+        RegInstr::SubInt { dst, lhs, rhs } => RegInstr::SubInt {
+            dst: dst + b,
+            lhs: lhs + b,
+            rhs: rhs + b,
+        },
+        RegInstr::MulInt { dst, lhs, rhs } => RegInstr::MulInt {
+            dst: dst + b,
+            lhs: lhs + b,
+            rhs: rhs + b,
+        },
+        RegInstr::DivInt { dst, lhs, rhs } => RegInstr::DivInt {
+            dst: dst + b,
+            lhs: lhs + b,
+            rhs: rhs + b,
+        },
+        RegInstr::ModInt { dst, lhs, rhs } => RegInstr::ModInt {
+            dst: dst + b,
+            lhs: lhs + b,
+            rhs: rhs + b,
+        },
+        RegInstr::BitAndInt { dst, lhs, rhs } => RegInstr::BitAndInt {
+            dst: dst + b,
+            lhs: lhs + b,
+            rhs: rhs + b,
+        },
+        RegInstr::BitOrInt { dst, lhs, rhs } => RegInstr::BitOrInt {
+            dst: dst + b,
+            lhs: lhs + b,
+            rhs: rhs + b,
+        },
+        RegInstr::BitXorInt { dst, lhs, rhs } => RegInstr::BitXorInt {
+            dst: dst + b,
+            lhs: lhs + b,
+            rhs: rhs + b,
+        },
+        RegInstr::ShiftLeftInt { dst, lhs, rhs } => RegInstr::ShiftLeftInt {
+            dst: dst + b,
+            lhs: lhs + b,
+            rhs: rhs + b,
+        },
+        RegInstr::ShiftRightInt { dst, lhs, rhs } => RegInstr::ShiftRightInt {
+            dst: dst + b,
+            lhs: lhs + b,
+            rhs: rhs + b,
+        },
+        RegInstr::LessInt { dst, lhs, rhs } => RegInstr::LessInt {
+            dst: dst + b,
+            lhs: lhs + b,
+            rhs: rhs + b,
+        },
+        RegInstr::LessEqualInt { dst, lhs, rhs } => RegInstr::LessEqualInt {
+            dst: dst + b,
+            lhs: lhs + b,
+            rhs: rhs + b,
+        },
+        RegInstr::GreaterInt { dst, lhs, rhs } => RegInstr::GreaterInt {
+            dst: dst + b,
+            lhs: lhs + b,
+            rhs: rhs + b,
+        },
+        RegInstr::GreaterEqualInt { dst, lhs, rhs } => RegInstr::GreaterEqualInt {
+            dst: dst + b,
+            lhs: lhs + b,
+            rhs: rhs + b,
+        },
+        RegInstr::Equal { dst, lhs, rhs } => RegInstr::Equal {
+            dst: dst + b,
+            lhs: lhs + b,
+            rhs: rhs + b,
+        },
+        RegInstr::NotEqual { dst, lhs, rhs } => RegInstr::NotEqual {
+            dst: dst + b,
+            lhs: lhs + b,
+            rhs: rhs + b,
+        },
+        _ => return None,
+    })
+}
+
+/// If `callee` is a captureless, branch-free **leaf** (no calls; every reachable
+/// instruction is a pure native op ending in a single `Return`), return its body
+/// (the pure instructions, without the `Return`) and the returned register —
+/// inlinable with no control-flow rewriting.
+#[cfg(feature = "native-jit")]
+fn native_straight_line_leaf(callee: &RegFunction, n_args: usize) -> Option<(Vec<RegInstr>, usize)> {
+    if callee.captures != 0 || callee.params != n_args {
+        return None;
+    }
+    let reachable = native_reachable_instructions(&callee.code);
+    let mut body = Vec::new();
+    let mut ret_src = None;
+    for (i, instr) in callee.code.iter().enumerate() {
+        if !reachable[i] {
+            continue;
+        }
+        if ret_src.is_some() {
+            return None; // reachable code after the return → not straight-line
+        }
+        match instr {
+            RegInstr::Return { src } => ret_src = Some(*src),
+            other if native_offset_regs(other, 0).is_some() => body.push(other.clone()),
+            _ => return None, // jump/match/call/runtime-error → not a leaf line
+        }
+    }
+    Some((body, ret_src?))
+}
+
+/// Inline straight-line leaf `CallKnown`s into `func`, returning the rewritten
+/// code and new register count — this is what makes a numeric function that calls
+/// small helpers native-eligible (the calls vanish). `None` if any call target is
+/// not inlinable (the function then falls back). Caller jump targets are remapped;
+/// spliced leaf bodies are branch-free.
+#[cfg(feature = "native-jit")]
+fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<RegInstr>, usize)> {
+    if !func
+        .code
+        .iter()
+        .any(|instr| matches!(instr, RegInstr::CallKnown { .. }))
+    {
+        return Some((func.code.clone(), func.regs));
+    }
+    let mut new_code: Vec<RegInstr> = Vec::new();
+    let mut index_map = vec![0usize; func.code.len()];
+    let mut next_reg = func.regs;
+    for (i, instr) in func.code.iter().enumerate() {
+        index_map[i] = new_code.len();
+        match instr {
+            RegInstr::CallKnown {
+                dst,
+                function,
+                args,
+            } => {
+                let callee = unit.functions.get(*function)?;
+                let (body, ret_src) = native_straight_line_leaf(callee, args.len())?;
+                let base = next_reg;
+                next_reg += callee.regs;
+                for (param, arg) in args.iter().enumerate() {
+                    new_code.push(RegInstr::Move {
+                        dst: base + param,
+                        src: *arg,
+                    });
+                }
+                for body_instr in &body {
+                    new_code.push(native_offset_regs(body_instr, base)?);
+                }
+                new_code.push(RegInstr::Move {
+                    dst: *dst,
+                    src: base + ret_src,
+                });
+            }
+            other => new_code.push(other.clone()),
+        }
+    }
+    for instr in &mut new_code {
+        match instr {
+            RegInstr::Jump { target }
+            | RegInstr::JumpIfBool { target, .. }
+            | RegInstr::JumpIfIntCompare { target, .. } => *target = index_map[*target],
+            _ => {}
+        }
+    }
+    Some((new_code, next_reg))
+}
+
 /// Translate a `RegFunction` into the native-JIT IR, or `None` if it is not in the
 /// native subset (anything that isn't integer/boolean/control core, has captures,
 /// or does not return an `Int`).
@@ -381,13 +594,18 @@ fn native_reachable_instructions(func: &RegFunction) -> Vec<bool> {
 /// handle loop back-edges) then proves every register is consistently `Int` or
 /// `Bool`, every operand is well-typed, and the result is an `Int`.
 #[cfg(feature = "native-jit")]
-fn translate_to_native_jit(func: &RegFunction) -> Option<vm_jit::JitFunction> {
+fn translate_to_native_jit(
+    unit: &RegUnit,
+    func: &RegFunction,
+) -> Option<(vm_jit::JitFunction, NativeTy)> {
     use vm_jit::{JitCompare, JitInstr};
 
     if func.captures != 0 {
         return None;
     }
-    let n_regs = func.regs;
+    // Inline straight-line leaf calls first, so a function that only leaves the
+    // native subset via small helper calls still qualifies (the calls vanish).
+    let (code, n_regs) = native_inline_leaf_calls(unit, func)?;
     if func.params > n_regs {
         return None;
     }
@@ -396,10 +614,10 @@ fn translate_to_native_jit(func: &RegFunction) -> Option<vm_jit::JitFunction> {
     // body always returns earlier; that tail is unreachable. Restricting analysis
     // (and codegen) to reachable instructions lets such functions still qualify —
     // dead instructions become `Nop`.
-    let reachable = native_reachable_instructions(func);
+    let reachable = native_reachable_instructions(&code);
 
     // Every *reachable* instruction must be in the native subset.
-    for (i, instr) in func.code.iter().enumerate() {
+    for (i, instr) in code.iter().enumerate() {
         if reachable[i] && !native_subset_instruction(instr) {
             return None;
         }
@@ -413,16 +631,14 @@ fn translate_to_native_jit(func: &RegFunction) -> Option<vm_jit::JitFunction> {
     let mut changed = true;
     while changed {
         changed = false;
-        for (i, instr) in func.code.iter().enumerate() {
+        for (i, instr) in code.iter().enumerate() {
             if !reachable[i] {
                 continue;
             }
             let ok = match instr {
+                // Integer-only producers (and `ModInt`, which the VM rejects on
+                // floats): destination is always `Int`.
                 RegInstr::LoadInt { dst, .. }
-                | RegInstr::AddInt { dst, .. }
-                | RegInstr::SubInt { dst, .. }
-                | RegInstr::MulInt { dst, .. }
-                | RegInstr::DivInt { dst, .. }
                 | RegInstr::ModInt { dst, .. }
                 | RegInstr::BitAndInt { dst, .. }
                 | RegInstr::BitOrInt { dst, .. }
@@ -431,6 +647,18 @@ fn translate_to_native_jit(func: &RegFunction) -> Option<vm_jit::JitFunction> {
                 | RegInstr::ShiftRightInt { dst, .. } => {
                     native_set_ty(&mut ty, *dst, NativeTy::Int, &mut changed)
                 }
+                RegInstr::LoadFloat { dst, .. } => {
+                    native_set_ty(&mut ty, *dst, NativeTy::Float, &mut changed)
+                }
+                // Type-polymorphic arithmetic (`AddInt` etc. serve both Int and
+                // Float in the VM): the result takes the operands' type.
+                RegInstr::AddInt { dst, lhs, .. }
+                | RegInstr::SubInt { dst, lhs, .. }
+                | RegInstr::MulInt { dst, lhs, .. }
+                | RegInstr::DivInt { dst, lhs, .. } => match ty[*lhs] {
+                    Some(t) => native_set_ty(&mut ty, *dst, t, &mut changed),
+                    None => true, // operand type not known yet; resolved on a later pass
+                },
                 RegInstr::LoadBool { dst, .. }
                 | RegInstr::LessInt { dst, .. }
                 | RegInstr::LessEqualInt { dst, .. }
@@ -454,6 +682,10 @@ fn translate_to_native_jit(func: &RegFunction) -> Option<vm_jit::JitFunction> {
 
     let int = |reg: usize| ty[reg] == Some(NativeTy::Int);
     let bool_ty = |reg: usize| ty[reg] == Some(NativeTy::Bool);
+    // Numeric = Int or Float; `same` = both operands typed and identical (so a
+    // polymorphic op lowers consistently and native equality matches `VmValue`).
+    let numeric = |reg: usize| matches!(ty[reg], Some(NativeTy::Int | NativeTy::Float));
+    let same = |a: usize, b: usize| ty[a].is_some() && ty[a] == ty[b];
     let r = |reg: usize| reg as u32;
     let cmp = |op: &RegIntCompare| match op {
         RegIntCompare::Less => JitCompare::Lt,
@@ -462,16 +694,20 @@ fn translate_to_native_jit(func: &RegFunction) -> Option<vm_jit::JitFunction> {
         RegIntCompare::GreaterEqual => JitCompare::Ge,
     };
 
-    let mut code = Vec::with_capacity(func.code.len());
-    for (i, instr) in func.code.iter().enumerate() {
+    let mut jit_code = Vec::with_capacity(code.len());
+    for (i, instr) in code.iter().enumerate() {
         if !reachable[i] {
             // Dead code (e.g. the lowerer's defensive trailing `Unit` return):
             // keep an index-aligned `Nop`, never executed.
-            code.push(JitInstr::Nop);
+            jit_code.push(JitInstr::Nop);
             continue;
         }
         let jit = match instr {
             RegInstr::LoadInt { dst, value } => JitInstr::LoadInt {
+                dst: r(*dst),
+                value: *value,
+            },
+            RegInstr::LoadFloat { dst, value } => JitInstr::LoadFloat {
                 dst: r(*dst),
                 value: *value,
             },
@@ -491,7 +727,7 @@ fn translate_to_native_jit(func: &RegFunction) -> Option<vm_jit::JitFunction> {
                 JitInstr::Nop
             }
             RegInstr::AddInt { dst, lhs, rhs } => {
-                require(int(*lhs) && int(*rhs))?;
+                require(numeric(*lhs) && same(*lhs, *rhs))?;
                 JitInstr::Add {
                     dst: r(*dst),
                     lhs: r(*lhs),
@@ -499,7 +735,7 @@ fn translate_to_native_jit(func: &RegFunction) -> Option<vm_jit::JitFunction> {
                 }
             }
             RegInstr::SubInt { dst, lhs, rhs } => {
-                require(int(*lhs) && int(*rhs))?;
+                require(numeric(*lhs) && same(*lhs, *rhs))?;
                 JitInstr::Sub {
                     dst: r(*dst),
                     lhs: r(*lhs),
@@ -507,7 +743,7 @@ fn translate_to_native_jit(func: &RegFunction) -> Option<vm_jit::JitFunction> {
                 }
             }
             RegInstr::MulInt { dst, lhs, rhs } => {
-                require(int(*lhs) && int(*rhs))?;
+                require(numeric(*lhs) && same(*lhs, *rhs))?;
                 JitInstr::Mul {
                     dst: r(*dst),
                     lhs: r(*lhs),
@@ -515,7 +751,7 @@ fn translate_to_native_jit(func: &RegFunction) -> Option<vm_jit::JitFunction> {
                 }
             }
             RegInstr::DivInt { dst, lhs, rhs } => {
-                require(int(*lhs) && int(*rhs))?;
+                require(numeric(*lhs) && same(*lhs, *rhs))?;
                 JitInstr::Div {
                     dst: r(*dst),
                     lhs: r(*lhs),
@@ -574,7 +810,7 @@ fn translate_to_native_jit(func: &RegFunction) -> Option<vm_jit::JitFunction> {
             | RegInstr::LessEqualInt { dst, lhs, rhs }
             | RegInstr::GreaterInt { dst, lhs, rhs }
             | RegInstr::GreaterEqualInt { dst, lhs, rhs } => {
-                require(int(*lhs) && int(*rhs))?;
+                require(numeric(*lhs) && same(*lhs, *rhs))?;
                 let op = match instr {
                     RegInstr::LessInt { .. } => JitCompare::Lt,
                     RegInstr::LessEqualInt { .. } => JitCompare::Le,
@@ -589,9 +825,9 @@ fn translate_to_native_jit(func: &RegFunction) -> Option<vm_jit::JitFunction> {
                 }
             }
             RegInstr::Equal { dst, lhs, rhs } => {
-                // Same statically-known type so native i64 equality matches the
-                // interpreter's `VmValue` equality (Int==Int / Bool==Bool).
-                require(ty[*lhs].is_some() && ty[*lhs] == ty[*rhs])?;
+                // Same statically-known type so native equality matches the
+                // interpreter's `VmValue` equality (Int/Bool via icmp, Float via fcmp).
+                require(same(*lhs, *rhs))?;
                 JitInstr::Equal {
                     dst: r(*dst),
                     lhs: r(*lhs),
@@ -599,7 +835,7 @@ fn translate_to_native_jit(func: &RegFunction) -> Option<vm_jit::JitFunction> {
                 }
             }
             RegInstr::NotEqual { dst, lhs, rhs } => {
-                require(ty[*lhs].is_some() && ty[*lhs] == ty[*rhs])?;
+                require(same(*lhs, *rhs))?;
                 JitInstr::NotEqual {
                     dst: r(*dst),
                     lhs: r(*lhs),
@@ -626,7 +862,7 @@ fn translate_to_native_jit(func: &RegFunction) -> Option<vm_jit::JitFunction> {
                 expected,
                 target,
             } => {
-                require(int(*lhs) && int(*rhs))?;
+                require(numeric(*lhs) && same(*lhs, *rhs))?;
                 JitInstr::JumpIfIntCompare {
                     lhs: r(*lhs),
                     rhs: r(*rhs),
@@ -636,23 +872,40 @@ fn translate_to_native_jit(func: &RegFunction) -> Option<vm_jit::JitFunction> {
                 }
             }
             RegInstr::Return { src } => {
-                // The native ABI returns an `i64` boxed as `Int`, so only
-                // Int-returning functions qualify.
-                require(int(*src))?;
+                // The native ABI returns 64 bits boxed by the caller as the
+                // function's return type, which must be `Int` or `Float`.
+                require(numeric(*src))?;
                 JitInstr::Return { src: r(*src) }
             }
             RegInstr::RuntimeError { .. } => JitInstr::Bail,
             // `native_subset_instruction` already rejected everything else.
             _ => return None,
         };
-        code.push(jit);
+        jit_code.push(jit);
     }
 
-    Some(vm_jit::JitFunction {
+    // Return type = the type of any reachable `Return`'s source (all consistent,
+    // validated numeric above); defaults to `Int` for an empty body.
+    let ret_type = code
+        .iter()
+        .enumerate()
+        .find_map(|(i, instr)| match instr {
+            RegInstr::Return { src } if reachable[i] => ty[*src],
+            _ => None,
+        })
+        .unwrap_or(NativeTy::Int);
+
+    let reg_types = (0..n_regs)
+        .map(|reg| ty[reg].unwrap_or(NativeTy::Int).jit_value_type())
+        .collect();
+
+    let jit_fn = vm_jit::JitFunction {
         n_params: func.params as u32,
         n_regs: n_regs as u32,
-        code,
-    })
+        reg_types,
+        code: jit_code,
+    };
+    Some((jit_fn, ret_type))
 }
 
 /// `Some(())` if the condition holds, else `None` — lets the translator use `?`
@@ -5432,7 +5685,9 @@ struct RegVm {
 #[cfg(feature = "native-jit")]
 struct NativeState {
     module: vm_jit::NativeModule,
-    cache: HashMap<String, Option<vm_jit::CompiledId>>,
+    // `None` = known not native-eligible; `Some((id, ret))` = compiled handle plus
+    // the function's return type (so the caller boxes the 64-bit result correctly).
+    cache: HashMap<String, Option<(vm_jit::CompiledId, NativeTy)>>,
     /// Per-function call counts, for tiering: a function is compiled and run
     /// natively only once it has been entered more than `tier_up_threshold` times
     /// (a hot-function heuristic). `0` means "compile on first call" (force-all).
@@ -5563,9 +5818,12 @@ impl RegVm {
     /// side-effect-free, so re-running them is observationally identical.
     #[cfg(feature = "native-jit")]
     fn try_native(&mut self, func: &RegFunction, base: usize) -> Option<VmValue> {
+        // The unit is needed to resolve inlinable callees; clone the `Rc` so the
+        // mutable `self.native` borrow below doesn't conflict.
+        let unit = Rc::clone(&self.unit);
         // Phase 1: tiering + resolve (and lazily compile) the native function,
         // cached by name. `None` in the cache means "known not native-eligible".
-        let id = {
+        let (id, ret_type) = {
             let native = self.native.as_mut()?;
             if native.force_bail {
                 // Deopt stress mode: pretend the native code bailed at its first
@@ -5581,15 +5839,17 @@ impl RegVm {
             match native.cache.get(&func.name) {
                 Some(entry) => (*entry)?,
                 None => {
-                    let entry = translate_to_native_jit(func)
-                        .and_then(|jit_fn| native.module.compile(&jit_fn).ok());
+                    let entry = translate_to_native_jit(&unit, func).and_then(|(jit_fn, ret)| {
+                        native.module.compile(&jit_fn).ok().map(|id| (id, ret))
+                    });
                     native.cache.insert(func.name.clone(), entry);
                     entry?
                 }
             }
         };
-        // Phase 2: unbox arguments. Only run native when every parameter is an
-        // `Int`, which is what the static "params are i64" assumption relies on.
+        // Phase 2: unbox arguments. Parameters are statically `Int` (the
+        // translator forces it), so run native only when every argument is an
+        // `Int`; otherwise fall back.
         let mut args = Vec::with_capacity(func.params);
         for index in 0..func.params {
             match self.reg(base + index) {
@@ -5597,9 +5857,14 @@ impl RegVm {
                 _ => return None,
             }
         }
-        // Phase 3: call. `None` means the native code bailed → fall back.
-        let result = self.native.as_ref()?.module.call(id, &args)?;
-        Some(VmValue::Int(result))
+        // Phase 3: call. `None` means the native code bailed → fall back. The
+        // 64-bit result is boxed per the function's return type (a float register
+        // stored its `f64` bit pattern).
+        let bits = self.native.as_ref()?.module.call(id, &args)?;
+        Some(match ret_type {
+            NativeTy::Float => VmValue::Float(f64::from_bits(bits as u64)),
+            _ => VmValue::Int(bits),
+        })
     }
 
     /// Tier-0 JIT executor for a JIT-eligible function. Runs the body via the
@@ -5709,7 +5974,7 @@ impl RegVm {
                 self.set_reg(base + *dst, VmValue::Unit);
             }
             RegInstr::MakeStruct { dst, name, fields } => {
-                let mut field_values = HashMap::with_capacity(fields.len());
+                let mut field_values = FieldMap::with_capacity_and_hasher(fields.len(), Default::default());
                 for (field, reg) in fields {
                     field_values.insert(field.clone(), self.reg(base + *reg).clone());
                 }
@@ -5722,7 +5987,7 @@ impl RegVm {
                 );
             }
             RegInstr::MakeVariant { dst, name, fields } => {
-                let mut field_values = HashMap::with_capacity(fields.len());
+                let mut field_values = FieldMap::with_capacity_and_hasher(fields.len(), Default::default());
                 for (field, reg) in fields {
                     field_values.insert(field.clone(), self.reg(base + *reg).clone());
                 }
@@ -5753,7 +6018,7 @@ impl RegVm {
                 );
             }
             RegInstr::MakeMap { dst, entries } => {
-                let mut map = HashMap::with_capacity(entries.len());
+                let mut map = ValueMap::with_capacity_and_hasher(entries.len(), Default::default());
                 for (key, value) in entries {
                     let key = map_key_from_value(self.reg(base + *key))?;
                     map.insert(key, self.reg(base + *value).clone());
@@ -9655,7 +9920,7 @@ impl RegVm {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let key_fn = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 let values = list.borrow().clone();
-                let mut groups: HashMap<VmMapKey, VmValue> = HashMap::new();
+                let mut groups: ValueMap = ValueMap::default();
                 for value in values {
                     let key_value =
                         self.call_closure_one(unit, &key_fn, value.clone(), next_base)?;
@@ -9932,7 +10197,7 @@ impl RegVm {
                     .iter()
                     .map(|(key, value)| (key.clone(), value.clone()))
                     .collect::<Vec<_>>();
-                let mut filtered = HashMap::new();
+                let mut filtered = ValueMap::default();
                 for (key, value) in entries {
                     let keep = self.call_closure_two(
                         unit,
@@ -10018,7 +10283,7 @@ impl RegVm {
                     .iter()
                     .map(|(key, value)| (key.clone(), value.clone()))
                     .collect::<Vec<_>>();
-                let mut mapped = HashMap::new();
+                let mut mapped = ValueMap::default();
                 for (key, value) in entries {
                     mapped.insert(key, self.call_closure_one(unit, &mapper, value, next_base)?);
                 }
@@ -10050,7 +10315,7 @@ impl RegVm {
                 }
                 Ok(VmValue::Map(Rc::new(RefCell::new(merged))))
             }
-            RegIntrinsic::MapNew => Ok(VmValue::Map(Rc::new(RefCell::new(HashMap::new())))),
+            RegIntrinsic::MapNew => Ok(VmValue::Map(Rc::new(RefCell::new(ValueMap::default())))),
             RegIntrinsic::MapTryFold => {
                 let map = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let mut state = intrinsic_arg(&self.stack, base, args, 1)?.clone();
@@ -11797,7 +12062,7 @@ fn list_item_at(
     })
 }
 
-fn expect_map_ref(value: &VmValue) -> Result<Rc<RefCell<HashMap<VmMapKey, VmValue>>>, EvalError> {
+fn expect_map_ref(value: &VmValue) -> Result<Rc<RefCell<ValueMap>>, EvalError> {
     match value {
         VmValue::Map(value) => Ok(Rc::clone(value)),
         other => Err(EvalError::Runtime(format!(
@@ -11950,491 +12215,6 @@ enum JsonPathPart {
     Index(usize),
 }
 
-fn parse_json_path(path: &str) -> Result<Vec<JsonPathPart>, VmValue> {
-    let path = path.strip_prefix("$.").unwrap_or(path);
-    let path = path.strip_prefix('$').unwrap_or(path);
-    if path.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let chars = path.chars().collect::<Vec<_>>();
-    let mut parts = Vec::new();
-    let mut index = 0;
-    while index < chars.len() {
-        if chars[index] == '.' {
-            index += 1;
-            continue;
-        }
-
-        if chars[index] == '[' {
-            index += 1;
-            let start = index;
-            while index < chars.len() && chars[index] != ']' {
-                index += 1;
-            }
-            if index == chars.len() {
-                return Err(json_error_value(format!(
-                    "JSON path `{path}` has an unterminated array index"
-                )));
-            }
-            let raw_index = chars[start..index].iter().collect::<String>();
-            let item_index = raw_index.parse::<usize>().map_err(|_| {
-                json_error_value(format!(
-                    "JSON path `{path}` has invalid array index `{raw_index}`"
-                ))
-            })?;
-            parts.push(JsonPathPart::Index(item_index));
-            index += 1;
-            continue;
-        }
-
-        let start = index;
-        while index < chars.len() && chars[index] != '.' && chars[index] != '[' {
-            index += 1;
-        }
-        let field = chars[start..index].iter().collect::<String>();
-        if field.is_empty() {
-            return Err(json_error_value(format!(
-                "JSON path `{path}` contains an empty field"
-            )));
-        }
-        parts.push(JsonPathPart::Field(field));
-    }
-
-    Ok(parts)
-}
-
-fn parse_json_text(text: &str) -> Result<serde_json::Value, VmValue> {
-    serde_json::from_str::<serde_json::Value>(text)
-        .map_err(|error| json_error_value(error.to_string()))
-}
-
-fn json_value_at(value: &serde_json::Value, path: &str) -> Result<serde_json::Value, VmValue> {
-    let mut current = value;
-    for part in parse_json_path(path)? {
-        match part {
-            JsonPathPart::Field(name) => {
-                let Some(next) = current.get(&name) else {
-                    return Err(json_error_value(format!(
-                        "missing JSON field `{name}` at path `{path}`"
-                    )));
-                };
-                current = next;
-            }
-            JsonPathPart::Index(index) => {
-                let Some(items) = current.as_array() else {
-                    return Err(json_error_value(format!(
-                        "JSON path `{path}` expected an array before index `{index}`"
-                    )));
-                };
-                let Some(next) = items.get(index) else {
-                    return Err(json_error_value(format!(
-                        "JSON array index `{index}` is out of bounds at path `{path}`"
-                    )));
-                };
-                current = next;
-            }
-        }
-    }
-    Ok(current.clone())
-}
-
-fn json_optional_path_value(value: &serde_json::Value, path: &str) -> VmValue {
-    match json_value_at(value, path) {
-        Ok(value) if value.is_null() => VmValue::OptionNone,
-        Ok(value) => VmValue::OptionSome(Box::new(VmValue::Json(Rc::new(value)))),
-        Err(_) => VmValue::OptionNone,
-    }
-}
-
-fn json_optional_typed_path_value(
-    value: &serde_json::Value,
-    path: &str,
-    convert: fn(serde_json::Value) -> Result<VmValue, VmValue>,
-) -> Result<VmValue, VmValue> {
-    match json_value_at(value, path) {
-        Ok(value) if value.is_null() => Ok(VmValue::OptionNone),
-        Ok(value) => convert(value).map(|value| VmValue::OptionSome(Box::new(value))),
-        Err(_) => Ok(VmValue::OptionNone),
-    }
-}
-
-fn json_array_contains_string_value(
-    value: &serde_json::Value,
-    needle: &str,
-    mode: JsonArrayStringMatch,
-) -> Result<VmValue, VmValue> {
-    let items = json_array_items(value)?;
-    Ok(VmValue::Bool(items.iter().any(|value| {
-        value.as_str().is_some_and(|item| match mode {
-            JsonArrayStringMatch::Exact => item == needle,
-            JsonArrayStringMatch::Substring => item.contains(needle),
-            JsonArrayStringMatch::Prefix => item.starts_with(needle),
-        })
-    })))
-}
-
-fn json_field_json(value: &serde_json::Value, name: &str) -> Result<serde_json::Value, VmValue> {
-    value
-        .get(name)
-        .cloned()
-        .ok_or_else(|| json_error_value(format!("missing JSON field `{name}`")))
-}
-
-fn json_field_value(value: &serde_json::Value, name: &str) -> Result<VmValue, VmValue> {
-    json_field_json(value, name).map(|value| VmValue::Json(Rc::new(value)))
-}
-
-fn json_typed_field_value(
-    value: &serde_json::Value,
-    name: &str,
-    type_name: &str,
-    convert: fn(&serde_json::Value) -> Option<VmValue>,
-) -> Result<VmValue, VmValue> {
-    let field = json_field_json(value, name)?;
-    convert(&field).ok_or_else(|| {
-        json_error_value(format!(
-            "JSON field `{name}` is not {} {type_name}",
-            json_type_article(type_name)
-        ))
-    })
-}
-
-fn json_as_bool_value(value: serde_json::Value) -> Result<VmValue, VmValue> {
-    value
-        .as_bool()
-        .map(VmValue::Bool)
-        .ok_or_else(|| json_error_value("JSON value is not a boolean"))
-}
-
-fn json_as_int_value(value: serde_json::Value) -> Result<VmValue, VmValue> {
-    value
-        .as_i64()
-        .map(VmValue::Int)
-        .ok_or_else(|| json_error_value("JSON value is not an integer"))
-}
-
-fn json_as_string_value(value: serde_json::Value) -> Result<VmValue, VmValue> {
-    value
-        .as_str()
-        .map(VmValue::string)
-        .ok_or_else(|| json_error_value("JSON value is not a string"))
-}
-
-fn json_optional_field_value(value: &serde_json::Value, name: &str) -> VmValue {
-    match value.get(name) {
-        Some(value) if value.is_null() => VmValue::OptionNone,
-        Some(value) => VmValue::OptionSome(Box::new(VmValue::Json(Rc::new(value.clone())))),
-        None => VmValue::OptionNone,
-    }
-}
-
-fn json_optional_typed_field_value(
-    value: &serde_json::Value,
-    name: &str,
-    type_name: &str,
-    convert: fn(&serde_json::Value) -> Option<VmValue>,
-) -> Result<VmValue, VmValue> {
-    match value.get(name) {
-        Some(value) if value.is_null() => Ok(VmValue::OptionNone),
-        Some(value) => convert(value)
-            .map(|value| VmValue::OptionSome(Box::new(value)))
-            .ok_or_else(|| {
-                json_error_value(format!(
-                    "JSON field `{name}` is not {} {type_name}",
-                    json_type_article(type_name)
-                ))
-            }),
-        None => Ok(VmValue::OptionNone),
-    }
-}
-
-fn json_type_article(type_name: &str) -> &'static str {
-    if matches!(
-        type_name.as_bytes().first(),
-        Some(b'a' | b'e' | b'i' | b'o' | b'u')
-    ) {
-        "an"
-    } else {
-        "a"
-    }
-}
-
-fn json_error_value(message: impl Into<String>) -> VmValue {
-    let mut fields = HashMap::new();
-    fields.insert("message".to_string(), VmValue::string(message.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("JsonError"),
-        fields,
-    }))
-}
-
-fn json_decode_struct_value(
-    unit: &RegUnit,
-    type_name: &str,
-    value: &serde_json::Value,
-) -> Result<VmValue, VmValue> {
-    let info = unit
-        .types
-        .get(type_root_name(type_name))
-        .ok_or_else(|| json_error_value(format!("unknown JSON decode type `{type_name}`")))?;
-    let object = value
-        .as_object()
-        .ok_or_else(|| json_error_value("JSON decode expected an object"))?;
-    let mut fields = HashMap::with_capacity(info.fields_ordered.len());
-    for field in &info.fields_ordered {
-        let decoded = match object.get(&field.name) {
-            Some(value) => json_decode_field_value(unit, &field.type_name, value)?,
-            None if type_root_name(&field.type_name) == "Option" => value_none(),
-            None => {
-                return Err(json_error_value(format!(
-                    "missing JSON field `{}`",
-                    field.name
-                )));
-            }
-        };
-        fields.insert(field.name.clone(), decoded);
-    }
-    Ok(VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from(info.name.as_str()),
-        fields,
-    })))
-}
-
-fn json_decode_field_value(
-    unit: &RegUnit,
-    type_name: &str,
-    value: &serde_json::Value,
-) -> Result<VmValue, VmValue> {
-    match type_root_name(type_name) {
-        "Unit" => {
-            if value.is_null() {
-                Ok(VmValue::Unit)
-            } else {
-                Err(json_type_error(type_name, value))
-            }
-        }
-        "Int" => value
-            .as_i64()
-            .map(VmValue::Int)
-            .ok_or_else(|| json_type_error(type_name, value)),
-        "Float" => value
-            .as_f64()
-            .map(VmValue::Float)
-            .ok_or_else(|| json_type_error(type_name, value)),
-        "Bool" => value
-            .as_bool()
-            .map(VmValue::Bool)
-            .ok_or_else(|| json_type_error(type_name, value)),
-        "String" => value
-            .as_str()
-            .map(VmValue::string)
-            .ok_or_else(|| json_type_error(type_name, value)),
-        "JsonValue" | "JsonLiteral" => Ok(VmValue::Json(Rc::new(value.clone()))),
-        "Option" => {
-            if value.is_null() {
-                return Ok(value_none());
-            }
-            let Some(inner) = type_arg_names(type_name).and_then(|args| args.first().copied())
-            else {
-                return Err(json_error_value(format!(
-                    "Option field `{type_name}` is missing a type argument"
-                )));
-            };
-            json_decode_field_value(unit, inner, value).map(value_some)
-        }
-        "List" => {
-            let Some(inner) = type_arg_names(type_name).and_then(|args| args.first().copied())
-            else {
-                return Err(json_error_value(format!(
-                    "List field `{type_name}` is missing a type argument"
-                )));
-            };
-            let items = value
-                .as_array()
-                .ok_or_else(|| json_type_error(type_name, value))?;
-            let decoded = items
-                .iter()
-                .map(|item| json_decode_field_value(unit, inner, item))
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(VmValue::List(Rc::new(RefCell::new(decoded))))
-        }
-        "Map" => {
-            let args = type_arg_names(type_name).unwrap_or_default();
-            if args.len() != 2 || type_root_name(args[0]) != "String" {
-                return Err(json_error_value(format!(
-                    "JSON decode only supports Map<String, T> fields in the VM, got `{type_name}`"
-                )));
-            }
-            let object = value
-                .as_object()
-                .ok_or_else(|| json_type_error(type_name, value))?;
-            let mut decoded = HashMap::with_capacity(object.len());
-            for (key, value) in object {
-                decoded.insert(
-                    VmMapKey::String(Rc::new(key.clone())),
-                    json_decode_field_value(unit, args[1], value)?,
-                );
-            }
-            Ok(VmValue::Map(Rc::new(RefCell::new(decoded))))
-        }
-        other if unit.types.contains_key(other) => json_decode_struct_value(unit, other, value),
-        _ => Err(json_error_value(format!(
-            "JSON decode does not support VM field type `{type_name}`"
-        ))),
-    }
-}
-
-fn json_type_error(expected: &str, value: &serde_json::Value) -> VmValue {
-    json_error_value(format!(
-        "JSON decode expected `{}` but found `{}`",
-        type_root_name(expected),
-        json_kind(value)
-    ))
-}
-
-fn decode_error_value(message: impl Into<String>) -> VmValue {
-    let mut fields = HashMap::new();
-    fields.insert("message".to_string(), VmValue::string(message.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("DecodeError"),
-        fields,
-    }))
-}
-
-fn config_error_value(message: impl Into<String>) -> VmValue {
-    let mut fields = HashMap::new();
-    fields.insert("message".to_string(), VmValue::string(message.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("ConfigError"),
-        fields,
-    }))
-}
-
-fn file_error_value(message: impl Into<String>) -> VmValue {
-    let mut fields = HashMap::new();
-    fields.insert("message".to_string(), VmValue::string(message.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("FileError"),
-        fields,
-    }))
-}
-
-fn channel_error_value(message: impl Into<String>) -> VmValue {
-    let mut fields = HashMap::new();
-    fields.insert("message".to_string(), VmValue::string(message.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("ChannelError"),
-        fields,
-    }))
-}
-
-fn http_error_value(message: impl Into<String>) -> VmValue {
-    let mut fields = HashMap::new();
-    fields.insert("message".to_string(), VmValue::string(message.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("HttpError"),
-        fields,
-    }))
-}
-
-fn http_response_value(status: i64, body: impl Into<String>) -> VmValue {
-    let mut fields = HashMap::new();
-    fields.insert("status".to_string(), VmValue::Int(status));
-    fields.insert("body".to_string(), VmValue::string(body.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("HttpResponse"),
-        fields,
-    }))
-}
-
-fn http_get_local(url: &str) -> Result<VmValue, VmValue> {
-    let Some(rest) = url.strip_prefix("http://") else {
-        return Err(http_error_value(format!(
-            "HTTP client runtime is not configured for GET {url}"
-        )));
-    };
-    let (host_port, path) = match rest.split_once('/') {
-        Some((host_port, path)) => (host_port, format!("/{path}")),
-        None => (rest, "/".to_string()),
-    };
-    if host_port.is_empty() {
-        return Err(http_error_value(format!(
-            "HTTP URL is missing a host: `{url}`"
-        )));
-    }
-    let mut stream = TcpStream::connect(host_port).map_err(|error| {
-        http_error_value(format!("HTTP connect to `{host_port}` failed: {error}"))
-    })?;
-    let timeout = Some(std::time::Duration::from_secs(5));
-    let _ = stream.set_read_timeout(timeout);
-    let _ = stream.set_write_timeout(timeout);
-    let request = format!("GET {path} HTTP/1.1\r\nHost: {host_port}\r\nConnection: close\r\n\r\n");
-    stream.write_all(request.as_bytes()).map_err(|error| {
-        http_error_value(format!("HTTP request write failed for `{url}`: {error}"))
-    })?;
-    let mut response = Vec::new();
-    stream.read_to_end(&mut response).map_err(|error| {
-        http_error_value(format!("HTTP response read failed for `{url}`: {error}"))
-    })?;
-    parse_http_response(&response).map_err(http_error_value)
-}
-
-fn parse_http_response(response: &[u8]) -> Result<VmValue, String> {
-    let header_end = response
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .ok_or_else(|| "HTTP response is missing header terminator".to_string())?;
-    let headers = String::from_utf8_lossy(&response[..header_end]);
-    let status_line = headers
-        .lines()
-        .next()
-        .ok_or_else(|| "HTTP response is missing status line".to_string())?;
-    let status = status_line
-        .split_whitespace()
-        .nth(1)
-        .ok_or_else(|| format!("HTTP response status line is invalid: `{status_line}`"))?
-        .parse::<i64>()
-        .map_err(|error| format!("HTTP response status is invalid: {error}"))?;
-    let body = String::from_utf8_lossy(&response[header_end + 4..]).to_string();
-    Ok(http_response_value(status, body))
-}
-
-fn tcp_error_value(message: impl Into<String>) -> VmValue {
-    let mut fields = HashMap::new();
-    fields.insert("message".to_string(), VmValue::string(message.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("TcpError"),
-        fields,
-    }))
-}
-
-fn tcp_stream_value(id: i64) -> VmValue {
-    let mut fields = HashMap::new();
-    fields.insert("id".to_string(), VmValue::Int(id));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("TcpStream"),
-        fields,
-    }))
-}
-
-fn websocket_value(id: i64) -> VmValue {
-    let mut fields = HashMap::new();
-    fields.insert("id".to_string(), VmValue::Int(id));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("WebSocket"),
-        fields,
-    }))
-}
-
-fn websocket_error_value(message: impl Into<String>) -> VmValue {
-    let mut fields = HashMap::new();
-    fields.insert("message".to_string(), VmValue::string(message.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("WebSocketError"),
-        fields,
-    }))
-}
 
 #[derive(Debug, Clone)]
 struct VmChannelState {
@@ -12450,7 +12230,7 @@ impl VmChannelState {
 }
 
 fn channel_value(id: i64, capacity: i64, receiver_taken: bool) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert("id".to_string(), VmValue::Int(id));
     fields.insert("capacity".to_string(), VmValue::Int(capacity));
     fields.insert("receiver_taken".to_string(), VmValue::Bool(receiver_taken));
@@ -12503,7 +12283,7 @@ fn peel_select_operation(operation: &HirExpr) -> (&HirExpr, bool) {
 }
 
 fn sender_value(channel_id: i64, closed: bool) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert("channel_id".to_string(), VmValue::Int(channel_id));
     fields.insert("closed".to_string(), VmValue::Bool(closed));
     VmValue::Struct(Rc::new(VmStruct {
@@ -12519,7 +12299,7 @@ struct VmReceiver {
 }
 
 fn receiver_value(channel_id: i64, closed: bool) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert("channel_id".to_string(), VmValue::Int(channel_id));
     fields.insert("closed".to_string(), VmValue::Bool(closed));
     VmValue::Struct(Rc::new(VmStruct {
@@ -12537,7 +12317,7 @@ const POOL_LEASE_ID_FIELD: &str = "__rsscript_vm_pool_id";
 const POOL_LEASE_DISCARDED_FIELD: &str = "__rsscript_vm_pool_discarded";
 
 fn resource_pool_value(id: i64) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert("id".to_string(), VmValue::Int(id));
     VmValue::Struct(Rc::new(VmStruct {
         name: Rc::from("ResourcePool"),
@@ -12546,7 +12326,7 @@ fn resource_pool_value(id: i64) -> VmValue {
 }
 
 fn pool_stats_value(capacity: i64, created: i64, available: i64, in_use: i64) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert("capacity".to_string(), VmValue::Int(capacity));
     fields.insert("created".to_string(), VmValue::Int(created));
     fields.insert("available".to_string(), VmValue::Int(available));
@@ -12558,7 +12338,7 @@ fn pool_stats_value(capacity: i64, created: i64, available: i64, in_use: i64) ->
 }
 
 fn pool_error_value(message: impl Into<String>) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert("message".to_string(), VmValue::string(message.into()));
     VmValue::Struct(Rc::new(VmStruct {
         name: Rc::from("PoolError"),
@@ -12645,7 +12425,7 @@ fn clock_system_unix_ms() -> i64 {
 }
 
 fn instant_value(unix_ms: i64) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert("unix_ms".to_string(), VmValue::Int(unix_ms));
     VmValue::Struct(Rc::new(VmStruct {
         name: Rc::from("Instant"),
@@ -12658,7 +12438,7 @@ fn deadline_after_ms(ms: i64) -> i64 {
 }
 
 fn deadline_value(unix_ms: i64) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert("unix_ms".to_string(), VmValue::Int(unix_ms));
     VmValue::Struct(Rc::new(VmStruct {
         name: Rc::from("Deadline"),
@@ -12667,7 +12447,7 @@ fn deadline_value(unix_ms: i64) -> VmValue {
 }
 
 fn counter_value(value: i64) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert("value".to_string(), VmValue::Int(value));
     VmValue::Struct(Rc::new(VmStruct {
         name: Rc::from("Counter"),
@@ -12676,7 +12456,7 @@ fn counter_value(value: i64) -> VmValue {
 }
 
 fn config_value(name: impl Into<String>) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert("name".to_string(), VmValue::string(name.into()));
     VmValue::Struct(Rc::new(VmStruct {
         name: Rc::from("ConfigValue"),
@@ -12693,7 +12473,7 @@ fn config_name_from_text(text: &str) -> String {
 }
 
 fn config_rules_value(name: impl Into<String>, rule_count: i64) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert("name".to_string(), VmValue::string(name.into()));
     fields.insert("rule_count".to_string(), VmValue::Int(rule_count));
     VmValue::Struct(Rc::new(VmStruct {
@@ -12703,7 +12483,7 @@ fn config_rules_value(name: impl Into<String>, rule_count: i64) -> VmValue {
 }
 
 fn rule_value(name: impl Into<String>) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert("name".to_string(), VmValue::string(name.into()));
     VmValue::Struct(Rc::new(VmStruct {
         name: Rc::from("Rule"),
@@ -12720,7 +12500,7 @@ fn rules_from_text(text: &str) -> Vec<VmValue> {
 }
 
 fn environment_value(has_parent: bool, has_function: bool) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert("has_parent".to_string(), VmValue::Bool(has_parent));
     fields.insert("has_function".to_string(), VmValue::Bool(has_function));
     VmValue::Struct(Rc::new(VmStruct {
@@ -12730,7 +12510,7 @@ fn environment_value(has_parent: bool, has_function: bool) -> VmValue {
 }
 
 fn function_object_value(has_closure: bool) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert("has_closure".to_string(), VmValue::Bool(has_closure));
     VmValue::Struct(Rc::new(VmStruct {
         name: Rc::from("FunctionObject"),
@@ -12739,7 +12519,7 @@ fn function_object_value(has_closure: bool) -> VmValue {
 }
 
 fn config_store_value(name: impl Into<String>) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert("name".to_string(), VmValue::string(name.into()));
     VmValue::Struct(Rc::new(VmStruct {
         name: Rc::from("ConfigStore"),
@@ -12748,7 +12528,7 @@ fn config_store_value(name: impl Into<String>) -> VmValue {
 }
 
 fn global_config_value(rule_count: i64) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert("rule_count".to_string(), VmValue::Int(rule_count));
     VmValue::Struct(Rc::new(VmStruct {
         name: Rc::from("GlobalConfig"),
@@ -12757,7 +12537,7 @@ fn global_config_value(rule_count: i64) -> VmValue {
 }
 
 fn request_value(path: impl Into<String>) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert("path".to_string(), VmValue::string(path.into()));
     VmValue::Struct(Rc::new(VmStruct {
         name: Rc::from("Request"),
@@ -12766,7 +12546,7 @@ fn request_value(path: impl Into<String>) -> VmValue {
 }
 
 fn response_value(status: i64, body: impl Into<String>) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert("status".to_string(), VmValue::Int(status));
     fields.insert("body".to_string(), VmValue::string(body.into()));
     VmValue::Struct(Rc::new(VmStruct {
@@ -12809,7 +12589,7 @@ fn http_request_value(
     backoff_ms: i64,
     header_count: i64,
 ) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert("method".to_string(), VmValue::string(method.into()));
     fields.insert("url".to_string(), VmValue::string(url.into()));
     fields.insert("body".to_string(), VmValue::string(body.into()));
@@ -12930,7 +12710,7 @@ impl VmDbConnection {
 }
 
 fn db_connection_value(url: impl Into<String>, queries: Vec<String>) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert("url".to_string(), VmValue::string(url.into()));
     fields.insert(
         "queries".to_string(),
@@ -12945,7 +12725,7 @@ fn db_connection_value(url: impl Into<String>, queries: Vec<String>) -> VmValue 
 }
 
 fn db_error_value(message: impl Into<String>) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert("message".to_string(), VmValue::string(message.into()));
     VmValue::Struct(Rc::new(VmStruct {
         name: Rc::from("DbError"),
@@ -13149,7 +12929,7 @@ fn process_output_details(stdout: &str, stderr: &str) -> String {
 }
 
 fn process_output_value(output: VmProcessOutput) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert("status".to_string(), VmValue::Int(output.status));
     fields.insert("stdout".to_string(), VmValue::string(output.stdout));
     fields.insert("stderr".to_string(), VmValue::string(output.stderr));
@@ -13162,7 +12942,7 @@ fn process_output_value(output: VmProcessOutput) -> VmValue {
 }
 
 fn process_event_value(kind: &str, data: &str, status: i64) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert("kind".to_string(), VmValue::string(kind));
     fields.insert("data".to_string(), VmValue::string(data));
     fields.insert("status".to_string(), VmValue::Int(status));
@@ -13186,7 +12966,7 @@ impl VmFileState {
 }
 
 fn file_value(path: impl Into<String>, mode: impl Into<String>, cursor: u64) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert("path".to_string(), VmValue::string(path.into()));
     fields.insert("mode".to_string(), VmValue::string(mode.into()));
     fields.insert("cursor".to_string(), VmValue::Int(cursor as i64));
@@ -13297,7 +13077,7 @@ fn file_bytes_stream_value(path: &str, chunk_size: i64) -> Result<VmValue, Strin
 }
 
 fn file_metadata_value(metadata: std::fs::Metadata) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert("is_file".to_string(), VmValue::Bool(metadata.is_file()));
     fields.insert("is_dir".to_string(), VmValue::Bool(metadata.is_dir()));
     fields.insert("len".to_string(), VmValue::Int(metadata.len() as i64));
@@ -13351,7 +13131,7 @@ fn relative_runtime_path(root: &Path, path: &Path) -> String {
 }
 
 fn tempdir_value(path: impl Into<String>) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert("path".to_string(), VmValue::string(path.into()));
     VmValue::Struct(Rc::new(VmStruct {
         name: Rc::from("TempDir"),
@@ -13422,7 +13202,7 @@ fn image_value(
     height: Option<i64>,
     operations: Vec<String>,
 ) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert("bytes".to_string(), VmValue::Bytes(Rc::new(bytes)));
     fields.insert(
         "width".to_string(),
@@ -13449,7 +13229,7 @@ fn image_value(
 }
 
 fn image_error_value(message: impl Into<String>) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert("message".to_string(), VmValue::string(message.into()));
     VmValue::Struct(Rc::new(VmStruct {
         name: Rc::from("ImageError"),
@@ -13466,7 +13246,7 @@ fn cancellation_token_value(id: i64) -> VmValue {
 }
 
 fn cancellation_handle_value(name: &'static str, id: i64) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert("id".to_string(), VmValue::Int(id));
     VmValue::Struct(Rc::new(VmStruct {
         name: Rc::from(name),
@@ -13475,7 +13255,7 @@ fn cancellation_handle_value(name: &'static str, id: i64) -> VmValue {
 }
 
 fn stream_value(items: Vec<VmValue>) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert(
         "items".to_string(),
         VmValue::List(Rc::new(RefCell::new(items))),
@@ -13490,7 +13270,7 @@ fn stream_value(items: Vec<VmValue>) -> VmValue {
 }
 
 fn stream_channel_value(channel_id: i64) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert(
         "items".to_string(),
         VmValue::List(Rc::new(RefCell::new(Vec::new()))),
@@ -13508,7 +13288,7 @@ fn stream_channel_value(channel_id: i64) -> VmValue {
 }
 
 fn stream_collect_error_value(message: impl Into<String>) -> VmValue {
-    let mut fields = HashMap::new();
+    let mut fields = FieldMap::default();
     fields.insert(
         "items".to_string(),
         VmValue::List(Rc::new(RefCell::new(Vec::new()))),
@@ -13530,1231 +13310,5 @@ struct VmStreamState {
     items: Rc<RefCell<Vec<VmValue>>>,
     collect_error: Option<String>,
     channel_id: Option<i64>,
-}
-
-fn regex_value(pattern: impl Into<String>) -> VmValue {
-    let mut fields = HashMap::new();
-    fields.insert("pattern".to_string(), VmValue::string(pattern.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("Regex"),
-        fields,
-    }))
-}
-
-fn regex_error_value(message: impl Into<String>) -> VmValue {
-    let mut fields = HashMap::new();
-    fields.insert("message".to_string(), VmValue::string(message.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("RegexError"),
-        fields,
-    }))
-}
-
-fn csv_error_value(message: impl Into<String>) -> VmValue {
-    let mut fields = HashMap::new();
-    fields.insert("message".to_string(), VmValue::string(message.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("CsvError"),
-        fields,
-    }))
-}
-
-fn row_buffer_value(bytes: Vec<u8>) -> VmValue {
-    let mut fields = HashMap::new();
-    fields.insert("bytes".to_string(), VmValue::Bytes(Rc::new(bytes)));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("RowBuffer"),
-        fields,
-    }))
-}
-
-fn row_value(fields: Vec<String>) -> VmValue {
-    let mut row_fields = HashMap::new();
-    row_fields.insert(
-        "fields".to_string(),
-        VmValue::List(Rc::new(RefCell::new(
-            fields.into_iter().map(VmValue::string).collect(),
-        ))),
-    );
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("Row"),
-        fields: row_fields,
-    }))
-}
-
-fn csv_parse_row_value(bytes: &[u8]) -> Result<VmValue, VmValue> {
-    let text = std::str::from_utf8(bytes).map_err(|error| csv_error_value(error.to_string()))?;
-    let Some(line) = text
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .nth(1)
-        .or_else(|| text.lines().map(str::trim).find(|line| !line.is_empty()))
-    else {
-        return Err(csv_error_value("CSV buffer is empty"));
-    };
-    Ok(row_value(
-        line.split(',')
-            .map(|field| field.trim().to_string())
-            .collect(),
-    ))
-}
-
-fn csv_rows_stream_value(path: &str) -> Result<VmValue, String> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|error| format!("CSV row stream open failed: {error}"))?;
-    let mut skipped_header = false;
-    let mut rows = Vec::new();
-    for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
-        if !skipped_header {
-            skipped_header = true;
-            continue;
-        }
-        rows.push(row_value(
-            line.split(',')
-                .map(|field| field.trim().to_string())
-                .collect(),
-        ));
-    }
-    Ok(stream_value(rows))
-}
-
-fn row_field_string_value(fields: Vec<String>, index: i64) -> Result<VmValue, VmValue> {
-    let index = usize::try_from(index).map_err(|_| csv_error_value("negative CSV field index"))?;
-    fields
-        .get(index)
-        .cloned()
-        .map(VmValue::string)
-        .ok_or_else(|| csv_error_value(format!("CSV field index `{index}` is out of bounds")))
-}
-
-fn yaml_parse_json_value(text: &str) -> Result<VmValue, VmValue> {
-    let value: serde_yaml_ng::Value =
-        serde_yaml_ng::from_str(text).map_err(|error| json_error_value(error.to_string()))?;
-    serde_json::to_value(value)
-        .map(|value| VmValue::Json(Rc::new(value)))
-        .map_err(|error| json_error_value(error.to_string()))
-}
-
-fn toml_parse_file_value(path: &str) -> Result<VmValue, VmValue> {
-    std::fs::read_to_string(path)
-        .map_err(|error| json_error_value(error.to_string()))
-        .and_then(|text| {
-            text.parse::<toml::Value>()
-                .map_err(|error| json_error_value(error.to_string()))
-        })
-        .and_then(|value| {
-            serde_json::to_value(value)
-                .map(|value| VmValue::Json(Rc::new(value)))
-                .map_err(|error| json_error_value(error.to_string()))
-        })
-}
-
-fn split_text_lines(value: &str) -> Vec<String> {
-    if value.is_empty() {
-        return Vec::new();
-    }
-    let trimmed = value.strip_suffix('\n').unwrap_or(value);
-    trimmed.split('\n').map(ToString::to_string).collect()
-}
-
-fn diff_unified_string(old: &str, new: &str) -> String {
-    if old == new {
-        return String::new();
-    }
-    let old_lines = split_text_lines(old);
-    let new_lines = split_text_lines(new);
-    let mut out = Vec::new();
-    out.push("--- old".to_string());
-    out.push("+++ new".to_string());
-    out.push(format!(
-        "@@ -1,{} +1,{} @@",
-        old_lines.len(),
-        new_lines.len()
-    ));
-    for line in &old_lines {
-        out.push(format!("-{line}"));
-    }
-    for line in &new_lines {
-        out.push(format!("+{line}"));
-    }
-    let mut text = out.join("\n");
-    text.push('\n');
-    text
-}
-
-fn parse_patch_hunk_old_start(line: &str) -> Result<usize, String> {
-    let mut parts = line.split_whitespace();
-    let Some("@@") = parts.next() else {
-        return Err("malformed hunk header".to_string());
-    };
-    let Some(old_part) = parts.next() else {
-        return Err("hunk header missing old range".to_string());
-    };
-    if !old_part.starts_with('-') {
-        return Err("hunk header old range must start with `-`".to_string());
-    }
-    old_part[1..]
-        .split(',')
-        .next()
-        .unwrap_or("1")
-        .parse::<usize>()
-        .map_err(|_| "hunk header old range start must be an integer".to_string())
-}
-
-fn patch_apply_text_string(original: &str, patch: &str) -> Result<String, String> {
-    let original_had_trailing_newline = original.ends_with('\n');
-    let original_lines = split_text_lines(original);
-    let patch_lines = split_text_lines(patch);
-    if patch_lines.is_empty() {
-        return Ok(original.to_string());
-    }
-
-    let mut output = Vec::new();
-    let mut original_index = 0usize;
-    let mut patch_index = 0usize;
-
-    while patch_index < patch_lines.len() {
-        let line = &patch_lines[patch_index];
-        if line.starts_with("--- ") || line.starts_with("+++ ") {
-            patch_index += 1;
-            continue;
-        }
-        if !line.starts_with("@@ ") {
-            return Err(format!("expected unified diff hunk header, got `{line}`"));
-        }
-        let old_start = parse_patch_hunk_old_start(line)?;
-        let target_index = old_start.saturating_sub(1);
-        if target_index < original_index || target_index > original_lines.len() {
-            return Err("patch hunk applies outside the original text".to_string());
-        }
-        while original_index < target_index {
-            output.push(original_lines[original_index].clone());
-            original_index += 1;
-        }
-        patch_index += 1;
-        while patch_index < patch_lines.len() {
-            let hunk_line = &patch_lines[patch_index];
-            if hunk_line.starts_with("@@ ")
-                || hunk_line.starts_with("--- ")
-                || hunk_line.starts_with("+++ ")
-            {
-                break;
-            }
-            let Some(prefix) = hunk_line.chars().next() else {
-                return Err("empty patch hunk line".to_string());
-            };
-            let value = hunk_line[1..].to_string();
-            match prefix {
-                ' ' => {
-                    let Some(original_line) = original_lines.get(original_index) else {
-                        return Err("patch context extends past original text".to_string());
-                    };
-                    if original_line != &value {
-                        return Err(format!(
-                            "patch context mismatch: expected `{}`, got `{value}`",
-                            original_line
-                        ));
-                    }
-                    output.push(original_line.clone());
-                    original_index += 1;
-                }
-                '-' => {
-                    let Some(original_line) = original_lines.get(original_index) else {
-                        return Err("patch removal extends past original text".to_string());
-                    };
-                    if original_line != &value {
-                        return Err(format!(
-                            "patch removal mismatch: expected `{}`, got `{value}`",
-                            original_line
-                        ));
-                    }
-                    original_index += 1;
-                }
-                '+' => output.push(value),
-                '\\' => {}
-                _ => return Err(format!("unsupported patch hunk prefix `{prefix}`")),
-            }
-            patch_index += 1;
-        }
-    }
-
-    while original_index < original_lines.len() {
-        output.push(original_lines[original_index].clone());
-        original_index += 1;
-    }
-
-    let mut text = output.join("\n");
-    if original_had_trailing_newline || patch.ends_with('\n') {
-        text.push('\n');
-    }
-    Ok(text)
-}
-
-fn json_result(value: Result<VmValue, VmValue>) -> VmValue {
-    match value {
-        Ok(value) => value_ok(value),
-        Err(error) => value_err(error),
-    }
-}
-
-fn vm_value_to_json_literal(value: &VmValue) -> Result<serde_json::Value, EvalError> {
-    match value {
-        VmValue::Unit => Ok(serde_json::Value::Null),
-        VmValue::Int(value) => Ok(serde_json::Value::Number((*value).into())),
-        VmValue::Bool(value) => Ok(serde_json::Value::Bool(*value)),
-        VmValue::Char(value) => Ok(serde_json::Value::String(value.to_string())),
-        VmValue::Bytes(value) => Ok(serde_json::Value::Array(
-            value
-                .iter()
-                .map(|value| serde_json::Value::Number((*value).into()))
-                .collect(),
-        )),
-        VmValue::String(value) => Ok(serde_json::Value::String(value.to_string())),
-        VmValue::Json(value) => Ok(value.as_ref().clone()),
-        VmValue::List(items) => items
-            .borrow()
-            .iter()
-            .map(vm_value_to_json_literal)
-            .collect::<Result<Vec<_>, _>>()
-            .map(serde_json::Value::Array),
-        VmValue::Map(entries) => {
-            let mut object = serde_json::Map::new();
-            for (key, value) in entries.borrow().iter() {
-                let VmMapKey::String(key) = key else {
-                    return Err(EvalError::Runtime(format!(
-                        "cannot convert map key `{}` to a JSON literal.",
-                        key.display()
-                    )));
-                };
-                object.insert(key.to_string(), vm_value_to_json_literal(value)?);
-            }
-            Ok(serde_json::Value::Object(object))
-        }
-        other => Err(EvalError::Runtime(format!(
-            "cannot convert `{}` to a JSON literal.",
-            other.display()
-        ))),
-    }
-}
-
-fn read_field_ref(value: &VmValue, field: &str) -> Result<VmValue, EvalError> {
-    match value {
-        VmValue::Struct(data) | VmValue::Variant(data) => {
-            data.fields.get(field).cloned().ok_or_else(|| {
-                EvalError::Runtime(format!("reg VM struct value is missing field `{field}`."))
-            })
-        }
-        VmValue::Managed(value) => read_field_ref(&value.borrow(), field),
-        other => Err(EvalError::Runtime(format!(
-            "reg VM expected Struct for field `{field}`, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-/// Return a copy of the struct/variant `value` with `field` set to `new_value`.
-/// Structs are value types, so this rebuilds the struct. A `Managed` wrapper is
-/// updated in place (its interior is shared and mutable by design).
-fn write_field_value(
-    value: &VmValue,
-    field: &str,
-    new_value: VmValue,
-) -> Result<VmValue, EvalError> {
-    match value {
-        VmValue::Struct(data) | VmValue::Variant(data) => {
-            if !data.fields.contains_key(field) {
-                return Err(EvalError::Runtime(format!(
-                    "reg VM struct value is missing field `{field}`."
-                )));
-            }
-            let mut fields = data.fields.clone();
-            fields.insert(field.to_string(), new_value);
-            let updated = Rc::new(VmStruct {
-                name: Rc::clone(&data.name),
-                fields,
-            });
-            Ok(match value {
-                VmValue::Variant(_) => VmValue::Variant(updated),
-                _ => VmValue::Struct(updated),
-            })
-        }
-        VmValue::Managed(inner) => {
-            let updated = write_field_value(&inner.borrow(), field, new_value)?;
-            *inner.borrow_mut() = updated;
-            Ok(VmValue::Managed(Rc::clone(inner)))
-        }
-        other => Err(EvalError::Runtime(format!(
-            "reg VM expected Struct for field `{field}`, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-fn unmanage_vm_value(value: VmValue) -> VmValue {
-    match value {
-        VmValue::Managed(value) => unmanage_vm_value(value.borrow().clone()),
-        other => other,
-    }
-}
-
-/// Recursively copy a value so the result shares no mutable interior with the
-/// original: every `List`/`Map` gets a fresh `Rc<RefCell>` and structs/variants
-/// are rebuilt with copied fields. `Managed` is the language's explicit shared
-/// reference type, so it keeps its handle (mirroring the backend, which shares
-/// `Managed` and treats plain collections as value types). Immutable handles
-/// (`String`/`Bytes`/`Json`) and opaque values are cloned shallowly.
-fn deep_copy_value(value: &VmValue) -> VmValue {
-    match value {
-        VmValue::List(items) => {
-            let copied = items.borrow().iter().map(deep_copy_value).collect::<Vec<_>>();
-            VmValue::List(Rc::new(RefCell::new(copied)))
-        }
-        VmValue::Map(entries) => {
-            let copied = entries
-                .borrow()
-                .iter()
-                .map(|(key, value)| (key.clone(), deep_copy_value(value)))
-                .collect::<HashMap<_, _>>();
-            VmValue::Map(Rc::new(RefCell::new(copied)))
-        }
-        VmValue::Struct(data) => VmValue::Struct(deep_copy_struct(data)),
-        VmValue::Variant(data) => VmValue::Variant(deep_copy_struct(data)),
-        VmValue::OptionSome(inner) => VmValue::OptionSome(Box::new(deep_copy_value(inner))),
-        other => other.clone(),
-    }
-}
-
-fn deep_copy_struct(data: &Rc<VmStruct>) -> Rc<VmStruct> {
-    let fields = data
-        .fields
-        .iter()
-        .map(|(name, value)| (name.clone(), deep_copy_value(value)))
-        .collect::<HashMap<_, _>>();
-    Rc::new(VmStruct {
-        name: Rc::clone(&data.name),
-        fields,
-    })
-}
-
-fn native_value_from_vm_value(value: VmValue) -> Result<NativeValue, EvalError> {
-    match unmanage_vm_value(value) {
-        VmValue::Unit => Ok(NativeValue::Unit),
-        VmValue::Int(value) => Ok(NativeValue::Int(value)),
-        VmValue::Float(value) => Ok(NativeValue::Float(value)),
-        VmValue::Bool(value) => Ok(NativeValue::Bool(value)),
-        VmValue::Char(value) => Ok(NativeValue::Char(value)),
-        VmValue::Bytes(value) => Ok(NativeValue::Bytes(value.as_ref().clone())),
-        VmValue::String(value) => Ok(NativeValue::String(value.to_string())),
-        VmValue::Json(value) => Ok(NativeValue::Json(value.as_ref().clone())),
-        VmValue::List(items) => items
-            .borrow()
-            .iter()
-            .cloned()
-            .map(native_value_from_vm_value)
-            .collect::<Result<Vec<_>, _>>()
-            .map(NativeValue::List),
-        VmValue::Map(entries) => entries
-            .borrow()
-            .iter()
-            .map(|(key, value)| {
-                Ok((
-                    key.native_value(),
-                    native_value_from_vm_value(value.clone())?,
-                ))
-            })
-            .collect::<Result<Vec<_>, EvalError>>()
-            .map(NativeValue::Map),
-        VmValue::Struct(data) => data
-            .fields
-            .iter()
-            .map(|(field, value)| Ok((field.clone(), native_value_from_vm_value(value.clone())?)))
-            .collect::<Result<BTreeMap<_, _>, EvalError>>()
-            .map(|fields| NativeValue::Struct {
-                name: data.name.to_string(),
-                fields,
-            }),
-        VmValue::Variant(data) => data
-            .fields
-            .iter()
-            .map(|(field, value)| Ok((field.clone(), native_value_from_vm_value(value.clone())?)))
-            .collect::<Result<BTreeMap<_, _>, EvalError>>()
-            .map(|fields| NativeValue::Variant {
-                name: data.name.to_string(),
-                fields,
-            }),
-        VmValue::Native(data) => Ok(NativeValue::Native {
-            type_name: data.type_name.to_string(),
-            id: data.id,
-        }),
-        VmValue::Managed(_) => Err(EvalError::Runtime(
-            "reg VM native argument stayed managed after unwrapping.".to_string(),
-        )),
-        // Mirror the return direction: bridge `Option` as a `Some`/`None`
-        // variant so native bindings can accept it.
-        VmValue::OptionSome(value) => {
-            let mut fields = BTreeMap::new();
-            fields.insert("value".to_string(), native_value_from_vm_value(*value)?);
-            Ok(NativeValue::Variant {
-                name: "Some".to_string(),
-                fields,
-            })
-        }
-        VmValue::OptionNone => Ok(NativeValue::Variant {
-            name: "None".to_string(),
-            fields: BTreeMap::new(),
-        }),
-        VmValue::Closure(_) => Err(EvalError::Runtime(
-            "reg VM cannot pass Closure to native host binding.".to_string(),
-        )),
-    }
-}
-
-fn vm_value_from_native_value(value: NativeValue) -> VmValue {
-    match value {
-        NativeValue::Unit => VmValue::Unit,
-        NativeValue::Int(value) => VmValue::Int(value),
-        NativeValue::Float(value) => VmValue::Float(value),
-        NativeValue::Bool(value) => VmValue::Bool(value),
-        NativeValue::String(value) => VmValue::string(value),
-        NativeValue::Char(value) => VmValue::Char(value),
-        NativeValue::Bytes(value) => VmValue::Bytes(Rc::new(value)),
-        NativeValue::List(items) => VmValue::List(Rc::new(RefCell::new(
-            items.into_iter().map(vm_value_from_native_value).collect(),
-        ))),
-        NativeValue::Map(entries) => VmValue::Map(Rc::new(RefCell::new(
-            entries
-                .into_iter()
-                .map(|(key, value)| {
-                    (
-                        vm_map_key_from_native_value(key),
-                        vm_value_from_native_value(value),
-                    )
-                })
-                .collect(),
-        ))),
-        NativeValue::Json(value) => VmValue::Json(Rc::new(value)),
-        NativeValue::Struct { name, fields } => VmValue::Struct(Rc::new(VmStruct {
-            name: Rc::from(name.as_str()),
-            fields: fields
-                .into_iter()
-                .map(|(field, value)| (field, vm_value_from_native_value(value)))
-                .collect(),
-        })),
-        // `Option` is a dedicated VM value, not a generic variant, so a native
-        // binding returning `Some(_)`/`None` must round-trip to `OptionSome`/
-        // `OptionNone` for `match`/`?` to recognize it.
-        NativeValue::Variant { name, mut fields } if name == "Some" => {
-            let value = fields
-                .remove("value")
-                .map(vm_value_from_native_value)
-                .unwrap_or(VmValue::Unit);
-            VmValue::OptionSome(Box::new(value))
-        }
-        NativeValue::Variant { name, .. } if name == "None" => VmValue::OptionNone,
-        NativeValue::Variant { name, fields } => VmValue::Variant(Rc::new(VmStruct {
-            name: Rc::from(name.as_str()),
-            fields: fields
-                .into_iter()
-                .map(|(field, value)| (field, vm_value_from_native_value(value)))
-                .collect(),
-        })),
-        NativeValue::Native { type_name, id } => VmValue::Native(Rc::new(VmNative {
-            type_name: Rc::from(type_name.as_str()),
-            id,
-        })),
-    }
-}
-
-fn vm_map_key_from_native_value(value: NativeValue) -> VmMapKey {
-    match value {
-        NativeValue::Bool(value) => VmMapKey::Bool(value),
-        NativeValue::Int(value) => VmMapKey::Int(value),
-        NativeValue::String(value) => VmMapKey::String(Rc::new(value)),
-        other => VmMapKey::String(Rc::new(format!("{other:?}"))),
-    }
-}
-
-fn expect_environment_state(value: &VmValue) -> Result<(bool, bool), EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name.as_ref() == "Environment" => {
-            let has_parent = data.fields.get("has_parent").ok_or_else(|| {
-                EvalError::Runtime("Environment value is missing has_parent.".to_string())
-            })?;
-            let has_function = data.fields.get("has_function").ok_or_else(|| {
-                EvalError::Runtime("Environment value is missing has_function.".to_string())
-            })?;
-            Ok((expect_bool_ref(has_parent)?, expect_bool_ref(has_function)?))
-        }
-        VmValue::Managed(value) => expect_environment_state(&value.borrow()),
-        other => Err(EvalError::Runtime(format!(
-            "expected Environment, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-fn expect_function_has_closure(value: &VmValue) -> Result<bool, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name.as_ref() == "FunctionObject" => {
-            let value = data.fields.get("has_closure").ok_or_else(|| {
-                EvalError::Runtime("FunctionObject value is missing has_closure.".to_string())
-            })?;
-            expect_bool_ref(value)
-        }
-        VmValue::Managed(value) => expect_function_has_closure(&value.borrow()),
-        other => Err(EvalError::Runtime(format!(
-            "expected FunctionObject, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-fn expect_counter_value(value: &VmValue) -> Result<i64, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name.as_ref() == "Counter" => {
-            let value = data
-                .fields
-                .get("value")
-                .ok_or_else(|| EvalError::Runtime("Counter value is missing.".to_string()))?;
-            expect_int_ref(value)
-        }
-        other => Err(EvalError::Runtime(format!(
-            "expected Counter, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-fn expect_instant_unix_ms(value: &VmValue) -> Result<i64, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name.as_ref() == "Instant" => {
-            let value = data.fields.get("unix_ms").ok_or_else(|| {
-                EvalError::Runtime("Instant value is missing unix_ms.".to_string())
-            })?;
-            expect_int_ref(value)
-        }
-        other => Err(EvalError::Runtime(format!(
-            "expected Instant, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-fn expect_deadline_unix_ms(value: &VmValue) -> Result<i64, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name.as_ref() == "Deadline" => {
-            let value = data.fields.get("unix_ms").ok_or_else(|| {
-                EvalError::Runtime("Deadline value is missing unix_ms.".to_string())
-            })?;
-            expect_int_ref(value)
-        }
-        other => Err(EvalError::Runtime(format!(
-            "expected Deadline, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-fn expect_db_connection_ref(value: &VmValue) -> Result<VmDbConnection, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name.as_ref() == "DbConnection" => {
-            let url = data.fields.get("url").ok_or_else(|| {
-                EvalError::Runtime("DbConnection value is missing url.".to_string())
-            })?;
-            let queries = data.fields.get("queries").ok_or_else(|| {
-                EvalError::Runtime("DbConnection value is missing queries.".to_string())
-            })?;
-            Ok(VmDbConnection {
-                url: expect_string_ref(url)?.to_string(),
-                queries: expect_string_list_ref(queries)?,
-            })
-        }
-        other => Err(EvalError::Runtime(format!(
-            "expected DbConnection, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-fn expect_cancellation_id_ref(value: &VmValue, expected_name: &str) -> Result<i64, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name.as_ref() == expected_name => {
-            let value = data.fields.get("id").ok_or_else(|| {
-                EvalError::Runtime(format!("{expected_name} value is missing id."))
-            })?;
-            expect_int_ref(value)
-        }
-        other => Err(EvalError::Runtime(format!(
-            "expected {expected_name}, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-fn expect_channel_ref(value: &VmValue) -> Result<VmChannelState, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name.as_ref() == "Channel" => {
-            let int_field = |name: &str| {
-                data.fields
-                    .get(name)
-                    .ok_or_else(|| EvalError::Runtime(format!("Channel value is missing {name}.")))
-                    .and_then(expect_int_ref)
-            };
-            let receiver_taken = data
-                .fields
-                .get("receiver_taken")
-                .ok_or_else(|| {
-                    EvalError::Runtime("Channel value is missing receiver_taken.".to_string())
-                })
-                .and_then(expect_bool_ref)?;
-            Ok(VmChannelState {
-                id: int_field("id")?,
-                capacity: int_field("capacity")?,
-                receiver_taken,
-            })
-        }
-        other => Err(EvalError::Runtime(format!(
-            "expected Channel, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-fn expect_sender_ref(value: &VmValue) -> Result<VmSender, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name.as_ref() == "Sender" => {
-            let channel_id = data.fields.get("channel_id").ok_or_else(|| {
-                EvalError::Runtime("Sender value is missing channel_id.".to_string())
-            })?;
-            let closed = data
-                .fields
-                .get("closed")
-                .ok_or_else(|| EvalError::Runtime("Sender value is missing closed.".to_string()))?;
-            Ok(VmSender {
-                channel_id: expect_int_ref(channel_id)?,
-                closed: expect_bool_ref(closed)?,
-            })
-        }
-        other => Err(EvalError::Runtime(format!(
-            "expected Sender, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-fn expect_receiver_ref(value: &VmValue) -> Result<VmReceiver, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name.as_ref() == "Receiver" => {
-            let channel_id = data.fields.get("channel_id").ok_or_else(|| {
-                EvalError::Runtime("Receiver value is missing channel_id.".to_string())
-            })?;
-            let closed = data.fields.get("closed").ok_or_else(|| {
-                EvalError::Runtime("Receiver value is missing closed.".to_string())
-            })?;
-            Ok(VmReceiver {
-                channel_id: expect_int_ref(channel_id)?,
-                closed: expect_bool_ref(closed)?,
-            })
-        }
-        other => Err(EvalError::Runtime(format!(
-            "expected Receiver, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-fn expect_resource_pool_ref(value: &VmValue) -> Result<VmResourcePoolState, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name.as_ref() == "ResourcePool" => {
-            let id = data.fields.get("id").ok_or_else(|| {
-                EvalError::Runtime("ResourcePool value is missing id.".to_string())
-            })?;
-            Ok(VmResourcePoolState {
-                id: expect_int_ref(id)?,
-            })
-        }
-        other => Err(EvalError::Runtime(format!(
-            "expected ResourcePool, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-fn expect_stream_ref(value: &VmValue) -> Result<VmStreamState, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name.as_ref() == "Stream" => {
-            let items = data
-                .fields
-                .get("items")
-                .ok_or_else(|| EvalError::Runtime("Stream value is missing items.".to_string()))
-                .and_then(expect_list_ref)?;
-            let collect_error = data
-                .fields
-                .get("collect_error")
-                .map(option_payload_ref)
-                .transpose()?
-                .flatten()
-                .map(|value| expect_string_ref(value).map(str::to_string))
-                .transpose()?;
-            let channel_id = data
-                .fields
-                .get("channel_id")
-                .map(option_payload_ref)
-                .transpose()?
-                .flatten()
-                .map(expect_int_ref)
-                .transpose()?;
-            Ok(VmStreamState {
-                items,
-                collect_error,
-                channel_id,
-            })
-        }
-        other => Err(EvalError::Runtime(format!(
-            "expected Stream, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-fn expect_tcp_stream_id_ref(value: &VmValue) -> Result<i64, EvalError> {
-    expect_id_struct_ref(value, "TcpStream")
-}
-
-fn expect_websocket_id_ref(value: &VmValue) -> Result<i64, EvalError> {
-    expect_id_struct_ref(value, "WebSocket")
-}
-
-fn expect_id_struct_ref(value: &VmValue, expected_name: &str) -> Result<i64, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name.as_ref() == expected_name => {
-            let id = data.fields.get("id").ok_or_else(|| {
-                EvalError::Runtime(format!("{expected_name} value is missing id."))
-            })?;
-            expect_int_ref(id)
-        }
-        other => Err(EvalError::Runtime(format!(
-            "expected {expected_name}, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-fn option_payload_ref(value: &VmValue) -> Result<Option<&VmValue>, EvalError> {
-    match value {
-        VmValue::OptionSome(value) => Ok(Some(value.as_ref())),
-        VmValue::OptionNone => Ok(None),
-        VmValue::Variant(data) if data.name.as_ref() == "Some" => data
-            .fields
-            .get("value")
-            .map(Some)
-            .ok_or_else(|| EvalError::Runtime("Some value is missing.".to_string())),
-        VmValue::Variant(data) if data.name.as_ref() == "None" => Ok(None),
-        other => Err(EvalError::Runtime(format!(
-            "expected Option, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-fn expect_process_request_ref(value: &VmValue) -> Result<VmProcessRequest, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name.as_ref() == "ProcessRequest" => {
-            let command = data.fields.get("command").ok_or_else(|| {
-                EvalError::Runtime("ProcessRequest command is missing.".to_string())
-            })?;
-            let args = data.fields.get("args").ok_or_else(|| {
-                EvalError::Runtime("ProcessRequest args are missing.".to_string())
-            })?;
-            let cwd = data
-                .fields
-                .get("cwd")
-                .map(option_payload_ref)
-                .transpose()?
-                .flatten()
-                .map(|value| expect_string_ref(value).map(PathBuf::from))
-                .transpose()?;
-            let stdin = data
-                .fields
-                .get("stdin")
-                .map(option_payload_ref)
-                .transpose()?
-                .flatten()
-                .map(|value| expect_string_ref(value).map(str::to_string))
-                .transpose()?;
-            let env = data
-                .fields
-                .get("env")
-                .map(expect_process_env_list_ref)
-                .transpose()?
-                .unwrap_or_default();
-            let timeout_ms = data
-                .fields
-                .get("timeout_ms")
-                .map(expect_int_ref)
-                .transpose()?
-                .unwrap_or(0);
-            let merge_stderr = data
-                .fields
-                .get("merge_stderr")
-                .map(expect_bool_ref)
-                .transpose()?
-                .unwrap_or(false);
-            let output_cap_bytes = data
-                .fields
-                .get("output_cap_bytes")
-                .map(expect_int_ref)
-                .transpose()?
-                .unwrap_or(0);
-            Ok(VmProcessRequest {
-                command: expect_string_ref(command)?.to_string(),
-                args: expect_string_list_ref(args)?,
-                cwd,
-                stdin,
-                env,
-                timeout_ms,
-                merge_stderr,
-                output_cap_bytes,
-            })
-        }
-        other => Err(EvalError::Runtime(format!(
-            "expected ProcessRequest, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-fn expect_process_env_list_ref(value: &VmValue) -> Result<Vec<(String, String)>, EvalError> {
-    let list = expect_list_ref(value)?;
-    list.borrow()
-        .iter()
-        .map(|value| match value {
-            VmValue::Struct(data) if data.name.as_ref() == "ProcessEnv" => {
-                let name = data
-                    .fields
-                    .get("name")
-                    .ok_or_else(|| EvalError::Runtime("ProcessEnv name is missing.".to_string()))?;
-                let value = data.fields.get("value").ok_or_else(|| {
-                    EvalError::Runtime("ProcessEnv value is missing.".to_string())
-                })?;
-                Ok((
-                    expect_string_ref(name)?.to_string(),
-                    expect_string_ref(value)?.to_string(),
-                ))
-            }
-            other => Err(EvalError::Runtime(format!(
-                "expected ProcessEnv, got `{}`.",
-                other.display()
-            ))),
-        })
-        .collect()
-}
-
-fn expect_row_buffer_bytes_ref(value: &VmValue) -> Result<Vec<u8>, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name.as_ref() == "RowBuffer" => data
-            .fields
-            .get("bytes")
-            .ok_or_else(|| EvalError::Runtime("RowBuffer value is missing bytes.".to_string()))
-            .and_then(expect_bytes_ref)
-            .map(|bytes| bytes.to_vec()),
-        other => Err(EvalError::Runtime(format!(
-            "expected RowBuffer, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-fn expect_row_fields_ref(value: &VmValue) -> Result<Vec<String>, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name.as_ref() == "Row" => {
-            let fields = data
-                .fields
-                .get("fields")
-                .ok_or_else(|| EvalError::Runtime("Row value is missing fields.".to_string()))?;
-            expect_string_list_ref(fields)
-        }
-        other => Err(EvalError::Runtime(format!(
-            "expected Row, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-fn expect_file_ref(value: &VmValue) -> Result<VmFileState, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name.as_ref() == "File" => {
-            let string_field = |name: &str| {
-                data.fields
-                    .get(name)
-                    .ok_or_else(|| EvalError::Runtime(format!("File {name} is missing.")))
-                    .and_then(expect_string_ref)
-                    .map(str::to_string)
-            };
-            let cursor = data
-                .fields
-                .get("cursor")
-                .ok_or_else(|| EvalError::Runtime("File cursor is missing.".to_string()))
-                .and_then(expect_int_ref)?;
-            Ok(VmFileState {
-                path: string_field("path")?,
-                mode: string_field("mode")?,
-                cursor: cursor.max(0) as u64,
-            })
-        }
-        other => Err(EvalError::Runtime(format!(
-            "expected File, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-fn expect_tempdir_path_ref(value: &VmValue) -> Result<String, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name.as_ref() == "TempDir" => data
-            .fields
-            .get("path")
-            .ok_or_else(|| EvalError::Runtime("TempDir path is missing.".to_string()))
-            .and_then(expect_string_ref)
-            .map(str::to_string),
-        other => Err(EvalError::Runtime(format!(
-            "expected TempDir, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-fn expect_config_value_name(value: &VmValue) -> Result<String, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name.as_ref() == "ConfigValue" => {
-            let value = data
-                .fields
-                .get("name")
-                .ok_or_else(|| EvalError::Runtime("ConfigValue name is missing.".to_string()))?;
-            Ok(expect_string_ref(value)?.to_string())
-        }
-        other => Err(EvalError::Runtime(format!(
-            "expected ConfigValue, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-fn expect_config_store_name(value: &VmValue) -> Result<String, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name.as_ref() == "ConfigStore" => {
-            let value = data
-                .fields
-                .get("name")
-                .ok_or_else(|| EvalError::Runtime("ConfigStore name is missing.".to_string()))?;
-            Ok(expect_string_ref(value)?.to_string())
-        }
-        other => Err(EvalError::Runtime(format!(
-            "expected ConfigStore, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-fn expect_config_rule_count(value: &VmValue) -> Result<i64, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name.as_ref() == "Config" => {
-            let value = data
-                .fields
-                .get("rule_count")
-                .ok_or_else(|| EvalError::Runtime("Config rule_count is missing.".to_string()))?;
-            expect_int_ref(value)
-        }
-        other => Err(EvalError::Runtime(format!(
-            "expected Config, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-fn expect_global_config_rule_count(value: &VmValue) -> Result<i64, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name.as_ref() == "GlobalConfig" => {
-            let value = data.fields.get("rule_count").ok_or_else(|| {
-                EvalError::Runtime("GlobalConfig rule_count is missing.".to_string())
-            })?;
-            expect_int_ref(value)
-        }
-        other => Err(EvalError::Runtime(format!(
-            "expected GlobalConfig, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-fn expect_image_state(value: &VmValue) -> Result<ImageState, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name.as_ref() == "Image" => {
-            let bytes = data
-                .fields
-                .get("bytes")
-                .ok_or_else(|| EvalError::Runtime("Image value is missing bytes.".to_string()))?;
-            let width = data
-                .fields
-                .get("width")
-                .ok_or_else(|| EvalError::Runtime("Image value is missing width.".to_string()))?;
-            let height = data
-                .fields
-                .get("height")
-                .ok_or_else(|| EvalError::Runtime("Image value is missing height.".to_string()))?;
-            let operations = data.fields.get("operations").ok_or_else(|| {
-                EvalError::Runtime("Image value is missing operations.".to_string())
-            })?;
-            Ok(ImageState {
-                bytes: expect_bytes_ref(bytes)?.to_vec(),
-                width: option_int_payload(width)?,
-                height: option_int_payload(height)?,
-                operations: expect_string_list_ref(operations)?,
-            })
-        }
-        other => Err(EvalError::Runtime(format!(
-            "expected Image, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-fn option_int_payload(value: &VmValue) -> Result<Option<i64>, EvalError> {
-    match value {
-        VmValue::Variant(data) if data.name.as_ref() == "Some" => data
-            .fields
-            .get("value")
-            .ok_or_else(|| EvalError::Runtime("Some value is missing.".to_string()))
-            .and_then(expect_int_ref)
-            .map(Some),
-        VmValue::Variant(data) if data.name.as_ref() == "None" => Ok(None),
-        VmValue::OptionSome(value) => expect_int_ref(value).map(Some),
-        VmValue::OptionNone => Ok(None),
-        other => Err(EvalError::Runtime(format!(
-            "expected Option<Int>, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-fn expect_http_request_ref(value: &VmValue) -> Result<VmHttpRequest, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name.as_ref() == "HttpRequest" => {
-            let string_field = |name: &str| {
-                data.fields
-                    .get(name)
-                    .ok_or_else(|| EvalError::Runtime(format!("HttpRequest {name} is missing.")))
-                    .and_then(expect_string_ref)
-                    .map(str::to_string)
-            };
-            let int_field = |name: &str| {
-                data.fields
-                    .get(name)
-                    .ok_or_else(|| EvalError::Runtime(format!("HttpRequest {name} is missing.")))
-                    .and_then(expect_int_ref)
-            };
-            Ok(VmHttpRequest {
-                method: string_field("method")?,
-                url: string_field("url")?,
-                body: string_field("body")?,
-                timeout_ms: int_field("timeout_ms")?,
-                attempts: int_field("attempts")?,
-                backoff_ms: int_field("backoff_ms")?,
-                header_count: int_field("header_count")?,
-            })
-        }
-        other => Err(EvalError::Runtime(format!(
-            "expected HttpRequest, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-fn expect_regex_ref(value: &VmValue) -> Result<regex::Regex, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name.as_ref() == "Regex" => {
-            let pattern = data
-                .fields
-                .get("pattern")
-                .ok_or_else(|| EvalError::Runtime("Regex value is missing pattern.".to_string()))?;
-            regex::Regex::new(expect_string_ref(pattern)?)
-                .map_err(|error| EvalError::Runtime(error.to_string()))
-        }
-        other => Err(EvalError::Runtime(format!(
-            "expected Regex, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-fn result_variant_payload(value: &VmValue) -> Result<Result<VmValue, VmValue>, EvalError> {
-    match value {
-        VmValue::Variant(data) if data.name.as_ref() == "Ok" => data
-            .fields
-            .get("value")
-            .cloned()
-            .map(Ok)
-            .ok_or_else(|| EvalError::Runtime("Ok value is missing.".to_string())),
-        VmValue::Variant(data) if data.name.as_ref() == "Err" => data
-            .fields
-            .get("value")
-            .cloned()
-            .map(Err)
-            .ok_or_else(|| EvalError::Runtime("Err value is missing.".to_string())),
-        other => Err(EvalError::Runtime(format!(
-            "? expects a Result value, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-fn value_some(value: VmValue) -> VmValue {
-    VmValue::OptionSome(Box::new(value))
-}
-
-fn value_none() -> VmValue {
-    VmValue::OptionNone
-}
-
-fn value_err(value: VmValue) -> VmValue {
-    let mut fields = HashMap::new();
-    fields.insert("value".to_string(), value);
-    VmValue::Variant(Rc::new(VmStruct {
-        name: Rc::from("Err"),
-        fields,
-    }))
-}
-
-fn value_ok(value: VmValue) -> VmValue {
-    let mut fields = HashMap::new();
-    fields.insert("value".to_string(), value);
-    VmValue::Variant(Rc::new(VmStruct {
-        name: Rc::from("Ok"),
-        fields,
-    }))
-}
-
-fn expect_string_ref(value: &VmValue) -> Result<&str, EvalError> {
-    match value {
-        VmValue::String(value) => Ok(value.as_str()),
-        other => Err(EvalError::Runtime(format!(
-            "reg VM expected String, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-
-fn type_root_name(name: &str) -> &str {
-    name.split_once('<')
-        .map(|(root, _)| root.trim())
-        .unwrap_or(name)
-}
-
-fn type_arg_names(type_name: &str) -> Option<Vec<&str>> {
-    let (_, rest) = type_name.split_once('<')?;
-    let args = rest.strip_suffix('>')?;
-    Some(split_type_args(args))
 }
 
