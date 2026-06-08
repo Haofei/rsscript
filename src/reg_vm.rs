@@ -65,12 +65,7 @@ pub fn reg_vm_eval_source_main_jit(
     source: &str,
     args: impl IntoIterator<Item = impl Into<String>>,
 ) -> Result<EvalOutput, EvalError> {
-    let executable = reg_vm_compile_source(file, source)?;
-    // Run the eligibility pass on the real program (the JIT "compile" step); its
-    // result drives native codegen in the next tier. Execution stays on the
-    // shared interpreter, so output is identical to `reg_vm_eval_source_main`.
-    let _plan = executable.jit_plan();
-    executable.eval_main_with_args(args)
+    reg_vm_compile_source(file, source)?.eval_main_with_args_jit(args)
 }
 
 /// Per-program JIT eligibility: how many functions are fully covered by the
@@ -240,6 +235,31 @@ impl RegVmExecutable {
             args,
             std::iter::empty::<(String, NativeInterpreterFn)>(),
         )
+    }
+
+    /// Run `main` with the tier-0 JIT enabled: JIT-eligible functions execute via
+    /// the specializing executor, the rest via the interpreter. Output is
+    /// identical to `eval_main_with_args` (verified by the N-way differential).
+    pub fn eval_main_with_args_jit(
+        &self,
+        args: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Result<EvalOutput, EvalError> {
+        let mut vm = RegVm::new(
+            Rc::clone(&self.unit),
+            args.into_iter().map(Into::into).collect(),
+            HashMap::new(),
+        );
+        vm.jit_enabled = true;
+        let value = vm.run_program("main")?;
+        let display_value = value.display();
+        let native_value = value.native_value();
+        Ok(EvalOutput {
+            value: display_value.clone(),
+            display_value,
+            native_value,
+            stdout: vm.stdout,
+            stderr: vm.stderr,
+        })
     }
 
     pub fn eval_main_with_args_and_native_bindings(
@@ -4716,6 +4736,12 @@ struct RegVm {
     websockets: HashMap<i64, TcpStream>,
     next_pool_id: i64,
     pools: HashMap<i64, VmResourcePool>,
+    /// Tier-0 JIT: when set, JIT-eligible functions run via the specializing
+    /// executor `run_jit` (which reuses the interpreter's value/register
+    /// semantics, so it is gap-free by construction).
+    jit_enabled: bool,
+    /// Cached JIT eligibility per function (keyed by `Rc` identity).
+    jit_eligibility: HashMap<*const RegFunction, bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -4785,7 +4811,189 @@ impl RegVm {
             websockets: HashMap::new(),
             next_pool_id: 1,
             pools: HashMap::new(),
+            jit_enabled: false,
+            jit_eligibility: HashMap::new(),
         }
+    }
+
+    /// Whether `func` is fully covered by the tier-0 JIT instruction subset
+    /// (cached by `Rc` identity).
+    fn is_jit_eligible(&mut self, func: &Rc<RegFunction>) -> bool {
+        let key = Rc::as_ptr(func);
+        if let Some(&eligible) = self.jit_eligibility.get(&key) {
+            return eligible;
+        }
+        let eligible = func.code.iter().all(jit_supported_instruction);
+        self.jit_eligibility.insert(key, eligible);
+        eligible
+    }
+
+    /// Tier-0 JIT executor for a JIT-eligible function. Runs the body via the
+    /// same shared helpers (`eval_numeric_binary`, `eval_numeric_compare`, …) and
+    /// register methods (`reg`/`set_reg`/`take_reg`) the interpreter uses, so its
+    /// result is identical to `drive` by construction. Eligible functions contain
+    /// no calls, awaits, or blocking ops, so this never suspends or pushes frames.
+    fn run_jit(&mut self, func: &RegFunction, base: usize) -> Result<VmValue, EvalError> {
+        let mut ip = 0usize;
+        while let Some(instr) = func.code.get(ip) {
+            ip += 1;
+            match instr {
+                RegInstr::LoadUnit { dst } => self.set_reg(base + *dst, VmValue::Unit),
+                RegInstr::LoadInt { dst, value } => self.set_reg(base + *dst, VmValue::Int(*value)),
+                RegInstr::LoadFloat { dst, value } => {
+                    self.set_reg(base + *dst, VmValue::Float(*value))
+                }
+                RegInstr::LoadBool { dst, value } => {
+                    self.set_reg(base + *dst, VmValue::Bool(*value))
+                }
+                RegInstr::Move { dst, src } => {
+                    let value = self.reg(base + *src).clone();
+                    self.set_reg(base + *dst, value);
+                }
+                RegInstr::DeepCopy { reg } => {
+                    let copied = deep_copy_value(self.reg(base + *reg));
+                    self.set_reg(base + *reg, copied);
+                }
+                RegInstr::AddInt { dst, lhs, rhs } => {
+                    let value = eval_numeric_binary(
+                        BinaryOp::Add,
+                        self.reg(base + *lhs),
+                        self.reg(base + *rhs),
+                    )?;
+                    self.set_reg(base + *dst, value);
+                }
+                RegInstr::SubInt { dst, lhs, rhs } => {
+                    let value = eval_numeric_binary(
+                        BinaryOp::Subtract,
+                        self.reg(base + *lhs),
+                        self.reg(base + *rhs),
+                    )?;
+                    self.set_reg(base + *dst, value);
+                }
+                RegInstr::MulInt { dst, lhs, rhs } => {
+                    let value = eval_numeric_binary(
+                        BinaryOp::Multiply,
+                        self.reg(base + *lhs),
+                        self.reg(base + *rhs),
+                    )?;
+                    self.set_reg(base + *dst, value);
+                }
+                RegInstr::DivInt { dst, lhs, rhs } => {
+                    let value = eval_numeric_binary(
+                        BinaryOp::Divide,
+                        self.reg(base + *lhs),
+                        self.reg(base + *rhs),
+                    )?;
+                    self.set_reg(base + *dst, value);
+                }
+                RegInstr::ModInt { dst, lhs, rhs } => {
+                    let value = eval_numeric_binary(
+                        BinaryOp::Modulo,
+                        self.reg(base + *lhs),
+                        self.reg(base + *rhs),
+                    )?;
+                    self.set_reg(base + *dst, value);
+                }
+                RegInstr::BitAndInt { dst, lhs, rhs } => {
+                    let l = expect_int_ref(self.reg(base + *lhs))?;
+                    let r = expect_int_ref(self.reg(base + *rhs))?;
+                    self.set_reg(base + *dst, VmValue::Int(l & r));
+                }
+                RegInstr::BitOrInt { dst, lhs, rhs } => {
+                    let l = expect_int_ref(self.reg(base + *lhs))?;
+                    let r = expect_int_ref(self.reg(base + *rhs))?;
+                    self.set_reg(base + *dst, VmValue::Int(l | r));
+                }
+                RegInstr::BitXorInt { dst, lhs, rhs } => {
+                    let l = expect_int_ref(self.reg(base + *lhs))?;
+                    let r = expect_int_ref(self.reg(base + *rhs))?;
+                    self.set_reg(base + *dst, VmValue::Int(l ^ r));
+                }
+                RegInstr::ShiftLeftInt { dst, lhs, rhs } => {
+                    let l = expect_int_ref(self.reg(base + *lhs))?;
+                    let r = expect_int_ref(self.reg(base + *rhs))?;
+                    self.set_reg(base + *dst, VmValue::Int(l.wrapping_shl(r.max(0) as u32)));
+                }
+                RegInstr::ShiftRightInt { dst, lhs, rhs } => {
+                    let l = expect_int_ref(self.reg(base + *lhs))?;
+                    let r = expect_int_ref(self.reg(base + *rhs))?;
+                    self.set_reg(base + *dst, VmValue::Int(l.wrapping_shr(r.max(0) as u32)));
+                }
+                RegInstr::LessInt { dst, lhs, rhs } => {
+                    let value = eval_numeric_compare(
+                        RegIntCompare::Less,
+                        self.reg(base + *lhs),
+                        self.reg(base + *rhs),
+                    )?;
+                    self.set_reg(base + *dst, VmValue::Bool(value));
+                }
+                RegInstr::LessEqualInt { dst, lhs, rhs } => {
+                    let value = eval_numeric_compare(
+                        RegIntCompare::LessEqual,
+                        self.reg(base + *lhs),
+                        self.reg(base + *rhs),
+                    )?;
+                    self.set_reg(base + *dst, VmValue::Bool(value));
+                }
+                RegInstr::GreaterInt { dst, lhs, rhs } => {
+                    let value = eval_numeric_compare(
+                        RegIntCompare::Greater,
+                        self.reg(base + *lhs),
+                        self.reg(base + *rhs),
+                    )?;
+                    self.set_reg(base + *dst, VmValue::Bool(value));
+                }
+                RegInstr::GreaterEqualInt { dst, lhs, rhs } => {
+                    let value = eval_numeric_compare(
+                        RegIntCompare::GreaterEqual,
+                        self.reg(base + *lhs),
+                        self.reg(base + *rhs),
+                    )?;
+                    self.set_reg(base + *dst, VmValue::Bool(value));
+                }
+                RegInstr::Equal { dst, lhs, rhs } => {
+                    let eq = self.reg(base + *lhs) == self.reg(base + *rhs);
+                    self.set_reg(base + *dst, VmValue::Bool(eq));
+                }
+                RegInstr::NotEqual { dst, lhs, rhs } => {
+                    let ne = self.reg(base + *lhs) != self.reg(base + *rhs);
+                    self.set_reg(base + *dst, VmValue::Bool(ne));
+                }
+                RegInstr::Jump { target } => ip = *target,
+                RegInstr::JumpIfBool {
+                    cond,
+                    expected,
+                    target,
+                } => {
+                    if expect_bool_ref(self.reg(base + *cond))? == *expected {
+                        ip = *target;
+                    }
+                }
+                RegInstr::JumpIfIntCompare {
+                    lhs,
+                    rhs,
+                    op,
+                    expected,
+                    target,
+                } => {
+                    let l = self.reg(base + *lhs);
+                    let r = self.reg(base + *rhs);
+                    if eval_numeric_compare(*op, l, r)? == *expected {
+                        ip = *target;
+                    }
+                }
+                RegInstr::Return { src } => return Ok(self.take_reg(base + *src)),
+                // Eligibility (`jit_supported_instruction`) guarantees only the
+                // instructions above reach here. A mismatch would be an internal
+                // bug; surface it instead of silently diverging.
+                other => {
+                    return Err(EvalError::Runtime(format!(
+                        "reg VM JIT reached non-eligible instruction `{other:?}`."
+                    )));
+                }
+            }
+        }
+        Ok(VmValue::Unit)
     }
 
     /// Grow the shared register stack so that `stack[..upto]` is addressable.
@@ -5203,6 +5411,21 @@ impl RegVm {
             let base = self.frames.last().expect("active frame").base;
             let next_base = base + func.regs;
             let mut ip = self.frames.last().expect("active frame").ip;
+
+            // Tier-0 JIT: a fresh JIT-eligible frame runs via the specializing
+            // executor (which reuses the interpreter's semantics), then completes
+            // exactly like the `Return` arm. Eligible functions never suspend, so
+            // they are always entered at `ip == 0`.
+            if self.jit_enabled && ip == 0 && self.is_jit_eligible(&func) {
+                let value = self.run_jit(&func, base)?;
+                let frame = self.frames.pop().expect("active frame");
+                if self.frames.len() == floor {
+                    return Ok(Outcome::Completed(value));
+                }
+                self.set_reg(frame.ret_dst, value);
+                continue 'frames;
+            }
+
             while let Some(instr) = func.code.get(ip) {
                 ip += 1;
                 match instr {

@@ -139,14 +139,85 @@ fn render_expr(expr: &Expr) -> String {
 }
 
 fn render(program: &Program) -> String {
-    let mut source = String::from("fn main() -> Unit {\n");
+    // The arithmetic lives in `compute()`, a pure integer/control function that
+    // is JIT-eligible, so the JIT executor actually runs it; `main` calls it and
+    // prints, so it stays on the interpreter. This makes the 3-way differential
+    // exercise the JIT path, not just interp vs compiled.
+    let mut source = String::from("fn compute() -> Int {\n");
     for (index, binding) in program.bindings.iter().enumerate() {
         source.push_str(&format!("    let x{index} = {}\n", render_expr(binding)));
     }
     source.push_str(&format!("    let result = {}\n", render_expr(&program.result)));
-    source.push_str("    Log.write(message: read String.from_int(value: result))\n");
+    source.push_str("    return result\n}\n\n");
+    source.push_str("fn main() -> Unit {\n");
+    source.push_str("    Log.write(message: read String.from_int(value: compute()))\n");
     source.push_str("    return Unit\n}\n");
     source
+}
+
+/// Eligible function with parameters (exercises DeepCopy + integer arithmetic in
+/// the JIT) — interp == jit == compiled.
+#[test]
+fn backends_agree_on_parameterized_arithmetic() {
+    let source = "\
+fn combine(a: Int, b: Int, c: Int) -> Int {
+    let scaled = a * 3 - b
+    return scaled + c * 2
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: combine(a: read 7, b: read 4, c: read 5)))
+    return Unit
+}
+";
+    common::differential::assert_backends_agree("jit-params.rss", source, &[]);
+}
+
+/// Eligible function with comparisons and branches (LessInt / JumpIfBool /
+/// JumpIfIntCompare in the JIT).
+#[test]
+fn backends_agree_on_comparison_and_branches() {
+    let source = "\
+fn classify(n: Int) -> Int {
+    if n < 10 {
+        return 0
+    }
+    if n <= 100 {
+        return 1
+    }
+    return 2
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: classify(n: read 3)))
+    Log.write(message: read String.from_int(value: classify(n: read 42)))
+    Log.write(message: read String.from_int(value: classify(n: read 999)))
+    return Unit
+}
+";
+    common::differential::assert_backends_agree("jit-branches.rss", source, &[]);
+}
+
+/// Eligible function with a loop (jumps + reassignment in the JIT).
+#[test]
+fn backends_agree_on_loop() {
+    let source = "\
+fn sum_to(n: Int) -> Int {
+    let mut total = 0
+    let mut i = 1
+    while i <= n {
+        total = total + i
+        i = i + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: sum_to(n: read 10)))
+    return Unit
+}
+";
+    common::differential::assert_backends_agree("jit-loop.rss", source, &[]);
 }
 
 proptest! {
