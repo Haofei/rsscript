@@ -15,6 +15,7 @@ mod eval;
 mod fmt;
 mod ide;
 mod lint;
+mod native;
 mod package;
 mod review;
 mod run_cmd;
@@ -34,6 +35,7 @@ pub fn run() -> ExitCode {
         "eval" => eval::run_eval(&args[2..]),
         "ide" => ide::run_ide(&args[2..]),
         "lint" => lint::run_lint(&args[2..]),
+        "native" => native::run_native(&args[2..]),
         "fmt" => fmt::run_fmt(&args[2..]),
         "new" => package::run_new_package(&args[2..]),
         "review" => review::run_review(&args[2..]),
