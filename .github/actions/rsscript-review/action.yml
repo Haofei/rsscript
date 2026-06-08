@@ -27,6 +27,10 @@ inputs:
     description: 'Fail the action if granted capabilities exceed requirements (over-privilege). Recommended true for protected branches.'
     required: false
     default: 'true'
+  require-verified-capabilities:
+    description: 'Fail if a required capability is only author-declared (rsspkg.toml binding) with no independent evidence. Off by default; turn on for high-security gates.'
+    required: false
+    default: 'false'
 
 outputs:
   status:
@@ -71,6 +75,7 @@ runs:
         INPUT_FAIL_ON_MISSING: ${{ inputs.fail-on-missing }}
         INPUT_FAIL_ON_UNKNOWN: ${{ inputs.fail-on-unknown }}
         INPUT_FAIL_ON_EXCESS: ${{ inputs.fail-on-excess }}
+        INPUT_REQUIRE_VERIFIED: ${{ inputs.require-verified-capabilities }}
       run: |
         TEMP_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/rsscript-review.XXXXXX")"
         PACKAGE_REVIEW_JSON="$TEMP_DIR/package-review.json"
@@ -105,6 +110,7 @@ runs:
         [ "$INPUT_FAIL_ON_MISSING" = "true" ] || REPORT_FLAGS+=(--allow-missing)
         [ "$INPUT_FAIL_ON_UNKNOWN" = "true" ] && REPORT_FLAGS+=(--fail-on-unknown)
         [ "$INPUT_FAIL_ON_EXCESS" = "true" ] && REPORT_FLAGS+=(--fail-on-excess)
+        [ "$INPUT_REQUIRE_VERIFIED" = "true" ] && REPORT_FLAGS+=(--require-verified-capabilities)
 
         set +e
         reir report-pr \

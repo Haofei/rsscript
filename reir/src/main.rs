@@ -298,6 +298,7 @@ fn try_run_report_pr(args: &[String]) -> Result<(ExitCode, String), CliError> {
             "--ci-json" => ci_json = true,
             "--fail-on-unknown" => policy.fail_on_unknown = true,
             "--fail-on-excess" => policy.fail_on_excess = true,
+            "--require-verified-capabilities" => policy.require_verified_capabilities = true,
             "--allow-missing" => policy.fail_on_missing = false,
             unknown => {
                 return Err(CliError::usage(format!(

@@ -209,6 +209,8 @@ pub struct CiGateSummary {
     pub total_missing: usize,
     pub total_excess: usize,
     pub total_unknown: usize,
+    #[serde(default)]
+    pub total_unverified: usize,
     pub unknown_ratio: f64,
 }
 
@@ -277,6 +279,9 @@ pub struct CiGatePolicy {
     pub fail_on_missing: bool,
     pub fail_on_unknown: bool,
     pub fail_on_excess: bool,
+    /// Fail when a required capability is backed only by author-declared evidence
+    /// (e.g. an `rsspkg.toml` binding) with no independent corroboration.
+    pub require_verified_capabilities: bool,
 }
 
 impl Default for CiGatePolicy {
@@ -285,8 +290,20 @@ impl Default for CiGatePolicy {
             fail_on_missing: true,
             fail_on_unknown: false,
             fail_on_excess: false,
+            require_verified_capabilities: false,
         }
     }
+}
+
+/// Whether a fact's acquisition mode is an author declaration (the package author
+/// asserted it) rather than independently established evidence.
+fn is_author_declared(fact: &Fact) -> bool {
+    matches!(
+        fact.acquisition_mode,
+        AcquisitionMode::BindingManifest
+            | AcquisitionMode::ManualDeclaration
+            | AcquisitionMode::ManualException
+    )
 }
 
 /// Produce CI gate JSON output from reconciliation results, failing only on
@@ -337,11 +354,25 @@ pub fn format_ci_gate_output_with_policy(
         })
         .collect();
 
+    // Required capabilities backed only by author declaration (not unknown, which
+    // is reported separately).
+    let unverified_facts: Vec<_> = required_capability_facts
+        .iter()
+        .copied()
+        .filter(|f| {
+            is_author_declared(f)
+                && f.value != FactValue::Unknown
+                && f.unknown_reason.is_none()
+                && f.confidence.level != ConfidenceLevel::Unknown
+        })
+        .collect();
+
     let total_required = required_capability_facts.len();
     let total_granted = granted_capability_facts.len();
     let total_missing = missing.len();
     let total_excess = excess.len();
     let total_unknown = unknown_facts.len();
+    let total_unverified = unverified_facts.len();
     let unknown_ratio = if total_required > 0 {
         total_unknown as f64 / total_required as f64
     } else {
@@ -350,7 +381,8 @@ pub fn format_ci_gate_output_with_policy(
 
     let fail = (policy.fail_on_missing && !missing.is_empty())
         || (policy.fail_on_unknown && !unknown_facts.is_empty())
-        || (policy.fail_on_excess && !excess.is_empty());
+        || (policy.fail_on_excess && !excess.is_empty())
+        || (policy.require_verified_capabilities && !unverified_facts.is_empty());
     let status = if fail {
         CiGateStatus::Fail
     } else if !unknown_facts.is_empty() {
@@ -424,6 +456,7 @@ pub fn format_ci_gate_output_with_policy(
             total_missing,
             total_excess,
             total_unknown,
+            total_unverified,
             unknown_ratio,
         },
         required_capabilities,
@@ -1477,9 +1510,40 @@ mod tests {
             std::slice::from_ref(&granted),
             std::slice::from_ref(&excess),
             CiGatePolicy {
-                fail_on_missing: true,
-                fail_on_unknown: false,
                 fail_on_excess: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(strict.status, CiGateStatus::Fail);
+    }
+
+    #[test]
+    fn require_verified_capabilities_blocks_author_declared() {
+        let mut required = capability_fact("fact.req.s3", FactRole::Required, FactValue::True);
+        required.acquisition_mode = AcquisitionMode::BindingManifest; // author-declared
+        let granted = capability_fact("fact.grant.s3", FactRole::Granted, FactValue::True);
+        let recon = crate::reconcile_capabilities(
+            std::slice::from_ref(&required),
+            std::slice::from_ref(&granted),
+        );
+
+        // Default policy accepts author-declared evidence (but counts it).
+        let default_out = format_ci_gate_output(
+            std::slice::from_ref(&required),
+            std::slice::from_ref(&granted),
+            &recon,
+        );
+        assert_ne!(default_out.status, CiGateStatus::Fail);
+        assert_eq!(default_out.summary.total_unverified, 1);
+
+        // require_verified_capabilities blocks it.
+        let strict = format_ci_gate_output_with_policy(
+            std::slice::from_ref(&required),
+            std::slice::from_ref(&granted),
+            &recon,
+            CiGatePolicy {
+                require_verified_capabilities: true,
+                ..Default::default()
             },
         );
         assert_eq!(strict.status, CiGateStatus::Fail);
