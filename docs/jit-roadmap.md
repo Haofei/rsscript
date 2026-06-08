@@ -27,10 +27,16 @@ and the compiled (Rust-lowering) backend. Built verification-first.
 
 - **Phase 0 — N-way differential framework.** Done. `Backend` trait
   (interp/jit/compiled), `assert_backends_agree`, generative differential.
-- **Phase 1 — tier-0 JIT (seam + correctness floor).** Done.
-  `reg_vm_eval_source_main_jit` runs per-function eligibility analysis and
-  executes through the shared interpreter; `JitPlan` reports eligible vs
-  fallback. No native code yet.
+- **Phase 1 — tier-0 JIT (specializing executor).** Done.
+  `RegVm::run_jit` executes JIT-eligible functions (the numeric/control core)
+  via a specializing loop that reuses the interpreter's exact value/register
+  semantics (`eval_numeric_binary`/`eval_numeric_compare`/`reg`/`set_reg`/…), so
+  it is gap-free by construction. Integrated into `drive`'s frame loop with
+  per-function fallback to the interpreter for anything outside the subset.
+  Exercised by the 3-way differential (generative arithmetic/comparisons/branches
+  + hand-written params/loops). No native code yet; eligible heap/field/match
+  instructions and calls are the next coverage step (prefer extracting a shared
+  `exec_instr` over duplicating arms, to keep gap-freeness structural).
 
 ## Phase 2 — native baseline codegen
 
