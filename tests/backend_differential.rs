@@ -155,22 +155,13 @@ proptest! {
     #![proptest_config(ProptestConfig { cases: 24, max_shrink_iters: 64, ..ProptestConfig::default() })]
 
     #[test]
-    fn vm_matches_compiler_on_integer_programs(program in arb_program()) {
-        // Skip cases that overflow i64 — both backends error there, and the goal
+    fn backends_agree_on_integer_programs(program in arb_program()) {
+        // Skip cases that overflow i64 — every backend errors there, and the goal
         // is to compare successful runs.
         prop_assume!(oracle(&program).is_some());
         let source = render(&program);
-
-        let vm = common::run_vm_source("backend-diff.rss", &source, &[])
-            .expect("generated program should evaluate on the VM");
-        let (compiled_stdout, _compiled_stderr) =
-            common::run_compiled_source("backend-diff.rss", &source, &[]);
-
-        prop_assert_eq!(
-            vm.stdout,
-            compiled_stdout,
-            "VM and compiled backend diverged for:\n{}",
-            source
-        );
+        // N-way: VM interpreter == JIT == compiled Rust. A future native JIT tier
+        // is checked here automatically.
+        common::differential::assert_backends_agree("backend-diff.rss", &source, &[]);
     }
 }

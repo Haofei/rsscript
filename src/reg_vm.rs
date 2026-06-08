@@ -48,6 +48,76 @@ pub fn reg_vm_eval_source_main(file: &str, source: &str) -> Result<EvalOutput, E
     reg_vm_eval_source_main_with_args(file, source, args)
 }
 
+/// Tier-0 JIT entry point.
+///
+/// Compiles the source, runs the per-function JIT-eligibility analysis (the seam
+/// where native code generation will plug in), then executes through the shared
+/// `run_frame` interpreter. Because execution reuses the interpreter's runtime,
+/// the JIT and the interpreter share a single source of semantic truth — there
+/// is no VM<->JIT gap *by construction* at this tier.
+///
+/// The next tier replaces the shared-execution step with native machine code for
+/// `jit_plan().eligible_functions` (it must live in a separate crate because
+/// `rsscript` is `#![forbid(unsafe_code)]`). That tier is gated by the N-way
+/// differential in `tests/common/differential.rs`: `interp ≡ jit ≡ compiled`.
+pub fn reg_vm_eval_source_main_jit(
+    file: &str,
+    source: &str,
+    args: impl IntoIterator<Item = impl Into<String>>,
+) -> Result<EvalOutput, EvalError> {
+    let executable = reg_vm_compile_source(file, source)?;
+    // Run the eligibility pass on the real program (the JIT "compile" step); its
+    // result drives native codegen in the next tier. Execution stays on the
+    // shared interpreter, so output is identical to `reg_vm_eval_source_main`.
+    let _plan = executable.jit_plan();
+    executable.eval_main_with_args(args)
+}
+
+/// Per-program JIT eligibility: how many functions are fully covered by the
+/// tier-0 JIT-supported instruction subset (and so are candidates for native
+/// codegen) versus how many must fall back to the interpreter.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct JitPlan {
+    pub total_functions: usize,
+    pub eligible_functions: usize,
+    pub fallback_functions: usize,
+}
+
+/// Whether an instruction is in the tier-0 JIT-supported subset (the numeric and
+/// control-flow core that native codegen targets first). Heap construction,
+/// calls, async, resources, and matches fall back to the interpreter.
+fn jit_supported_instruction(instr: &RegInstr) -> bool {
+    matches!(
+        instr,
+        RegInstr::LoadUnit { .. }
+            | RegInstr::LoadInt { .. }
+            | RegInstr::LoadFloat { .. }
+            | RegInstr::LoadBool { .. }
+            | RegInstr::Move { .. }
+            | RegInstr::DeepCopy { .. }
+            | RegInstr::AddInt { .. }
+            | RegInstr::SubInt { .. }
+            | RegInstr::MulInt { .. }
+            | RegInstr::DivInt { .. }
+            | RegInstr::ModInt { .. }
+            | RegInstr::BitAndInt { .. }
+            | RegInstr::BitOrInt { .. }
+            | RegInstr::BitXorInt { .. }
+            | RegInstr::ShiftLeftInt { .. }
+            | RegInstr::ShiftRightInt { .. }
+            | RegInstr::LessInt { .. }
+            | RegInstr::LessEqualInt { .. }
+            | RegInstr::GreaterInt { .. }
+            | RegInstr::GreaterEqualInt { .. }
+            | RegInstr::Equal { .. }
+            | RegInstr::NotEqual { .. }
+            | RegInstr::Jump { .. }
+            | RegInstr::JumpIfBool { .. }
+            | RegInstr::JumpIfIntCompare { .. }
+            | RegInstr::Return { .. }
+    )
+}
+
 pub fn reg_vm_eval_source_main_with_args_and_native_bindings(
     file: &str,
     source: &str,
@@ -146,6 +216,22 @@ pub fn reg_vm_compile_source(file: &str, source: &str) -> Result<RegVmExecutable
 }
 
 impl RegVmExecutable {
+    /// Per-function JIT eligibility analysis (the tier-0 "compile" step). A
+    /// function is eligible when every instruction is in the JIT-supported
+    /// subset; otherwise it falls back to the interpreter.
+    pub fn jit_plan(&self) -> JitPlan {
+        let mut plan = JitPlan::default();
+        for function in &self.unit.functions {
+            plan.total_functions += 1;
+            if function.code.iter().all(jit_supported_instruction) {
+                plan.eligible_functions += 1;
+            } else {
+                plan.fallback_functions += 1;
+            }
+        }
+        plan
+    }
+
     pub fn eval_main_with_args(
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,

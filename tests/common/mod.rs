@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+pub mod differential;
+
 use std::collections::BTreeSet;
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
