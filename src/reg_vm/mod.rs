@@ -364,6 +364,19 @@ fn native_set_ty(ty: &mut [Option<NativeTy>], reg: usize, t: NativeTy, changed: 
     }
 }
 
+/// Unify two registers' types (they must end up equal). Propagates a known type
+/// to an unknown one — this is how *parameter* types are inferred from the typed
+/// operands they're combined with. `false` on a conflict.
+#[cfg(feature = "native-jit")]
+fn native_unify(ty: &mut [Option<NativeTy>], a: usize, b: usize, changed: &mut bool) -> bool {
+    match (ty[a], ty[b]) {
+        (Some(x), Some(y)) => x == y,
+        (Some(x), None) => native_set_ty(ty, b, x, changed),
+        (None, Some(y)) => native_set_ty(ty, a, y, changed),
+        (None, None) => true,
+    }
+}
+
 /// Mark which instructions are reachable from `ip == 0` along the control-flow
 /// graph (sequential fallthrough, jumps, conditional branches). Used to ignore
 /// the lowerer's unreachable defensive tail when judging native eligibility.
@@ -597,7 +610,7 @@ fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<R
 fn translate_to_native_jit(
     unit: &RegUnit,
     func: &RegFunction,
-) -> Option<(vm_jit::JitFunction, NativeTy)> {
+) -> Option<(vm_jit::JitFunction, NativeTy, Vec<NativeTy>)> {
     use vm_jit::{JitCompare, JitInstr};
 
     if func.captures != 0 {
@@ -623,11 +636,11 @@ fn translate_to_native_jit(
         }
     }
 
-    // Type inference. Parameters are `Int` (guaranteed by the caller's unboxing).
+    // Type inference by unification (fixpoint, to handle loop back-edges).
+    // Parameters start untyped and acquire their type from the operands they are
+    // combined with — so a float-parameter function is inferred correctly rather
+    // than forced to `Int`.
     let mut ty: Vec<Option<NativeTy>> = vec![None; n_regs];
-    for slot in ty.iter_mut().take(func.params) {
-        *slot = Some(NativeTy::Int);
-    }
     let mut changed = true;
     while changed {
         changed = false;
@@ -635,43 +648,43 @@ fn translate_to_native_jit(
             if !reachable[i] {
                 continue;
             }
+            let ty = &mut ty;
+            let c = &mut changed;
             let ok = match instr {
-                // Integer-only producers (and `ModInt`, which the VM rejects on
-                // floats): destination is always `Int`.
-                RegInstr::LoadInt { dst, .. }
-                | RegInstr::ModInt { dst, .. }
-                | RegInstr::BitAndInt { dst, .. }
-                | RegInstr::BitOrInt { dst, .. }
-                | RegInstr::BitXorInt { dst, .. }
-                | RegInstr::ShiftLeftInt { dst, .. }
-                | RegInstr::ShiftRightInt { dst, .. } => {
-                    native_set_ty(&mut ty, *dst, NativeTy::Int, &mut changed)
+                RegInstr::LoadInt { dst, .. } => native_set_ty(ty, *dst, NativeTy::Int, c),
+                RegInstr::LoadFloat { dst, .. } => native_set_ty(ty, *dst, NativeTy::Float, c),
+                RegInstr::LoadBool { dst, .. } => native_set_ty(ty, *dst, NativeTy::Bool, c),
+                // Integer-only ops (`ModInt`/bitwise/shift; VM rejects them on
+                // floats): all three operands are `Int`.
+                RegInstr::ModInt { dst, lhs, rhs }
+                | RegInstr::BitAndInt { dst, lhs, rhs }
+                | RegInstr::BitOrInt { dst, lhs, rhs }
+                | RegInstr::BitXorInt { dst, lhs, rhs }
+                | RegInstr::ShiftLeftInt { dst, lhs, rhs }
+                | RegInstr::ShiftRightInt { dst, lhs, rhs } => {
+                    native_set_ty(ty, *dst, NativeTy::Int, c)
+                        && native_set_ty(ty, *lhs, NativeTy::Int, c)
+                        && native_set_ty(ty, *rhs, NativeTy::Int, c)
                 }
-                RegInstr::LoadFloat { dst, .. } => {
-                    native_set_ty(&mut ty, *dst, NativeTy::Float, &mut changed)
+                // Type-polymorphic arithmetic: `dst`, `lhs`, `rhs` share one
+                // (numeric) type — unification flows it among them and to params.
+                RegInstr::AddInt { dst, lhs, rhs }
+                | RegInstr::SubInt { dst, lhs, rhs }
+                | RegInstr::MulInt { dst, lhs, rhs }
+                | RegInstr::DivInt { dst, lhs, rhs } => {
+                    native_unify(ty, *lhs, *rhs, c) && native_unify(ty, *dst, *lhs, c)
                 }
-                // Type-polymorphic arithmetic (`AddInt` etc. serve both Int and
-                // Float in the VM): the result takes the operands' type.
-                RegInstr::AddInt { dst, lhs, .. }
-                | RegInstr::SubInt { dst, lhs, .. }
-                | RegInstr::MulInt { dst, lhs, .. }
-                | RegInstr::DivInt { dst, lhs, .. } => match ty[*lhs] {
-                    Some(t) => native_set_ty(&mut ty, *dst, t, &mut changed),
-                    None => true, // operand type not known yet; resolved on a later pass
-                },
-                RegInstr::LoadBool { dst, .. }
-                | RegInstr::LessInt { dst, .. }
-                | RegInstr::LessEqualInt { dst, .. }
-                | RegInstr::GreaterInt { dst, .. }
-                | RegInstr::GreaterEqualInt { dst, .. }
-                | RegInstr::Equal { dst, .. }
-                | RegInstr::NotEqual { dst, .. } => {
-                    native_set_ty(&mut ty, *dst, NativeTy::Bool, &mut changed)
+                RegInstr::LessInt { dst, lhs, rhs }
+                | RegInstr::LessEqualInt { dst, lhs, rhs }
+                | RegInstr::GreaterInt { dst, lhs, rhs }
+                | RegInstr::GreaterEqualInt { dst, lhs, rhs }
+                | RegInstr::Equal { dst, lhs, rhs }
+                | RegInstr::NotEqual { dst, lhs, rhs } => {
+                    native_unify(ty, *lhs, *rhs, c) && native_set_ty(ty, *dst, NativeTy::Bool, c)
                 }
-                RegInstr::Move { dst, src } => match ty[*src] {
-                    Some(t) => native_set_ty(&mut ty, *dst, t, &mut changed),
-                    None => true, // src type not known yet; resolved on a later pass
-                },
+                RegInstr::Move { dst, src } => native_unify(ty, *dst, *src, c),
+                RegInstr::JumpIfBool { cond, .. } => native_set_ty(ty, *cond, NativeTy::Bool, c),
+                RegInstr::JumpIfIntCompare { lhs, rhs, .. } => native_unify(ty, *lhs, *rhs, c),
                 _ => true,
             };
             if !ok {
@@ -899,13 +912,19 @@ fn translate_to_native_jit(
         .map(|reg| ty[reg].unwrap_or(NativeTy::Int).jit_value_type())
         .collect();
 
+    // Parameter types (for the caller's argument unboxing); an unconstrained
+    // parameter defaults to `Int` (and a mismatching argument then just falls back).
+    let param_types: Vec<NativeTy> = (0..func.params)
+        .map(|reg| ty[reg].unwrap_or(NativeTy::Int))
+        .collect();
+
     let jit_fn = vm_jit::JitFunction {
         n_params: func.params as u32,
         n_regs: n_regs as u32,
         reg_types,
         code: jit_code,
     };
-    Some((jit_fn, ret_type))
+    Some((jit_fn, ret_type, param_types))
 }
 
 /// `Some(())` if the condition holds, else `None` — lets the translator use `?`
@@ -5685,9 +5704,11 @@ struct RegVm {
 #[cfg(feature = "native-jit")]
 struct NativeState {
     module: vm_jit::NativeModule,
-    // `None` = known not native-eligible; `Some((id, ret))` = compiled handle plus
-    // the function's return type (so the caller boxes the 64-bit result correctly).
-    cache: HashMap<String, Option<(vm_jit::CompiledId, NativeTy)>>,
+    // `None` = known not native-eligible; `Some((id, ret, params))` = compiled
+    // handle, return type (to box the 64-bit result), and parameter types (to
+    // unbox each argument: `Int`/`Bool` from their VM value, `Float` as bits).
+    #[allow(clippy::type_complexity)]
+    cache: HashMap<String, Option<(vm_jit::CompiledId, NativeTy, Vec<NativeTy>)>>,
     /// Per-function call counts, for tiering: a function is compiled and run
     /// natively only once it has been entered more than `tier_up_threshold` times
     /// (a hot-function heuristic). `0` means "compile on first call" (force-all).
@@ -5823,7 +5844,7 @@ impl RegVm {
         let unit = Rc::clone(&self.unit);
         // Phase 1: tiering + resolve (and lazily compile) the native function,
         // cached by name. `None` in the cache means "known not native-eligible".
-        let (id, ret_type) = {
+        let (id, ret_type, param_types) = {
             let native = self.native.as_mut()?;
             if native.force_bail {
                 // Deopt stress mode: pretend the native code bailed at its first
@@ -5836,26 +5857,36 @@ impl RegVm {
             if *count <= native.tier_up_threshold {
                 return None;
             }
-            match native.cache.get(&func.name) {
-                Some(entry) => (*entry)?,
+            let entry = match native.cache.get(&func.name) {
+                Some(entry) => entry.clone(),
                 None => {
-                    let entry = translate_to_native_jit(&unit, func).and_then(|(jit_fn, ret)| {
-                        native.module.compile(&jit_fn).ok().map(|id| (id, ret))
-                    });
-                    native.cache.insert(func.name.clone(), entry);
-                    entry?
+                    let entry = translate_to_native_jit(&unit, func).and_then(
+                        |(jit_fn, ret, params)| {
+                            native
+                                .module
+                                .compile(&jit_fn)
+                                .ok()
+                                .map(|id| (id, ret, params))
+                        },
+                    );
+                    native.cache.insert(func.name.clone(), entry.clone());
+                    entry
                 }
-            }
+            };
+            entry?
         };
-        // Phase 2: unbox arguments. Parameters are statically `Int` (the
-        // translator forces it), so run native only when every argument is an
-        // `Int`; otherwise fall back.
+        // Phase 2: unbox each argument to 64 bits according to its inferred
+        // parameter type. If a runtime value doesn't match the inferred type, fall
+        // back (the static inference assumed otherwise).
         let mut args = Vec::with_capacity(func.params);
         for index in 0..func.params {
-            match self.reg(base + index) {
-                VmValue::Int(value) => args.push(*value),
+            let bits = match (param_types[index], self.reg(base + index)) {
+                (NativeTy::Int, VmValue::Int(value)) => *value,
+                (NativeTy::Float, VmValue::Float(value)) => value.to_bits() as i64,
+                (NativeTy::Bool, VmValue::Bool(value)) => i64::from(*value),
                 _ => return None,
-            }
+            };
+            args.push(bits);
         }
         // Phase 3: call. `None` means the native code bailed → fall back. The
         // 64-bit result is boxed per the function's return type (a float register
@@ -12749,9 +12780,8 @@ struct VmProcessRequest {
     cwd: Option<PathBuf>,
     stdin: Option<String>,
     env: Vec<(String, String)>,
-    // Parsed from the request but not enforced by the interpreter (the compiled
-    // backend honors it); kept so the field round-trips and can be wired up later.
-    #[allow(dead_code)]
+    /// Process deadline in ms; enforced by `process_run_request` (kills the child
+    /// past the deadline), matching the compiled runtime.
     timeout_ms: i64,
     merge_stderr: bool,
     output_cap_bytes: i64,
@@ -12796,6 +12826,73 @@ fn process_run_request(request: &VmProcessRequest) -> Result<VmProcessOutput, Vm
             ))
         })?;
     }
+
+    // With a positive deadline, mirror the runtime: read the pipes on background
+    // threads (so they can't deadlock the child) while polling for exit, and kill
+    // the child once the deadline passes — returning a `timed out` error.
+    if request.timeout_ms > 0 {
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_millis(request.timeout_ms as u64);
+        let read_pipe = |pipe: Option<std::process::ChildStdout>| {
+            pipe.map(|mut reader| {
+                std::thread::spawn(move || {
+                    let mut buf = Vec::new();
+                    let _ = reader.read_to_end(&mut buf);
+                    buf
+                })
+            })
+        };
+        let stdout_thread = read_pipe(child.stdout.take());
+        let stderr_thread = child.stderr.take().map(|mut reader| {
+            std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                let _ = reader.read_to_end(&mut buf);
+                buf
+            })
+        });
+        let mut timed_out = false;
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) => {
+                    if std::time::Instant::now() >= deadline {
+                        timed_out = true;
+                        let _ = child.kill();
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(error) => {
+                    return Err(VmValue::string(format!(
+                        "failed to poll `{}`: {error}",
+                        request.command
+                    )));
+                }
+            }
+        }
+        let status = child.wait().map_err(|error| {
+            VmValue::string(format!("failed to wait for `{}`: {error}", request.command))
+        })?;
+        let stdout = stdout_thread.and_then(|t| t.join().ok()).unwrap_or_default();
+        let stderr = stderr_thread.and_then(|t| t.join().ok()).unwrap_or_default();
+        let state = process_output_state_from_parts(
+            status.code().unwrap_or(-1) as i64,
+            &stdout,
+            &stderr,
+            request.output_cap_bytes,
+            request.merge_stderr,
+        );
+        if timed_out {
+            return Err(VmValue::string(format!(
+                "`{}` timed out after {}ms: {}",
+                request.command,
+                request.timeout_ms,
+                process_output_details(&state.stdout, &state.stderr)
+            )));
+        }
+        return Ok(state);
+    }
+
     let output = child.wait_with_output().map_err(|error| {
         VmValue::string(format!("failed to wait for `{}`: {error}", request.command))
     })?;
@@ -12815,13 +12912,30 @@ fn process_output_state_with_capture(
     output_cap_bytes: i64,
     merge_stderr: bool,
 ) -> VmProcessOutput {
-    let status = output.status.code().unwrap_or(-1) as i64;
+    process_output_state_from_parts(
+        output.status.code().unwrap_or(-1) as i64,
+        &output.stdout,
+        &output.stderr,
+        output_cap_bytes,
+        merge_stderr,
+    )
+}
+
+/// Build a process output from already-captured stdout/stderr bytes and a status
+/// code (used by the timeout path, which reads the pipes on background threads).
+fn process_output_state_from_parts(
+    status: i64,
+    stdout_bytes: &[u8],
+    stderr_bytes: &[u8],
+    output_cap_bytes: i64,
+    merge_stderr: bool,
+) -> VmProcessOutput {
     let cap = usize::try_from(output_cap_bytes)
         .ok()
         .filter(|value| *value > 0);
     let mut capture = VmProcessCapture::new(cap, merge_stderr);
-    capture.push(false, &output.stdout);
-    capture.push(true, &output.stderr);
+    capture.push(false, stdout_bytes);
+    capture.push(true, stderr_bytes);
     let stdout = String::from_utf8_lossy(&capture.stdout).to_string();
     let stderr = String::from_utf8_lossy(&capture.stderr).to_string();
     let merged = String::from_utf8_lossy(&capture.merged).to_string();

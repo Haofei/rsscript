@@ -418,6 +418,31 @@ fn main() -> Unit {
     common::differential::assert_backends_agree("jit-cross-call.rss", source, &[]);
 }
 
+/// A function with **float parameters** plus an `Int` loop counter — exercises the
+/// native JIT's unification-based parameter typing (the float params are inferred
+/// `Float` via the `bias` anchor). interp == jit == native == compiled.
+#[test]
+fn backends_agree_on_float_param_function() {
+    let source = "\
+fn blend(x: Float, k: Float, n: Int) -> Float {
+    let bias = 0.5
+    let mut acc = x
+    let mut i = 0
+    while i < n {
+        acc = acc * k + bias - x
+        i = i + 1
+    }
+    return acc
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_float(value: blend(x: read 1.25, k: read 0.5, n: read 16)))
+    return Unit
+}
+";
+    common::differential::assert_backends_agree("jit-float-params.rss", source, &[]);
+}
+
 proptest! {
     // Each case compiles a crate, so keep the count modest. Raise for a longer
     // differential-fuzz session (e.g. PROPTEST_CASES=200).
@@ -450,6 +475,14 @@ proptest! {
         // fail, so no case is skipped.
         let source = render_string(&program);
         common::differential::assert_backends_agree("backend-diff-string.rss", &source, &[]);
+    }
+
+    #[test]
+    fn backends_agree_on_bytes_programs(program in arb_bytes_program()) {
+        // `Bytes.from_string`/`concat`/`slice` chains; the result's *length* is
+        // printed (raw-byte display isn't the thing under test). N-way.
+        let source = render_bytes(&program);
+        common::differential::assert_backends_agree("backend-diff-bytes.rss", &source, &[]);
     }
 
     /// Coverage-style fuzz seed: a raw byte string is decoded into a program by
@@ -780,6 +813,114 @@ fn render_string(program: &StringProgram) -> String {
     source.push_str(
         "    Log.write(message: read String.from_int(value: String.len(value: read result)))\n",
     );
+    source.push_str("    return Unit\n}\n");
+    source
+}
+
+// --- Bytes programs -------------------------------------------------------
+
+const BYTES_LITS: [&str; 5] = ["", "a", "byte", "Z9", "  "];
+
+#[derive(Debug, Clone)]
+enum BytesAtom {
+    Lit(usize),
+    Var(usize),
+}
+
+type BytesExpr = Vec<BytesAtom>;
+
+#[derive(Debug, Clone)]
+struct BytesProgram {
+    bindings: Vec<BytesExpr>,
+    result: BytesExpr,
+    /// Optional `(start, len)` slice applied to the result before measuring.
+    slice: Option<(i64, i64)>,
+}
+
+fn arb_bytes_atom(vars_in_scope: usize) -> impl Strategy<Value = BytesAtom> {
+    if vars_in_scope == 0 {
+        (0..BYTES_LITS.len()).prop_map(BytesAtom::Lit).boxed()
+    } else {
+        prop_oneof![
+            (0..BYTES_LITS.len()).prop_map(BytesAtom::Lit),
+            (0..vars_in_scope).prop_map(BytesAtom::Var),
+        ]
+        .boxed()
+    }
+}
+
+fn arb_bytes_expr(vars_in_scope: usize) -> impl Strategy<Value = BytesExpr> {
+    prop::collection::vec(arb_bytes_atom(vars_in_scope), 1..=3)
+}
+
+fn arb_bytes_program() -> impl Strategy<Value = BytesProgram> {
+    (0usize..=2)
+        .prop_flat_map(|binding_count| {
+            let mut strategy = Just(Vec::<BytesExpr>::new()).boxed();
+            for index in 0..binding_count {
+                strategy = (strategy, arb_bytes_expr(index))
+                    .prop_map(|(mut bindings, expr)| {
+                        bindings.push(expr);
+                        bindings
+                    })
+                    .boxed();
+            }
+            strategy.prop_flat_map(|bindings| {
+                let count = bindings.len();
+                let slice = prop::option::of((0i64..=6, 0i64..=6));
+                (arb_bytes_expr(count), slice).prop_map(move |(result, slice)| BytesProgram {
+                    bindings: bindings.clone(),
+                    result,
+                    slice,
+                })
+            })
+        })
+        .boxed()
+}
+
+fn render_bytes_atom(atom: &BytesAtom) -> String {
+    match atom {
+        BytesAtom::Lit(index) => {
+            format!("Bytes.from_string(value: read {:?})", BYTES_LITS[*index])
+        }
+        BytesAtom::Var(index) => format!("b{index}"),
+    }
+}
+
+/// Left-fold the atoms into nested `Bytes.concat`, seeded with empty bytes so
+/// every atom is `read` (cloned) — same move-sidestep as the string generator.
+fn render_bytes_expr(expr: &BytesExpr) -> String {
+    let mut acc = String::from("Bytes.from_string(value: read \"\")");
+    for atom in expr {
+        acc = format!(
+            "Bytes.concat(left: read {acc}, right: read {})",
+            render_bytes_atom(atom)
+        );
+    }
+    acc
+}
+
+fn render_bytes(program: &BytesProgram) -> String {
+    let mut source = String::from("fn main() -> Unit {\n");
+    for (index, binding) in program.bindings.iter().enumerate() {
+        source.push_str(&format!("    let b{index} = {}\n", render_bytes_expr(binding)));
+    }
+    source.push_str(&format!(
+        "    let result = {}\n",
+        render_bytes_expr(&program.result)
+    ));
+    if let Some((start, len)) = program.slice {
+        source.push_str(&format!(
+            "    let sliced = Bytes.slice(value: read result, start: {start}, len: {len})\n",
+        ));
+        source.push_str(
+            "    Log.write(message: read String.from_int(value: Bytes.len(value: read sliced)))\n",
+        );
+    } else {
+        source.push_str(
+            "    Log.write(message: read String.from_int(value: Bytes.len(value: read result)))\n",
+        );
+    }
     source.push_str("    return Unit\n}\n");
     source
 }

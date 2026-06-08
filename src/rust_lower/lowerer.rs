@@ -3077,6 +3077,27 @@ impl<'a> RustLowerer<'a> {
                 DataEffect::Take => self.lower_expr(value),
             };
         }
+        // A `read`-effect argument passed to a user function's *by-value* `Copy`
+        // parameter (declared with no `read`/`mut` effect, so it lowers to e.g.
+        // `f64`, not `&f64`) is passed by value, not borrowed. Without this a
+        // `read`-float argument was borrowed against a by-value `f64` parameter —
+        // a VM↔compiler build gap. Receiver/intrinsic calls aren't `Callee::Name`,
+        // so their `&T` ABI (`char_is_alpha(&char)`, …) is unaffected.
+        if let Callee::Name(_) = callee
+            && let Expr::Effect {
+                effect: DataEffect::Read,
+                value,
+                ..
+            } = &arg.value
+            && let Some(expected) = self.expected_call_arg_type(callee, arg, index)
+            && is_copy_type_ref(&expected)
+            && !matches!(
+                self.expected_call_arg_effect(callee, arg, index),
+                Some(DataEffect::Read | DataEffect::Mut)
+            )
+        {
+            return self.lower_expr_for_expected_type(value, &expected);
+        }
         if arg.name.is_none()
             && let Some(DataEffect::Read) = self.expected_call_arg_effect(callee, arg, index)
             && let Some(expected) = self.expected_call_arg_type(callee, arg, index)
@@ -4065,6 +4086,11 @@ impl<'a> RustLowerer<'a> {
     }
 
     fn read_effect_lowers_by_value(expected: &TypeRef) -> bool {
+        // Whether a `read`-effect param/arg of this type lowers by value vs `&T`.
+        // Tuned to the runtime intrinsic ABI (receiver methods like
+        // `char_is_alpha`/`float_to_string` take `&char`/`&f64`), so `Char`/`Float`
+        // stay by-reference here; user-function by-value Copy params are handled
+        // separately in `lower_call_arg_for_callee`.
         expected.args.is_empty()
             && matches!(
                 expected.name.as_str(),

@@ -1,4 +1,4 @@
-use crate::text_util::{split_top_level_type_args, type_arg_names, type_root_name};
+use crate::text_util::{split_top_level_type_args, strip_fresh_type, type_arg_names, type_root_name};
 use std::collections::{HashMap, HashSet};
 
 use crate::analyzer::Analyzer;
@@ -4502,13 +4502,6 @@ fn check_list_literal_item_expr(
             "manual",
         ),
     );
-}
-
-fn strip_fresh_type(type_name: &str) -> &str {
-    type_name
-        .trim()
-        .strip_prefix("fresh ")
-        .unwrap_or(type_name.trim())
 }
 
 fn is_result_type_name(type_name: &str) -> bool {

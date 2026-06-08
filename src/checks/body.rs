@@ -1,4 +1,4 @@
-use crate::text_util::{split_top_level_type_args, type_arg_names, type_root_name};
+use crate::text_util::{split_top_level_type_args, strip_fresh_type, type_arg_names, type_root_name};
 use std::collections::{HashMap, HashSet};
 
 use crate::analyzer::Analyzer;
@@ -6410,14 +6410,6 @@ fn stream_item_type(type_name: &str) -> Option<&str> {
         .and_then(|type_name| type_name.strip_suffix('>'))?;
     split_top_level_type_args(inner).into_iter().next()
 }
-
-fn strip_fresh_type(type_name: &str) -> &str {
-    type_name
-        .strip_prefix("fresh ")
-        .map(str::trim)
-        .unwrap_or(type_name)
-}
-
 
 fn check_resource_pool_lease_stmt(analyzer: &mut Analyzer<'_>, statement: &HirStmt) {
     match statement {

@@ -1,4 +1,4 @@
-use crate::text_util::{split_top_level_type_args, type_arg_names, type_root_name};
+use crate::text_util::{split_top_level_type_args, strip_fresh_type, type_arg_names, type_root_name};
 use std::collections::{HashMap, HashSet};
 
 use crate::diagnostic::Span;
@@ -3266,13 +3266,6 @@ fn type_ref_name(ty: &TypeRef) -> String {
     }
 }
 
-
-fn strip_fresh_type(type_name: &str) -> &str {
-    type_name
-        .trim()
-        .strip_prefix("fresh ")
-        .unwrap_or(type_name.trim())
-}
 
 fn record_duplicate_symbol(
     duplicates: &mut Vec<DuplicateSymbol>,

@@ -99,6 +99,13 @@ pub(crate) fn clamp_to_char_boundary(value: &str, mut index: usize) -> usize {
     index
 }
 
+/// Drop a leading `fresh ` freshness marker from a (trimmed) type name. The
+/// single canonical definition; e.g. `fresh List<Int>` → `List<Int>`, `Foo` → `Foo`.
+pub(crate) fn strip_fresh_type(type_name: &str) -> &str {
+    let trimmed = type_name.trim();
+    trimmed.strip_prefix("fresh ").unwrap_or(trimmed)
+}
+
 /// The root (non-generic) name of a type: trims, drops a leading `fresh ` marker,
 /// and takes everything before the first `<`. Examples: `List<Int>` → `List`,
 /// `fresh Map<K, V>` → `Map`, `  Foo  ` → `Foo`.

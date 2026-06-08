@@ -77,11 +77,24 @@ Status legend: `[x]` done · `[ ]` todo · `[~]` in progress.
   stackless interpreter would not. Verified by `backends_agree_on_cross_function_calls`,
   the recursion-fallback `jit_plan` test, and the whole parity corpus under
   force-all JIT.
-- [x] Float / string ops parity coverage in the generator
-  (`backends_agree_on_float_programs`, `backends_agree_on_string_programs`):
+- [x] Float / string / **bytes** ops parity coverage in the generator
+  (`backends_agree_on_float_programs`, `_string_programs`, `_bytes_programs`):
   division-free float arithmetic + comparisons (result reduced to an `Int` so float
-  *formatting* isn't the variable under test) and `String.concat`/`String.len`
-  chains, all three-way. Bytes ops can follow the same pattern next.
+  *formatting* isn't the variable under test), `String.concat`/`String.len` chains,
+  and `Bytes.from_string`/`concat`/`slice`/`len` chains — all N-way.
+- [x] **Native float parameters**: parameter types are inferred by *unification*
+  (a float param is typed `Float` from a float-typed operand), so float-parameter
+  functions compile natively (`backends_agree_on_float_param_function`, 5-way).
+  Surfaced and fixed a real VM↔compiler gap: a `read`-effect float/`Char` argument
+  to a user function's by-value `Copy` parameter was being borrowed (`blend(&1.25)`)
+  against a by-value `f64` — now passed by value (`lower_call_arg_for_callee`).
+  (Int↔Float casts are intrinsics, so they remain on the fallback path.)
+- [x] **`Process` `timeout_ms` enforced by the interpreter** (was parsed-but-ignored,
+  a gap vs the compiled runtime): `process_run_request` now reads stdout/stderr on
+  background threads and kills the child past the deadline (`sleep 5` with a 200 ms
+  timeout ends in ~210 ms).
+- [x] Consolidated the last drifted type-name helper, `strip_fresh_type` (4 copies →
+  one in `text_util`), reconciling `body.rs`'s variant; full checker suite green.
 
 ### High performance (the actual JIT) — native (Cranelift) tier
 Built behind the `native-jit` cargo feature (off by default, so normal builds
