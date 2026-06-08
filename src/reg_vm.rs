@@ -88,8 +88,17 @@ fn jit_supported_instruction(instr: &RegInstr) -> bool {
             | RegInstr::LoadInt { .. }
             | RegInstr::LoadFloat { .. }
             | RegInstr::LoadBool { .. }
+            | RegInstr::LoadString { .. }
             | RegInstr::Move { .. }
             | RegInstr::DeepCopy { .. }
+            | RegInstr::Manage { .. }
+            | RegInstr::GetField { .. }
+            | RegInstr::SetField { .. }
+            | RegInstr::MakeStruct { .. }
+            | RegInstr::MakeVariant { .. }
+            | RegInstr::MakeList { .. }
+            | RegInstr::MakeObject { .. }
+            | RegInstr::MakeMap { .. }
             | RegInstr::AddInt { .. }
             | RegInstr::SubInt { .. }
             | RegInstr::MulInt { .. }
@@ -4853,6 +4862,85 @@ impl RegVm {
                 RegInstr::DeepCopy { reg } => {
                     let copied = deep_copy_value(self.reg(base + *reg));
                     self.set_reg(base + *reg, copied);
+                }
+                RegInstr::LoadString { dst, value } => {
+                    self.set_reg(base + *dst, VmValue::String(Rc::clone(value)));
+                }
+                RegInstr::Manage { dst, src } => {
+                    let value = self.reg(base + *src).clone();
+                    self.set_reg(base + *dst, VmValue::Managed(Rc::new(RefCell::new(value))));
+                }
+                RegInstr::GetField {
+                    dst,
+                    base: obj,
+                    name,
+                } => {
+                    let value = read_field_ref(self.reg(base + *obj), name)?;
+                    self.set_reg(base + *dst, value);
+                }
+                RegInstr::SetField {
+                    dst,
+                    base: obj,
+                    name,
+                    value,
+                } => {
+                    let obj_reg = base + *obj;
+                    let new_value = self.reg(base + *value).clone();
+                    let updated = write_field_value(self.reg(obj_reg), name, new_value)?;
+                    self.set_reg(obj_reg, updated);
+                    self.set_reg(base + *dst, VmValue::Unit);
+                }
+                RegInstr::MakeStruct { dst, name, fields } => {
+                    let mut field_values = HashMap::with_capacity(fields.len());
+                    for (field, reg) in fields {
+                        field_values.insert(field.clone(), self.reg(base + *reg).clone());
+                    }
+                    self.set_reg(
+                        base + *dst,
+                        VmValue::Struct(Rc::new(VmStruct {
+                            name: Rc::from(name.as_str()),
+                            fields: field_values,
+                        })),
+                    );
+                }
+                RegInstr::MakeVariant { dst, name, fields } => {
+                    let mut field_values = HashMap::with_capacity(fields.len());
+                    for (field, reg) in fields {
+                        field_values.insert(field.clone(), self.reg(base + *reg).clone());
+                    }
+                    self.set_reg(
+                        base + *dst,
+                        VmValue::Variant(Rc::new(VmStruct {
+                            name: Rc::from(name.as_str()),
+                            fields: field_values,
+                        })),
+                    );
+                }
+                RegInstr::MakeList { dst, items } => {
+                    let mut list = Vec::with_capacity(items.len());
+                    for reg in items {
+                        list.push(self.reg(base + *reg).clone());
+                    }
+                    self.set_reg(base + *dst, VmValue::List(Rc::new(RefCell::new(list))));
+                }
+                RegInstr::MakeObject { dst, fields } => {
+                    let mut object = serde_json::Map::new();
+                    for (field, reg) in fields {
+                        let value = vm_value_to_json_literal(self.reg(base + *reg))?;
+                        object.insert(field.clone(), value);
+                    }
+                    self.set_reg(
+                        base + *dst,
+                        VmValue::Json(Rc::new(serde_json::Value::Object(object))),
+                    );
+                }
+                RegInstr::MakeMap { dst, entries } => {
+                    let mut map = HashMap::with_capacity(entries.len());
+                    for (key, value) in entries {
+                        let key = map_key_from_value(self.reg(base + *key))?;
+                        map.insert(key, self.reg(base + *value).clone());
+                    }
+                    self.set_reg(base + *dst, VmValue::Map(Rc::new(RefCell::new(map))));
                 }
                 RegInstr::AddInt { dst, lhs, rhs } => {
                     let value = eval_numeric_binary(

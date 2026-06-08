@@ -522,6 +522,28 @@ pub fn assert_vm_eval_matches_backend_internal(
     let eval = reg_vm_eval_source_main_with_args(name, source, interpreter_args.iter().copied())
         .unwrap_or_else(|error| panic!("interpreter eval failed for {name}: {error:?}"));
 
+    // Tier-0 JIT must match the interpreter exactly. Skip programs that do
+    // (non-idempotent) network I/O — running them an extra time would exhaust the
+    // test server's connections, and their ops aren't JIT-eligible anyway. Pure
+    // programs are verified three-way here; the rest by tests/backend_differential.rs.
+    let does_network_io = source.contains("Tcp")
+        || source.contains("WebSocket")
+        || source.contains("HttpResponse")
+        || source.contains("HttpRequest");
+    if !does_network_io {
+        let eval_jit =
+            rsscript::reg_vm_eval_source_main_jit(name, source, interpreter_args.iter().copied())
+                .unwrap_or_else(|error| panic!("jit eval failed for {name}: {error:?}"));
+        assert_eq!(
+            eval_jit.stdout, eval.stdout,
+            "JIT vs interpreter stdout divergence for {name}"
+        );
+        assert_eq!(
+            eval_jit.display_value, eval.display_value,
+            "JIT vs interpreter value divergence for {name}"
+        );
+    }
+
     // Cache the compiled backend's (stdout, stderr) keyed by source + args, so
     // reruns skip the (dominant) generated-crate rebuild. Same approach as vm.rs.
     let cache_dir =
