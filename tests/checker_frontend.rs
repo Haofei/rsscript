@@ -4925,3 +4925,24 @@ async fn run(stream: read Stream<Int>) -> Result<Unit, ChannelError> {
         "await for stream inside async fn should pass: {errors:?}"
     );
 }
+
+#[test]
+fn integer_literal_out_of_range_is_rejected() {
+    let source = "fn main() -> Int {\n    return 99999999999999999999999999999999999999\n}\n";
+    let diagnostics = analyze_source("bigint.rss", source);
+    assert!(
+        diagnostics.iter().any(|d| d.code == "RS0033"),
+        "out-of-range integer literal should be RS0033, got {:?}",
+        diagnostics.iter().map(|d| d.code.as_str()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn max_i64_literal_is_accepted() {
+    let source = "fn main() -> Int {\n    return 9223372036854775807\n}\n";
+    let diagnostics = analyze_source("maxint.rss", source);
+    assert!(
+        !diagnostics.iter().any(|d| d.code == "RS0033"),
+        "i64::MAX literal must not be flagged"
+    );
+}

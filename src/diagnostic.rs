@@ -36,6 +36,7 @@ pub mod code {
     pub const AWAIT_NON_ASYNC: &str = "RS0030";
     pub const AWAIT_LIVE_LOCAL: &str = "RS0031";
     pub const PROTOCOL_NOT_SATISFIED: &str = "RS0032";
+    pub const INTEGER_LITERAL_OUT_OF_RANGE: &str = "RS0033";
     pub const FEATURE_VIOLATION: &str = "RS0101";
     pub const UNNAMED_ARGUMENT: &str = "RS0201";
     pub const MISSING_DATA_EFFECT: &str = "RS0202";
@@ -497,6 +498,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::PROTOCOL_NOT_SATISFIED,
         title: "protocol not satisfied",
         explanation: "A `Protocol.method(...)` call must prove that the receiver type satisfies the protocol through an explicit generic bound or an explicit `impl Protocol for Type` declaration. Protocols are nominal capability contracts, not structural matches inferred from method names.",
+    },
+    DiagnosticExplanation {
+        code: code::INTEGER_LITERAL_OUT_OF_RANGE,
+        title: "integer literal out of range",
+        explanation: "RSScript `Int` is a 64-bit signed integer. An integer literal that does not fit in i64 is rejected at the frontend so it never reaches the VM (runtime error) or the compiled backend (rustc error) — review-critical failures surface as checker diagnostics, not backend surprises.",
     },
     DiagnosticExplanation {
         code: code::FEATURE_VIOLATION,

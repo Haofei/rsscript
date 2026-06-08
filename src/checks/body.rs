@@ -1573,6 +1573,35 @@ fn check_expr_semantics(
     );
 }
 
+/// A decimal integer literal must fit RSScript's `Int` (i64). Reject out-of-range
+/// literals at the frontend so they never reach the VM (runtime error) or the
+/// compiled backend (rustc error). Non-decimal / float literals are left alone.
+fn check_integer_literal_range(analyzer: &mut Analyzer<'_>, expr: &HirExpr) {
+    let HirExpr::Number { value, span, .. } = expr else {
+        return;
+    };
+    let is_decimal_integer =
+        !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit());
+    if is_decimal_integer && value.parse::<i64>().is_err() {
+        analyzer.diagnostics.push(
+            Diagnostic::error(
+                code::INTEGER_LITERAL_OUT_OF_RANGE,
+                format!("integer literal `{value}` does not fit in `Int` (i64)."),
+                span.clone(),
+                "integer literal out of range",
+            )
+            .with_cause(
+                "RSScript `Int` is a 64-bit signed integer; literals must fit in i64.",
+            )
+            .with_fix(
+                "use_in_range_literal",
+                "Use a value within i64 range.",
+                "manual",
+            ),
+        );
+    }
+}
+
 fn check_bool_condition(analyzer: &mut Analyzer<'_>, expr: &HirExpr, construct: &str) {
     let Some(type_name) = hir_expr_type_name(expr) else {
         return;
@@ -2292,6 +2321,7 @@ fn check_expr_semantics_with_context(
     async_call_consumed: bool,
     live_after: &HashSet<String>,
 ) {
+    check_integer_literal_range(analyzer, expr);
     match expr {
         HirExpr::Call {
             callee,

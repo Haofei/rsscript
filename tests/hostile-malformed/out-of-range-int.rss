@@ -1,0 +1,5 @@
+// An integer literal larger than i64 is rejected by the checker (RS0033),
+// so it fails closed at `rss check` rather than only erroring in the backends.
+fn f() -> Int {
+  return 99999999999999999999999999999999999999
+}
