@@ -6000,7 +6000,11 @@ impl RegVm {
             } => {
                 let obj_reg = base + *obj;
                 let new_value = self.reg(base + *value).clone();
-                let updated = write_field_value(self.reg(obj_reg), name, new_value)?;
+                // Take the struct out so its `Rc` count reflects only other live
+                // holders; `write_field_value_owned` then mutates in place when
+                // uniquely owned, or copy-on-writes when shared.
+                let current = self.take_reg(obj_reg);
+                let updated = write_field_value_owned(current, name, new_value)?;
                 self.set_reg(obj_reg, updated);
                 self.set_reg(base + *dst, VmValue::Unit);
             }

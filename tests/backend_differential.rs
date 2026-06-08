@@ -382,6 +382,43 @@ fn main() -> Unit {
     common::differential::assert_backends_agree("jit-collections.rss", source, &[]);
 }
 
+/// A mut-heavy struct field-write loop plus mut/read parameter passing — gates the
+/// copy-on-write `SetField` (mutate in place when the struct `Rc` is uniquely
+/// owned, clone when shared). The results must match the compiled backend, which
+/// uses owned Rust structs.
+#[test]
+fn backends_agree_on_struct_field_writes() {
+    let source = "\
+struct Box {
+    v: Int,
+    w: Int
+}
+
+fn total(b: read Box) -> Int {
+    return b.v + b.w
+}
+
+fn main() -> Unit {
+    let mut a = Box(v: 1, w: 2)
+    let mut i = 0
+    while i < 20 {
+        a.v = a.v + a.w
+        a.w = a.w + i + a.v
+        // `total` borrows `a` (read) mid-loop — exercises the shared-Rc path
+        // before the next in-place write.
+        let snapshot = total(b: read a)
+        a.v = a.v + snapshot
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: a.v))
+    Log.write(message: read String.from_int(value: a.w))
+    Log.write(message: read String.from_int(value: total(b: read a)))
+    return Unit
+}
+";
+    common::differential::assert_backends_agree("struct-field-writes.rss", source, &[]);
+}
+
 /// Deque / Set / SortedSet / SortedMap mutations with out-of-order inserts,
 /// duplicates, and removes, then sorted/ordered dumps. This gates the collection
 /// backing/representation optimizations: the VM (`Vec`-backed) and the compiled

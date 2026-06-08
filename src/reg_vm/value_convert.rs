@@ -333,39 +333,68 @@ pub(super) fn read_field_ref(value: &VmValue, field: &str) -> Result<VmValue, Ev
 /// Return a copy of the struct/variant `value` with `field` set to `new_value`.
 /// Structs are value types, so this rebuilds the struct. A `Managed` wrapper is
 /// updated in place (its interior is shared and mutable by design).
-pub(super) fn write_field_value(
-    value: &VmValue,
+/// Set `field`, mutating the struct in place when the value is the sole owner of
+/// its `Rc` (copy-on-write). A uniquely-owned struct has no other observer, so
+/// in-place mutation is observationally identical to rebuilding — but avoids
+/// cloning the entire field map and allocating a new `Rc` on every `obj.field =
+/// ...` (the dominant cost in `mut`-binding field-write loops). Falls back to
+/// clone + rebuild when the `Rc` is shared.
+pub(super) fn write_field_value_owned(
+    value: VmValue,
     field: &str,
     new_value: VmValue,
 ) -> Result<VmValue, EvalError> {
     match value {
-        VmValue::Struct(data) | VmValue::Variant(data) => {
-            if !data.fields.contains_key(field) {
-                return Err(EvalError::Runtime(format!(
-                    "reg VM struct value is missing field `{field}`."
-                )));
-            }
-            let mut fields = data.fields.clone();
-            fields.insert(field.to_string(), new_value);
-            let updated = Rc::new(VmStruct {
-                name: Rc::clone(&data.name),
-                fields,
-            });
-            Ok(match value {
-                VmValue::Variant(_) => VmValue::Variant(updated),
-                _ => VmValue::Struct(updated),
-            })
+        VmValue::Struct(mut data) => {
+            write_struct_field_in_place(&mut data, field, new_value)?;
+            Ok(VmValue::Struct(data))
+        }
+        VmValue::Variant(mut data) => {
+            write_struct_field_in_place(&mut data, field, new_value)?;
+            Ok(VmValue::Variant(data))
         }
         VmValue::Managed(inner) => {
-            let updated = write_field_value(&inner.borrow(), field, new_value)?;
+            let current = inner.borrow().clone();
+            let updated = write_field_value_owned(current, field, new_value)?;
             *inner.borrow_mut() = updated;
-            Ok(VmValue::Managed(Rc::clone(inner)))
+            Ok(VmValue::Managed(inner))
         }
         other => Err(EvalError::Runtime(format!(
             "reg VM expected Struct for field `{field}`, got `{}`.",
             other.display()
         ))),
     }
+}
+
+fn write_struct_field_in_place(
+    data: &mut Rc<VmStruct>,
+    field: &str,
+    new_value: VmValue,
+) -> Result<(), EvalError> {
+    if let Some(unique) = Rc::get_mut(data) {
+        return match unique.fields.get_mut(field) {
+            Some(slot) => {
+                *slot = new_value;
+                Ok(())
+            }
+            None => Err(EvalError::Runtime(format!(
+                "reg VM struct value is missing field `{field}`."
+            ))),
+        };
+    }
+    // Shared `Rc`: copy-on-write to preserve value semantics for the other holders.
+    if !data.fields.contains_key(field) {
+        return Err(EvalError::Runtime(format!(
+            "reg VM struct value is missing field `{field}`."
+        )));
+    }
+    let mut fields = data.fields.clone();
+    fields.insert(field.to_string(), new_value);
+    *data = Rc::new(VmStruct {
+        name: Rc::clone(&data.name),
+        fields,
+    });
+    Ok(())
 }
 
 pub(super) fn unmanage_vm_value(value: VmValue) -> VmValue {
