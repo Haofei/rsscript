@@ -118,12 +118,16 @@ don't pull in the codegen dependency). Enable with `--features native-jit`.
   type (the IR carries `reg_types`). Float-computing functions (e.g. the float
   differential's `compute()`) compile natively. Verified 5-way; **~93× faster**
   than the interpreter on a float kernel.
-- [x] **Inlining of straight-line leaf calls** (toward Phase-3 speculative
-  inlining): a numeric function that calls small pure helpers is made
-  native-eligible by splicing each branch-free leaf callee into the caller's
-  register window (`native_inline_leaf_calls`), so the call disappears. Verified
-  5-way (`backends_agree_on_cross_function_calls` inlines its helpers); **~135×
-  faster** on a call-in-loop numeric kernel that previously fell back.
+- [x] **Inlining of callees with internal control flow** (toward Phase-3
+  speculative inlining): a function that calls small helpers is made
+  native-eligible by splicing each inlinable callee into a fresh register window
+  (`native_inline_leaf_calls`), so the call disappears. Callees may contain
+  internal branches and loops — their jump targets are remapped and each `Return`
+  becomes a result `Move` + jump to the post-call join (resolved via a
+  caller/callee/join fixup list); only calls/suspends/matches/heap/errors keep the
+  caller on the fallback path. Verified 5-way (`backends_agree_on_cross_function_calls`,
+  `backends_agree_on_branchy_inlined_calls`); **~135–160× faster** on call-in-loop
+  numeric kernels (straight-line and branchy) that previously fell back.
 - [x] **Faster VM value representation** (`vm_value::FnvHasher`): struct/variant
   fields and `Map` values use an FNV-1a hasher instead of SipHash (the VM's maps
   are never adversarial), speeding the field/key hashing the interpreter does
