@@ -1237,6 +1237,13 @@ impl RegVmExecutable {
         vm.jit_enabled = true;
         vm.jit_force_all = true;
         let value = vm.run_program("main")?;
+        // Telemetry: `RSS_JIT_STATS=1` prints where native-tier attempts went, so
+        // the next coverage win is measurable.
+        if std::env::var_os("RSS_JIT_STATS").is_some()
+            && let Some(native) = &vm.native
+        {
+            eprintln!("{}", native.stats.summary());
+        }
         let display_value = value.display();
         let native_value = value.native_value();
         Ok(EvalOutput {
@@ -5871,6 +5878,59 @@ struct NativeState {
     /// native-eligible function exercises the fallback path. Used to verify
     /// `{interp, tier0, native, force-deopt, compiled}` all agree.
     force_bail: bool,
+    /// Telemetry: where native-tier attempts go (so the next coverage win is
+    /// measurable rather than guessed).
+    stats: NativeStats,
+}
+
+/// Native-JIT telemetry. The VM is single-threaded, so plain counters suffice.
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Default, Clone)]
+pub(crate) struct NativeStats {
+    /// Hot functions that reached the native tier (passed tiering, not force-bail).
+    pub considered: u64,
+    /// Calls deferred below the tier-up threshold (still on the interpreter).
+    pub tier_deferred: u64,
+    /// Functions that translated into the native IR.
+    pub translated: u64,
+    /// Functions rejected by translation (outside the native subset).
+    pub not_eligible: u64,
+    /// Functions Cranelift compiled to machine code.
+    pub compiled: u64,
+    /// Functions that translated but failed to compile.
+    pub compile_failed: u64,
+    /// Native calls whose runtime args didn't match the inferred parameter types.
+    pub arg_mismatch: u64,
+    /// Native calls that ran to completion.
+    pub native_calls: u64,
+    /// Native calls that bailed at a guard (overflow/div-by-zero/…) → interpreter.
+    pub native_bails: u64,
+    /// Total nanoseconds spent in Cranelift compilation.
+    pub compile_nanos: u128,
+    /// Total nanoseconds spent executing native code.
+    pub run_nanos: u128,
+}
+
+#[cfg(feature = "native-jit")]
+impl NativeStats {
+    fn summary(&self) -> String {
+        format!(
+            "native-jit: considered={} translated={} compiled={} not_eligible={} \
+compile_failed={} calls={} bails={} arg_mismatch={} tier_deferred={} \
+compile_ms={:.3} run_ms={:.3}",
+            self.considered,
+            self.translated,
+            self.compiled,
+            self.not_eligible,
+            self.compile_failed,
+            self.native_calls,
+            self.native_bails,
+            self.arg_mismatch,
+            self.tier_deferred,
+            self.compile_nanos as f64 / 1.0e6,
+            self.run_nanos as f64 / 1.0e6,
+        )
+    }
 }
 
 #[cfg(feature = "native-jit")]
@@ -5882,6 +5942,7 @@ impl NativeState {
             counts: HashMap::new(),
             tier_up_threshold,
             force_bail,
+            stats: NativeStats::default(),
         })
     }
 }
@@ -6008,20 +6069,35 @@ impl RegVm {
             let count = native.counts.entry(func.name.clone()).or_insert(0);
             *count += 1;
             if *count <= native.tier_up_threshold {
+                native.stats.tier_deferred += 1;
                 return None;
             }
+            native.stats.considered += 1;
             let entry = match native.cache.get(&func.name) {
                 Some(entry) => entry.clone(),
                 None => {
-                    let entry = translate_to_native_jit(&unit, func).and_then(
-                        |(jit_fn, ret, params)| {
-                            native
-                                .module
-                                .compile(&jit_fn)
-                                .ok()
-                                .map(|id| (id, ret, params))
-                        },
-                    );
+                    let entry = match translate_to_native_jit(&unit, func) {
+                        Some((jit_fn, ret, params)) => {
+                            native.stats.translated += 1;
+                            let started = std::time::Instant::now();
+                            let compiled = native.module.compile(&jit_fn);
+                            native.stats.compile_nanos += started.elapsed().as_nanos();
+                            match compiled {
+                                Ok(id) => {
+                                    native.stats.compiled += 1;
+                                    Some((id, ret, params))
+                                }
+                                Err(_) => {
+                                    native.stats.compile_failed += 1;
+                                    None
+                                }
+                            }
+                        }
+                        None => {
+                            native.stats.not_eligible += 1;
+                            None
+                        }
+                    };
                     native.cache.insert(func.name.clone(), entry.clone());
                     entry
                 }
@@ -6034,21 +6110,42 @@ impl RegVm {
         let mut args = Vec::with_capacity(func.params);
         for (index, param_type) in param_types.iter().enumerate() {
             let bits = match (param_type, self.reg(base + index)) {
-                (NativeTy::Int, VmValue::Int(value)) => *value,
-                (NativeTy::Float, VmValue::Float(value)) => value.to_bits() as i64,
-                (NativeTy::Bool, VmValue::Bool(value)) => i64::from(*value),
-                _ => return None,
+                (NativeTy::Int, VmValue::Int(value)) => Some(*value),
+                (NativeTy::Float, VmValue::Float(value)) => Some(value.to_bits() as i64),
+                (NativeTy::Bool, VmValue::Bool(value)) => Some(i64::from(*value)),
+                _ => None,
             };
-            args.push(bits);
+            match bits {
+                Some(bits) => args.push(bits),
+                None => {
+                    if let Some(native) = self.native.as_mut() {
+                        native.stats.arg_mismatch += 1;
+                    }
+                    return None;
+                }
+            }
         }
         // Phase 3: call. `None` means the native code bailed → fall back. The
         // 64-bit result is boxed per the function's return type (a float register
         // stored its `f64` bit pattern).
-        let bits = self.native.as_ref()?.module.call(id, &args)?;
-        Some(match ret_type {
-            NativeTy::Float => VmValue::Float(f64::from_bits(bits as u64)),
-            _ => VmValue::Int(bits),
-        })
+        let started = std::time::Instant::now();
+        let result = self.native.as_ref()?.module.call(id, &args);
+        let elapsed = started.elapsed().as_nanos();
+        let native = self.native.as_mut()?;
+        native.stats.run_nanos += elapsed;
+        match result {
+            Some(bits) => {
+                native.stats.native_calls += 1;
+                Some(match ret_type {
+                    NativeTy::Float => VmValue::Float(f64::from_bits(bits as u64)),
+                    _ => VmValue::Int(bits),
+                })
+            }
+            None => {
+                native.stats.native_bails += 1;
+                None
+            }
+        }
     }
 
     /// Tier-0 JIT executor for a JIT-eligible function. Runs the body via the
