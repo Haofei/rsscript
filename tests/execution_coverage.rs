@@ -2,6 +2,31 @@ use std::collections::BTreeSet;
 
 use rsscript::{lower_coverage_report, vm_coverage_report};
 
+// Intentional, behaviorally-covered execution gaps. A construct may appear here
+// only if it is handled by another mechanism (a parse-error node that never
+// lowers, a desugaring, or the async scheduler) and its VM<->compiler parity is
+// verified elsewhere (tests/vm_eval.rs parity_select / parity_task_group and
+// tests/backend_differential.rs). These lists make the gap check CONVERGE:
+// closing a gap (a construct leaving `missing`) is always safe, but a construct
+// becoming missing that is NOT on the list fails the test — i.e. a regression or
+// an undocumented new gap.
+const ALLOWED_COMPILER_STMT_GAPS: &[&str] = &[
+    // Parse-error / malformed nodes are diagnostics; they never lower.
+    "MalformedFor",
+    "MalformedIf",
+    "MalformedLoop",
+    "MalformedMatch",
+    "MalformedWith",
+    "Unknown",
+];
+const ALLOWED_COMPILER_EXPR_GAPS: &[&str] = &[
+    "Spawn",   // desugared by async lowering before expression lowering
+    "Unknown", // parse-error node
+];
+const ALLOWED_VM_HIR_STMT_GAPS: &[&str] = &["Match", "Select"]; // desugared / scheduler
+const ALLOWED_VM_HIR_EXPR_GAPS: &[&str] = &["Await", "Match", "Spawn"]; // desugared / scheduler
+const ALLOWED_VM_FUNCTION_KIND_GAPS: &[&str] = &["async"]; // run via the cooperative scheduler
+
 #[test]
 fn lower_coverage_report_tracks_ast_and_runtime_surface() {
     let report = lower_coverage_report();
@@ -25,48 +50,53 @@ fn lower_coverage_report_tracks_ast_and_runtime_surface() {
     );
 
     assert_bucket_complete(&report.runtime_intrinsics);
-    assert_bucket_counts(&report.ast_statements, 20, 14, 6);
-    assert_bucket_counts(&report.ast_expressions, 19, 17, 2);
-    assert_bucket_counts(&report.function_kinds, 3, 3, 0);
+    assert_bucket_consistent(&report.ast_statements);
+    assert_bucket_consistent(&report.ast_expressions);
+    assert_bucket_complete(&report.function_kinds);
 
-    assert!(
-        report
-            .ast_expressions
-            .missing
-            .contains(&"Spawn".to_string()),
-        "known lower expression gap should stay visible"
+    assert_gaps_within(
+        "compiler AST statements",
+        &report.ast_statements.missing,
+        ALLOWED_COMPILER_STMT_GAPS,
+    );
+    assert_gaps_within(
+        "compiler AST expressions",
+        &report.ast_expressions.missing,
+        ALLOWED_COMPILER_EXPR_GAPS,
     );
 }
 
 #[test]
-fn vm_coverage_gap_is_explicit() {
+fn vm_coverage_gaps_are_within_allowlist() {
     let vm = vm_coverage_report();
 
+    // Fully-supported surfaces — these must never regress.
     assert_bucket_complete(&vm.runtime_intrinsics);
     assert_bucket_complete(&vm.special_forms);
-    assert_bucket_counts(&vm.hir_statements, 12, 10, 2);
-    assert_bucket_counts(&vm.hir_expressions, 17, 14, 3);
-    assert_bucket_counts(&vm.value_types, 15, 15, 0);
-    assert_bucket_counts(&vm.function_kinds, 3, 2, 1);
+    assert_bucket_complete(&vm.value_types);
     assert_bucket_complete(&vm.parity_features);
 
-    assert!(vm.runtime_intrinsics.missing.is_empty());
-    assert!(vm.special_forms.missing.is_empty());
-    assert_eq!(
-        vm.hir_statements.missing,
-        vec!["Match".to_string(), "Select".to_string()]
+    assert_bucket_consistent(&vm.hir_statements);
+    assert_bucket_consistent(&vm.hir_expressions);
+    assert_bucket_consistent(&vm.function_kinds);
+
+    // Converging gap check (see the allowlist comment above): closing a gap stays
+    // green; a new, undocumented gap fails.
+    assert_gaps_within(
+        "VM HIR statements",
+        &vm.hir_statements.missing,
+        ALLOWED_VM_HIR_STMT_GAPS,
     );
-    assert_eq!(
-        vm.hir_expressions.missing,
-        vec![
-            "Await".to_string(),
-            "Match".to_string(),
-            "Spawn".to_string()
-        ]
+    assert_gaps_within(
+        "VM HIR expressions",
+        &vm.hir_expressions.missing,
+        ALLOWED_VM_HIR_EXPR_GAPS,
     );
-    assert!(vm.value_types.missing.is_empty());
-    assert_eq!(vm.function_kinds.missing, vec!["async".to_string()]);
-    assert!(vm.parity_features.missing.is_empty());
+    assert_gaps_within(
+        "VM function kinds",
+        &vm.function_kinds.missing,
+        ALLOWED_VM_FUNCTION_KIND_GAPS,
+    );
 }
 
 #[test]
@@ -95,26 +125,26 @@ fn parity_fixture_annotations_cover_supported_vm_features() {
     );
 }
 
-fn assert_bucket_counts(
-    bucket: &rsscript::CoverageBucket,
-    total: usize,
-    supported: usize,
-    missing: usize,
-) {
+/// Every missing construct must be on the documented allowlist; otherwise it is
+/// a regression or an undocumented new gap. (Closing a gap is always allowed.)
+fn assert_gaps_within(label: &str, missing: &[String], allowed: &[&str]) {
+    let unexpected: Vec<&String> = missing
+        .iter()
+        .filter(|item| !allowed.contains(&item.as_str()))
+        .collect();
+    assert!(
+        unexpected.is_empty(),
+        "{label}: execution gap(s) not in the allowlist (regression / undocumented): \
+         {unexpected:?}\n  allowed: {allowed:?}"
+    );
+}
+
+/// `total` must account for exactly the supported and missing entries.
+fn assert_bucket_consistent(bucket: &rsscript::CoverageBucket) {
     assert_eq!(
         bucket.total(),
-        total,
-        "total changed for bucket: {bucket:?}"
-    );
-    assert_eq!(
-        bucket.supported_count(),
-        supported,
-        "supported count changed for bucket: {bucket:?}"
-    );
-    assert_eq!(
-        bucket.missing_count(),
-        missing,
-        "missing count changed for bucket: {bucket:?}"
+        bucket.supported_count() + bucket.missing_count(),
+        "bucket total must equal supported + missing: {bucket:?}"
     );
 }
 
