@@ -113,10 +113,12 @@ fn try_run_collect(args: &[String]) -> Result<ExitCode, CliError> {
     let mut from = None;
     let mut out = None;
     let mut json = false;
+    let mut strict = false;
     let mut index = 0;
 
     while index < args.len() {
         match args[index].as_str() {
+            "--strict" => strict = true,
             "--producer" => producer = Some(take_value(args, &mut index, "--producer")?),
             "--review-map" => review_map = Some(take_value(args, &mut index, "--review-map")?),
             "--package-review" => {
@@ -262,6 +264,22 @@ fn try_run_collect(args: &[String]) -> Result<ExitCode, CliError> {
         package_vendor_json: package_vendor_json.as_deref(),
         package_name: package_name.as_deref(),
     })?;
+
+    if strict {
+        let error_diagnostics = bundle
+            .facts
+            .iter()
+            .filter(|fact| {
+                fact.kind == reir::FactKind::Diagnostic && fact.unknown_reason.is_some()
+            })
+            .count();
+        if error_diagnostics > 0 {
+            return Err(CliError::usage(format!(
+                "--strict: refusing to emit REIR evidence built from {error_diagnostics} error \
+                 diagnostic(s); fix the source and re-run"
+            )));
+        }
+    }
 
     if let Some(out_path) = &out {
         write_json_file(out_path, &bundle)?;

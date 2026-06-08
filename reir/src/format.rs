@@ -184,6 +184,12 @@ pub fn format_pr_review_comment(
 pub struct CiGateOutput {
     pub schema: &'static str,
     pub status: CiGateStatus,
+    /// False when the evidence was derived from invalid source (error
+    /// diagnostics): the bundle must not be trusted as a gate input.
+    #[serde(default = "default_true")]
+    pub valid_for_gating: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gating_reason: Option<String>,
     pub summary: CiGateSummary,
     pub required_capabilities: Vec<CiCapabilityFact>,
     pub granted_capabilities: Vec<CiCapabilityFact>,
@@ -295,6 +301,10 @@ impl Default for CiGatePolicy {
     }
 }
 
+fn default_true() -> bool {
+    true
+}
+
 /// Whether a fact's acquisition mode is an author declaration (the package author
 /// asserted it) rather than independently established evidence.
 fn is_author_declared(fact: &Fact) -> bool {
@@ -379,7 +389,17 @@ pub fn format_ci_gate_output_with_policy(
         0.0
     };
 
-    let fail = (policy.fail_on_missing && !missing.is_empty())
+    // Evidence derived from invalid source (error diagnostics) must not be
+    // trusted as a gate input, regardless of capability reconciliation.
+    let has_error_diagnostics = required_facts
+        .iter()
+        .chain(granted_facts.iter())
+        .any(|fact| fact.kind == FactKind::Diagnostic && fact.unknown_reason.is_some());
+    let valid_for_gating = !has_error_diagnostics;
+    let gating_reason = (!valid_for_gating).then(|| "error_diagnostics".to_string());
+
+    let fail = !valid_for_gating
+        || (policy.fail_on_missing && !missing.is_empty())
         || (policy.fail_on_unknown && !unknown_facts.is_empty())
         || (policy.fail_on_excess && !excess.is_empty())
         || (policy.require_verified_capabilities && !unverified_facts.is_empty());
@@ -450,6 +470,8 @@ pub fn format_ci_gate_output_with_policy(
     CiGateOutput {
         schema: "reir.ci.v0.2",
         status,
+        valid_for_gating,
+        gating_reason,
         summary: CiGateSummary {
             total_required,
             total_granted,
@@ -1515,6 +1537,24 @@ mod tests {
             },
         );
         assert_eq!(strict.status, CiGateStatus::Fail);
+    }
+
+    #[test]
+    fn error_diagnostic_makes_bundle_invalid_for_gating() {
+        let required = capability_fact("fact.req", FactRole::Required, FactValue::True);
+        let granted = capability_fact("fact.grant", FactRole::Granted, FactValue::True);
+        let recon = crate::reconcile_capabilities(
+            std::slice::from_ref(&required),
+            std::slice::from_ref(&granted),
+        );
+        let out = format_ci_gate_output(
+            &[required, diagnostic_fact("fact.diag.error")],
+            std::slice::from_ref(&granted),
+            &recon,
+        );
+        assert!(!out.valid_for_gating);
+        assert_eq!(out.gating_reason.as_deref(), Some("error_diagnostics"));
+        assert_eq!(out.status, CiGateStatus::Fail);
     }
 
     #[test]
