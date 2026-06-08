@@ -391,6 +391,14 @@ pub(super) fn deep_copy_value(value: &VmValue) -> VmValue {
                 .collect::<Vec<_>>();
             VmValue::List(Rc::new(RefCell::new(copied)))
         }
+        VmValue::Deque(values) => {
+            let copied = values
+                .borrow()
+                .iter()
+                .map(deep_copy_value)
+                .collect::<std::collections::VecDeque<_>>();
+            VmValue::Deque(Rc::new(RefCell::new(copied)))
+        }
         VmValue::Map(entries) => {
             let copied = entries
                 .borrow()
@@ -429,6 +437,13 @@ pub(super) fn native_value_from_vm_value(value: VmValue) -> Result<NativeValue, 
         VmValue::String(value) => Ok(NativeValue::String(value.to_string())),
         VmValue::Json(value) => Ok(NativeValue::Json(value.as_ref().clone())),
         VmValue::List(items) => items
+            .borrow()
+            .iter()
+            .cloned()
+            .map(native_value_from_vm_value)
+            .collect::<Result<Vec<_>, _>>()
+            .map(NativeValue::List),
+        VmValue::Deque(items) => items
             .borrow()
             .iter()
             .cloned()

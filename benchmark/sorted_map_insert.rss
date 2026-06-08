@@ -1,0 +1,48 @@
+features: local
+
+fn bench_size(default: Int) -> Int {
+    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
+    match String.parse_int(value: read raw) {
+        Some(value) => {
+            return value
+        }
+        None => {
+            return default
+        }
+    }
+}
+
+fn main() -> Unit {
+    let limit = bench_size(default: 8000)
+    let mut index = 0
+    local table = SortedMap<Int, Int>.new()
+
+    // Ascending key ingestion (the common sorted-data case): each insert is a
+    // binary search + append. Previously this cloned the whole backing and
+    // re-sorted on *every* op (O(n log n) per insert); now it is O(log n) search
+    // + amortized O(1) append.
+    while index < limit {
+        let key = index
+        let value = key * 3
+        SortedMap.insert<Int, Int>(map: mut table, key: read key, value: read value)
+        index = index + 1
+    }
+
+    index = 0
+    let mut total = 0
+    while index < limit {
+        let key = index + 1
+        match SortedMap.get<Int, Int>(map: read table, key: read key) {
+            Some(value) => {
+                total = total + value
+            }
+            None => {
+                total = total - 1
+            }
+        }
+        index = index + 1
+    }
+
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}

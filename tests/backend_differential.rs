@@ -382,6 +382,76 @@ fn main() -> Unit {
     common::differential::assert_backends_agree("jit-collections.rss", source, &[]);
 }
 
+/// Deque / Set / SortedSet / SortedMap mutations with out-of-order inserts,
+/// duplicates, and removes, then sorted/ordered dumps. This gates the collection
+/// backing/representation optimizations: the VM (`Vec`-backed) and the compiled
+/// backend (real `VecDeque`/ordered structures) must produce identical ordered
+/// output, so any in-place / binary-search rewrite that broke ordering would fail
+/// here. interp == jit == compiled (== native/force-deopt under the feature).
+#[test]
+fn backends_agree_on_ordered_collection_ops() {
+    let source = "\
+features: local
+
+fn main() -> Unit {
+    local deque = Deque<Int>.new()
+    Deque.push_back<Int>(deque: mut deque, value: read 1)
+    Deque.push_front<Int>(deque: mut deque, value: read 2)
+    Deque.push_back<Int>(deque: mut deque, value: read 3)
+    Deque.push_front<Int>(deque: mut deque, value: read 4)
+    match Deque.pop_front<Int>(deque: mut deque) {
+        Some(v) => { Log.write(message: read String.from_int(value: v)) }
+        None => { Log.write(message: read \"none\") }
+    }
+    match Deque.pop_back<Int>(deque: mut deque) {
+        Some(v) => { Log.write(message: read String.from_int(value: v)) }
+        None => { Log.write(message: read \"none\") }
+    }
+    let dq = Deque.to_list<Int>(deque: read deque)
+    let mut d = 0
+    while d < Deque.len<Int>(deque: read deque) {
+        Log.write(message: read String.from_int(value: dq[d]))
+        d = d + 1
+    }
+
+    local sset = SortedSet<Int>.new()
+    let order = [5, 1, 3, 1, 9, 2, 5, 7, 0]
+    let mut k = 0
+    while k < List.len<Int>(list: read order) {
+        let _ins = SortedSet.insert<Int>(set: mut sset, value: read order[k])
+        k = k + 1
+    }
+    let _r1 = SortedSet.remove<Int>(set: mut sset, value: read 3)
+    let _r2 = SortedSet.remove<Int>(set: mut sset, value: read 42)
+    let xs = SortedSet.to_list<Int>(set: read sset)
+    let mut i = 0
+    while i < SortedSet.len<Int>(set: read sset) {
+        Log.write(message: read String.from_int(value: xs[i]))
+        i = i + 1
+    }
+
+    local smap = SortedMap<Int, Int>.new()
+    let mut m = 0
+    while m < List.len<Int>(list: read order) {
+        let entry_value = order[m] * 10
+        SortedMap.insert<Int, Int>(map: mut smap, key: read order[m], value: read entry_value)
+        m = m + 1
+    }
+    let _rm = SortedMap.remove<Int, Int>(map: mut smap, key: read 9)
+    let ks = SortedMap.keys<Int, Int>(map: read smap)
+    let vs = SortedMap.values<Int, Int>(map: read smap)
+    let mut j = 0
+    while j < SortedMap.len<Int, Int>(map: read smap) {
+        Log.write(message: read String.from_int(value: ks[j]))
+        Log.write(message: read String.from_int(value: vs[j]))
+        j = j + 1
+    }
+    return Unit
+}
+";
+    common::differential::assert_backends_agree("ordered-collections.rss", source, &[]);
+}
+
 /// JIT-eligible functions that call other JIT-eligible functions: the tier-0
 /// executor now drives non-suspending, non-recursive callees in-line. `accumulate`
 /// has a loop (so it is JIT'd) and calls two leaf helpers — interp == jit ==

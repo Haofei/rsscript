@@ -1,0 +1,40 @@
+struct Particle {
+    x: Int,
+    y: Int,
+    vx: Int,
+    vy: Int
+}
+
+fn bench_size(default: Int) -> Int {
+    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
+    match String.parse_int(value: read raw) {
+        Some(value) => {
+            return value
+        }
+        None => {
+            return default
+        }
+    }
+}
+
+fn main() -> Unit {
+    let limit = bench_size(default: 200000)
+    let mut p = Particle(x: 0, y: 0, vx: 1, vy: 2)
+    let mut i = 0
+    let mut total = 0
+
+    // Field-read/write hot loop: every iteration does 4 field reads + 4 writes.
+    // This is the path that hashes a `String` key per access today; it is the
+    // target for slot-indexed struct fields (`GetFieldSlot`/`SetFieldSlot`).
+    while i < limit {
+        p.x = p.x + p.vx
+        p.y = p.y + p.vy
+        p.vx = p.vx + 1
+        p.vy = p.vy - 1
+        total = total + p.x + p.y
+        i = i + 1
+    }
+
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}

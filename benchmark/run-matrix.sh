@@ -34,6 +34,9 @@ cases=(
   "list_index_scan.rss:19000"
   "map_insert_lookup.rss:17000"
   "map_string_keys.rss:16000"
+  "sorted_map_insert.rss:8000"
+  "struct_field_rw.rss:200000"
+  "deque_queue.rss:50000"
 )
 
 json_field() {

@@ -50,6 +50,9 @@ pub(crate) enum VmValue {
     String(Rc<String>),
     Json(Rc<serde_json::Value>),
     List(Rc<RefCell<Vec<VmValue>>>),
+    /// `Deque<T>` — a double-ended queue with O(1) front/back push/pop, unlike a
+    /// `Vec`-backed list whose front ops are O(n).
+    Deque(Rc<RefCell<std::collections::VecDeque<VmValue>>>),
     Map(Rc<RefCell<ValueMap>>),
     OptionSome(Box<VmValue>),
     OptionNone,
@@ -129,6 +132,15 @@ impl VmValue {
                     .join(", ");
                 format!("[{values}]")
             }
+            Self::Deque(values) => {
+                let values = values
+                    .borrow()
+                    .iter()
+                    .map(VmValue::display)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("[{values}]")
+            }
             Self::Map(entries) => {
                 let mut values = entries
                     .borrow()
@@ -171,6 +183,14 @@ impl VmValue {
             Self::String(value) => Some(NativeValue::String(value.to_string())),
             Self::Json(value) => Some(NativeValue::Json(value.as_ref().clone())),
             Self::List(values) => values
+                .borrow()
+                .iter()
+                .map(VmValue::native_value)
+                .collect::<Option<Vec<_>>>()
+                .map(NativeValue::List),
+            // No `Deque` in the native ABI — a deque crosses the host boundary as
+            // a list (the same shape the compiled backend produces).
+            Self::Deque(values) => values
                 .borrow()
                 .iter()
                 .map(VmValue::native_value)
@@ -221,6 +241,7 @@ impl PartialEq for VmValue {
             (Self::OptionSome(left), Self::OptionSome(right)) => left == right,
             (Self::OptionNone, Self::OptionNone) => true,
             (Self::List(left), Self::List(right)) => *left.borrow() == *right.borrow(),
+            (Self::Deque(left), Self::Deque(right)) => *left.borrow() == *right.borrow(),
             (Self::Map(left), Self::Map(right)) => *left.borrow() == *right.borrow(),
             (Self::Struct(left), Self::Struct(right)) => {
                 left.name == right.name && left.fields == right.fields

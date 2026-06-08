@@ -1,0 +1,32 @@
+features: async
+
+fn bench_size(default: Int) -> Int {
+    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
+    match String.parse_int(value: read raw) {
+        Some(value) => {
+            return value
+        }
+        None => {
+            return default
+        }
+    }
+}
+
+async fn step(value: Int) -> Result<Int, String> {
+    return Ok(value + 1)
+}
+
+// Async call/await overhead gate: each iteration drives the async-call + resume
+// machinery (frame/task state). Exercises the per-await cost the review flags as
+// proportional to stack/register footprint on park/resume.
+async fn main() -> Result<Unit, String> {
+    let limit = bench_size(default: 200000)
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        total = await step(value: total)?
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return Ok(Unit)
+}

@@ -51,20 +51,30 @@ shared stack to `base + local_count`.
 
 ## Calling Convention
 
-The stable calling convention should be:
+> Note: the original design called for a push/pop stack machine that *truncates*
+> the stack on return. The register VM (`src/reg_vm`) instead uses **fixed register
+> windows on a shared, append-only register stack**. The actual convention is:
 
-1. Caller evaluates arguments left-to-right and leaves them on the shared stack.
-2. `CallUser(function, argc)` computes `base = stack.len() - argc`.
-3. VM pushes `VmFrame { function, ip: 0, base }`.
-4. VM extends `stack` to hold all locals.
-5. `Return` pops the return value, truncates stack to `base`, pops the frame, and
-   pushes the return value for the caller.
+1. Each function has a statically known register count (`regs`); registers
+   `base..base + regs` are its window. Parameters occupy the first slots; captures
+   (for closures) precede parameters.
+2. The caller picks the callee's `base` past its own live registers and copies the
+   argument values into the callee's parameter slots, then pushes a frame
+   (`function`, `ip: 0`, `base`).
+3. `prepare_frame` grows the shared stack to `base + regs` if needed (it only ever
+   **grows** — windows are reused in place, never truncated) and clears the
+   per-register *written* bits for the new window.
+4. `Return { src }` copies the value from the callee's `src` register into the
+   caller's destination register and pops the frame. The stack is **not**
+   truncated; the freed window is reused by the next call.
 
-Closure calls use the same mechanism, with captures placed before closure
-parameters in the callee local layout.
+Each register carries a `written` bit, asserted on read/take, so a lowering bug
+that reads an uninitialized slot (e.g. a stale value left in a reused window) fails
+loudly instead of silently observing garbage.
 
-Runtime intrinsics may still use small inline argument containers for now, but
-user function and closure calls should not allocate a fresh argument vector.
+User function and closure calls do not allocate a fresh argument vector — arguments
+are written directly into the callee window. Runtime intrinsics may still use small
+inline argument containers.
 
 ## Feature Gate
 

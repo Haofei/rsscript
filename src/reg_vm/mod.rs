@@ -7097,42 +7097,39 @@ impl RegVm {
                             self.set_reg(base + *dst, VmValue::Unit);
                         }
                         RegInstr::DequeClear { dst, deque } => {
-                            expect_list_ref(self.reg(base + *deque))?
+                            expect_deque_ref(self.reg(base + *deque))?
                                 .borrow_mut()
                                 .clear();
                             self.set_reg(base + *dst, VmValue::Unit);
                         }
                         RegInstr::DequePopBack { dst, deque } => {
-                            let value = expect_list_ref(self.reg(base + *deque))?
+                            let value = expect_deque_ref(self.reg(base + *deque))?
                                 .borrow_mut()
-                                .pop()
+                                .pop_back()
                                 .map(|value| VmValue::OptionSome(Box::new(value)))
                                 .unwrap_or(VmValue::OptionNone);
                             self.set_reg(base + *dst, value);
                         }
                         RegInstr::DequePopFront { dst, deque } => {
-                            let deque = expect_list_ref(self.reg(base + *deque))?.clone();
-                            let mut borrowed = deque.borrow_mut();
-                            let value = if borrowed.is_empty() {
-                                VmValue::OptionNone
-                            } else {
-                                VmValue::OptionSome(Box::new(borrowed.remove(0)))
-                            };
-                            drop(borrowed);
+                            let value = expect_deque_ref(self.reg(base + *deque))?
+                                .borrow_mut()
+                                .pop_front() // O(1), unlike the old `Vec::remove(0)`
+                                .map(|value| VmValue::OptionSome(Box::new(value)))
+                                .unwrap_or(VmValue::OptionNone);
                             self.set_reg(base + *dst, value);
                         }
                         RegInstr::DequePushBack { dst, deque, value } => {
                             let value = self.reg(base + *value).clone();
-                            expect_list_ref(self.reg(base + *deque))?
+                            expect_deque_ref(self.reg(base + *deque))?
                                 .borrow_mut()
-                                .push(value);
+                                .push_back(value);
                             self.set_reg(base + *dst, VmValue::Unit);
                         }
                         RegInstr::DequePushFront { dst, deque, value } => {
                             let value = self.reg(base + *value).clone();
-                            expect_list_ref(self.reg(base + *deque))?
+                            expect_deque_ref(self.reg(base + *deque))?
                                 .borrow_mut()
-                                .insert(0, value);
+                                .push_front(value); // O(1), unlike the old `Vec::insert(0, _)`
                             self.set_reg(base + *dst, VmValue::Unit);
                         }
                         RegInstr::SetClear { dst, set } => {
@@ -7150,18 +7147,15 @@ impl RegVm {
                             self.set_reg(base + *dst, VmValue::Unit);
                         }
                         RegInstr::SetInsert { dst, set, value } => {
-                            let mut values =
-                                expect_list_ref(self.reg(base + *set))?.borrow().clone();
                             let value = self.reg(base + *value).clone();
-                            let inserted = set_insert_vm(&mut values, value);
-                            *expect_list_ref(self.reg(base + *set))?.borrow_mut() = values;
+                            let list = expect_list_ref(self.reg(base + *set))?;
+                            let inserted = set_insert_vm(&mut list.borrow_mut(), value);
                             self.set_reg(base + *dst, VmValue::Bool(inserted));
                         }
                         RegInstr::SetRemove { dst, set, value } => {
-                            let mut values =
-                                expect_list_ref(self.reg(base + *set))?.borrow().clone();
-                            let removed = set_remove_vm(&mut values, self.reg(base + *value));
-                            *expect_list_ref(self.reg(base + *set))?.borrow_mut() = values;
+                            let value = self.reg(base + *value).clone();
+                            let list = expect_list_ref(self.reg(base + *set))?;
+                            let removed = set_remove_vm(&mut list.borrow_mut(), &value);
                             self.set_reg(base + *dst, VmValue::Bool(removed));
                         }
                         RegInstr::SortedSetClear { dst, set } => {
@@ -7169,19 +7163,15 @@ impl RegVm {
                             self.set_reg(base + *dst, VmValue::Unit);
                         }
                         RegInstr::SortedSetInsert { dst, set, value } => {
-                            let set_reg = base + *set;
-                            let mut values = expect_list_ref(self.reg(set_reg))?.borrow().clone();
                             let value = self.reg(base + *value).clone();
-                            let inserted = set_insert_vm(&mut values, value);
-                            sort_vm_values(&mut values)?;
-                            *expect_list_ref(self.reg(set_reg))?.borrow_mut() = values;
+                            let list = expect_list_ref(self.reg(base + *set))?;
+                            let inserted = sorted_insert_vm(&mut list.borrow_mut(), value)?;
                             self.set_reg(base + *dst, VmValue::Bool(inserted));
                         }
                         RegInstr::SortedSetRemove { dst, set, value } => {
-                            let set_reg = base + *set;
-                            let mut values = expect_list_ref(self.reg(set_reg))?.borrow().clone();
-                            let removed = set_remove_vm(&mut values, self.reg(base + *value));
-                            *expect_list_ref(self.reg(set_reg))?.borrow_mut() = values;
+                            let value = self.reg(base + *value).clone();
+                            let list = expect_list_ref(self.reg(base + *set))?;
+                            let removed = sorted_remove_vm(&mut list.borrow_mut(), &value)?;
                             self.set_reg(base + *dst, VmValue::Bool(removed));
                         }
                         RegInstr::SortedMapClear { dst, map } => {
@@ -7194,28 +7184,16 @@ impl RegVm {
                             key,
                             value,
                         } => {
-                            let map_reg = base + *map;
-                            let mut entries = expect_sorted_map_entries(self.reg(map_reg))?;
-                            sorted_map_insert(
-                                &mut entries,
-                                self.reg(base + *key).clone(),
-                                self.reg(base + *value).clone(),
-                            );
-                            sort_vm_map_entries(&mut entries)?;
-                            write_sorted_map_entries_in_place(
-                                expect_list_ref(self.reg(map_reg))?,
-                                entries,
-                            );
+                            let key = self.reg(base + *key).clone();
+                            let value = self.reg(base + *value).clone();
+                            let list = expect_list_ref(self.reg(base + *map))?;
+                            sorted_map_insert_in_place(&mut list.borrow_mut(), key, value)?;
                             self.set_reg(base + *dst, VmValue::Unit);
                         }
                         RegInstr::SortedMapRemove { dst, map, key } => {
-                            let map_reg = base + *map;
-                            let mut entries = expect_sorted_map_entries(self.reg(map_reg))?;
-                            let removed = sorted_map_remove(&mut entries, self.reg(base + *key));
-                            write_sorted_map_entries_in_place(
-                                expect_list_ref(self.reg(map_reg))?,
-                                entries,
-                            );
+                            let key = self.reg(base + *key).clone();
+                            let list = expect_list_ref(self.reg(base + *map))?;
+                            let removed = sorted_map_remove_in_place(&mut list.borrow_mut(), &key)?;
                             self.set_reg(
                                 base + *dst,
                                 removed
@@ -8487,17 +8465,20 @@ impl RegVm {
                 ))
             }
             RegIntrinsic::DequeIsEmpty => {
-                let deque = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let deque = expect_deque_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::Bool(deque.borrow().is_empty()))
             }
             RegIntrinsic::DequeLen => {
-                let deque = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let deque = expect_deque_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::Int(deque.borrow().len() as i64))
             }
-            RegIntrinsic::DequeNew => Ok(VmValue::List(Rc::new(RefCell::new(Vec::new())))),
+            RegIntrinsic::DequeNew => Ok(VmValue::Deque(Rc::new(RefCell::new(
+                std::collections::VecDeque::new(),
+            )))),
             RegIntrinsic::DequeToList => {
-                let deque = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::List(Rc::new(RefCell::new(deque.borrow().clone()))))
+                let deque = expect_deque_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let list = deque.borrow().iter().cloned().collect::<Vec<_>>();
+                Ok(VmValue::List(Rc::new(RefCell::new(list))))
             }
             RegIntrinsic::DiffUnified => {
                 let old = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -10660,7 +10641,7 @@ impl RegVm {
             RegIntrinsic::SortedSetContains => {
                 let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let value = intrinsic_arg(&self.stack, base, args, 1)?;
-                Ok(VmValue::Bool(set.borrow().iter().any(|item| item == value)))
+                Ok(VmValue::Bool(sorted_contains_vm(&set.borrow(), value)?))
             }
             RegIntrinsic::SortedSetIsEmpty => {
                 let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -10676,16 +10657,16 @@ impl RegVm {
                 Ok(VmValue::List(Rc::new(RefCell::new(set.borrow().clone()))))
             }
             RegIntrinsic::SortedMapContainsKey => {
-                let entries =
-                    expect_sorted_map_entries(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let map = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let key = intrinsic_arg(&self.stack, base, args, 1)?;
-                Ok(VmValue::Bool(sorted_map_get(&entries, key).is_some()))
+                Ok(VmValue::Bool(
+                    sorted_map_get_in_place(&map.borrow(), key)?.is_some(),
+                ))
             }
             RegIntrinsic::SortedMapGet => {
-                let entries =
-                    expect_sorted_map_entries(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let map = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let key = intrinsic_arg(&self.stack, base, args, 1)?;
-                Ok(sorted_map_get(&entries, key)
+                Ok(sorted_map_get_in_place(&map.borrow(), key)?
                     .map(|value| VmValue::OptionSome(Box::new(value)))
                     .unwrap_or(VmValue::OptionNone))
             }
@@ -11889,6 +11870,154 @@ fn set_remove_vm(items: &mut Vec<VmValue>, value: &VmValue) -> bool {
     true
 }
 
+/// Insert `value` into an already-sorted `Vec` via binary search, keeping it
+/// sorted (`Ok(false)` if an equal element is present). O(log n) search + O(n)
+/// shift — no clone and no full re-sort, unlike rebuilding the whole backing.
+fn sorted_insert_vm(items: &mut Vec<VmValue>, value: VmValue) -> Result<bool, EvalError> {
+    vm_value_cmp(&value, &value)?; // reject non-orderable values (parity with re-sort)
+    let mut lo = 0;
+    let mut hi = items.len();
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        match vm_value_cmp(&items[mid], &value)? {
+            Ordering::Less => lo = mid + 1,
+            Ordering::Greater => hi = mid,
+            Ordering::Equal => return Ok(false),
+        }
+    }
+    items.insert(lo, value);
+    Ok(true)
+}
+
+/// Remove `value` from an already-sorted `Vec` via binary search.
+fn sorted_remove_vm(items: &mut Vec<VmValue>, value: &VmValue) -> Result<bool, EvalError> {
+    let mut lo = 0;
+    let mut hi = items.len();
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        match vm_value_cmp(&items[mid], value)? {
+            Ordering::Less => lo = mid + 1,
+            Ordering::Greater => hi = mid,
+            Ordering::Equal => {
+                items.remove(mid);
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// Binary-search a sorted `Vec` for `value` (O(log n)) — used by `SortedSet`'s
+/// membership test in place of a linear scan.
+fn sorted_contains_vm(items: &[VmValue], value: &VmValue) -> Result<bool, EvalError> {
+    let mut lo = 0;
+    let mut hi = items.len();
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        match vm_value_cmp(&items[mid], value)? {
+            Ordering::Less => lo = mid + 1,
+            Ordering::Greater => hi = mid,
+            Ordering::Equal => return Ok(true),
+        }
+    }
+    Ok(false)
+}
+
+/// Binary-search a sorted-map backing by key and return the value if present —
+/// O(log n), cloning only the matched value (not the whole backing).
+fn sorted_map_get_in_place(
+    backing: &[VmValue],
+    key: &VmValue,
+) -> Result<Option<VmValue>, EvalError> {
+    let mut lo = 0;
+    let mut hi = backing.len();
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        let pair = expect_list_ref(&backing[mid])?;
+        let pair = pair.borrow();
+        let entry_key = pair
+            .first()
+            .ok_or_else(|| EvalError::Runtime("reg VM SortedMap entry missing key.".to_string()))?;
+        match vm_value_cmp(entry_key, key)? {
+            Ordering::Less => lo = mid + 1,
+            Ordering::Greater => hi = mid,
+            Ordering::Equal => return Ok(pair.get(1).cloned()),
+        }
+    }
+    Ok(None)
+}
+
+/// Binary-search a sorted-map backing (a `List` of `[key, value]` pair lists) by
+/// key and insert/update in place — no clone, no full re-sort, no rebuild.
+fn sorted_map_insert_in_place(
+    backing: &mut Vec<VmValue>,
+    key: VmValue,
+    value: VmValue,
+) -> Result<(), EvalError> {
+    vm_value_cmp(&key, &key)?;
+    let mut lo = 0;
+    let mut hi = backing.len();
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        let ordering = {
+            let pair = expect_list_ref(&backing[mid])?;
+            let pair = pair.borrow();
+            let entry_key = pair.first().ok_or_else(|| {
+                EvalError::Runtime("reg VM SortedMap entry missing key.".to_string())
+            })?;
+            vm_value_cmp(entry_key, &key)?
+        };
+        match ordering {
+            Ordering::Less => lo = mid + 1,
+            Ordering::Greater => hi = mid,
+            Ordering::Equal => {
+                let pair = expect_list_ref(&backing[mid])?;
+                let mut pair = pair.borrow_mut();
+                if let Some(slot) = pair.get_mut(1) {
+                    *slot = value;
+                } else {
+                    pair.push(value);
+                }
+                return Ok(());
+            }
+        }
+    }
+    backing.insert(lo, VmValue::List(Rc::new(RefCell::new(vec![key, value]))));
+    Ok(())
+}
+
+/// Binary-search a sorted-map backing by key and remove the entry, returning its
+/// value if present.
+fn sorted_map_remove_in_place(
+    backing: &mut Vec<VmValue>,
+    key: &VmValue,
+) -> Result<Option<VmValue>, EvalError> {
+    let mut lo = 0;
+    let mut hi = backing.len();
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        let ordering = {
+            let pair = expect_list_ref(&backing[mid])?;
+            let pair = pair.borrow();
+            let entry_key = pair.first().ok_or_else(|| {
+                EvalError::Runtime("reg VM SortedMap entry missing key.".to_string())
+            })?;
+            vm_value_cmp(entry_key, key)?
+        };
+        match ordering {
+            Ordering::Less => lo = mid + 1,
+            Ordering::Greater => hi = mid,
+            Ordering::Equal => {
+                let removed = backing.remove(mid);
+                let pair = expect_list_ref(&removed)?;
+                let value = pair.borrow().get(1).cloned();
+                return Ok(value);
+            }
+        }
+    }
+    Ok(None)
+}
+
 fn sort_vm_values(items: &mut [VmValue]) -> Result<(), EvalError> {
     for item in items.iter() {
         vm_value_cmp(item, item)?;
@@ -11946,16 +12075,6 @@ fn sorted_map_entry_values(entries: Vec<(VmValue, VmValue)>) -> Vec<VmValue> {
         .collect()
 }
 
-/// Overwrite a sorted-map's backing buffer in place so mutations through a `mut`
-/// parameter propagate to the caller (the map is stored as a `List` of `[k, v]`
-/// pair lists, so we replace the outer buffer's contents, not its `Rc`).
-fn write_sorted_map_entries_in_place(
-    backing: Rc<RefCell<Vec<VmValue>>>,
-    entries: Vec<(VmValue, VmValue)>,
-) {
-    *backing.borrow_mut() = sorted_map_entry_values(entries);
-}
-
 fn sorted_map_get(entries: &[(VmValue, VmValue)], key: &VmValue) -> Option<VmValue> {
     entries
         .iter()
@@ -11973,19 +12092,6 @@ fn sorted_map_insert(entries: &mut Vec<(VmValue, VmValue)>, key: VmValue, value:
 fn sorted_map_remove(entries: &mut Vec<(VmValue, VmValue)>, key: &VmValue) -> Option<VmValue> {
     let index = entries.iter().position(|(entry_key, _)| entry_key == key)?;
     Some(entries.remove(index).1)
-}
-
-fn sort_vm_map_entries(entries: &mut [(VmValue, VmValue)]) -> Result<(), EvalError> {
-    for (key, _) in entries.iter() {
-        vm_value_cmp(key, key)?;
-    }
-    let mut sorted = entries.to_vec();
-    sorted.sort_by(|(left, _), (right, _)| vm_value_cmp(left, right).unwrap_or(Ordering::Equal));
-    for pair in sorted.windows(2) {
-        vm_value_cmp(&pair[0].0, &pair[1].0)?;
-    }
-    entries.clone_from_slice(&sorted);
-    Ok(())
 }
 
 fn path_join_string(base: &str, child: &str) -> String {
@@ -12075,6 +12181,18 @@ fn expect_list_ref(value: &VmValue) -> Result<Rc<RefCell<Vec<VmValue>>>, EvalErr
         VmValue::List(value) => Ok(Rc::clone(value)),
         other => Err(EvalError::Runtime(format!(
             "reg VM expected List, got `{}`.",
+            other.display()
+        ))),
+    }
+}
+
+fn expect_deque_ref(
+    value: &VmValue,
+) -> Result<Rc<RefCell<std::collections::VecDeque<VmValue>>>, EvalError> {
+    match value {
+        VmValue::Deque(value) => Ok(Rc::clone(value)),
+        other => Err(EvalError::Runtime(format!(
+            "reg VM expected Deque, got `{}`.",
             other.display()
         ))),
     }
