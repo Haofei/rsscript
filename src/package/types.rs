@@ -6,8 +6,31 @@ use crate::diagnostic::{Diagnostic, Span};
 use crate::review::{ReviewFinding, ReviewMap};
 use crate::rust_lower::NativeRustDependency;
 
+/// Schema id for the package-review JSON artifact. Bump on breaking changes.
+pub const PACKAGE_REVIEW_SCHEMA: &str = "rsscript.package_review.v0.1";
+
+/// The tool + version that produced an artifact, so consumers can reason about
+/// schema compatibility instead of guessing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ArtifactProducer {
+    pub name: String,
+    pub version: String,
+}
+
+impl ArtifactProducer {
+    pub fn current() -> Self {
+        Self {
+            name: "rsscript".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PackageReview {
+    #[serde(rename = "$schema")]
+    pub schema: String,
+    pub producer: ArtifactProducer,
     pub package: PackageIdentity,
     pub manifest_path: String,
     pub risk: PackageRisk,
