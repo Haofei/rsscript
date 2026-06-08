@@ -154,3 +154,100 @@ fn budget_result(
         evidence: Vec::new(),
     }
 }
+
+/// A gate policy file (`rss-policy.toml`): per-target capability-gate settings
+/// with an optional `[default]` fallback, resolving to a `CiGatePolicy`.
+///
+/// ```toml
+/// [default]
+/// fail_on_missing = true
+///
+/// [target.prod]
+/// fail_on_unknown = true
+/// fail_on_excess = true
+/// require_verified_capabilities = true
+/// ```
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct GatePolicyFile {
+    #[serde(default)]
+    pub default: TargetGatePolicy,
+    #[serde(default)]
+    pub target: HashMap<String, TargetGatePolicy>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct TargetGatePolicy {
+    pub fail_on_missing: Option<bool>,
+    pub fail_on_unknown: Option<bool>,
+    pub fail_on_excess: Option<bool>,
+    pub require_verified_capabilities: Option<bool>,
+}
+
+impl GatePolicyFile {
+    pub fn parse(text: &str) -> Result<Self, String> {
+        toml::from_str(text).map_err(|error| format!("invalid gate policy file: {error}"))
+    }
+
+    /// Resolve the effective gate policy for `target`: start from the built-in
+    /// default, layer the `[default]` section, then the target-specific section.
+    pub fn gate_policy_for(&self, target: Option<&str>) -> crate::format::CiGatePolicy {
+        let mut policy = crate::format::CiGatePolicy::default();
+        self.default.apply_to(&mut policy);
+        if let Some(name) = target {
+            if let Some(target_policy) = self.target.get(name) {
+                target_policy.apply_to(&mut policy);
+            }
+        }
+        policy
+    }
+}
+
+impl TargetGatePolicy {
+    pub fn apply_to(&self, policy: &mut crate::format::CiGatePolicy) {
+        if let Some(value) = self.fail_on_missing {
+            policy.fail_on_missing = value;
+        }
+        if let Some(value) = self.fail_on_unknown {
+            policy.fail_on_unknown = value;
+        }
+        if let Some(value) = self.fail_on_excess {
+            policy.fail_on_excess = value;
+        }
+        if let Some(value) = self.require_verified_capabilities {
+            policy.require_verified_capabilities = value;
+        }
+    }
+}
+
+#[cfg(test)]
+mod gate_policy_tests {
+    use super::*;
+
+    #[test]
+    fn target_section_overrides_default_and_builtin() {
+        let file = GatePolicyFile::parse(
+            r#"
+[default]
+fail_on_unknown = false
+
+[target.prod]
+fail_on_unknown = true
+fail_on_excess = true
+require_verified_capabilities = true
+"#,
+        )
+        .expect("policy parses");
+
+        let prod = file.gate_policy_for(Some("prod"));
+        assert!(prod.fail_on_missing); // built-in default
+        assert!(prod.fail_on_unknown);
+        assert!(prod.fail_on_excess);
+        assert!(prod.require_verified_capabilities);
+
+        // A target without a section falls back to [default] + built-in.
+        let staging = file.gate_policy_for(Some("staging"));
+        assert!(staging.fail_on_missing);
+        assert!(!staging.fail_on_unknown);
+        assert!(!staging.fail_on_excess);
+    }
+}

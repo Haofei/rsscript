@@ -1,0 +1,24 @@
+# Example RSScript capability-gate policy.
+#
+# `reir report-pr --policy rss-policy.toml --target <name>` resolves the gate
+# policy as: built-in defaults -> [default] -> [target.<name>], then any explicit
+# `--fail-on-*` / `--require-verified-capabilities` CLI flags on top.
+#
+# Built-in defaults: fail_on_missing = true; everything else off.
+
+[default]
+fail_on_missing = true
+fail_on_unknown = true
+
+# Production is strict: over-privilege and author-only evidence both block.
+[target.prod]
+fail_on_missing = true
+fail_on_unknown = true
+fail_on_excess = true
+require_verified_capabilities = true
+
+# Staging is more permissive: missing still blocks, excess is advisory.
+[target.staging]
+fail_on_missing = true
+fail_on_unknown = false
+fail_on_excess = false

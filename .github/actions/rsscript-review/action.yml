@@ -31,6 +31,10 @@ inputs:
     description: 'Fail if a required capability is only author-declared (rsspkg.toml binding) with no independent evidence. Off by default; turn on for high-security gates.'
     required: false
     default: 'false'
+  policy:
+    description: 'Path to an rss-policy.toml gate policy file (per-target fail-on-* rules). Overlaid by the explicit fail-on-* inputs.'
+    required: false
+    default: ''
 
 outputs:
   status:
@@ -76,6 +80,7 @@ runs:
         INPUT_FAIL_ON_UNKNOWN: ${{ inputs.fail-on-unknown }}
         INPUT_FAIL_ON_EXCESS: ${{ inputs.fail-on-excess }}
         INPUT_REQUIRE_VERIFIED: ${{ inputs.require-verified-capabilities }}
+        INPUT_POLICY: ${{ inputs.policy }}
       run: |
         TEMP_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/rsscript-review.XXXXXX")"
         PACKAGE_REVIEW_JSON="$TEMP_DIR/package-review.json"
@@ -107,6 +112,7 @@ runs:
 
         # Build the policy flags from inputs so the gate fails closed by default.
         REPORT_FLAGS=()
+        [ -n "$INPUT_POLICY" ] && REPORT_FLAGS+=(--policy "$INPUT_POLICY")
         [ "$INPUT_FAIL_ON_MISSING" = "true" ] || REPORT_FLAGS+=(--allow-missing)
         [ "$INPUT_FAIL_ON_UNKNOWN" = "true" ] && REPORT_FLAGS+=(--fail-on-unknown)
         [ "$INPUT_FAIL_ON_EXCESS" = "true" ] && REPORT_FLAGS+=(--fail-on-excess)

@@ -305,7 +305,9 @@ fn try_run_report_pr(args: &[String]) -> Result<(ExitCode, String), CliError> {
     let mut granted = None;
     let mut target = None;
     let mut ci_json = false;
-    let mut policy = reir::CiGatePolicy::default();
+    let mut policy_file = None;
+    // CLI flag overrides, layered on top of any --policy file.
+    let mut cli = reir::TargetGatePolicy::default();
     let mut index = 0;
 
     while index < args.len() {
@@ -313,11 +315,14 @@ fn try_run_report_pr(args: &[String]) -> Result<(ExitCode, String), CliError> {
             "--required" => required = Some(take_value(args, &mut index, "--required")?),
             "--granted" => granted = Some(take_value(args, &mut index, "--granted")?),
             "--target" => target = Some(take_value(args, &mut index, "--target")?),
+            "--policy" => policy_file = Some(take_value(args, &mut index, "--policy")?),
             "--ci-json" => ci_json = true,
-            "--fail-on-unknown" => policy.fail_on_unknown = true,
-            "--fail-on-excess" => policy.fail_on_excess = true,
-            "--require-verified-capabilities" => policy.require_verified_capabilities = true,
-            "--allow-missing" => policy.fail_on_missing = false,
+            "--fail-on-unknown" => cli.fail_on_unknown = Some(true),
+            "--fail-on-excess" => cli.fail_on_excess = Some(true),
+            "--require-verified-capabilities" => {
+                cli.require_verified_capabilities = Some(true)
+            }
+            "--allow-missing" => cli.fail_on_missing = Some(false),
             unknown => {
                 return Err(CliError::usage(format!(
                     "unknown report-pr flag `{unknown}`"
@@ -326,6 +331,19 @@ fn try_run_report_pr(args: &[String]) -> Result<(ExitCode, String), CliError> {
         }
         index += 1;
     }
+
+    // Resolve the gate policy: optional policy file for the target, then CLI overrides.
+    let mut policy = match &policy_file {
+        Some(path) => {
+            let text = std::fs::read_to_string(path)
+                .map_err(|error| CliError::usage(format!("failed to read {path}: {error}")))?;
+            reir::GatePolicyFile::parse(&text)
+                .map_err(CliError::usage)?
+                .gate_policy_for(target.as_deref())
+        }
+        None => reir::CiGatePolicy::default(),
+    };
+    cli.apply_to(&mut policy);
 
     let required_path = required.ok_or_else(|| CliError::usage("missing --required <file>"))?;
     let granted_path = granted.ok_or_else(|| CliError::usage("missing --granted <file>"))?;
