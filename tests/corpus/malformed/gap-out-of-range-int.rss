@@ -1,0 +1,5 @@
+// KNOWN GAP (found by fuzz): an integer literal larger than i64 is
+// currently accepted with no diagnostic. Tracked for a checker range-check.
+fn f() -> Int {
+  return 99999999999999999999999999999999999999
+}
