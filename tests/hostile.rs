@@ -10,7 +10,7 @@ use proptest::prelude::*;
 /// known fail-open gaps the fuzzer surfaced (still must not panic).
 #[test]
 fn malformed_corpus_never_panics_and_fails_closed() {
-    let dir = std::path::Path::new("tests/corpus/malformed");
+    let dir = std::path::Path::new("tests/hostile-malformed");
     let mut entries: Vec<_> = std::fs::read_dir(dir)
         .expect("malformed corpus dir exists")
         .filter_map(|e| e.ok().map(|e| e.path()))
