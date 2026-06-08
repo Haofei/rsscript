@@ -186,7 +186,6 @@ pub struct CiGateOutput {
     pub status: CiGateStatus,
     /// False when the evidence was derived from invalid source (error
     /// diagnostics): the bundle must not be trusted as a gate input.
-    #[serde(default = "default_true")]
     pub valid_for_gating: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gating_reason: Option<String>,
@@ -299,10 +298,6 @@ impl Default for CiGatePolicy {
             require_verified_capabilities: false,
         }
     }
-}
-
-fn default_true() -> bool {
-    true
 }
 
 /// Whether a fact's acquisition mode is an author declaration (the package author

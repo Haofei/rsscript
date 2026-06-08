@@ -8424,3 +8424,20 @@ fn package_metadata_fails_closed_on_error_diagnostics() {
         report.reasons
     );
 }
+
+#[test]
+fn package_review_markdown_lists_capabilities_by_risk() {
+    let review = review_package_dir(std::path::Path::new(
+        "examples/capability-review-demo/after",
+    ))
+    .expect("demo review should succeed");
+    let markdown = rsscript::format_package_review_markdown(&review);
+    assert!(markdown.contains("## RSScript review:"));
+    assert!(markdown.contains("### Capabilities (by risk)"));
+    assert!(markdown.contains("network.client"));
+    assert!(markdown.contains("database.read"));
+    // high-risk capability is listed before medium.
+    let high = markdown.find("network.client").unwrap();
+    let medium = markdown.find("database.read").unwrap();
+    assert!(high < medium, "high-risk capability should sort first");
+}

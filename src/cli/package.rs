@@ -8,7 +8,8 @@ use rsscript::{
     format_package_lock_json, format_package_lock_reir_json, format_package_lock_toml,
     format_package_metadata_human, format_package_metadata_json, format_package_metadata_reir_json,
     format_package_publish_human, format_package_publish_json, format_package_review_human,
-    format_package_review_json, format_package_tree_human, format_package_tree_json,
+    format_package_review_json, format_package_review_markdown, format_package_tree_human,
+    format_package_tree_json,
     format_package_tree_reir_json, format_package_vendor_human, format_package_vendor_json,
     format_package_vendor_reir_json, lock_package_dir, package_metadata, package_metadata_verify,
     package_tree, publish_package_dry_run_with_registry, review_package_dir, vendor_package_dir,
@@ -28,7 +29,11 @@ pub(crate) fn run_package(args: &[String]) -> ExitCode {
     match command {
         PackageCommand::Ci { json, path } => run_package_check(json, path),
         PackageCommand::Check { json, path } => run_package_check(json, path),
-        PackageCommand::Review { json, path } => run_package_review(json, path),
+        PackageCommand::Review {
+            json,
+            markdown,
+            path,
+        } => run_package_review(json, markdown, path),
         PackageCommand::Diff {
             json,
             old_path,
@@ -67,6 +72,7 @@ pub(crate) enum PackageCommand<'a> {
     },
     Review {
         json: bool,
+        markdown: bool,
         path: &'a str,
     },
     Diff {
@@ -114,6 +120,7 @@ pub(crate) enum PackageCommand<'a> {
 
 fn parse_package_args(args: &[String]) -> Result<PackageCommand<'_>, String> {
     let mut json = false;
+    let mut markdown = false;
     let mut reir = false;
     let mut verify = false;
     let mut dry_run = false;
@@ -125,6 +132,8 @@ fn parse_package_args(args: &[String]) -> Result<PackageCommand<'_>, String> {
     while let Some(arg) = args.get(index) {
         if arg == "--json" {
             json = true;
+        } else if arg == "--markdown" {
+            markdown = true;
         } else if arg == "--reir" {
             reir = true;
         } else if arg == "--verify" {
@@ -183,8 +192,16 @@ fn parse_package_args(args: &[String]) -> Result<PackageCommand<'_>, String> {
     match (words.as_slice(), paths.as_slice()) {
         ([], []) => Ok(PackageCommand::Check { json, path: "." }),
         ([], [path]) => Ok(PackageCommand::Check { json, path }),
-        (["review"], []) => Ok(PackageCommand::Review { json, path: "." }),
-        (["review"], [path]) => Ok(PackageCommand::Review { json, path }),
+        (["review"], []) => Ok(PackageCommand::Review {
+            json,
+            markdown,
+            path: ".",
+        }),
+        (["review"], [path]) => Ok(PackageCommand::Review {
+            json,
+            markdown,
+            path,
+        }),
         (["diff"], [old_path, new_path]) => Ok(PackageCommand::Diff {
             json,
             old_path,
@@ -333,7 +350,7 @@ pub(crate) fn run_package_check(json: bool, path: &str) -> ExitCode {
     }
 }
 
-fn run_package_review(json: bool, path: &str) -> ExitCode {
+fn run_package_review(json: bool, markdown: bool, path: &str) -> ExitCode {
     let review = match review_package_dir(Path::new(path)) {
         Ok(review) => review,
         Err(error) => {
@@ -342,7 +359,9 @@ fn run_package_review(json: bool, path: &str) -> ExitCode {
         }
     };
 
-    if json {
+    if markdown {
+        print!("{}", format_package_review_markdown(&review));
+    } else if json {
         println!("{}", format_package_review_json(&review));
     } else {
         print!("{}", format_package_review_human(&review));
@@ -664,7 +683,7 @@ mod tests {
         let values = args(&["review", "--json", "package"]);
         let command = super::parse_package_args(&values).expect("review should parse");
         match command {
-            super::PackageCommand::Review { json, path } => {
+            super::PackageCommand::Review { json, path, .. } => {
                 assert!(json);
                 assert_eq!(path, "package");
             }

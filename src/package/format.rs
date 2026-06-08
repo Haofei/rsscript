@@ -222,6 +222,88 @@ pub fn format_package_review_human(review: &PackageReview) -> String {
     output
 }
 
+/// Render a package review as a PR-facing Markdown report: the powers it needs
+/// (ranked by risk, with provider and author-declared/unknown flags), native
+/// risk, reviewable boundaries, and diagnostics.
+pub fn format_package_review_markdown(review: &PackageReview) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "## RSScript review: `{}` {} — risk **{}**",
+        review.package.name,
+        review.package.version,
+        package_risk_label(review.risk)
+    );
+    if !review.reasons.is_empty() {
+        let _ = writeln!(out, "\n**Why:**");
+        for reason in &review.reasons {
+            let _ = writeln!(out, "- {reason}");
+        }
+    }
+
+    let mut capabilities = review.capabilities.clone();
+    capabilities.sort_by_key(|capability| match capability.risk {
+        crate::CapabilityRisk::High => 0u8,
+        crate::CapabilityRisk::Medium => 1,
+        crate::CapabilityRisk::Low => 2,
+    });
+    let mut seen = std::collections::BTreeSet::new();
+    let mut rows = Vec::new();
+    for capability in &capabilities {
+        if !seen.insert((capability.category.clone(), capability.binding_symbol.clone())) {
+            continue;
+        }
+        let risk = match capability.risk {
+            crate::CapabilityRisk::High => "high",
+            crate::CapabilityRisk::Medium => "medium",
+            crate::CapabilityRisk::Low => "low",
+        };
+        let note = capability
+            .unknown_reason
+            .as_deref()
+            .map(|reason| format!(" ⚠️ {reason}"))
+            .unwrap_or_default();
+        rows.push(format!(
+            "| {} | {} | {} | `{}`{} |",
+            risk,
+            capability.category,
+            capability.provider.as_deref().unwrap_or("—"),
+            capability.binding_symbol,
+            note
+        ));
+    }
+    if rows.is_empty() {
+        let _ = writeln!(out, "\nNo declared capabilities.");
+    } else {
+        let _ = writeln!(out, "\n### Capabilities (by risk)\n");
+        let _ = writeln!(out, "| risk | capability | provider | via |");
+        let _ = writeln!(out, "|------|------------|----------|-----|");
+        for row in rows {
+            let _ = writeln!(out, "{row}");
+        }
+    }
+
+    if let Some(native) = &review.native_rust {
+        let _ = writeln!(out, "\n### Native boundary\n");
+        let _ = writeln!(out, "- crate: `{}`", native.crate_name.as_deref().unwrap_or("?"));
+        let _ = writeln!(out, "- path: `{}`", native.path);
+    }
+
+    let errors = review
+        .diagnostics
+        .iter()
+        .filter(|d| d.severity.is_error())
+        .count();
+    if errors > 0 {
+        let _ = writeln!(
+            out,
+            "\n### Diagnostics\n\n**{errors} error(s)** — this review is not valid for gating."
+        );
+    }
+    out
+}
+
 /// Distinct capabilities the package requires, ranked high-risk first, so a
 /// reviewer sees the powers (and any unrecognized ones) at a glance.
 fn format_package_review_capabilities_human(
