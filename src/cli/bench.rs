@@ -18,6 +18,7 @@ enum BenchMode {
     Eval,
     Vm,
     VmInternal,
+    JitInternal,
     Run,
     Release,
     ReleaseInternal,
@@ -34,11 +35,12 @@ impl BenchMode {
             "eval" => Ok(Self::Eval),
             "vm" => Ok(Self::Vm),
             "vm-internal" => Ok(Self::VmInternal),
+            "jit-internal" => Ok(Self::JitInternal),
             "run" => Ok(Self::Run),
             "release" => Ok(Self::Release),
             "release-internal" => Ok(Self::ReleaseInternal),
             _ => Err(format!(
-                "invalid benchmark mode `{value}`; expected eval, vm, vm-internal, run, release, or release-internal."
+                "invalid benchmark mode `{value}`; expected eval, vm, vm-internal, jit-internal, run, release, or release-internal."
             )),
         }
     }
@@ -48,6 +50,7 @@ impl BenchMode {
             Self::Eval => "eval",
             Self::Vm => "vm",
             Self::VmInternal => "vm-internal",
+            Self::JitInternal => "jit-internal",
             Self::Run => "run",
             Self::Release => "release",
             Self::ReleaseInternal => "release-internal",
@@ -56,8 +59,8 @@ impl BenchMode {
 
     fn cargo_profile_dir(self) -> &'static str {
         match self {
-            Self::Eval | Self::Vm | Self::VmInternal => {
-                unreachable!("eval/vm mode does not build a cargo profile")
+            Self::Eval | Self::Vm | Self::VmInternal | Self::JitInternal => {
+                unreachable!("eval/vm/jit mode does not build a cargo profile")
             }
             Self::Run => "debug",
             Self::Release | Self::ReleaseInternal => "release",
@@ -209,6 +212,7 @@ fn run_bench_inner(options: &BenchOptions<'_>) -> Result<BenchResult, String> {
         BenchMode::Eval => run_eval_bench(options),
         BenchMode::Vm => run_reg_vm_bench(options),
         BenchMode::VmInternal => run_reg_vm_internal_bench(options),
+        BenchMode::JitInternal => run_reg_vm_jit_bench(options),
         BenchMode::Run | BenchMode::Release | BenchMode::ReleaseInternal => {
             run_generated_bench(options)
         }
@@ -292,6 +296,39 @@ fn run_reg_vm_internal_bench(options: &BenchOptions<'_>) -> Result<BenchResult, 
     let run_once = || {
         executable
             .eval_main_with_args_and_native_bindings(
+                options.program_args.iter().copied(),
+                bindings.iter().map(|(key, func)| (key.clone(), *func)),
+            )
+            .map_err(format_eval_error)
+    };
+    for _ in 0..options.warmup {
+        run_once()?;
+    }
+
+    let mut measurements = Vec::with_capacity(options.iterations);
+    for _ in 0..options.iterations {
+        let start = Instant::now();
+        run_once()?;
+        measurements.push(start.elapsed());
+    }
+    Ok(summarize_measurements(
+        benchmark_name(options.path),
+        options.mode,
+        options.vm,
+        options.iterations,
+        options.warmup,
+        &measurements,
+    ))
+}
+
+/// Tier-0 JIT benchmark: compile once (like `vm-internal`), then run with the
+/// JIT enabled (JIT-eligible functions via the specializing executor, the rest
+/// via the interpreter). Apples-to-apples with `vm-internal`.
+fn run_reg_vm_jit_bench(options: &BenchOptions<'_>) -> Result<BenchResult, String> {
+    let (executable, bindings) = compile_vm_internal_target(options)?;
+    let run_once = || {
+        executable
+            .eval_main_with_args_and_native_bindings_jit(
                 options.program_args.iter().copied(),
                 bindings.iter().map(|(key, func)| (key.clone(), *func)),
             )

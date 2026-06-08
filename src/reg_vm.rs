@@ -263,10 +263,26 @@ impl RegVmExecutable {
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<EvalOutput, EvalError> {
+        self.eval_main_with_args_and_native_bindings_jit(
+            args,
+            std::iter::empty::<(String, NativeInterpreterFn)>(),
+        )
+    }
+
+    /// Like [`eval_main_with_args_jit`] but with native host bindings for any
+    /// `native fn`s reached on the interpreter fallback path.
+    pub fn eval_main_with_args_and_native_bindings_jit(
+        &self,
+        args: impl IntoIterator<Item = impl Into<String>>,
+        native_bindings: impl IntoIterator<Item = (impl Into<String>, NativeInterpreterFn)>,
+    ) -> Result<EvalOutput, EvalError> {
         let mut vm = RegVm::new(
             Rc::clone(&self.unit),
             args.into_iter().map(Into::into).collect(),
-            HashMap::new(),
+            native_bindings
+                .into_iter()
+                .map(|(key, function)| (key.into(), function))
+                .collect(),
         );
         vm.jit_enabled = true;
         let value = vm.run_program("main")?;
