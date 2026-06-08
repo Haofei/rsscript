@@ -1,0 +1,13 @@
+[package]
+name = "vm-jit"
+version = "0.1.0"
+edition = "2024"
+description = "Native (Cranelift) baseline JIT for the RSScript register VM's integer/control core. Lives in its own crate because the main `rsscript` crate is #![forbid(unsafe_code)] and executing generated machine code requires `unsafe`."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+cranelift-codegen = "0.132.1"
+cranelift-frontend = "0.132.1"
+cranelift-jit = "0.132.1"
+cranelift-module = "0.132.1"
+cranelift-native = "0.132.1"

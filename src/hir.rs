@@ -219,6 +219,10 @@ pub struct HirBlock {
     pub span: Span,
 }
 
+// HIR nodes are built once per compile and matched by reference, never kept in
+// large hot collections, so the size spread between variants doesn't matter;
+// boxing the big arms would churn dozens of `match` sites for no runtime gain.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HirStmt {
     Let {
@@ -311,6 +315,8 @@ pub struct HirCallReceiver {
     pub resolved_namespace: Option<String>,
 }
 
+// See `HirStmt`: boxing for size parity isn't worth the match-site churn here.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HirExpr {
     Ident {
@@ -735,10 +741,6 @@ impl Hir {
         self.function_bodies
             .iter()
             .map(|(name, body)| (name.as_str(), body))
-    }
-
-    pub fn resource_drop_body(&self, type_name: &str) -> Option<&HirBlock> {
-        self.resource_drop_bodies.get(type_root_name(type_name))
     }
 
     pub fn resource_drop_bodies(&self) -> impl Iterator<Item = (&str, &HirBlock)> {

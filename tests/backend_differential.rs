@@ -85,20 +85,19 @@ struct Program {
     result: Expr,
 }
 
-// NOTE: literal magnitudes and the binding-chain depth below are deliberately
-// small. RSScript `Int` is i64, but the compiled backend currently lowers integer
-// literals without an `i64` suffix, so an all-literal-derived sub-expression
-// defaults to Rust `i32` and can *const-overflow at compile time* even though the
-// i64 value is fine (e.g. `3528_i32 * 3457776_i32`). That is a real, separate
-// VM<->compiler gap (tracked in docs/jit-todo.md); we keep generated values well
-// under i32::MAX here so this differential exercises VM<->JIT parity rather than
-// re-finding that one compiler bug on every run.
+// Literal magnitudes deliberately span past `i32::MAX`: a product of two factors
+// can exceed 2^31, so an all-literal sub-expression that defaults to Rust `i32`
+// would *const-overflow at compile time* even though the i64 value is fine. That
+// was a real VM<->compiler gap (integer literals lowered without an `i64`
+// suffix); now that `rust_lower` emits `i64`-typed literals, this differential
+// exercises that fix instead of avoiding it. The oracle uses checked arithmetic
+// and `prop_assume!` skips the (now common) i64-overflow cases.
 fn arb_factor(vars_in_scope: usize) -> impl Strategy<Value = Factor> {
     if vars_in_scope == 0 {
-        (0i64..=4).prop_map(Factor::Lit).boxed()
+        (0i64..=60_000).prop_map(Factor::Lit).boxed()
     } else {
         prop_oneof![
-            (0i64..=4).prop_map(Factor::Lit),
+            (0i64..=60_000).prop_map(Factor::Lit),
             (0..vars_in_scope).prop_map(Factor::Var),
         ]
         .boxed()
@@ -228,7 +227,10 @@ fn render(program: &Program) -> String {
     for (index, binding) in program.bindings.iter().enumerate() {
         source.push_str(&format!("    let x{index} = {}\n", render_expr(binding)));
     }
-    source.push_str(&format!("    let mut acc = {}\n", render_expr(&program.result)));
+    source.push_str(&format!(
+        "    let mut acc = {}\n",
+        render_expr(&program.result)
+    ));
     for guard in &program.guards {
         source.push_str(&format!(
             "    if {} {} {} {{\n        acc = acc + {}\n    }}\n",
@@ -310,6 +312,112 @@ fn main() -> Unit {
     common::differential::assert_backends_agree("jit-loop.rss", source, &[]);
 }
 
+/// Eligible function exercising the collection get/set/index ops now in the
+/// tier-0 subset (List push/set/get/len/append/pop/clear, Map insert/get/remove)
+/// — interp == jit == compiled. The work lives in `compute()` (pure: no closures,
+/// no calls), so the JIT executor actually runs these instructions.
+#[test]
+fn backends_agree_on_collection_ops() {
+    // `compute` takes the collections as parameters so it is JIT-eligible
+    // (construction via `List.new()`/`Map.new()` is an intrinsic and stays on the
+    // interpreter in `main`). It exercises every collection op now in the tier-0
+    // subset: List set/append/len/get/pop/clear and Map insert/get/remove.
+    let source = "\
+fn compute(xs: mut List<Int>, ys: read List<Int>, table: mut Map<Int, Int>) -> Int {
+    List.set<Int>(list: mut xs, index: 2, value: read 100)
+    List.append<Int>(list: mut xs, values: read ys)
+    let mut total = 0
+    let mut j = 0
+    while j < List.len<Int>(list: read xs) {
+        total = total + List.get<Int>(list: read xs, index: j)
+        j = j + 1
+    }
+    match List.pop<Int>(list: mut xs) {
+        Some(v) => {
+            total = total + v
+        }
+        None => {
+            total = total
+        }
+    }
+    Map.insert<Int, Int>(map: mut table, key: read 9, value: read total)
+    match Map.remove<Int, Int>(map: mut table, key: read 1) {
+        Some(v) => {
+            total = total + v
+        }
+        None => {
+            total = total
+        }
+    }
+    match Map.get<Int, Int>(map: read table, key: read 2) {
+        Some(v) => {
+            total = total + v
+        }
+        None => {
+            total = total
+        }
+    }
+    List.clear<Int>(list: mut xs)
+    total = total + List.len<Int>(list: read xs)
+    return total
+}
+
+fn main() -> Unit {
+    let mut xs = List<Int>.new()
+    let mut i = 0
+    while i < 6 {
+        let sq = i * i
+        List.push<Int>(list: mut xs, value: read sq)
+        i = i + 1
+    }
+    let mut ys = List<Int>.new()
+    List.push<Int>(list: mut ys, value: read 7)
+    let mut table = Map<Int, Int>.new()
+    Map.insert<Int, Int>(map: mut table, key: read 1, value: read 50)
+    Map.insert<Int, Int>(map: mut table, key: read 2, value: read 25)
+    Log.write(message: read String.from_int(value: compute(xs: mut xs, ys: read ys, table: mut table)))
+    return Unit
+}
+";
+    common::differential::assert_backends_agree("jit-collections.rss", source, &[]);
+}
+
+/// JIT-eligible functions that call other JIT-eligible functions: the tier-0
+/// executor now drives non-suspending, non-recursive callees in-line. `accumulate`
+/// has a loop (so it is JIT'd) and calls two leaf helpers — interp == jit ==
+/// compiled.
+#[test]
+fn backends_agree_on_cross_function_calls() {
+    let source = "\
+fn square(n: Int) -> Int {
+    return n * n
+}
+
+fn weight(n: Int) -> Int {
+    if n < 0 {
+        return 0 - n
+    }
+    return n
+}
+
+fn accumulate(limit: Int) -> Int {
+    let mut total = 0
+    let mut i = 0
+    while i < limit {
+        total = total + square(n: read i) - weight(n: read i)
+        i = i + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: accumulate(limit: read 8)))
+    return Unit
+}
+";
+    common::differential::assert_backends_agree("jit-cross-call.rss", source, &[]);
+}
+
 proptest! {
     // Each case compiles a crate, so keep the count modest. Raise for a longer
     // differential-fuzz session (e.g. PROPTEST_CASES=200).
@@ -325,4 +433,353 @@ proptest! {
         // is checked here automatically.
         common::differential::assert_backends_agree("backend-diff.rss", &source, &[]);
     }
+
+    #[test]
+    fn backends_agree_on_float_programs(program in arb_float_program()) {
+        // Float arithmetic + comparisons, three-way. No division (avoids
+        // div-by-zero) and no NaN-producing ops, so every case succeeds and is
+        // deterministic; the result is reduced to an Int count of true
+        // comparisons so float *formatting* parity is not the thing under test.
+        let source = render_float(&program);
+        common::differential::assert_backends_agree("backend-diff-float.rss", &source, &[]);
+    }
+
+    #[test]
+    fn backends_agree_on_string_programs(program in arb_string_program()) {
+        // String concatenation chains + length, three-way. Concatenation cannot
+        // fail, so no case is skipped.
+        let source = render_string(&program);
+        common::differential::assert_backends_agree("backend-diff-string.rss", &source, &[]);
+    }
+
+    /// Coverage-style fuzz seed: a raw byte string is decoded into a program by
+    /// [`program_from_seed`], then run through the N-way differential. This is the
+    /// Fuzzilli-style `seed(bytes) -> program` shape; proptest supplies the random
+    /// seeds and shrinking (the "mutators"). Pointing a coverage-guided engine
+    /// (cargo-fuzz / libFuzzer) at `program_from_seed` is the deployment step — the
+    /// decoder is total (any byte string yields a valid program), which is exactly
+    /// what such engines require.
+    #[test]
+    fn backends_agree_on_seed_decoded_programs(seed in prop::collection::vec(any::<u8>(), 0..64)) {
+        let program = program_from_seed(&seed);
+        prop_assume!(oracle(&program).is_some());
+        let source = render(&program);
+        common::differential::assert_backends_agree("backend-diff-seed.rss", &source, &[]);
+    }
+}
+
+// --- Coverage-style seed -> program decoder -------------------------------
+
+/// A cursor over a fuzz seed. Reads wrap around (and an empty seed reads as all
+/// zeroes), so **every** byte string decodes to a valid program — the totality a
+/// coverage-guided fuzzer needs.
+struct SeedReader<'a> {
+    bytes: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> SeedReader<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, pos: 0 }
+    }
+
+    fn next(&mut self) -> u8 {
+        if self.bytes.is_empty() {
+            return 0;
+        }
+        let b = self.bytes[self.pos % self.bytes.len()];
+        self.pos = self.pos.wrapping_add(1);
+        b
+    }
+
+    /// A value in `0..n` (`0` when `n == 0`).
+    fn range(&mut self, n: usize) -> usize {
+        if n == 0 { 0 } else { self.next() as usize % n }
+    }
+}
+
+/// Decode a fuzz seed into an integer [`Program`] (same shape as `arb_program`).
+fn program_from_seed(seed: &[u8]) -> Program {
+    let mut r = SeedReader::new(seed);
+    let binding_count = r.range(3); // 0..=2
+    let mut bindings = Vec::new();
+    for index in 0..binding_count {
+        bindings.push(expr_from_seed(&mut r, index));
+    }
+    let count = bindings.len();
+    let guard_count = r.range(3); // 0..=2
+    let mut guards = Vec::new();
+    for _ in 0..guard_count {
+        guards.push(Guard {
+            lhs: expr_from_seed(&mut r, count),
+            cmp: cmp_from_seed(&mut r),
+            rhs: expr_from_seed(&mut r, count),
+            adjustment: expr_from_seed(&mut r, count),
+        });
+    }
+    let result = expr_from_seed(&mut r, count);
+    Program {
+        bindings,
+        guards,
+        result,
+    }
+}
+
+fn expr_from_seed(r: &mut SeedReader, vars_in_scope: usize) -> Expr {
+    let terms = 1 + r.range(3); // 1..=3
+    (0..terms)
+        .map(|_| {
+            let op = if r.next() & 1 == 0 { '+' } else { '-' };
+            let factor_count = 1 + r.range(2); // 1..=2
+            let factors = (0..factor_count)
+                .map(|_| factor_from_seed(r, vars_in_scope))
+                .collect();
+            (op, factors)
+        })
+        .collect()
+}
+
+fn factor_from_seed(r: &mut SeedReader, vars_in_scope: usize) -> Factor {
+    if vars_in_scope > 0 && r.next() & 1 == 0 {
+        Factor::Var(r.range(vars_in_scope))
+    } else {
+        Factor::Lit(i64::from(r.next()) % 64)
+    }
+}
+
+fn cmp_from_seed(r: &mut SeedReader) -> Cmp {
+    match r.range(6) {
+        0 => Cmp::Lt,
+        1 => Cmp::Le,
+        2 => Cmp::Gt,
+        3 => Cmp::Ge,
+        4 => Cmp::Eq,
+        _ => Cmp::Ne,
+    }
+}
+
+// --- Float programs -------------------------------------------------------
+
+/// Exact-in-binary float literals so arithmetic is reproducible bit-for-bit
+/// across backends (all are sums of small powers of two).
+const FLOAT_LITS: [f64; 6] = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5];
+
+#[derive(Debug, Clone)]
+enum FloatFactor {
+    Lit(usize),
+    Var(usize),
+}
+
+type FloatTerm = (char, Vec<FloatFactor>);
+type FloatExpr = Vec<FloatTerm>;
+
+/// A float program: a chain of `let` bindings (float sum-of-products) and a set
+/// of comparisons whose true-count is returned as an `Int`.
+#[derive(Debug, Clone)]
+struct FloatProgram {
+    bindings: Vec<FloatExpr>,
+    comparisons: Vec<(FloatExpr, Cmp, FloatExpr)>,
+}
+
+fn arb_float_factor(vars_in_scope: usize) -> impl Strategy<Value = FloatFactor> {
+    if vars_in_scope == 0 {
+        (0..FLOAT_LITS.len()).prop_map(FloatFactor::Lit).boxed()
+    } else {
+        prop_oneof![
+            (0..FLOAT_LITS.len()).prop_map(FloatFactor::Lit),
+            (0..vars_in_scope).prop_map(FloatFactor::Var),
+        ]
+        .boxed()
+    }
+}
+
+fn arb_float_expr(vars_in_scope: usize) -> impl Strategy<Value = FloatExpr> {
+    // Only `+`/`-` between terms and `*` within a term — no division, so no
+    // div-by-zero and no irrational/long-decimal intermediate values.
+    let term = (
+        prop_oneof![Just('+'), Just('-')],
+        prop::collection::vec(arb_float_factor(vars_in_scope), 1..=2),
+    );
+    prop::collection::vec(term, 1..=3)
+}
+
+fn arb_float_program() -> impl Strategy<Value = FloatProgram> {
+    (0usize..=2)
+        .prop_flat_map(|binding_count| {
+            let mut strategy = Just(Vec::<FloatExpr>::new()).boxed();
+            for index in 0..binding_count {
+                strategy = (strategy, arb_float_expr(index))
+                    .prop_map(|(mut bindings, expr)| {
+                        bindings.push(expr);
+                        bindings
+                    })
+                    .boxed();
+            }
+            strategy.prop_flat_map(|bindings| {
+                let count = bindings.len();
+                let cmp = prop_oneof![
+                    Just(Cmp::Lt),
+                    Just(Cmp::Le),
+                    Just(Cmp::Gt),
+                    Just(Cmp::Ge),
+                    Just(Cmp::Eq),
+                    Just(Cmp::Ne),
+                ];
+                let comparison = (arb_float_expr(count), cmp, arb_float_expr(count));
+                prop::collection::vec(comparison, 1..=3).prop_map(move |comparisons| FloatProgram {
+                    bindings: bindings.clone(),
+                    comparisons,
+                })
+            })
+        })
+        .boxed()
+}
+
+fn render_float_factor(factor: &FloatFactor) -> String {
+    match factor {
+        // `{:?}` always prints a decimal point (e.g. `2.0`), keeping it a Float
+        // literal rather than an Int.
+        FloatFactor::Lit(index) => format!("{:?}", FLOAT_LITS[*index]),
+        FloatFactor::Var(index) => format!("f{index}"),
+    }
+}
+
+fn render_float_expr(expr: &FloatExpr) -> String {
+    let mut rendered = String::new();
+    for (index, (op, factors)) in expr.iter().enumerate() {
+        if index > 0 {
+            rendered.push_str(&format!(" {op} "));
+        }
+        let product = factors
+            .iter()
+            .map(render_float_factor)
+            .collect::<Vec<_>>()
+            .join(" * ");
+        rendered.push_str(&product);
+    }
+    rendered
+}
+
+fn render_float(program: &FloatProgram) -> String {
+    let mut source = String::from("fn compute() -> Int {\n");
+    for (index, binding) in program.bindings.iter().enumerate() {
+        source.push_str(&format!(
+            "    let f{index} = {}\n",
+            render_float_expr(binding)
+        ));
+    }
+    source.push_str("    let mut count = 0\n");
+    for (lhs, cmp, rhs) in &program.comparisons {
+        source.push_str(&format!(
+            "    if {} {} {} {{\n        count = count + 1\n    }}\n",
+            render_float_expr(lhs),
+            cmp.render(),
+            render_float_expr(rhs),
+        ));
+    }
+    source.push_str("    return count\n}\n\n");
+    source.push_str("fn main() -> Unit {\n");
+    source.push_str("    Log.write(message: read String.from_int(value: compute()))\n");
+    source.push_str("    return Unit\n}\n");
+    source
+}
+
+// --- String programs ------------------------------------------------------
+
+const STRING_LITS: [&str; 5] = ["", "a", "bc", "Z9", "  "];
+
+#[derive(Debug, Clone)]
+enum StringAtom {
+    Lit(usize),
+    Var(usize),
+}
+
+/// A non-empty left-folded concatenation of atoms.
+type StringExpr = Vec<StringAtom>;
+
+#[derive(Debug, Clone)]
+struct StringProgram {
+    bindings: Vec<StringExpr>,
+    result: StringExpr,
+}
+
+fn arb_string_atom(vars_in_scope: usize) -> impl Strategy<Value = StringAtom> {
+    if vars_in_scope == 0 {
+        (0..STRING_LITS.len()).prop_map(StringAtom::Lit).boxed()
+    } else {
+        prop_oneof![
+            (0..STRING_LITS.len()).prop_map(StringAtom::Lit),
+            (0..vars_in_scope).prop_map(StringAtom::Var),
+        ]
+        .boxed()
+    }
+}
+
+fn arb_string_expr(vars_in_scope: usize) -> impl Strategy<Value = StringExpr> {
+    prop::collection::vec(arb_string_atom(vars_in_scope), 1..=3)
+}
+
+fn arb_string_program() -> impl Strategy<Value = StringProgram> {
+    (0usize..=2)
+        .prop_flat_map(|binding_count| {
+            let mut strategy = Just(Vec::<StringExpr>::new()).boxed();
+            for index in 0..binding_count {
+                strategy = (strategy, arb_string_expr(index))
+                    .prop_map(|(mut bindings, expr)| {
+                        bindings.push(expr);
+                        bindings
+                    })
+                    .boxed();
+            }
+            strategy.prop_flat_map(|bindings| {
+                let count = bindings.len();
+                arb_string_expr(count).prop_map(move |result| StringProgram {
+                    bindings: bindings.clone(),
+                    result,
+                })
+            })
+        })
+        .boxed()
+}
+
+fn render_string_atom(atom: &StringAtom) -> String {
+    match atom {
+        StringAtom::Lit(index) => format!("{:?}", STRING_LITS[*index]),
+        StringAtom::Var(index) => format!("s{index}"),
+    }
+}
+
+/// Left-fold the atoms into nested `String.concat` calls, seeded with an empty
+/// string. Folding from `""` means every atom (including a lone variable) is
+/// passed through `read`, i.e. cloned — so a variable stays usable after being
+/// referenced, sidestepping String move semantics that are not under test here.
+fn render_string_expr(expr: &StringExpr) -> String {
+    let mut acc = String::from("\"\"");
+    for atom in expr {
+        acc = format!(
+            "String.concat(left: read {acc}, right: read {})",
+            render_string_atom(atom)
+        );
+    }
+    acc
+}
+
+fn render_string(program: &StringProgram) -> String {
+    let mut source = String::from("fn main() -> Unit {\n");
+    for (index, binding) in program.bindings.iter().enumerate() {
+        source.push_str(&format!(
+            "    let s{index} = {}\n",
+            render_string_expr(binding)
+        ));
+    }
+    source.push_str(&format!(
+        "    let result = {}\n",
+        render_string_expr(&program.result)
+    ));
+    source.push_str("    Log.write(message: read result)\n");
+    source.push_str(
+        "    Log.write(message: read String.from_int(value: String.len(value: read result)))\n",
+    );
+    source.push_str("    return Unit\n}\n");
+    source
 }

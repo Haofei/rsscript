@@ -11,6 +11,7 @@ members = [
     "runtime",
     "reir",
     "native-abi",
+    "vm-jit",
     "rss/core/cli/native/rust",
     "rss/core/crypto/native/rust",
     "rss/core/http-server/native/rust",
@@ -39,11 +40,27 @@ hmac = "0.12"
 percent-encoding = "2"
 rand = "0.8"
 uuid = { version = "1", features = ["v4"] }
+vm-jit = { path = "vm-jit", optional = true }
+
+[features]
+# Native (Cranelift) baseline JIT for the integer/control core. Off by default so
+# normal builds/tests don't pull in the codegen dependency; enable for the
+# native differential backend, `rss bench --mode jit-native`, and force-JIT CI.
+native-jit = ["dep:vm-jit"]
 
 [build-dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
+
+# Release tuning for the `rss` tool / VM. Thin LTO + a single codegen unit let the
+# optimizer inline across the interpreter's hot dispatch/value helpers, which are
+# spread across modules. Small but real on the interpreter (~3% on numeric loops);
+# the large interpreter wins come from the native JIT, not codegen flags. Costs
+# extra release build time only (dev/test builds are unaffected).
+[profile.release]
+lto = "thin"
+codegen-units = 1
 
 [dev-dependencies]
 sha1 = "0.10"

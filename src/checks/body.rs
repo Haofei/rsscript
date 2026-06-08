@@ -2220,12 +2220,16 @@ fn declared_pattern_fields(
 
 fn first_mutating_effect_expr(expr: &HirExpr) -> Option<(DataEffect, &crate::diagnostic::Span)> {
     match expr {
-        HirExpr::Effect { effect, span, .. } if matches!(effect, ParamEffect::Mut) => {
-            Some((DataEffect::Mut, span))
-        }
-        HirExpr::Effect { effect, span, .. } if matches!(effect, ParamEffect::Take) => {
-            Some((DataEffect::Take, span))
-        }
+        HirExpr::Effect {
+            effect: ParamEffect::Mut,
+            span,
+            ..
+        } => Some((DataEffect::Mut, span)),
+        HirExpr::Effect {
+            effect: ParamEffect::Take,
+            span,
+            ..
+        } => Some((DataEffect::Take, span)),
         HirExpr::Effect { value, .. }
         | HirExpr::Manage { value, .. }
         | HirExpr::Spawn { value, .. }

@@ -61,9 +61,62 @@ impl Backend for Jit {
     }
 }
 
-/// The standard set of execution backends to cross-check.
+/// The native (Cranelift) JIT execution mode: the integer/control core runs as
+/// machine code, tier-0 covers the rest of the supported subset, and the
+/// interpreter the remainder (with bail-to-interpreter on arithmetic edges).
+/// Correct by the same fallback rule; this differential guards what it compiles.
+#[cfg(feature = "native-jit")]
+pub struct NativeJit;
+
+#[cfg(feature = "native-jit")]
+impl Backend for NativeJit {
+    fn name(&self) -> &'static str {
+        "vm-jit-native"
+    }
+
+    fn run_stdout(&self, file: &str, source: &str, args: &[&str]) -> Result<String, String> {
+        rsscript::reg_vm_eval_source_main_native(file, source, args.iter().copied())
+            .map(|output| output.stdout)
+            .map_err(|error| format!("{error:?}"))
+    }
+}
+
+/// The native tier in deopt stress mode: the native code always bails, so every
+/// native-eligible function exercises the fallback-to-interpreter path. Must
+/// still agree with every other backend (verifies deopt has no gap).
+#[cfg(feature = "native-jit")]
+pub struct NativeJitForceDeopt;
+
+#[cfg(feature = "native-jit")]
+impl Backend for NativeJitForceDeopt {
+    fn name(&self) -> &'static str {
+        "vm-jit-native-force-deopt"
+    }
+
+    fn run_stdout(&self, file: &str, source: &str, args: &[&str]) -> Result<String, String> {
+        rsscript::reg_vm_eval_source_main_native_force_deopt(file, source, args.iter().copied())
+            .map(|output| output.stdout)
+            .map_err(|error| format!("{error:?}"))
+    }
+}
+
+/// The standard set of execution backends to cross-check. With the `native-jit`
+/// feature, the native tier and its force-deopt twin join as additional backends.
 pub fn all_backends() -> Vec<Box<dyn Backend>> {
-    vec![Box::new(Interpreter), Box::new(Jit), Box::new(Compiled)]
+    #[cfg(not(feature = "native-jit"))]
+    {
+        vec![Box::new(Interpreter), Box::new(Jit), Box::new(Compiled)]
+    }
+    #[cfg(feature = "native-jit")]
+    {
+        vec![
+            Box::new(Interpreter),
+            Box::new(Jit),
+            Box::new(NativeJit),
+            Box::new(NativeJitForceDeopt),
+            Box::new(Compiled),
+        ]
+    }
 }
 
 /// Run `source` on every backend and require identical successful stdout. Panics

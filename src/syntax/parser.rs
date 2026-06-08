@@ -2941,7 +2941,7 @@ fn parse_unary_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> 
     if tokens.get(start)?.symbol("~") {
         let (value_start, value_end) = unary_operand_range(tokens, start + 1, end);
         let value = parse_expr(tokens, value_start, value_end)?;
-        return Some(Expr::Call {
+        Some(Expr::Call {
             callee: Callee::Qualified {
                 namespace: "Int".to_string(),
                 name: "bit_not".to_string(),
@@ -2953,7 +2953,7 @@ fn parse_unary_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> 
                 span: tokens[start].span.clone(),
             }],
             span: tokens[start].span.clone(),
-        });
+        })
     } else {
         None
     }

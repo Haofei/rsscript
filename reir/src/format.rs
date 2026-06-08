@@ -510,10 +510,11 @@ pub fn format_sarif(reconciliations: &[Reconciliation]) -> String {
             .as_ref()
             .map(|capability| {
                 let mut parts = vec![format!("{:?}", capability.category)];
-                for field in [&capability.provider, &capability.service, &capability.action] {
-                    if let Some(value) = field {
-                        parts.push(value.clone());
-                    }
+                for value in [&capability.provider, &capability.service, &capability.action]
+                    .into_iter()
+                    .flatten()
+                {
+                    parts.push(value.clone());
                 }
                 parts.join(" / ")
             })

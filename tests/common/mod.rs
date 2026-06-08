@@ -542,6 +542,26 @@ pub fn assert_vm_eval_matches_backend_internal(
             eval_jit.display_value, eval.display_value,
             "JIT vs interpreter value divergence for {name}"
         );
+
+        // Native (Cranelift) tier, when enabled: the integer/control core runs as
+        // machine code; everything else falls back. Must also match exactly.
+        #[cfg(feature = "native-jit")]
+        {
+            let eval_native = rsscript::reg_vm_eval_source_main_native(
+                name,
+                source,
+                interpreter_args.iter().copied(),
+            )
+            .unwrap_or_else(|error| panic!("native jit eval failed for {name}: {error:?}"));
+            assert_eq!(
+                eval_native.stdout, eval.stdout,
+                "native JIT vs interpreter stdout divergence for {name}"
+            );
+            assert_eq!(
+                eval_native.display_value, eval.display_value,
+                "native JIT vs interpreter value divergence for {name}"
+            );
+        }
     }
 
     // Cache the compiled backend's (stdout, stderr) keyed by source + args, so

@@ -19,6 +19,7 @@ enum BenchMode {
     Vm,
     VmInternal,
     JitInternal,
+    JitNative,
     Run,
     Release,
     ReleaseInternal,
@@ -36,11 +37,12 @@ impl BenchMode {
             "vm" => Ok(Self::Vm),
             "vm-internal" => Ok(Self::VmInternal),
             "jit-internal" => Ok(Self::JitInternal),
+            "jit-native" => Ok(Self::JitNative),
             "run" => Ok(Self::Run),
             "release" => Ok(Self::Release),
             "release-internal" => Ok(Self::ReleaseInternal),
             _ => Err(format!(
-                "invalid benchmark mode `{value}`; expected eval, vm, vm-internal, jit-internal, run, release, or release-internal."
+                "invalid benchmark mode `{value}`; expected eval, vm, vm-internal, jit-internal, jit-native, run, release, or release-internal."
             )),
         }
     }
@@ -51,6 +53,7 @@ impl BenchMode {
             Self::Vm => "vm",
             Self::VmInternal => "vm-internal",
             Self::JitInternal => "jit-internal",
+            Self::JitNative => "jit-native",
             Self::Run => "run",
             Self::Release => "release",
             Self::ReleaseInternal => "release-internal",
@@ -59,7 +62,7 @@ impl BenchMode {
 
     fn cargo_profile_dir(self) -> &'static str {
         match self {
-            Self::Eval | Self::Vm | Self::VmInternal | Self::JitInternal => {
+            Self::Eval | Self::Vm | Self::VmInternal | Self::JitInternal | Self::JitNative => {
                 unreachable!("eval/vm/jit mode does not build a cargo profile")
             }
             Self::Run => "debug",
@@ -213,6 +216,7 @@ fn run_bench_inner(options: &BenchOptions<'_>) -> Result<BenchResult, String> {
         BenchMode::Vm => run_reg_vm_bench(options),
         BenchMode::VmInternal => run_reg_vm_internal_bench(options),
         BenchMode::JitInternal => run_reg_vm_jit_bench(options),
+        BenchMode::JitNative => run_reg_vm_native_bench(options),
         BenchMode::Run | BenchMode::Release | BenchMode::ReleaseInternal => {
             run_generated_bench(options)
         }
@@ -319,6 +323,48 @@ fn run_reg_vm_internal_bench(options: &BenchOptions<'_>) -> Result<BenchResult, 
         options.warmup,
         &measurements,
     ))
+}
+
+/// Native (Cranelift) JIT benchmark: the integer/control core runs as machine
+/// code. Each iteration re-creates the native module and so includes JIT compile
+/// time (warmup amortizes the per-process code-cache warmup but not per-eval
+/// compilation); it is intended for binding-free numeric kernels — the case the
+/// native tier targets. Requires building with `--features native-jit`.
+fn run_reg_vm_native_bench(options: &BenchOptions<'_>) -> Result<BenchResult, String> {
+    #[cfg(not(feature = "native-jit"))]
+    {
+        let _ = options;
+        Err(
+            "rss bench --mode jit-native requires building with `--features native-jit`."
+                .to_string(),
+        )
+    }
+    #[cfg(feature = "native-jit")]
+    {
+        let (executable, _bindings) = compile_vm_internal_target(options)?;
+        let run_once = || {
+            executable
+                .eval_main_with_args_native(options.program_args.iter().copied())
+                .map_err(format_eval_error)
+        };
+        for _ in 0..options.warmup {
+            run_once()?;
+        }
+        let mut measurements = Vec::with_capacity(options.iterations);
+        for _ in 0..options.iterations {
+            let start = Instant::now();
+            run_once()?;
+            measurements.push(start.elapsed());
+        }
+        Ok(summarize_measurements(
+            benchmark_name(options.path),
+            options.mode,
+            options.vm,
+            options.iterations,
+            options.warmup,
+            &measurements,
+        ))
+    }
 }
 
 /// Tier-0 JIT benchmark: compile once (like `vm-internal`), then run with the
@@ -712,7 +758,7 @@ mod tests {
         assert_eq!(
             super::parse_bench_args(&args(&["--mode", "fast", "bench.rss"]))
                 .expect_err("unknown mode should fail"),
-            "invalid benchmark mode `fast`; expected eval, vm, vm-internal, jit-internal, run, release, or release-internal."
+            "invalid benchmark mode `fast`; expected eval, vm, vm-internal, jit-internal, jit-native, run, release, or release-internal."
         );
         assert_eq!(
             super::parse_bench_args(&args(&["--vm", "fast", "bench.rss"]))

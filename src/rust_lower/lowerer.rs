@@ -1159,7 +1159,7 @@ impl<'a> RustLowerer<'a> {
             }
             Stmt::Let(stmt)
                 if stmt.value.as_ref().is_some_and(|value| {
-                    !async_await_inner(value).is_some() && is_try_wrapped(value)
+                    async_await_inner(value).is_none() && is_try_wrapped(value)
                 }) =>
             {
                 let value = stmt.value.as_ref().expect("try let has a value");
@@ -2169,7 +2169,17 @@ impl<'a> RustLowerer<'a> {
                         .unwrap_or_else(|| rust_value_ident(name))
                 }
             }
-            Expr::Number(value, _) => value.clone(),
+            // Integer literals lower as `i64` (RSScript `Int` is i64); without the
+            // suffix Rust infers `i32` for an all-literal sub-expression and can
+            // const-overflow at compile time even when the i64 value fits. Float
+            // literals already default to `f64` (RSScript `Float`), so leave them.
+            Expr::Number(value, _) => {
+                if value.contains('.') {
+                    value.clone()
+                } else {
+                    format!("{value}i64")
+                }
+            }
             Expr::String(value, _) => format!("{:?}.to_string()", decode_string_token(value)),
             Expr::MultilineString(value, _) => format!("{value:?}.to_string()"),
             Expr::ObjectLiteral { .. } => self.lower_json_value(expr),
@@ -2262,7 +2272,14 @@ impl<'a> RustLowerer<'a> {
                 }
             }
             Expr::Index { base, index, .. } => {
-                format!("{}[{}]", self.lower_expr(base), self.lower_expr(index))
+                // RSScript indices are `Int` (i64), but Rust slice indices are
+                // `usize`; cast explicitly (parenthesized so `as` binds to the
+                // whole index expression, not just its trailing literal).
+                format!(
+                    "{}[({}) as usize]",
+                    self.lower_expr(base),
+                    self.lower_expr(index)
+                )
             }
             Expr::Call { callee, args, span } => {
                 if is_json_decode_callee(callee) {
@@ -2809,6 +2826,15 @@ impl<'a> RustLowerer<'a> {
                 return lowered;
             }
             return format!("{lowered}.clone()");
+        }
+        // Integer literal in a typed slot (e.g. a sized `Int32` param/field):
+        // emit the suffix matching the expected type so it lowers as the right
+        // Rust integer rather than `lower_expr`'s default `i64`.
+        if let Expr::Number(value, _) = expr
+            && !value.contains('.')
+            && let Some(suffix) = rust_int_literal_suffix(&expected.name)
+        {
+            return format!("{value}{suffix}");
         }
         self.lower_expr(expr)
     }
@@ -5087,6 +5113,24 @@ fn push_unique_derive(derives: &mut Vec<String>, derive: &str) {
     if !derives.iter().any(|existing| existing == derive) {
         derives.push(derive.to_string());
     }
+}
+
+/// The Rust integer-literal suffix for an RSScript integer type name, e.g.
+/// `Int -> "i64"`, `Int32 -> "i32"`. `None` for non-integer types. Used so an
+/// integer literal in a typed context (sized ints, or the default `Int`) lowers
+/// with the matching suffix instead of Rust's untyped-`i32` default.
+fn rust_int_literal_suffix(type_name: &str) -> Option<&'static str> {
+    Some(match type_name {
+        "Int" | "Int64" | "Fd" => "i64",
+        "Int8" => "i8",
+        "Int16" => "i16",
+        "Int32" => "i32",
+        "UInt" | "UInt64" => "u64",
+        "UInt8" | "Byte" => "u8",
+        "UInt16" => "u16",
+        "UInt32" => "u32",
+        _ => return None,
+    })
 }
 
 fn infer_const_type(expr: &Expr) -> String {

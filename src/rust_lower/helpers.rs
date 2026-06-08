@@ -1490,30 +1490,9 @@ pub(super) fn lower_builtin_value_ident(name: &str) -> Option<&'static str> {
     }
 }
 
-pub(super) fn decode_string_token(value: &str) -> String {
-    let mut decoded = String::new();
-    let mut chars = value.chars();
-    while let Some(ch) = chars.next() {
-        if ch != '\\' {
-            decoded.push(ch);
-            continue;
-        }
-        match chars.next() {
-            Some('n') => decoded.push('\n'),
-            Some('r') => decoded.push('\r'),
-            Some('t') => decoded.push('\t'),
-            Some('\\') => decoded.push('\\'),
-            Some('"') => decoded.push('"'),
-            Some('0') => decoded.push('\0'),
-            Some(other) => {
-                decoded.push('\\');
-                decoded.push(other);
-            }
-            None => decoded.push('\\'),
-        }
-    }
-    decoded
-}
+// Re-exported from the shared text utilities (single source of truth); kept at
+// `super` visibility so the rest of `rust_lower` reaches it via `helpers::*`.
+pub(super) use crate::text_util::decode_string_token;
 
 pub(super) fn is_rust_enum_constructor(name: &str) -> bool {
     matches!(name, "Ok" | "Err" | "Some")

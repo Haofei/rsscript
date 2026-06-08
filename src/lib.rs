@@ -29,6 +29,7 @@ mod runtime_abi;
 mod rust_lower;
 mod symbols;
 pub mod syntax;
+mod text_util;
 mod vm_coverage;
 mod vm_value;
 
@@ -98,6 +99,8 @@ pub use reg_vm::{
     reg_vm_eval_source_main_with_args_and_native_bindings as eval_source_main_with_args_and_native_bindings,
     reg_vm_eval_source_main_with_args_and_native_bindings,
 };
+#[cfg(feature = "native-jit")]
+pub use reg_vm::{reg_vm_eval_source_main_native, reg_vm_eval_source_main_native_force_deopt};
 pub use review::{
     ReviewFinding, ReviewFix, ReviewMap, ReviewMapCategorySummary, ReviewMapClassification,
     ReviewMapFile, ReviewMapFileRisk, ReviewMapRegion, ReviewMapSummary, ReviewRisk,

@@ -2628,7 +2628,7 @@ fn main() -> Unit {
     let rust = lower_source_to_rust("callback-param.rss", source)
         .expect("callback with parameter should lower");
 
-    assert!(rust.contains("callback(41)"));
+    assert!(rust.contains("callback(41i64)"));
     assert!(rust.contains("|item: i64|"));
 }
 
@@ -3935,7 +3935,7 @@ fn run() -> Int {
         .expect("explicit fn capture source should lower");
     assert!(lowered.contains("let add = |value|"));
     assert!(lowered.contains("value + offset"));
-    assert!(lowered.contains("add(40)"));
+    assert!(lowered.contains("add(40i64)"));
 }
 
 #[test]
@@ -4933,7 +4933,10 @@ fn integer_literal_out_of_range_is_rejected() {
     assert!(
         diagnostics.iter().any(|d| d.code == "RS0033"),
         "out-of-range integer literal should be RS0033, got {:?}",
-        diagnostics.iter().map(|d| d.code.as_str()).collect::<Vec<_>>()
+        diagnostics
+            .iter()
+            .map(|d| d.code.as_str())
+            .collect::<Vec<_>>()
     );
 }
 
