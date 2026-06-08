@@ -90,11 +90,38 @@ supply-chain provider swap can't slip through unnoticed.
   [high] databse.raed via Db.query  -- capability binding uses unrecognized category `databse.raed`
   ```
 
+### Gate — reconcile required vs granted (policy + SARIF)
+
+The deployment grants the package's powers *except* the new outbound network the
+PR introduced. `reir report-pr` reconciles them under a policy and fails closed:
+
+```
+$ reir report-pr --policy examples/rss-policy.toml --target prod --sarif
+   error missing_capability - Required capability not granted by target: NetworkClient / reqwest
+  gate exit code: 1  (non-zero = blocked)
+```
+
+The SARIF output uploads to GitHub code scanning for inline PR annotations.
+
+### Render, audit, fail-closed, agent
+
+```
+$ rss pkg review --markdown after     # PR-facing review (capabilities table, native, diagnostics)
+$ rss native audit after              # native adapter risk (Cargo.lock/build.rs/scan; transitive = not_audited)
+$ rss pkg metadata <broken package>   # exit 1, no REIR written — evidence withheld for invalid source
+$ rss check --explain RS0015 --json   # machine-readable diagnostic + repair guidance for agents
+```
+
 ## The pipeline
 
 ```
 declare capabilities (rsspkg.toml)
-  -> rss pkg review   risk-ranked powers
-  -> rss pkg diff     added / removed / escalated powers
-  -> rss pkg lock     capability-aware review_hash (provider pinned)
+  -> rss pkg review [--markdown]   risk-ranked powers (human / JSON / markdown)
+  -> rss pkg diff                  added / removed / escalated powers
+  -> rss pkg lock                  capability-aware review_hash (provider pinned)
+  -> reir collect | report-pr      reconcile required vs granted under rss-policy.toml
+       --policy --target               fail on missing / unknown / excess / unverified
+       --sarif                         inline PR annotations via GitHub code scanning
+  -> rss native audit              native adapter risk facts (transitive = not_audited)
+  fail closed: invalid source (rss pkg metadata / reir collect --strict) emits no evidence
 ```

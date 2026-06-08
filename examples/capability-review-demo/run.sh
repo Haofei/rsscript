@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # End-to-end demo of RSScript's capability-aware review pipeline.
 #
-#   Phase 1  rss pkg review   — list a package's powers, ranked by risk
-#   Phase 3  rss pkg diff     — what powers did a change introduce?
-#   Phase 2  rss pkg lock      — a provider swap changes the review hash
-#   Phase 0  rss check         — effect-annotated closures parse; bad category flagged
+#   rss pkg review            — list a package's powers, ranked by risk
+#   rss pkg diff              — what powers did a change introduce?
+#   rss pkg lock              — a provider swap changes the review hash
+#   rss check                 — effect-annotated closures parse; bad category flagged
+#   reir report-pr            — reconcile required vs granted with a policy, emit SARIF
+#   rss pkg review --markdown — PR-facing review render
+#   rss native audit          — native adapter risk facts
+#   rss pkg metadata          — fail closed: invalid source yields no evidence
+#   rss check --explain --json— machine-readable diagnostic for agents
 #
-# Run from anywhere; it locates the repo root and builds `rss` if needed.
+# Run from anywhere; it locates the repo root and builds `rss`/`reir` if needed.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -23,6 +28,16 @@ else
   echo "building rss ..." >&2
   (cd "$root" && cargo build --quiet --bin rss)
   RSS="$root/target/debug/rss"
+fi
+
+if [[ -x "$root/target/debug/reir" ]]; then
+  REIR="$root/target/debug/reir"
+elif [[ -x "$root/target/release/reir" ]]; then
+  REIR="$root/target/release/reir"
+else
+  echo "building reir ..." >&2
+  (cd "$root" && cargo build --quiet --bin reir -p reir)
+  REIR="$root/target/debug/reir"
 fi
 
 rule() { printf '\n=== %s ===\n\n' "$1"; }
@@ -72,5 +87,60 @@ cp -r "$before" "$bogus"
 sed -i.bak 's/category = "database.read"/category = "databse.raed"/' "$bogus/rsspkg.toml" && rm -f "$bogus/rsspkg.toml.bak"
 echo "\$ rss pkg review <package with a typo'd category 'databse.raed'>"
 "$RSS" pkg review "$bogus" | sed -n '/capabilities (by risk)/,/^exports:/p' | grep -v '^exports:' || true
+
+rule "GATE — reconcile required vs granted (policy + SARIF)"
+work="$(mktemp -d)"
+"$RSS" pkg review --json "$after" > "$work/after-review.json" 2>/dev/null || true
+"$REIR" collect --producer rsscript --package-review "$work/after-review.json" \
+  --out "$work/required.reir.json" >/dev/null
+# The deployment grants the package's powers EXCEPT the new outbound network the
+# PR introduced (infra wasn't updated) — derived from the real required facts.
+python3 - "$work/required.reir.json" "$work/granted.reir.json" <<'PY'
+import json, sys
+req = json.load(open(sys.argv[1]))
+facts = []
+for fact in req.get("facts", []):
+    cap = fact.get("capability") or {}
+    if cap.get("category") == "network.client":
+        continue  # infra did not grant the new power
+    if fact.get("role") == "required":
+        fact = dict(fact, role="granted")
+    facts.append(fact)
+json.dump({**req, "facts": facts}, open(sys.argv[2], "w"))
+PY
+echo "\$ reir report-pr --policy examples/rss-policy.toml --target prod --sarif"
+set +e
+"$REIR" report-pr --required "$work/required.reir.json" --granted "$work/granted.reir.json" \
+  --policy "$root/examples/rss-policy.toml" --target prod --sarif 2>/dev/null \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); [print('  ', r['level'], r['ruleId'], '-', r['message']['text']) for r in d['runs'][0]['results']]"
+"$REIR" report-pr --required "$work/required.reir.json" --granted "$work/granted.reir.json" \
+  --policy "$root/examples/rss-policy.toml" --target prod >/dev/null 2>&1
+echo "  gate exit code: $?  (non-zero = blocked)"
+set -e
+
+rule "RENDER — markdown review for a PR"
+echo "\$ rss pkg review --markdown after"
+"$RSS" pkg review --markdown "$after" | sed -n '1,14p'
+
+rule "NATIVE AUDIT — adapter risk facts"
+echo "\$ rss native audit after"
+"$RSS" native audit "$after" 2>/dev/null || true
+
+rule "FAIL CLOSED — invalid source yields no authoritative evidence"
+broken="$(mktemp -d)/broken"
+cp -r "$after" "$broken"
+printf '\nnative fn Broken.x(a: read String -> String\n' >> "$broken/interface/lib.rssi"
+echo "\$ rss pkg metadata <package with a parse error>"
+set +e
+"$RSS" pkg metadata "$broken" >/dev/null 2>&1
+echo "  metadata exit code: $?  (non-zero = refused)"
+set -e
+test -f "$broken/review/reir/rsscript.json" \
+  && echo "  REIR written (unexpected)" \
+  || echo "  REIR bundle NOT written — evidence withheld for invalid source"
+
+rule "AGENT — machine-readable diagnostic explanation"
+echo "\$ rss check --explain RS0015 --json"
+"$RSS" check --explain RS0015 --json 2>/dev/null || true
 
 printf '\nDone.\n'
