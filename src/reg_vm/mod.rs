@@ -29,7 +29,7 @@ use crate::syntax::ast::{
     BinaryOp, Callee, MatchFieldPattern, MatchLiteral, MatchPattern, merge_programs,
 };
 use crate::syntax::parse_source;
-use crate::vm_value::{FieldMap, ValueMap, VmClosure, VmMapKey, VmNative, VmStruct, VmValue};
+use crate::vm_value::{ValueMap, VmClosure, VmMapKey, VmNative, VmStruct, VmValue};
 
 mod runtime_values;
 mod value_access;
@@ -6105,29 +6105,23 @@ impl RegVm {
                 self.set_reg(base + *dst, VmValue::Unit);
             }
             RegInstr::MakeStruct { dst, name, fields } => {
-                let mut field_values = FieldMap::with_capacity_and_hasher(fields.len(), Default::default());
+                let mut field_values: Vec<(String, VmValue)> = Vec::with_capacity(fields.len());
                 for (field, reg) in fields {
-                    field_values.insert(field.clone(), self.reg(base + *reg).clone());
+                    field_values.push((field.clone(), self.reg(base + *reg).clone()));
                 }
                 self.set_reg(
                     base + *dst,
-                    VmValue::Struct(Rc::new(VmStruct {
-                        name: Rc::from(name.as_str()),
-                        fields: field_values,
-                    })),
+                    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from(name.as_str()), field_values))),
                 );
             }
             RegInstr::MakeVariant { dst, name, fields } => {
-                let mut field_values = FieldMap::with_capacity_and_hasher(fields.len(), Default::default());
+                let mut field_values: Vec<(String, VmValue)> = Vec::with_capacity(fields.len());
                 for (field, reg) in fields {
-                    field_values.insert(field.clone(), self.reg(base + *reg).clone());
+                    field_values.push((field.clone(), self.reg(base + *reg).clone()));
                 }
                 self.set_reg(
                     base + *dst,
-                    VmValue::Variant(Rc::new(VmStruct {
-                        name: Rc::from(name.as_str()),
-                        fields: field_values,
-                    })),
+                    VmValue::Variant(Rc::new(VmStruct::from_named(Rc::from(name.as_str()), field_values))),
                 );
             }
             RegInstr::MakeList { dst, items } => {
@@ -6380,12 +6374,12 @@ impl RegVm {
             RegInstr::UnwrapVariantValue { dst, src, expected } => {
                 let value = match self.reg(base + *src) {
                     VmValue::Variant(data) if data.name.as_ref() == expected.as_str() => data
-                        .fields
+                        
                         .get("value")
                         .cloned()
                         .or_else(|| {
                             (data.fields.len() == 1)
-                                .then(|| data.fields.values().next().cloned())
+                                .then(|| data.fields.first().cloned())
                                 .flatten()
                         })
                         .ok_or_else(|| {
@@ -7449,8 +7443,8 @@ impl RegVm {
         };
         let callee = Rc::clone(&unit.functions[function_id]);
         self.prepare_frame(base, callee.regs);
-        for (field, value) in &data.fields {
-            if let Some(reg) = callee.local_regs.get(field) {
+        for (field, value) in data.iter() {
+            if let Some(reg) = callee.local_regs.get(field.as_ref()) {
                 self.set_reg(base + *reg, value.clone());
             }
         }
@@ -12479,14 +12473,12 @@ impl VmChannelState {
 }
 
 fn channel_value(id: i64, capacity: i64, receiver_taken: bool) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("id".to_string(), VmValue::Int(id));
-    fields.insert("capacity".to_string(), VmValue::Int(capacity));
-    fields.insert("receiver_taken".to_string(), VmValue::Bool(receiver_taken));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("Channel"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> = vec![
+        ("id".to_string(), VmValue::Int(id)),
+        ("capacity".to_string(), VmValue::Int(capacity)),
+        ("receiver_taken".to_string(), VmValue::Bool(receiver_taken)),
+    ];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Channel"), fields)))
 }
 
 #[derive(Debug, Clone)]
@@ -12532,13 +12524,11 @@ fn peel_select_operation(operation: &HirExpr) -> (&HirExpr, bool) {
 }
 
 fn sender_value(channel_id: i64, closed: bool) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("channel_id".to_string(), VmValue::Int(channel_id));
-    fields.insert("closed".to_string(), VmValue::Bool(closed));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("Sender"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> = vec![
+        ("channel_id".to_string(), VmValue::Int(channel_id)),
+        ("closed".to_string(), VmValue::Bool(closed)),
+    ];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Sender"), fields)))
 }
 
 #[derive(Debug, Clone)]
@@ -12548,13 +12538,11 @@ struct VmReceiver {
 }
 
 fn receiver_value(channel_id: i64, closed: bool) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("channel_id".to_string(), VmValue::Int(channel_id));
-    fields.insert("closed".to_string(), VmValue::Bool(closed));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("Receiver"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> = vec![
+        ("channel_id".to_string(), VmValue::Int(channel_id)),
+        ("closed".to_string(), VmValue::Bool(closed)),
+    ];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Receiver"), fields)))
 }
 
 #[derive(Debug, Clone)]
@@ -12566,39 +12554,33 @@ const POOL_LEASE_ID_FIELD: &str = "__rsscript_vm_pool_id";
 const POOL_LEASE_DISCARDED_FIELD: &str = "__rsscript_vm_pool_discarded";
 
 fn resource_pool_value(id: i64) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("id".to_string(), VmValue::Int(id));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("ResourcePool"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> = vec![
+        ("id".to_string(), VmValue::Int(id)),
+    ];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("ResourcePool"), fields)))
 }
 
 fn pool_stats_value(capacity: i64, created: i64, available: i64, in_use: i64) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("capacity".to_string(), VmValue::Int(capacity));
-    fields.insert("created".to_string(), VmValue::Int(created));
-    fields.insert("available".to_string(), VmValue::Int(available));
-    fields.insert("in_use".to_string(), VmValue::Int(in_use));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("PoolStats"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> = vec![
+        ("capacity".to_string(), VmValue::Int(capacity)),
+        ("created".to_string(), VmValue::Int(created)),
+        ("available".to_string(), VmValue::Int(available)),
+        ("in_use".to_string(), VmValue::Int(in_use)),
+    ];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("PoolStats"), fields)))
 }
 
 fn pool_error_value(message: impl Into<String>) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("message".to_string(), VmValue::string(message.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("PoolError"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> = vec![
+        ("message".to_string(), VmValue::string(message.into())),
+    ];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("PoolError"), fields)))
 }
 
 fn pool_error_message(value: &VmValue) -> Option<String> {
     match value {
         VmValue::Struct(data) if data.name.as_ref() == "PoolError" => data
-            .fields
+            
             .get("message")
             .and_then(|value| expect_string_ref(value).ok())
             .map(str::to_string),
@@ -12613,13 +12595,14 @@ fn mark_pool_lease(value: VmValue, pool_id: i64) -> Result<VmValue, String> {
             value.display()
         ));
     };
-    let mut fields = data.fields.clone();
-    fields.insert(POOL_LEASE_ID_FIELD.to_string(), VmValue::Int(pool_id));
-    fields.insert(POOL_LEASE_DISCARDED_FIELD.to_string(), VmValue::Bool(false));
-    Ok(VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::clone(&data.name),
+    let mut fields: Vec<(Rc<str>, VmValue)> =
+        data.iter().map(|(name, v)| (name.clone(), v.clone())).collect();
+    fields.push((Rc::from(POOL_LEASE_ID_FIELD), VmValue::Int(pool_id)));
+    fields.push((Rc::from(POOL_LEASE_DISCARDED_FIELD), VmValue::Bool(false)));
+    Ok(VmValue::Struct(Rc::new(VmStruct::from_named(
+        Rc::clone(&data.name),
         fields,
-    })))
+    ))))
 }
 
 fn mark_pool_lease_discarded(value: VmValue) -> Result<VmValue, EvalError> {
@@ -12629,40 +12612,52 @@ fn mark_pool_lease_discarded(value: VmValue) -> Result<VmValue, EvalError> {
             value.display()
         )));
     };
-    if !data.fields.contains_key(POOL_LEASE_ID_FIELD) {
+    if !data.contains(POOL_LEASE_ID_FIELD) {
         return Err(EvalError::Runtime(format!(
             "ResourcePool.discard expected an active pool lease, got `{}`.",
             VmValue::Struct(Rc::clone(&data)).display()
         )));
     }
-    let mut fields = data.fields.clone();
-    fields.insert(POOL_LEASE_DISCARDED_FIELD.to_string(), VmValue::Bool(true));
-    Ok(VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::clone(&data.name),
+    let fields: Vec<(Rc<str>, VmValue)> = data
+        .iter()
+        .map(|(name, v)| {
+            if name.as_ref() == POOL_LEASE_DISCARDED_FIELD {
+                (name.clone(), VmValue::Bool(true))
+            } else {
+                (name.clone(), v.clone())
+            }
+        })
+        .collect();
+    Ok(VmValue::Struct(Rc::new(VmStruct::from_named(
+        Rc::clone(&data.name),
         fields,
-    })))
+    ))))
 }
 
 fn split_pool_lease(value: VmValue) -> Result<Option<VmResourcePoolLease>, EvalError> {
     let VmValue::Struct(data) = value else {
         return Ok(None);
     };
-    let mut fields = data.fields.clone();
-    let Some(pool_id) = fields.remove(POOL_LEASE_ID_FIELD) else {
+    let Some(pool_id) = data.get(POOL_LEASE_ID_FIELD).cloned() else {
         return Ok(None);
     };
-    let discarded = fields
-        .remove(POOL_LEASE_DISCARDED_FIELD)
-        .map(|value| expect_bool_ref(&value))
+    let discarded = data
+        .get(POOL_LEASE_DISCARDED_FIELD)
+        .map(expect_bool_ref)
         .transpose()?
         .unwrap_or(false);
+    // Rebuild the underlying resource struct without the lease bookkeeping fields.
+    let fields: Vec<(Rc<str>, VmValue)> = data
+        .iter()
+        .filter(|(name, _)| {
+            name.as_ref() != POOL_LEASE_ID_FIELD && name.as_ref() != POOL_LEASE_DISCARDED_FIELD
+        })
+        .map(|(name, v)| (name.clone(), v.clone()))
+        .collect();
     Ok(Some(VmResourcePoolLease {
         pool_id: expect_int_ref(&pool_id)?,
         discarded,
-        value: VmValue::Struct(Rc::new(VmStruct {
-            name: Rc::clone(&data.name),
-            fields,
-        })),
+        value: VmValue::Struct(Rc::new(VmStruct::from_named(Rc::clone(&data.name), fields))),
     }))
 }
 
@@ -12674,12 +12669,10 @@ fn clock_system_unix_ms() -> i64 {
 }
 
 fn instant_value(unix_ms: i64) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("unix_ms".to_string(), VmValue::Int(unix_ms));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("Instant"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> = vec![
+        ("unix_ms".to_string(), VmValue::Int(unix_ms)),
+    ];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Instant"), fields)))
 }
 
 fn deadline_after_ms(ms: i64) -> i64 {
@@ -12687,30 +12680,24 @@ fn deadline_after_ms(ms: i64) -> i64 {
 }
 
 fn deadline_value(unix_ms: i64) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("unix_ms".to_string(), VmValue::Int(unix_ms));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("Deadline"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> = vec![
+        ("unix_ms".to_string(), VmValue::Int(unix_ms)),
+    ];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Deadline"), fields)))
 }
 
 fn counter_value(value: i64) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("value".to_string(), VmValue::Int(value));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("Counter"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> = vec![
+        ("value".to_string(), VmValue::Int(value)),
+    ];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Counter"), fields)))
 }
 
 fn config_value(name: impl Into<String>) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("name".to_string(), VmValue::string(name.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("ConfigValue"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> = vec![
+        ("name".to_string(), VmValue::string(name.into())),
+    ];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("ConfigValue"), fields)))
 }
 
 fn config_name_from_text(text: &str) -> String {
@@ -12722,22 +12709,18 @@ fn config_name_from_text(text: &str) -> String {
 }
 
 fn config_rules_value(name: impl Into<String>, rule_count: i64) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("name".to_string(), VmValue::string(name.into()));
-    fields.insert("rule_count".to_string(), VmValue::Int(rule_count));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("Config"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> = vec![
+        ("name".to_string(), VmValue::string(name.into())),
+        ("rule_count".to_string(), VmValue::Int(rule_count)),
+    ];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Config"), fields)))
 }
 
 fn rule_value(name: impl Into<String>) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("name".to_string(), VmValue::string(name.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("Rule"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> = vec![
+        ("name".to_string(), VmValue::string(name.into())),
+    ];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Rule"), fields)))
 }
 
 fn rules_from_text(text: &str) -> Vec<VmValue> {
@@ -12749,59 +12732,47 @@ fn rules_from_text(text: &str) -> Vec<VmValue> {
 }
 
 fn environment_value(has_parent: bool, has_function: bool) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("has_parent".to_string(), VmValue::Bool(has_parent));
-    fields.insert("has_function".to_string(), VmValue::Bool(has_function));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("Environment"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> = vec![
+        ("has_parent".to_string(), VmValue::Bool(has_parent)),
+        ("has_function".to_string(), VmValue::Bool(has_function)),
+    ];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Environment"), fields)))
 }
 
 fn function_object_value(has_closure: bool) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("has_closure".to_string(), VmValue::Bool(has_closure));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("FunctionObject"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> = vec![
+        ("has_closure".to_string(), VmValue::Bool(has_closure)),
+    ];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("FunctionObject"), fields)))
 }
 
 fn config_store_value(name: impl Into<String>) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("name".to_string(), VmValue::string(name.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("ConfigStore"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> = vec![
+        ("name".to_string(), VmValue::string(name.into())),
+    ];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("ConfigStore"), fields)))
 }
 
 fn global_config_value(rule_count: i64) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("rule_count".to_string(), VmValue::Int(rule_count));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("GlobalConfig"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> = vec![
+        ("rule_count".to_string(), VmValue::Int(rule_count)),
+    ];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("GlobalConfig"), fields)))
 }
 
 fn request_value(path: impl Into<String>) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("path".to_string(), VmValue::string(path.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("Request"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> = vec![
+        ("path".to_string(), VmValue::string(path.into())),
+    ];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Request"), fields)))
 }
 
 fn response_value(status: i64, body: impl Into<String>) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("status".to_string(), VmValue::Int(status));
-    fields.insert("body".to_string(), VmValue::string(body.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("Response"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> = vec![
+        ("status".to_string(), VmValue::Int(status)),
+        ("body".to_string(), VmValue::string(body.into())),
+    ];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Response"), fields)))
 }
 
 #[derive(Debug, Clone)]
@@ -12838,18 +12809,16 @@ fn http_request_value(
     backoff_ms: i64,
     header_count: i64,
 ) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("method".to_string(), VmValue::string(method.into()));
-    fields.insert("url".to_string(), VmValue::string(url.into()));
-    fields.insert("body".to_string(), VmValue::string(body.into()));
-    fields.insert("timeout_ms".to_string(), VmValue::Int(timeout_ms));
-    fields.insert("attempts".to_string(), VmValue::Int(attempts));
-    fields.insert("backoff_ms".to_string(), VmValue::Int(backoff_ms));
-    fields.insert("header_count".to_string(), VmValue::Int(header_count));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("HttpRequest"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> = vec![
+        ("method".to_string(), VmValue::string(method.into())),
+        ("url".to_string(), VmValue::string(url.into())),
+        ("body".to_string(), VmValue::string(body.into())),
+        ("timeout_ms".to_string(), VmValue::Int(timeout_ms)),
+        ("attempts".to_string(), VmValue::Int(attempts)),
+        ("backoff_ms".to_string(), VmValue::Int(backoff_ms)),
+        ("header_count".to_string(), VmValue::Int(header_count)),
+    ];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("HttpRequest"), fields)))
 }
 
 enum WebSocketExpectedFrame {
@@ -12959,27 +12928,23 @@ impl VmDbConnection {
 }
 
 fn db_connection_value(url: impl Into<String>, queries: Vec<String>) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("url".to_string(), VmValue::string(url.into()));
-    fields.insert(
+    let mut fields: Vec<(String, VmValue)> = vec![
+        ("url".to_string(), VmValue::string(url.into())),
+    ];
+    fields.push((
         "queries".to_string(),
         VmValue::List(Rc::new(RefCell::new(
             queries.into_iter().map(VmValue::string).collect(),
         ))),
-    );
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("DbConnection"),
-        fields,
-    }))
+    ));
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("DbConnection"), fields)))
 }
 
 fn db_error_value(message: impl Into<String>) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("message".to_string(), VmValue::string(message.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("DbError"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> = vec![
+        ("message".to_string(), VmValue::string(message.into())),
+    ];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("DbError"), fields)))
 }
 
 #[derive(Debug, Clone)]
@@ -13261,27 +13226,23 @@ fn process_output_details(stdout: &str, stderr: &str) -> String {
 }
 
 fn process_output_value(output: VmProcessOutput) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("status".to_string(), VmValue::Int(output.status));
-    fields.insert("stdout".to_string(), VmValue::string(output.stdout));
-    fields.insert("stderr".to_string(), VmValue::string(output.stderr));
-    fields.insert("merged".to_string(), VmValue::string(output.merged));
-    fields.insert("truncated".to_string(), VmValue::Bool(output.truncated));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("ProcessOutput"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> = vec![
+        ("status".to_string(), VmValue::Int(output.status)),
+        ("stdout".to_string(), VmValue::string(output.stdout)),
+        ("stderr".to_string(), VmValue::string(output.stderr)),
+        ("merged".to_string(), VmValue::string(output.merged)),
+        ("truncated".to_string(), VmValue::Bool(output.truncated)),
+    ];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("ProcessOutput"), fields)))
 }
 
 fn process_event_value(kind: &str, data: &str, status: i64) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("kind".to_string(), VmValue::string(kind));
-    fields.insert("data".to_string(), VmValue::string(data));
-    fields.insert("status".to_string(), VmValue::Int(status));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("ProcessEvent"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> = vec![
+        ("kind".to_string(), VmValue::string(kind)),
+        ("data".to_string(), VmValue::string(data)),
+        ("status".to_string(), VmValue::Int(status)),
+    ];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("ProcessEvent"), fields)))
 }
 
 #[derive(Debug, Clone)]
@@ -13298,14 +13259,12 @@ impl VmFileState {
 }
 
 fn file_value(path: impl Into<String>, mode: impl Into<String>, cursor: u64) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("path".to_string(), VmValue::string(path.into()));
-    fields.insert("mode".to_string(), VmValue::string(mode.into()));
-    fields.insert("cursor".to_string(), VmValue::Int(cursor as i64));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("File"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> = vec![
+        ("path".to_string(), VmValue::string(path.into())),
+        ("mode".to_string(), VmValue::string(mode.into())),
+        ("cursor".to_string(), VmValue::Int(cursor as i64)),
+    ];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("File"), fields)))
 }
 
 fn file_read_remaining(file: &mut VmFileState) -> std::io::Result<Vec<u8>> {
@@ -13409,14 +13368,12 @@ fn file_bytes_stream_value(path: &str, chunk_size: i64) -> Result<VmValue, Strin
 }
 
 fn file_metadata_value(metadata: std::fs::Metadata) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("is_file".to_string(), VmValue::Bool(metadata.is_file()));
-    fields.insert("is_dir".to_string(), VmValue::Bool(metadata.is_dir()));
-    fields.insert("len".to_string(), VmValue::Int(metadata.len() as i64));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("FileMetadata"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> = vec![
+        ("is_file".to_string(), VmValue::Bool(metadata.is_file())),
+        ("is_dir".to_string(), VmValue::Bool(metadata.is_dir())),
+        ("len".to_string(), VmValue::Int(metadata.len() as i64)),
+    ];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("FileMetadata"), fields)))
 }
 
 fn directory_list_files(root: &Path) -> std::io::Result<Vec<String>> {
@@ -13463,12 +13420,10 @@ fn relative_runtime_path(root: &Path, path: &Path) -> String {
 }
 
 fn tempdir_value(path: impl Into<String>) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("path".to_string(), VmValue::string(path.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("TempDir"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> = vec![
+        ("path".to_string(), VmValue::string(path.into())),
+    ];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("TempDir"), fields)))
 }
 
 fn tempdir_new_value(parent: PathBuf) -> Result<VmValue, VmValue> {
@@ -13534,39 +13489,35 @@ fn image_value(
     height: Option<i64>,
     operations: Vec<String>,
 ) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("bytes".to_string(), VmValue::Bytes(Rc::new(bytes)));
-    fields.insert(
+    let mut fields: Vec<(String, VmValue)> = vec![
+        ("bytes".to_string(), VmValue::Bytes(Rc::new(bytes))),
+    ];
+    fields.push((
         "width".to_string(),
         width
             .map(|value| value_some(VmValue::Int(value)))
             .unwrap_or_else(value_none),
-    );
-    fields.insert(
+    ));
+    fields.push((
         "height".to_string(),
         height
             .map(|value| value_some(VmValue::Int(value)))
             .unwrap_or_else(value_none),
-    );
-    fields.insert(
+    ));
+    fields.push((
         "operations".to_string(),
         VmValue::List(Rc::new(RefCell::new(
             operations.into_iter().map(VmValue::string).collect(),
         ))),
-    );
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("Image"),
-        fields,
-    }))
+    ));
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Image"), fields)))
 }
 
 fn image_error_value(message: impl Into<String>) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("message".to_string(), VmValue::string(message.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("ImageError"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> = vec![
+        ("message".to_string(), VmValue::string(message.into())),
+    ];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("ImageError"), fields)))
 }
 
 fn cancellation_source_value(id: i64) -> VmValue {
@@ -13578,63 +13529,49 @@ fn cancellation_token_value(id: i64) -> VmValue {
 }
 
 fn cancellation_handle_value(name: &'static str, id: i64) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("id".to_string(), VmValue::Int(id));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from(name),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> = vec![
+        ("id".to_string(), VmValue::Int(id)),
+    ];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from(name), fields)))
 }
 
 fn stream_value(items: Vec<VmValue>) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert(
+    let mut fields: Vec<(String, VmValue)> = vec![(
         "items".to_string(),
         VmValue::List(Rc::new(RefCell::new(items))),
-    );
-    fields.insert("collect_error".to_string(), VmValue::OptionNone);
-    fields.insert("channel_id".to_string(), VmValue::OptionNone);
-    fields.insert("stream_id".to_string(), VmValue::OptionNone);
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("Stream"),
-        fields,
-    }))
+    )];
+    fields.push(("collect_error".to_string(), VmValue::OptionNone));
+    fields.push(("channel_id".to_string(), VmValue::OptionNone));
+    fields.push(("stream_id".to_string(), VmValue::OptionNone));
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Stream"), fields)))
 }
 
 fn stream_channel_value(channel_id: i64) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert(
+    let mut fields: Vec<(String, VmValue)> = vec![(
         "items".to_string(),
         VmValue::List(Rc::new(RefCell::new(Vec::new()))),
-    );
-    fields.insert("collect_error".to_string(), VmValue::OptionNone);
-    fields.insert(
+    )];
+    fields.push(("collect_error".to_string(), VmValue::OptionNone));
+    fields.push((
         "channel_id".to_string(),
         VmValue::OptionSome(Box::new(VmValue::Int(channel_id))),
-    );
-    fields.insert("stream_id".to_string(), VmValue::OptionNone);
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("Stream"),
-        fields,
-    }))
+    ));
+    fields.push(("stream_id".to_string(), VmValue::OptionNone));
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Stream"), fields)))
 }
 
 fn stream_collect_error_value(message: impl Into<String>) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert(
+    let mut fields: Vec<(String, VmValue)> = vec![(
         "items".to_string(),
         VmValue::List(Rc::new(RefCell::new(Vec::new()))),
-    );
-    fields.insert(
+    )];
+    fields.push((
         "collect_error".to_string(),
         VmValue::OptionSome(Box::new(VmValue::string(message.into()))),
-    );
-    fields.insert("channel_id".to_string(), VmValue::OptionNone);
-    fields.insert("stream_id".to_string(), VmValue::OptionNone);
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("Stream"),
-        fields,
-    }))
+    ));
+    fields.push(("channel_id".to_string(), VmValue::OptionNone));
+    fields.push(("stream_id".to_string(), VmValue::OptionNone));
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Stream"), fields)))
 }
 
 #[derive(Debug, Clone)]

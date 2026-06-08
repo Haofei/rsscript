@@ -6,17 +6,17 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use crate::eval_types::EvalError;
-use crate::vm_value::{FieldMap, VmValue};
+use crate::vm_value::VmValue;
 
 use super::*;
 
 pub(super) fn expect_environment_state(value: &VmValue) -> Result<(bool, bool), EvalError> {
     match value {
         VmValue::Struct(data) if data.name.as_ref() == "Environment" => {
-            let has_parent = data.fields.get("has_parent").ok_or_else(|| {
+            let has_parent = data.get("has_parent").ok_or_else(|| {
                 EvalError::Runtime("Environment value is missing has_parent.".to_string())
             })?;
-            let has_function = data.fields.get("has_function").ok_or_else(|| {
+            let has_function = data.get("has_function").ok_or_else(|| {
                 EvalError::Runtime("Environment value is missing has_function.".to_string())
             })?;
             Ok((expect_bool_ref(has_parent)?, expect_bool_ref(has_function)?))
@@ -32,7 +32,7 @@ pub(super) fn expect_environment_state(value: &VmValue) -> Result<(bool, bool), 
 pub(super) fn expect_function_has_closure(value: &VmValue) -> Result<bool, EvalError> {
     match value {
         VmValue::Struct(data) if data.name.as_ref() == "FunctionObject" => {
-            let value = data.fields.get("has_closure").ok_or_else(|| {
+            let value = data.get("has_closure").ok_or_else(|| {
                 EvalError::Runtime("FunctionObject value is missing has_closure.".to_string())
             })?;
             expect_bool_ref(value)
@@ -49,7 +49,6 @@ pub(super) fn expect_counter_value(value: &VmValue) -> Result<i64, EvalError> {
     match value {
         VmValue::Struct(data) if data.name.as_ref() == "Counter" => {
             let value = data
-                .fields
                 .get("value")
                 .ok_or_else(|| EvalError::Runtime("Counter value is missing.".to_string()))?;
             expect_int_ref(value)
@@ -64,7 +63,7 @@ pub(super) fn expect_counter_value(value: &VmValue) -> Result<i64, EvalError> {
 pub(super) fn expect_instant_unix_ms(value: &VmValue) -> Result<i64, EvalError> {
     match value {
         VmValue::Struct(data) if data.name.as_ref() == "Instant" => {
-            let value = data.fields.get("unix_ms").ok_or_else(|| {
+            let value = data.get("unix_ms").ok_or_else(|| {
                 EvalError::Runtime("Instant value is missing unix_ms.".to_string())
             })?;
             expect_int_ref(value)
@@ -79,7 +78,7 @@ pub(super) fn expect_instant_unix_ms(value: &VmValue) -> Result<i64, EvalError> 
 pub(super) fn expect_deadline_unix_ms(value: &VmValue) -> Result<i64, EvalError> {
     match value {
         VmValue::Struct(data) if data.name.as_ref() == "Deadline" => {
-            let value = data.fields.get("unix_ms").ok_or_else(|| {
+            let value = data.get("unix_ms").ok_or_else(|| {
                 EvalError::Runtime("Deadline value is missing unix_ms.".to_string())
             })?;
             expect_int_ref(value)
@@ -94,10 +93,10 @@ pub(super) fn expect_deadline_unix_ms(value: &VmValue) -> Result<i64, EvalError>
 pub(super) fn expect_db_connection_ref(value: &VmValue) -> Result<VmDbConnection, EvalError> {
     match value {
         VmValue::Struct(data) if data.name.as_ref() == "DbConnection" => {
-            let url = data.fields.get("url").ok_or_else(|| {
+            let url = data.get("url").ok_or_else(|| {
                 EvalError::Runtime("DbConnection value is missing url.".to_string())
             })?;
-            let queries = data.fields.get("queries").ok_or_else(|| {
+            let queries = data.get("queries").ok_or_else(|| {
                 EvalError::Runtime("DbConnection value is missing queries.".to_string())
             })?;
             Ok(VmDbConnection {
@@ -118,7 +117,7 @@ pub(super) fn expect_cancellation_id_ref(
 ) -> Result<i64, EvalError> {
     match value {
         VmValue::Struct(data) if data.name.as_ref() == expected_name => {
-            let value = data.fields.get("id").ok_or_else(|| {
+            let value = data.get("id").ok_or_else(|| {
                 EvalError::Runtime(format!("{expected_name} value is missing id."))
             })?;
             expect_int_ref(value)
@@ -134,13 +133,11 @@ pub(super) fn expect_channel_ref(value: &VmValue) -> Result<VmChannelState, Eval
     match value {
         VmValue::Struct(data) if data.name.as_ref() == "Channel" => {
             let int_field = |name: &str| {
-                data.fields
-                    .get(name)
+                data.get(name)
                     .ok_or_else(|| EvalError::Runtime(format!("Channel value is missing {name}.")))
                     .and_then(expect_int_ref)
             };
             let receiver_taken = data
-                .fields
                 .get("receiver_taken")
                 .ok_or_else(|| {
                     EvalError::Runtime("Channel value is missing receiver_taken.".to_string())
@@ -162,11 +159,10 @@ pub(super) fn expect_channel_ref(value: &VmValue) -> Result<VmChannelState, Eval
 pub(super) fn expect_sender_ref(value: &VmValue) -> Result<VmSender, EvalError> {
     match value {
         VmValue::Struct(data) if data.name.as_ref() == "Sender" => {
-            let channel_id = data.fields.get("channel_id").ok_or_else(|| {
+            let channel_id = data.get("channel_id").ok_or_else(|| {
                 EvalError::Runtime("Sender value is missing channel_id.".to_string())
             })?;
             let closed = data
-                .fields
                 .get("closed")
                 .ok_or_else(|| EvalError::Runtime("Sender value is missing closed.".to_string()))?;
             Ok(VmSender {
@@ -184,10 +180,10 @@ pub(super) fn expect_sender_ref(value: &VmValue) -> Result<VmSender, EvalError> 
 pub(super) fn expect_receiver_ref(value: &VmValue) -> Result<VmReceiver, EvalError> {
     match value {
         VmValue::Struct(data) if data.name.as_ref() == "Receiver" => {
-            let channel_id = data.fields.get("channel_id").ok_or_else(|| {
+            let channel_id = data.get("channel_id").ok_or_else(|| {
                 EvalError::Runtime("Receiver value is missing channel_id.".to_string())
             })?;
-            let closed = data.fields.get("closed").ok_or_else(|| {
+            let closed = data.get("closed").ok_or_else(|| {
                 EvalError::Runtime("Receiver value is missing closed.".to_string())
             })?;
             Ok(VmReceiver {
@@ -205,7 +201,7 @@ pub(super) fn expect_receiver_ref(value: &VmValue) -> Result<VmReceiver, EvalErr
 pub(super) fn expect_resource_pool_ref(value: &VmValue) -> Result<VmResourcePoolState, EvalError> {
     match value {
         VmValue::Struct(data) if data.name.as_ref() == "ResourcePool" => {
-            let id = data.fields.get("id").ok_or_else(|| {
+            let id = data.get("id").ok_or_else(|| {
                 EvalError::Runtime("ResourcePool value is missing id.".to_string())
             })?;
             Ok(VmResourcePoolState {
@@ -223,12 +219,10 @@ pub(super) fn expect_stream_ref(value: &VmValue) -> Result<VmStreamState, EvalEr
     match value {
         VmValue::Struct(data) if data.name.as_ref() == "Stream" => {
             let items = data
-                .fields
                 .get("items")
                 .ok_or_else(|| EvalError::Runtime("Stream value is missing items.".to_string()))
                 .and_then(expect_list_ref)?;
             let collect_error = data
-                .fields
                 .get("collect_error")
                 .map(option_payload_ref)
                 .transpose()?
@@ -236,7 +230,6 @@ pub(super) fn expect_stream_ref(value: &VmValue) -> Result<VmStreamState, EvalEr
                 .map(|value| expect_string_ref(value).map(str::to_string))
                 .transpose()?;
             let channel_id = data
-                .fields
                 .get("channel_id")
                 .map(option_payload_ref)
                 .transpose()?
@@ -267,7 +260,7 @@ pub(super) fn expect_websocket_id_ref(value: &VmValue) -> Result<i64, EvalError>
 pub(super) fn expect_id_struct_ref(value: &VmValue, expected_name: &str) -> Result<i64, EvalError> {
     match value {
         VmValue::Struct(data) if data.name.as_ref() == expected_name => {
-            let id = data.fields.get("id").ok_or_else(|| {
+            let id = data.get("id").ok_or_else(|| {
                 EvalError::Runtime(format!("{expected_name} value is missing id."))
             })?;
             expect_int_ref(id)
@@ -284,7 +277,6 @@ pub(super) fn option_payload_ref(value: &VmValue) -> Result<Option<&VmValue>, Ev
         VmValue::OptionSome(value) => Ok(Some(value.as_ref())),
         VmValue::OptionNone => Ok(None),
         VmValue::Variant(data) if data.name.as_ref() == "Some" => data
-            .fields
             .get("value")
             .map(Some)
             .ok_or_else(|| EvalError::Runtime("Some value is missing.".to_string())),
@@ -299,14 +291,13 @@ pub(super) fn option_payload_ref(value: &VmValue) -> Result<Option<&VmValue>, Ev
 pub(super) fn expect_process_request_ref(value: &VmValue) -> Result<VmProcessRequest, EvalError> {
     match value {
         VmValue::Struct(data) if data.name.as_ref() == "ProcessRequest" => {
-            let command = data.fields.get("command").ok_or_else(|| {
+            let command = data.get("command").ok_or_else(|| {
                 EvalError::Runtime("ProcessRequest command is missing.".to_string())
             })?;
-            let args = data.fields.get("args").ok_or_else(|| {
+            let args = data.get("args").ok_or_else(|| {
                 EvalError::Runtime("ProcessRequest args are missing.".to_string())
             })?;
             let cwd = data
-                .fields
                 .get("cwd")
                 .map(option_payload_ref)
                 .transpose()?
@@ -314,7 +305,6 @@ pub(super) fn expect_process_request_ref(value: &VmValue) -> Result<VmProcessReq
                 .map(|value| expect_string_ref(value).map(PathBuf::from))
                 .transpose()?;
             let stdin = data
-                .fields
                 .get("stdin")
                 .map(option_payload_ref)
                 .transpose()?
@@ -322,25 +312,21 @@ pub(super) fn expect_process_request_ref(value: &VmValue) -> Result<VmProcessReq
                 .map(|value| expect_string_ref(value).map(str::to_string))
                 .transpose()?;
             let env = data
-                .fields
                 .get("env")
                 .map(expect_process_env_list_ref)
                 .transpose()?
                 .unwrap_or_default();
             let timeout_ms = data
-                .fields
                 .get("timeout_ms")
                 .map(expect_int_ref)
                 .transpose()?
                 .unwrap_or(0);
             let merge_stderr = data
-                .fields
                 .get("merge_stderr")
                 .map(expect_bool_ref)
                 .transpose()?
                 .unwrap_or(false);
             let output_cap_bytes = data
-                .fields
                 .get("output_cap_bytes")
                 .map(expect_int_ref)
                 .transpose()?
@@ -372,10 +358,9 @@ pub(super) fn expect_process_env_list_ref(
         .map(|value| match value {
             VmValue::Struct(data) if data.name.as_ref() == "ProcessEnv" => {
                 let name = data
-                    .fields
                     .get("name")
                     .ok_or_else(|| EvalError::Runtime("ProcessEnv name is missing.".to_string()))?;
-                let value = data.fields.get("value").ok_or_else(|| {
+                let value = data.get("value").ok_or_else(|| {
                     EvalError::Runtime("ProcessEnv value is missing.".to_string())
                 })?;
                 Ok((
@@ -394,7 +379,6 @@ pub(super) fn expect_process_env_list_ref(
 pub(super) fn expect_row_buffer_bytes_ref(value: &VmValue) -> Result<Vec<u8>, EvalError> {
     match value {
         VmValue::Struct(data) if data.name.as_ref() == "RowBuffer" => data
-            .fields
             .get("bytes")
             .ok_or_else(|| EvalError::Runtime("RowBuffer value is missing bytes.".to_string()))
             .and_then(expect_bytes_ref)
@@ -410,7 +394,6 @@ pub(super) fn expect_row_fields_ref(value: &VmValue) -> Result<Vec<String>, Eval
     match value {
         VmValue::Struct(data) if data.name.as_ref() == "Row" => {
             let fields = data
-                .fields
                 .get("fields")
                 .ok_or_else(|| EvalError::Runtime("Row value is missing fields.".to_string()))?;
             expect_string_list_ref(fields)
@@ -426,14 +409,12 @@ pub(super) fn expect_file_ref(value: &VmValue) -> Result<VmFileState, EvalError>
     match value {
         VmValue::Struct(data) if data.name.as_ref() == "File" => {
             let string_field = |name: &str| {
-                data.fields
-                    .get(name)
+                data.get(name)
                     .ok_or_else(|| EvalError::Runtime(format!("File {name} is missing.")))
                     .and_then(expect_string_ref)
                     .map(str::to_string)
             };
             let cursor = data
-                .fields
                 .get("cursor")
                 .ok_or_else(|| EvalError::Runtime("File cursor is missing.".to_string()))
                 .and_then(expect_int_ref)?;
@@ -453,7 +434,6 @@ pub(super) fn expect_file_ref(value: &VmValue) -> Result<VmFileState, EvalError>
 pub(super) fn expect_tempdir_path_ref(value: &VmValue) -> Result<String, EvalError> {
     match value {
         VmValue::Struct(data) if data.name.as_ref() == "TempDir" => data
-            .fields
             .get("path")
             .ok_or_else(|| EvalError::Runtime("TempDir path is missing.".to_string()))
             .and_then(expect_string_ref)
@@ -469,7 +449,6 @@ pub(super) fn expect_config_value_name(value: &VmValue) -> Result<String, EvalEr
     match value {
         VmValue::Struct(data) if data.name.as_ref() == "ConfigValue" => {
             let value = data
-                .fields
                 .get("name")
                 .ok_or_else(|| EvalError::Runtime("ConfigValue name is missing.".to_string()))?;
             Ok(expect_string_ref(value)?.to_string())
@@ -485,7 +464,6 @@ pub(super) fn expect_config_store_name(value: &VmValue) -> Result<String, EvalEr
     match value {
         VmValue::Struct(data) if data.name.as_ref() == "ConfigStore" => {
             let value = data
-                .fields
                 .get("name")
                 .ok_or_else(|| EvalError::Runtime("ConfigStore name is missing.".to_string()))?;
             Ok(expect_string_ref(value)?.to_string())
@@ -501,7 +479,6 @@ pub(super) fn expect_config_rule_count(value: &VmValue) -> Result<i64, EvalError
     match value {
         VmValue::Struct(data) if data.name.as_ref() == "Config" => {
             let value = data
-                .fields
                 .get("rule_count")
                 .ok_or_else(|| EvalError::Runtime("Config rule_count is missing.".to_string()))?;
             expect_int_ref(value)
@@ -516,7 +493,7 @@ pub(super) fn expect_config_rule_count(value: &VmValue) -> Result<i64, EvalError
 pub(super) fn expect_global_config_rule_count(value: &VmValue) -> Result<i64, EvalError> {
     match value {
         VmValue::Struct(data) if data.name.as_ref() == "GlobalConfig" => {
-            let value = data.fields.get("rule_count").ok_or_else(|| {
+            let value = data.get("rule_count").ok_or_else(|| {
                 EvalError::Runtime("GlobalConfig rule_count is missing.".to_string())
             })?;
             expect_int_ref(value)
@@ -532,18 +509,15 @@ pub(super) fn expect_image_state(value: &VmValue) -> Result<ImageState, EvalErro
     match value {
         VmValue::Struct(data) if data.name.as_ref() == "Image" => {
             let bytes = data
-                .fields
                 .get("bytes")
                 .ok_or_else(|| EvalError::Runtime("Image value is missing bytes.".to_string()))?;
             let width = data
-                .fields
                 .get("width")
                 .ok_or_else(|| EvalError::Runtime("Image value is missing width.".to_string()))?;
             let height = data
-                .fields
                 .get("height")
                 .ok_or_else(|| EvalError::Runtime("Image value is missing height.".to_string()))?;
-            let operations = data.fields.get("operations").ok_or_else(|| {
+            let operations = data.get("operations").ok_or_else(|| {
                 EvalError::Runtime("Image value is missing operations.".to_string())
             })?;
             Ok(ImageState {
@@ -563,7 +537,6 @@ pub(super) fn expect_image_state(value: &VmValue) -> Result<ImageState, EvalErro
 pub(super) fn option_int_payload(value: &VmValue) -> Result<Option<i64>, EvalError> {
     match value {
         VmValue::Variant(data) if data.name.as_ref() == "Some" => data
-            .fields
             .get("value")
             .ok_or_else(|| EvalError::Runtime("Some value is missing.".to_string()))
             .and_then(expect_int_ref)
@@ -582,15 +555,13 @@ pub(super) fn expect_http_request_ref(value: &VmValue) -> Result<VmHttpRequest, 
     match value {
         VmValue::Struct(data) if data.name.as_ref() == "HttpRequest" => {
             let string_field = |name: &str| {
-                data.fields
-                    .get(name)
+                data.get(name)
                     .ok_or_else(|| EvalError::Runtime(format!("HttpRequest {name} is missing.")))
                     .and_then(expect_string_ref)
                     .map(str::to_string)
             };
             let int_field = |name: &str| {
-                data.fields
-                    .get(name)
+                data.get(name)
                     .ok_or_else(|| EvalError::Runtime(format!("HttpRequest {name} is missing.")))
                     .and_then(expect_int_ref)
             };
@@ -615,7 +586,6 @@ pub(super) fn expect_regex_ref(value: &VmValue) -> Result<regex::Regex, EvalErro
     match value {
         VmValue::Struct(data) if data.name.as_ref() == "Regex" => {
             let pattern = data
-                .fields
                 .get("pattern")
                 .ok_or_else(|| EvalError::Runtime("Regex value is missing pattern.".to_string()))?;
             regex::Regex::new(expect_string_ref(pattern)?)
@@ -633,13 +603,11 @@ pub(super) fn result_variant_payload(
 ) -> Result<Result<VmValue, VmValue>, EvalError> {
     match value {
         VmValue::Variant(data) if data.name.as_ref() == "Ok" => data
-            .fields
             .get("value")
             .cloned()
             .map(Ok)
             .ok_or_else(|| EvalError::Runtime("Ok value is missing.".to_string())),
         VmValue::Variant(data) if data.name.as_ref() == "Err" => data
-            .fields
             .get("value")
             .cloned()
             .map(Err)
@@ -660,21 +628,13 @@ pub(super) fn value_none() -> VmValue {
 }
 
 pub(super) fn value_err(value: VmValue) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("value".to_string(), value);
-    VmValue::Variant(Rc::new(VmStruct {
-        name: Rc::from("Err"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> = vec![("value".to_string(), value)];
+    VmValue::Variant(Rc::new(VmStruct::from_named(Rc::from("Err"), fields)))
 }
 
 pub(super) fn value_ok(value: VmValue) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("value".to_string(), value);
-    VmValue::Variant(Rc::new(VmStruct {
-        name: Rc::from("Ok"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> = vec![("value".to_string(), value)];
+    VmValue::Variant(Rc::new(VmStruct::from_named(Rc::from("Ok"), fields)))
 }
 
 pub(super) fn expect_string_ref(value: &VmValue) -> Result<&str, EvalError> {

@@ -5,58 +5,45 @@
 use std::rc::Rc;
 
 use crate::eval_types::{EvalError, NativeValue};
-use crate::vm_value::{FieldMap, ValueMap, VmMapKey, VmStruct, VmValue};
+use crate::vm_value::{ValueMap, VmMapKey, VmStruct, VmValue};
 
 use super::*;
 
 pub(super) fn regex_value(pattern: impl Into<String>) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("pattern".to_string(), VmValue::string(pattern.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("Regex"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> =
+        vec![("pattern".to_string(), VmValue::string(pattern.into()))];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Regex"), fields)))
 }
 
 pub(super) fn regex_error_value(message: impl Into<String>) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("message".to_string(), VmValue::string(message.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("RegexError"),
+    let fields: Vec<(String, VmValue)> =
+        vec![("message".to_string(), VmValue::string(message.into()))];
+    VmValue::Struct(Rc::new(VmStruct::from_named(
+        Rc::from("RegexError"),
         fields,
-    }))
+    )))
 }
 
 pub(super) fn csv_error_value(message: impl Into<String>) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("message".to_string(), VmValue::string(message.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("CsvError"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> =
+        vec![("message".to_string(), VmValue::string(message.into()))];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("CsvError"), fields)))
 }
 
 pub(super) fn row_buffer_value(bytes: Vec<u8>) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("bytes".to_string(), VmValue::Bytes(Rc::new(bytes)));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("RowBuffer"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> =
+        vec![("bytes".to_string(), VmValue::Bytes(Rc::new(bytes)))];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("RowBuffer"), fields)))
 }
 
 pub(super) fn row_value(fields: Vec<String>) -> VmValue {
-    let mut row_fields = FieldMap::default();
-    row_fields.insert(
+    let row_fields: Vec<(String, VmValue)> = vec![(
         "fields".to_string(),
         VmValue::List(Rc::new(RefCell::new(
             fields.into_iter().map(VmValue::string).collect(),
         ))),
-    );
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("Row"),
-        fields: row_fields,
-    }))
+    )];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Row"), row_fields)))
 }
 
 pub(super) fn csv_parse_row_value(bytes: &[u8]) -> Result<VmValue, VmValue> {
@@ -318,7 +305,7 @@ pub(super) fn vm_value_to_json_literal(value: &VmValue) -> Result<serde_json::Va
 pub(super) fn read_field_ref(value: &VmValue, field: &str) -> Result<VmValue, EvalError> {
     match value {
         VmValue::Struct(data) | VmValue::Variant(data) => {
-            data.fields.get(field).cloned().ok_or_else(|| {
+            data.get(field).cloned().ok_or_else(|| {
                 EvalError::Runtime(format!("reg VM struct value is missing field `{field}`."))
             })
         }
@@ -371,29 +358,24 @@ fn write_struct_field_in_place(
     field: &str,
     new_value: VmValue,
 ) -> Result<(), EvalError> {
-    if let Some(unique) = Rc::get_mut(data) {
-        return match unique.fields.get_mut(field) {
-            Some(slot) => {
-                *slot = new_value;
-                Ok(())
-            }
-            None => Err(EvalError::Runtime(format!(
-                "reg VM struct value is missing field `{field}`."
-            ))),
-        };
-    }
-    // Shared `Rc`: copy-on-write to preserve value semantics for the other holders.
-    if !data.fields.contains_key(field) {
+    let Some(slot) = data.slot(field) else {
         return Err(EvalError::Runtime(format!(
             "reg VM struct value is missing field `{field}`."
         )));
+    };
+    if let Some(unique) = Rc::get_mut(data) {
+        unique.fields[slot] = new_value;
+        return Ok(());
     }
+    // Shared `Rc`: copy-on-write to preserve value semantics for the other holders
+    // (the layout is immutable and shared with them).
     let mut fields = data.fields.clone();
-    fields.insert(field.to_string(), new_value);
-    *data = Rc::new(VmStruct {
-        name: Rc::clone(&data.name),
+    fields[slot] = new_value;
+    *data = Rc::new(VmStruct::with_layout(
+        Rc::clone(&data.name),
+        Rc::clone(&data.layout),
         fields,
-    });
+    ));
     Ok(())
 }
 
@@ -444,15 +426,13 @@ pub(super) fn deep_copy_value(value: &VmValue) -> VmValue {
 }
 
 pub(super) fn deep_copy_struct(data: &Rc<VmStruct>) -> Rc<VmStruct> {
-    let fields = data
-        .fields
-        .iter()
-        .map(|(name, value)| (name.clone(), deep_copy_value(value)))
-        .collect::<FieldMap>();
-    Rc::new(VmStruct {
-        name: Rc::clone(&data.name),
+    // Share the immutable layout; deep-copy only the values (in slot order).
+    let fields = data.fields.iter().map(deep_copy_value).collect();
+    Rc::new(VmStruct::with_layout(
+        Rc::clone(&data.name),
+        Rc::clone(&data.layout),
         fields,
-    })
+    ))
 }
 
 pub(super) fn native_value_from_vm_value(value: VmValue) -> Result<NativeValue, EvalError> {
@@ -491,18 +471,26 @@ pub(super) fn native_value_from_vm_value(value: VmValue) -> Result<NativeValue, 
             .collect::<Result<Vec<_>, EvalError>>()
             .map(NativeValue::Map),
         VmValue::Struct(data) => data
-            .fields
             .iter()
-            .map(|(field, value)| Ok((field.clone(), native_value_from_vm_value(value.clone())?)))
+            .map(|(field, value)| {
+                Ok((
+                    field.to_string(),
+                    native_value_from_vm_value(value.clone())?,
+                ))
+            })
             .collect::<Result<BTreeMap<_, _>, EvalError>>()
             .map(|fields| NativeValue::Struct {
                 name: data.name.to_string(),
                 fields,
             }),
         VmValue::Variant(data) => data
-            .fields
             .iter()
-            .map(|(field, value)| Ok((field.clone(), native_value_from_vm_value(value.clone())?)))
+            .map(|(field, value)| {
+                Ok((
+                    field.to_string(),
+                    native_value_from_vm_value(value.clone())?,
+                ))
+            })
             .collect::<Result<BTreeMap<_, _>, EvalError>>()
             .map(|fields| NativeValue::Variant {
                 name: data.name.to_string(),
@@ -559,13 +547,12 @@ pub(super) fn vm_value_from_native_value(value: NativeValue) -> VmValue {
                 .collect(),
         ))),
         NativeValue::Json(value) => VmValue::Json(Rc::new(value)),
-        NativeValue::Struct { name, fields } => VmValue::Struct(Rc::new(VmStruct {
-            name: Rc::from(name.as_str()),
-            fields: fields
+        NativeValue::Struct { name, fields } => VmValue::Struct(Rc::new(VmStruct::from_named(
+            name.as_str(),
+            fields
                 .into_iter()
-                .map(|(field, value)| (field, vm_value_from_native_value(value)))
-                .collect(),
-        })),
+                .map(|(field, value)| (field, vm_value_from_native_value(value))),
+        ))),
         // `Option` is a dedicated VM value, not a generic variant, so a native
         // binding returning `Some(_)`/`None` must round-trip to `OptionSome`/
         // `OptionNone` for `match`/`?` to recognize it.
@@ -577,13 +564,12 @@ pub(super) fn vm_value_from_native_value(value: NativeValue) -> VmValue {
             VmValue::OptionSome(Box::new(value))
         }
         NativeValue::Variant { name, .. } if name == "None" => VmValue::OptionNone,
-        NativeValue::Variant { name, fields } => VmValue::Variant(Rc::new(VmStruct {
-            name: Rc::from(name.as_str()),
-            fields: fields
+        NativeValue::Variant { name, fields } => VmValue::Variant(Rc::new(VmStruct::from_named(
+            name.as_str(),
+            fields
                 .into_iter()
-                .map(|(field, value)| (field, vm_value_from_native_value(value)))
-                .collect(),
-        })),
+                .map(|(field, value)| (field, vm_value_from_native_value(value))),
+        ))),
         NativeValue::Native { type_name, id } => VmValue::Native(Rc::new(VmNative {
             type_name: Rc::from(type_name.as_str()),
             id,

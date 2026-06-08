@@ -34,8 +34,6 @@ impl std::hash::Hasher for FnvHasher {
 }
 
 pub(crate) type FnvBuildHasher = std::hash::BuildHasherDefault<FnvHasher>;
-/// Struct/variant field map (field name → value), FNV-hashed.
-pub(crate) type FieldMap = HashMap<String, VmValue, FnvBuildHasher>;
 /// VM `Map` value (key → value), FNV-hashed.
 pub(crate) type ValueMap = HashMap<VmMapKey, VmValue, FnvBuildHasher>;
 
@@ -63,10 +61,87 @@ pub(crate) enum VmValue {
     Closure(Rc<VmClosure>),
 }
 
+/// The ordered field names of a struct/variant type, shared (via `Rc`) across all
+/// instances so the names aren't duplicated per instance and field access can be
+/// an offset index rather than a string hash.
+#[derive(Debug)]
+pub(crate) struct StructLayout {
+    pub(crate) field_names: Vec<Rc<str>>,
+}
+
+impl StructLayout {
+    pub(crate) fn new(field_names: Vec<Rc<str>>) -> Self {
+        StructLayout { field_names }
+    }
+
+    /// The slot of `field`, or `None` if absent. A linear scan — struct field
+    /// counts are tiny, so this beats hashing, and the hot path uses precomputed
+    /// slots (`GetFieldSlot`) from the lowerer anyway.
+    pub(crate) fn slot(&self, field: &str) -> Option<usize> {
+        self.field_names.iter().position(|name| &**name == field)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct VmStruct {
     pub(crate) name: Rc<str>,
-    pub(crate) fields: FieldMap,
+    pub(crate) layout: Rc<StructLayout>,
+    pub(crate) fields: Vec<VmValue>,
+}
+
+impl VmStruct {
+    /// Build a struct/variant from named field/value pairs (the field order
+    /// becomes the slot order). Allocates a fresh layout; callers that share a
+    /// type's layout reuse it via [`VmStruct::with_layout`].
+    pub(crate) fn from_named<K: Into<Rc<str>>>(
+        name: impl Into<Rc<str>>,
+        fields: impl IntoIterator<Item = (K, VmValue)>,
+    ) -> Self {
+        let (field_names, values): (Vec<Rc<str>>, Vec<VmValue>) = fields
+            .into_iter()
+            .map(|(key, value)| (key.into(), value))
+            .unzip();
+        VmStruct {
+            name: name.into(),
+            layout: Rc::new(StructLayout::new(field_names)),
+            fields: values,
+        }
+    }
+
+    pub(crate) fn with_layout(
+        name: Rc<str>,
+        layout: Rc<StructLayout>,
+        fields: Vec<VmValue>,
+    ) -> Self {
+        VmStruct {
+            name,
+            layout,
+            fields,
+        }
+    }
+
+    pub(crate) fn slot(&self, field: &str) -> Option<usize> {
+        self.layout.slot(field)
+    }
+
+    pub(crate) fn get(&self, field: &str) -> Option<&VmValue> {
+        self.layout
+            .slot(field)
+            .and_then(|slot| self.fields.get(slot))
+    }
+
+    pub(crate) fn contains(&self, field: &str) -> bool {
+        self.layout.slot(field).is_some()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.fields.is_empty()
+    }
+
+    /// Iterate `(field_name, value)` pairs in slot order.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&Rc<str>, &VmValue)> {
+        self.layout.field_names.iter().zip(self.fields.iter())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -154,11 +229,10 @@ impl VmValue {
             Self::OptionSome(value) => format!("Some({})", value.display()),
             Self::OptionNone => "None".to_string(),
             Self::Struct(data) | Self::Variant(data) => {
-                if data.fields.is_empty() {
+                if data.is_empty() {
                     return data.name.to_string();
                 }
                 let mut values = data
-                    .fields
                     .iter()
                     .map(|(key, value)| format!("{key}: {}", value.display()))
                     .collect::<Vec<_>>();
@@ -202,11 +276,11 @@ impl VmValue {
                 .map(|(key, value)| Some((key.native_value(), value.native_value()?)))
                 .collect::<Option<Vec<_>>>()
                 .map(NativeValue::Map),
-            Self::Struct(data) => native_fields(&data.fields).map(|fields| NativeValue::Struct {
+            Self::Struct(data) => native_fields(data).map(|fields| NativeValue::Struct {
                 name: data.name.to_string(),
                 fields,
             }),
-            Self::Variant(data) => native_fields(&data.fields).map(|fields| NativeValue::Variant {
+            Self::Variant(data) => native_fields(data).map(|fields| NativeValue::Variant {
                 name: data.name.to_string(),
                 fields,
             }),
@@ -220,10 +294,9 @@ impl VmValue {
     }
 }
 
-fn native_fields(fields: &FieldMap) -> Option<BTreeMap<String, NativeValue>> {
-    fields
-        .iter()
-        .map(|(field, value)| Some((field.clone(), value.native_value()?)))
+fn native_fields(data: &VmStruct) -> Option<BTreeMap<String, NativeValue>> {
+    data.iter()
+        .map(|(field, value)| Some((field.to_string(), value.native_value()?)))
         .collect()
 }
 

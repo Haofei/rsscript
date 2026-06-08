@@ -4,7 +4,7 @@
 
 use std::rc::Rc;
 
-use crate::vm_value::{FieldMap, ValueMap, VmStruct, VmValue};
+use crate::vm_value::{ValueMap, VmStruct, VmValue};
 
 use super::value_access::{value_none, value_some};
 use super::*;
@@ -226,12 +226,9 @@ pub(super) fn json_type_article(type_name: &str) -> &'static str {
 }
 
 pub(super) fn json_error_value(message: impl Into<String>) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("message".to_string(), VmValue::string(message.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("JsonError"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> =
+        vec![("message".to_string(), VmValue::string(message.into()))];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("JsonError"), fields)))
 }
 
 pub(super) fn json_decode_struct_value(
@@ -246,7 +243,7 @@ pub(super) fn json_decode_struct_value(
     let object = value
         .as_object()
         .ok_or_else(|| json_error_value("JSON decode expected an object"))?;
-    let mut fields = FieldMap::with_capacity_and_hasher(info.fields_ordered.len(), Default::default());
+    let mut fields: Vec<(String, VmValue)> = Vec::with_capacity(info.fields_ordered.len());
     for field in &info.fields_ordered {
         let decoded = match object.get(&field.name) {
             Some(value) => json_decode_field_value(unit, &field.type_name, value)?,
@@ -258,12 +255,12 @@ pub(super) fn json_decode_struct_value(
                 )));
             }
         };
-        fields.insert(field.name.clone(), decoded);
+        fields.push((field.name.clone(), decoded));
     }
-    Ok(VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from(info.name.as_str()),
+    Ok(VmValue::Struct(Rc::new(VmStruct::from_named(
+        Rc::from(info.name.as_str()),
         fields,
-    })))
+    ))))
 }
 
 pub(super) fn json_decode_field_value(
@@ -359,58 +356,53 @@ pub(super) fn json_type_error(expected: &str, value: &serde_json::Value) -> VmVa
 }
 
 pub(super) fn decode_error_value(message: impl Into<String>) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("message".to_string(), VmValue::string(message.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("DecodeError"),
+    let fields: Vec<(String, VmValue)> =
+        vec![("message".to_string(), VmValue::string(message.into()))];
+    VmValue::Struct(Rc::new(VmStruct::from_named(
+        Rc::from("DecodeError"),
         fields,
-    }))
+    )))
 }
 
 pub(super) fn config_error_value(message: impl Into<String>) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("message".to_string(), VmValue::string(message.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("ConfigError"),
+    let fields: Vec<(String, VmValue)> =
+        vec![("message".to_string(), VmValue::string(message.into()))];
+    VmValue::Struct(Rc::new(VmStruct::from_named(
+        Rc::from("ConfigError"),
         fields,
-    }))
+    )))
 }
 
 pub(super) fn file_error_value(message: impl Into<String>) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("message".to_string(), VmValue::string(message.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("FileError"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> =
+        vec![("message".to_string(), VmValue::string(message.into()))];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("FileError"), fields)))
 }
 
 pub(super) fn channel_error_value(message: impl Into<String>) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("message".to_string(), VmValue::string(message.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("ChannelError"),
+    let fields: Vec<(String, VmValue)> =
+        vec![("message".to_string(), VmValue::string(message.into()))];
+    VmValue::Struct(Rc::new(VmStruct::from_named(
+        Rc::from("ChannelError"),
         fields,
-    }))
+    )))
 }
 
 pub(super) fn http_error_value(message: impl Into<String>) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("message".to_string(), VmValue::string(message.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("HttpError"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> =
+        vec![("message".to_string(), VmValue::string(message.into()))];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("HttpError"), fields)))
 }
 
 pub(super) fn http_response_value(status: i64, body: impl Into<String>) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("status".to_string(), VmValue::Int(status));
-    fields.insert("body".to_string(), VmValue::string(body.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("HttpResponse"),
+    let fields: Vec<(String, VmValue)> = vec![
+        ("status".to_string(), VmValue::Int(status)),
+        ("body".to_string(), VmValue::string(body.into())),
+    ];
+    VmValue::Struct(Rc::new(VmStruct::from_named(
+        Rc::from("HttpResponse"),
         fields,
-    }))
+    )))
 }
 
 pub(super) fn http_get_local(url: &str) -> Result<VmValue, VmValue> {
@@ -466,37 +458,26 @@ pub(super) fn parse_http_response(response: &[u8]) -> Result<VmValue, String> {
 }
 
 pub(super) fn tcp_error_value(message: impl Into<String>) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("message".to_string(), VmValue::string(message.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("TcpError"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> =
+        vec![("message".to_string(), VmValue::string(message.into()))];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("TcpError"), fields)))
 }
 
 pub(super) fn tcp_stream_value(id: i64) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("id".to_string(), VmValue::Int(id));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("TcpStream"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> = vec![("id".to_string(), VmValue::Int(id))];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("TcpStream"), fields)))
 }
 
 pub(super) fn websocket_value(id: i64) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("id".to_string(), VmValue::Int(id));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("WebSocket"),
-        fields,
-    }))
+    let fields: Vec<(String, VmValue)> = vec![("id".to_string(), VmValue::Int(id))];
+    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("WebSocket"), fields)))
 }
 
 pub(super) fn websocket_error_value(message: impl Into<String>) -> VmValue {
-    let mut fields = FieldMap::default();
-    fields.insert("message".to_string(), VmValue::string(message.into()));
-    VmValue::Struct(Rc::new(VmStruct {
-        name: Rc::from("WebSocketError"),
+    let fields: Vec<(String, VmValue)> =
+        vec![("message".to_string(), VmValue::string(message.into()))];
+    VmValue::Struct(Rc::new(VmStruct::from_named(
+        Rc::from("WebSocketError"),
         fields,
-    }))
+    )))
 }
