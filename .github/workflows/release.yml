@@ -1,0 +1,55 @@
+name: Release
+
+# Build pinned, checksummed `rss` + `reir` binaries with build provenance on tag.
+# This is the trust artifact a supply-chain gate should pin to (instead of @main
+# / ambient PATH tools): download the release binary, verify the checksum, and
+# verify provenance with `gh attestation verify`.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binaries
+        run: |
+          cargo build --release --bin rss -p rsscript
+          cargo build --release --bin reir -p reir
+          mkdir -p dist
+          cp target/release/rss dist/rss-linux-x86_64
+          cp target/release/reir dist/reir-linux-x86_64
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum rss-linux-x86_64 reir-linux-x86_64 > SHA256SUMS
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: |
+            dist/rss-linux-x86_64
+            dist/reir-linux-x86_64
+
+      - name: Upload release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/rss-linux-x86_64
+            dist/reir-linux-x86_64
+            dist/SHA256SUMS

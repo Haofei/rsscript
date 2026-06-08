@@ -43,6 +43,9 @@ outputs:
   comment:
     description: 'The review comment text'
     value: ${{ steps.review.outputs.comment }}
+  sarif:
+    description: 'SARIF 2.1.0 output path (upload via github/codeql-action/upload-sarif for inline PR annotations)'
+    value: ${{ steps.review.outputs.sarif }}
   ci_json:
     description: 'CI gate JSON output path'
     value: ${{ steps.review.outputs.ci_json }}
@@ -152,6 +155,17 @@ runs:
           exit $CI_JSON_EXIT_CODE
         fi
         echo "ci_json=$CI_JSON_FILE" >> "$GITHUB_OUTPUT"
+
+        # SARIF for GitHub code scanning / inline PR annotations.
+        SARIF_FILE="$TEMP_DIR/rsscript-review.sarif"
+        reir report-pr \
+          --required "$REQUIRED_REIR_JSON" \
+          --granted "$INPUT_GRANTS" \
+          --target "$INPUT_TARGET" \
+          --sarif > "$SARIF_FILE" 2>/dev/null || true
+        if [ -s "$SARIF_FILE" ]; then
+          echo "sarif=$SARIF_FILE" >> "$GITHUB_OUTPUT"
+        fi
 
         if [ -s "$CI_JSON_FILE" ]; then
           REVIEW_STATUS=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status","unknown"))' "$CI_JSON_FILE")

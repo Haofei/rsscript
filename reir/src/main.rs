@@ -305,6 +305,7 @@ fn try_run_report_pr(args: &[String]) -> Result<(ExitCode, String), CliError> {
     let mut granted = None;
     let mut target = None;
     let mut ci_json = false;
+    let mut sarif = false;
     let mut policy_file = None;
     // CLI flag overrides, layered on top of any --policy file.
     let mut cli = reir::TargetGatePolicy::default();
@@ -317,6 +318,7 @@ fn try_run_report_pr(args: &[String]) -> Result<(ExitCode, String), CliError> {
             "--target" => target = Some(take_value(args, &mut index, "--target")?),
             "--policy" => policy_file = Some(take_value(args, &mut index, "--policy")?),
             "--ci-json" => ci_json = true,
+            "--sarif" => sarif = true,
             "--fail-on-unknown" => cli.fail_on_unknown = Some(true),
             "--fail-on-excess" => cli.fail_on_excess = Some(true),
             "--require-verified-capabilities" => {
@@ -361,7 +363,9 @@ fn try_run_report_pr(args: &[String]) -> Result<(ExitCode, String), CliError> {
         &reconciliations,
         policy,
     );
-    let output = if ci_json {
+    let output = if sarif {
+        reir::format_sarif(&reconciliations)
+    } else if ci_json {
         reir::format_ci_gate_json(&ci_output)
     } else {
         format_pr_review_comment(

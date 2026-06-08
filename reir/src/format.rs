@@ -494,6 +494,95 @@ pub fn format_ci_gate_json(output: &CiGateOutput) -> String {
     serde_json::to_string_pretty(output).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
 }
 
+/// Render reconciliation results as SARIF 2.1.0 so CI can upload them to GitHub
+/// code scanning and get inline PR annotations. Missing capabilities are errors;
+/// excess grants are warnings.
+pub fn format_sarif(reconciliations: &[Reconciliation]) -> String {
+    let mut results = Vec::new();
+    for reconciliation in reconciliations {
+        let (rule_id, level) = match reconciliation.kind {
+            ReconciliationKind::MissingCapability => ("missing_capability", "error"),
+            ReconciliationKind::ExcessCapability => ("excess_capability", "warning"),
+            _ => continue,
+        };
+        let capability = reconciliation
+            .capability
+            .as_ref()
+            .map(|capability| {
+                let mut parts = vec![format!("{:?}", capability.category)];
+                for field in [&capability.provider, &capability.service, &capability.action] {
+                    if let Some(value) = field {
+                        parts.push(value.clone());
+                    }
+                }
+                parts.join(" / ")
+            })
+            .unwrap_or_else(|| "capability".to_string());
+        let text = match reconciliation.kind {
+            ReconciliationKind::MissingCapability => {
+                format!("Required capability not granted by target: {capability}")
+            }
+            ReconciliationKind::ExcessCapability => {
+                format!("Granted capability exceeds requirements (over-privilege): {capability}")
+            }
+            _ => unreachable!(),
+        };
+        let mut result = serde_json::json!({
+            "ruleId": rule_id,
+            "level": level,
+            "message": { "text": text },
+        });
+        // Attach a source location when the evidence carries one.
+        if let Some(evidence) = reconciliation
+            .evidence
+            .iter()
+            .find(|evidence| evidence.file.is_some())
+        {
+            let uri = evidence.file.clone().unwrap_or_default();
+            let mut region = serde_json::Map::new();
+            if let Some(line) = evidence.line {
+                region.insert("startLine".to_string(), serde_json::json!(line.max(1)));
+            }
+            if let Some(column) = evidence.column {
+                region.insert("startColumn".to_string(), serde_json::json!(column.max(1)));
+            }
+            result["locations"] = serde_json::json!([{
+                "physicalLocation": {
+                    "artifactLocation": { "uri": uri },
+                    "region": serde_json::Value::Object(region),
+                }
+            }]);
+        }
+        results.push(result);
+    }
+
+    let bundle = serde_json::json!({
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [{
+            "tool": {
+                "driver": {
+                    "name": "rsscript-reir",
+                    "informationUri": "https://github.com/Haofei/rsscript",
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "rules": [
+                        {
+                            "id": "missing_capability",
+                            "shortDescription": { "text": "Required capability is not granted by the deployment target." }
+                        },
+                        {
+                            "id": "excess_capability",
+                            "shortDescription": { "text": "Granted capability exceeds what the code requires (over-privilege)." }
+                        }
+                    ]
+                }
+            },
+            "results": results,
+        }]
+    });
+    serde_json::to_string_pretty(&bundle).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
+}
+
 fn is_capability_fact(fact: &Fact, role: FactRole) -> bool {
     fact.kind == FactKind::Capability && fact.role == Some(role) && fact.capability.is_some()
 }
@@ -1532,6 +1621,17 @@ mod tests {
             },
         );
         assert_eq!(strict.status, CiGateStatus::Fail);
+    }
+
+    #[test]
+    fn sarif_reports_missing_capability_as_error() {
+        let sarif = format_sarif(&[missing_reconciliation()]);
+        let value: serde_json::Value = serde_json::from_str(&sarif).expect("valid SARIF JSON");
+        assert_eq!(value["version"], "2.1.0");
+        let results = value["runs"][0]["results"].as_array().expect("results array");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["ruleId"], "missing_capability");
+        assert_eq!(results[0]["level"], "error");
     }
 
     #[test]
