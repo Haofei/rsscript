@@ -79,6 +79,18 @@ Status legend: `[x]` done · `[ ]` todo · `[~]` in progress.
   native-Rust on the standard benchmarks and record in the benchmark README
   (tier-0 gains are modest; native codegen is where the large speedup comes).
 
+## Known bugs found by the differential (to fix)
+
+- [ ] **Integer literals lower to untyped Rust → default `i32`.** The compiled
+  backend emits integer literals without an `i64` suffix, so an all-literal-derived
+  sub-expression defaults to `i32` and can const-overflow at compile time
+  (`attempt to compute 3528_i32 * 3457776_i32`) even though RSScript `Int` is i64
+  and the value fits. This is a real VM↔compiler gap (checker accepts, VM runs,
+  compiler fails to build). Fix: emit `i64`-typed integer literals in
+  `rust_lower` (and update the ~20 `rust_lowering_maps_*` snapshot assertions).
+  The generative differential's generator currently caps literal magnitudes to
+  avoid re-finding this on every run.
+
 ## No-gap guarantee (always green)
 - interp == jit == compiled on: generative programs, all curated parity fixtures,
   and hand-written struct/loop/branch cases.

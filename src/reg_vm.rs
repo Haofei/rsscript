@@ -78,6 +78,28 @@ pub struct JitPlan {
     pub fallback_functions: usize,
 }
 
+/// Whether `code` contains a back-edge (a jump/branch whose target is at or
+/// before it) — i.e. a loop. The tier-0 JIT only pays off across loop iterations,
+/// so straight-line functions are left on the interpreter.
+fn jit_function_has_loop(code: &[RegInstr]) -> bool {
+    code.iter().enumerate().any(|(index, instr)| match instr {
+        RegInstr::Jump { target } => *target <= index,
+        RegInstr::JumpIfBool { target, .. } => *target <= index,
+        RegInstr::JumpIfIntCompare { target, .. } => *target <= index,
+        RegInstr::MatchOption {
+            some_ip, none_ip, ..
+        } => *some_ip <= index || *none_ip <= index,
+        RegInstr::MatchResult { ok_ip, err_ip, .. } => *ok_ip <= index || *err_ip <= index,
+        RegInstr::MatchVariant {
+            match_ip, else_ip, ..
+        } => *match_ip <= index || *else_ip <= index,
+        RegInstr::MatchMapGet {
+            some_ip, none_ip, ..
+        } => *some_ip <= index || *none_ip <= index,
+        _ => false,
+    })
+}
+
 /// Whether an instruction is in the tier-0 JIT-supported subset (the numeric and
 /// control-flow core that native codegen targets first). Heap construction,
 /// calls, async, resources, and matches fall back to the interpreter.
@@ -263,18 +285,30 @@ impl RegVmExecutable {
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<EvalOutput, EvalError> {
-        self.eval_main_with_args_and_native_bindings_jit(
+        // The differential/parity callers want every supported function JIT'd so
+        // the whole covered subset is verified, not just loop functions.
+        self.eval_main_with_args_and_native_bindings_jit_inner(
             args,
             std::iter::empty::<(String, NativeInterpreterFn)>(),
+            true,
         )
     }
 
-    /// Like [`eval_main_with_args_jit`] but with native host bindings for any
-    /// `native fn`s reached on the interpreter fallback path.
+    /// Like [`eval_main_with_args_jit`] but with native host bindings, using the
+    /// production has-loop heuristic (only loop functions are JIT'd).
     pub fn eval_main_with_args_and_native_bindings_jit(
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
         native_bindings: impl IntoIterator<Item = (impl Into<String>, NativeInterpreterFn)>,
+    ) -> Result<EvalOutput, EvalError> {
+        self.eval_main_with_args_and_native_bindings_jit_inner(args, native_bindings, false)
+    }
+
+    fn eval_main_with_args_and_native_bindings_jit_inner(
+        &self,
+        args: impl IntoIterator<Item = impl Into<String>>,
+        native_bindings: impl IntoIterator<Item = (impl Into<String>, NativeInterpreterFn)>,
+        force_all: bool,
     ) -> Result<EvalOutput, EvalError> {
         let mut vm = RegVm::new(
             Rc::clone(&self.unit),
@@ -285,6 +319,7 @@ impl RegVmExecutable {
                 .collect(),
         );
         vm.jit_enabled = true;
+        vm.jit_force_all = force_all;
         let value = vm.run_program("main")?;
         let display_value = value.display();
         let native_value = value.native_value();
@@ -339,6 +374,9 @@ struct RegFunction {
     regs: usize,
     local_regs: HashMap<String, Reg>,
     code: Vec<RegInstr>,
+    /// Cached tier-0 JIT analysis `(all_instructions_supported, has_loop)`,
+    /// computed once after `code` is emitted.
+    jit_analysis: std::cell::Cell<Option<(bool, bool)>>,
 }
 
 impl RegFunction {
@@ -350,6 +388,7 @@ impl RegFunction {
             regs: 0,
             local_regs: HashMap::new(),
             code: Vec::new(),
+            jit_analysis: std::cell::Cell::new(None),
         }
     }
 }
@@ -1429,6 +1468,7 @@ impl RegUnit {
                     regs: 0,
                     local_regs: HashMap::new(),
                     code: Vec::new(),
+                    jit_analysis: std::cell::Cell::new(None),
                 },
                 loop_stack: Vec::new(),
                 cleanup_stack: Vec::new(),
@@ -1463,6 +1503,7 @@ impl RegUnit {
                     regs: 0,
                     local_regs: HashMap::new(),
                     code: Vec::new(),
+                    jit_analysis: std::cell::Cell::new(None),
                 },
                 loop_stack: Vec::new(),
                 cleanup_stack: Vec::new(),
@@ -2305,6 +2346,7 @@ impl RegLowerer<'_> {
                             regs: 0,
                             local_regs: HashMap::new(),
                             code: Vec::new(),
+                            jit_analysis: std::cell::Cell::new(None),
                         },
                         loop_stack: Vec::new(),
                         cleanup_stack: Vec::new(),
@@ -4775,8 +4817,9 @@ struct RegVm {
     /// executor `run_jit` (which reuses the interpreter's value/register
     /// semantics, so it is gap-free by construction).
     jit_enabled: bool,
-    /// Cached JIT eligibility per function (keyed by `Rc` identity).
-    jit_eligibility: HashMap<*const RegFunction, bool>,
+    /// JIT every supported function, ignoring the has-loop heuristic (used by the
+    /// differential tests so the whole covered instruction subset is verified).
+    jit_force_all: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -4847,20 +4890,32 @@ impl RegVm {
             next_pool_id: 1,
             pools: HashMap::new(),
             jit_enabled: false,
-            jit_eligibility: HashMap::new(),
+            jit_force_all: false,
         }
     }
 
-    /// Whether `func` is fully covered by the tier-0 JIT instruction subset
-    /// (cached by `Rc` identity).
-    fn is_jit_eligible(&mut self, func: &Rc<RegFunction>) -> bool {
-        let key = Rc::as_ptr(func);
-        if let Some(&eligible) = self.jit_eligibility.get(&key) {
-            return eligible;
-        }
-        let eligible = func.code.iter().all(jit_supported_instruction);
-        self.jit_eligibility.insert(key, eligible);
-        eligible
+    /// Whether `func` should run on the tier-0 JIT. Cached on the function (a
+    /// cheap `Cell` read after the first call). A function is eligible only if (a)
+    /// every instruction is in the supported subset, and (b) it contains a
+    /// back-edge (a loop): straight-line functions gain nothing from the
+    /// specializing executor, so JIT-ing them in a hot call would only add
+    /// overhead. This keeps the JIT at-least-parity with the interpreter.
+    fn is_jit_eligible(&self, func: &RegFunction) -> bool {
+        let (supported, has_loop) = match func.jit_analysis.get() {
+            Some(analysis) => analysis,
+            None => {
+                let analysis = (
+                    func.code.iter().all(jit_supported_instruction),
+                    jit_function_has_loop(&func.code),
+                );
+                func.jit_analysis.set(Some(analysis));
+                analysis
+            }
+        };
+        // Production: only JIT functions with a loop (where the specializing
+        // executor pays off). `jit_force_all` (tests) JITs every supported
+        // function so the differential verifies the whole covered subset.
+        supported && (self.jit_force_all || has_loop)
     }
 
     /// Tier-0 JIT executor for a JIT-eligible function. Runs the body via the

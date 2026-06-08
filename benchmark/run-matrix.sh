@@ -42,10 +42,17 @@ json_field() {
   JSON="$json" FIELD="$field" perl -MJSON::PP -e 'my $data = decode_json($ENV{JSON}); print $data->{$ENV{FIELD}}'
 }
 
-printf '%-26s %10s %12s %12s %12s\n' \
-  "case" "size" "reg_vm_ms" "rust_ms" "reg/rust"
-printf '%-26s %10s %12s %12s %12s\n' \
-  "----" "----" "---------" "-------" "--------"
+ratio() {
+  NUM="$1" DEN="$2" perl -e '
+    my $den = $ENV{DEN};
+    if ($den == 0) { print "inf"; } else { printf "%.2f", $ENV{NUM} / $den; }
+  '
+}
+
+printf '%-26s %10s %12s %12s %12s %12s %10s\n' \
+  "case" "size" "reg_vm_ms" "jit_ms" "rust_ms" "reg/rust" "jit/reg"
+printf '%-26s %10s %12s %12s %12s %12s %10s\n' \
+  "----" "----" "---------" "------" "-------" "--------" "-------"
 
 for entry in "${cases[@]}"; do
   case_file="${entry%%:*}"
@@ -60,20 +67,26 @@ for entry in "${cases[@]}"; do
     "${bench_cmd[@]}" bench --json --mode vm-internal --vm reg \
       --iterations "$iterations" --warmup "$warmup" "$path" -- "$size" 2>/dev/null || true
   )"
+  jit_json="$(
+    "${bench_cmd[@]}" bench --json --mode jit-internal --vm reg \
+      --iterations "$iterations" --warmup "$warmup" "$path" -- "$size" 2>/dev/null || true
+  )"
 
   release_ms="$(json_field "$release_json" mean_ms)"
   if [[ "$reg_json" == \{* ]]; then
     reg_ms="$(json_field "$reg_json" mean_ms)"
-    reg_release_ratio="$(
-      REG_MS="$reg_ms" RELEASE_MS="$release_ms" perl -e '
-        my $release = $ENV{RELEASE_MS};
-        if ($release == 0) { print "inf"; } else { printf "%.2f", $ENV{REG_MS} / $release; }
-      '
-    )"
-    printf '%-26s %10s %12.3f %12.3f %12s\n' \
-      "$case_file" "$size" "$reg_ms" "$release_ms" "$reg_release_ratio"
+    reg_release_ratio="$(ratio "$reg_ms" "$release_ms")"
+    if [[ "$jit_json" == \{* ]]; then
+      jit_ms="$(json_field "$jit_json" mean_ms)"
+      jit_reg_ratio="$(ratio "$jit_ms" "$reg_ms")"
+      printf '%-26s %10s %12.3f %12.3f %12.3f %12s %10s\n' \
+        "$case_file" "$size" "$reg_ms" "$jit_ms" "$release_ms" "$reg_release_ratio" "$jit_reg_ratio"
+    else
+      printf '%-26s %10s %12.3f %12s %12.3f %12s %10s\n' \
+        "$case_file" "$size" "$reg_ms" "unsupported" "$release_ms" "$reg_release_ratio" "-"
+    fi
   else
-    printf '%-26s %10s %12s %12.3f %12s\n' \
-      "$case_file" "$size" "unsupported" "$release_ms" "-"
+    printf '%-26s %10s %12s %12s %12.3f %12s %10s\n' \
+      "$case_file" "$size" "unsupported" "unsupported" "$release_ms" "-" "-"
   fi
 done
