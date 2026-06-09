@@ -42,6 +42,16 @@
       ]
     },
     {
+      "path": "stdlib/cmp/eq.rssi",
+      "module": "cmp.eq",
+      "functions": [
+        "equals"
+      ],
+      "types": [
+        "Eq"
+      ]
+    },
+    {
       "path": "stdlib/cmp/ord.rssi",
       "module": "cmp.ord",
       "functions": [
@@ -486,6 +496,16 @@
         "Hmac.sha256_string"
       ],
       "types": []
+    },
+    {
+      "path": "stdlib/hash/hashable.rssi",
+      "module": "hash.hashable",
+      "functions": [
+        "hash_value"
+      ],
+      "types": [
+        "Hashable"
+      ]
     },
     {
       "path": "stdlib/http/client.rssi",

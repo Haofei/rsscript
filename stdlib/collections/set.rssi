@@ -1,52 +1,57 @@
+// `Set<T>` is a hash set. Its element type `T` must be `Hashable` (and therefore
+// `Eq`): a builtin hashable scalar, or a managed `struct`/`sum` that lists
+// `derives(Eq, Hash)`. The bound is checked in RSScript, so a non-hashable
+// element is rejected with a clear diagnostic instead of leaking as a rustc
+// trait-bound error.
 struct Set<T>
 
-pub fn Set.new<T>() -> fresh Set<T>
+pub fn Set.new<T: Hashable>() -> fresh Set<T>
 
-pub fn Set.len<T>(set: read Set<T>) -> Int
+pub fn Set.len<T: Hashable>(set: read Set<T>) -> Int
 
-pub fn Set.is_empty<T>(set: read Set<T>) -> Bool
+pub fn Set.is_empty<T: Hashable>(set: read Set<T>) -> Bool
 
-pub fn Set.contains<T>(
+pub fn Set.contains<T: Hashable>(
     set: read Set<T>,
     value: read T,
 ) -> Bool
 
-pub fn Set.insert<T>(
+pub fn Set.insert<T: Hashable>(
     set: mut Set<T>,
     value: read T,
 ) -> Bool
     effects(retains(value))
 
-pub fn Set.remove<T>(
+pub fn Set.remove<T: Hashable>(
     set: mut Set<T>,
     value: read T,
 ) -> Bool
 
-pub fn Set.clear<T>(set: mut Set<T>) -> Unit
+pub fn Set.clear<T: Hashable>(set: mut Set<T>) -> Unit
 
-pub fn Set.to_list<T>(set: read Set<T>) -> fresh List<T>
+pub fn Set.to_list<T: Hashable>(set: read Set<T>) -> fresh List<T>
 
-pub fn Set.for_each<T>(
+pub fn Set.for_each<T: Hashable>(
     set: read Set<T>,
     callback: noescape Fn(T) -> Unit,
 ) -> Unit
 
-pub fn Set.union<T>(
+pub fn Set.union<T: Hashable>(
     left: read Set<T>,
     right: read Set<T>,
 ) -> fresh Set<T>
 
-pub fn Set.intersection<T>(
+pub fn Set.intersection<T: Hashable>(
     left: read Set<T>,
     right: read Set<T>,
 ) -> fresh Set<T>
 
-pub fn Set.difference<T>(
+pub fn Set.difference<T: Hashable>(
     left: read Set<T>,
     right: read Set<T>,
 ) -> fresh Set<T>
 
-pub fn Set.is_subset<T>(
+pub fn Set.is_subset<T: Hashable>(
     left: read Set<T>,
     right: read Set<T>,
 ) -> Bool

@@ -1,0 +1,18 @@
+// `Hashable` lets a managed value be used as a `Map<K, V>` key or `Set<K>`
+// element, modeled on Swift's `Hashable` (which refines `Equatable`). A type
+// that is `Hashable` must also be `Eq`: two values that compare equal must hash
+// equal.
+//
+// A managed `struct` or `sum` satisfies `Hashable` by listing
+// `derives(Eq, Hash)`, which the compiler expands into a structural hash and
+// equality over every field — no hand-written boilerplate. The builtin hashable
+// scalars (`Int`, `String`, `Bool`, ...) satisfy `Hashable` directly.
+//
+// `Hashable` is pure and total: it introduces no mutation, retention, native,
+// or unsafe boundary, and adds no capability gate. It is the bound on
+// `Map<K, V>` keys and `Set<K>` elements so that graph interning, dedup, and
+// memoization over user-defined managed types are expressible while a
+// non-hashable key is rejected in RSScript instead of leaking from rustc.
+protocol Hashable {
+    fn hash_value(self: read Self) -> Int
+}

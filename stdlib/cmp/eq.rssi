@@ -1,0 +1,11 @@
+// `Eq` is total, structural value equality, modeled on Swift's `Equatable`.
+//
+// A managed `struct` or `sum` satisfies `Eq` by listing `derives(Eq)` (or
+// `derives(Ord)`, which implies `Eq`), which the compiler expands into a
+// structural equality over every field. The builtin equatable scalars
+// (`Int`, `String`, `Bool`, ...) satisfy `Eq` directly. `Eq` is a pure,
+// total contract: it introduces no mutation, retention, native, or unsafe
+// boundary.
+protocol Eq {
+    fn equals(self: read Self, other: read Self) -> Bool
+}

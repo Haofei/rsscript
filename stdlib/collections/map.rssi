@@ -1,80 +1,85 @@
+// `Map<K, V>` is a hash map. Its key type `K` must be `Hashable` (and therefore
+// `Eq`): a builtin hashable scalar, or a managed `struct`/`sum` that lists
+// `derives(Eq, Hash)`. The bound is checked in RSScript, so a non-hashable key
+// is rejected with a clear diagnostic instead of leaking as a rustc trait-bound
+// error.
 struct Map<K, V>
 
-pub fn Map.new<K, V>() -> fresh Map<K, V>
+pub fn Map.new<K: Hashable, V>() -> fresh Map<K, V>
 
-pub fn Map.len<K, V>(map: read Map<K, V>) -> Int
+pub fn Map.len<K: Hashable, V>(map: read Map<K, V>) -> Int
 
-pub fn Map.is_empty<K, V>(map: read Map<K, V>) -> Bool
+pub fn Map.is_empty<K: Hashable, V>(map: read Map<K, V>) -> Bool
 
-pub fn Map.contains_key<K, V>(
+pub fn Map.contains_key<K: Hashable, V>(
     map: read Map<K, V>,
     key: read K,
 ) -> Bool
 
-pub fn Map.get<K, V>(
+pub fn Map.get<K: Hashable, V>(
     map: read Map<K, V>,
     key: read K,
 ) -> Option<V>
 
-pub fn Map.get_or_default<K, V>(
+pub fn Map.get_or_default<K: Hashable, V>(
     map: read Map<K, V>,
     key: read K,
     default: read V,
 ) -> V
 
-pub fn Map.insert<K, V>(
+pub fn Map.insert<K: Hashable, V>(
     map: mut Map<K, V>,
     key: read K,
     value: read V,
 ) -> Unit
     effects(retains(key), retains(value))
 
-pub fn Map.insert_old<K, V>(
+pub fn Map.insert_old<K: Hashable, V>(
     map: mut Map<K, V>,
     key: read K,
     value: read V,
 ) -> Option<V>
     effects(retains(key), retains(value))
 
-pub fn Map.remove<K, V>(
+pub fn Map.remove<K: Hashable, V>(
     map: mut Map<K, V>,
     key: read K,
 ) -> Option<V>
 
-pub fn Map.clear<K, V>(map: mut Map<K, V>) -> Unit
+pub fn Map.clear<K: Hashable, V>(map: mut Map<K, V>) -> Unit
 
-pub fn Map.keys<K, V>(map: read Map<K, V>) -> fresh List<K>
+pub fn Map.keys<K: Hashable, V>(map: read Map<K, V>) -> fresh List<K>
 
-pub fn Map.values<K, V>(map: read Map<K, V>) -> fresh List<V>
+pub fn Map.values<K: Hashable, V>(map: read Map<K, V>) -> fresh List<V>
 
-pub fn Map.for_each<K, V>(
+pub fn Map.for_each<K: Hashable, V>(
     map: read Map<K, V>,
     callback: noescape Fn(K, V) -> Unit,
 ) -> Unit
 
-pub fn Map.map_values<K, V, U>(
+pub fn Map.map_values<K: Hashable, V, U>(
     map: read Map<K, V>,
     mapper: noescape Fn(V) -> U,
 ) -> fresh Map<K, U>
 
-pub fn Map.filter<K, V>(
+pub fn Map.filter<K: Hashable, V>(
     map: read Map<K, V>,
     predicate: noescape Fn(K, V) -> Bool,
 ) -> fresh Map<K, V>
 
-pub fn Map.try_fold<K, V, U: Struct, E>(
+pub fn Map.try_fold<K: Hashable, V, U: Struct, E>(
     map: read Map<K, V>,
     initial: read U,
     folder: noescape Fn(U, K, V) -> Result<fresh U, E>,
 ) -> Result<fresh U, E>
 
-pub fn Map.fold<K, V, U: Struct>(
+pub fn Map.fold<K: Hashable, V, U: Struct>(
     map: read Map<K, V>,
     initial: read U,
     folder: noescape Fn(U, K, V) -> fresh U,
 ) -> fresh U
 
-pub fn Map.merge<K, V>(
+pub fn Map.merge<K: Hashable, V>(
     left: read Map<K, V>,
     right: read Map<K, V>,
     resolver: noescape Fn(V, V) -> V,
