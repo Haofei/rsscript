@@ -3061,7 +3061,7 @@ impl<'a> RustLowerer<'a> {
             && self.expr_lowers_to_managed_handle(value)
         {
             return match effect {
-                DataEffect::Read => format!("&{}", self.lower_expr(value)),
+                DataEffect::Read => self.lower_managed_read_ref(value),
                 DataEffect::Mut => format!("&mut {}", self.lower_expr(value)),
                 DataEffect::Take => self.lower_expr(value),
             };
@@ -3072,7 +3072,7 @@ impl<'a> RustLowerer<'a> {
             && self.expr_lowers_to_managed_handle(value)
         {
             return match effect {
-                DataEffect::Read => format!("&{}", self.lower_expr(value)),
+                DataEffect::Read => self.lower_managed_read_ref(value),
                 DataEffect::Mut => format!("&mut {}", self.lower_expr(value)),
                 DataEffect::Take => self.lower_expr(value),
             };
@@ -3149,6 +3149,14 @@ impl<'a> RustLowerer<'a> {
                         && matches!(value.as_ref(), Expr::ArrayLiteral { .. }))
                 {
                     format!("&{}", self.lower_expr_for_expected_type(value, expected))
+                } else if let Expr::Ident(name, _) = value.as_ref()
+                    && self.param_effects.get(name) == Some(&DataEffect::Read)
+                {
+                    // A `read`-PARAM already lowers to `&T`; passing it on as a `read`
+                    // argument must NOT add another `&` (that produced `&&T` and an
+                    // ill-typed call, e.g. `list_push(&mut v, &&node)`). Mirrors the
+                    // `mut`-param case just below.
+                    rust_value_ident(name)
                 } else {
                     format!("&{}", self.lower_expr(value))
                 }
@@ -3347,6 +3355,20 @@ impl<'a> RustLowerer<'a> {
             | Expr::Try { value, .. } => self.infer_call_arg_type(value),
             _ => self.infer_expr_type(expr),
         }
+    }
+
+    // Lower a `read`-effect managed-handle argument to a `&T`. A managed `let` local lowers to
+    // an owned `T`, so it needs a leading `&`. A managed `read`-PARAM already lowers to `&T`
+    // (its Rust param type is a reference), so adding another `&` produced `&&T` and an
+    // ill-typed push into an owned collection (RS1101/RS1102 E0308). Detect the already-ref
+    // case and don't double-borrow.
+    fn lower_managed_read_ref(&mut self, value: &Expr) -> String {
+        if let Expr::Ident(name, _) = value
+            && matches!(self.param_effects.get(name), Some(DataEffect::Read))
+        {
+            return self.lower_expr(value);
+        }
+        format!("&{}", self.lower_expr(value))
     }
 
     fn call_arg_is_retained(&self, callee: &Callee, arg: &CallArg, _index: usize) -> bool {
