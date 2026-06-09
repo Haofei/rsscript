@@ -1,0 +1,29 @@
+// A user struct with several fields, deriving Eq+Hash, used as a Map key:
+// insert, lookup, overwrite (same key), and dedup.
+
+struct Coord derives(Clone, Eq, Hash) {
+    x: Int
+    y: Int
+    label: String
+}
+
+fn main() -> Unit {
+    let m = Map.new<Coord, Int>()
+    let a = Coord(x: 1, y: 2, label: "a")
+    let b = Coord(x: 3, y: 4, label: "b")
+    let a_dup = Coord(x: 1, y: 2, label: "a")
+
+    Map.insert(map: mut m, key: read a, value: read 10)
+    Map.insert(map: mut m, key: read b, value: read 20)
+    // Overwrite: structurally equal key replaces the existing entry.
+    Map.insert(map: mut m, key: read a_dup, value: read 99)
+
+    let here = Map.contains_key(map: read m, key: read a)
+    let got = Map.get(map: read m, key: read a_dup)
+    let n = Map.len(map: read m)
+
+    if here {
+        Log.write(message: read "found")
+    }
+    return Unit
+}

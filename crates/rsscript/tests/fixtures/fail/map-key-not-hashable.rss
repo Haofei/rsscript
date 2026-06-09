@@ -1,0 +1,15 @@
+// expect: RS0032
+
+// A struct that does not derive Hash cannot be a Map key. The Hashable bound on
+// Map keys is checked in RSScript instead of leaking as a rustc trait-bound error.
+struct Coord derives(Clone) {
+    x: Int
+    y: Int
+}
+
+fn main() -> Unit {
+    let m = Map.new<Coord, Int>()
+    let c = Coord(x: 1, y: 2)
+    Map.insert(map: mut m, key: read c, value: read 10)
+    return Unit
+}

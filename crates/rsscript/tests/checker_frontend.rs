@@ -399,6 +399,135 @@ fn check_label(actual: read String, expected: read String) -> Unit {
 }
 
 #[test]
+fn hashable_struct_is_accepted_as_map_key_and_set_element() {
+    let source = r#"
+struct Coord derives(Clone, Eq, Hash) {
+    x: Int
+    y: Int
+}
+
+fn main() -> Unit {
+    let m = Map.new<Coord, Int>()
+    let c = Coord(x: 1, y: 2)
+    Map.insert(map: mut m, key: read c, value: read 10)
+    let here = Map.contains_key(map: read m, key: read c)
+    let s = Set.new<Coord>()
+    let added = Set.insert(set: mut s, value: read c)
+    return Unit
+}
+"#;
+    assert_eq!(
+        analyze_source_with_core("hashable-key.rss", source),
+        Vec::new()
+    );
+}
+
+#[test]
+fn non_hashable_struct_map_key_is_rejected_in_rsscript() {
+    // A struct without `derives(Hash)` is not `Hashable`, so it must be rejected
+    // with RS0032 in RSScript rather than leaking a rustc trait-bound error.
+    let source = r#"
+struct Coord derives(Clone) {
+    x: Int
+    y: Int
+}
+
+fn main() -> Unit {
+    let m = Map.new<Coord, Int>()
+    let c = Coord(x: 1, y: 2)
+    Map.insert(map: mut m, key: read c, value: read 10)
+    return Unit
+}
+"#;
+    let codes = analyze_source_with_core("non-hashable-key.rss", source)
+        .into_iter()
+        .map(|diagnostic| diagnostic.code)
+        .collect::<Vec<_>>();
+    assert!(
+        codes.contains(&"RS0032".to_string()),
+        "expected RS0032, got {codes:?}"
+    );
+}
+
+#[test]
+fn non_hashable_set_element_is_rejected_in_rsscript() {
+    let source = r#"
+struct Coord derives(Clone) {
+    x: Int
+    y: Int
+}
+
+fn main() -> Unit {
+    let s = Set.new<Coord>()
+    let c = Coord(x: 1, y: 2)
+    let added = Set.insert(set: mut s, value: read c)
+    return Unit
+}
+"#;
+    let codes = analyze_source_with_core("non-hashable-set.rss", source)
+        .into_iter()
+        .map(|diagnostic| diagnostic.code)
+        .collect::<Vec<_>>();
+    assert!(
+        codes.contains(&"RS0032".to_string()),
+        "expected RS0032, got {codes:?}"
+    );
+}
+
+#[test]
+fn builtin_scalar_map_keys_remain_accepted() {
+    // Widening Map/Set keys to `K: Hashable` must not regress the common
+    // String/Int key cases.
+    let source = r#"
+fn main() -> Unit {
+    let by_name = Map.new<String, Int>()
+    Map.insert(map: mut by_name, key: read "a", value: read 1)
+    let by_id = Map.new<Int, String>()
+    Map.insert(map: mut by_id, key: read 7, value: read "seven")
+    let ids = Set.new<Int>()
+    let added = Set.insert(set: mut ids, value: read 7)
+    return Unit
+}
+"#;
+    assert_eq!(
+        analyze_source_with_core("builtin-keys.rss", source),
+        Vec::new()
+    );
+}
+
+#[test]
+fn interned_uop_struct_lowers_to_runnable_package() {
+    // Canonical target case: a tinygrad-style UOp struct used as a Map<Uop, Uop>
+    // intern key and a dedup Set<Uop>, end-to-end through Rust lowering.
+    let source = r#"
+struct Uop derives(Clone, Eq, Hash) {
+    op: Int
+    children: List<Int>
+    arg: Option<Int>
+}
+
+fn main() -> Unit {
+    let intern = Map.new<Uop, Uop>()
+    let a = Uop(op: 1, children: List.new<Int>(), arg: Some(7))
+    Map.insert(map: mut intern, key: read a, value: read a)
+    let here = Map.contains_key(map: read intern, key: read a)
+    let seen = Set.new<Uop>()
+    let added = Set.insert(set: mut seen, value: read a)
+    return Unit
+}
+"#;
+    assert_eq!(analyze_source_with_core("uop.rss", source), Vec::new());
+    let package =
+        lower_source_to_rust_package("uop.rss", source, "uop", &common::runtime_path())
+            .unwrap_or_else(|diagnostics| panic!("uop.rss: {diagnostics:?}"));
+    assert!(package.main_rs.is_some());
+    let main_rs = package.main_rs.unwrap();
+    assert!(!main_rs.contains("todo!"));
+    // The derived struct hash/eq lower to Rust derives that make it a HashMap key.
+    assert!(package.lib_rs.contains("Hash"));
+}
+
+#[test]
 fn bundled_interpreter_function_object_new_does_not_retain_closure() {
     let source = r#"
 features: local

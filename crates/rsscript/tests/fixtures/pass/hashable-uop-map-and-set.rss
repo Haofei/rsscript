@@ -1,0 +1,30 @@
+// Canonical target case: a small struct standing in for tinygrad's UOp
+// (an int op tag + a list of child ids + an optional arg) used as a
+// Map<Uop, Uop> intern key and in a dedup Set<Uop>.
+
+struct Uop derives(Clone, Eq, Hash) {
+    op: Int
+    children: List<Int>
+    arg: Option<Int>
+}
+
+fn main() -> Unit {
+    let intern = Map.new<Uop, Uop>()
+    let a = Uop(op: 1, children: List.new<Int>(), arg: Some(7))
+    let b = Uop(op: 2, children: List.new<Int>(), arg: None)
+    let a_dup = Uop(op: 1, children: List.new<Int>(), arg: Some(7))
+
+    Map.insert(map: mut intern, key: read a, value: read a)
+    Map.insert(map: mut intern, key: read b, value: read b)
+    Map.insert(map: mut intern, key: read a_dup, value: read a_dup)
+    let interned = Map.contains_key(map: read intern, key: read a_dup)
+
+    let seen = Set.new<Uop>()
+    let added = Set.insert(set: mut seen, value: read a)
+    let added_dup = Set.insert(set: mut seen, value: read a_dup)
+
+    if interned {
+        Log.write(message: read "uop interned")
+    }
+    return Unit
+}

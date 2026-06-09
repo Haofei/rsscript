@@ -1,0 +1,32 @@
+// A sealed sum (enum) that carries payload variants, deriving Eq+Hash, used as a
+// Map key. The Hashable bound accepts the enum because every variant payload
+// field (`Int`, `String`) is itself hashable; the RS0211 derive check separately
+// validates the payload fields. (v0.6 constructs nullary variant values and
+// `match`es payloads; user payload-variant construction is not yet an executable
+// form, so the key values here are the nullary variants.)
+
+sum Token derives(Clone, Eq, Hash) {
+    End
+    Number(value: Int)
+    Name(text: String)
+}
+
+fn classify(token: read Token) -> Int {
+    match token {
+        End => { return 0 }
+        Number(value) => { return value }
+        Name(text) => { return 1 }
+    }
+}
+
+fn main() -> Unit {
+    let counts = Map.new<Token, Int>()
+    let end = End
+
+    Map.insert(map: mut counts, key: read end, value: read classify(token: read end))
+    let here = Map.contains_key(map: read counts, key: read end)
+    if here {
+        Log.write(message: read "token seen")
+    }
+    return Unit
+}

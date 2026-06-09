@@ -1,0 +1,14 @@
+// expect: RS0032
+
+// A struct that does not derive Hash cannot be a Set element.
+struct Coord derives(Clone) {
+    x: Int
+    y: Int
+}
+
+fn main() -> Unit {
+    let s = Set.new<Coord>()
+    let c = Coord(x: 1, y: 2)
+    let added = Set.insert(set: mut s, value: read c)
+    return Unit
+}

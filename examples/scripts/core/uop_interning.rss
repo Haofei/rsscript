@@ -1,0 +1,52 @@
+// Graph interning / dedup over a user-defined managed type used as a hash key.
+//
+// `Uop` stands in for a tinygrad-style UOp node: an integer `op` tag, a list of
+// child ids, and an optional integer arg. Deriving `Eq, Hash` makes it a
+// `Hashable` value, so it can be a `Map<Uop, Uop>` key (interning each node to
+// its canonical instance) and a `Set<Uop>` element (dedup). No hand-written
+// hash or equality is needed; the compiler derives the structural ones.
+
+struct Uop derives(Clone, Eq, Hash) {
+    op: Int
+    children: List<Int>
+    arg: Option<Int>
+}
+
+fn main() -> Unit {
+    // Intern table: map each Uop to its canonical (first-seen) Uop.
+    let intern = Map.new<Uop, Uop>()
+
+    let a = Uop(op: 1, children: List.new<Int>(), arg: Some(7))
+    let b = Uop(op: 2, children: List.new<Int>(), arg: None)
+    // `a_again` is a structurally identical, separately-constructed value.
+    let a_again = Uop(op: 1, children: List.new<Int>(), arg: Some(7))
+
+    Map.insert(map: mut intern, key: read a, value: read a)
+    Map.insert(map: mut intern, key: read b, value: read b)
+    // Overwrite-with-same-key path: inserting a structural duplicate replaces.
+    Map.insert(map: mut intern, key: read a_again, value: read a_again)
+
+    let size = Map.len(map: read intern)
+    Log.write(message: read String.concat(
+        left: read "intern size: ",
+        right: read Int.to_string(value: read size),
+    ))
+
+    // Lookup the canonical node for a structural duplicate.
+    let found = Map.contains_key(map: read intern, key: read a_again)
+    if found {
+        Log.write(message: read "a_again interns to an existing node")
+    }
+
+    // Dedup with a Set<Uop>.
+    let seen = Set.new<Uop>()
+    let inserted_a = Set.insert(set: mut seen, value: read a)
+    let inserted_dup = Set.insert(set: mut seen, value: read a_again)
+    let unique = Set.len(set: read seen)
+    Log.write(message: read String.concat(
+        left: read "unique nodes: ",
+        right: read Int.to_string(value: read unique),
+    ))
+
+    return Unit
+}
