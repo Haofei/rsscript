@@ -1148,6 +1148,11 @@ pub(super) fn lower_generic_params(params: &[GenericParam]) -> String {
         .iter()
         .map(|param| {
             let name = rust_ident(&param.name);
+            // Plain value-type generics are cloned by RSScript's value semantics
+            // (e.g. `List.get<T>`), so they need `Clone` in generated Rust. Bounded
+            // generics keep their declared bound: protocol/managed/resource
+            // implementors aren't necessarily `Clone`, and over-constraining them
+            // (e.g. a `Writer`) would reject legitimate callers.
             match &param.bound {
                 Some(GenericBound::Managed) => format!("{name}: rsscript_runtime::ManagedValue"),
                 Some(GenericBound::Struct) => name,
@@ -1158,7 +1163,7 @@ pub(super) fn lower_generic_params(params: &[GenericParam]) -> String {
                 Some(GenericBound::Protocol(protocol)) => {
                     format!("{name}: {}", rust_ident(protocol))
                 }
-                None => name,
+                None => format!("{name}: Clone"),
             }
         })
         .collect::<Vec<_>>()

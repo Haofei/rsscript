@@ -543,6 +543,17 @@ fn backends_agree_on_manifest_inspector() {
     common::differential::assert_backends_agree("selfhost-manifest-inspector.rss", source, &[fixture]);
 }
 
+/// A generic collection implemented in RSS itself: `benchmark/selfhost_mailbox.rss`
+/// (a fixed-capacity `Mailbox<T>` over parallel lists, with oldest-first and
+/// source-filtered takes). Regression for the generic-call lowering fix (a generic
+/// function call with explicit type args used to be mis-lowered as a struct
+/// construction). interp == jit == native == force-deopt == compiled.
+#[test]
+fn backends_agree_on_selfhost_mailbox() {
+    let source = include_str!("../benchmark/selfhost_mailbox.rss");
+    common::differential::assert_backends_agree("selfhost-mailbox.rss", source, &[]);
+}
+
 /// Real self-hosted tool, cross-backend: the stdlib conformance reporter
 /// (`benchmark/selfhost_stdlib_reporter.rss`) — an IO-free, loop-heavy battery of
 /// List/Map/Option checks emitting a JSON summary. interp == jit == native ==

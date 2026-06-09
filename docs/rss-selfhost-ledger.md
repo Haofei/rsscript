@@ -161,3 +161,71 @@ Status:         open | decided | done
 - **Tests/Benchmark:** the matrix `nat/reg` and `reg/rust` columns; the two
   `selfhost_*` cases.
 - **Status:** decided.
+
+### SH-007 — can't reassign a scalar struct field through a `mut` parameter
+
+- **Tool:** Mailbox<T> (collection in RSS)
+- **Symptom:** `m.count = m.count + 1` on a `mut Mailbox` param is rejected
+  (RS0311 "`m` is a parameter, not a reassignable local").
+- **Minimal RSS:** `fn bump(m: mut Box) -> Unit { m.n = m.n + 1 }`.
+- **Backend:** all (language).
+- **Root cause:** scalar field reassignment is only allowed on `let mut` locals,
+  not through a `mut` parameter. `List` fields are reference types, so
+  `List.set(list: mut m.field, ...)` *does* mutate-in-place and propagate.
+- **Classification:** language (intended) + docs.
+- **Decision:** documented constraint. Workaround in a self-hosted collection:
+  keep mutable scalar state in a 1-element `List<Int>` (reference type) and/or
+  compute it by scanning (the Mailbox holds `next_seq` as a 1-elem list and
+  computes `count`). Not changing the language now; recorded so it's expected.
+- **Status:** decided.
+
+### SH-008 — generic function call mis-lowered as a struct construction (BUG, fixed)
+
+- **Tool:** Mailbox<T>
+- **Symptom:** `get_v<Int>(h: read h)` evaluated to a struct value
+  `get_v { h: ... }` — the call was lowered as a struct construction. (Checker
+  accepted it as a call; VM lowerer disagreed.)
+- **Minimal RSS:** `fn get_v<T>(h: read Holder<T>) -> Int { return h.v }` called
+  as `get_v<Int>(h: read h)`.
+- **Backend:** vm/jit (lowering).
+- **Root cause:** `Callee::Name` looked up `function_ids.get(name)` with the raw
+  name including type args (`"get_v<Int>"`); functions are keyed bare (`"get_v"`),
+  so it missed and fell through to struct construction.
+- **Classification:** VM (lowering bug).
+- **Decision (DONE):** strip generics in the lookup —
+  `function_ids.get(type_root_name(name))`.
+- **Tests:** `backends_agree_on_selfhost_mailbox` (5-way).
+- **Status:** done.
+
+### SH-009 — AOT generic params miss the `Clone` bound (BUG, fixed)
+
+- **Tool:** Mailbox<T>
+- **Symptom:** AOT fails to compile a generic collection that retrieves elements:
+  `the trait bound T: Clone is not satisfied`.
+- **Minimal RSS:** a generic `fn` that does `List.get<T>(...)` (clones).
+- **Backend:** aot.
+- **Root cause:** `lower_generic_params` emitted `<T>` with no `Clone`, but RSS
+  value semantics clone values (`List.get`), so generated generic Rust needs it.
+- **Classification:** AOT (lowering bug).
+- **Decision (DONE):** generated generic params now carry `Clone` (for every bound
+  except `Resource`, which is move-only).
+- **Tests:** `backends_agree_on_selfhost_mailbox` (AOT now compiles + agrees).
+- **Status:** done.
+
+### SH-010 — AOT doesn't deref a `Copy` match-binding from a `read` Option
+
+- **Tool:** Mailbox<T> (test driver)
+- **Symptom:** matching `Some(v)` on a `read Option<Int>` binds `v: &i64`; passing
+  it to a by-value `Copy` intrinsic (`String.from_int`) fails AOT with
+  `expected i64, found &i64`. (VM tolerates it; AOT is correct to reject.)
+- **Minimal RSS:** `fn f(o: read Option<Int>) { match o { Some(v) => String.from_int(value: v) ... } }`.
+- **Backend:** aot.
+- **Root cause:** same class as the `read`-float-arg fix — a `Copy` value reached
+  by reference where a by-value position is expected isn't auto-deref'd by the
+  lowerer (here the value is bound by a match on a borrowed Option).
+- **Classification:** AOT (lowering).
+- **Decision:** worked around in the Mailbox driver (match the *owned* Option from
+  the take call directly, so `v` is an owned `Int`). The general auto-deref fix is
+  the same shape as the earlier `read_effect_lowers_by_value` work; recorded for a
+  scoped follow-up.
+- **Status:** open (worked around).

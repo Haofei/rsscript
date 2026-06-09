@@ -3714,7 +3714,11 @@ impl RegLowerer<'_> {
         let dst = self.temp();
         match callee {
             Callee::Name(name) => {
-                if let Some(function) = self.function_ids.get(name).copied() {
+                // A generic call carries its type args in `name` (e.g.
+                // `get_v<Int>`); functions are keyed by their bare name, so strip
+                // the generics before the lookup — otherwise a generic *function*
+                // call falls through and is mis-lowered as a struct construction.
+                if let Some(function) = self.function_ids.get(type_root_name(name)).copied() {
                     self.emit(RegInstr::CallKnown {
                         dst,
                         function,

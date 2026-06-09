@@ -4077,9 +4077,10 @@ fn main() -> Result<Unit, MainError> {
             .contains("pub fn main() -> Result<(), MainError>")
     );
     assert!(main_rs.contains("rsscript_runtime::install_runtime_diagnostic_panic_hook();"));
-    assert!(main_rs.contains(
-        "result_runnable_example_rss::main().expect(\"RSScript main returned an error\");"
-    ));
+    // A `main` returning `Err` reports to stderr and exits non-zero rather than
+    // panicking (ledger SH-005).
+    assert!(main_rs.contains("if let Err(error) = result_runnable_example_rss::main()"));
+    assert!(main_rs.contains("std::process::exit(1);"));
 }
 
 #[test]
