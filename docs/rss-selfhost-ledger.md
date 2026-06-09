@@ -137,3 +137,27 @@ Status:         open | decided | done
 - **Tests:** `backends_all_fail_on_bad_manifest` (malformed + absent manifest,
   all backends fail). Feature differential 20/20; corpus + vm green.
 - **Status:** done.
+
+### SH-006 — on real tool code the JIT gives ~0×; AOT gives 1.6–14×
+
+- **Tool:** both (manifest inspector + stdlib reporter)
+- **Symptom (measured):** mean ms across modes —
+  | tool | vm-internal | jit-internal | jit-native | release (AOT) |
+  |------|------------|--------------|-----------|---------------|
+  | manifest inspector (IO/intrinsic) | 0.029 | 0.031 | 0.035 | **0.018** |
+  | stdlib reporter (collection loops) | 1.04 | 1.25 | 1.04 | **0.072** |
+- **Backend:** all.
+- **Root cause:** both JIT tiers accelerate only the numeric/control core (plus
+  parameter heap reads); real tool code is intrinsic calls, `Result`/`Option`
+  handling, and locally-built collections (SH-001, SH-004), none of which the JIT
+  covers — so JIT ≈ VM (occasionally *slower* from failed compile attempts). The
+  AOT compiler lowers the *whole* program (including collection ops) to native
+  Rust, so it wins big on the collection-heavy reporter (~14×).
+- **Classification:** JIT (coverage) — measured, by design.
+- **Decision:** the JIT's niche is numeric/loop kernels; **AOT is the performance
+  path for tool code**. To make the JIT help real tools would require Phase 3
+  (SH-004: native local collections) and intrinsic-in-native coverage — large.
+  The actionable near-term lever for tool speed is the AOT path, not the JIT.
+- **Tests/Benchmark:** the matrix `nat/reg` and `reg/rust` columns; the two
+  `selfhost_*` cases.
+- **Status:** decided.
