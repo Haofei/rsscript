@@ -128,11 +128,12 @@ Status:         open | decided | done
   both.)
 - **Classification:** language/spec (define the contract) + VM/AOT (make the
   entry points agree) + docs.
-- **Decision (proposed):** a `main` returning `Err` is a failed run on every
-  backend — non-zero exit, error rendered to stderr. Implement by having the VM
-  eval/run entry points report a `Result`-`Err` main as a process failure
-  (matching AOT), then add the failure-path differential test
-  (`backends_all_fail_on_bad_manifest`). Cross-cutting (eval CLI + run + harness);
-  scheduled, not done this iteration.
-- **Tests:** pending the fix (test stubbed out in `backend_differential.rs`).
-- **Status:** open.
+- **Decision:** a `main` returning `Err` is a failed run on every backend —
+  non-zero exit (1), error to stderr. **Done:** the AOT main wrapper now reports
+  the error and `std::process::exit(1)` instead of `.expect()`-panicking
+  (exit 101); the VM `eval` CLI exits 1 + stderr when `main`'s return is an `Err`
+  variant; the differential harness's VM/JIT/native backends treat a `main`-`Err`
+  as a failed run (`stdout_or_main_err`), so failure paths agree across backends.
+- **Tests:** `backends_all_fail_on_bad_manifest` (malformed + absent manifest,
+  all backends fail). Feature differential 20/20; corpus + vm green.
+- **Status:** done.

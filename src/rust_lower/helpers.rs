@@ -1638,8 +1638,12 @@ pub(super) fn rust_package_main(program: &Program, package_name: &str) -> Option
     let crate_name = cargo_crate_name(package_name);
     let call = match kind {
         RunnableMainKind::Unit => format!("{}::{}();", crate_name, rust_ident(&main.name)),
+        // A `main` returning `Err` is a failed run on every backend (ledger
+        // SH-005): report it to stderr and exit non-zero, rather than panicking.
         RunnableMainKind::ResultUnit => format!(
-            "{}::{}().expect(\"RSScript main returned an error\");",
+            "if let Err(error) = {}::{}() {{ \
+             eprintln!(\"RSScript main returned an error: {{error:?}}\"); \
+             std::process::exit(1); }}",
             crate_name,
             rust_ident(&main.name)
         ),

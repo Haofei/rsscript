@@ -15,6 +15,19 @@ pub trait Backend {
     fn run_stdout(&self, file: &str, source: &str, args: &[&str]) -> Result<String, String>;
 }
 
+/// Normalized stdout, or `Err` if `main` returned `Err` (ledger SH-005: a
+/// `main` returning `Err` is a failed run, matching the AOT backend's non-zero
+/// exit). A runnable `main` is `Unit` or `Result<Unit, E>`, so an `Err` variant
+/// in the return value is unambiguously the failure case.
+fn stdout_or_main_err(output: rsscript::EvalOutput) -> Result<String, String> {
+    if let Some(rsscript::NativeValue::Variant { name, .. }) = &output.native_value
+        && name == "Err"
+    {
+        return Err(format!("main returned {}", output.value));
+    }
+    Ok(output.stdout)
+}
+
 /// The register-VM interpreter.
 pub struct Interpreter;
 
@@ -25,8 +38,8 @@ impl Backend for Interpreter {
 
     fn run_stdout(&self, file: &str, source: &str, args: &[&str]) -> Result<String, String> {
         super::run_vm_source(file, source, args)
-            .map(|output| output.stdout)
             .map_err(|error| format!("{error:?}"))
+            .and_then(stdout_or_main_err)
     }
 }
 
@@ -55,8 +68,8 @@ impl Backend for Jit {
 
     fn run_stdout(&self, file: &str, source: &str, args: &[&str]) -> Result<String, String> {
         rsscript::reg_vm_eval_source_main_jit(file, source, args.iter().copied())
-            .map(|output| output.stdout)
             .map_err(|error| format!("{error:?}"))
+            .and_then(stdout_or_main_err)
     }
 }
 
@@ -75,8 +88,8 @@ impl Backend for NativeJit {
 
     fn run_stdout(&self, file: &str, source: &str, args: &[&str]) -> Result<String, String> {
         rsscript::reg_vm_eval_source_main_native(file, source, args.iter().copied())
-            .map(|output| output.stdout)
             .map_err(|error| format!("{error:?}"))
+            .and_then(stdout_or_main_err)
     }
 }
 
@@ -94,8 +107,8 @@ impl Backend for NativeJitForceDeopt {
 
     fn run_stdout(&self, file: &str, source: &str, args: &[&str]) -> Result<String, String> {
         rsscript::reg_vm_eval_source_main_native_force_deopt(file, source, args.iter().copied())
-            .map(|output| output.stdout)
             .map_err(|error| format!("{error:?}"))
+            .and_then(stdout_or_main_err)
     }
 }
 

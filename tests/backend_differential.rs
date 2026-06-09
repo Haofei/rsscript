@@ -553,13 +553,25 @@ fn backends_agree_on_stdlib_reporter() {
     common::differential::assert_backends_agree("selfhost-stdlib-reporter.rss", source, &[]);
 }
 
-// NOTE: a failure-path test for the manifest inspector on a malformed/absent
-// manifest is intentionally NOT here yet — it surfaced ledger item SH-005: a
-// `main` that *returns* `Err` is graceful completion on the VM (`eval` prints it,
-// exit 0) but a panic on AOT (exit 101), so the backends don't agree on the
-// outcome. That divergence must be resolved (SH-005) before such a test can pass.
-// The genuine runtime-failure path (an error *thrown* by an intrinsic, not
-// returned) is covered by the out-of-bounds `List.get` tests below.
+/// Failure-path differential for a real tool (gates ledger SH-005): the manifest
+/// inspector must fail on every backend when the manifest is malformed (missing
+/// `[package]`) or absent — a `main` returning `Err` is now a failed run on the
+/// VM, JIT, native, and AOT alike.
+#[test]
+fn backends_all_fail_on_bad_manifest() {
+    let source = include_str!("../benchmark/selfhost_manifest_inspector.rss");
+    let missing_field = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/benchmark/fixtures/package-bad/rsspkg.toml"
+    );
+    common::differential::assert_backends_all_fail("bad-manifest.rss", source, &[missing_field]);
+
+    let absent = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/benchmark/fixtures/does-not-exist/rsspkg.toml"
+    );
+    common::differential::assert_backends_all_fail("absent-manifest.rss", source, &[absent]);
+}
 
 /// Failure-path differential (the case that matters most for semantic hardening):
 /// an out-of-bounds `List.get` must error on *every* backend. The loop-condition

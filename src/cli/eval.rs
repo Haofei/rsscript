@@ -2,7 +2,8 @@ use std::fs;
 use std::process::ExitCode;
 
 use rsscript::{
-    EvalError, format_diagnostics_human, format_diagnostics_json, reg_vm_eval_source_main_with_args,
+    EvalError, NativeValue, format_diagnostics_human, format_diagnostics_json,
+    reg_vm_eval_source_main_with_args,
 };
 
 use super::print_usage;
@@ -66,6 +67,16 @@ pub(crate) fn run_eval(args: &[String]) -> ExitCode {
         Ok(output) => {
             print!("{}", output.stdout);
             eprint!("{}", output.stderr);
+            // A `main` returning `Err` is a failed run (ledger SH-005): report it
+            // to stderr and exit non-zero, matching the AOT backend (a runnable
+            // `main` is `Unit` or `Result<Unit, E>`, so an `Err` variant here is
+            // unambiguously the failure case).
+            if let Some(NativeValue::Variant { name, .. }) = &output.native_value
+                && name == "Err"
+            {
+                eprintln!("RSScript main returned an error: {}", output.value);
+                return ExitCode::from(1);
+            }
             println!("{}", output.value);
             ExitCode::SUCCESS
         }
