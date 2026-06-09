@@ -1,0 +1,15 @@
+// Regression: parenthesized sub-expressions in arithmetic must parse (trim_outer
+// double-call bug left the closing paren in range, yielding RS0015 Unknown).
+fn compute(a: Int, b: Int, c: Int) -> Int {
+    let g = (a + b)
+    let h = (a + b) * c
+    let i = a * (b + c)
+    let j = ((a + b) * c) - a
+    let k = (a + b) / c
+    return ((g + h) + i) + ((j + k) + 0)
+}
+
+fn main() -> Unit {
+    Log.write(message: read Int.to_string(value: read compute(a: 2, b: 3, c: 4)))
+    return Unit
+}

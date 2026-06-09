@@ -2217,8 +2217,7 @@ fn split_match_pattern_guard(tokens: &[Token], start: usize, end: usize) -> Opti
 }
 
 fn parse_match_pattern(tokens: &[Token], start: usize, end: usize) -> Option<MatchPattern> {
-    let start = trim_outer(tokens, start, end).0;
-    let end = trim_outer(tokens, start, end).1;
+    let (start, end) = trim_outer(tokens, start, end);
     if start >= end {
         return None;
     }
@@ -2441,8 +2440,7 @@ fn starts_like_constructor(name: &str) -> bool {
 }
 
 fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
-    let start = trim_outer(tokens, start, end).0;
-    let end = trim_outer(tokens, start, end).1;
+    let (start, end) = trim_outer(tokens, start, end);
     if start >= end {
         return None;
     }
