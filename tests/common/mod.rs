@@ -53,6 +53,18 @@ pub fn error_codes(file: &str, source: &str) -> Vec<String> {
 /// repeated runs across the suite don't rebuild. Panics if the program fails to
 /// lower or run.
 pub fn run_compiled_source(file: &str, source: &str, args: &[&str]) -> (String, String) {
+    try_run_compiled_source(file, source, args)
+        .unwrap_or_else(|error| panic!("compiled backend for `{file}` failed: {error}"))
+}
+
+/// Like [`run_compiled_source`] but returns `Err` (instead of panicking) when the
+/// generated program fails at runtime — for failure-path differential tests.
+/// Successful runs are cached; failures recompile (they are rare).
+pub fn try_run_compiled_source(
+    file: &str,
+    source: &str,
+    args: &[&str],
+) -> Result<(String, String), String> {
     let cache_dir =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("target/rsscript-corpus-compiled-cache");
     fs::create_dir_all(&cache_dir).expect("compiled cache dir should create");
@@ -63,12 +75,12 @@ pub fn run_compiled_source(file: &str, source: &str, args: &[&str]) -> (String, 
         fs::read_to_string(&stdout_path),
         fs::read_to_string(&stderr_path),
     ) {
-        return (stdout, stderr);
+        return Ok((stdout, stderr));
     }
-    let (stdout, stderr) = compile_and_run(file, source, args);
+    let (stdout, stderr) = compile_and_run(file, source, args)?;
     let _ = fs::write(&stdout_path, &stdout);
     let _ = fs::write(&stderr_path, &stderr);
-    (stdout, stderr)
+    Ok((stdout, stderr))
 }
 
 fn compiled_cache_key(file: &str, source: &str, args: &[&str]) -> String {
@@ -79,7 +91,7 @@ fn compiled_cache_key(file: &str, source: &str, args: &[&str]) -> String {
     format!("{:016x}", hasher.finish())
 }
 
-fn compile_and_run(file: &str, source: &str, args: &[&str]) -> (String, String) {
+fn compile_and_run(file: &str, source: &str, args: &[&str]) -> Result<(String, String), String> {
     let runtime_path = format!("{}/runtime", env!("CARGO_MANIFEST_DIR"));
     let package_name = format!(
         "rsscript_{}",
@@ -114,11 +126,17 @@ fn compile_and_run(file: &str, source: &str, args: &[&str]) -> (String, String) 
     let stdout = String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n");
     let stderr = String::from_utf8_lossy(&output.stderr).replace("\r\n", "\n");
     let _ = fs::remove_dir_all(&package_dir);
-    assert!(
-        output.status.success(),
-        "compiled backend for `{file}` failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
-    );
-    (stdout, stderr)
+    if output.status.success() {
+        Ok((stdout, stderr))
+    } else {
+        // A runtime failure of the generated program (e.g. a panic on an
+        // out-of-bounds access). Reported as `Err` so failure-path differential
+        // tests can assert every backend fails.
+        Err(format!(
+            "compiled backend for `{file}` exited with {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+            output.status
+        ))
+    }
 }
 
 pub fn fixture_paths(directory: &str) -> Vec<PathBuf> {

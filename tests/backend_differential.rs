@@ -527,6 +527,56 @@ fn main() -> Unit {
     common::differential::assert_backends_agree("jit-native-heap-reads.rss", source, &[]);
 }
 
+/// Failure-path differential (the case that matters most for semantic hardening):
+/// an out-of-bounds `List.get` must error on *every* backend. The loop-condition
+/// variant specifically guards the native tier's immediate-bail behaviour — a
+/// failed read must fall back at once, not loop forever or use a garbage 0.
+#[test]
+fn backends_all_fail_on_out_of_bounds_list_get_in_condition() {
+    let source = "\
+fn scan(xs: read List<Int>) -> Int {
+    let mut i = 0
+    let mut acc = 0
+    while List.get<Int>(list: read xs, index: i) >= 0 {
+        acc = acc + i
+        i = i + 1
+    }
+    return acc
+}
+
+fn main() -> Unit {
+    let xs = [1, 2, 3]
+    Log.write(message: read String.from_int(value: scan(xs: read xs)))
+    return Unit
+}
+";
+    common::differential::assert_backends_all_fail("oob-list-get-loop.rss", source, &[]);
+}
+
+/// Failure-path differential: a plain out-of-bounds `List.get` in a hot loop body
+/// (the index runs past the list) errors on every backend.
+#[test]
+fn backends_all_fail_on_out_of_bounds_list_get() {
+    let source = "\
+fn sum_n(xs: read List<Int>, n: Int) -> Int {
+    let mut i = 0
+    let mut acc = 0
+    while i < n {
+        acc = acc + List.get<Int>(list: read xs, index: i)
+        i = i + 1
+    }
+    return acc
+}
+
+fn main() -> Unit {
+    let xs = [1, 2, 3]
+    Log.write(message: read String.from_int(value: sum_n(xs: read xs, n: read 8)))
+    return Unit
+}
+";
+    common::differential::assert_backends_all_fail("oob-list-get.rss", source, &[]);
+}
+
 /// JIT-eligible functions that call other JIT-eligible functions: the tier-0
 /// executor now drives non-suspending, non-recursive callees in-line. `accumulate`
 /// has a loop (so it is JIT'd) and calls two leaf helpers — interp == jit ==

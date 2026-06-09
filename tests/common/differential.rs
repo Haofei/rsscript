@@ -39,8 +39,7 @@ impl Backend for Compiled {
     }
 
     fn run_stdout(&self, file: &str, source: &str, args: &[&str]) -> Result<String, String> {
-        let (stdout, _stderr) = super::run_compiled_source(file, source, args);
-        Ok(stdout)
+        super::try_run_compiled_source(file, source, args).map(|(stdout, _stderr)| stdout)
     }
 }
 
@@ -123,6 +122,24 @@ pub fn all_backends() -> Vec<Box<dyn Backend>> {
 /// (so proptest shrinks) with the diverging pair on mismatch.
 pub fn assert_backends_agree(file: &str, source: &str, args: &[&str]) {
     assert_backends_agree_on(file, source, args, &all_backends());
+}
+
+/// Failure-path differential: assert that **every** backend fails (returns
+/// `Err`) on `source`. This is the semantic-hardening check the success-path
+/// [`assert_backends_agree`] can't make — it catches a backend that silently
+/// succeeds (or, for the native tier, loops/returns garbage) where the others
+/// error. Error *messages* aren't compared (each backend formats differently);
+/// the contract is that a failing program fails on all of them.
+pub fn assert_backends_all_fail(file: &str, source: &str, args: &[&str]) {
+    for backend in all_backends() {
+        if let Ok(stdout) = backend.run_stdout(file, source, args) {
+            panic!(
+                "backend `{}` unexpectedly succeeded on a failure-path program \
+                 {file} (stdout: {stdout:?})\n--- source ---\n{source}",
+                backend.name()
+            );
+        }
+    }
 }
 
 /// Like [`assert_backends_agree`] but with an explicit backend set.
