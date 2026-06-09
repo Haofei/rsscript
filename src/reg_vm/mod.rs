@@ -5997,8 +5997,31 @@ compile_ms={:.3} run_ms={:.3}",
 thread_local! {
     /// Heap values for the in-flight native call, indexed by handle.
     static JIT_HEAP_ARGS: RefCell<Vec<VmValue>> = const { RefCell::new(Vec::new()) };
-    /// Set when a helper can't satisfy a read → the VM falls back.
-    static JIT_BAILED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// `1` when a helper can't satisfy a read. The generated code holds a pointer
+    /// to this byte and branches to fallback immediately after each heap read, so
+    /// a bad read can't keep executing; the VM also checks it after the call.
+    static JIT_BAILED: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+
+/// Address of the per-thread bail flag, passed into compiled code so it can load
+/// and branch on it. The thread-local outlives every native call on this thread,
+/// so the pointer is valid for the call's duration. (Only the indirect deref in
+/// `vm-jit` is `unsafe`; producing the address here is not.)
+#[cfg(feature = "native-jit")]
+fn jit_bail_flag_ptr() -> *const u8 {
+    JIT_BAILED.with(|flag| flag.as_ptr() as *const u8)
+}
+
+/// Clears the per-call heap-arg table on drop, so a native attempt never retains
+/// its cloned struct/list arguments past the call (on success, bail, or error).
+#[cfg(feature = "native-jit")]
+struct JitHeapArgsGuard;
+
+#[cfg(feature = "native-jit")]
+impl Drop for JitHeapArgsGuard {
+    fn drop(&mut self) {
+        JIT_HEAP_ARGS.with(|table| table.borrow_mut().clear());
+    }
 }
 
 #[cfg(feature = "native-jit")]
@@ -6062,7 +6085,7 @@ extern "C" fn rss_jit_field_int(handle: i64, slot: i64) -> i64 {
     {
         Some(value) => value,
         None => {
-            JIT_BAILED.with(|b| b.set(true));
+            JIT_BAILED.with(|b| b.set(1));
             0
         }
     }
@@ -6073,7 +6096,7 @@ extern "C" fn rss_jit_list_len(handle: i64) -> i64 {
     match jit_heap_read(handle, jit_list_len) {
         Some(value) => value,
         None => {
-            JIT_BAILED.with(|b| b.set(true));
+            JIT_BAILED.with(|b| b.set(1));
             0
         }
     }
@@ -6084,7 +6107,7 @@ extern "C" fn rss_jit_list_get_int(handle: i64, index: i64) -> i64 {
     match jit_heap_read(handle, |value| jit_list_get_int(value, index)) {
         Some(value) => value,
         None => {
-            JIT_BAILED.with(|b| b.set(true));
+            JIT_BAILED.with(|b| b.set(1));
             0
         }
     }
@@ -6265,9 +6288,10 @@ impl RegVm {
         // Phase 2: marshal each argument to 64 bits per its inferred parameter
         // type. Scalars unbox directly; a `Handle` (struct/list) is registered in
         // the per-call heap table and passed as its index, for the host helpers to
-        // read. Reset the table + bail flag first.
-        JIT_HEAP_ARGS.with(|table| table.borrow_mut().clear());
-        JIT_BAILED.with(|flag| flag.set(false));
+        // read. Reset the bail flag; a drop guard clears the (possibly large) heap
+        // table on every exit path so cloned args aren't retained after the call.
+        JIT_BAILED.with(|flag| flag.set(0));
+        let _heap_guard = JitHeapArgsGuard;
         let mut args = Vec::with_capacity(func.params);
         for (index, param_type) in param_types.iter().enumerate() {
             let value = self.reg(base + index);
@@ -6305,9 +6329,13 @@ impl RegVm {
         // is boxed per the function's return type (a float register stored its
         // `f64` bit pattern).
         let started = std::time::Instant::now();
-        let result = self.native.as_ref()?.module.call(id, &args);
+        let result = self
+            .native
+            .as_ref()?
+            .module
+            .call(id, &args, jit_bail_flag_ptr());
         let elapsed = started.elapsed().as_nanos();
-        let helper_bailed = JIT_BAILED.with(|flag| flag.get());
+        let helper_bailed = JIT_BAILED.with(|flag| flag.get()) != 0;
         let native = self.native.as_mut()?;
         native.stats.run_nanos += elapsed;
         match result {

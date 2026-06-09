@@ -55,7 +55,7 @@ pub struct HostHelpers {
 /// producer (`rsscript`) translates its private bytecode into this stable,
 /// versioned surface, so the two crates are decoupled: a breaking IR change bumps
 /// this and the producer is updated in lock-step.
-pub const IR_VERSION: u32 = 1;
+pub const IR_VERSION: u32 = 2;
 
 /// Signed integer comparison (the four ordered comparisons; equality is its own
 /// instruction so it can also apply to booleans).
@@ -257,9 +257,12 @@ impl JitFunction {
 }
 
 /// The native ABI of every compiled function:
-/// `(args_ptr, n_args, out_ptr) -> completed`. Returns `1` and writes the result
-/// to `*out` on success, or `0` (leaving `*out` untouched) to request fallback.
-type CompiledAbi = unsafe extern "C" fn(*const i64, usize, *mut i64) -> u8;
+/// `(args_ptr, n_args, out_ptr, bail_ptr) -> completed`. Returns `1` and writes
+/// the result to `*out` on success, or `0` (leaving `*out` untouched) to request
+/// fallback. `bail_ptr` points at a `u8` flag the host helpers set when a heap
+/// read can't be satisfied; the generated code loads it after every helper call
+/// and branches to fallback immediately, so a bad read can't keep executing.
+type CompiledAbi = unsafe extern "C" fn(*const i64, usize, *mut i64, *const u8) -> u8;
 
 #[derive(Debug)]
 pub struct JitError(pub String);
@@ -361,6 +364,7 @@ impl NativeModule {
         self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // args ptr
         self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // n_args
         self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // out ptr
+        self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // bail flag ptr
         self.ctx
             .func
             .signature
@@ -402,13 +406,23 @@ impl NativeModule {
     /// interpreter). This is the **safe** boundary: the only `unsafe` is the call
     /// through a pointer this module emitted with the matching ABI, and `args`
     /// is passed as a read-only slice.
-    pub fn call(&self, id: CompiledId, args: &[i64]) -> Option<i64> {
+    /// `bail_ptr` points at a `u8` the caller resets to `0` before the call; host
+    /// helpers set it to `1` on an unsatisfiable heap read, and the generated code
+    /// branches to fallback as soon as it sees it set. Returns `None` (fallback) on
+    /// either a guard bail or a helper bail.
+    // `call` is the deliberate *safe* boundary (see the type docs): marking it
+    // `unsafe` would force the `#![forbid(unsafe_code)]` consumer into `unsafe`.
+    // `bail_ptr` must point at a readable `u8` valid for the call (the consumer
+    // passes a thread-local's address); the generated code only ever loads it.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub fn call(&self, id: CompiledId, args: &[i64], bail_ptr: *const u8) -> Option<i64> {
         let f = self.funcs[id.0];
         let mut out: i64 = 0;
         // SAFETY: `f` was produced by `compile` with the `CompiledAbi` signature;
-        // it reads `args.len()` i64s from `args.as_ptr()` and writes one i64 to
-        // `&mut out`. The generated code never retains the pointers.
-        let completed = unsafe { f(args.as_ptr(), args.len(), &mut out as *mut i64) };
+        // it reads `args.len()` i64s from `args.as_ptr()`, writes one i64 to
+        // `&mut out`, and only ever loads (never stores) the `u8` at `bail_ptr`.
+        // The generated code never retains the pointers.
+        let completed = unsafe { f(args.as_ptr(), args.len(), &mut out as *mut i64, bail_ptr) };
         if completed != 0 { Some(out) } else { None }
     }
 }
@@ -450,6 +464,7 @@ fn build_function(
     let params = bcx.block_params(entry).to_vec();
     let args_ptr = params[0];
     let out_ptr = params[2];
+    let bail_ptr = params[3];
     for (i, &var) in vars.iter().take(program.n_params as usize).enumerate() {
         let v = bcx
             .ins()
@@ -711,12 +726,16 @@ fn build_function(
                 let slot_v = bcx.ins().iconst(types::I64, i64::from(*slot));
                 let call = bcx.ins().call(field_int_ref, &[handle, slot_v]);
                 let result = bcx.inst_results(call)[0];
+                let cont = bail_if_helper_failed(&mut bcx, bail_ptr, fallback);
+                bcx.switch_to_block(cont);
                 bcx.def_var(reg(*dst), result);
             }
             JitInstr::ListLen { dst, base } => {
                 let handle = bcx.use_var(reg(*base));
                 let call = bcx.ins().call(list_len_ref, &[handle]);
                 let result = bcx.inst_results(call)[0];
+                let cont = bail_if_helper_failed(&mut bcx, bail_ptr, fallback);
+                bcx.switch_to_block(cont);
                 bcx.def_var(reg(*dst), result);
             }
             JitInstr::ListGetInt { dst, base, index } => {
@@ -724,6 +743,8 @@ fn build_function(
                 let index_v = bcx.use_var(reg(*index));
                 let call = bcx.ins().call(list_get_int_ref, &[handle, index_v]);
                 let result = bcx.inst_results(call)[0];
+                let cont = bail_if_helper_failed(&mut bcx, bail_ptr, fallback);
+                bcx.switch_to_block(cont);
                 bcx.def_var(reg(*dst), result);
             }
         }
@@ -749,6 +770,14 @@ fn bail_if(bcx: &mut FunctionBuilder, cond: Value, fallback: Block) -> Block {
     let cont = bcx.create_block();
     bcx.ins().brif(cond, fallback, &[], cont, &[]);
     cont
+}
+
+/// Load the host-helper bail flag and branch to `fallback` if a preceding heap
+/// read flagged failure — checked immediately after each helper call so a bad
+/// read never keeps executing. Returns the continuation block.
+fn bail_if_helper_failed(bcx: &mut FunctionBuilder, bail_ptr: Value, fallback: Block) -> Block {
+    let flag = bcx.ins().load(types::I8, MemFlags::trusted(), bail_ptr, 0);
+    bail_if(bcx, flag, fallback)
 }
 
 /// Checked division / remainder matching the interpreter: bail on divide-by-zero
@@ -872,7 +901,7 @@ mod tests {
                 ],
             ))
             .unwrap();
-        let call = |a: f64, b: f64| f64::from_bits(m.call(id, &[a.to_bits() as i64, b.to_bits() as i64]).unwrap() as u64);
+        let call = |a: f64, b: f64| f64::from_bits(m.call(id, &[a.to_bits() as i64, b.to_bits() as i64], &0u8).unwrap() as u64);
         assert_eq!(call(2.5, 4.0), 2.5 * 4.0 - 2.5);
         assert_eq!(call(3.0, 0.0), -3.0);
         let _ = Int; // silence unused in case
@@ -896,10 +925,10 @@ mod tests {
                 ],
             ))
             .unwrap();
-        assert_eq!(m.call(id, &[3, 4]), Some(7));
-        assert_eq!(m.call(id, &[-10, 4]), Some(-6));
+        assert_eq!(m.call(id, &[3, 4], &0u8), Some(7));
+        assert_eq!(m.call(id, &[-10, 4], &0u8), Some(-6));
         // overflow bails:
-        assert_eq!(m.call(id, &[i64::MAX, 1]), None);
+        assert_eq!(m.call(id, &[i64::MAX, 1], &0u8), None);
     }
 
     #[test]
@@ -934,9 +963,9 @@ mod tests {
             JitInstr::Return { src: 1 },  // 8 end
         ];
         let id = m.compile(&f(1, 4, code)).unwrap();
-        assert_eq!(m.call(id, &[10]), Some(55));
-        assert_eq!(m.call(id, &[0]), Some(0));
-        assert_eq!(m.call(id, &[100]), Some(5050));
+        assert_eq!(m.call(id, &[10], &0u8), Some(55));
+        assert_eq!(m.call(id, &[0], &0u8), Some(0));
+        assert_eq!(m.call(id, &[100], &0u8), Some(5050));
     }
 
     #[test]
@@ -956,8 +985,8 @@ mod tests {
                 ],
             ))
             .unwrap();
-        assert_eq!(m.call(id, &[20, 5]), Some(4));
-        assert_eq!(m.call(id, &[20, 0]), None);
-        assert_eq!(m.call(id, &[i64::MIN, -1]), None);
+        assert_eq!(m.call(id, &[20, 5], &0u8), Some(4));
+        assert_eq!(m.call(id, &[20, 0], &0u8), None);
+        assert_eq!(m.call(id, &[i64::MIN, -1], &0u8), None);
     }
 }
