@@ -1,0 +1,5 @@
+[interfaces]
+paths = ["interface"]
+
+[sources]
+paths = ["src"]

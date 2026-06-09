@@ -110,3 +110,29 @@ Status:         open | decided | done
 - **Tests:** `backends_agree_on_stdlib_reporter` (5-way).
 - **Benchmark:** `selfhost_stdlib_reporter.rss` in the matrix.
 - **Status:** open (informs Phase 3).
+
+### SH-005 — `main` returning `Err` diverges: VM exit 0 vs AOT exit 101
+
+- **Tool:** manifest inspector (failure path)
+- **Symptom:** running the inspector on a malformed manifest (so `main() ->
+  Result<Unit, String>` returns `Err`):
+  - VM (`rss eval`): prints `Err { value: "missing JSON field \`package\`" }`,
+    **exit 0**.
+  - AOT (`rss run`): `panicked … RSScript main returned an error: …`, **exit 101**.
+- **Minimal RSS:** `fn main() -> Result<Unit, String> { return Err("boom") }`.
+- **Backend:** vm vs aot (divergence).
+- **Root cause:** the two entry points surface a `main` that *returns* `Err`
+  differently — the VM eval wrapper treats it as a normal completion (the `Err`
+  is just the return value), the AOT `main` wrapper panics. (Distinct from an
+  error *thrown* by an intrinsic, e.g. out-of-bounds `List.get`, which fails on
+  both.)
+- **Classification:** language/spec (define the contract) + VM/AOT (make the
+  entry points agree) + docs.
+- **Decision (proposed):** a `main` returning `Err` is a failed run on every
+  backend — non-zero exit, error rendered to stderr. Implement by having the VM
+  eval/run entry points report a `Result`-`Err` main as a process failure
+  (matching AOT), then add the failure-path differential test
+  (`backends_all_fail_on_bad_manifest`). Cross-cutting (eval CLI + run + harness);
+  scheduled, not done this iteration.
+- **Tests:** pending the fix (test stubbed out in `backend_differential.rs`).
+- **Status:** open.

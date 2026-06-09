@@ -553,6 +553,14 @@ fn backends_agree_on_stdlib_reporter() {
     common::differential::assert_backends_agree("selfhost-stdlib-reporter.rss", source, &[]);
 }
 
+// NOTE: a failure-path test for the manifest inspector on a malformed/absent
+// manifest is intentionally NOT here yet — it surfaced ledger item SH-005: a
+// `main` that *returns* `Err` is graceful completion on the VM (`eval` prints it,
+// exit 0) but a panic on AOT (exit 101), so the backends don't agree on the
+// outcome. That divergence must be resolved (SH-005) before such a test can pass.
+// The genuine runtime-failure path (an error *thrown* by an intrinsic, not
+// returned) is covered by the out-of-bounds `List.get` tests below.
+
 /// Failure-path differential (the case that matters most for semantic hardening):
 /// an out-of-bounds `List.get` must error on *every* backend. The loop-condition
 /// variant specifically guards the native tier's immediate-bail behaviour — a
