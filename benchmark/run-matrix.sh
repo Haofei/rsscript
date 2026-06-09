@@ -39,6 +39,7 @@ cases=(
   "sorted_map_insert.rss:8000"
   "struct_field_rw.rss:200000"
   "deque_queue.rss:50000"
+  "selfhost_manifest_inspector.rss:benchmark/fixtures/package-medium/rsspkg.toml"
 )
 
 json_field() {

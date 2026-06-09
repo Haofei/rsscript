@@ -107,6 +107,8 @@ struct BenchResult {
     min: Duration,
     mean: Duration,
     max: Duration,
+    /// Native-JIT telemetry for `jit-native` mode (`--json` only); `None` otherwise.
+    jit: Option<serde_json::Value>,
 }
 
 fn parse_bench_args(args: &[String]) -> Result<BenchOptions<'_>, String> {
@@ -356,14 +358,23 @@ fn run_reg_vm_native_bench(options: &BenchOptions<'_>) -> Result<BenchResult, St
             run_once()?;
             measurements.push(start.elapsed());
         }
-        Ok(summarize_measurements(
+        let mut result = summarize_measurements(
             benchmark_name(options.path),
             options.mode,
             options.vm,
             options.iterations,
             options.warmup,
             &measurements,
-        ))
+        );
+        // One extra run to capture native-tier telemetry for `--json` output, so
+        // the matrix shows *why* a workload is (or isn't) JIT-accelerated.
+        if options.json {
+            let (_output, stats) = executable
+                .eval_main_with_args_native_with_stats(options.program_args.iter().copied())
+                .map_err(format_eval_error)?;
+            result.jit = Some(stats.to_json());
+        }
+        Ok(result)
     }
 }
 
@@ -547,6 +558,7 @@ fn run_internal_benchmark_binary(
         min: nanos("min_nanos")?,
         mean: nanos("mean_nanos")?,
         max: nanos("max_nanos")?,
+        jit: None,
     })
 }
 
@@ -653,6 +665,7 @@ fn summarize_measurements(
         min,
         mean,
         max,
+        jit: None,
     }
 }
 
@@ -671,7 +684,7 @@ fn bench_result_human(result: &BenchResult) -> String {
 }
 
 fn bench_result_json(result: &BenchResult) -> String {
-    serde_json::json!({
+    let mut value = serde_json::json!({
         "name": result.name,
         "mode": result.mode.as_str(),
         "vm": result.vm.as_str(),
@@ -680,8 +693,11 @@ fn bench_result_json(result: &BenchResult) -> String {
         "min_ms": millis(result.min),
         "mean_ms": millis(result.mean),
         "max_ms": millis(result.max),
-    })
-    .to_string()
+    });
+    if let Some(jit) = &result.jit {
+        value["jit"] = jit.clone();
+    }
+    value.to_string()
 }
 
 fn benchmark_name(path: &str) -> String {

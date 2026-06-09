@@ -1255,6 +1255,17 @@ impl RegVmExecutable {
         args: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<EvalOutput, EvalError> {
         self.eval_main_with_args_native_inner(args, 0, false)
+            .map(|(output, _stats)| output)
+    }
+
+    /// Like [`Self::eval_main_with_args_native`] but also returns the native-tier
+    /// [`NativeStats`] from the run (for benchmark/telemetry reporting).
+    #[cfg(feature = "native-jit")]
+    pub fn eval_main_with_args_native_with_stats(
+        &self,
+        args: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Result<(EvalOutput, NativeStats), EvalError> {
+        self.eval_main_with_args_native_inner(args, 0, false)
     }
 
     /// Run `main` with the native tier in **deopt stress mode**: the native code
@@ -1267,6 +1278,7 @@ impl RegVmExecutable {
         args: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<EvalOutput, EvalError> {
         self.eval_main_with_args_native_inner(args, 0, true)
+            .map(|(output, _stats)| output)
     }
 
     #[cfg(feature = "native-jit")]
@@ -1275,7 +1287,7 @@ impl RegVmExecutable {
         args: impl IntoIterator<Item = impl Into<String>>,
         tier_up_threshold: u32,
         force_bail: bool,
-    ) -> Result<EvalOutput, EvalError> {
+    ) -> Result<(EvalOutput, NativeStats), EvalError> {
         let mut vm = RegVm::new(
             Rc::clone(&self.unit),
             args.into_iter().map(Into::into).collect(),
@@ -1293,15 +1305,23 @@ impl RegVmExecutable {
         {
             eprintln!("{}", native.stats.summary());
         }
+        let stats = vm
+            .native
+            .as_ref()
+            .map(|native| native.stats.clone())
+            .unwrap_or_default();
         let display_value = value.display();
         let native_value = value.native_value();
-        Ok(EvalOutput {
-            value: display_value.clone(),
-            display_value,
-            native_value,
-            stdout: vm.stdout,
-            stderr: vm.stderr,
-        })
+        Ok((
+            EvalOutput {
+                value: display_value.clone(),
+                display_value,
+                native_value,
+                stdout: vm.stdout,
+                stderr: vm.stderr,
+            },
+            stats,
+        ))
     }
 
     /// Like [`eval_main_with_args_jit`] but with native host bindings, using the
@@ -5935,7 +5955,7 @@ struct NativeState {
 /// Native-JIT telemetry. The VM is single-threaded, so plain counters suffice.
 #[cfg(feature = "native-jit")]
 #[derive(Debug, Default, Clone)]
-pub(crate) struct NativeStats {
+pub struct NativeStats {
     /// Hot functions that reached the native tier (passed tiering, not force-bail).
     pub considered: u64,
     /// Calls deferred below the tier-up threshold (still on the interpreter).
@@ -5979,6 +5999,23 @@ compile_ms={:.3} run_ms={:.3}",
             self.compile_nanos as f64 / 1.0e6,
             self.run_nanos as f64 / 1.0e6,
         )
+    }
+
+    /// Telemetry as JSON, for the `jit` field of `rss bench --json` output.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "considered": self.considered,
+            "translated": self.translated,
+            "compiled": self.compiled,
+            "not_eligible": self.not_eligible,
+            "compile_failed": self.compile_failed,
+            "native_calls": self.native_calls,
+            "bails": self.native_bails,
+            "arg_mismatch": self.arg_mismatch,
+            "tier_deferred": self.tier_deferred,
+            "compile_ms": self.compile_nanos as f64 / 1.0e6,
+            "run_ms": self.run_nanos as f64 / 1.0e6,
+        })
     }
 }
 

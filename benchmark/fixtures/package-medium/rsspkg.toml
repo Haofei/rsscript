@@ -1,0 +1,15 @@
+[package]
+name = "medium-pkg"
+version = "1.2.3"
+edition = "2026"
+
+[interfaces]
+paths = ["interface", "vendor/interface"]
+
+[sources]
+paths = ["src", "src/extra"]
+
+[dependencies]
+rss-agent = { path = "../agent" }
+rss-json = { path = "../json" }
+rss-toml = { path = "../toml" }

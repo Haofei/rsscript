@@ -527,6 +527,22 @@ fn main() -> Unit {
     common::differential::assert_backends_agree("jit-native-heap-reads.rss", source, &[]);
 }
 
+/// Real self-hosted tool, cross-backend: the RSS package manifest inspector
+/// (`benchmark/selfhost_manifest_inspector.rss`) parses a fixture `rsspkg.toml`
+/// and emits a JSON report. interp == jit == native == force-deopt == compiled —
+/// a hardening check on a realistic intrinsic/IO/error-handling workload (not a
+/// numeric microbenchmark). An absolute fixture path keeps every backend (incl.
+/// the AOT subprocess) reading the same file.
+#[test]
+fn backends_agree_on_manifest_inspector() {
+    let source = include_str!("../benchmark/selfhost_manifest_inspector.rss");
+    let fixture = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/benchmark/fixtures/package-medium/rsspkg.toml"
+    );
+    common::differential::assert_backends_agree("selfhost-manifest-inspector.rss", source, &[fixture]);
+}
+
 /// Failure-path differential (the case that matters most for semantic hardening):
 /// an out-of-bounds `List.get` must error on *every* backend. The loop-condition
 /// variant specifically guards the native tier's immediate-bail behaviour — a

@@ -1,0 +1,52 @@
+[package]
+name = "large-pkg"
+version = "2.0.0"
+edition = "2026"
+
+[interfaces]
+paths = ["interface"]
+
+[sources]
+paths = ["src"]
+
+[dependencies]
+dep-1 = { path = "../dep-1" }
+dep-2 = { path = "../dep-2" }
+dep-3 = { path = "../dep-3" }
+dep-4 = { path = "../dep-4" }
+dep-5 = { path = "../dep-5" }
+dep-6 = { path = "../dep-6" }
+dep-7 = { path = "../dep-7" }
+dep-8 = { path = "../dep-8" }
+dep-9 = { path = "../dep-9" }
+dep-10 = { path = "../dep-10" }
+dep-11 = { path = "../dep-11" }
+dep-12 = { path = "../dep-12" }
+dep-13 = { path = "../dep-13" }
+dep-14 = { path = "../dep-14" }
+dep-15 = { path = "../dep-15" }
+dep-16 = { path = "../dep-16" }
+dep-17 = { path = "../dep-17" }
+dep-18 = { path = "../dep-18" }
+dep-19 = { path = "../dep-19" }
+dep-20 = { path = "../dep-20" }
+dep-21 = { path = "../dep-21" }
+dep-22 = { path = "../dep-22" }
+dep-23 = { path = "../dep-23" }
+dep-24 = { path = "../dep-24" }
+dep-25 = { path = "../dep-25" }
+dep-26 = { path = "../dep-26" }
+dep-27 = { path = "../dep-27" }
+dep-28 = { path = "../dep-28" }
+dep-29 = { path = "../dep-29" }
+dep-30 = { path = "../dep-30" }
+dep-31 = { path = "../dep-31" }
+dep-32 = { path = "../dep-32" }
+dep-33 = { path = "../dep-33" }
+dep-34 = { path = "../dep-34" }
+dep-35 = { path = "../dep-35" }
+dep-36 = { path = "../dep-36" }
+dep-37 = { path = "../dep-37" }
+dep-38 = { path = "../dep-38" }
+dep-39 = { path = "../dep-39" }
+dep-40 = { path = "../dep-40" }
