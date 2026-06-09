@@ -543,6 +543,35 @@ fn backends_agree_on_manifest_inspector() {
     common::differential::assert_backends_agree("selfhost-manifest-inspector.rss", source, &[fixture]);
 }
 
+/// Scalar field assignment through a `mut` parameter must propagate to the caller
+/// on every backend (VM write-back == AOT `&mut`). Regression for ledger SH-013.
+#[test]
+fn backends_agree_on_mut_param_field_assignment() {
+    let source = "features: local\n\
+\n\
+struct Tally {\n\
+    n: Int\n\
+}\n\
+\n\
+fn bump(c: mut Tally) -> Unit {\n\
+    c.n = c.n + 1\n\
+}\n\
+\n\
+fn add(c: mut Tally, amount: Int) -> Unit {\n\
+    c.n = c.n + amount\n\
+}\n\
+\n\
+fn main() -> Unit {\n\
+    let mut c = Tally(n: 0)\n\
+    bump(c: mut c)\n\
+    bump(c: mut c)\n\
+    add(c: mut c, amount: 10)\n\
+    Log.write(message: read String.from_int(value: c.n))\n\
+    return Unit\n\
+}\n";
+    common::differential::assert_backends_agree("mut-param-field.rss", source, &[]);
+}
+
 /// A generic collection implemented in RSS itself: `benchmark/selfhost_mailbox.rss`
 /// (a fixed-capacity `Mailbox<T>` over parallel lists, with oldest-first and
 /// source-filtered takes). Regression for the generic-call lowering fix (a generic

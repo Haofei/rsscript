@@ -282,3 +282,27 @@ Status:         open | decided | done
   within noise; was 345 vs 326). Telemetry `considered: 0` after warmup.
 - **Tests:** feature differential 21/21 (behavior-neutral).
 - **Status:** done.
+
+### SH-013 — scalar field assignment through a `mut` parameter (fixed)
+
+- **Tool:** Mailbox<T> (the List<Int>-as-cell smell, SH-007)
+- **Symptom:** `m.count = m.count + 1` on a `mut` param was rejected (RS0311), so
+  the mailbox held mutable scalars in 1-element lists and recomputed `count`.
+- **Root cause:** (1) the checker rejected any assignment rooted in a parameter;
+  (2) the VM copies `CallKnown` args into the callee window with no write-back, so
+  even if allowed, scalar field mutations wouldn't propagate (only `List` fields
+  did, via their shared `RefCell`). AOT already had `&mut` semantics.
+- **Classification:** language (checker) + VM (call semantics).
+- **Decision (DONE):**
+  - Checker: a `mut` parameter (`AssignBinding::MutParam`) allows field/index
+    assignment (not bare rebinding).
+  - VM: `CallKnown` carries the callee's `mut`-param positions; when the frame
+    completes (any return path), each `mut` arg's final value is written back to
+    the caller's register (`apply_mut_writeback`), matching AOT's `&mut`.
+  - Backward compatible: empty `mut_args` ⇒ no-op; List-based code already
+    propagated and is unchanged.
+- **Note:** core already ships `Counter` (`Counter.new/add/value`, a `mut`-scalar
+  container) — the stdlib alternative the review suggested already exists.
+- **Tests:** `backends_agree_on_mut_param_field_assignment` (5-way). Full gate
+  green: feature differential 22/22; vm 112; corpus; checker 212/149.
+- **Status:** done.

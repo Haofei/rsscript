@@ -592,9 +592,12 @@ fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<R
                 dst,
                 function,
                 args,
+                mut_args,
             } => {
                 let callee = unit.functions.get(*function)?;
-                if !native_callee_inlinable(callee, args.len()) {
+                // Calls with `mut` args need a write-back at return; don't inline
+                // them (native-inlinable callees are side-effect-free anyway).
+                if !mut_args.is_empty() || !native_callee_inlinable(callee, args.len()) {
                     return None;
                 }
                 let base = next_reg;
@@ -1676,6 +1679,12 @@ enum RegInstr {
         dst: Reg,
         function: usize,
         args: Vec<Reg>,
+        /// Argument positions passed with `mut` (the callee's `mut` params). After
+        /// the call returns, each such argument's (possibly mutated) value is
+        /// written back to the caller's argument register, so a `mut` parameter's
+        /// field/element mutations propagate to the caller — matching AOT's
+        /// `&mut` semantics.
+        mut_args: Vec<usize>,
     },
     /// `spawn f(args)` / `async let`: start `function` as a new concurrent task
     /// and put a Task handle in `dst` (the spawning task keeps running).
@@ -3733,10 +3742,12 @@ impl RegLowerer<'_> {
                 // the generics before the lookup — otherwise a generic *function*
                 // call falls through and is mis-lowered as a struct construction.
                 if let Some(function) = self.function_ids.get(type_root_name(name)).copied() {
+                    let mut_args = self.user_mut_arg_positions(name);
                     self.emit(RegInstr::CallKnown {
                         dst,
                         function,
                         args: arg_regs,
+                        mut_args,
                     });
                 } else if self.is_native_function(None, name) {
                     let mut_args = self.native_mut_arg_positions(None, name);
@@ -5038,10 +5049,13 @@ impl RegLowerer<'_> {
                             return Ok(dst);
                         }
                         if let Some(function) = self.function_ids.get(&qualified_key).copied() {
+                            let mut_args =
+                                self.native_mut_arg_positions(Some(namespace_root), name_root);
                             self.emit(RegInstr::CallKnown {
                                 dst,
                                 function,
                                 args: arg_regs,
+                                mut_args,
                             });
                             return Ok(dst);
                         }
@@ -5104,6 +5118,12 @@ impl RegLowerer<'_> {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// `mut` parameter positions of a user function, so a `CallKnown` can write
+    /// the mutated arguments back to the caller (matching AOT's `&mut` params).
+    fn user_mut_arg_positions(&self, name: &str) -> Vec<usize> {
+        self.native_mut_arg_positions(None, name)
     }
 
     fn variant_match(&mut self, value: &HirExpr, arms: &[HirMatchArm]) -> Result<bool, EvalError> {
@@ -5842,6 +5862,11 @@ struct Frame {
     /// Absolute register in the caller that receives this frame's return value.
     /// `usize::MAX` marks a driver root (its value is returned out of `run_frame`).
     ret_dst: usize,
+    /// `mut`-argument write-backs to perform when this frame completes:
+    /// `(caller_abs_reg, this_frame_abs_reg)` pairs. The caller register receives
+    /// the parameter's final (possibly mutated) value, so `mut` params propagate.
+    /// Empty for the overwhelmingly common no-`mut`-arg call (then a no-op).
+    mut_writeback: Vec<(usize, usize)>,
 }
 
 /// Result of driving a task's call stack one slice at a time.
@@ -6448,6 +6473,7 @@ impl RegVm {
                 dst,
                 function: callee_id,
                 args,
+                mut_args,
             } = instr
             {
                 let callee = Rc::clone(&unit.functions[*callee_id]);
@@ -6458,6 +6484,11 @@ impl RegVm {
                     self.set_reg(next_base + index, value);
                 }
                 let result = self.run_frame(unit, callee, next_base)?;
+                // Propagate `mut` parameters back to the caller's argument regs.
+                for &pos in mut_args {
+                    let value = self.reg(next_base + pos).clone();
+                    self.set_reg(base + args[pos], value);
+                }
                 self.set_reg(base + *dst, result);
                 continue;
             }
@@ -7022,6 +7053,16 @@ impl RegVm {
         self.written[index] = true;
     }
 
+    /// Propagate a completing frame's `mut` parameters back to the caller: each
+    /// `(caller_reg, callee_reg)` copies the parameter's final value out. A no-op
+    /// for the common call with no `mut` args (empty `mut_writeback`).
+    fn apply_mut_writeback(&mut self, frame: &Frame) {
+        for &(caller_reg, callee_reg) in &frame.mut_writeback {
+            let value = self.reg(callee_reg).clone();
+            self.set_reg(caller_reg, value);
+        }
+    }
+
     #[inline(always)]
     fn take_reg(&mut self, index: usize) -> VmValue {
         assert!(
@@ -7055,6 +7096,7 @@ impl RegVm {
             ip: 0,
             base,
             ret_dst: usize::MAX,
+            mut_writeback: Vec::new(),
         });
         match self.drive(unit, floor)? {
             Outcome::Completed(value) => Ok(value),
@@ -7095,6 +7137,7 @@ impl RegVm {
             ip: 0,
             base: 0,
             ret_dst: usize::MAX,
+            mut_writeback: Vec::new(),
         }];
         self.tasks.insert(
             tid,
@@ -7415,6 +7458,7 @@ impl RegVm {
                 && let Some(value) = self.try_native(&func, base)
             {
                 let frame = self.frames.pop().expect("active frame");
+                self.apply_mut_writeback(&frame);
                 if self.frames.len() == floor {
                     return Ok(Outcome::Completed(value));
                 }
@@ -7429,6 +7473,7 @@ impl RegVm {
             if self.jit_enabled && ip == 0 && self.is_jit_eligible(&func) {
                 let value = self.run_jit(unit, &func, base)?;
                 let frame = self.frames.pop().expect("active frame");
+                self.apply_mut_writeback(&frame);
                 if self.frames.len() == floor {
                     return Ok(Outcome::Completed(value));
                 }
@@ -7447,6 +7492,7 @@ impl RegVm {
                     PureStep::Next => {}
                     PureStep::Return(value) => {
                         let frame = self.frames.pop().expect("active frame");
+                        self.apply_mut_writeback(&frame);
                         if self.frames.len() == floor {
                             return Ok(Outcome::Completed(value));
                         }
@@ -7462,6 +7508,7 @@ impl RegVm {
                             dst,
                             function: callee_id,
                             args,
+                            mut_args,
                         } => {
                             let callee = Rc::clone(&unit.functions[*callee_id]);
                             self.prepare_frame(next_base, callee.regs);
@@ -7469,6 +7516,13 @@ impl RegVm {
                                 let value = self.reg(base + *reg).clone();
                                 self.set_reg(next_base + index, value);
                             }
+                            // `mut` args: when this frame completes, write each
+                            // parameter's final value back to the caller's register
+                            // so mutations propagate (caller_abs_reg, callee_abs_reg).
+                            let mut_writeback = mut_args
+                                .iter()
+                                .map(|&pos| (base + args[pos], next_base + pos))
+                                .collect();
                             // Stackless call: save our resume point, push the callee, and
                             // re-enter the driver loop instead of recursing on the host
                             // stack — so an `await` deep in this chain can later suspend it.
@@ -7478,6 +7532,7 @@ impl RegVm {
                                 ip: 0,
                                 base: next_base,
                                 ret_dst: base + *dst,
+                                mut_writeback,
                             });
                             continue 'frames;
                         }
@@ -7839,6 +7894,7 @@ impl RegVm {
                                     // whole stackless driver.
                                     let err_value = value_err(error);
                                     let frame = self.frames.pop().expect("active frame");
+                                    self.apply_mut_writeback(&frame);
                                     if self.frames.len() == floor {
                                         return Ok(Outcome::Completed(err_value));
                                     }
@@ -7867,6 +7923,7 @@ impl RegVm {
             // Fell off the end of the function body without an explicit `Return`.
             // Lowering always appends one, so this is a defensive `Unit` return.
             let frame = self.frames.pop().expect("active frame");
+            self.apply_mut_writeback(&frame);
             if self.frames.len() == floor {
                 return Ok(Outcome::Completed(VmValue::Unit));
             }

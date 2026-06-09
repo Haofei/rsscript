@@ -4897,6 +4897,9 @@ enum AssignBinding {
     MutLocal,
     ImmutableLocal,
     Param,
+    /// A `mut` parameter: not reassignable itself, but its fields/elements may be
+    /// updated in place (the mutation propagates to the caller, matching `&mut`).
+    MutParam,
 }
 
 #[derive(Clone)]
@@ -4929,11 +4932,12 @@ impl<'a> AssignChecker<'a> {
         self.scopes.clear();
         self.push_scope();
         for param in &function.params {
-            self.insert(
-                param.name.clone(),
-                AssignBinding::Param,
-                Some(type_ref_name(&param.ty)),
-            );
+            let binding = if param.effect == Some(DataEffect::Mut) {
+                AssignBinding::MutParam
+            } else {
+                AssignBinding::Param
+            };
+            self.insert(param.name.clone(), binding, Some(type_ref_name(&param.ty)));
         }
         self.block(&function.body);
         self.pop_scope();
@@ -5172,9 +5176,9 @@ impl<'a> AssignChecker<'a> {
                         format!("`{name}` is an immutable binding"),
                         format!("Declare `{name}` with `let mut` to allow reassignment."),
                     ),
-                    Some(AssignBinding::Param) => (
+                    Some(AssignBinding::Param | AssignBinding::MutParam) => (
                         format!("`{name}` is a parameter, not a reassignable local"),
-                        "Parameters are not reassignable. Bind a `let mut` local, or mutate through a `mut` parameter."
+                        "Parameters are not reassignable (even `mut` ones): a `mut` parameter's fields/elements may be updated, but the parameter binding itself can't be rebound. Bind a `let mut` local instead."
                             .to_string(),
                     ),
                     None => (
@@ -5244,6 +5248,9 @@ impl<'a> AssignChecker<'a> {
         };
         match self.resolve(root) {
             Some(AssignBinding::MutLocal) => {}
+            // A `mut` parameter's fields/elements may be updated in place (the
+            // mutation propagates to the caller, like `&mut`).
+            Some(AssignBinding::MutParam) => {}
             Some(AssignBinding::ImmutableLocal) => {
                 self.diagnostics.push(invalid_assignment_diagnostic(
                     span.clone(),
