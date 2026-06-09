@@ -237,10 +237,14 @@ Status:         open | decided | done
 - **Symptom (measured, mean ms):**
   | mode | mean ms | vs AOT |
   |------|---------|--------|
-  | vm-internal | 100.1 | 470× slower |
-  | jit-internal | 107.9 | 506× slower (no help) |
-  | jit-native | 126.3 | 593× slower (*worse* — wasted compile attempts) |
-  | release / AOT | **0.213** | 1× |
+  | vm-internal | 330.0 | 448× slower |
+  | jit-internal | 330.6 | no help |
+  | jit-native | 345.3 | *worse* (wasted compile attempts) |
+  | release / AOT | **0.737** | 1× |
+
+  (Honest workload: cycle count from runtime args + data-dependent takes, so AOT
+  cannot fold it. The earlier `send(i);take()`-with-constant-cycles version let
+  LLVM collapse the work to 0.213 ms; the gap is real regardless.)
 - **Backend:** all.
 - **Root cause:** the collection is generic + built on `List` intrinsics. The VM
   executes every `List.get`/`set`/`push`/`len` as an interpreted intrinsic dispatch

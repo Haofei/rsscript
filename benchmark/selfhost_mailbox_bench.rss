@@ -1,4 +1,4 @@
-features: local
+features: native, local
 
 // A fixed-capacity mailbox (message queue) implemented in RSS itself, on top of
 // parallel lists. Each message carries a source id and a monotonic sequence
@@ -128,22 +128,86 @@ fn mailbox_take_from<T>(m: mut Mailbox<T>, source: Int) -> Option<T> {
     return Some(take_at<T>(m: mut m, slot: slot))
 }
 
-// Heavy driver: many send/take cycles on the self-hosted Mailbox<T>, to measure
-// the collection across VM / JIT / native / AOT (answers: does a self-hosted
-// collection expose the VM/JIT-vs-compiler performance gap?).
+// Cycle count comes from runtime args so neither AOT/LLVM nor the JIT can fold
+// the workload to a constant.
+fn input_size(default: Int) -> Int {
+    let fallback = String.from_int(value: default)
+    let raw = Args.get_or_default(index: 0, default: read fallback)
+    match String.parse_int(value: read raw) {
+        Some(n) => {
+            return n
+        }
+        None => {
+            return default
+        }
+    }
+}
+
+// Heavy driver on the self-hosted Mailbox<T>. The pattern is deliberately *not*
+// send(i);take(): sources vary (i % 4), takes alternate between oldest, source-
+// filtered, and leaving items pending, and the mailbox runs near capacity — so
+// the work is data-dependent and can't be optimized away. Measures the collection
+// across VM / JIT / native / AOT.
 fn main() -> Unit {
-    let mut box = mailbox_new<Int>(capacity: 8)
-    let cycles = 60000
+    let cycles = input_size(default: 60000)
+    let mut box = mailbox_new<Int>(capacity: 16)
+
+    // Prefill so sends and takes interleave against a non-empty buffer.
+    let mut p = 0
+    while p < 8 {
+        let psrc = p % 4
+        let _pre = mailbox_send<Int>(m: mut box, value: read p, source: psrc)
+        p = p + 1
+    }
+
     let mut i = 0
     let mut sink = 0
     while i < cycles {
-        let _sent = mailbox_send<Int>(m: mut box, value: read i, source: 1)
-        match mailbox_take<Int>(m: mut box) {
-            Some(v) => { sink = sink + v }
-            None => { sink = sink + 0 }
+        let source = i % 4
+        let _sent = mailbox_send<Int>(m: mut box, value: read i, source: source)
+        let which = i % 3
+        if which == 0 {
+            // Source-filtered take (scans).
+            match mailbox_take_from<Int>(m: mut box, source: 1) {
+                Some(v) => { sink = sink + v }
+                None => { sink = sink + 1 }
+            }
+        } else {
+            if which == 1 {
+                // Oldest take.
+                match mailbox_take<Int>(m: mut box) {
+                    Some(v) => { sink = sink + v }
+                    None => { sink = sink + 2 }
+                }
+            } else {
+                // Leave the item pending (no take) — exercises the full buffer.
+                sink = sink + 3
+            }
         }
         i = i + 1
     }
+
+    // Drain whatever remains so the result depends on the pending items too.
+    let mut drained = mailbox_take<Int>(m: mut box)
+    while is_some_int(value: read drained) {
+        match drained {
+            Some(v) => { sink = sink + v }
+            None => { sink = sink + 0 }
+        }
+        drained = mailbox_take<Int>(m: mut box)
+    }
+
     Log.write(message: read String.from_int(value: sink))
     return Unit
+}
+
+fn is_some_int(value: read Option<Int>) -> Bool {
+    match value {
+        Some(_v) => {
+            return true
+        }
+        None => {
+            return false
+        }
+    }
 }
