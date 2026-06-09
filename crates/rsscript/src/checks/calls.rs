@@ -1446,6 +1446,7 @@ fn check_generic_call_bounds(
         if type_satisfies_protocol_bound(analyzer, function, actual, protocol) {
             continue;
         }
+        let (cause, fix) = protocol_bound_guidance(protocol, actual);
         analyzer.diagnostics.push(
             Diagnostic::error(
                 code::PROTOCOL_NOT_SATISFIED,
@@ -1455,14 +1456,8 @@ fn check_generic_call_bounds(
                 call_span.clone(),
                 "protocol not satisfied",
             )
-            .with_cause(
-                "Generic protocol bounds are nominal. Use a type with a matching derive, add a compatible generic bound, or pass an explicit comparator API.",
-            )
-            .with_fix(
-                "satisfy_protocol_bound",
-                format!("Add `derives({protocol})` to `{actual}` if the compiler-owned ordering is intended, or call an API that accepts an explicit comparator."),
-                "manual",
-            ),
+            .with_cause(cause)
+            .with_fix("satisfy_protocol_bound", fix, "manual"),
         );
     }
 }
@@ -1481,6 +1476,20 @@ fn type_satisfies_protocol_bound(
     }
     if protocol == "Ord" && builtin_type_is_ord(actual_root) {
         return true;
+    }
+    if (protocol == "Hashable" || protocol == "Eq") && builtin_type_is_hashable(actual_root) {
+        return true;
+    }
+    // `List<T>`/`Option<T>`/`Result<A, B>` are `Hashable`/`Eq` exactly when their
+    // element types are, so a key like `List<Coord>` is satisfiable structurally.
+    if (protocol == "Hashable" || protocol == "Eq")
+        && matches!(actual_root, "List" | "Option" | "Result")
+    {
+        if let Some(args) = type_arg_names(strip_fresh_type(actual)) {
+            return args
+                .iter()
+                .all(|arg| type_satisfies_protocol_bound(analyzer, function, arg, protocol));
+        }
     }
     if function.type_params.iter().any(|param| {
         param.name == actual_root
@@ -1553,21 +1562,74 @@ fn check_capability_from_call(
     }
 }
 
+/// Protocol-specific cause/fix text for an unsatisfied generic protocol bound.
+/// `Hashable`/`Eq` are compiler-derived structural contracts (used by
+/// `Map`/`Set` keys), so the suggestion points at the concrete `derives(...)`
+/// list rather than the comparator wording used for `Ord`.
+fn protocol_bound_guidance(protocol: &str, actual: &str) -> (&'static str, String) {
+    match protocol {
+        "Hashable" => (
+            "A `Map` key / `Set` element must be `Hashable` (and therefore `Eq`). Hashability is a compiler-derived structural contract: a builtin scalar key, or a managed struct/sum that derives `Eq` and `Hash`.",
+            format!("Add `derives(Eq, Hash)` to `{actual}` so the compiler derives a structural hash and equality, or use a hashable key type."),
+        ),
+        "Eq" => (
+            "Equality is a compiler-derived structural contract: a builtin scalar, or a managed struct/sum that derives `Eq` (or `Ord`, which implies `Eq`).",
+            format!("Add `derives(Eq)` to `{actual}`, or use an equatable type."),
+        ),
+        _ => (
+            "Generic protocol bounds are nominal. Use a type with a matching derive, add a compatible generic bound, or pass an explicit comparator API.",
+            format!("Add `derives({protocol})` to `{actual}` if the compiler-owned ordering is intended, or call an API that accepts an explicit comparator."),
+        ),
+    }
+}
+
 fn builtin_type_is_ord(type_name: &str) -> bool {
     matches!(type_name, "Int" | "String" | "Bool")
 }
 
+/// Builtin scalar types that are `Hashable`/`Eq` directly (no derive needed).
+/// Mirrors the structural derive support in the analyzer (`Float` is excluded
+/// because it is neither `Eq` nor `Hash`).
+fn builtin_type_is_hashable(type_name: &str) -> bool {
+    matches!(
+        type_name,
+        "Int"
+            | "Int8"
+            | "Int16"
+            | "Int32"
+            | "Int64"
+            | "UInt"
+            | "UInt8"
+            | "UInt16"
+            | "UInt32"
+            | "UInt64"
+            | "Bool"
+            | "Byte"
+            | "Char"
+            | "Unit"
+            | "String"
+    )
+}
+
+/// Whether a user-declared `type_name` satisfies a compiler-derived `protocol`
+/// bound. `Ord` requires `derives(Ord)`; `Hashable` requires `derives(Hash)`;
+/// `Eq` requires `derives(Eq)` or `derives(Ord)` (which implies `Eq`).
 fn type_derives_protocol(items: &[Item], type_name: &str, protocol: &str) -> bool {
-    if protocol != "Ord" {
+    let derive_satisfies = |derives: &[String]| -> bool {
+        let has = |name: &str| derives.iter().any(|derive| derive == name);
+        match protocol {
+            "Ord" => has("Ord"),
+            "Hashable" => has("Hash"),
+            "Eq" => has("Eq") || has("Ord"),
+            _ => false,
+        }
+    };
+    if !matches!(protocol, "Ord" | "Hashable" | "Eq") {
         return false;
     }
     items.iter().any(|item| match item {
-        Item::Type(decl) => {
-            decl.name == type_name && decl.derives.iter().any(|derive| derive == "Ord")
-        }
-        Item::SumType(sum) => {
-            sum.name == type_name && sum.derives.iter().any(|derive| derive == "Ord")
-        }
+        Item::Type(decl) => decl.name == type_name && derive_satisfies(&decl.derives),
+        Item::SumType(sum) => sum.name == type_name && derive_satisfies(&sum.derives),
         _ => false,
     })
 }
