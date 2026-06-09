@@ -263,3 +263,22 @@ Status:         open | decided | done
 - **Tests/Benchmark:** `selfhost_mailbox_bench.rss` (add to the matrix);
   correctness via `backends_agree_on_selfhost_mailbox`.
 - **Status:** decided.
+
+### SH-012 — jit-native per-call overhead on uncompilable code (fixed)
+
+- **Tool:** Mailbox bench (jit-native)
+- **Symptom:** jit-native ~4–5% *slower* than vm-internal; telemetry showed
+  `considered: 300002, translated: 0, not_eligible: 7` — it re-evaluated
+  eligibility on every call.
+- **Root cause:** `try_native` did per-call work for every call (a
+  `counts.entry(name.clone())` string-clone + hashmap, then a `cache.get(name)`
+  hashmap lookup) even for functions already known not-eligible.
+- **Classification:** VM (JIT dispatch overhead).
+- **Decision (DONE):** the not-eligible verdict is an invariant property of the
+  function, so cache it on `RegFunction` (`native_status: Cell<u8>`). The drive
+  loop now checks it inline and skips the `try_native` call entirely (just a
+  `Cell` read) for known-uncompilable functions.
+- **Result:** jit-native ≈ vm-internal on the mailbox bench (≈325 vs ≈325 ms,
+  within noise; was 345 vs 326). Telemetry `considered: 0` after warmup.
+- **Tests:** feature differential 21/21 (behavior-neutral).
+- **Status:** done.

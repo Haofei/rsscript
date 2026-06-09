@@ -1396,6 +1396,10 @@ struct RegUnit {
     types: HashMap<String, TypeInfo>,
 }
 
+/// `RegFunction::native_status` value: the function is known not native-eligible.
+#[cfg(feature = "native-jit")]
+const NATIVE_STATUS_NOT_ELIGIBLE: u8 = 1;
+
 #[derive(Debug, Clone)]
 struct RegFunction {
     // `name`/`params`/`captures` are metadata read only by the native JIT
@@ -1412,6 +1416,12 @@ struct RegFunction {
     /// Cached tier-0 JIT analysis `(all_instructions_supported, has_loop)`,
     /// computed once after `code` is emitted.
     jit_analysis: std::cell::Cell<Option<(bool, bool)>>,
+    /// Cached native-tier verdict, an invariant property of the function:
+    /// `0` unknown, `1` known not native-eligible. Lets `try_native` skip all
+    /// per-call tiering/cache/name-hash work once a function is known to never
+    /// compile (so `jit-native` isn't slower than the VM on uncompilable code).
+    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    native_status: std::cell::Cell<u8>,
 }
 
 impl RegFunction {
@@ -1424,6 +1434,7 @@ impl RegFunction {
             local_regs: HashMap::new(),
             code: Vec::new(),
             jit_analysis: std::cell::Cell::new(None),
+            native_status: std::cell::Cell::new(0),
         }
     }
 }
@@ -2518,6 +2529,7 @@ impl RegUnit {
                     local_regs: HashMap::new(),
                     code: Vec::new(),
                     jit_analysis: std::cell::Cell::new(None),
+            native_status: std::cell::Cell::new(0),
                 },
                 loop_stack: Vec::new(),
                 cleanup_stack: Vec::new(),
@@ -2553,6 +2565,7 @@ impl RegUnit {
                     local_regs: HashMap::new(),
                     code: Vec::new(),
                     jit_analysis: std::cell::Cell::new(None),
+            native_status: std::cell::Cell::new(0),
                 },
                 loop_stack: Vec::new(),
                 cleanup_stack: Vec::new(),
@@ -3444,6 +3457,7 @@ impl RegLowerer<'_> {
                             local_regs: HashMap::new(),
                             code: Vec::new(),
                             jit_analysis: std::cell::Cell::new(None),
+            native_status: std::cell::Cell::new(0),
                         },
                         loop_stack: Vec::new(),
                         cleanup_stack: Vec::new(),
@@ -6275,6 +6289,13 @@ impl RegVm {
     /// side-effect-free, so re-running them is observationally identical.
     #[cfg(feature = "native-jit")]
     fn try_native(&mut self, func: &RegFunction, base: usize) -> Option<VmValue> {
+        // Cheap negative path: a function known not native-eligible never compiles,
+        // so skip all per-call tiering/cache/name-hash work and fall straight back
+        // to the interpreter (keeps `jit-native` from being slower than the VM on
+        // code the native tier can't take).
+        if func.native_status.get() == NATIVE_STATUS_NOT_ELIGIBLE {
+            return None;
+        }
         // The unit is needed to resolve inlinable callees; clone the `Rc` so the
         // mutable `self.native` borrow below doesn't conflict.
         let unit = Rc::clone(&self.unit);
@@ -6317,6 +6338,9 @@ impl RegVm {
                         }
                         None => {
                             native.stats.not_eligible += 1;
+                            // Invariant verdict — cache it on the function so future
+                            // calls take the cheap negative path above.
+                            func.native_status.set(NATIVE_STATUS_NOT_ELIGIBLE);
                             None
                         }
                     };
@@ -7385,6 +7409,9 @@ impl RegVm {
             #[cfg(feature = "native-jit")]
             if ip == 0
                 && self.native.is_some()
+                // Inline negative check: skip the `try_native` call entirely for
+                // functions already known not native-eligible (just a `Cell` read).
+                && func.native_status.get() != NATIVE_STATUS_NOT_ELIGIBLE
                 && let Some(value) = self.try_native(&func, base)
             {
                 let frame = self.frames.pop().expect("active frame");
