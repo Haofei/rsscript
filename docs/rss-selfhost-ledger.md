@@ -229,3 +229,33 @@ Status:         open | decided | done
   the same shape as the earlier `read_effect_lowers_by_value` work; recorded for a
   scoped follow-up.
 - **Status:** open (worked around).
+
+### SH-011 — self-hosted collection: VM/JIT ~470–590× slower than AOT
+
+- **Tool:** Mailbox<T> heavy driver (`selfhost_mailbox_bench.rss`, 60k send/take
+  cycles on the RSS-implemented collection).
+- **Symptom (measured, mean ms):**
+  | mode | mean ms | vs AOT |
+  |------|---------|--------|
+  | vm-internal | 100.1 | 470× slower |
+  | jit-internal | 107.9 | 506× slower (no help) |
+  | jit-native | 126.3 | 593× slower (*worse* — wasted compile attempts) |
+  | release / AOT | **0.213** | 1× |
+- **Backend:** all.
+- **Root cause:** the collection is generic + built on `List` intrinsics. The VM
+  executes every `List.get`/`set`/`push`/`len` as an interpreted intrinsic dispatch
+  over dynamic `VmValue`s; neither JIT tier accelerates it (generic + intrinsic +
+  locally-owned heap → not native-eligible, per SH-001/SH-004), and the native
+  tier is even slower from compile attempts that all bail. AOT lowers the whole
+  thing to native Rust `Vec` ops.
+- **Classification:** VM (representation / intrinsic dispatch cost) + JIT
+  (coverage).
+- **Decision:** this is the clearest measured answer to the question "does a
+  self-hosted collection expose the VM/JIT-vs-compiler gap?" — **yes, ~470× on the
+  VM, and the JIT does not close it** (it is slightly worse). For self-hosted
+  collections, AOT is the only fast path today; closing the VM/JIT gap needs
+  Phase-3 native local-collection support (SH-004) and/or cheaper VM intrinsic
+  dispatch + value representation — a large effort, now justified by real data.
+- **Tests/Benchmark:** `selfhost_mailbox_bench.rss` (add to the matrix);
+  correctness via `backends_agree_on_selfhost_mailbox`.
+- **Status:** decided.

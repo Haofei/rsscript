@@ -41,6 +41,7 @@ cases=(
   "deque_queue.rss:50000"
   "selfhost_manifest_inspector.rss:benchmark/fixtures/package-medium/rsspkg.toml"
   "selfhost_stdlib_reporter.rss:0"
+  "selfhost_mailbox_bench.rss:0"
 )
 
 json_field() {

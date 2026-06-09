@@ -1,0 +1,149 @@
+features: local
+
+// A fixed-capacity mailbox (message queue) implemented in RSS itself, on top of
+// parallel lists. Each message carries a source id and a monotonic sequence
+// number; `take` returns the OLDEST pending message (lowest seq), optionally
+// filtered by source.
+//
+// NOTE (language finding): RSS does not allow reassigning a *scalar* struct field
+// through a `mut` parameter (`m.count = ...` is rejected). `List` fields are
+// reference types, so `List.set(list: mut m.field, ...)` mutates in place and
+// propagates. So mutable scalar state (`next_seq`) is held in a 1-element list,
+// and `count` is computed by scanning. See docs/rss-selfhost-ledger.md SH-007.
+struct Mailbox<T> {
+    capacity: Int
+    next_seq: List<Int>
+    msg: List<T>
+    valid: List<Bool>
+    src: List<Int>
+    seq: List<Int>
+}
+
+fn mailbox_new<T>(capacity: Int) -> fresh Mailbox<T> {
+    let mut next_seq = List<Int>.new()
+    List.push<Int>(list: mut next_seq, value: read 0)
+    return Mailbox(
+        capacity: capacity,
+        next_seq: next_seq,
+        msg: List<T>.new(),
+        valid: List<Bool>.new(),
+        src: List<Int>.new(),
+        seq: List<Int>.new(),
+    )
+}
+
+fn mailbox_count<T>(m: read Mailbox<T>) -> Int {
+    let mut count = 0
+    let mut i = 0
+    let len = List.len<Bool>(list: read m.valid)
+    while i < len {
+        if List.get<Bool>(list: read m.valid, index: i) {
+            count = count + 1
+        }
+        i = i + 1
+    }
+    return count
+}
+
+// Store a message; returns false if the mailbox is full.
+fn mailbox_send<T>(m: mut Mailbox<T>, value: read T, source: Int) -> Bool {
+    if mailbox_count<T>(m: read m) >= m.capacity {
+        return false
+    }
+    let seq = List.get<Int>(list: read m.next_seq, index: 0)
+    let next = seq + 1
+    List.set<Int>(list: mut m.next_seq, index: 0, value: read next)
+
+    let mut i = 0
+    let len = List.len<Bool>(list: read m.valid)
+    while i < len {
+        if List.get<Bool>(list: read m.valid, index: i) == false {
+            List.set<T>(list: mut m.msg, index: i, value: read value)
+            List.set<Bool>(list: mut m.valid, index: i, value: read true)
+            List.set<Int>(list: mut m.src, index: i, value: read source)
+            List.set<Int>(list: mut m.seq, index: i, value: read seq)
+            return true
+        }
+        i = i + 1
+    }
+
+    List.push<T>(list: mut m.msg, value: read value)
+    List.push<Bool>(list: mut m.valid, value: read true)
+    List.push<Int>(list: mut m.src, value: read source)
+    List.push<Int>(list: mut m.seq, value: read seq)
+    return true
+}
+
+// Slot index of the oldest valid message (optionally only from `source`), or -1.
+fn oldest_slot<T>(m: read Mailbox<T>, filtered: Bool, source: Int) -> Int {
+    let mut best = -1
+    let mut best_seq = 0
+    let mut i = 0
+    let len = List.len<Bool>(list: read m.valid)
+    while i < len {
+        if List.get<Bool>(list: read m.valid, index: i) {
+            let mut matches = true
+            if filtered {
+                if List.get<Int>(list: read m.src, index: i) != source {
+                    matches = false
+                }
+            }
+            if matches {
+                let s = List.get<Int>(list: read m.seq, index: i)
+                if best < 0 {
+                    best = i
+                    best_seq = s
+                } else {
+                    if s < best_seq {
+                        best = i
+                        best_seq = s
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return best
+}
+
+fn take_at<T>(m: mut Mailbox<T>, slot: Int) -> T {
+    let value = List.get<T>(list: read m.msg, index: slot)
+    List.set<Bool>(list: mut m.valid, index: slot, value: read false)
+    return value
+}
+
+fn mailbox_take<T>(m: mut Mailbox<T>) -> Option<T> {
+    let slot = oldest_slot<T>(m: read m, filtered: false, source: 0)
+    if slot < 0 {
+        return None
+    }
+    return Some(take_at<T>(m: mut m, slot: slot))
+}
+
+fn mailbox_take_from<T>(m: mut Mailbox<T>, source: Int) -> Option<T> {
+    let slot = oldest_slot<T>(m: read m, filtered: true, source: source)
+    if slot < 0 {
+        return None
+    }
+    return Some(take_at<T>(m: mut m, slot: slot))
+}
+
+// Heavy driver: many send/take cycles on the self-hosted Mailbox<T>, to measure
+// the collection across VM / JIT / native / AOT (answers: does a self-hosted
+// collection expose the VM/JIT-vs-compiler performance gap?).
+fn main() -> Unit {
+    let mut box = mailbox_new<Int>(capacity: 8)
+    let cycles = 60000
+    let mut i = 0
+    let mut sink = 0
+    while i < cycles {
+        let _sent = mailbox_send<Int>(m: mut box, value: read i, source: 1)
+        match mailbox_take<Int>(m: mut box) {
+            Some(v) => { sink = sink + v }
+            None => { sink = sink + 0 }
+        }
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: sink))
+    return Unit
+}
