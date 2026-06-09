@@ -306,3 +306,46 @@ Status:         open | decided | done
 - **Tests:** `backends_agree_on_mut_param_field_assignment` (5-way). Full gate
   green: feature differential 22/22; vm 112; corpus; checker 212/149.
 - **Status:** done.
+
+### SH-014 — hand-rolled modulo loop is O(n); use native `%`
+
+- **Tool:** ring-buffer Mailbox benchmark
+- **Symptom:** the bench was O(n²): instruction count grew quadratically while
+  count/head/memory all stayed bounded.
+- **Root cause:** the driver computed `i % 3` / `i % 4` with a hand-written
+  `fn wrap(v, m){ while v >= m { v -= m } }`. Called with the *loop counter*
+  `wrap(i, 3)`, it loops `i/3` times → O(i) per cycle → O(n²) total. (The ring
+  buffer's own `wrap(head+count, cap)` was fine — bounded inputs.)
+- **Classification:** stdlib/docs (use the language).
+- **Decision (DONE):** use the native `%` operator everywhere (O(1)); deleted the
+  `wrap` helper. The ring buffer is now linear and ~3× faster than the scanning
+  version (vm 112 ms vs 330 ms at 60k cycles).
+- **Status:** done.
+
+### SH-015 — AOT: generic `read T` pushed into a `List<T>` infers `Vec<&T>`
+
+- **Tool:** ring-buffer Mailbox (pre-fill with a generic placeholder)
+- **Symptom:** `mailbox_new<T>(.., placeholder: read T)` doing
+  `List.push(values, read placeholder)` in a loop failed AOT with
+  `expected Vec<T>, found Vec<&T>` (the `read` borrow was stored by reference).
+  VM ran fine.
+- **Classification:** AOT (lowering) — same family as SH-010 (a `read`/borrowed
+  value reaching a by-value/owned position isn't cloned/deref'd).
+- **Decision:** worked around by dropping the placeholder pre-fill and growing the
+  ring lazily on send (`if tail < len { set } else { push }`), so the generic
+  element only enters the list via the proven `read value` send path. The general
+  AOT auto-clone fix is the SH-010 follow-up.
+- **Status:** open (worked around).
+
+### SH-004/SH-006 update — fixed ring-buffer Mailbox across modes (60k cycles)
+
+| mode | mean ms |
+|------|---------|
+| vm-internal | 112.9 |
+| jit-internal | 114.6 |
+| jit-native | 112.8 (≈ vm — SH-012 fix) |
+| release / AOT | 0.784 |
+
+Conclusion unchanged: the JIT gives ~0× on collection code (now without being
+*slower* than the VM); AOT is ~144× and remains the only fast path. The remaining
+gap is VM value-representation / intrinsic-dispatch cost (the next big lever).

@@ -1,131 +1,103 @@
 features: local
 
-// A fixed-capacity mailbox (message queue) implemented in RSS itself, on top of
-// parallel lists. Each message carries a source id and a monotonic sequence
-// number; `take` returns the OLDEST pending message (lowest seq), optionally
-// filtered by source.
-//
-// NOTE (language finding): RSS does not allow reassigning a *scalar* struct field
-// through a `mut` parameter (`m.count = ...` is rejected). `List` fields are
-// reference types, so `List.set(list: mut m.field, ...)` mutates in place and
-// propagates. So mutable scalar state (`next_seq`) is held in a 1-element list,
-// and `count` is computed by scanning. See docs/rss-selfhost-ledger.md SH-007.
+// A fixed-capacity ring-buffer mailbox (message queue) implemented in RSS itself.
+// `head`/`count` index a circular live window over `values`/`sources` (grown lazily
+// up to `capacity`). Common send/take are O(1); only the source-filtered take scans
+// (and compacts). Mutable scalar state lives in plain `Int` fields, mutated
+// through `mut` parameters (see ledger SH-013) — no `List<Int>`-as-cell.
 struct Mailbox<T> {
     capacity: Int
-    next_seq: List<Int>
-    msg: List<T>
-    valid: List<Bool>
-    src: List<Int>
-    seq: List<Int>
+    head: Int
+    count: Int
+    values: List<T>
+    sources: List<Int>
 }
 
 fn mailbox_new<T>(capacity: Int) -> fresh Mailbox<T> {
-    let mut next_seq = List<Int>.new()
-    List.push<Int>(list: mut next_seq, value: read 0)
     return Mailbox(
         capacity: capacity,
-        next_seq: next_seq,
-        msg: List<T>.new(),
-        valid: List<Bool>.new(),
-        src: List<Int>.new(),
-        seq: List<Int>.new(),
+        head: 0,
+        count: 0,
+        values: List<T>.new(),
+        sources: List<Int>.new(),
     )
 }
 
 fn mailbox_count<T>(m: read Mailbox<T>) -> Int {
-    let mut count = 0
-    let mut i = 0
-    let len = List.len<Bool>(list: read m.valid)
-    while i < len {
-        if List.get<Bool>(list: read m.valid, index: i) {
-            count = count + 1
-        }
-        i = i + 1
-    }
-    return count
+    return m.count
 }
 
-// Store a message; returns false if the mailbox is full.
+// Store a message at the tail. O(1). Returns false if full.
 fn mailbox_send<T>(m: mut Mailbox<T>, value: read T, source: Int) -> Bool {
-    if mailbox_count<T>(m: read m) >= m.capacity {
+    if m.count >= m.capacity {
         return false
     }
-    let seq = List.get<Int>(list: read m.next_seq, index: 0)
-    let next = seq + 1
-    List.set<Int>(list: mut m.next_seq, index: 0, value: read next)
-
-    let mut i = 0
-    let len = List.len<Bool>(list: read m.valid)
-    while i < len {
-        if List.get<Bool>(list: read m.valid, index: i) == false {
-            List.set<T>(list: mut m.msg, index: i, value: read value)
-            List.set<Bool>(list: mut m.valid, index: i, value: read true)
-            List.set<Int>(list: mut m.src, index: i, value: read source)
-            List.set<Int>(list: mut m.seq, index: i, value: read seq)
-            return true
-        }
-        i = i + 1
+    let raw = m.head + m.count
+    let tail = raw % m.capacity
+    // Slots fill 0..capacity-1 contiguously, so `tail` is either an existing slot
+    // (reuse) or exactly the next one to allocate (grow). Avoids needing a generic
+    // placeholder value to pre-size the lists.
+    if tail < List.len<T>(list: read m.values) {
+        List.set<T>(list: mut m.values, index: tail, value: read value)
+        List.set<Int>(list: mut m.sources, index: tail, value: read source)
+    } else {
+        List.push<T>(list: mut m.values, value: read value)
+        List.push<Int>(list: mut m.sources, value: read source)
     }
-
-    List.push<T>(list: mut m.msg, value: read value)
-    List.push<Bool>(list: mut m.valid, value: read true)
-    List.push<Int>(list: mut m.src, value: read source)
-    List.push<Int>(list: mut m.seq, value: read seq)
+    m.count = m.count + 1
     return true
 }
 
-// Slot index of the oldest valid message (optionally only from `source`), or -1.
-fn oldest_slot<T>(m: read Mailbox<T>, filtered: Bool, source: Int) -> Int {
-    let mut best = -1
-    let mut best_seq = 0
-    let mut i = 0
-    let len = List.len<Bool>(list: read m.valid)
-    while i < len {
-        if List.get<Bool>(list: read m.valid, index: i) {
-            let mut matches = true
-            if filtered {
-                if List.get<Int>(list: read m.src, index: i) != source {
-                    matches = false
-                }
-            }
-            if matches {
-                let s = List.get<Int>(list: read m.seq, index: i)
-                if best < 0 {
-                    best = i
-                    best_seq = s
-                } else {
-                    if s < best_seq {
-                        best = i
-                        best_seq = s
-                    }
-                }
-            }
-        }
-        i = i + 1
-    }
-    return best
-}
-
-fn take_at<T>(m: mut Mailbox<T>, slot: Int) -> T {
-    let value = List.get<T>(list: read m.msg, index: slot)
-    List.set<Bool>(list: mut m.valid, index: slot, value: read false)
-    return value
-}
-
+// Take the oldest message (ring head). O(1).
 fn mailbox_take<T>(m: mut Mailbox<T>) -> Option<T> {
-    let slot = oldest_slot<T>(m: read m, filtered: false, source: 0)
-    if slot < 0 {
+    if m.count <= 0 {
         return None
     }
-    return Some(take_at<T>(m: mut m, slot: slot))
+    let value = List.get<T>(list: read m.values, index: m.head)
+    let next = m.head + 1
+    m.head = next % m.capacity
+    m.count = m.count - 1
+    return Some(value)
 }
 
+// Take the oldest message from `source`. Scans the live window; on a middle
+// removal, shifts the older elements forward by one to close the gap (preserving
+// FIFO order of the rest).
 fn mailbox_take_from<T>(m: mut Mailbox<T>, source: Int) -> Option<T> {
-    let slot = oldest_slot<T>(m: read m, filtered: true, source: source)
-    if slot < 0 {
+    let mut offset = -1
+    let mut k = 0
+    while k < m.count {
+        let raw = m.head + k
+        let idx = raw % m.capacity
+        if List.get<Int>(list: read m.sources, index: idx) == source {
+            offset = k
+            k = m.count
+        } else {
+            k = k + 1
+        }
+    }
+    if offset < 0 {
         return None
     }
-    return Some(take_at<T>(m: mut m, slot: slot))
+    let take_raw = m.head + offset
+    let take_idx = take_raw % m.capacity
+    let value = List.get<T>(list: read m.values, index: take_idx)
+    let mut j = offset
+    while j > 0 {
+        let dst_raw = m.head + j
+        let dst = dst_raw % m.capacity
+        let src_raw = m.head + j - 1
+        let src = src_raw % m.capacity
+        let moved_value = List.get<T>(list: read m.values, index: src)
+        let moved_source = List.get<Int>(list: read m.sources, index: src)
+        List.set<T>(list: mut m.values, index: dst, value: read moved_value)
+        List.set<Int>(list: mut m.sources, index: dst, value: read moved_source)
+        j = j - 1
+    }
+    let next = m.head + 1
+    m.head = next % m.capacity
+    m.count = m.count - 1
+    return Some(value)
 }
 
 fn show(label: read String, value: Int) -> Unit {
@@ -142,7 +114,6 @@ fn main() -> Unit {
     let _b = mailbox_send<Int>(m: mut box, value: read 20, source: 2)
     let _c = mailbox_send<Int>(m: mut box, value: read 30, source: 1)
 
-    // Match the owned `Option` returned by each take directly (keeps `v` an `Int`).
     match mailbox_take<Int>(m: mut box) {
         Some(v) => { show(label: read "oldest=", value: v) }
         None => { show_none(label: read "oldest=") }
