@@ -908,8 +908,8 @@ fn copy_file(input: read Path, output: read Path) -> Result<Unit, FileError> {
     let rust = lower_source_to_rust("file.rss", source).expect("source should lower");
 
     assert!(rust.contains("-> Result<(), rsscript_runtime::FileError>"));
-    assert!(rust.contains("let mut reader = rsscript_runtime::file_open_read(&input)?;"));
-    assert!(rust.contains("let mut writer = rsscript_runtime::file_open_write(&output)?;"));
+    assert!(rust.contains("let mut reader = rsscript_runtime::file_open_read(input)?;"));
+    assert!(rust.contains("let mut writer = rsscript_runtime::file_open_write(output)?;"));
     assert!(rust.contains("let bytes = rsscript_runtime::file_read_all(&mut reader)?;"));
     assert!(rust.contains("let text = rsscript_runtime::file_read_all_string(&mut reader)?;"));
     assert!(rust.contains("rsscript_runtime::file_write(&mut writer, &bytes)?;"));
@@ -1121,7 +1121,7 @@ fn read_name(text: read String) -> Result<String, JsonError> {
     let rust = lower_source_to_rust("json.rss", source).expect("source should lower");
 
     assert!(rust.contains("-> Result<String, rsscript_runtime::JsonError>"));
-    assert!(rust.contains("let value = rsscript_runtime::json_parse(&text)?;"));
+    assert!(rust.contains("let value = rsscript_runtime::json_parse(text)?;"));
     assert!(rust.contains("let value_from_file = rsscript_runtime::json_parse_file(&path)?;"));
     assert!(rust.contains(
         "let literal_value = rsscript_runtime::json_value(&rsscript_runtime::json_object"
@@ -1180,7 +1180,7 @@ fn read_name(text: read String) -> Result<String, JsonError> {
     assert!(rust.contains("let text = rsscript_runtime::json_as_string(&item)?;"));
     assert!(
         rust.contains(
-            "return Ok(rsscript_runtime::string_starts_with(&text, &\"pro\".to_string()));"
+            "return Ok(rsscript_runtime::string_starts_with(text, &\"pro\".to_string()));"
         )
     );
     assert!(rust.contains(
@@ -1190,10 +1190,10 @@ fn read_name(text: read String) -> Result<String, JsonError> {
         rust.contains("let profile_name = rsscript_runtime::json_as_string(&profile_name_value)?;")
     );
     assert!(rust.contains(
-        "let profile_name_at = rsscript_runtime::json_string_at(&text, &\"profile.name\".to_string())?;"
+        "let profile_name_at = rsscript_runtime::json_string_at(text, &\"profile.name\".to_string())?;"
     ));
     assert!(rust.contains(
-        "let missing_name = rsscript_runtime::json_string_at_or(&text, &\"profile.missing\".to_string(), &\"unknown\".to_string());"
+        "let missing_name = rsscript_runtime::json_string_at_or(text, &\"profile.missing\".to_string(), &\"unknown\".to_string());"
     ));
     assert!(
         rust.contains(
@@ -1374,7 +1374,7 @@ fn read_name(path: read Path) -> Result<String, CsvError> {
 
     assert!(rust.contains("-> Result<String, rsscript_runtime::CsvError>"));
     assert!(rust.contains("let mut buffer = rsscript_runtime::row_buffer_new(4096i64);"));
-    assert!(rust.contains("let mut file = rsscript_runtime::csv_open_read(&path)?;"));
+    assert!(rust.contains("let mut file = rsscript_runtime::csv_open_read(path)?;"));
     assert!(rust.contains("rsscript_runtime::csv_read_into(&mut file, &mut buffer)?;"));
     assert!(rust.contains("let row = rsscript_runtime::csv_parse_row(&buffer)?;"));
     assert!(rust.contains("return rsscript_runtime::row_field_string(&row, 0i64);"));
@@ -1398,12 +1398,12 @@ fn process(input: read Path, output: read Path) -> Result<Unit, ImageError> {
     let rust = lower_source_to_rust("image.rss", source).expect("source should lower");
 
     assert!(rust.contains("-> Result<(), rsscript_runtime::ImageError>"));
-    assert!(rust.contains("let mut image = rsscript_runtime::image_load(&input)?;"));
+    assert!(rust.contains("let mut image = rsscript_runtime::image_load(input)?;"));
     assert!(rust.contains("rsscript_runtime::image_resize(&mut image, 320i64, 240i64);"));
     assert!(rust.contains("rsscript_runtime::image_normalize(&mut image);"));
     assert!(rust.contains("rsscript_runtime::image_sharpen(&mut image);"));
     assert!(rust.contains("rsscript_runtime::image_inspect(&image);"));
-    assert!(rust.contains("rsscript_runtime::image_save(&image, &output)?;"));
+    assert!(rust.contains("rsscript_runtime::image_save(&image, output)?;"));
 }
 
 #[test]
@@ -1425,7 +1425,7 @@ fn main() -> Result<Unit, HttpError> {
 
     assert!(rust.contains("request: &rsscript_runtime::Request"));
     assert!(rust.contains("-> Result<rsscript_runtime::Response, rsscript_runtime::HttpError>"));
-    assert!(rust.contains("let path = rsscript_runtime::request_path(&request);"));
+    assert!(rust.contains("let path = rsscript_runtime::request_path(request);"));
     assert!(rust.contains("return rsscript_runtime::response_ok(&body);"));
     assert!(rust.contains("let request = rsscript_runtime::request_new(&\"/users\".to_string());"));
     assert!(rust.contains("let response = handle_request(&request)?;"));
@@ -1453,9 +1453,9 @@ fn run_query(url: read Url, sql: read String) -> Result<Unit, DbError> {
 
     assert!(rust.contains("url: &String"));
     assert!(rust.contains("-> Result<(), rsscript_runtime::DbError>"));
-    assert!(rust.contains("let mut pool = rsscript_runtime::ResourcePool::from_factory(2i64, || rsscript_runtime::db_connection_open(&url));"));
+    assert!(rust.contains("let mut pool = rsscript_runtime::ResourcePool::from_factory(2i64, || rsscript_runtime::db_connection_open(url));"));
     assert!(rust.contains("let mut conn = rsscript_runtime::unwrap_runtime(rsscript_runtime::ResourcePool::borrow_at(&mut pool, rsscript_runtime::SourceSpan::new(\"db.rss\""));
-    assert!(rust.contains("rsscript_runtime::db_connection_query(&mut conn, &sql)?;"));
+    assert!(rust.contains("rsscript_runtime::db_connection_query(&mut conn, sql)?;"));
 }
 
 #[test]
@@ -1521,8 +1521,8 @@ fn run_query(url: read Url, sql: read String) -> Result<Unit, DbError> {
     let rust = lower_source_to_rust("db-try-pool.rss", source).expect("source should lower");
 
     assert!(rust.contains("-> Result<(), rsscript_runtime::DbError>"));
-    assert!(rust.contains("let mut pool = rsscript_runtime::ResourcePool::try_from_factory(2i64, || rsscript_runtime::db_connection_try_open(&url))?;"));
-    assert!(rust.contains("rsscript_runtime::db_connection_query(&mut conn, &sql)?;"));
+    assert!(rust.contains("let mut pool = rsscript_runtime::ResourcePool::try_from_factory(2i64, || rsscript_runtime::db_connection_try_open(url))?;"));
+    assert!(rust.contains("rsscript_runtime::db_connection_query(&mut conn, sql)?;"));
 }
 
 #[test]
@@ -1711,7 +1711,7 @@ fn reload_config(path: read Path, store: mut ConfigStore) -> Result<Unit, Config
     assert!(
         rust.contains("-> Result<rsscript_runtime::ConfigValue, rsscript_runtime::ConfigError>")
     );
-    assert!(rust.contains("return rsscript_runtime::config_load(&path);"));
+    assert!(rust.contains("return rsscript_runtime::config_load(path);"));
     assert!(rust.contains("store: &mut rsscript_runtime::ConfigStore"));
     assert!(rust.contains("rsscript_runtime::config_store_replace(store, &next);"));
 }
@@ -1733,7 +1733,7 @@ fn reload_rules_config(path: read Path, global: mut GlobalConfig) -> Result<Unit
     let rust = lower_source_to_rust("rules-config.rss", source).expect("source should lower");
 
     assert!(rust.contains("-> Result<rsscript_runtime::Config, rsscript_runtime::ConfigError>"));
-    assert!(rust.contains("let rules = rsscript_runtime::rule_loader_load_rules(&path)?;"));
+    assert!(rust.contains("let rules = rsscript_runtime::rule_loader_load_rules(path)?;"));
     assert!(
         rust.contains("return Ok(rsscript_runtime::config_new(&\"rules\".to_string(), &rules));")
     );
@@ -2170,12 +2170,12 @@ fn write_views(file: mut File, bytes: read Bytes, buffer: read Buffer) -> Result
 "#;
     let rust = lower_source_to_rust("view-lower.rss", source).expect("source should lower");
 
-    assert!(rust.contains("let head = rsscript_runtime::string_view(&line, 0i64, 12i64);"));
+    assert!(rust.contains("let head = rsscript_runtime::string_view(line, 0i64, 12i64);"));
     assert!(
         rust.contains("let key = rsscript_runtime::string_view_before(&head, &\":\".to_string());")
     );
-    assert!(rust.contains("let bytes_head = rsscript_runtime::bytes_view(&bytes, 0i64, 4i64);"));
-    assert!(rust.contains("let buffer_head = rsscript_runtime::buffer_view(&buffer, 0i64, 4i64);"));
+    assert!(rust.contains("let bytes_head = rsscript_runtime::bytes_view(bytes, 0i64, 4i64);"));
+    assert!(rust.contains("let buffer_head = rsscript_runtime::buffer_view(buffer, 0i64, 4i64);"));
     assert!(rust.contains("rsscript_runtime::bytes_view_to_bytes(&bytes_head)"));
     assert!(rust.contains("rsscript_runtime::buffer_view_to_bytes(&buffer_head)"));
     assert!(rust.contains("rsscript_runtime::file_write(file, &bytes_head)?;"));
@@ -2437,11 +2437,11 @@ fn fetch_status(url: read Url) -> Result<Int, HttpError> {
     let rust = lower_source_to_rust("stdlib-facades.rss", source).expect("source should lower");
 
     assert!(rust.contains("metadata: &rsscript_runtime::FileMetadata"));
-    assert!(rust.contains("let exists = rsscript_runtime::directory_exists(&path);"));
-    assert!(rust.contains("let metadata = rsscript_runtime::directory_metadata(&path)?;"));
-    assert!(rust.contains("rsscript_runtime::directory_write_string(&path, &text)?;"));
-    assert!(rust.contains("let file_hash = rsscript_runtime::hash_sha256_file(&path)?;"));
-    assert!(rust.contains("let byte_hash = rsscript_runtime::hash_sha256_bytes(&bytes);"));
+    assert!(rust.contains("let exists = rsscript_runtime::directory_exists(path);"));
+    assert!(rust.contains("let metadata = rsscript_runtime::directory_metadata(path)?;"));
+    assert!(rust.contains("rsscript_runtime::directory_write_string(path, &text)?;"));
+    assert!(rust.contains("let file_hash = rsscript_runtime::hash_sha256_file(path)?;"));
+    assert!(rust.contains("let byte_hash = rsscript_runtime::hash_sha256_bytes(bytes);"));
     assert!(rust.contains("let current = rsscript_runtime::env_current_dir()?;"));
     assert!(rust.contains("let run_root = rsscript_runtime::env_run_workspace_root();"));
     assert!(rust.contains("rsscript_runtime::env_set_current_dir(&current)?;"));
@@ -2453,16 +2453,16 @@ fn fetch_status(url: read Url) -> Result<Int, HttpError> {
     assert!(rust.contains("let elapsed = rsscript_runtime::instant_elapsed(&now);"));
     assert!(rust.contains("let millis = rsscript_runtime::duration_as_ms(&elapsed);"));
     assert!(rust.contains("-> Result<bool, rsscript_runtime::RegexError>"));
-    assert!(rust.contains("let regex = rsscript_runtime::regex_compile(&pattern)?;"));
-    assert!(rust.contains("let found = rsscript_runtime::regex_find(&regex, &value);"));
-    assert!(rust.contains("let captures = rsscript_runtime::regex_captures(&regex, &value);"));
+    assert!(rust.contains("let regex = rsscript_runtime::regex_compile(pattern)?;"));
+    assert!(rust.contains("let found = rsscript_runtime::regex_find(&regex, value);"));
+    assert!(rust.contains("let captures = rsscript_runtime::regex_captures(&regex, value);"));
     assert!(rust.contains("let replaced = rsscript_runtime::regex_replace_all"));
-    assert!(rust.contains("let parts = rsscript_runtime::regex_split(&regex, &value);"));
-    assert!(rust.contains("rsscript_runtime::regex_is_match(&regex, &value)"));
-    assert!(rust.contains("let mut dir = rsscript_runtime::tempdir_new_in(&parent)?;"));
+    assert!(rust.contains("let parts = rsscript_runtime::regex_split(&regex, value);"));
+    assert!(rust.contains("rsscript_runtime::regex_is_match(&regex, value)"));
+    assert!(rust.contains("let mut dir = rsscript_runtime::tempdir_new_in(parent)?;"));
     assert!(rust.contains("rsscript_runtime::tempdir_path(&dir)"));
     assert!(rust.contains("-> Result<i64, rsscript_runtime::HttpError>"));
-    assert!(rust.contains("let response = rsscript_runtime::http_get(&url)?;"));
+    assert!(rust.contains("let response = rsscript_runtime::http_get(url)?;"));
     assert!(rust.contains("let ok = rsscript_runtime::http_response_is_success(&response);"));
     assert!(rust.contains("let body = rsscript_runtime::http_response_text(&response);"));
     assert!(rust.contains("return Ok(rsscript_runtime::http_response_status(&response));"));
@@ -2500,7 +2500,7 @@ async fn fetch_status(url: read Url) -> Result<Int, HttpError> {
         "async fn should lower to a pending chain, got:\n{rust}"
     );
     assert!(
-        rust.contains("rsscript_runtime::pending_try(rsscript_runtime::http_get_async(&url)"),
+        rust.contains("rsscript_runtime::pending_try(rsscript_runtime::http_get_async(url)"),
         "async HTTP client call should use the Tokio-backed pending hook, got:\n{rust}"
     );
     assert!(
@@ -2796,7 +2796,7 @@ fn copy(path: read Path) -> Result<Unit, FileError> {
     assert!(
         lowered
             .rust_source
-            .contains("    {\n        let mut file = rsscript_runtime::file_open_read(&path)?;")
+            .contains("    {\n        let mut file = rsscript_runtime::file_open_read(path)?;")
     );
     assert!(lowered.rust_source.contains(
         "        rsscript_runtime::file_read_all(&mut file)?;\n        // rss:span kind=resource_drop"
@@ -3166,7 +3166,7 @@ fn render(name: read String) -> fresh User {
 
     assert!(rust.contains("fn User_lookup(name: &String) -> User"));
     assert!(rust.contains("fn render(name: &String) -> User"));
-    assert!(rust.contains("return User_lookup(&name);"));
+    assert!(rust.contains("return User_lookup(name);"));
     assert!(!rust.contains("fn User.lookup"));
     assert!(!rust.contains("User::lookup"));
 }
@@ -3213,7 +3213,7 @@ fn write_line<W: Writer>(
     assert!(rust.contains("pub trait Writer"));
     assert!(rust.contains("impl Writer for BufferWriter"));
     assert!(rust.contains("fn write_line<W: Writer>(writer: &mut W, message: &String)"));
-    assert!(rust.contains("Writer::write(writer, &message);"));
+    assert!(rust.contains("Writer::write(writer, message);"));
     assert!(rust.contains("BufferWriter_write(self, message);"));
     assert!(!rust.contains("fn Writer_write"));
 }
@@ -3246,7 +3246,7 @@ fn write_line<W: Writer>(writer: mut W, message: read String) -> Unit {
     let rust =
         lower_source_to_rust("receiver-protocol-lower.rss", source).expect("source should lower");
 
-    assert!(rust.contains("<W as Writer>::write(writer, &message);"));
+    assert!(rust.contains("<W as Writer>::write(writer, message);"));
     assert!(!rust.contains("Writer::write(&mut writer, &message);"));
 }
 
@@ -3278,7 +3278,7 @@ fn write_line(writer: mut BufferWriter, message: read String) -> Unit {
     let rust = lower_source_to_rust("receiver-concrete-protocol-lower.rss", source)
         .expect("source should lower");
 
-    assert!(rust.contains("<BufferWriter as Writer>::write(writer, &message);"));
+    assert!(rust.contains("<BufferWriter as Writer>::write(writer, message);"));
     assert!(!rust.contains("BufferWriter::write(&mut writer, &message);"));
 }
 
@@ -3315,7 +3315,7 @@ fn write_dynamic(writer: take BufferWriter, message: read String) -> Unit {
     assert!(rust.contains("BufferWriter(BufferWriter)"));
     assert!(rust.contains("impl Writer for CapabilityWriter"));
     assert!(rust.contains("CapabilityWriter::BufferWriter(writer)"));
-    assert!(rust.contains("Writer::write(&mut cap, &message);"));
+    assert!(rust.contains("Writer::write(&mut cap, message);"));
     assert!(!rust.contains("dyn Writer"));
 }
 
@@ -3348,7 +3348,7 @@ fn write_dynamic(writer: take BufferWriter, message: read String) -> Unit {
     let rust =
         lower_source_to_rust("capability-receiver-lower.rss", source).expect("source should lower");
 
-    assert!(rust.contains("<CapabilityWriter as Writer>::write(&mut cap, &message);"));
+    assert!(rust.contains("<CapabilityWriter as Writer>::write(&mut cap, message);"));
 }
 
 #[test]
@@ -6795,7 +6795,7 @@ async fn run(url: read Url) -> Result<Unit, HttpError> {
         "async loop should emit statements before the await inside the poll loop, got:\n{lowered}"
     );
     assert!(
-        lowered.contains("rsscript_runtime::http_post_json_bearer_retry_async(&url, &body"),
+        lowered.contains("rsscript_runtime::http_post_json_bearer_retry_async(url, &body"),
         "await pending should be constructed after the per-iteration body binding, got:\n{lowered}"
     );
     assert!(
@@ -7041,9 +7041,9 @@ fn read_rows(path: read Path) -> Result<Unit, ChannelError> {
 
     assert!(lowered.contains("rsscript_runtime::stream_from_list(items)"));
     assert!(lowered.contains("rsscript_runtime::stream_collect_list(&stream)"));
-    assert!(lowered.contains("rsscript_runtime::file_bytes_stream(&path, 4096i64)?"));
+    assert!(lowered.contains("rsscript_runtime::file_bytes_stream(path, 4096i64)?"));
     assert!(lowered.contains("let chunks: rsscript_runtime::RssStream<Vec<u8>> ="));
-    assert!(lowered.contains("rsscript_runtime::csv_rows(&path, 8192i64)?"));
+    assert!(lowered.contains("rsscript_runtime::csv_rows(path, 8192i64)?"));
     assert!(lowered.contains("let rows: rsscript_runtime::RssStream<rsscript_runtime::Row> ="));
     assert!(lowered.matches("rsscript_runtime::stream_next(&").count() >= 2);
 }
