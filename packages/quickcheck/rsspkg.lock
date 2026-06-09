@@ -1,0 +1,14 @@
+version = 1
+
+[[package]]
+name = "rss-quickcheck"
+version = "0.1.0"
+source = "path+packages/quickcheck"
+checksum = "sha256:f07a06f95d5a31f56daedd27c0c26d34a400659a0e5c935976a62d7e7831822f"
+interface_hash = "sha256:39d4fe5382251d41297e6d0b4393bc4a455f13b5e415366a966ba0944d0f2f1f"
+review_hash = "sha256:befe1b5705d6651c43a4d6995e31dc274f3f32191c64a6a3ad1b377d10085668"
+features = []
+
+[metadata]
+rss_version = "0.1.0"
+created_by = "rsscript pkg"

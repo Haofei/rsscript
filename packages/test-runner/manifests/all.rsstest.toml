@@ -1,0 +1,128 @@
+[[tests]]
+name = "rustfmt is clean"
+kind = "command_success"
+command = "cargo"
+args = ["fmt", "--check"]
+
+[[tests]]
+name = "clippy has no warnings"
+kind = "command_success"
+command = "cargo"
+timeout_ms = 60000
+args = ["clippy", "--workspace", "--", "-D", "warnings"]
+
+[[tests]]
+name = "generated Rust packages compile"
+kind = "command_for_each_path"
+command = "cargo"
+args = ["check", "--manifest-path"]
+jobs = 1
+paths = [
+  "tests/generated/simple/Cargo.toml",
+  "tests/generated/managed/Cargo.toml",
+  "tests/generated/resource_pool/Cargo.toml",
+  "tests/generated/effects/Cargo.toml",
+  "tests/generated/result/Cargo.toml",
+  "tests/generated/try/Cargo.toml",
+  "tests/generated/runnable/Cargo.toml",
+]
+
+[[tests]]
+# Run every workspace crate's tests in one global parallel pool (all cores).
+# Includes the rsscript unit/integration tests, the differential corpus + property
+# suites (which build the compiled backend for parity fixtures), the runtime and
+# native-abi crates, and the native adapter crates.
+name = "workspace tests pass (nextest)"
+kind = "command_success"
+command = "cargo"
+timeout_ms = 600000
+args = ["nextest", "run", "--workspace", "--no-fail-fast"]
+
+[[tests]]
+name = "rss binary builds"
+kind = "command_success"
+command = "cargo"
+timeout_ms = 60000
+args = ["build", "--quiet", "--bin", "rss"]
+
+[[tests]]
+name = "readme package ci command works"
+kind = "command_stdout_contains"
+command = "target/debug/rss"
+args = ["pkg", "ci", "--json", "examples/packages/code-agent"]
+contains_all = ["\"name\":\"rss-code-agent\"", "\"ok\":true"]
+
+[[tests]]
+name = "readme package diff command works"
+kind = "command_success"
+command = "target/debug/rss"
+args = ["pkg", "diff", "examples/packages/code-agent", "examples/packages/code-agent"]
+
+[[tests]]
+name = "readme check command works"
+kind = "command_success"
+command = "target/debug/rss"
+args = ["check", "examples/scripts/basic/hello.rss"]
+
+[[tests]]
+name = "core interfaces have no diagnostics"
+kind = "command_success"
+command = "cargo"
+args = [
+  "test",
+  "-q",
+  "--test",
+  "checker_frontend",
+  "core_interface_files_have_no_diagnostics",
+  "--",
+  "--exact",
+]
+
+[[tests]]
+name = "rss script examples lint"
+kind = "command_for_each_file"
+directory = "examples/scripts"
+extension = ".rss"
+recursive = true
+command = "target/debug/rss"
+args = ["lint"]
+
+[[tests]]
+name = "rss package examples check"
+kind = "command_for_each_path"
+command = "target/debug/rss"
+args = ["pkg"]
+paths = [
+  "examples/packages/code-agent",
+  "packages/async",
+  "packages/async-runtime",
+  "packages/quickcheck",
+  "packages/core-properties",
+]
+
+[[tests]]
+name = "core package properties"
+kind = "command_success"
+command = "target/debug/rss"
+timeout_ms = 60000
+args = ["run", "packages/core-properties"]
+
+[[tests]]
+name = "passing root fixtures have no diagnostics"
+kind = "command_success"
+command = "cargo"
+args = [
+  "test",
+  "-q",
+  "--test",
+  "checker_frontend",
+  "pass_fixtures_have_no_diagnostics",
+  "--",
+  "--exact",
+]
+
+[[tests]]
+name = "git diff has no whitespace errors"
+kind = "command_success"
+command = "git"
+args = ["diff", "--check"]

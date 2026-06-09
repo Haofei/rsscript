@@ -1,9 +1,0 @@
-[package]
-name = "rsscript-generated-resource-pool"
-version = "0.1.0"
-edition = "2024"
-
-[workspace]
-
-[dependencies]
-rsscript-runtime = { path = "../../../runtime" }

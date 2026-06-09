@@ -1,0 +1,24 @@
+[[tests]]
+name = "rayon wrapper pins rayon crate"
+kind = "file_contains"
+path = "packages/rayon/native/rust/Cargo.toml"
+contains = "rayon = \"1.12\""
+
+[[tests]]
+name = "rayon wrapper exposes rss interface"
+kind = "file_contains"
+path = "packages/rayon/interface/lib.rssi"
+contains = "Rayon.sum_squares"
+
+[[tests]]
+name = "package manager rss command surface exists"
+kind = "file_contains"
+path = "packages/package-manager/main.rss"
+contains = "rss package manager"
+
+[[tests]]
+name = "test runner captures cargo stdout"
+kind = "command_stdout_contains"
+command = "cargo"
+args = ["--version"]
+contains = "cargo"

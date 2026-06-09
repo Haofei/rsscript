@@ -21,7 +21,7 @@ jobs:
         uses: ./.github/actions/rsscript-review
         with:
           head: examples/packages/code-agent
-          grants: demos/s3-iam-reir/expected/prod-grants.reir.json
+          grants: examples/demos/s3-iam-reir/expected/prod-grants.reir.json
           target: prod
           post-comment: false
           fail-on-missing: false

@@ -69,7 +69,7 @@ runs:
         else
           # Ambient binaries are not provenance-pinned. For a protected gate, pin
           # this action to a release SHA so the toolchain is built from that ref.
-          echo "::warning::Using rss/reir already on PATH. These are not provenance-pinned; pin this action to a release SHA for a trusted supply-chain gate ($(command -v rss), $(command -v reir))."
+          echo "::warning::Using packages/reir already on PATH. These are not provenance-pinned; pin this action to a release SHA for a trusted supply-chain gate ($(command -v rss), $(command -v reir))."
         fi
 
     - name: Run RSScript and REIR review

@@ -14,7 +14,7 @@ model. This file is the **operating contract for editing the package**.
    `rsspkg.toml`). RSS is not in your training data; do not guess it.
 2. This file — package conventions and where things go.
 3. `schemas/core-package-index.json`, then the exact `.rssi` it names. Core
-   signatures live under `core/`; standard packages under `rss/*/interface/`.
+   signatures live under `stdlib/`; standard packages under `packages/*/interface/`.
 
 Do not invent stdlib or package APIs. If a signature is not in an `.rssi`, it
 does not exist.

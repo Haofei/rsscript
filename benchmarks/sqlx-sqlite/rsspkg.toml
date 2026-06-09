@@ -1,7 +1,0 @@
-[package]
-name = "rss-sqlx-sqlite-benchmark"
-version = "0.1.0"
-edition = "2026"
-
-[dependencies]
-rss-sqlx = { path = "../../rss/adapters/sqlx" }

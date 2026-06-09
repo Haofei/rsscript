@@ -3,7 +3,7 @@
   "generated_by": "build.rs",
   "default_core": [
     {
-      "path": "core/cache/cache.rssi",
+      "path": "stdlib/cache/cache.rssi",
       "module": "cache.cache",
       "functions": [
         "Cache.get",
@@ -14,7 +14,7 @@
       "types": []
     },
     {
-      "path": "core/capability/capability.rssi",
+      "path": "stdlib/capability/capability.rssi",
       "module": "capability.capability",
       "functions": [
         "Capability.from"
@@ -24,7 +24,7 @@
       ]
     },
     {
-      "path": "core/clock/clock.rssi",
+      "path": "stdlib/clock/clock.rssi",
       "module": "clock.clock",
       "functions": [
         "Clock.now",
@@ -42,7 +42,7 @@
       ]
     },
     {
-      "path": "core/cmp/ord.rssi",
+      "path": "stdlib/cmp/ord.rssi",
       "module": "cmp.ord",
       "functions": [
         "compare"
@@ -52,7 +52,7 @@
       ]
     },
     {
-      "path": "core/collections/buffer.rssi",
+      "path": "stdlib/collections/buffer.rssi",
       "module": "collections.buffer",
       "functions": [
         "Buffer.clear",
@@ -71,7 +71,7 @@
       ]
     },
     {
-      "path": "core/collections/bytes.rssi",
+      "path": "stdlib/collections/bytes.rssi",
       "module": "collections.bytes",
       "functions": [
         "Bytes.concat",
@@ -93,7 +93,7 @@
       ]
     },
     {
-      "path": "core/collections/deque.rssi",
+      "path": "stdlib/collections/deque.rssi",
       "module": "collections.deque",
       "functions": [
         "Deque.clear",
@@ -111,7 +111,7 @@
       ]
     },
     {
-      "path": "core/collections/list.rssi",
+      "path": "stdlib/collections/list.rssi",
       "module": "collections.list",
       "functions": [
         "List.all",
@@ -161,7 +161,7 @@
       "types": []
     },
     {
-      "path": "core/collections/map.rssi",
+      "path": "stdlib/collections/map.rssi",
       "module": "collections.map",
       "functions": [
         "Map.clear",
@@ -188,7 +188,7 @@
       ]
     },
     {
-      "path": "core/collections/persistent_map.rssi",
+      "path": "stdlib/collections/persistent_map.rssi",
       "module": "collections.persistent_map",
       "functions": [
         "PersistentMap.clear",
@@ -205,7 +205,7 @@
       ]
     },
     {
-      "path": "core/collections/pipeline.rssi",
+      "path": "stdlib/collections/pipeline.rssi",
       "module": "collections.pipeline",
       "functions": [
         "FalliblePipeline.collect",
@@ -226,7 +226,7 @@
       ]
     },
     {
-      "path": "core/collections/set.rssi",
+      "path": "stdlib/collections/set.rssi",
       "module": "collections.set",
       "functions": [
         "Set.clear",
@@ -248,7 +248,7 @@
       ]
     },
     {
-      "path": "core/collections/sorted_map.rssi",
+      "path": "stdlib/collections/sorted_map.rssi",
       "module": "collections.sorted_map",
       "functions": [
         "SortedMap.clear",
@@ -267,7 +267,7 @@
       ]
     },
     {
-      "path": "core/collections/sorted_set.rssi",
+      "path": "stdlib/collections/sorted_set.rssi",
       "module": "collections.sorted_set",
       "functions": [
         "SortedSet.clear",
@@ -284,7 +284,7 @@
       ]
     },
     {
-      "path": "core/config/config.rssi",
+      "path": "stdlib/config/config.rssi",
       "module": "config.config",
       "functions": [
         "Config.load",
@@ -299,7 +299,7 @@
       ]
     },
     {
-      "path": "core/config/rules.rssi",
+      "path": "stdlib/config/rules.rssi",
       "module": "config.rules",
       "functions": [
         "Config.new",
@@ -316,7 +316,7 @@
       ]
     },
     {
-      "path": "core/counter/counter.rssi",
+      "path": "stdlib/counter/counter.rssi",
       "module": "counter.counter",
       "functions": [
         "Counter.add",
@@ -328,7 +328,7 @@
       ]
     },
     {
-      "path": "core/csv/csv.rssi",
+      "path": "stdlib/csv/csv.rssi",
       "module": "csv.csv",
       "functions": [
         "Csv.open_read",
@@ -343,7 +343,7 @@
       ]
     },
     {
-      "path": "core/date/date.rssi",
+      "path": "stdlib/date/date.rssi",
       "module": "date.date",
       "functions": [
         "Date.add_days",
@@ -367,7 +367,7 @@
       "types": []
     },
     {
-      "path": "core/db/db.rssi",
+      "path": "stdlib/db/db.rssi",
       "module": "db.db",
       "functions": [
         "Db.close",
@@ -380,7 +380,7 @@
       ]
     },
     {
-      "path": "core/diff/diff.rssi",
+      "path": "stdlib/diff/diff.rssi",
       "module": "diff.diff",
       "functions": [
         "Diff.unified"
@@ -388,7 +388,7 @@
       "types": []
     },
     {
-      "path": "core/encoding/encoding.rssi",
+      "path": "stdlib/encoding/encoding.rssi",
       "module": "encoding.encoding",
       "functions": [
         "Base64.decode",
@@ -407,7 +407,7 @@
       ]
     },
     {
-      "path": "core/env/env.rssi",
+      "path": "stdlib/env/env.rssi",
       "module": "env.env",
       "functions": [
         "Env.current_dir",
@@ -422,7 +422,7 @@
       "types": []
     },
     {
-      "path": "core/fs/directory.rssi",
+      "path": "stdlib/fs/directory.rssi",
       "module": "fs.directory",
       "functions": [
         "Directory.copy_file",
@@ -446,7 +446,7 @@
       ]
     },
     {
-      "path": "core/fs/file.rssi",
+      "path": "stdlib/fs/file.rssi",
       "module": "fs.file",
       "functions": [
         "File.append_bytes",
@@ -476,7 +476,7 @@
       ]
     },
     {
-      "path": "core/hash/hash.rssi",
+      "path": "stdlib/hash/hash.rssi",
       "module": "hash.hash",
       "functions": [
         "Hash.sha256_bytes",
@@ -488,7 +488,7 @@
       "types": []
     },
     {
-      "path": "core/http/client.rssi",
+      "path": "stdlib/http/client.rssi",
       "module": "http.client",
       "functions": [
         "Http.get",
@@ -511,7 +511,7 @@
       ]
     },
     {
-      "path": "core/http/http.rssi",
+      "path": "stdlib/http/http.rssi",
       "module": "http.http",
       "functions": [
         "Request.new",
@@ -526,7 +526,7 @@
       ]
     },
     {
-      "path": "core/image/image.rssi",
+      "path": "stdlib/image/image.rssi",
       "module": "image.image",
       "functions": [
         "Image.inspect",
@@ -541,7 +541,7 @@
       ]
     },
     {
-      "path": "core/interpreter/interpreter.rssi",
+      "path": "stdlib/interpreter/interpreter.rssi",
       "module": "interpreter.interpreter",
       "functions": [
         "Environment.bind_function",
@@ -558,7 +558,7 @@
       ]
     },
     {
-      "path": "core/json/json.rssi",
+      "path": "stdlib/json/json.rssi",
       "module": "json.json",
       "functions": [
         "Json.array",
@@ -641,7 +641,7 @@
       ]
     },
     {
-      "path": "core/log/log.rssi",
+      "path": "stdlib/log/log.rssi",
       "module": "log.log",
       "functions": [
         "Log.error",
@@ -653,7 +653,7 @@
       "types": []
     },
     {
-      "path": "core/math/math.rssi",
+      "path": "stdlib/math/math.rssi",
       "module": "math.math",
       "functions": [
         "Math.abs",
@@ -674,7 +674,7 @@
       "types": []
     },
     {
-      "path": "core/option/option.rssi",
+      "path": "stdlib/option/option.rssi",
       "module": "option.option",
       "functions": [
         "Option.and_then",
@@ -690,7 +690,7 @@
       "types": []
     },
     {
-      "path": "core/os/os.rssi",
+      "path": "stdlib/os/os.rssi",
       "module": "os.os",
       "functions": [
         "Args.all",
@@ -702,7 +702,7 @@
       "types": []
     },
     {
-      "path": "core/patch/patch.rssi",
+      "path": "stdlib/patch/patch.rssi",
       "module": "patch.patch",
       "functions": [
         "Patch.apply_text"
@@ -710,7 +710,7 @@
       "types": []
     },
     {
-      "path": "core/path/path.rssi",
+      "path": "stdlib/path/path.rssi",
       "module": "path.path",
       "functions": [
         "Path.exists",
@@ -736,7 +736,7 @@
       "types": []
     },
     {
-      "path": "core/process/process.rssi",
+      "path": "stdlib/process/process.rssi",
       "module": "process.process",
       "functions": [
         "Process.run",
@@ -755,7 +755,7 @@
       ]
     },
     {
-      "path": "core/random/random.rssi",
+      "path": "stdlib/random/random.rssi",
       "module": "random.random",
       "functions": [
         "Random.bool",
@@ -768,7 +768,7 @@
       "types": []
     },
     {
-      "path": "core/regex/regex.rssi",
+      "path": "stdlib/regex/regex.rssi",
       "module": "regex.regex",
       "functions": [
         "Regex.captures",
@@ -785,7 +785,7 @@
       ]
     },
     {
-      "path": "core/resource/resource_pool.rssi",
+      "path": "stdlib/resource/resource_pool.rssi",
       "module": "resource.resource_pool",
       "functions": [
         "PoolError.message",
@@ -809,7 +809,7 @@
       ]
     },
     {
-      "path": "core/result/result.rssi",
+      "path": "stdlib/result/result.rssi",
       "module": "result.result",
       "functions": [
         "Result.and_then",
@@ -826,7 +826,7 @@
       "types": []
     },
     {
-      "path": "core/string/string.rssi",
+      "path": "stdlib/string/string.rssi",
       "module": "string.string",
       "functions": [
         "Char.compare",
@@ -912,7 +912,7 @@
       ]
     },
     {
-      "path": "core/tempdir/tempdir.rssi",
+      "path": "stdlib/tempdir/tempdir.rssi",
       "module": "tempdir.tempdir",
       "functions": [
         "TempDir.keep",
@@ -925,7 +925,7 @@
       ]
     },
     {
-      "path": "core/test/assert.rssi",
+      "path": "stdlib/test/assert.rssi",
       "module": "test.assert",
       "functions": [
         "Assert.equal",
@@ -935,7 +935,7 @@
       "types": []
     },
     {
-      "path": "core/toml/toml.rssi",
+      "path": "stdlib/toml/toml.rssi",
       "module": "toml.toml",
       "functions": [
         "Toml.parse_file"
@@ -943,7 +943,7 @@
       "types": []
     },
     {
-      "path": "core/url/url.rssi",
+      "path": "stdlib/url/url.rssi",
       "module": "url.url",
       "functions": [
         "Url.from_string",
@@ -952,7 +952,7 @@
       "types": []
     },
     {
-      "path": "core/weak/weak.rssi",
+      "path": "stdlib/weak/weak.rssi",
       "module": "weak.weak",
       "functions": [
         "Weak.downgrade",
@@ -962,7 +962,7 @@
       "types": []
     },
     {
-      "path": "core/workspace/workspace.rssi",
+      "path": "stdlib/workspace/workspace.rssi",
       "module": "workspace.workspace",
       "functions": [
         "Workspace.resolve"
@@ -970,7 +970,7 @@
       "types": []
     },
     {
-      "path": "core/yaml/yaml.rssi",
+      "path": "stdlib/yaml/yaml.rssi",
       "module": "yaml.yaml",
       "functions": [
         "Yaml.parse",
@@ -984,7 +984,7 @@
       "kind": "adapter",
       "name": "rss-sqlite",
       "version": "0.1.0",
-      "path": "rss/adapters/sqlite",
+      "path": "packages/adapters/sqlite",
       "interface_files": [
         "interface/lib.rssi"
       ],
@@ -1001,7 +1001,7 @@
       "kind": "adapter",
       "name": "rss-sqlite-smoke",
       "version": "0.1.0",
-      "path": "rss/adapters/sqlite/tests/sqlite-smoke",
+      "path": "packages/adapters/sqlite/tests/sqlite-smoke",
       "interface_files": [],
       "source_files": [
         "src/main.rss"
@@ -1017,7 +1017,7 @@
       "kind": "adapter",
       "name": "rss-sqlx",
       "version": "0.1.0",
-      "path": "rss/adapters/sqlx",
+      "path": "packages/adapters/sqlx",
       "interface_files": [
         "interface/lib.rssi"
       ],
@@ -1035,7 +1035,7 @@
       "kind": "adapter",
       "name": "rss-sqlx-smoke",
       "version": "0.1.0",
-      "path": "rss/adapters/sqlx/tests/sqlx-smoke",
+      "path": "packages/adapters/sqlx/tests/sqlx-smoke",
       "interface_files": [],
       "source_files": [
         "src/main.rss"
@@ -1051,7 +1051,7 @@
       "kind": "adapter",
       "name": "rss-sqlx-ffi",
       "version": "0.1.0",
-      "path": "rss/adapters/sqlx-ffi",
+      "path": "packages/adapters/sqlx-ffi",
       "interface_files": [
         "interface/lib.rssi"
       ],
@@ -1068,7 +1068,7 @@
       "kind": "package",
       "name": "rss-agent",
       "version": "0.1.0",
-      "path": "rss/agent",
+      "path": "packages/agent",
       "interface_files": [
         "interface/lib.rssi"
       ],
@@ -1084,7 +1084,7 @@
       "kind": "package",
       "name": "rss-agent-tools",
       "version": "0.1.0",
-      "path": "rss/agent-tools",
+      "path": "packages/agent-tools",
       "interface_files": [
         "interface/lib.rssi"
       ],
@@ -1100,7 +1100,7 @@
       "kind": "package",
       "name": "rss-async",
       "version": "0.1.0",
-      "path": "rss/async",
+      "path": "packages/async",
       "interface_files": [
         "interface/cancellation.rssi",
         "interface/channel.rssi",
@@ -1128,7 +1128,7 @@
       "kind": "package",
       "name": "rss-async-runtime",
       "version": "0.1.0",
-      "path": "rss/async-runtime",
+      "path": "packages/async-runtime",
       "interface_files": [],
       "source_files": [
         "src/lib.rss"
@@ -1142,7 +1142,7 @@
       "kind": "package",
       "name": "rss-chat-completions",
       "version": "0.1.0",
-      "path": "rss/chat-completions",
+      "path": "packages/chat-completions",
       "interface_files": [
         "interface/lib.rssi"
       ],
@@ -1161,7 +1161,7 @@
       "kind": "core",
       "name": "rss-core-cli",
       "version": "0.1.0",
-      "path": "rss/core/cli",
+      "path": "packages/core/cli",
       "interface_files": [
         "interface/lib.rssi"
       ],
@@ -1178,7 +1178,7 @@
       "kind": "core",
       "name": "rss-core-crypto",
       "version": "0.1.0",
-      "path": "rss/core/crypto",
+      "path": "packages/core/crypto",
       "interface_files": [
         "interface/lib.rssi"
       ],
@@ -1195,7 +1195,7 @@
       "kind": "core",
       "name": "rss-core-http-server-serve-hello",
       "version": "0.1.0",
-      "path": "rss/core/http-server/examples/serve-hello",
+      "path": "packages/core/http-server/examples/serve-hello",
       "interface_files": [],
       "source_files": [
         "src/main.rss"
@@ -1211,7 +1211,7 @@
       "kind": "core",
       "name": "rss-core-http-server",
       "version": "0.1.0",
-      "path": "rss/core/http-server",
+      "path": "packages/core/http-server",
       "interface_files": [
         "interface/lib.rssi"
       ],
@@ -1228,7 +1228,7 @@
       "kind": "core",
       "name": "rss-core-telemetry",
       "version": "0.1.0",
-      "path": "rss/core/telemetry",
+      "path": "packages/core/telemetry",
       "interface_files": [
         "interface/lib.rssi"
       ],
@@ -1247,7 +1247,7 @@
       "kind": "package",
       "name": "rss-core-properties",
       "version": "0.1.0",
-      "path": "rss/core-properties",
+      "path": "packages/core-properties",
       "interface_files": [],
       "source_files": [
         "src/main.rss",
@@ -1269,7 +1269,7 @@
       "kind": "package",
       "name": "rss-quickcheck",
       "version": "0.1.0",
-      "path": "rss/quickcheck",
+      "path": "packages/quickcheck",
       "interface_files": [
         "interface/lib.rssi"
       ],
@@ -1285,7 +1285,7 @@
       "kind": "package",
       "name": "rss-rayon",
       "version": "0.1.0",
-      "path": "rss/rayon",
+      "path": "packages/rayon",
       "interface_files": [
         "interface/lib.rssi"
       ],
@@ -1302,7 +1302,7 @@
       "kind": "package",
       "name": "rss-rayon-sort-fixture",
       "version": "0.1.0",
-      "path": "rss/rayon/tests/sort-fixture",
+      "path": "packages/rayon/tests/sort-fixture",
       "interface_files": [
         "interface/lib.rssi"
       ],
@@ -1319,7 +1319,7 @@
       "kind": "package",
       "name": "rss-rayon-sort-smoke",
       "version": "0.1.0",
-      "path": "rss/rayon/tests/sort-smoke",
+      "path": "packages/rayon/tests/sort-smoke",
       "interface_files": [],
       "source_files": [
         "src/main.rss"
@@ -1335,7 +1335,7 @@
       "kind": "package",
       "name": "rss-rayon-sort-speed",
       "version": "0.1.0",
-      "path": "rss/rayon/tests/sort-speed",
+      "path": "packages/rayon/tests/sort-speed",
       "interface_files": [],
       "source_files": [
         "src/main.rss"
@@ -1352,7 +1352,7 @@
       "kind": "package",
       "name": "rss-rayon-sum-smoke",
       "version": "0.1.0",
-      "path": "rss/rayon/tests/sum-smoke",
+      "path": "packages/rayon/tests/sum-smoke",
       "interface_files": [],
       "source_files": [
         "src/main.rss"
@@ -1368,7 +1368,7 @@
       "kind": "package",
       "name": "rss-test-runner",
       "version": "0.1.0",
-      "path": "rss/test-runner",
+      "path": "packages/test-runner",
       "interface_files": [
         "interface/lib.rssi"
       ],

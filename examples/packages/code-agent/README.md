@@ -78,5 +78,5 @@ network behavior are not hard-coded:
 The agent should not guess RSScript APIs. It reads the repository root
 `AGENT.md` first, then `examples/packages/code-agent/AGENTS.md`, uses `rss_ide`
 or direct `read` calls against `schemas/core-package-index.json`, then opens the
-relevant indexed `.rssi` files under `core/` or `rss/*/interface/` before writing
+relevant indexed `.rssi` files under `stdlib/` or `packages/*/interface/` before writing
 RSScript code.

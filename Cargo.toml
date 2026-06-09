@@ -1,57 +1,19 @@
-[package]
-name = "rsscript"
-version = "0.1.0"
-edition = "2024"
-description = "Reviewable System Script v0.6 review-first front-end checker and Rust lowering prototype"
-license = "MIT OR Apache-2.0"
-
 [workspace]
+resolver = "3"
 members = [
-    "lsp",
-    "runtime",
-    "reir",
-    "native-abi",
-    "vm-jit",
-    "rss/core/cli/native/rust",
-    "rss/core/crypto/native/rust",
-    "rss/core/http-server/native/rust",
-    "rss/rayon/native/rust",
-    "rss/adapters/sqlite/native/rust",
-    "rss/adapters/sqlx-ffi/native/rust",
+    "crates/rsscript",
+    "crates/lsp",
+    "crates/runtime",
+    "crates/reir",
+    "crates/native-abi",
+    "crates/vm-jit",
+    "packages/core/cli/native/rust",
+    "packages/core/crypto/native/rust",
+    "packages/core/http-server/native/rust",
+    "packages/rayon/native/rust",
+    "packages/adapters/sqlite/native/rust",
+    "packages/adapters/sqlx-ffi/native/rust",
 ]
-
-[[bin]]
-name = "rss"
-path = "src/main.rs"
-
-[dependencies]
-reir = { path = "reir" }
-rss-native-abi = { path = "native-abi", features = ["host"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["preserve_order"] }
-sha2 = "0.10"
-regex = "1"
-toml = "0.8"
-serde_yaml_ng = "0.10"
-base64 = "0.22"
-chrono = { version = "0.4", default-features = false, features = ["alloc"] }
-hex = "0.4"
-hmac = "0.12"
-percent-encoding = "2"
-rand = "0.8"
-uuid = { version = "1", features = ["v4"] }
-vm-jit = { path = "vm-jit", optional = true }
-
-[features]
-# Native (Cranelift) baseline JIT for the integer/control core. Off by default so
-# normal builds/tests don't pull in the codegen dependency; enable for the
-# native differential backend, `rss bench --mode jit-native`, and force-JIT CI.
-native-jit = ["dep:vm-jit"]
-
-[build-dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-toml = "0.8"
 
 # Release tuning for the `rss` tool / VM. Thin LTO + a single codegen unit let the
 # optimizer inline across the interpreter's hot dispatch/value helpers, which are
@@ -61,14 +23,3 @@ toml = "0.8"
 [profile.release]
 lto = "thin"
 codegen-units = 1
-
-[dev-dependencies]
-sha1 = "0.10"
-libtest-mimic = "0.8"
-proptest = "1"
-
-# The differential corpus runner uses a custom (libtest-mimic) harness so each
-# fixture is an individually named, filterable test case.
-[[test]]
-name = "corpus"
-harness = false

@@ -1,0 +1,247 @@
+// Standard package contracts that are prelude-visible only for single-file
+// checks/lowering. Package review and package lowering must receive these
+// through explicit package dependencies instead.
+pub(crate) const STANDARD_PACKAGE_INTERFACES: &[(&str, &str)] = &[
+    (
+        "packages/async/interface/cancellation.rssi",
+        include_str!("../../../packages/async/interface/cancellation.rssi"),
+    ),
+    (
+        "packages/async/interface/channel.rssi",
+        include_str!("../../../packages/async/interface/channel.rssi"),
+    ),
+    (
+        "packages/async/interface/deadline.rssi",
+        include_str!("../../../packages/async/interface/deadline.rssi"),
+    ),
+    (
+        "packages/async/interface/file.rssi",
+        include_str!("../../../packages/async/interface/file.rssi"),
+    ),
+    (
+        "packages/async/interface/http.rssi",
+        include_str!("../../../packages/async/interface/http.rssi"),
+    ),
+    (
+        "packages/async/interface/process.rssi",
+        include_str!("../../../packages/async/interface/process.rssi"),
+    ),
+    (
+        "packages/async/interface/csv.rssi",
+        include_str!("../../../packages/async/interface/csv.rssi"),
+    ),
+    (
+        "packages/async/interface/stream.rssi",
+        include_str!("../../../packages/async/interface/stream.rssi"),
+    ),
+    (
+        "packages/async/interface/task.rssi",
+        include_str!("../../../packages/async/interface/task.rssi"),
+    ),
+    (
+        "packages/async/interface/tcp.rssi",
+        include_str!("../../../packages/async/interface/tcp.rssi"),
+    ),
+    (
+        "packages/async/interface/timer.rssi",
+        include_str!("../../../packages/async/interface/timer.rssi"),
+    ),
+    (
+        "packages/async/interface/websocket.rssi",
+        include_str!("../../../packages/async/interface/websocket.rssi"),
+    ),
+];
+
+pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
+    (
+        "stdlib/capability/capability.rssi",
+        include_str!("../../../stdlib/capability/capability.rssi"),
+    ),
+    (
+        "stdlib/cache/cache.rssi",
+        include_str!("../../../stdlib/cache/cache.rssi"),
+    ),
+    (
+        "stdlib/clock/clock.rssi",
+        include_str!("../../../stdlib/clock/clock.rssi"),
+    ),
+    ("stdlib/cmp/ord.rssi", include_str!("../../../stdlib/cmp/ord.rssi")),
+    (
+        "stdlib/collections/buffer.rssi",
+        include_str!("../../../stdlib/collections/buffer.rssi"),
+    ),
+    (
+        "stdlib/collections/bytes.rssi",
+        include_str!("../../../stdlib/collections/bytes.rssi"),
+    ),
+    (
+        "stdlib/collections/deque.rssi",
+        include_str!("../../../stdlib/collections/deque.rssi"),
+    ),
+    (
+        "stdlib/collections/list.rssi",
+        include_str!("../../../stdlib/collections/list.rssi"),
+    ),
+    (
+        "stdlib/collections/map.rssi",
+        include_str!("../../../stdlib/collections/map.rssi"),
+    ),
+    (
+        "stdlib/collections/pipeline.rssi",
+        include_str!("../../../stdlib/collections/pipeline.rssi"),
+    ),
+    (
+        "stdlib/collections/persistent_map.rssi",
+        include_str!("../../../stdlib/collections/persistent_map.rssi"),
+    ),
+    (
+        "stdlib/collections/set.rssi",
+        include_str!("../../../stdlib/collections/set.rssi"),
+    ),
+    (
+        "stdlib/collections/sorted_map.rssi",
+        include_str!("../../../stdlib/collections/sorted_map.rssi"),
+    ),
+    (
+        "stdlib/collections/sorted_set.rssi",
+        include_str!("../../../stdlib/collections/sorted_set.rssi"),
+    ),
+    (
+        "stdlib/config/config.rssi",
+        include_str!("../../../stdlib/config/config.rssi"),
+    ),
+    (
+        "stdlib/config/rules.rssi",
+        include_str!("../../../stdlib/config/rules.rssi"),
+    ),
+    (
+        "stdlib/counter/counter.rssi",
+        include_str!("../../../stdlib/counter/counter.rssi"),
+    ),
+    ("stdlib/csv/csv.rssi", include_str!("../../../stdlib/csv/csv.rssi")),
+    (
+        "stdlib/date/date.rssi",
+        include_str!("../../../stdlib/date/date.rssi"),
+    ),
+    ("stdlib/db/db.rssi", include_str!("../../../stdlib/db/db.rssi")),
+    (
+        "stdlib/diff/diff.rssi",
+        include_str!("../../../stdlib/diff/diff.rssi"),
+    ),
+    (
+        "stdlib/encoding/encoding.rssi",
+        include_str!("../../../stdlib/encoding/encoding.rssi"),
+    ),
+    ("stdlib/env/env.rssi", include_str!("../../../stdlib/env/env.rssi")),
+    (
+        "stdlib/fs/directory.rssi",
+        include_str!("../../../stdlib/fs/directory.rssi"),
+    ),
+    ("stdlib/fs/file.rssi", include_str!("../../../stdlib/fs/file.rssi")),
+    (
+        "stdlib/hash/hash.rssi",
+        include_str!("../../../stdlib/hash/hash.rssi"),
+    ),
+    (
+        "stdlib/http/client.rssi",
+        include_str!("../../../stdlib/http/client.rssi"),
+    ),
+    (
+        "stdlib/http/http.rssi",
+        include_str!("../../../stdlib/http/http.rssi"),
+    ),
+    (
+        "stdlib/interpreter/interpreter.rssi",
+        include_str!("../../../stdlib/interpreter/interpreter.rssi"),
+    ),
+    (
+        "stdlib/image/image.rssi",
+        include_str!("../../../stdlib/image/image.rssi"),
+    ),
+    (
+        "stdlib/json/json.rssi",
+        include_str!("../../../stdlib/json/json.rssi"),
+    ),
+    ("stdlib/log/log.rssi", include_str!("../../../stdlib/log/log.rssi")),
+    (
+        "stdlib/math/math.rssi",
+        include_str!("../../../stdlib/math/math.rssi"),
+    ),
+    (
+        "stdlib/option/option.rssi",
+        include_str!("../../../stdlib/option/option.rssi"),
+    ),
+    ("stdlib/os/os.rssi", include_str!("../../../stdlib/os/os.rssi")),
+    (
+        "stdlib/path/path.rssi",
+        include_str!("../../../stdlib/path/path.rssi"),
+    ),
+    (
+        "stdlib/patch/patch.rssi",
+        include_str!("../../../stdlib/patch/patch.rssi"),
+    ),
+    (
+        "stdlib/process/process.rssi",
+        include_str!("../../../stdlib/process/process.rssi"),
+    ),
+    (
+        "stdlib/random/random.rssi",
+        include_str!("../../../stdlib/random/random.rssi"),
+    ),
+    (
+        "stdlib/regex/regex.rssi",
+        include_str!("../../../stdlib/regex/regex.rssi"),
+    ),
+    (
+        "stdlib/resource/resource_pool.rssi",
+        include_str!("../../../stdlib/resource/resource_pool.rssi"),
+    ),
+    (
+        "stdlib/result/result.rssi",
+        include_str!("../../../stdlib/result/result.rssi"),
+    ),
+    (
+        "stdlib/string/string.rssi",
+        include_str!("../../../stdlib/string/string.rssi"),
+    ),
+    (
+        "stdlib/tempdir/tempdir.rssi",
+        include_str!("../../../stdlib/tempdir/tempdir.rssi"),
+    ),
+    (
+        "stdlib/test/assert.rssi",
+        include_str!("../../../stdlib/test/assert.rssi"),
+    ),
+    (
+        "stdlib/toml/toml.rssi",
+        include_str!("../../../stdlib/toml/toml.rssi"),
+    ),
+    ("stdlib/url/url.rssi", include_str!("../../../stdlib/url/url.rssi")),
+    (
+        "stdlib/weak/weak.rssi",
+        include_str!("../../../stdlib/weak/weak.rssi"),
+    ),
+    (
+        "stdlib/workspace/workspace.rssi",
+        include_str!("../../../stdlib/workspace/workspace.rssi"),
+    ),
+    (
+        "stdlib/yaml/yaml.rssi",
+        include_str!("../../../stdlib/yaml/yaml.rssi"),
+    ),
+];
+
+pub(crate) fn builtin_interfaces() -> impl Iterator<Item = (&'static str, &'static str)> {
+    CORE_INTERFACES.iter().copied()
+}
+
+pub(crate) fn default_interfaces() -> impl Iterator<Item = (&'static str, &'static str)> {
+    CORE_INTERFACES
+        .iter()
+        .chain(STANDARD_PACKAGE_INTERFACES.iter())
+        .copied()
+}
+
+pub(crate) fn standard_package_interfaces() -> impl Iterator<Item = (&'static str, &'static str)> {
+    STANDARD_PACKAGE_INTERFACES.iter().copied()
+}

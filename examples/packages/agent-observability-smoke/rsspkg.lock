@@ -12,7 +12,7 @@ features = []
 [[package]]
 name = "rss-agent"
 version = "0.1.0"
-source = "path+rss/agent"
+source = "path+packages/agent"
 checksum = "sha256:17e60777f0f4340b6cbc170e51cec839b715581662c15e53d3f276957e9935e2"
 interface_hash = "sha256:7cda33905aaa0464b192f6ab1db1bf295a9463877efa88d2370c80e40e559d16"
 review_hash = "sha256:11e8f031906e747a1d003b9d5a0586e0648dda0af8148eae7b1ff6a1a90dcd0a"

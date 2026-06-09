@@ -1,0 +1,15 @@
+version = 1
+
+[[package]]
+name = "rss-core-http-server"
+version = "0.1.0"
+source = "path+packages/core/http-server"
+checksum = "sha256:91b5572f38f31029f770ef8ce18aa081fd0df620f34cd235f22ea44f04af0ce5"
+interface_hash = "sha256:2ed018b976ef74c33e0b0c530c969c742d15d6b4f23a38eaa740c2dbbb25623b"
+review_hash = "sha256:219400d161fb506e7ac056d68b83e27990e9a3551e9474ea0b78061bc45ff223"
+native_hash = "sha256:18b38e4f3191736fa723f688a40e7336ee6fa611163beacdbe845306496586ab"
+features = []
+
+[metadata]
+rss_version = "0.1.0"
+created_by = "rsscript pkg"
