@@ -5,14 +5,10 @@ features: native, local
 // and hardening pressure-test (see docs/rss-selfhost-ledger.md).
 
 fn edition_of(package: read JsonValue) -> Result<fresh String, JsonError> {
-    match Json.field_optional_string(value: read package, name: read "edition")? {
-        Some(text) => {
-            return Ok(text)
-        }
-        None => {
-            return Ok("")
-        }
-    }
+    // SH-002: the optional-field-or-default shape collapses to one line via the
+    // existing `Option.unwrap_or` rather than a `match`.
+    let edition = Json.field_optional_string(value: read package, name: read "edition")?
+    return Ok(Option.unwrap_or<String>(value: read edition, default: read ""))
 }
 
 fn dependency_count(manifest: read JsonValue) -> Result<Int, JsonError> {

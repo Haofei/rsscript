@@ -1,0 +1,100 @@
+features: local
+
+// Self-hosted RSS tool: a stdlib conformance reporter. Runs a battery of
+// pure stdlib checks (List/Map/String/Option/Result) and emits a JSON summary.
+// Unlike the manifest inspector this is IO-free and loop-heavy, so it is a useful
+// contrast for "what does the JIT actually accelerate?" (see the self-host ledger).
+
+// 0 + 1 + ... + (n-1), built and summed through List, exercising List.push/len/get.
+fn list_roundtrip(n: Int) -> Int {
+    let mut xs = List<Int>.new()
+    let mut i = 0
+    while i < n {
+        List.push<Int>(list: mut xs, value: read i)
+        i = i + 1
+    }
+    let mut total = 0
+    let mut j = 0
+    while j < List.len<Int>(list: read xs) {
+        total = total + List.get<Int>(list: read xs, index: j)
+        j = j + 1
+    }
+    return total
+}
+
+// Insert n keys into a Map, then sum the looked-up values, exercising Map.insert/get.
+fn map_roundtrip(n: Int) -> Int {
+    local table = Map<Int, Int>.new()
+    let mut i = 0
+    while i < n {
+        let doubled = i * 2
+        Map.insert<Int, Int>(map: mut table, key: read i, value: read doubled)
+        i = i + 1
+    }
+    let mut total = 0
+    let mut k = 0
+    while k < n {
+        match Map.get<Int, Int>(map: read table, key: read k) {
+            Some(value) => {
+                total = total + value
+            }
+            None => {
+                total = total
+            }
+        }
+        k = k + 1
+    }
+    return total
+}
+
+fn option_roundtrip(n: Int) -> Int {
+    let mut total = 0
+    let mut i = 0
+    while i < n {
+        // unwrap_or(Some(1)) == 1 and unwrap_or(None, 1) == 1, so each iteration
+        // contributes 2 → total == n * 2.
+        let value = Option.unwrap_or<Int>(value: read Some(1), default: read 0)
+        let fallback = Option.unwrap_or<Int>(value: read None, default: read 1)
+        total = total + value + fallback
+        i = i + 1
+    }
+    return total
+}
+
+fn json_bool(value: Bool) -> fresh String {
+    if value {
+        return "true"
+    }
+    return "false"
+}
+
+fn main() -> Unit {
+    let n = 2000
+    let n_minus_1 = n - 1
+    let expected_list = n * n_minus_1 / 2
+    let expected_map = n_minus_1 * n
+    let expected_option = n * 2
+    let list_ok = list_roundtrip(n: read n) == expected_list
+    let map_ok = map_roundtrip(n: read n) == expected_map
+    let option_ok = option_roundtrip(n: read n) == expected_option
+
+    let mut passed = 0
+    if list_ok {
+        passed = passed + 1
+    }
+    if map_ok {
+        passed = passed + 1
+    }
+    if option_ok {
+        passed = passed + 1
+    }
+
+    let mut fields = List<String>.new()
+    List.push<String>(list: mut fields, value: read Json.int_field(name: read "checks", value: 3))
+    List.push<String>(list: mut fields, value: read Json.int_field(name: read "passed", value: passed))
+    List.push<String>(list: mut fields, value: read Json.raw_field(name: read "list_ok", value: read json_bool(value: list_ok)))
+    List.push<String>(list: mut fields, value: read Json.raw_field(name: read "map_ok", value: read json_bool(value: map_ok)))
+    List.push<String>(list: mut fields, value: read Json.raw_field(name: read "option_ok", value: read json_bool(value: option_ok)))
+    Log.write(message: read Json.object(fields: read fields))
+    return Unit
+}

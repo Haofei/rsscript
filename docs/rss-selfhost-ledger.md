@@ -79,3 +79,34 @@ Status:         open | decided | done
 - **Decision:** keep the explicit model; the cost is one `match` at each error
   boundary. Not promoting — documented here so it isn't re-litigated.
 - **Status:** decided.
+
+### SH-004 — collection loops over *local* collections get no native acceleration
+
+- **Tool:** stdlib conformance reporter
+- **Symptom:** an IO-free, loop-heavy tool *still* shows `translated: 0,
+  native_calls: 0` — the JIT accelerates none of it.
+- **Minimal RSS:**
+  ```
+  let mut xs = List<Int>.new()
+  while i < n { List.push<Int>(list: mut xs, value: read i); i = i + 1 }
+  while j < List.len<Int>(list: read xs) { total = total + List.get<Int>(list: read xs, index: j); ... }
+  ```
+- **Backend:** jit-native (and tier-0).
+- **Root cause:** two gaps compound. (1) Collection *construction/mutation*
+  (`List.push`, `Map.insert`) is not in the native subset at all. (2) The
+  read ops that *are* native (`ListLen`/`ListGet`/`GetFieldSlot`) only fire when
+  the collection is a **handle parameter** — handles never originate in native
+  code, so a locally-built `let mut xs` can't be read natively. Real tool code
+  builds and processes collections locally, so the Phase-2 read-heap coverage
+  rarely applies.
+- **Classification:** JIT (coverage) + VM (representation).
+- **Decision:** this is the measured case for **Phase 3 (local mutation)**: to
+  accelerate real tool loops the native tier needs (a) native `List.push`/
+  `Map.insert` on locally-owned collections and (b) native reads of *local*
+  (not just parameter) collections — i.e. handles that originate from native
+  `MakeList`/`MakeMap`, with the VM's copy-on-write/aliasing rules. Larger than
+  a single helper; recorded as the next high-value JIT direction with real-program
+  evidence (rather than guessed from microbenchmarks).
+- **Tests:** `backends_agree_on_stdlib_reporter` (5-way).
+- **Benchmark:** `selfhost_stdlib_reporter.rss` in the matrix.
+- **Status:** open (informs Phase 3).

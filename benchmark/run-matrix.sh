@@ -40,6 +40,7 @@ cases=(
   "struct_field_rw.rss:200000"
   "deque_queue.rss:50000"
   "selfhost_manifest_inspector.rss:benchmark/fixtures/package-medium/rsspkg.toml"
+  "selfhost_stdlib_reporter.rss:0"
 )
 
 json_field() {

@@ -543,6 +543,16 @@ fn backends_agree_on_manifest_inspector() {
     common::differential::assert_backends_agree("selfhost-manifest-inspector.rss", source, &[fixture]);
 }
 
+/// Real self-hosted tool, cross-backend: the stdlib conformance reporter
+/// (`benchmark/selfhost_stdlib_reporter.rss`) — an IO-free, loop-heavy battery of
+/// List/Map/Option checks emitting a JSON summary. interp == jit == native ==
+/// force-deopt == compiled.
+#[test]
+fn backends_agree_on_stdlib_reporter() {
+    let source = include_str!("../benchmark/selfhost_stdlib_reporter.rss");
+    common::differential::assert_backends_agree("selfhost-stdlib-reporter.rss", source, &[]);
+}
+
 /// Failure-path differential (the case that matters most for semantic hardening):
 /// an out-of-bounds `List.get` must error on *every* backend. The loop-condition
 /// variant specifically guards the native tier's immediate-bail behaviour — a
