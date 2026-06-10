@@ -2235,6 +2235,28 @@ impl<'a> RustLowerer<'a> {
                         self.lower_string_comparison_operand(right)
                     );
                 }
+                if matches!(op, "==" | "!=") {
+                    // A `read`-bound enum parameter lowers to `&Op`; comparing it
+                    // against a sum *value* (e.g. a bare variant) needs a deref so
+                    // both sides are `Op`. Mirrors how field-access enum comparison
+                    // already lowers to a value on both sides.
+                    let left_ref = self.is_enum_read_ref_operand(left);
+                    let right_ref = self.is_enum_read_ref_operand(right);
+                    if left_ref && !right_ref && self.is_enum_value_operand(right) {
+                        return format!(
+                            "*{} {op} {}",
+                            self.lower_binary_operand(left, binary_op, false),
+                            self.lower_binary_operand(right, binary_op, true)
+                        );
+                    }
+                    if right_ref && !left_ref && self.is_enum_value_operand(left) {
+                        return format!(
+                            "{} {op} *{}",
+                            self.lower_binary_operand(left, binary_op, false),
+                            self.lower_binary_operand(right, binary_op, true)
+                        );
+                    }
+                }
                 format!(
                     "{} {op} {}",
                     self.lower_binary_operand(left, binary_op, false),
@@ -3897,6 +3919,38 @@ impl<'a> RustLowerer<'a> {
             && !self
                 .infer_expr_type(expr)
                 .is_some_and(|ty| self.is_class_type(&ty))
+    }
+
+    /// True when this operand is a `read`-bound parameter whose type is a
+    /// user-defined sum type. Such a parameter lowers to `&Op`, so comparing it
+    /// against a sum *value* (e.g. a bare variant literal) needs a deref.
+    fn is_enum_read_ref_operand(&self, expr: &Expr) -> bool {
+        let Expr::Ident(name, _) = expr else {
+            return false;
+        };
+        if self.param_effects.get(name) != Some(&DataEffect::Read) {
+            return false;
+        }
+        let Some(ty) = self.value_types.get(name) else {
+            return false;
+        };
+        ty.args.is_empty() && self.is_sum_type_name(&ty.name)
+    }
+
+    /// True when this operand is a sum *value* that lowers by value (not behind a
+    /// reference) — most commonly a bare variant literal such as `A`.
+    fn is_enum_value_operand(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Ident(name, _) => self.find_sum_type_for_variant(name).is_some(),
+            _ => false,
+        }
+    }
+
+    fn is_sum_type_name(&self, name: &str) -> bool {
+        self.program
+            .items
+            .iter()
+            .any(|item| matches!(item, Item::SumType(sum) if sum.name == name))
     }
 
     fn is_string_comparison_operand(&self, expr: &Expr) -> bool {
