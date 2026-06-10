@@ -115,11 +115,20 @@ impl Lexer<'_> {
         let start_line = self.line;
         let start_column = self.column;
         let start_index = self.index;
-        while self
-            .peek()
-            .is_some_and(|ch| ch.is_ascii_digit() || ch == '.')
-        {
+        // Integer part.
+        while self.peek().is_some_and(|ch| ch.is_ascii_digit()) {
             self.bump();
+        }
+        // At most one fractional part, and only when a digit follows the `.`.
+        // This rejects malformed literals like `5.` (trailing dot) and `1.2.3`
+        // (multiple dots), which previously lexed as a single Float token and
+        // lowered to invalid Rust. The remaining `.`/digits are lexed separately
+        // (as a field-access `.` or a new number), so the parser reports them.
+        if self.peek() == Some('.') && self.peek_next().is_some_and(|ch| ch.is_ascii_digit()) {
+            self.bump();
+            while self.peek().is_some_and(|ch| ch.is_ascii_digit()) {
+                self.bump();
+            }
         }
         let value = self.chars[start_index..self.index].iter().collect();
         self.tokens.push(Token {

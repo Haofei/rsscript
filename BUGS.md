@@ -4,6 +4,20 @@ Found by a white-box audit of the compiler on **2026-06-10**, reproduced against
 release binary built from commit `f5fab92` (`target/release/rss`). Every item below was
 reproduced; the HIGH items were additionally re-verified by hand.
 
+> **Status (2026-06-10, re-audit + fix):** all 11 items were re-verified against a fresh
+> build. **RSS-1 … RSS-10 are fixed** and confirmed across `eval`, `run`, and
+> `run --release`, with the full `cargo test` suite still green. **RSS-11** (LOW,
+> compile-time perf only) is confirmed valid but **deferred** — see its entry.
+>
+> Repro notes found during the re-audit:
+> - **RSS-5 / RSS-10:** the original single-line struct bodies (`{ first: T  second: T }`)
+>   additionally tripped a field-separator quirk that masked the documented symptom; with
+>   idiomatic newline-separated fields both bugs reproduce exactly as described and are fixed.
+> - Separately discovered (not one of the 11, left open): matching on a borrowed
+>   `read Option<T>`/`Result<…>` param and using the bound payload by value
+>   (`match o { Some(s) => return s }`) lowers to `&T` and fails rustc E0308. Pre-existing
+>   at `f5fab92`; independent of the RSS-4 fix.
+
 Run recipe used for all repros:
 
 ```sh
@@ -24,7 +38,7 @@ precedence trees, or borrow/clone coercion on assignment — which is where ever
 
 ## HIGH
 
-### RSS-1 — Prefix `!` and `~` bind looser than every binary operator (silent wrong result)
+### RSS-1 — [FIXED] — Prefix `!` and `~` bind looser than every binary operator (silent wrong result)
 - **Class:** wrong result (no error; both backends agree on the wrong parse)
 - **Source:** `crates/rsscript/src/syntax/parser.rs:2464` (`parse_unary_expr` is tried before
   `parse_binary_expr`), `:2960-2968` (`unary_operand_range` extends the operand to the rest of
@@ -47,7 +61,7 @@ fn main() -> Unit {
   parens gives the right answer, proving the mis-grouping.
 - **Fix:** give prefix `!`/`~` precedence above all binary operators.
 
-### RSS-2 — Integer overflow silently wraps in release AOT but traps everywhere else
+### RSS-2 — [FIXED] — Integer overflow silently wraps in release AOT but traps everywhere else
 - **Class:** soundness / cross-backend divergence
 - **Source:** `crates/rsscript/src/rust_lower/lowerer.rs` Add/Sub/Mul emit bare `+`/`-`/`*`; the
   generated release profile sets no `overflow-checks = true`. Sibling: `crates/runtime/src/math.rs`
@@ -71,7 +85,7 @@ fn main() -> Unit {
 - **Fix:** lower `+ - *` to `wrapping_*`/`checked_*` (as `<<` already uses `wrapping_shl`), or set
   `overflow-checks = true` in the generated release profile; route `Math.pow` through `checked_pow`.
 
-### RSS-3 — `read`-param / borrowed RHS not cloned on assignment → non-compiling Rust (E0308)
+### RSS-3 — [FIXED] — `read`-param / borrowed RHS not cloned on assignment → non-compiling Rust (E0308)
 - **Class:** miscompile (valid program won't compile under AOT)
 - **Source:** `crates/rsscript/src/rust_lower/lowerer.rs:1865-1869` (`Stmt::Assign` emits
   `target = lower_expr(value)` with no clone coercion; the `let`-init path at `:1601-1613` *does*
@@ -99,7 +113,7 @@ fn main() -> Unit {
 - **Fix:** apply the same `.clone()` coercion in `Stmt::Assign` lowering; also clone when the RHS is
   a read-view alias (`:3922`).
 
-### RSS-4 — Untyped `Some(...)` / `Ok(...)` local bypasses argument type checking (false-accept)
+### RSS-4 — [FIXED] — Untyped `Some(...)` / `Ok(...)` local bypasses argument type checking (false-accept)
 - **Class:** soundness (false-accept → backend E0308)
 - **Source:** `crates/rsscript/src/hir.rs:2431-2459` (`infer_hir_expr_type` → `None` for
   `CallResolution::EnumVariant`), `:1422-1446` (`Stmt::Let` records `type_name=None`),
@@ -124,7 +138,7 @@ fn main() -> Unit {
 - **Fix:** infer `Option<Int>` / `Result<Int,_>` for enum-variant constructors so the local carries
   a type.
 
-### RSS-5 — Turbofish struct constructor miscompiles to a positional tuple-struct call (E0423)
+### RSS-5 — [FIXED] — Turbofish struct constructor miscompiles to a positional tuple-struct call (E0423)
 - **Class:** miscompile
 - **Source:** `crates/rsscript/src/rust_lower/lowerer.rs:2342` (named-field path looked up via the
   raw callee string), fall-through at `:2646`; `type_kinds` keyed by bare name at `:58`.
@@ -149,7 +163,7 @@ fn main() -> Unit {
 
 ## MEDIUM
 
-### RSS-6 — `<<` / `>>` share the comparison precedence tier
+### RSS-6 — [FIXED] — `<<` / `>>` share the comparison precedence tier
 - **Source:** `crates/rsscript/src/syntax/parser.rs:2883-2891` (`ShiftLeft`/`ShiftRight` grouped
   with `Equal`/`Less`/`Greater` in `find_top_level_operator`).
 - `4 == 1 << 2` parses as `(4 == 1) << 2` (shift on a bool). In C/Rust shift binds tighter than
@@ -157,25 +171,25 @@ fn main() -> Unit {
   backends then fail (`no method named wrapping_shl for type bool`, rustc E0599). False-reject.
 - **Fix:** move `<<`/`>>` to a tier between additive and relational.
 
-### RSS-7 — Lexer accepts malformed multi-dot number literals (`1.2.3`, `5.`)
+### RSS-7 — [FIXED] — Lexer accepts malformed multi-dot number literals (`1.2.3`, `5.`)
 - **Source:** `crates/rsscript/src/lexer.rs:114-134` (`lex_number` consumes any run of digit-or-`.`).
 - `1.2.3` and `5.` tokenize as one Float; `check` reports `ok`; the lowerer emits the verbatim
   token `let x = 1.2.3;` → rustc E0610. False-accept that defers to a confusing backend error.
 - **Fix:** reject more than one `.` (and trailing `.`) in `lex_number`.
 
-### RSS-8 — Mixed numeric operands skip operand-type checking
+### RSS-8 — [FIXED] — Mixed numeric operands skip operand-type checking
 - **Source:** `crates/rsscript/src/checks/forbidden.rs:377-381` (empty arm), `:341-358`.
 - `Float + Int` and `Float < Int` are not type-checked (the `==` path correctly rejects), so they
   pass `check` then fail the backend with E0277/E0308.
 - **Fix:** require matching numeric roots in the arithmetic/relational arms.
 
-### RSS-9 — reg_vm compares floats bitwise, diverging from AOT's IEEE `==`
+### RSS-9 — [FIXED] — reg_vm compares floats bitwise, diverging from AOT's IEEE `==`
 - **Source:** `crates/rsscript/src/.../vm_value.rs:308` (Float `PartialEq` via `to_bits`).
 - `NaN == NaN` → true and `0.0 == -0.0` → false in the interpreter; AOT uses IEEE `==` and gives
   the opposite. A real interp-vs-compiled divergence.
 - **Fix:** use IEEE `==` in the Float equality arm.
 
-### RSS-10 — Generic struct constructor drops its type argument
+### RSS-10 — [FIXED] — Generic struct constructor drops its type argument
 - **Source:** `crates/rsscript/src/hir.rs:3391`, `:2483` (`constructor_sig_from_type` returns the
   bare `"Wrap"`).
 - `let w: Wrap<Int> = Wrap(item: 7)` is wrongly rejected (RS0207) because the constructor's return
@@ -186,9 +200,19 @@ fn main() -> Unit {
 
 ## LOW
 
-### RSS-11 — ~O(n³) `check` blowup on deeply nested generics (compile-time DoS surface)
-- **Source:** `crates/rsscript/src/checks/calls.rs:2052-2142` (repeated string re-parsing of type
-  names).
-- Nested generics (`List<…<Int>>`) make `rss check` super-linear (depth 500 ≈ 9–21s, depth 2000
-  times out). Not a correctness fault.
-- **Fix:** parse type strings once / memoize substitutions.
+### RSS-11 — [VALID · DEFERRED] — ~O(n³) `check` blowup on deeply nested generics (compile-time DoS surface)
+- **Source:** `crates/rsscript/src/checks/calls.rs:2052-2142` (`collect_type_param_substitutions`
+  and `substitute_type_params` re-parse the full type string at every nesting level).
+- Nested generics passed to a **generic** function (e.g. `fn id<T>(x: read T) -> T` called with
+  `List<…<Int>>`) make `rss check` super-linear. Re-measured on this machine: depth 100 ≈ 21 ms,
+  300 ≈ 74 ms, 500 ≈ 283 ms, 800 ≈ 1.1 s, 2000 ≈ 16.8 s. Confirms the ~cubic shape. (The original
+  repro used a *non-generic* `id`, which never enters the substitution recursion and stays flat —
+  the trigger requires a generic callee.) Not a correctness fault.
+- **Fix:** parse type strings into a tree once / memoize substitutions.
+- **Status — deferred (intentional):** the asymptotic fix means replacing the string-based type
+  representation in the generic-substitution path with a parse-once tree — a sizeable refactor of
+  correctness-critical, heavily-relied-upon generics code. The trigger is adversarial, self-authored
+  source (the compiler only processes local source, so there is no remote DoS vector), real code
+  never nests generics more than a handful of levels, and the item is rated LOW / non-correctness.
+  The risk of regressing generics resolution was judged disproportionate to the benefit, so the fix
+  is left for a dedicated change rather than bundled with the RSS-1…RSS-10 correctness fixes.

@@ -354,6 +354,17 @@ fn check_builtin_operator_operand_types(
                     &right_type,
                     "numeric operands",
                 );
+            } else if type_root_name(&left_type) != type_root_name(&right_type) {
+                // Both numeric but different roots (e.g. `Float < Int`): the backend
+                // rejects the mixed comparison, so reject it here too.
+                operator_type_mismatch_diagnostic(
+                    analyzer,
+                    span.clone(),
+                    operator_label(op),
+                    &left_type,
+                    &right_type,
+                    "matching operand types",
+                );
             }
         }
         BinaryOp::LogicalAnd | BinaryOp::LogicalOr => {
@@ -378,7 +389,30 @@ fn check_builtin_operator_operand_types(
         | BinaryOp::Subtract
         | BinaryOp::Multiply
         | BinaryOp::Divide
-        | BinaryOp::Modulo => {}
+        | BinaryOp::Modulo => {
+            // Non-numeric operands are already rejected by the operator-overload
+            // check; here catch mixed numeric roots (e.g. `Float + Int`), which
+            // otherwise pass `check` and then fail the backend with E0277/E0308.
+            let (Some(left_type), Some(right_type)) = (
+                inferred_operand_type(analyzer, left).map(str::to_string),
+                inferred_operand_type(analyzer, right).map(str::to_string),
+            ) else {
+                return;
+            };
+            if is_numeric_type(&left_type)
+                && is_numeric_type(&right_type)
+                && type_root_name(&left_type) != type_root_name(&right_type)
+            {
+                operator_type_mismatch_diagnostic(
+                    analyzer,
+                    span.clone(),
+                    operator_label(op),
+                    &left_type,
+                    &right_type,
+                    "matching operand types",
+                );
+            }
+        }
         BinaryOp::BitAnd
         | BinaryOp::BitOr
         | BinaryOp::BitXor

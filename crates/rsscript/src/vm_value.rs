@@ -305,7 +305,11 @@ impl PartialEq for VmValue {
         match (self, other) {
             (Self::Unit, Self::Unit) => true,
             (Self::Int(left), Self::Int(right)) => left == right,
-            (Self::Float(left), Self::Float(right)) => left.to_bits() == right.to_bits(),
+            // Use IEEE `==` (not bitwise) so the interpreter matches the AOT
+            // backend: `NaN == NaN` is false and `0.0 == -0.0` is true. Floats
+            // are never used as map keys (see `VmMapKey`), so this does not affect
+            // hashing.
+            (Self::Float(left), Self::Float(right)) => left == right,
             (Self::Bool(left), Self::Bool(right)) => left == right,
             (Self::Char(left), Self::Char(right)) => left == right,
             (Self::Bytes(left), Self::Bytes(right)) => left == right,

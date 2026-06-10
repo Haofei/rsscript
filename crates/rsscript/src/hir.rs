@@ -2402,6 +2402,31 @@ fn hir_binding_kind(kind: LetKind) -> HirBindingKind {
     }
 }
 
+/// Infer the type of a built-in `Option`/`Result` variant constructor call so an
+/// untyped local (`let o = Some(5)`) carries a type and downstream argument checks
+/// are not silently skipped. The variant's known payload position is filled from the
+/// argument; the other generic position (e.g. the error type of `Ok`) is left as a
+/// single-uppercase placeholder so `unresolved_generic_type` skips it rather than
+/// reporting a spurious mismatch.
+fn infer_enum_variant_type(
+    hir: &Hir,
+    variant: &str,
+    args: &[crate::syntax::ast::CallArg],
+    value_types: &HashMap<String, String>,
+) -> Option<String> {
+    let payload_type = |args: &[crate::syntax::ast::CallArg]| {
+        args.first()
+            .and_then(|arg| infer_hir_expr_type(hir, &arg.value, value_types))
+    };
+    match variant {
+        "Some" => Some(format!("Option<{}>", payload_type(args)?)),
+        "Ok" => Some(format!("Result<{}, E>", payload_type(args)?)),
+        "Err" => Some(format!("Result<T, {}>", payload_type(args)?)),
+        // `None` and bare `Option`/`Result` carry no inferable payload type.
+        _ => None,
+    }
+}
+
 pub(crate) fn infer_hir_expr_type(
     hir: &Hir,
     expr: &Expr,
@@ -2454,7 +2479,9 @@ pub(crate) fn infer_hir_expr_type(
                         .map(str::to_string),
                     Callee::Qualified { .. } | Callee::ReceiverCall { .. } => None,
                 },
-                CallResolution::EnumVariant => None,
+                CallResolution::EnumVariant => {
+                    infer_enum_variant_type(hir, callee_name(callee), args, value_types)
+                }
             }
         }
         Expr::Field { base, name, .. } => {
@@ -3388,7 +3415,16 @@ fn constructor_sig_from_type(type_info: &TypeInfo, is_builtin: bool) -> Function
                 type_name: field.type_name.clone(),
             })
             .collect(),
-        return_type: Some(type_info.name.clone()),
+        // A generic struct's constructor returns the type *applied to its params*
+        // (`Wrap<T>`), not the bare name (`Wrap`). Carrying the params lets
+        // `infer_signature_return_type` substitute them from the arguments
+        // (`Wrap(item: 7)` -> `Wrap<Int>`); a bare name leaves nothing to
+        // substitute and spuriously rejects `let w: Wrap<Int> = Wrap(item: 7)`.
+        return_type: Some(if type_info.type_params.is_empty() {
+            type_info.name.clone()
+        } else {
+            format!("{}<{}>", type_info.name, type_info.type_params.join(", "))
+        }),
         returns_fresh: type_info.kind == HirTypeKind::Struct,
         effects: Vec::new(),
         retained_params: HashSet::new(),

@@ -2461,10 +2461,6 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
         return Some(closure);
     }
 
-    if let Some(unary) = parse_unary_expr(tokens, start, end) {
-        return Some(unary);
-    }
-
     // An effect keyword immediately followed by a closure (e.g. `read || { ... }`)
     // is an effect-annotated closure argument. Handle it before binary parsing so
     // the `||` isn't mistaken for a logical-or operator.
@@ -2482,6 +2478,13 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
 
     if let Some(binary) = parse_binary_expr(tokens, start, end) {
         return Some(binary);
+    }
+
+    // Prefix `!`/`~` bind tighter than every binary operator but looser than the
+    // postfix `?` operator, so they are parsed after `parse_binary_expr` (which
+    // splits at the loosest operator first) and before the trailing-`?` check.
+    if let Some(unary) = parse_unary_expr(tokens, start, end) {
+        return Some(unary);
     }
 
     if let Some(question) = find_trailing_top_level_question(tokens, start, end) {
@@ -2881,14 +2884,23 @@ fn parse_binary_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr>
                 start,
                 end,
                 &[
-                    (&["<", "<"], BinaryOp::ShiftLeft),
-                    (&[">", ">"], BinaryOp::ShiftRight),
                     (&["=", "="], BinaryOp::Equal),
                     (&["!", "="], BinaryOp::NotEqual),
                     (&["<", "="], BinaryOp::LessEqual),
                     (&[">", "="], BinaryOp::GreaterEqual),
                     (&["<"], BinaryOp::Less),
                     (&[">"], BinaryOp::Greater),
+                ],
+            )
+        })
+        .or_else(|| {
+            find_top_level_operator(
+                tokens,
+                start,
+                end,
+                &[
+                    (&["<", "<"], BinaryOp::ShiftLeft),
+                    (&[">", ">"], BinaryOp::ShiftRight),
                 ],
             )
         })
@@ -3023,6 +3035,19 @@ fn find_top_level_operator(
             continue;
         }
         if depth == 0 {
+            // Consume `<<`/`>>` as atomic units so a stray `<`/`>` half is not
+            // mistaken for a comparison operator. The shift tier itself searches
+            // for these sequences, so skip this only when they are not wanted.
+            let searching_shift = operators
+                .iter()
+                .any(|(symbols, _)| matches!(*symbols, ["<", "<"] | [">", ">"]));
+            if !searching_shift
+                && (symbols_match(tokens, index, end, &["<", "<"])
+                    || symbols_match(tokens, index, end, &[">", ">"]))
+            {
+                skip_until = index + 2;
+                continue;
+            }
             for (symbols, op) in operators {
                 if symbols_match(tokens, index, end, symbols) {
                     if *op == BinaryOp::LogicalOr

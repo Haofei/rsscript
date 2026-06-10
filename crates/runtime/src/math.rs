@@ -15,7 +15,9 @@ pub fn math_clamp(value: i64, min: i64, max: i64) -> i64 {
 }
 
 pub fn math_pow(base: i64, exponent: i64) -> i64 {
-    base.pow(exponent.max(0) as u32)
+    base.checked_pow(exponent.max(0) as u32).unwrap_or_else(|| {
+        panic!("Math.pow overflow: {base} raised to {exponent} exceeds the Int range")
+    })
 }
 
 pub fn math_abs_float(value: f64) -> f64 {

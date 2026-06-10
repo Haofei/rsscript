@@ -323,7 +323,7 @@ pub fn lower_sources_to_rust_package_with_options(
         ""
     };
     let cargo_toml = format!(
-        "[package]\nname = \"{package_name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n\n[dependencies]\nrsscript-runtime = {{ path = \"{}\" }}\n{serde_dependency_toml}{native_dependency_toml}",
+        "[package]\nname = \"{package_name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n\n[profile.release]\noverflow-checks = true\n\n[dependencies]\nrsscript-runtime = {{ path = \"{}\" }}\n{serde_dependency_toml}{native_dependency_toml}",
         toml_string(runtime_path),
     );
     let main_rs = rust_package_main(&program, &package_name);

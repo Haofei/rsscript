@@ -1598,15 +1598,15 @@ impl<'a> RustLowerer<'a> {
                     } else {
                         self.lower_expr(value)
                     };
-                    // `let mut x = <read-param>` of a managed (non-Copy) type: the
+                    // `let x = <read-param>` of a managed (non-Copy) type: the
                     // read-PARAM lowers to `&T`, so binding it directly makes `x: &T`.
-                    // A later `x = <owned T>` reassignment is then ill-typed (E0308).
-                    // Clone the borrow into an owned `T` so the mutable local owns its
-                    // value. Gated tightly: only `let mut`, only when the initializer
-                    // is exactly a `read`-param ident that lowers to `&T`.
-                    let lowered = if !mutable.is_empty()
-                        && self.let_init_is_clonable_read_param_ref(value)
-                    {
+                    // That borrow then breaks owned uses of `x` — a later `x = <owned T>`
+                    // reassignment (for `let mut`), a `return x`, or an alias chain
+                    // (`let chosen = a; let mut s = chosen`). Clone the borrow into an
+                    // owned `T` so the local owns its value. Gated tightly by
+                    // `let_init_is_clonable_read_param_ref`: the initializer must be a
+                    // `read`-param ident lowering to a plain `&T` (managed, non-Copy).
+                    let lowered = if self.let_init_is_clonable_read_param_ref(value) {
                         format!("{lowered}.clone()")
                     } else {
                         lowered
@@ -1862,11 +1862,22 @@ impl<'a> RustLowerer<'a> {
             }
             Stmt::Break(_) => out.push_str(&format!("{pad}break;\n")),
             Stmt::Continue(_) => out.push_str(&format!("{pad}continue;\n")),
-            Stmt::Assign(stmt) => out.push_str(&format!(
-                "{pad}{} = {};\n",
-                self.lower_assignment_target(&stmt.target),
-                self.lower_expr(&stmt.value)
-            )),
+            Stmt::Assign(stmt) => {
+                // An assignment target always needs an owned `T`. When the RHS is a
+                // `read`-param ident it lowers to a plain `&T` borrow, so clone it to
+                // own the value — the same coercion the `let`-init path applies. (A
+                // read-view alias RHS is already cloned inside `lower_expr`.)
+                let value = if self.let_init_is_clonable_read_param_ref(&stmt.value) {
+                    format!("{}.clone()", self.lower_expr(&stmt.value))
+                } else {
+                    self.lower_expr(&stmt.value)
+                };
+                out.push_str(&format!(
+                    "{pad}{} = {};\n",
+                    self.lower_assignment_target(&stmt.target),
+                    value
+                ));
+            }
             Stmt::Expr(expr) => out.push_str(&format!("{pad}{};\n", self.lower_expr(expr))),
             Stmt::MalformedWith(span)
             | Stmt::MalformedIf(span)
@@ -2339,10 +2350,17 @@ impl<'a> RustLowerer<'a> {
                     };
                 }
                 if let Callee::Name(name) = callee {
-                    if let Some(type_kind) = self.type_kinds.get(name).copied() {
+                    // A turbofish constructor callee carries its type arguments in the
+                    // raw name (e.g. `Pair<Int>`), but `type_kinds` and the per-type
+                    // field/handle lookups are keyed by the bare root (`Pair`). Root the
+                    // name so the named-field constructor path is taken (and the struct
+                    // literal is emitted as `Pair { .. }`, letting Rust infer the args)
+                    // instead of falling through to a positional tuple-struct call.
+                    let ctor_name = type_root_name(name);
+                    if let Some(type_kind) = self.type_kinds.get(ctor_name).copied() {
                         let mut fields = Vec::new();
                         for arg in args {
-                            let field_name = self.constructor_field_arg_name(name, arg);
+                            let field_name = self.constructor_field_arg_name(ctor_name, arg);
                             let field = field_name
                                 .as_deref()
                                 .map(rust_ident)
@@ -2351,20 +2369,20 @@ impl<'a> RustLowerer<'a> {
                                 .name
                                 .as_deref()
                                 .or(field_name.as_deref())
-                                .is_some_and(|field_name| self.is_weak_field(name, field_name));
+                                .is_some_and(|field_name| self.is_weak_field(ctor_name, field_name));
                             if is_weak_field {
                                 fields.push(format!(
                                     "{field}: {}",
                                     self.lower_explicit_weak_field_value(&arg.value)
                                 ));
                             } else if field_name.as_deref().is_some_and(|field_name| {
-                                self.is_runtime_handle_field(name, field_name)
+                                self.is_runtime_handle_field(ctor_name, field_name)
                             }) {
                                 let field_name = field_name.unwrap_or_default();
                                 fields.push(format!(
                                     "{field}: {}",
                                     self.lower_runtime_handle_field_value(
-                                        name,
+                                        ctor_name,
                                         &field_name,
                                         &arg.value,
                                         &arg.span
@@ -2373,7 +2391,7 @@ impl<'a> RustLowerer<'a> {
                             } else {
                                 let value = field_name
                                     .as_deref()
-                                    .and_then(|field_name| self.field_type(name, field_name))
+                                    .and_then(|field_name| self.field_type(ctor_name, field_name))
                                     .map(|expected| {
                                         self.lower_expr_for_expected_type(&arg.value, &expected)
                                     })
@@ -2382,7 +2400,7 @@ impl<'a> RustLowerer<'a> {
                             }
                         }
                         let fields = fields.join(", ");
-                        let constructed = format!("{} {{ {fields} }}", rust_ident(name));
+                        let constructed = format!("{} {{ {fields} }}", rust_ident(ctor_name));
                         if type_kind == TypeKind::Class {
                             return format!(
                                 "rsscript_runtime::manage_at({constructed}, {})",
