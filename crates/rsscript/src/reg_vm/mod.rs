@@ -2152,6 +2152,7 @@ enum RegIntrinsic {
     FloatIsInfinite,
     FloatIsNan,
     IntToString,
+    IntToFloat,
     IntBitAnd,
     IntBitNot,
     IntBitOr,
@@ -3617,6 +3618,14 @@ impl RegLowerer<'_> {
                     });
                     return Ok(dst);
                 }
+                ("Int", "to_float") => {
+                    self.emit(RegInstr::CallIntrinsic {
+                        dst,
+                        intrinsic: RegIntrinsic::IntToFloat,
+                        args: vec![receiver_reg],
+                    });
+                    return Ok(dst);
+                }
                 ("String", "concat") => {
                     if arg_regs.len() != 1 {
                         return Err(EvalError::Runtime(format!(
@@ -4227,6 +4236,7 @@ impl RegLowerer<'_> {
                     ("Int", "shift_left") => RegIntrinsic::IntShiftLeft,
                     ("Int", "shift_right") => RegIntrinsic::IntShiftRight,
                     ("Int", "to_string") => RegIntrinsic::IntToString,
+                    ("Int", "to_float") => RegIntrinsic::IntToFloat,
                     ("Math", "abs") => RegIntrinsic::MathAbs,
                     ("Math", "abs_float") => RegIntrinsic::MathAbsFloat,
                     ("Math", "ceil") => RegIntrinsic::MathCeil,
@@ -9903,6 +9913,9 @@ impl RegVm {
             }
             RegIntrinsic::IntToString => Ok(VmValue::string(
                 expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_string(),
+            )),
+            RegIntrinsic::IntToFloat => Ok(VmValue::Float(
+                expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)? as f64,
             )),
             RegIntrinsic::FloatToString => Ok(VmValue::string(
                 expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_string(),

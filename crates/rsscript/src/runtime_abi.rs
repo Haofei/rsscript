@@ -1335,6 +1335,7 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("Int", "shift_left", "rsscript_runtime::int_shift_left"),
     runtime_intrinsic("Int", "shift_right", "rsscript_runtime::int_shift_right"),
     runtime_intrinsic("Int", "to_string", "rsscript_runtime::string_from_int"),
+    runtime_intrinsic("Int", "to_float", "rsscript_runtime::int_to_float"),
     runtime_intrinsic("Float", "to_string", "rsscript_runtime::float_to_string"),
     runtime_intrinsic("Float", "is_finite", "rsscript_runtime::float_is_finite"),
     runtime_intrinsic(

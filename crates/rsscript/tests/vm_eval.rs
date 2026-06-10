@@ -794,6 +794,7 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:BytesView.starts_with runtime:BytesView.to_bytes
 // parity: runtime:Int.bit_and runtime:Int.bit_not runtime:Int.bit_or runtime:Int.bit_xor
 // parity: runtime:Int.shift_left runtime:Int.shift_right runtime:Int.to_string
+// parity: runtime:Int.to_float
 // parity: runtime:Buffer.clear runtime:Buffer.consume runtime:Buffer.is_empty runtime:Buffer.len
 // parity: runtime:Buffer.new runtime:Buffer.view runtime:BufferView.is_empty
 // parity: runtime:BufferView.len runtime:BufferView.slice runtime:BufferView.to_bytes

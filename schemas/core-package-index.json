@@ -871,6 +871,7 @@
         "Int.bit_xor",
         "Int.shift_left",
         "Int.shift_right",
+        "Int.to_float",
         "Int.to_string",
         "String.after",
         "String.before",

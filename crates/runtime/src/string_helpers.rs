@@ -2,6 +2,10 @@ pub fn string_from_int(value: i64) -> String {
     value.to_string()
 }
 
+pub fn int_to_float(value: i64) -> f64 {
+    value as f64
+}
+
 pub fn string_from_float(value: f64) -> String {
     value.to_string()
 }

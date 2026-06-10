@@ -58,6 +58,9 @@ pub fn String.from_bool(value: Bool) -> fresh String
 pub fn Int.to_string(value: read Int) -> fresh String
     effects(pure)
 
+pub fn Int.to_float(value: read Int) -> Float
+    effects(pure)
+
 pub fn Float.to_string(value: read Float) -> fresh String
     effects(pure)
 
