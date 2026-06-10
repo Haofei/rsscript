@@ -1480,11 +1480,23 @@ fn type_satisfies_protocol_bound(
     if (protocol == "Hashable" || protocol == "Eq") && builtin_type_is_hashable(actual_root) {
         return true;
     }
+    if protocol == "Clone" && builtin_type_is_clone(actual_root) {
+        return true;
+    }
     // `List<T>`/`Option<T>`/`Result<A, B>` are `Hashable`/`Eq` exactly when their
     // element types are, so a key like `List<Coord>` is satisfiable structurally.
     if (protocol == "Hashable" || protocol == "Eq")
         && matches!(actual_root, "List" | "Option" | "Result")
     {
+        if let Some(args) = type_arg_names(strip_fresh_type(actual)) {
+            return args
+                .iter()
+                .all(|arg| type_satisfies_protocol_bound(analyzer, function, arg, protocol));
+        }
+    }
+    // `List<T>`/`Option<T>`/`Result<A, B>` are `Clone` exactly when their element
+    // types are, mirroring the structural derive support for value containers.
+    if protocol == "Clone" && matches!(actual_root, "List" | "Option" | "Result") {
         if let Some(args) = type_arg_names(strip_fresh_type(actual)) {
             return args
                 .iter()
@@ -1611,6 +1623,32 @@ fn builtin_type_is_hashable(type_name: &str) -> bool {
     )
 }
 
+/// Builtin scalar types that are `Clone` directly (no derive needed). Every
+/// value scalar is copyable, including `Float` (which is not `Eq`/`Hash`).
+fn builtin_type_is_clone(type_name: &str) -> bool {
+    matches!(
+        type_name,
+        "Int"
+            | "Int8"
+            | "Int16"
+            | "Int32"
+            | "Int64"
+            | "UInt"
+            | "UInt8"
+            | "UInt16"
+            | "UInt32"
+            | "UInt64"
+            | "Bool"
+            | "Byte"
+            | "Char"
+            | "Unit"
+            | "Float"
+            | "Float32"
+            | "Float64"
+            | "String"
+    )
+}
+
 /// Whether a user-declared `type_name` satisfies a compiler-derived `protocol`
 /// bound. `Ord` requires `derives(Ord)`; `Hashable` requires `derives(Hash)`;
 /// `Eq` requires `derives(Eq)` or `derives(Ord)` (which implies `Eq`).
@@ -1621,10 +1659,11 @@ fn type_derives_protocol(items: &[Item], type_name: &str, protocol: &str) -> boo
             "Ord" => has("Ord"),
             "Hashable" => has("Hash"),
             "Eq" => has("Eq") || has("Ord"),
+            "Clone" => has("Clone"),
             _ => false,
         }
     };
-    if !matches!(protocol, "Ord" | "Hashable" | "Eq") {
+    if !matches!(protocol, "Ord" | "Hashable" | "Eq" | "Clone") {
         return false;
     }
     items.iter().any(|item| match item {

@@ -11,6 +11,10 @@ pub struct RssFalliblePipeline<T, E> {
     pub result: Result<Vec<T>, E>,
 }
 
+pub fn clone_value<T: Clone>(value: &T) -> T {
+    value.clone()
+}
+
 pub fn ord_compare<T: Ord>(left: &T, right: &T) -> i64 {
     match left.cmp(right) {
         std::cmp::Ordering::Less => -1,

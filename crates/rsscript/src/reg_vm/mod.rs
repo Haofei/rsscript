@@ -1997,6 +1997,7 @@ enum RegIntrinsic {
     CharToLower,
     CharToString,
     CharToUpper,
+    CloneClone,
     ClockNow,
     ClockSystemUnixMs,
     ConfigLoad,
@@ -3578,6 +3579,14 @@ impl RegLowerer<'_> {
                 .map(|arg| self.expr(&arg.value))
                 .collect::<Result<Vec<_>, _>>()?;
             match (type_root_name(namespace), type_root_name(method)) {
+                ("Clone", "clone") => {
+                    self.emit(RegInstr::CallIntrinsic {
+                        dst,
+                        intrinsic: RegIntrinsic::CloneClone,
+                        args: vec![receiver_reg],
+                    });
+                    return Ok(dst);
+                }
                 ("Float", "to_string") => {
                     self.emit(RegInstr::CallIntrinsic {
                         dst,
@@ -4648,6 +4657,7 @@ impl RegLowerer<'_> {
                     ("Option", "or") => RegIntrinsic::OptionOr,
                     ("Option", "unwrap_or") => RegIntrinsic::OptionUnwrapOr,
                     ("Option", "unwrap_or_else") => RegIntrinsic::OptionUnwrapOrElse,
+                    ("Clone", "clone") => RegIntrinsic::CloneClone,
                     ("Ord", "compare") => RegIntrinsic::OrdCompare,
                     ("OS", "close") => RegIntrinsic::OsClose,
                     ("Patch", "apply_text") => RegIntrinsic::PatchApplyText,
@@ -4958,7 +4968,7 @@ impl RegLowerer<'_> {
                     ("String", "char_at") => RegIntrinsic::StringCharAt,
                     ("String", "contains") => RegIntrinsic::StringContains,
                     ("String", "count") => RegIntrinsic::StringCount,
-                    ("String", "copy") => RegIntrinsic::StringCopy,
+                    ("String", "copy") | ("String", "clone") => RegIntrinsic::StringCopy,
                     ("String", "ends_with") => RegIntrinsic::StringEndsWith,
                     ("String", "env") => RegIntrinsic::EnvGet,
                     ("String", "env_or") => RegIntrinsic::EnvGetOrDefault,
@@ -11155,6 +11165,10 @@ impl RegVm {
                         other.display()
                     ))),
                 }
+            }
+            RegIntrinsic::CloneClone => {
+                let value = intrinsic_arg(&self.stack, base, args, 0)?;
+                Ok(deep_copy_value(value))
             }
             RegIntrinsic::OrdCompare => {
                 let left = intrinsic_arg(&self.stack, base, args, 0)?;

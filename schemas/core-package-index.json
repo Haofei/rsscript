@@ -42,6 +42,16 @@
       ]
     },
     {
+      "path": "stdlib/clone/clone.rssi",
+      "module": "clone.clone",
+      "functions": [
+        "clone"
+      ],
+      "types": [
+        "Clone"
+      ]
+    },
+    {
       "path": "stdlib/cmp/eq.rssi",
       "module": "cmp.eq",
       "functions": [
@@ -877,6 +887,7 @@
         "String.before",
         "String.char_at",
         "String.chars",
+        "String.clone",
         "String.concat",
         "String.contains",
         "String.copy",

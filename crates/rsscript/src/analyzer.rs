@@ -3336,9 +3336,15 @@ impl Analyzer<'_> {
         bounds: &HashMap<String, Option<GenericBound>>,
     ) {
         let target = fresh_return_target_type(return_ty);
-        if bounds.contains_key(&target.name)
-            && bounds.get(&target.name).and_then(Option::as_ref) != Some(&GenericBound::Struct)
-        {
+        // A protocol method's implicit `Self` parameter is bound `Managed`, which
+        // still admits a `fresh Self` return: managed structs/sums are freshly
+        // ownable, and the per-instantiation derive (`derives(Clone)`) is checked
+        // at the use site. A `fresh Self` from a value scalar is impossible
+        // because scalars do not satisfy the protocol's `Managed` `Self` bound.
+        let bound = bounds.get(&target.name).and_then(Option::as_ref);
+        let fresh_bound_ok = matches!(bound, Some(GenericBound::Struct))
+            || (target.name == "Self" && matches!(bound, Some(GenericBound::Managed)));
+        if bounds.contains_key(&target.name) && !fresh_bound_ok {
             self.diagnostics.push(
                 Diagnostic::error(
                     code::INVALID_FRESH_RETURN_TYPE,

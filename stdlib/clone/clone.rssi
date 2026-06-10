@@ -1,0 +1,14 @@
+// `Clone` is an explicit, deep value copy, modeled on Swift's value semantics
+// and Rust's `Clone`.
+//
+// A managed `struct` or `sum` satisfies `Clone` by listing `derives(Clone)`,
+// which the compiler expands into a structural copy of every field. The builtin
+// value scalars (`Int`, `String`, `Bool`, ...) satisfy `Clone` directly.
+//
+// `Clone.clone<T>(self: read x)` copies a value out of a shared (`read`) borrow
+// into a `fresh` owned value, closing the "clone gap" where a `read` field
+// cannot be moved into a constructor. `Clone` is a pure contract: it introduces
+// no mutation, retention, native, or unsafe boundary.
+protocol Clone {
+    fn clone(self: read Self) -> fresh Self
+}

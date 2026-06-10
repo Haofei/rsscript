@@ -46,6 +46,9 @@ pub fn String.concat(left: read String, right: read String) -> fresh String
 pub fn String.copy(value: read String) -> fresh String
     effects(pure)
 
+pub fn String.clone(value: read String) -> fresh String
+    effects(pure)
+
 pub fn String.from_int(value: Int) -> fresh String
     effects(pure)
 

@@ -803,6 +803,7 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:ChannelError.message
 // parity: runtime:CancellationSource.cancel runtime:CancellationSource.new
 // parity: runtime:CancellationSource.token runtime:CancellationToken.is_cancelled
+// parity: runtime:Clone.clone
 // parity: runtime:Clock.now runtime:Clock.system_unix_ms
 // parity: runtime:Config.load runtime:Config.name runtime:Config.new runtime:Config.rule_count
 // parity: runtime:ConfigStore.name runtime:ConfigStore.new runtime:ConfigStore.replace
@@ -947,7 +948,7 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:SortedMap.values
 // parity: runtime:String.after runtime:String.before runtime:String.char_at runtime:String.concat
 // parity: runtime:String.chars
-// parity: runtime:String.contains runtime:String.count runtime:String.copy runtime:String.ends_with
+// parity: runtime:String.clone runtime:String.contains runtime:String.count runtime:String.copy runtime:String.ends_with
 // parity: runtime:String.env runtime:String.env_or
 // parity: runtime:String.format runtime:String.from_bool runtime:String.from_float runtime:String.from_int
 // parity: runtime:String.index_of runtime:String.is_empty runtime:String.join runtime:String.len

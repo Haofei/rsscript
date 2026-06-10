@@ -65,6 +65,10 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         "stdlib/clock/clock.rssi",
         include_str!("../../../stdlib/clock/clock.rssi"),
     ),
+    (
+        "stdlib/clone/clone.rssi",
+        include_str!("../../../stdlib/clone/clone.rssi"),
+    ),
     ("stdlib/cmp/eq.rssi", include_str!("../../../stdlib/cmp/eq.rssi")),
     ("stdlib/cmp/ord.rssi", include_str!("../../../stdlib/cmp/ord.rssi")),
     (
