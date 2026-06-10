@@ -2700,8 +2700,8 @@ fn infer_arg_expr_type(
         Expr::ObjectLiteral { .. } | Expr::MapLiteral { .. } | Expr::ArrayLiteral { .. } => {
             infer_hir_expr_type(hir, expr, value_types)
         }
-        Expr::Field { .. }
-        | Expr::Index { .. }
+        Expr::Field { .. } => infer_hir_expr_type(hir, expr, value_types),
+        Expr::Index { .. }
         | Expr::Binary { .. }
         | Expr::Number(_, _)
         | Expr::String(_, _)

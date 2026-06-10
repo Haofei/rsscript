@@ -1598,6 +1598,19 @@ impl<'a> RustLowerer<'a> {
                     } else {
                         self.lower_expr(value)
                     };
+                    // `let mut x = <read-param>` of a managed (non-Copy) type: the
+                    // read-PARAM lowers to `&T`, so binding it directly makes `x: &T`.
+                    // A later `x = <owned T>` reassignment is then ill-typed (E0308).
+                    // Clone the borrow into an owned `T` so the mutable local owns its
+                    // value. Gated tightly: only `let mut`, only when the initializer
+                    // is exactly a `read`-param ident that lowers to `&T`.
+                    let lowered = if !mutable.is_empty()
+                        && self.let_init_is_clonable_read_param_ref(value)
+                    {
+                        format!("{lowered}.clone()")
+                    } else {
+                        lowered
+                    };
                     let inferred_ty = self.infer_expr_type(value);
                     let annotation = stmt
                         .type_annotation
@@ -3891,6 +3904,40 @@ impl<'a> RustLowerer<'a> {
         };
         let key = native_boundary_callee_key(&qualified);
         self.function_param_effects.get(&key)?.get(arg_index + 1)?.1
+    }
+
+    /// True when `expr` is exactly a `read`-effect parameter ident whose type
+    /// lowers to a plain `&T` borrow (managed / non-Copy) — i.e. binding it to a
+    /// `let mut` local would yield `&T` and break a later owned reassignment.
+    /// Excludes Copy scalars (passed by value), retained `Managed<T>` params
+    /// (which lower to `&Managed<T>`, not a plain `&T`), and `read`-view binds
+    /// (already cloned at use sites).
+    fn let_init_is_clonable_read_param_ref(&self, expr: &Expr) -> bool {
+        let Expr::Ident(name, _) = expr else {
+            return false;
+        };
+        if self.param_effects.get(name) != Some(&DataEffect::Read) {
+            return false;
+        }
+        if self.read_view_bindings.contains(name) {
+            return false;
+        }
+        let Some(ty) = self.value_types.get(name) else {
+            return false;
+        };
+        // Copy scalars are passed `read` by value, so the local already owns a `T`.
+        if is_copy_type_ref(ty) || Self::read_effect_lowers_by_value(ty) {
+            return false;
+        }
+        // Retained non-class params lower to `&Managed<T>`, not a plain `&T`;
+        // cloning that would clone the `Managed` handle, not produce an owned `T`.
+        if self.current_retained_params.contains(name)
+            && !self.is_class_type(ty)
+            && self.type_kinds.contains_key(&ty.name)
+        {
+            return false;
+        }
+        true
     }
 
     fn expr_lowers_to_managed_handle(&self, expr: &Expr) -> bool {
