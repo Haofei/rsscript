@@ -1,0 +1,194 @@
+# RSScript (rss) — known compiler bugs
+
+Found by a white-box audit of the compiler on **2026-06-10**, reproduced against the
+release binary built from commit `f5fab92` (`target/release/rss`). Every item below was
+reproduced; the HIGH items were additionally re-verified by hand.
+
+Run recipe used for all repros:
+
+```sh
+cd rsscript
+export RSSCRIPT_RUNTIME_PATH="$PWD/crates/runtime"
+BIN=target/release/rss
+$BIN check  file.rss          # parse + typecheck only
+$BIN run    file.rss          # reg_vm interpreter
+$BIN run --release file.rss   # AOT: lower to Rust -> cargo build -> run
+$BIN eval   file.rss
+```
+
+The recurring theme: **the interpreter, `check`, and the AOT Rust-lowering path disagree.**
+The green cargo suite does not exercise the `eval` / `run` / `run --release` triad, operator
+precedence trees, or borrow/clone coercion on assignment — which is where every HIGH bug lives.
+
+---
+
+## HIGH
+
+### RSS-1 — Prefix `!` and `~` bind looser than every binary operator (silent wrong result)
+- **Class:** wrong result (no error; both backends agree on the wrong parse)
+- **Source:** `crates/rsscript/src/syntax/parser.rs:2464` (`parse_unary_expr` is tried before
+  `parse_binary_expr`), `:2960-2968` (`unary_operand_range` extends the operand to the rest of
+  the expression)
+- **Root cause:** prefix `!`/`~` are parsed before binary operators and their operand is
+  extended to the entire remaining expression, so they bind *looser* than every binary op — the
+  inverse of all C-family languages. `!a && b` parses as `!(a && b)`; `~a + b` as `~(a + b)`.
+
+```rust
+// not_and.rss
+fn main() -> Unit {
+    let a = false
+    let b = false
+    let r = !a && b
+    if r { Log.write(message: read "T") } else { Log.write(message: read "F") }
+}
+```
+- **Expected:** `(!a) && b` = `true && false` = `F`. **Actual:** prints `T` (parsed `!(a && b)`).
+  Also `~a + b` with a=0,b=1 prints `-2` (correct `(~0)+1` = `0`). Wrapping the prefix operand in
+  parens gives the right answer, proving the mis-grouping.
+- **Fix:** give prefix `!`/`~` precedence above all binary operators.
+
+### RSS-2 — Integer overflow silently wraps in release AOT but traps everywhere else
+- **Class:** soundness / cross-backend divergence
+- **Source:** `crates/rsscript/src/rust_lower/lowerer.rs` Add/Sub/Mul emit bare `+`/`-`/`*`; the
+  generated release profile sets no `overflow-checks = true`. Sibling: `crates/runtime/src/math.rs`
+  `Math.pow` uses `i64::pow` not `checked_pow`.
+- **Root cause:** reg_vm uses `checked_*` and traps; the AOT lowerer emits plain Rust arithmetic
+  and ships a release profile with overflow checks off.
+
+```rust
+// ovf.rss
+fn bump(x: Int) -> Int { return x + 1 }
+fn main() -> Unit {
+  let a = 9223372036854775807
+  let b = bump(x: a)
+  Log.write(message: read Int.to_string(value: read b))
+}
+```
+- **Expected:** all modes agree (trap). **Actual:** `eval` → "integer addition overflow…";
+  `run` → `panic: attempt to add with overflow`; **`run --release` → prints `-9223372036854775808`
+  (exit 0)**. Breaks the documented `interp == compiled` invariant; release builds compute wrong
+  finite values where every other mode errors.
+- **Fix:** lower `+ - *` to `wrapping_*`/`checked_*` (as `<<` already uses `wrapping_shl`), or set
+  `overflow-checks = true` in the generated release profile; route `Math.pow` through `checked_pow`.
+
+### RSS-3 — `read`-param / borrowed RHS not cloned on assignment → non-compiling Rust (E0308)
+- **Class:** miscompile (valid program won't compile under AOT)
+- **Source:** `crates/rsscript/src/rust_lower/lowerer.rs:1865-1869` (`Stmt::Assign` emits
+  `target = lower_expr(value)` with no clone coercion; the `let`-init path at `:1601-1613` *does*
+  clone). Aliased-view variant: `let_init_is_clonable_read_param_ref` at `:3915-3941` (returns
+  false for `read_view_bindings`, `:3922`).
+- **Root cause:** the clone-coercion fix that lets `let mut x = <read-param>` own a `T` was applied
+  only to the `let`-initializer path, not to plain assignment (`x = b`) nor to read params reached
+  through an alias. Those lower to `chosen: Vec<i64> = b /*&Vec<i64>*/`, which rustc rejects.
+
+```rust
+// pick.rss
+fn pick(a: read String, b: read String, useB: read Bool) -> String {
+  let mut s = a
+  if useB { s = b }
+  return s
+}
+fn main() -> Unit {
+  Log.write(message: read pick(a: read "AA", b: read "BB", useB: read true))
+}
+```
+- **Expected:** prints `BB`. **Actual:** `check` ok, `eval` prints `BB`, **`run` fails** with
+  `error[RS1101] … mismatched types` (rustc E0308 at `s = b`). Hits `String`, `List<T>`, any
+  non-Copy struct. (This is the "known open" let-mut bug from the port TODO — still live, plus the
+  new aliased-view variant.)
+- **Fix:** apply the same `.clone()` coercion in `Stmt::Assign` lowering; also clone when the RHS is
+  a read-view alias (`:3922`).
+
+### RSS-4 — Untyped `Some(...)` / `Ok(...)` local bypasses argument type checking (false-accept)
+- **Class:** soundness (false-accept → backend E0308)
+- **Source:** `crates/rsscript/src/hir.rs:2431-2459` (`infer_hir_expr_type` → `None` for
+  `CallResolution::EnumVariant`), `:1422-1446` (`Stmt::Let` records `type_name=None`),
+  `crates/rsscript/src/checks/calls.rs:1330-1345` (arg check skipped when actual type is `None`).
+- **Root cause:** `let o = Some(5)` gets no inferred type, so when `o` is passed where
+  `Option<String>` is required, the arg check is skipped and `Option<Int> → Option<String>` is
+  accepted. rustc then rejects the lowered Rust. The inline form `describe(o: read Some(5))` *is*
+  caught (RS0207) — only the untyped let escapes.
+
+```rust
+// optbug.rss
+fn describe(o: read Option<String>) -> String {
+  match o { Some(s) => { return s } None => { return "none" } }
+}
+fn main() -> Unit {
+  let o = Some(5)
+  Log.write(message: read describe(o: read o))
+}
+```
+- **Expected:** rejected at `check`. **Actual:** `check` ok, then `run` → E0308 (`expected
+  &Option<String>, found &Option<i64>`).
+- **Fix:** infer `Option<Int>` / `Result<Int,_>` for enum-variant constructors so the local carries
+  a type.
+
+### RSS-5 — Turbofish struct constructor miscompiles to a positional tuple-struct call (E0423)
+- **Class:** miscompile
+- **Source:** `crates/rsscript/src/rust_lower/lowerer.rs:2342` (named-field path looked up via the
+  raw callee string), fall-through at `:2646`; `type_kinds` keyed by bare name at `:58`.
+- **Root cause:** the named-field constructor path is gated by `type_kinds.get(name)` where `name`
+  is the raw callee `"Pair<Int>"` (turbofish embedded), but `type_kinds` is keyed by the bare
+  `"Pair"`. The lookup misses, so the call falls through to a positional emission
+  `Pair(11i64, 22i64)` against a named-field struct → rustc E0423.
+
+```rust
+// turbofish_ctor.rss
+struct Pair<T> derives(Clone, Eq, Hash) { first: T  second: T }
+fn main() -> Unit {
+    let p = Pair<Int>(first: 11, second: 22)
+    Log.write(message: read Int.to_string(value: read p.first))
+}
+```
+- **Expected:** prints `11`. **Actual:** `check` ok, `run` → E0423. Non-turbofish
+  `Pair(first:…, second:…)` lowers correctly.
+- **Fix:** use `type_root_name(name)` for the `type_kinds` lookup at `:2342`.
+
+---
+
+## MEDIUM
+
+### RSS-6 — `<<` / `>>` share the comparison precedence tier
+- **Source:** `crates/rsscript/src/syntax/parser.rs:2883-2891` (`ShiftLeft`/`ShiftRight` grouped
+  with `Equal`/`Less`/`Greater` in `find_top_level_operator`).
+- `4 == 1 << 2` parses as `(4 == 1) << 2` (shift on a bool). In C/Rust shift binds tighter than
+  comparison, so the correct parse is `4 == (1 << 2)` = `4 == 4` = true. `check` passes; both
+  backends then fail (`no method named wrapping_shl for type bool`, rustc E0599). False-reject.
+- **Fix:** move `<<`/`>>` to a tier between additive and relational.
+
+### RSS-7 — Lexer accepts malformed multi-dot number literals (`1.2.3`, `5.`)
+- **Source:** `crates/rsscript/src/lexer.rs:114-134` (`lex_number` consumes any run of digit-or-`.`).
+- `1.2.3` and `5.` tokenize as one Float; `check` reports `ok`; the lowerer emits the verbatim
+  token `let x = 1.2.3;` → rustc E0610. False-accept that defers to a confusing backend error.
+- **Fix:** reject more than one `.` (and trailing `.`) in `lex_number`.
+
+### RSS-8 — Mixed numeric operands skip operand-type checking
+- **Source:** `crates/rsscript/src/checks/forbidden.rs:377-381` (empty arm), `:341-358`.
+- `Float + Int` and `Float < Int` are not type-checked (the `==` path correctly rejects), so they
+  pass `check` then fail the backend with E0277/E0308.
+- **Fix:** require matching numeric roots in the arithmetic/relational arms.
+
+### RSS-9 — reg_vm compares floats bitwise, diverging from AOT's IEEE `==`
+- **Source:** `crates/rsscript/src/.../vm_value.rs:308` (Float `PartialEq` via `to_bits`).
+- `NaN == NaN` → true and `0.0 == -0.0` → false in the interpreter; AOT uses IEEE `==` and gives
+  the opposite. A real interp-vs-compiled divergence.
+- **Fix:** use IEEE `==` in the Float equality arm.
+
+### RSS-10 — Generic struct constructor drops its type argument
+- **Source:** `crates/rsscript/src/hir.rs:3391`, `:2483` (`constructor_sig_from_type` returns the
+  bare `"Wrap"`).
+- `let w: Wrap<Int> = Wrap(item: 7)` is wrongly rejected (RS0207) because the constructor's return
+  type loses `<Int>`. False-reject.
+- **Fix:** synthesize `Wrap<T>` and substitute the type arg.
+
+---
+
+## LOW
+
+### RSS-11 — ~O(n³) `check` blowup on deeply nested generics (compile-time DoS surface)
+- **Source:** `crates/rsscript/src/checks/calls.rs:2052-2142` (repeated string re-parsing of type
+  names).
+- Nested generics (`List<…<Int>>`) make `rss check` super-linear (depth 500 ≈ 9–21s, depth 2000
+  times out). Not a correctness fault.
+- **Fix:** parse type strings once / memoize substitutions.
