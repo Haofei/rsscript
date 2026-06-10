@@ -4,3 +4,4 @@ tests/generated/**/Cargo.lock
 benchmarks/**/target/
 benchmarks/**/Cargo.lock
 .DS_Store
+.claude/
