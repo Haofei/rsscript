@@ -1,9 +1,8 @@
 // A sealed sum (enum) that carries payload variants, deriving Eq+Hash, used as a
 // Map key. The Hashable bound accepts the enum because every variant payload
 // field (`Int`, `String`) is itself hashable; the RS0211 derive check separately
-// validates the payload fields. (v0.6 constructs nullary variant values and
-// `match`es payloads; user payload-variant construction is not yet an executable
-// form, so the key values here are the nullary variants.)
+// validates the payload fields. (User payload-variant construction is now an
+// executable form — `Number(value: 5)` etc. — see RSS-13 in BUGS.md.)
 
 sum Token derives(Clone, Eq, Hash) {
     End

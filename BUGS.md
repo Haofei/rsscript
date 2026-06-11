@@ -216,3 +216,85 @@ fn main() -> Unit {
   never nests generics more than a handful of levels, and the item is rated LOW / non-correctness.
   The risk of regressing generics resolution was judged disproportionate to the benefit, so the fix
   is left for a dedicated change rather than bundled with the RSS-1…RSS-10 correctness fixes.
+
+---
+
+## Added during tinygrad-port work (2026-06-11)
+
+### RSS-12 — [FIXED] — Nested generic type-arguments in method calls parsed as comparisons
+- **Source:** `crates/rsscript/src/syntax/parser.rs` `find_top_level_operator` (~:3031).
+- `List.new<List<Int>>()`, `List.get<List<Int>>(...)`, `List.len<List<Int>>(...)` all failed with
+  RS0015 "unsupported syntax". The binary-operator splitter tracked `angle_depth` asymmetrically:
+  it decremented on a nested inner `>` but never incremented on the nested inner `<` (the inner
+  `<` of `List<Int>` is not a generic-open per `is_generic_angle_open`, which requires the matching
+  `>` to be followed by `.`/`(`), so `angle_depth` hit 0 one `>` early and the outer `>` was parsed
+  as a `Greater` comparison → the call collapsed to `Expr::Unknown`.
+- **Fix:** inside a generic argument list (`angle_depth > 0`), also `angle_depth += 1` on `<`. Inside
+  a type-argument list `<` is unambiguously a nested generic open, never a comparison.
+- **Verified:** `List<List<Int>>` build/index/len/param all parse, typecheck, and run.
+
+### RSS-13 — [FIXED] — User sum payload-variant construction did not resolve/lower
+- Previously documented in fixtures as "user payload-variant construction is not yet executable":
+  declaring and `match`ing payload variants worked, but constructing one (`ArgInt(value: 5)`,
+  `Shape.Circle(radius: 5)`) failed with RS0206 "does not resolve" / a backend "cannot find tuple
+  variant" error.
+- **Sources / fix (two sites):**
+  1. `crates/rsscript/src/hir.rs` `resolve_call` (~:762): also resolve a call as
+     `CallResolution::EnumVariant` when `self.sum_type_for_variant(name).is_some()` (not only the
+     builtins Ok/Err/Some/None). The reg-VM already lowered `MakeVariant` via `sum_variant_fields`.
+  2. `crates/rsscript/src/rust_lower/lowerer.rs` constructor lowering (~:2412): emit the qualified,
+     struct-style form `Enum::Variant { field: value, ... }` (nullary: `Enum::Variant`) for user sum
+     variants, matching the lowered enum (whose payload variants use named fields), instead of the
+     bare/tuple fall-through.
+- **Verified:** construct + `match`/discriminate + extract (via owned/`take` scrutinee) all run.
+- **Known follow-up:** extracting a *Copy* payload (Int/Float) directly from a *borrowed* (`read`)
+  match still needs the binding deref'd (use an owned `take`/cloned scrutinee for now).
+
+### RSS-15 — [ADDED] — Explicit, callable `.clone()` for `derives(Clone)` types
+- Previously only implicit clone existed (e.g. `read` args retained into a collection); there was no
+  surface syntax to deep-copy a user value, and `derives(Copy)` on a sum is rejected. This blocked
+  rebuilding immutable graph nodes (e.g. a UOp simplifier).
+- **Added (kept implicit clone):**
+  - `hir.rs` `resolve_receiver_call`: when no method candidate resolves and the method is `clone`,
+    synthesize a builtin sig `(self: read T) -> fresh T` so `x.clone()` resolves and types as `T`.
+  - `rust_lower/lowerer.rs` receiver-call lowering: for a user struct/sum receiver, emit
+    `{receiver}.clone()` (Rust's derived Clone = deep copy). Gated to user types so builtins
+    (JSON/Map/List) keep their own clone lowering (`json_clone`, …).
+  - `rust_lower/lowerer.rs` `lower_call_arg_for_expected_type`: exclude `clone` from the
+    "`read` receiver-call result is re-borrowed" rule — `.clone()` yields an owned value, so passing
+    it to a by-value param must not add `&` (was emitting `&x.clone()` into an owned param).
+- **Verified:** clone of struct/sum/field; clone passed to a by-value param; whole rss suite green.
+
+### RSS-13 follow-ups — [FIXED] — payload-variant construction is now typed & checked
+- (Audit found the initial RSS-13 resolved variant calls but did not type/check them.)
+- **P1 type:** `hir.rs` `infer_enum_variant_type` now returns the variant's sum type for user variants
+  (was only Some/Ok/Err), so `Number(value: 5)` has type `Token` and misuse (e.g. passing it to a
+  `read String` param) is caught (RS0207) instead of emitting invalid Rust.
+- **P1 check / no panic:** `checks/calls.rs` `check_enum_variant_form` validates user-variant
+  construction against declared fields — unknown field name (RS0203), wrong arity (RS0203/RS0204) —
+  so a malformed constructor (`Number(1, 2)`, `Number(bad: 5)`) is a checker error, not an
+  out-of-bounds panic in the lowerer.
+- **P2 field types:** `rust_lower/lowerer.rs` variant construction lowers each arg against its declared
+  field type (mirroring struct ctors) and resolves fields by name bounds-safely. Note: once round-2
+  value-type checking landed, `Tiny(value: 1)` with `value: Int32` is *rejected* at check (RS0207, an
+  `Int` literal is not `Int32`) — same as struct constructors; the field-type lowering applies to
+  values that already have the field's type (e.g. an `Int32`-typed binding), which lower without a cast.
+
+### RSS-13 follow-ups (round 2) — [FIXED] — duplicate fields & field-value types
+- (Second audit: the round-1 variant checker tracked names/counts but not duplicates or value types.)
+- **Exactly-once coverage:** `check_enum_variant_form` now tracks per-field coverage — duplicate field
+  (RS0205), unknown field (RS0203), too many (RS0203), and any unfilled field (RS0204). So
+  `Both(left: 1, left: 2)` reports duplicate `left` + missing `right` (was: passed check, then E0062).
+- **Value types:** each variant field value is type-checked against its declared field type (reusing
+  `argument_type_matches` + the JSON/Map/List literal acceptances, like binding-payload checks). So
+  `Number(value: "x")` for `value: Int` reports RS0207 (was: passed check, then E0308).
+
+### RSS-15 / RSS-13 follow-ups (round 3) — [FIXED] — clone gated on `Clone`; variants are named-only
+- **`.clone()` only for `Clone`-deriving types:** the synthesized clone previously resolved for *any*
+  user type, so `struct Boxy derives(Eq)` passed `check` then failed Rust with E0599. Now `Hir` tracks
+  `clone_types` (declared types whose derive list includes `Clone`); `resolve_receiver_call` synthesizes
+  `clone` only for those (non-user receivers keep prior behavior), and rust_lower emits `.clone()` only
+  when `type_derives_clone(root)`. A declared type without `Clone` now reports RS0206 at check time.
+- **Variants are named-field-only:** `check_enum_variant_form` rejects any unnamed payload arg
+  (RS0201), matching the v0.6 spec (variants use the same named-field construction form as structs).
+  `Number(5)` is now a checker error instead of lowering to `Token::Number { value: 5i64 }`.

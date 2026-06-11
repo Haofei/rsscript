@@ -1075,6 +1075,14 @@ Struct { field, .. }               // ignore the remaining fields
 42, "ready", true                  // scalar literal patterns
 ```
 
+A declared `sum` variant is **constructed** with the same named-field call form as a
+struct: a payload-free variant is written bare (`North`, `ArgNone`), and a payload
+variant is constructed by naming its fields (`Number(value: 5)`, `ArgInt(value: 5)`).
+The construction is checked against the variant's declared fields and lowers to the
+qualified variant value. Extracting a payload binds it under the same data-effect and
+move rules as any other binding (a `Copy` payload read directly from a borrowed
+scrutinee may require an owned/`take` or cloned scrutinee; see RSS-13).
+
 `as` / `@` whole-value bindings are intentionally not part of this surface. They
 bind a parent place and one or more child places at the same time and therefore
 need extra overlap rules. A future version may add them after the place-conflict

@@ -1721,6 +1721,109 @@ fn check_enum_variant_form(
     call_span: &Span,
 ) {
     let variant = callee_name(callee);
+    // User sum variants: validate construction against the variant's declared fields. Each field
+    // must be supplied exactly once (no unknown name, no duplicate, none missing) and each value is
+    // type-checked against its declared field type — so a malformed/ill-typed constructor is a
+    // checker error rather than a lowerer panic or a mapped rustc error.
+    if let Some(fields) = analyzer.hir.sum_variant_fields(&variant).map(|fields| {
+        fields
+            .iter()
+            .map(|f| (f.name.clone(), f.type_name.clone()))
+            .collect::<Vec<(String, String)>>()
+    }) {
+        // Variants use the same named-field construction form as structs (per the v0.6 spec);
+        // positional/unnamed payload args are not allowed.
+        if let Some(unnamed) = args.iter().find(|arg| arg.name.is_none()) {
+            analyzer.diagnostics.push(Diagnostic::error(
+                code::UNNAMED_ARGUMENT,
+                format!(
+                    "variant `{variant}` must be constructed with named fields, e.g. `{variant}(field: value)`."
+                ),
+                unnamed.span.clone(),
+                "variant field must be named",
+            ));
+            return;
+        }
+        let mut seen = vec![false; fields.len()];
+        for (index, arg) in args.iter().enumerate() {
+            // Resolve which field this arg targets: by name if given, else positionally.
+            let field_idx = match &arg.name {
+                Some(name) => match fields.iter().position(|(fname, _)| fname == name) {
+                    Some(i) => i,
+                    None => {
+                        analyzer.diagnostics.push(Diagnostic::error(
+                            code::UNKNOWN_ARGUMENT,
+                            format!("variant `{variant}` has no field `{name}`."),
+                            arg.span.clone(),
+                            "unknown variant field",
+                        ));
+                        continue;
+                    }
+                },
+                None if index < fields.len() => index,
+                None => {
+                    analyzer.diagnostics.push(Diagnostic::error(
+                        code::UNKNOWN_ARGUMENT,
+                        format!(
+                            "variant `{variant}` has {} field(s) but {} were given.",
+                            fields.len(),
+                            args.len()
+                        ),
+                        arg.span.clone(),
+                        "too many variant fields",
+                    ));
+                    continue;
+                }
+            };
+            if seen[field_idx] {
+                analyzer.diagnostics.push(Diagnostic::error(
+                    code::DUPLICATE_ARGUMENT,
+                    format!(
+                        "variant `{variant}` field `{}` is provided more than once.",
+                        fields[field_idx].0
+                    ),
+                    arg.span.clone(),
+                    "duplicate variant field",
+                ));
+                continue;
+            }
+            seen[field_idx] = true;
+            // Type-check the value against the declared field type (mirrors binding-payload checks:
+            // accept matching JSON/Map/List literals, skip unresolved generics, else require a match).
+            let expected = fields[field_idx].1.as_str();
+            if json_value_accepts_literal(expected, &arg.value)
+                || check_map_literal_type(analyzer, expected, &arg.value, "variant field")
+                || check_list_literal_type(analyzer, expected, &arg.value, "variant field")
+            {
+                continue;
+            }
+            if let Some(actual) = hir_expr_type_name(&arg.value)
+                && !unresolved_generic_type(actual)
+                && !argument_type_matches(expected, actual)
+            {
+                analyzer.diagnostics.push(Diagnostic::error(
+                    code::ARGUMENT_TYPE_MISMATCH,
+                    format!(
+                        "variant `{variant}` field `{}` has type `{actual}`, expected `{expected}`.",
+                        fields[field_idx].0
+                    ),
+                    hir_expr_span(&arg.value).clone(),
+                    "variant field type mismatch",
+                ));
+            }
+        }
+        for (i, provided) in seen.iter().enumerate() {
+            if !provided {
+                analyzer.diagnostics.push(Diagnostic::error(
+                    code::MISSING_ARGUMENT,
+                    format!("variant `{variant}` is missing field `{}`.", fields[i].0),
+                    call_span.clone(),
+                    "missing variant field",
+                ));
+            }
+        }
+        return;
+    }
     let valid = match variant.as_str() {
         "Ok" | "Err" | "Some" => args.len() == 1 && args[0].name.is_none(),
         "None" | "Result" | "Option" => false,

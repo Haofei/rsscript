@@ -3029,7 +3029,12 @@ fn find_top_level_operator(
             continue;
         }
         if depth == 0 && angle_depth > 0 {
-            if token.symbol(">") {
+            // Inside a generic type-argument list, `<` always opens a nested generic
+            // (never a comparison), so count it; otherwise a nested `List<Int>` would
+            // desync the depth and the outer `>` would be mistaken for a comparison op.
+            if token.symbol("<") {
+                angle_depth += 1;
+            } else if token.symbol(">") {
                 angle_depth -= 1;
             }
             continue;

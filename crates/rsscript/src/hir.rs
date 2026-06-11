@@ -460,6 +460,8 @@ pub struct HirFunctionBody {
 pub struct Hir {
     signatures: HashMap<String, FunctionSig>,
     types: HashMap<String, TypeInfo>,
+    // user-declared types whose derive list includes `Clone` (gates the synthesized `.clone()`)
+    clone_types: HashSet<String>,
     fields_by_name: HashMap<String, Vec<FieldInfo>>,
     sum_variant_types: HashMap<String, String>,
     sum_variant_fields: HashMap<String, Vec<FieldInfo>>,
@@ -614,6 +616,14 @@ impl Hir {
                         &type_decl.name,
                         &type_decl.span,
                     );
+                    // Mirror rust_lower's derive emission: an omitted derive list defaults to
+                    // Debug+Clone for non-resource types, so those are cloneable too.
+                    if type_decl.derives.iter().any(|d| d == "Clone")
+                        || (type_decl.derives.is_empty()
+                            && type_decl.kind != TypeKind::Resource)
+                    {
+                        self.clone_types.insert(type_decl.name.clone());
+                    }
                     self.insert_type(type_info_from_decl(type_decl));
                 }
                 Item::SumType(sum) => {
@@ -636,6 +646,10 @@ impl Hir {
                         fields_ordered: Vec::new(),
                         fields: HashMap::new(),
                     };
+                    // Sums are never resources; an omitted derive list defaults to Debug+Clone.
+                    if sum.derives.is_empty() || sum.derives.iter().any(|d| d == "Clone") {
+                        self.clone_types.insert(sum.name.clone());
+                    }
                     self.insert_type(type_info);
                     for variant in &sum.variants {
                         self.sum_variant_types
@@ -760,7 +774,11 @@ impl Hir {
 
     pub fn resolve_call(&self, callee: &Callee) -> CallResolution {
         let call_name = callee_name(callee);
-        if is_enum_variant_call(call_name) {
+        // Builtin variants (Ok/Err/Some/None) and user-declared sum variants are both
+        // constructor calls. The reg-VM lowerer already builds user payload variants via
+        // `sum_variant_fields`; recognizing them here lets construction resolve instead of
+        // being reported as an unknown callee.
+        if is_enum_variant_call(call_name) || self.sum_type_for_variant(call_name).is_some() {
             return CallResolution::EnumVariant;
         }
 
@@ -803,6 +821,43 @@ impl Hir {
     ) -> (CallResolution, Option<String>) {
         let candidates = self.receiver_call_candidates(receiver_type, method, value_types);
         if candidates.is_empty() {
+            // A declared (user) type only gets the synthesized `.clone()` if it derives `Clone`;
+            // otherwise leave the call unresolved (RS0206) instead of emitting an `.clone()` that
+            // Rust would reject (E0599). Non-user receivers keep their existing resolution.
+            let clone_allowed = {
+                let root = type_root_name(receiver_type);
+                !self.types.contains_key(root) || self.clone_types.contains(root)
+            };
+            if method == "clone" && clone_allowed {
+                // Every value supports an explicit `.clone()` returning a fresh copy of the
+                // receiver's type. The runtime already clones implicitly (e.g. `read` args stored
+                // into a collection); this exposes that as a callable for any `derives(Clone)` type.
+                return (
+                    CallResolution::Resolved {
+                        signature: FunctionSig {
+                            namespace: Some(type_root_name(receiver_type).to_string()),
+                            name: "clone".to_string(),
+                            is_public: true,
+                            is_async: false,
+                            is_native: false,
+                            type_params: Box::from([]),
+                            type_param_bounds: Vec::new(),
+                            params: vec![ParamSig {
+                                name: "self".to_string(),
+                                effect: Some(ParamEffect::Read),
+                                type_name: receiver_type.to_string(),
+                            }],
+                            return_type: Some(receiver_type.to_string()),
+                            returns_fresh: true,
+                            effects: Vec::new(),
+                            retained_params: HashSet::new(),
+                            is_builtin: true,
+                        },
+                        kind: ResolvedCalleeKind::BuiltinFunction,
+                    },
+                    Some(type_root_name(receiver_type).to_string()),
+                );
+            }
             return (CallResolution::Unknown, None);
         }
         if candidates.len() > 1 {
@@ -2422,8 +2477,9 @@ fn infer_enum_variant_type(
         "Some" => Some(format!("Option<{}>", payload_type(args)?)),
         "Ok" => Some(format!("Result<{}, E>", payload_type(args)?)),
         "Err" => Some(format!("Result<T, {}>", payload_type(args)?)),
-        // `None` and bare `Option`/`Result` carry no inferable payload type.
-        _ => None,
+        // A user-declared sum variant constructs a value of its sum type, so a `Number(value: 5)`
+        // call has type `Token` — letting the normal arg/binding type checks catch misuse.
+        _ => hir.sum_type_for_variant(variant).map(str::to_string),
     }
 }
 

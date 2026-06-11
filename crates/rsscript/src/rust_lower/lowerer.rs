@@ -1788,10 +1788,11 @@ impl<'a> RustLowerer<'a> {
                 let scrutinee_type = self.infer_expr_type(&stmt.value);
                 let scrutinee =
                     self.lower_match_scrutinee_expr(&stmt.value, scrutinee_type.as_ref());
+                let by_ref = self.match_scrutinee_by_ref(&stmt.value);
                 out.push_str(&format!("{pad}match {scrutinee} {{\n"));
                 for arm in &stmt.arms {
                     let pattern =
-                        self.lower_match_pattern_typed(&arm.pattern, scrutinee_type.as_ref());
+                        self.lower_match_pattern_typed(&arm.pattern, scrutinee_type.as_ref(), by_ref);
                     let guard = arm
                         .guard
                         .as_ref()
@@ -1818,6 +1819,14 @@ impl<'a> RustLowerer<'a> {
                             self.managed_bindings.insert(binding.clone());
                         } else {
                             self.managed_bindings.remove(binding);
+                        }
+                    }
+                    if by_ref {
+                        for name in self.copy_payload_bindings(&arm.pattern, scrutinee_type.as_ref()) {
+                            out.push_str(&format!(
+                                "{}let {name} = *{name};\n",
+                                "    ".repeat(indent + 2)
+                            ));
                         }
                     }
                     self.lower_block(&arm.body, out, indent + 2);
@@ -2410,6 +2419,56 @@ impl<'a> RustLowerer<'a> {
                         return constructed;
                     }
 
+                    // User sum-type payload-variant construction: emit the qualified, struct-style
+                    // form `Enum::Variant { field: value, ... }` to match the lowered enum (whose
+                    // payload variants use named fields). Nullary variants emit `Enum::Variant`.
+                    if let Some(sum_name) = self.find_sum_type_for_variant(ctor_name) {
+                        // declared (name, type) of each field of this variant
+                        let decl_fields: Vec<(String, TypeRef)> = self
+                            .program
+                            .items
+                            .iter()
+                            .find_map(|item| {
+                                if let Item::SumType(sum) = item {
+                                    sum.variants.iter().find(|v| v.name == ctor_name).map(|v| {
+                                        v.fields
+                                            .iter()
+                                            .map(|f| (f.name.clone(), f.ty.clone()))
+                                            .collect()
+                                    })
+                                } else {
+                                    None
+                                }
+                            })
+                            .unwrap_or_default();
+                        if decl_fields.is_empty() {
+                            return format!("{}::{}", rust_ident(&sum_name), rust_ident(ctor_name));
+                        }
+                        let mut fields = Vec::new();
+                        for (index, arg) in args.iter().enumerate() {
+                            // Resolve the target field by name if given, else positionally. Arity and
+                            // field names are validated in the checker; here we stay bounds-safe and
+                            // lower each value against its declared field type (like struct ctors).
+                            let field = match &arg.name {
+                                Some(name) => {
+                                    decl_fields.iter().find(|(fname, _)| fname == name)
+                                }
+                                None => decl_fields.get(index),
+                            };
+                            let Some((field_name, field_ty)) = field else {
+                                continue;
+                            };
+                            let value = self.lower_expr_for_expected_type(&arg.value, field_ty);
+                            fields.push(format!("{}: {value}", rust_ident(field_name)));
+                        }
+                        return format!(
+                            "{}::{} {{ {} }}",
+                            rust_ident(&sum_name),
+                            rust_ident(ctor_name),
+                            fields.join(", ")
+                        );
+                    }
+
                     if is_rust_enum_constructor(name) {
                         let args = args
                             .iter()
@@ -2450,6 +2509,14 @@ impl<'a> RustLowerer<'a> {
                         .map(type_ref_display_name)
                         .unwrap_or_else(|| "Unknown".to_string());
                     let receiver_type_root = type_root_name(&receiver_type_name).to_string();
+                    if method == "clone" && self.type_derives_clone(&receiver_type_root) {
+                        // Explicit `.clone()` on a user struct/sum that derives `Clone` -> Rust's
+                        // derived Clone (a deep copy). `.clone()` borrows its receiver, so a place
+                        // behind a `&` (read param / field of one) works without moving. Types that
+                        // don't derive Clone are rejected earlier (RS0206); builtins (JSON/Map/List/…)
+                        // keep their own clone lowering below.
+                        return format!("{}.clone()", self.lower_expr(receiver));
+                    }
                     let receiver_rust_type = receiver_type
                         .as_ref()
                         .map(|ty| self.lower_type_ref(ty, ManagedPosition::Bare))
@@ -2735,19 +2802,29 @@ impl<'a> RustLowerer<'a> {
             Expr::Match { value, arms, .. } => {
                 let scrutinee_type = self.infer_expr_type(value);
                 let scrutinee = self.lower_match_scrutinee_expr(value, scrutinee_type.as_ref());
+                let by_ref = self.match_scrutinee_by_ref(value);
                 let mut out = format!("match {scrutinee} {{\n");
                 for arm in arms {
                     let pattern =
-                        self.lower_match_pattern_typed(&arm.pattern, scrutinee_type.as_ref());
+                        self.lower_match_pattern_typed(&arm.pattern, scrutinee_type.as_ref(), by_ref);
                     let guard = arm
                         .guard
                         .as_ref()
                         .map(|guard| format!(" if {}", self.lower_expr(guard)))
                         .unwrap_or_default();
-                    out.push_str(&format!(
-                        "    {pattern}{guard} => {}",
-                        self.lower_expr_block(&arm.body, 1)
-                    ));
+                    let mut body = self.lower_expr_block(&arm.body, 1);
+                    if by_ref {
+                        let binds = self.copy_payload_bindings(&arm.pattern, scrutinee_type.as_ref());
+                        if !binds.is_empty() {
+                            let derefs = binds
+                                .iter()
+                                .map(|n| format!("let {n} = *{n};"))
+                                .collect::<Vec<_>>()
+                                .join(" ");
+                            body = body.replacen('{', &format!("{{ {derefs}"), 1);
+                        }
+                    }
+                    out.push_str(&format!("    {pattern}{guard} => {body}"));
                     out.push_str(",\n");
                 }
                 out.push('}');
@@ -3176,10 +3253,13 @@ impl<'a> RustLowerer<'a> {
                 callee:
                     Callee::ReceiverCall {
                         effect: DataEffect::Read,
+                        method,
                         ..
                     },
                 ..
-            } if !is_copy_type_ref(expected) => {
+            } if method != "clone" && !is_copy_type_ref(expected) => {
+                // `.clone()` yields an owned value (it must not be re-borrowed when passed to a
+                // by-value param); every other `read` receiver-call returns a borrow-friendly result.
                 format!("&{}", self.lower_expr_for_expected_type(value, expected))
             }
             Expr::Effect {
@@ -4018,6 +4098,24 @@ impl<'a> RustLowerer<'a> {
             .any(|item| matches!(item, Item::SumType(sum) if sum.name == name))
     }
 
+    // Whether a user-declared struct/sum lowers to a Rust type that derives `Clone`. Mirrors
+    // `compute_derive_attr`: an omitted derive list defaults to Debug+Clone (non-resource), and an
+    // explicit list is cloneable only if it includes `Clone`.
+    fn type_derives_clone(&self, name: &str) -> bool {
+        self.program.items.iter().any(|item| match item {
+            Item::Type(decl) => {
+                decl.name == name
+                    && (decl.derives.iter().any(|d| d == "Clone")
+                        || (decl.derives.is_empty() && decl.kind != TypeKind::Resource))
+            }
+            Item::SumType(sum) => {
+                sum.name == name
+                    && (sum.derives.is_empty() || sum.derives.iter().any(|d| d == "Clone"))
+            }
+            _ => false,
+        })
+    }
+
     fn is_string_comparison_operand(&self, expr: &Expr) -> bool {
         matches!(expr, Expr::String(_, _) | Expr::MultilineString(_, _))
             || self
@@ -4224,6 +4322,18 @@ impl<'a> RustLowerer<'a> {
             Expr::Ident(name, _) if self.param_effects.contains_key(name) => self.lower_expr(value),
             _ => format!("&{}", self.lower_expr(value)),
         }
+    }
+
+    // The Copy scalar primitives — payloads of these match-bind by value (with a deref-pattern
+    // when the scrutinee is a borrow). Distinct from `read_effect_lowers_by_value` (intrinsic-ABI tuned).
+    fn is_copy_primitive(ty: &TypeRef) -> bool {
+        ty.args.is_empty()
+            && matches!(
+                ty.name.as_str(),
+                "Bool" | "Byte" | "Char" | "Int" | "Int8" | "Int16" | "Int32" | "Int64"
+                    | "UInt" | "UInt8" | "UInt16" | "UInt32" | "UInt64" | "Float" | "Float32"
+                    | "Float64"
+            )
     }
 
     fn read_effect_lowers_by_value(expected: &TypeRef) -> bool {
@@ -4613,15 +4723,55 @@ impl<'a> RustLowerer<'a> {
         let lowered = self.lower_expr(value);
         if scrutinee_type.is_some_and(|ty| ty.name == "String") {
             format!("{lowered}.as_str()")
+        } else if self.match_scrutinee_is_forced_borrow(value) {
+            format!("&({lowered})")
         } else {
             lowered
         }
     }
 
+    // A match scrutinee that is a *place* behind a borrow (a field/index of a read-view) has
+    // value type `T` (not `&T`), so matching it would move a non-Copy payload out of a shared
+    // reference. Borrow it so the match binds by reference instead.
+    fn match_scrutinee_is_forced_borrow(&self, value: &Expr) -> bool {
+        matches!(value, Expr::Field { .. } | Expr::Index { .. }) && self.match_scrutinee_by_ref(value)
+    }
+
+    // Whether a match scrutinee lowers to a reference (`&T`): a read-view `let` binding, a `read`
+    // param, or a field/index of one. Such matches bind payloads by reference (so non-Copy payloads
+    // don't move out of a shared ref, and Copy payloads need a deref-pattern to come out by value).
+    fn match_scrutinee_by_ref(&self, value: &Expr) -> bool {
+        match value {
+            Expr::Ident(name, _) => {
+                self.read_view_bindings.contains(name)
+                    || self.param_effects.get(name) == Some(&DataEffect::Read)
+            }
+            Expr::Field { base, .. } | Expr::Index { base, .. } => self.match_scrutinee_by_ref(base),
+            Expr::Effect { value, .. } | Expr::Try { value, .. } => self.match_scrutinee_by_ref(value),
+            _ => false,
+        }
+    }
+
+    // Names of single-field payload bindings whose field is a Copy primitive. When the scrutinee is
+    // by-ref, such a binding is `&T` (match ergonomics); the arm prepends `let x = *x;` to rebind by value.
+    fn copy_payload_bindings(&self, pattern: &MatchPattern, value_type: Option<&TypeRef>) -> Vec<String> {
+        if let MatchPattern::Variant { name, binding, .. } = pattern
+            && let Some(MatchPattern::Binding { name: bind_name, .. }) = binding.as_deref()
+            && let Some((_, fields)) = self.sum_variant_fields_for_type(value_type, name)
+            && fields.len() == 1
+            && Self::is_copy_primitive(&fields[0].ty)
+        {
+            return vec![rust_ident(bind_name)];
+        }
+        Vec::new()
+    }
+
+
     fn lower_match_pattern_typed(
         &self,
         pattern: &MatchPattern,
         value_type: Option<&TypeRef>,
+        by_ref: bool,
     ) -> String {
         match pattern {
             MatchPattern::Binding { name, .. } => rust_ident(name),
@@ -4633,7 +4783,7 @@ impl<'a> RustLowerer<'a> {
                 let inner = value_type.and_then(|ty| ty.args.first());
                 let payload = binding
                     .as_ref()
-                    .map(|binding| self.lower_match_pattern_typed(binding, inner))
+                    .map(|binding| self.lower_match_pattern_typed(binding, inner, by_ref))
                     .unwrap_or_else(|| "_".to_string());
                 format!("Some({payload})")
             }
@@ -4650,7 +4800,7 @@ impl<'a> RustLowerer<'a> {
                 });
                 let payload = binding
                     .as_ref()
-                    .map(|binding| self.lower_match_pattern_typed(binding, inner))
+                    .map(|binding| self.lower_match_pattern_typed(binding, inner, by_ref))
                     .unwrap_or_else(|| "_".to_string());
                 format!("{}({payload})", rust_ident(name))
             }
@@ -4667,7 +4817,7 @@ impl<'a> RustLowerer<'a> {
                             binding
                                 .as_ref()
                                 .map(|binding| {
-                                    self.lower_match_pattern_typed(binding, Some(&field.ty))
+                                    self.lower_match_pattern_typed(binding, Some(&field.ty), by_ref)
                                 })
                                 .unwrap_or_else(|| "_".to_string())
                         } else {
@@ -4689,7 +4839,7 @@ impl<'a> RustLowerer<'a> {
                 fields,
                 has_rest,
                 ..
-            } => self.lower_struct_match_pattern_typed(name, fields, *has_rest, value_type),
+            } => self.lower_struct_match_pattern_typed(name, fields, *has_rest, value_type, by_ref),
         }
     }
 
@@ -4699,6 +4849,7 @@ impl<'a> RustLowerer<'a> {
         fields: &[crate::syntax::ast::MatchFieldPattern],
         has_rest: bool,
         value_type: Option<&TypeRef>,
+        by_ref: bool,
     ) -> String {
         let namespace = value_type.and_then(|ty| {
             self.sum_variant_fields_for_type(Some(ty), name)
@@ -4721,7 +4872,7 @@ impl<'a> RustLowerer<'a> {
                 parts.push(format!(
                     "{}: {}",
                     rust_ident(&field.name),
-                    self.lower_match_pattern_typed(pattern, field_type)
+                    self.lower_match_pattern_typed(pattern, field_type, by_ref)
                 ));
             } else if let Some(binding) = &field.binding {
                 let binding_text = if field.effect == Some(crate::syntax::ast::DataEffect::Mut) {
