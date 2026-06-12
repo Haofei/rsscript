@@ -6,6 +6,10 @@ pub fn Bytes.from_string(value: read String) -> fresh Bytes
 
 pub fn Bytes.from_buffer(buffer: read Buffer) -> fresh Bytes
 
+pub fn Bytes.from_uints(values: read List<Int>) -> fresh Bytes
+
+pub fn Bytes.to_uints(value: read Bytes) -> fresh List<Int>
+
 pub fn Bytes.len(value: read Bytes) -> Int
 
 pub fn Bytes.is_empty(value: read Bytes) -> Bool

@@ -6,6 +6,15 @@ pub native fn Hash.sha256_string(value: read String) -> fresh String
 pub native fn Hash.sha256_bytes(value: read Bytes) -> fresh String
     effects(native)
 
+pub native fn Hash.sha3_224_bytes(value: read Bytes) -> fresh Bytes
+    effects(native)
+
+pub native fn Hash.sha3_256_bytes(value: read Bytes) -> fresh Bytes
+    effects(native)
+
+pub native fn Hash.shake128_bytes(value: read Bytes, out_len: Int) -> fresh Bytes
+    effects(native)
+
 pub native fn Hash.sha256_file(path: read Path) -> Result<fresh String, FileError>
     effects(native)
 

@@ -4545,7 +4545,11 @@ fn standard_library_export_capabilities(export: &RsScriptPackageExport) -> Vec<C
         | "Random.string" => {
             categories.push(CapabilityCategory::RandomRead);
         }
-        "Hash.sha256_string" | "Hash.sha256_bytes" => {
+        "Hash.sha256_string"
+        | "Hash.sha256_bytes"
+        | "Hash.sha3_224_bytes"
+        | "Hash.sha3_256_bytes"
+        | "Hash.shake128_bytes" => {
             categories.push(CapabilityCategory::ComputeHash);
         }
         "Hash.sha256_file" => {

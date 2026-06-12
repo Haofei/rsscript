@@ -163,9 +163,11 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "from_string",
         "rsscript_runtime::bytes_from_string",
     ),
+    runtime_intrinsic("Bytes", "from_uints", "rsscript_runtime::bytes_from_uints"),
     runtime_intrinsic("Bytes", "is_empty", "rsscript_runtime::bytes_is_empty"),
     runtime_intrinsic("Bytes", "len", "rsscript_runtime::bytes_len"),
     runtime_intrinsic("Bytes", "slice", "rsscript_runtime::bytes_slice"),
+    runtime_intrinsic("Bytes", "to_uints", "rsscript_runtime::bytes_to_uints"),
     runtime_intrinsic("Bytes", "view", "rsscript_runtime::bytes_view"),
     runtime_intrinsic(
         "BytesView",
@@ -628,11 +630,26 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "sha256_bytes",
         "rsscript_runtime::hash_sha256_bytes",
     ),
+    runtime_intrinsic(
+        "Hash",
+        "sha3_224_bytes",
+        "rsscript_runtime::hash_sha3_224_bytes",
+    ),
+    runtime_intrinsic(
+        "Hash",
+        "sha3_256_bytes",
+        "rsscript_runtime::hash_sha3_256_bytes",
+    ),
     runtime_intrinsic("Hash", "sha256_file", "rsscript_runtime::hash_sha256_file"),
     runtime_intrinsic(
         "Hash",
         "sha256_string",
         "rsscript_runtime::hash_sha256_string",
+    ),
+    runtime_intrinsic(
+        "Hash",
+        "shake128_bytes",
+        "rsscript_runtime::hash_shake128_bytes",
     ),
     runtime_intrinsic(
         "Hmac",

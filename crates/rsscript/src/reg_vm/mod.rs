@@ -12,13 +12,13 @@ use hmac::{Hmac, Mac};
 use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use rand::Rng;
 use sha2::{Digest, Sha256};
+use sha3::{
+    Sha3_224, Sha3_256, Shake128,
+    digest::{ExtendableOutput, Update, XofReader},
+};
 
 use crate::diagnostic::Severity;
 use crate::eval_types::{EvalError, EvalOutput, NativeInterpreterFn, NativeValue};
-use crate::text_util::{
-    decode_string_token, string_format, string_pad, string_slice_range, type_arg_names,
-    type_root_name,
-};
 use crate::hir::{
     Hir, HirBlock, HirCallArg, HirCallReceiver, HirExpr, HirMatchArm, HirStmt, ParamEffect,
     TypeInfo,
@@ -29,6 +29,10 @@ use crate::syntax::ast::{
     BinaryOp, Callee, MatchFieldPattern, MatchLiteral, MatchPattern, merge_programs,
 };
 use crate::syntax::parse_source;
+use crate::text_util::{
+    decode_string_token, string_format, string_pad, string_slice_range, type_arg_names,
+    type_root_name,
+};
 use crate::vm_value::{ValueMap, VmClosure, VmMapKey, VmNative, VmStruct, VmValue};
 
 mod runtime_values;
@@ -1263,7 +1267,7 @@ impl RegVmExecutable {
             false,
             std::env::var_os("RSS_JIT_STATS").is_some(),
         )
-            .map(|(output, _stats)| output)
+        .map(|(output, _stats)| output)
     }
 
     /// Like [`Self::eval_main_with_args_native`] but also returns the native-tier
@@ -1291,7 +1295,7 @@ impl RegVmExecutable {
             true,
             std::env::var_os("RSS_JIT_STATS").is_some(),
         )
-            .map(|(output, _stats)| output)
+        .map(|(output, _stats)| output)
     }
 
     #[cfg(feature = "native-jit")]
@@ -1969,9 +1973,11 @@ enum RegIntrinsic {
     BytesConcat,
     BytesConsume,
     BytesFromString,
+    BytesFromUints,
     BytesIsEmpty,
     BytesLen,
     BytesSlice,
+    BytesToUints,
     BytesViewStartsWith,
     BytesViewToBytes,
     BufferNew,
@@ -2113,6 +2119,9 @@ enum RegIntrinsic {
     HashSha256Bytes,
     HashSha256File,
     HashSha256String,
+    HashSha3_224Bytes,
+    HashSha3_256Bytes,
+    HashShake128Bytes,
     HmacSha256Bytes,
     HmacSha256String,
     GlobalConfigNew,
@@ -2563,7 +2572,7 @@ impl RegUnit {
                     local_regs: HashMap::new(),
                     code: Vec::new(),
                     jit_analysis: std::cell::Cell::new(None),
-            native_status: std::cell::Cell::new(0),
+                    native_status: std::cell::Cell::new(0),
                 },
                 loop_stack: Vec::new(),
                 cleanup_stack: Vec::new(),
@@ -2599,7 +2608,7 @@ impl RegUnit {
                     local_regs: HashMap::new(),
                     code: Vec::new(),
                     jit_analysis: std::cell::Cell::new(None),
-            native_status: std::cell::Cell::new(0),
+                    native_status: std::cell::Cell::new(0),
                 },
                 loop_stack: Vec::new(),
                 cleanup_stack: Vec::new(),
@@ -2837,7 +2846,9 @@ impl RegLowerer<'_> {
                 self.emit(RegInstr::Move { dst, src: value });
                 Ok(())
             }
-            HirExpr::Field { base, name, access, .. } => {
+            HirExpr::Field {
+                base, name, access, ..
+            } => {
                 // Read the current container, write an updated copy back into
                 // `base_value` in place, then store that copy into the enclosing
                 // place (value semantics, composes for nested paths).
@@ -3187,7 +3198,10 @@ impl RegLowerer<'_> {
                     };
                     if arm.binding != "_" {
                         let binding = self.local(&arm.binding);
-                        self.emit(RegInstr::Move { dst: binding, src: bound });
+                        self.emit(RegInstr::Move {
+                            dst: binding,
+                            src: bound,
+                        });
                     }
                     self.block(&arm.body)?;
                     end_jumps.push(self.emit(RegInstr::Jump { target: usize::MAX }));
@@ -3491,7 +3505,7 @@ impl RegLowerer<'_> {
                             local_regs: HashMap::new(),
                             code: Vec::new(),
                             jit_analysis: std::cell::Cell::new(None),
-            native_status: std::cell::Cell::new(0),
+                            native_status: std::cell::Cell::new(0),
                         },
                         loop_stack: Vec::new(),
                         cleanup_stack: Vec::new(),
@@ -3507,9 +3521,7 @@ impl RegLowerer<'_> {
                     // backend's tail-expression closure rule. Bodies ending in any
                     // other statement (including an explicit `return`) fall through
                     // to an implicit `Unit` return.
-                    if let Some((HirStmt::Expr(value), prefix)) =
-                        body.statements.split_last()
-                    {
+                    if let Some((HirStmt::Expr(value), prefix)) = body.statements.split_last() {
                         for statement in prefix {
                             lowerer.statement(statement)?;
                         }
@@ -3911,9 +3923,11 @@ impl RegLowerer<'_> {
                     ("Bytes", "consume") => RegIntrinsic::BytesConsume,
                     ("Bytes", "from_buffer") => RegIntrinsic::BytesViewToBytes,
                     ("Bytes", "from_string") => RegIntrinsic::BytesFromString,
+                    ("Bytes", "from_uints") => RegIntrinsic::BytesFromUints,
                     ("Bytes", "is_empty") => RegIntrinsic::BytesIsEmpty,
                     ("Bytes", "len") => RegIntrinsic::BytesLen,
                     ("Bytes", "slice") | ("Bytes", "view") => RegIntrinsic::BytesSlice,
+                    ("Bytes", "to_uints") => RegIntrinsic::BytesToUints,
                     ("Buffer", "clear") => {
                         if arg_regs.len() != 1 {
                             return Err(EvalError::Runtime(format!(
@@ -4191,6 +4205,9 @@ impl RegLowerer<'_> {
                     ("Hash", "sha256_bytes") => RegIntrinsic::HashSha256Bytes,
                     ("Hash", "sha256_file") => RegIntrinsic::HashSha256File,
                     ("Hash", "sha256_string") => RegIntrinsic::HashSha256String,
+                    ("Hash", "sha3_224_bytes") => RegIntrinsic::HashSha3_224Bytes,
+                    ("Hash", "sha3_256_bytes") => RegIntrinsic::HashSha3_256Bytes,
+                    ("Hash", "shake128_bytes") => RegIntrinsic::HashShake128Bytes,
                     ("Hmac", "sha256_bytes") => RegIntrinsic::HmacSha256Bytes,
                     ("Hmac", "sha256_string") => RegIntrinsic::HmacSha256String,
                     ("GlobalConfig", "new") => RegIntrinsic::GlobalConfigNew,
@@ -6692,7 +6709,10 @@ impl RegVm {
                 }
                 self.set_reg(
                     base + *dst,
-                    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from(name.as_str()), field_values))),
+                    VmValue::Struct(Rc::new(VmStruct::from_named(
+                        Rc::from(name.as_str()),
+                        field_values,
+                    ))),
                 );
             }
             RegInstr::MakeVariant { dst, name, fields } => {
@@ -6702,7 +6722,10 @@ impl RegVm {
                 }
                 self.set_reg(
                     base + *dst,
-                    VmValue::Variant(Rc::new(VmStruct::from_named(Rc::from(name.as_str()), field_values))),
+                    VmValue::Variant(Rc::new(VmStruct::from_named(
+                        Rc::from(name.as_str()),
+                        field_values,
+                    ))),
                 );
             }
             RegInstr::MakeList { dst, items } => {
@@ -6955,7 +6978,6 @@ impl RegVm {
             RegInstr::UnwrapVariantValue { dst, src, expected } => {
                 let value = match self.reg(base + *src) {
                     VmValue::Variant(data) if data.name.as_ref() == expected.as_str() => data
-                        
                         .get("value")
                         .cloned()
                         .or_else(|| {
@@ -8795,6 +8817,15 @@ impl RegVm {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::Bytes(Rc::new(value.as_bytes().to_vec())))
             }
+            RegIntrinsic::BytesFromUints => {
+                let values = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let bytes = values
+                    .borrow()
+                    .iter()
+                    .map(|value| expect_int_ref(value).map(|v| v as u8))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(VmValue::Bytes(Rc::new(bytes)))
+            }
             RegIntrinsic::BytesIsEmpty => {
                 let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::Bool(value.is_empty()))
@@ -8808,6 +8839,15 @@ impl RegVm {
                 let start = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 let len = expect_int_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
                 Ok(VmValue::Bytes(Rc::new(bytes_slice(value, start, len))))
+            }
+            RegIntrinsic::BytesToUints => {
+                let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::List(Rc::new(RefCell::new(
+                    value
+                        .iter()
+                        .map(|byte| VmValue::Int(i64::from(*byte)))
+                        .collect(),
+                ))))
             }
             RegIntrinsic::BytesViewStartsWith => {
                 let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -9682,6 +9722,19 @@ impl RegVm {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::string(sha256_digest(value.as_bytes())))
             }
+            RegIntrinsic::HashSha3_224Bytes => {
+                let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Bytes(Rc::new(sha3_224_digest(value))))
+            }
+            RegIntrinsic::HashSha3_256Bytes => {
+                let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Bytes(Rc::new(sha3_256_digest(value))))
+            }
+            RegIntrinsic::HashShake128Bytes => {
+                let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let out_len = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::Bytes(Rc::new(shake128_digest(value, out_len))))
+            }
             RegIntrinsic::HmacSha256Bytes => {
                 let key = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
@@ -9940,9 +9993,11 @@ impl RegVm {
             RegIntrinsic::IntToString => Ok(VmValue::string(
                 expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_string(),
             )),
-            RegIntrinsic::IntToFloat => Ok(VmValue::Float(
-                expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)? as f64,
-            )),
+            RegIntrinsic::IntToFloat => {
+                Ok(VmValue::Float(
+                    expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)? as f64,
+                ))
+            }
             RegIntrinsic::FloatToString => Ok(VmValue::string(
                 expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_string(),
             )),
@@ -12255,7 +12310,8 @@ impl RegVm {
                 Ok(VmValue::Unit)
             }
             RegIntrinsic::TimerSleepUntil => {
-                let target_unix_ms = expect_deadline_unix_ms(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let target_unix_ms =
+                    expect_deadline_unix_ms(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let now_unix_ms = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_millis() as i64)
@@ -12536,13 +12592,34 @@ fn bytes_slice(value: &[u8], start: i64, len: i64) -> Vec<u8> {
 
 fn sha256_digest(value: &[u8]) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(value);
+    Digest::update(&mut hasher, value);
     format!("{:x}", hasher.finalize())
+}
+
+fn sha3_224_digest(value: &[u8]) -> Vec<u8> {
+    let mut hasher = Sha3_224::new();
+    Update::update(&mut hasher, value);
+    hasher.finalize().to_vec()
+}
+
+fn sha3_256_digest(value: &[u8]) -> Vec<u8> {
+    let mut hasher = Sha3_256::new();
+    Update::update(&mut hasher, value);
+    hasher.finalize().to_vec()
+}
+
+fn shake128_digest(value: &[u8], out_len: i64) -> Vec<u8> {
+    let mut hasher = Shake128::default();
+    Update::update(&mut hasher, value);
+    let mut reader = hasher.finalize_xof();
+    let mut out = vec![0u8; out_len.max(0) as usize];
+    XofReader::read(&mut reader, &mut out);
+    out
 }
 
 fn hmac_sha256_digest(key: &[u8], value: &[u8]) -> String {
     let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key length");
-    mac.update(value);
+    Mac::update(&mut mac, value);
     format!("{:x}", mac.finalize().into_bytes())
 }
 
@@ -13108,7 +13185,6 @@ enum JsonPathPart {
     Index(usize),
 }
 
-
 #[derive(Debug, Clone)]
 struct VmChannelState {
     id: i64,
@@ -13204,10 +13280,11 @@ const POOL_LEASE_ID_FIELD: &str = "__rsscript_vm_pool_id";
 const POOL_LEASE_DISCARDED_FIELD: &str = "__rsscript_vm_pool_discarded";
 
 fn resource_pool_value(id: i64) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![
-        ("id".to_string(), VmValue::Int(id)),
-    ];
-    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("ResourcePool"), fields)))
+    let fields: Vec<(String, VmValue)> = vec![("id".to_string(), VmValue::Int(id))];
+    VmValue::Struct(Rc::new(VmStruct::from_named(
+        Rc::from("ResourcePool"),
+        fields,
+    )))
 }
 
 fn pool_stats_value(capacity: i64, created: i64, available: i64, in_use: i64) -> VmValue {
@@ -13221,16 +13298,14 @@ fn pool_stats_value(capacity: i64, created: i64, available: i64, in_use: i64) ->
 }
 
 fn pool_error_value(message: impl Into<String>) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![
-        ("message".to_string(), VmValue::string(message.into())),
-    ];
+    let fields: Vec<(String, VmValue)> =
+        vec![("message".to_string(), VmValue::string(message.into()))];
     VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("PoolError"), fields)))
 }
 
 fn pool_error_message(value: &VmValue) -> Option<String> {
     match value {
         VmValue::Struct(data) if data.name.as_ref() == "PoolError" => data
-            
             .get("message")
             .and_then(|value| expect_string_ref(value).ok())
             .map(str::to_string),
@@ -13245,8 +13320,10 @@ fn mark_pool_lease(value: VmValue, pool_id: i64) -> Result<VmValue, String> {
             value.display()
         ));
     };
-    let mut fields: Vec<(Rc<str>, VmValue)> =
-        data.iter().map(|(name, v)| (name.clone(), v.clone())).collect();
+    let mut fields: Vec<(Rc<str>, VmValue)> = data
+        .iter()
+        .map(|(name, v)| (name.clone(), v.clone()))
+        .collect();
     fields.push((Rc::from(POOL_LEASE_ID_FIELD), VmValue::Int(pool_id)));
     fields.push((Rc::from(POOL_LEASE_DISCARDED_FIELD), VmValue::Bool(false)));
     Ok(VmValue::Struct(Rc::new(VmStruct::from_named(
@@ -13319,9 +13396,7 @@ fn clock_system_unix_ms() -> i64 {
 }
 
 fn instant_value(unix_ms: i64) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![
-        ("unix_ms".to_string(), VmValue::Int(unix_ms)),
-    ];
+    let fields: Vec<(String, VmValue)> = vec![("unix_ms".to_string(), VmValue::Int(unix_ms))];
     VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Instant"), fields)))
 }
 
@@ -13330,24 +13405,21 @@ fn deadline_after_ms(ms: i64) -> i64 {
 }
 
 fn deadline_value(unix_ms: i64) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![
-        ("unix_ms".to_string(), VmValue::Int(unix_ms)),
-    ];
+    let fields: Vec<(String, VmValue)> = vec![("unix_ms".to_string(), VmValue::Int(unix_ms))];
     VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Deadline"), fields)))
 }
 
 fn counter_value(value: i64) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![
-        ("value".to_string(), VmValue::Int(value)),
-    ];
+    let fields: Vec<(String, VmValue)> = vec![("value".to_string(), VmValue::Int(value))];
     VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Counter"), fields)))
 }
 
 fn config_value(name: impl Into<String>) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![
-        ("name".to_string(), VmValue::string(name.into())),
-    ];
-    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("ConfigValue"), fields)))
+    let fields: Vec<(String, VmValue)> = vec![("name".to_string(), VmValue::string(name.into()))];
+    VmValue::Struct(Rc::new(VmStruct::from_named(
+        Rc::from("ConfigValue"),
+        fields,
+    )))
 }
 
 fn config_name_from_text(text: &str) -> String {
@@ -13367,9 +13439,7 @@ fn config_rules_value(name: impl Into<String>, rule_count: i64) -> VmValue {
 }
 
 fn rule_value(name: impl Into<String>) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![
-        ("name".to_string(), VmValue::string(name.into())),
-    ];
+    let fields: Vec<(String, VmValue)> = vec![("name".to_string(), VmValue::string(name.into()))];
     VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Rule"), fields)))
 }
 
@@ -13386,34 +13456,39 @@ fn environment_value(has_parent: bool, has_function: bool) -> VmValue {
         ("has_parent".to_string(), VmValue::Bool(has_parent)),
         ("has_function".to_string(), VmValue::Bool(has_function)),
     ];
-    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Environment"), fields)))
+    VmValue::Struct(Rc::new(VmStruct::from_named(
+        Rc::from("Environment"),
+        fields,
+    )))
 }
 
 fn function_object_value(has_closure: bool) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![
-        ("has_closure".to_string(), VmValue::Bool(has_closure)),
-    ];
-    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("FunctionObject"), fields)))
+    let fields: Vec<(String, VmValue)> =
+        vec![("has_closure".to_string(), VmValue::Bool(has_closure))];
+    VmValue::Struct(Rc::new(VmStruct::from_named(
+        Rc::from("FunctionObject"),
+        fields,
+    )))
 }
 
 fn config_store_value(name: impl Into<String>) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![
-        ("name".to_string(), VmValue::string(name.into())),
-    ];
-    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("ConfigStore"), fields)))
+    let fields: Vec<(String, VmValue)> = vec![("name".to_string(), VmValue::string(name.into()))];
+    VmValue::Struct(Rc::new(VmStruct::from_named(
+        Rc::from("ConfigStore"),
+        fields,
+    )))
 }
 
 fn global_config_value(rule_count: i64) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![
-        ("rule_count".to_string(), VmValue::Int(rule_count)),
-    ];
-    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("GlobalConfig"), fields)))
+    let fields: Vec<(String, VmValue)> = vec![("rule_count".to_string(), VmValue::Int(rule_count))];
+    VmValue::Struct(Rc::new(VmStruct::from_named(
+        Rc::from("GlobalConfig"),
+        fields,
+    )))
 }
 
 fn request_value(path: impl Into<String>) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![
-        ("path".to_string(), VmValue::string(path.into())),
-    ];
+    let fields: Vec<(String, VmValue)> = vec![("path".to_string(), VmValue::string(path.into()))];
     VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Request"), fields)))
 }
 
@@ -13468,7 +13543,10 @@ fn http_request_value(
         ("backoff_ms".to_string(), VmValue::Int(backoff_ms)),
         ("header_count".to_string(), VmValue::Int(header_count)),
     ];
-    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("HttpRequest"), fields)))
+    VmValue::Struct(Rc::new(VmStruct::from_named(
+        Rc::from("HttpRequest"),
+        fields,
+    )))
 }
 
 enum WebSocketExpectedFrame {
@@ -13578,22 +13656,22 @@ impl VmDbConnection {
 }
 
 fn db_connection_value(url: impl Into<String>, queries: Vec<String>) -> VmValue {
-    let mut fields: Vec<(String, VmValue)> = vec![
-        ("url".to_string(), VmValue::string(url.into())),
-    ];
+    let mut fields: Vec<(String, VmValue)> = vec![("url".to_string(), VmValue::string(url.into()))];
     fields.push((
         "queries".to_string(),
         VmValue::List(Rc::new(RefCell::new(
             queries.into_iter().map(VmValue::string).collect(),
         ))),
     ));
-    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("DbConnection"), fields)))
+    VmValue::Struct(Rc::new(VmStruct::from_named(
+        Rc::from("DbConnection"),
+        fields,
+    )))
 }
 
 fn db_error_value(message: impl Into<String>) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![
-        ("message".to_string(), VmValue::string(message.into())),
-    ];
+    let fields: Vec<(String, VmValue)> =
+        vec![("message".to_string(), VmValue::string(message.into()))];
     VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("DbError"), fields)))
 }
 
@@ -13706,8 +13784,12 @@ fn process_run_request(request: &VmProcessRequest) -> Result<VmProcessOutput, Vm
         let status = child.wait().map_err(|error| {
             VmValue::string(format!("failed to wait for `{}`: {error}", request.command))
         })?;
-        let stdout = stdout_thread.and_then(|t| t.join().ok()).unwrap_or_default();
-        let stderr = stderr_thread.and_then(|t| t.join().ok()).unwrap_or_default();
+        let stdout = stdout_thread
+            .and_then(|t| t.join().ok())
+            .unwrap_or_default();
+        let stderr = stderr_thread
+            .and_then(|t| t.join().ok())
+            .unwrap_or_default();
         let state = process_output_state_from_parts(
             status.code().unwrap_or(-1) as i64,
             &stdout,
@@ -13883,7 +13965,10 @@ fn process_output_value(output: VmProcessOutput) -> VmValue {
         ("merged".to_string(), VmValue::string(output.merged)),
         ("truncated".to_string(), VmValue::Bool(output.truncated)),
     ];
-    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("ProcessOutput"), fields)))
+    VmValue::Struct(Rc::new(VmStruct::from_named(
+        Rc::from("ProcessOutput"),
+        fields,
+    )))
 }
 
 fn process_event_value(kind: &str, data: &str, status: i64) -> VmValue {
@@ -13892,7 +13977,10 @@ fn process_event_value(kind: &str, data: &str, status: i64) -> VmValue {
         ("data".to_string(), VmValue::string(data)),
         ("status".to_string(), VmValue::Int(status)),
     ];
-    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("ProcessEvent"), fields)))
+    VmValue::Struct(Rc::new(VmStruct::from_named(
+        Rc::from("ProcessEvent"),
+        fields,
+    )))
 }
 
 #[derive(Debug, Clone)]
@@ -14023,7 +14111,10 @@ fn file_metadata_value(metadata: std::fs::Metadata) -> VmValue {
         ("is_dir".to_string(), VmValue::Bool(metadata.is_dir())),
         ("len".to_string(), VmValue::Int(metadata.len() as i64)),
     ];
-    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("FileMetadata"), fields)))
+    VmValue::Struct(Rc::new(VmStruct::from_named(
+        Rc::from("FileMetadata"),
+        fields,
+    )))
 }
 
 fn directory_list_files(root: &Path) -> std::io::Result<Vec<String>> {
@@ -14070,9 +14161,7 @@ fn relative_runtime_path(root: &Path, path: &Path) -> String {
 }
 
 fn tempdir_value(path: impl Into<String>) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![
-        ("path".to_string(), VmValue::string(path.into())),
-    ];
+    let fields: Vec<(String, VmValue)> = vec![("path".to_string(), VmValue::string(path.into()))];
     VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("TempDir"), fields)))
 }
 
@@ -14139,9 +14228,8 @@ fn image_value(
     height: Option<i64>,
     operations: Vec<String>,
 ) -> VmValue {
-    let mut fields: Vec<(String, VmValue)> = vec![
-        ("bytes".to_string(), VmValue::Bytes(Rc::new(bytes))),
-    ];
+    let mut fields: Vec<(String, VmValue)> =
+        vec![("bytes".to_string(), VmValue::Bytes(Rc::new(bytes)))];
     fields.push((
         "width".to_string(),
         width
@@ -14164,10 +14252,12 @@ fn image_value(
 }
 
 fn image_error_value(message: impl Into<String>) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![
-        ("message".to_string(), VmValue::string(message.into())),
-    ];
-    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("ImageError"), fields)))
+    let fields: Vec<(String, VmValue)> =
+        vec![("message".to_string(), VmValue::string(message.into()))];
+    VmValue::Struct(Rc::new(VmStruct::from_named(
+        Rc::from("ImageError"),
+        fields,
+    )))
 }
 
 fn cancellation_source_value(id: i64) -> VmValue {
@@ -14179,9 +14269,7 @@ fn cancellation_token_value(id: i64) -> VmValue {
 }
 
 fn cancellation_handle_value(name: &'static str, id: i64) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![
-        ("id".to_string(), VmValue::Int(id)),
-    ];
+    let fields: Vec<(String, VmValue)> = vec![("id".to_string(), VmValue::Int(id))];
     VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from(name), fields)))
 }
 
