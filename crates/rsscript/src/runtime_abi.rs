@@ -668,6 +668,11 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "encode_string",
         "rsscript_runtime::hex_encode_string",
     ),
+    runtime_intrinsic(
+        "Gzip",
+        "decompress_bytes",
+        "rsscript_runtime::gzip_decompress_bytes",
+    ),
     runtime_intrinsic("Http", "get", "rsscript_runtime::http_get"),
     runtime_intrinsic("Http", "get_async", "rsscript_runtime::http_get_async"),
     runtime_intrinsic("Http", "send_async", "rsscript_runtime::http_send_async"),

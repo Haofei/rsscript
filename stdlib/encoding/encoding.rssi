@@ -23,6 +23,9 @@ pub native fn Hex.encode_string(value: read String) -> fresh String
 pub native fn Hex.decode(text: read String) -> Result<fresh Bytes, DecodeError>
     effects(native)
 
+pub native fn Gzip.decompress_bytes(value: read Bytes) -> Result<fresh Bytes, DecodeError>
+    effects(native)
+
 pub native fn Url.encode_component(value: read String) -> fresh String
     effects(native)
 

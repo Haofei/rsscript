@@ -1,6 +1,8 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use flate2::read::GzDecoder;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
+use std::io::Read;
 
 #[derive(Debug, Clone)]
 pub struct DecodeError {
@@ -46,6 +48,17 @@ pub fn hex_decode(text: &str) -> Result<Vec<u8>, DecodeError> {
     })
 }
 
+// Gzip
+
+pub fn gzip_decompress_bytes(value: &[u8]) -> Result<Vec<u8>, DecodeError> {
+    let mut decoder = GzDecoder::new(value);
+    let mut out = Vec::new();
+    decoder.read_to_end(&mut out).map_err(|e| DecodeError {
+        message: e.to_string(),
+    })?;
+    Ok(out)
+}
+
 // URL encoding
 
 const COMPONENT_SET: &AsciiSet = &NON_ALPHANUMERIC
@@ -69,4 +82,22 @@ pub fn url_decode_component(value: &str) -> Result<String, DecodeError> {
 
 pub fn decode_error_message(error: &DecodeError) -> String {
     error.message.clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gzip_decompress_bytes_decodes_gzip_payload() {
+        let gzipped = hex::decode("1f8b08000000000002ff4b4c4a0600c241243503000000").unwrap();
+        let decoded = gzip_decompress_bytes(&gzipped).unwrap();
+        assert_eq!(decoded, b"abc");
+    }
+
+    #[test]
+    fn gzip_decompress_bytes_reports_decode_errors() {
+        let err = gzip_decompress_bytes(b"not gzip").unwrap_err();
+        assert!(!err.message.is_empty());
+    }
 }

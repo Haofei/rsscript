@@ -8,6 +8,7 @@ use std::rc::Rc;
 
 use base64::Engine;
 use chrono::{DateTime, Datelike, NaiveDate, SecondsFormat, TimeZone, Timelike, Utc};
+use flate2::read::GzDecoder;
 use hmac::{Hmac, Mac};
 use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use rand::Rng;
@@ -2126,6 +2127,7 @@ enum RegIntrinsic {
     HmacSha256String,
     GlobalConfigNew,
     GlobalConfigRuleCount,
+    GzipDecompressBytes,
     HexDecode,
     HexEncode,
     HexEncodeString,
@@ -4227,6 +4229,7 @@ impl RegLowerer<'_> {
                         return Ok(dst);
                     }
                     ("GlobalConfig", "rule_count") => RegIntrinsic::GlobalConfigRuleCount,
+                    ("Gzip", "decompress_bytes") => RegIntrinsic::GzipDecompressBytes,
                     ("Hex", "decode") => RegIntrinsic::HexDecode,
                     ("Hex", "encode") => RegIntrinsic::HexEncode,
                     ("Hex", "encode_string") => RegIntrinsic::HexEncodeString,
@@ -9757,6 +9760,17 @@ impl RegVm {
             RegIntrinsic::GlobalConfigRuleCount => {
                 let global = intrinsic_arg(&self.stack, base, args, 0)?;
                 Ok(VmValue::Int(expect_global_config_rule_count(global)?))
+            }
+            RegIntrinsic::GzipDecompressBytes => {
+                let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let mut decoder = GzDecoder::new(value);
+                let mut out = Vec::new();
+                Ok(json_result(
+                    decoder
+                        .read_to_end(&mut out)
+                        .map(|_| VmValue::Bytes(Rc::new(out)))
+                        .map_err(|error| decode_error_value(error.to_string())),
+                ))
             }
             RegIntrinsic::HexDecode => {
                 let text = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;

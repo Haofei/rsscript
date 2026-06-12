@@ -1368,6 +1368,25 @@ fn main() -> Unit {
         Err(error) => Log.write(message: read DecodeError.message(error: read error))
     }
 
+    match Hex.decode(text: read "1f8b08000000000002ff4b4c4a0600c241243503000000") {
+        Ok(gzipped) => {
+            match Gzip.decompress_bytes(value: read gzipped) {
+                Ok(value) => {
+                    Log.write(message: read String.from_int(value: Bytes.len(value: read value)))
+                    Log.write(message: read Hex.encode(value: read value))
+                }
+                Err(error) => Log.write(message: read DecodeError.message(error: read error))
+            }
+        }
+        Err(error) => Log.write(message: read DecodeError.message(error: read error))
+    }
+
+    let bad_gzip = String.to_bytes(value: read "not gzip")
+    match Gzip.decompress_bytes(value: read bad_gzip) {
+        Ok(value) => Log.write(message: read String.from_int(value: Bytes.len(value: read value)))
+        Err(error) => Log.write(message: read DecodeError.message(error: read error))
+    }
+
     let component = Url.encode_component(value: read "a b/é?x=1")
     Log.write(message: read component)
 
