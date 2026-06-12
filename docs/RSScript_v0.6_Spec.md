@@ -36,6 +36,35 @@ Package/REIR integration:
     propagation.
 ```
 
+### Changes since the v0.6 baseline
+
+```text
+Value-semantics protocols and derives (§14.6, §20.1 L) — IMPLEMENTED:
+  - Compiler-owned protocols `Clone`, `Eq`, `Ord`, `Hashable` with their
+    contracts in stdlib (`clone/`, `cmp/`, `hash/`).
+  - `derives(...)` clause on struct/sum: accepted set is Debug, Clone, Eq,
+    Ord, Hash, JsonEncode, JsonDecode, Schema, ReviewSchema. Field-level
+    derive support is checked in RSScript before lowering; resources accept
+    only Debug/Schema/ReviewSchema.
+  - `Clone.clone<T>(self: read x) -> fresh T` closes the read-borrow clone
+    gap; `String.clone` and per-type synthesized `.clone()` are the same
+    managed-value copy.
+  - `Map<K,V>` keys and `Set<K>` elements are bound by `Hashable`; a
+    non-hashable key is rejected in RSScript with a `derives(Eq, Hash)` fix.
+
+Numeric surface (§18.2) — IMPLEMENTED:
+  - `Math` module: Int intrinsics (abs/min/max/clamp/pow) and Float intrinsics
+    (abs/min/max/clamp/pow, exp/exp2/log/log2/sin/cos/tanh, sqrt, trunc_float,
+    floor/ceil/round).
+  - Scalar conversions/inspection: `Int.to_float`, `Int.to_string`,
+    `Float.to_string`, `Float.is_nan`/`is_finite`/`is_infinite`,
+    `String.from_float`, `String.parse_float`.
+
+Soundness/feature fixes folded into the prose (see BUGS.md RSS-1…RSS-13):
+  - Nested generics, sound payload-variant construction, borrowed-match
+    payload extraction, callable clone, let-mut clone of read-param init.
+```
+
 ---
 
 ## Constitution
@@ -2986,6 +3015,82 @@ safety, blanket implementations, associated types, and auto method resolution
 must not leak into source, diagnostics, `.rssi` contracts, package metadata, or
 review evidence.
 
+#### Compiler-owned protocols and `derives`
+
+A small, fixed set of protocols are **compiler-owned**: their contract is
+declared in `stdlib/` but satisfaction is produced by the compiler from a
+`derives(...)` clause on a type declaration rather than written by hand. This is
+the implemented form of the "compiler-owned derives" direction (§20.1 L) for the
+value-semantics protocols. The shipped derives are:
+
+```text
+Debug        structural debug rendering (the implicit default on every type,
+             including resources)
+Clone        deep, explicit value copy (protocol Clone, §below)
+Eq           total structural equality (protocol Eq)
+Ord          lexicographic ordering over declared fields/variants; implies Eq
+Hash         structural hash; with Eq this satisfies protocol Hashable
+JsonEncode   compiler-owned serialization marker (lowers to audited serde)
+JsonDecode   compiler-owned deserialization marker (lowers to audited serde)
+Schema       review/schema marker; introduces no executable behavior
+ReviewSchema review/schema marker; introduces no executable behavior
+```
+
+The value protocols and their contracts are:
+
+```rust
+protocol Clone    { fn clone(self: read Self) -> fresh Self }
+protocol Eq       { fn equals(self: read Self, other: read Self) -> Bool }
+protocol Ord      { fn compare(self: read Self, other: read Self) -> Int }
+protocol Hashable { fn hash_value(self: read Self) -> Int }
+```
+
+A managed `struct` or `sum` satisfies one of these by listing it in
+`derives(...)`; the compiler expands the derive into a structural implementation
+over every field. The builtin value scalars satisfy these protocols directly
+with no derive, with one deliberate exception: every value scalar (`Int`,
+`Float`, `String`, `Bool`, `Char`, …) is `Clone`, but `Float`/`Float32`/`Float64`
+are **not** `Eq`, `Ord`, or `Hashable` (IEEE-754 equality is not total), so a
+`Float` may not be a `Map`/`Set` key and a `derives(Eq)` over a `Float` field is
+rejected.
+
+```rust
+struct User derives(Eq, Hash, Clone) {
+    id: Int
+    name: String
+}
+```
+
+Rules that hold for compiler-owned derives:
+
+```text
+closed set       only the names listed above are accepted; any other name is
+                 rejected with an "unsupported derive" diagnostic.
+field-checked    every field of a derived type must itself support the derive.
+                 A derive over a non-supporting field (e.g. `Eq` over a `Float`
+                 field) is rejected with an RSScript diagnostic before lowering,
+                 not as a leaked rustc trait-bound error.
+Ord implies Eq   `derives(Ord)` also provides `Eq`; `Hashable` requires
+                 `derives(Hash)` together with `Eq` (so `derives(Eq, Hash)` or
+                 `derives(Ord, Hash)`), enforcing "equal values hash equal".
+resources        a `resource` supports only `Debug`, `Schema`, and `ReviewSchema`.
+                 Value derives (`Clone`, `Eq`, `Ord`, `Hash`, `JsonEncode`,
+                 `JsonDecode`) on a resource are rejected: they would copy or
+                 compare a move-only RAII value.
+pure contract    these protocols introduce no mutation, retention, native, or
+                 unsafe boundary, and add no capability gate.
+```
+
+`Clone.clone<T>(self: read x)` copies a value out of a shared (`read`) borrow
+into a `fresh` owned value. This closes the "clone gap" where a `read` field or
+`read` parameter cannot otherwise be moved into a constructor or a collection;
+`String.clone` and the per-type `.clone()` synthesized for any `derives(Clone)`
+type are the same managed-value copy.
+
+`Hashable` is the bound on `Map<K, V>` keys and `Set<K>` elements (§18.2): a
+non-hashable key is rejected in RSScript with a `derives(Eq, Hash)` suggestion
+instead of leaking a trait-bound error from the Rust backend.
+
 #### 14.6.1 Receiver-call shorthand
 
 A **receiver-call expression** is a syntactic shorthand for a qualified function
@@ -3764,6 +3869,7 @@ Unit
 Bool
 Int
 Float
+Math
 String
 Bytes
 Buffer
@@ -3800,6 +3906,7 @@ Span
 Log
 Test
 Assert
+Clone / Eq / Ord / Hashable (compiler-owned value protocols, §14.6)
 ```
 
 The prototype ships these signatures as ordinary bundled `.rssi` files under
@@ -4039,9 +4146,60 @@ pub fn Json.array_fold<T: Struct>(
 ) -> Result<fresh T, JsonError>
 ```
 
+The scalar conversion and `Float` inspection surface covers `Int`/`Float`/`String`
+interchange and floating-point classification. All are `pure`:
+
+```rust
+pub fn Int.to_string(value: read Int) -> fresh String
+pub fn Int.to_float(value: read Int) -> Float
+
+pub fn Float.to_string(value: read Float) -> fresh String
+pub fn Float.is_nan(value: read Float) -> Bool
+pub fn Float.is_finite(value: read Float) -> Bool
+pub fn Float.is_infinite(value: read Float) -> Bool
+
+pub fn String.from_float(value: Float) -> fresh String
+pub fn String.parse_float(value: read String) -> Option<Float>
+```
+
+The `Math` core surface provides `Int` and `Float` numeric intrinsics. They are
+pure value functions with no capability gate, lowering to ordinary Rust `f64`/`i64`
+operations in the backend (and to direct VM opcodes under the register VM):
+
+```rust
+pub fn Math.abs(value: Int) -> Int
+pub fn Math.min(left: Int, right: Int) -> Int
+pub fn Math.max(left: Int, right: Int) -> Int
+pub fn Math.clamp(value: Int, min: Int, max: Int) -> Int
+pub fn Math.pow(base: Int, exponent: Int) -> Int
+
+pub fn Math.abs_float(value: Float) -> Float
+pub fn Math.min_float(left: Float, right: Float) -> Float
+pub fn Math.max_float(left: Float, right: Float) -> Float
+pub fn Math.clamp_float(value: Float, min: Float, max: Float) -> Float
+pub fn Math.pow_float(base: Float, exponent: Float) -> Float
+
+pub fn Math.exp(value: Float) -> Float
+pub fn Math.exp2(value: Float) -> Float
+pub fn Math.log(value: Float) -> Float
+pub fn Math.log2(value: Float) -> Float
+pub fn Math.sin(value: Float) -> Float
+pub fn Math.cos(value: Float) -> Float
+pub fn Math.tanh(value: Float) -> Float
+
+pub fn Math.sqrt(value: Float) -> Float
+pub fn Math.trunc_float(value: Float) -> Float
+pub fn Math.floor(value: Float) -> Int
+pub fn Math.ceil(value: Float) -> Int
+pub fn Math.round(value: Float) -> Int
+```
+
 The minimum `Path`, `Map`, and `Set` core surfaces cover package-manager-style
-path inspection and ordinary keyed/indexed working sets. `Map` and `Set` retain
-inserted non-Copy values by contract:
+path inspection and ordinary keyed/indexed working sets. A `Map<K, V>` key and a
+`Set<K>` element must satisfy the compiler-owned `Hashable` protocol (§14.6):
+a builtin scalar key, or a managed `struct`/`sum` that `derives(Eq, Hash)`. A
+non-hashable key is rejected in RSScript, not by the Rust backend. `Map` and
+`Set` retain inserted non-Copy values by contract:
 
 ```rust
 pub fn Path.from_string(value: read String) -> fresh Path
@@ -4179,6 +4337,136 @@ Error composition in RSScript is always explicit at the call site. Unlike Rust's
 `From`/`Into` implicit conversions, every error-boundary crossing requires a
 visible `map_error` call that a reviewer can audit. The `?` operator propagates
 errors within the same error type; crossing error types requires explicit mapping.
+
+The remaining bundled facades are review-visible library boundaries. Facades that
+touch the filesystem, time, environment, subprocess, randomness, encoding/regex
+engines, or telemetry are `native` (the effect is in every signature); pure value
+facades such as `Url` parsing and `Csv` row parsing are not. The signatures below
+are representative core surfaces, not the full bundled `.rssi`; the authoritative
+contracts live under `stdlib/`.
+
+Filesystem — `File` is a `resource` (move-only RAII, §6.4); path-level helpers are
+free functions:
+
+```rust
+resource File
+
+pub fn File.open(path: read Path) -> Result<File, FileError>
+pub fn File.open_read(path: read Path) -> Result<File, FileError>
+pub fn File.open_write(path: read Path) -> Result<File, FileError>
+pub fn File.read_all_string(file: mut File) -> Result<String, FileError>
+pub fn File.read_into(file: mut File, buffer: mut Buffer) -> Result<Bool, FileError>
+pub fn File.write_string(file: mut File, text: read String) -> Result<Unit, FileError>
+pub fn File.write_buffer(file: mut File, buffer: read Buffer) -> Result<Unit, FileError>
+
+pub fn File.exists(path: read Path) -> Bool                              effects(native)
+pub fn File.read_string(path: read Path) -> Result<String, FileError>    effects(native)
+pub fn File.write_string_to_path(path: read Path, text: read String) -> Result<Unit, FileError>
+    effects(native)
+pub fn File.write_atomic(path: read Path, text: read String) -> Result<Unit, FileError>
+    effects(native)
+pub fn FileError.message(error: read FileError) -> String                effects(pure)
+
+pub native fn Directory.exists(path: read Path) -> Bool                  effects(native)
+pub native fn Directory.is_dir(path: read Path) -> Bool                  effects(native)
+pub native fn Directory.create_all(path: read Path) -> Result<Unit, FileError>
+    effects(native)
+pub native fn Directory.list_paths(path: read Path) -> Result<fresh List<Path>, FileError>
+    effects(native)
+pub native fn Directory.remove_dir_all(path: read Path) -> Result<Unit, FileError>
+    effects(native)
+pub native fn Directory.rename(from: read Path, to: read Path) -> Result<Unit, FileError>
+    effects(native)
+```
+
+JSON — parsing and typed field/path access return typed `JsonError`; encoding and
+field-builder helpers are `pure`. The full surface adds `field_*`/`at_*` accessors
+and `at_*_or` fallbacks:
+
+```rust
+struct JsonValue
+struct JsonLiteral
+
+pub fn Json.parse(text: read String) -> Result<fresh JsonValue, JsonError>
+pub fn Json.parse_file(path: read Path) -> Result<fresh JsonValue, JsonError>
+pub fn Json.decode<T: Struct>(value: read JsonValue) -> Result<fresh T, JsonError>
+pub fn Json.decode_text<T: Struct>(text: read String) -> Result<fresh T, JsonError>
+pub fn Json.to_string(value: read JsonValue) -> fresh String            effects(pure)
+pub fn Json.field(value: read JsonValue, name: read String) -> Result<fresh JsonValue, JsonError>
+pub fn Json.field_string(value: read JsonValue, name: read String) -> Result<String, JsonError>
+pub fn Json.at(value: read JsonValue, path: read String) -> Result<fresh JsonValue, JsonError>
+pub fn Json.at_int_or(value: read JsonValue, path: read String, fallback: Int) -> Int
+    effects(pure)
+```
+
+Time, environment, randomness, and subprocess facades are `native`:
+
+```rust
+struct Instant
+struct Duration
+
+pub native fn Clock.now() -> fresh Instant                              effects(native)
+pub native fn Clock.system_unix_ms() -> Int                            effects(native)
+pub native fn Instant.elapsed(start: read Instant) -> fresh Duration   effects(native)
+pub native fn Duration.ms(value: Int) -> fresh Duration                effects(native)
+pub native fn Duration.as_ms(value: read Duration) -> Int              effects(native)
+
+pub native fn Env.get(name: read String) -> Option<fresh String>       effects(native)
+pub native fn Env.get_or_default(name: read String, default: read String) -> fresh String
+    effects(native)
+pub native fn Env.current_dir() -> Result<fresh Path, FileError>       effects(native)
+pub native fn Env.home_dir() -> Option<fresh Path>                     effects(native)
+
+pub native fn Uuid.new_v4() -> fresh String                            effects(native)
+pub native fn Random.int(min: Int, max: Int) -> Int                    effects(native)
+pub native fn Random.float() -> Float                                  effects(native)
+pub native fn Random.bytes(len: Int) -> fresh Bytes                    effects(native)
+
+pub native fn Process.run_stdout(command: read String, args: read List<String>)
+    -> Result<String, String>                                         effects(native)
+pub native fn Process.run(command: read String, args: read List<String>)
+    -> Result<fresh ProcessOutput, String>                            effects(native)
+pub native fn Process.run_timeout(
+    command: read String, args: read List<String>, timeout_ms: Int,
+) -> Result<fresh ProcessOutput, String>                              effects(native)
+```
+
+Encoding, regex, and logging facades. `Base64`/`Hex`/`Url` component encoding and
+`Regex` are `native`; `Log` emission is a `native` telemetry boundary:
+
+```rust
+pub native fn Base64.encode(value: read String) -> fresh String        effects(native)
+pub native fn Base64.decode(text: read String) -> Result<fresh Bytes, DecodeError>
+    effects(native)
+pub native fn Hex.encode(value: read Bytes) -> fresh String            effects(native)
+pub native fn Url.encode_component(value: read String) -> fresh String  effects(native)
+
+pub native fn Regex.compile(pattern: read String) -> Result<fresh Regex, RegexError>
+    effects(native)
+pub native fn Regex.is_match(regex: read Regex, value: read String) -> Bool
+    effects(native)
+pub native fn Regex.captures(regex: read Regex, value: read String) -> fresh List<String>
+    effects(native)
+pub native fn Regex.replace_all(
+    regex: read Regex, value: read String, replacement: read String,
+) -> fresh String                                                     effects(native)
+
+pub fn Log.write(message: read String) -> Unit                         effects(native)
+pub fn Log.error(message: read String) -> Unit                         effects(native)
+pub fn Log.write_json(value: read JsonValue) -> Unit                   effects(native)
+```
+
+Pure value facades — `Url` parsing and `Csv` row parsing carry no `native` effect:
+
+```rust
+pub fn Url.from_string(value: read String) -> fresh Url
+pub fn Url.to_string(url: read Url) -> fresh String                    effects(pure)
+
+pub fn Csv.open_read(path: read Path) -> Result<File, CsvError>
+pub fn Csv.read_into(file: mut File, buffer: mut RowBuffer) -> Result<Unit, CsvError>
+pub fn Csv.parse_row(buffer: read RowBuffer) -> Result<fresh Row, CsvError>
+pub fn Row.field_string(row: read Row, index: Int) -> Result<String, CsvError>
+```
 
 Agent, GPU, model-client, and domain-specific network clients are use-case
 libraries, not language core. The bundled HTTP surface is intentionally only a
@@ -4534,11 +4822,20 @@ K. Explicit error composition (design principle — v0.6 implemented)
      anyhow/eyre-style erased errors (these hide error provenance from review).
 
 L. Compiler-owned derives (restricted code generation)
+   - Status: the value-semantics derives (`Clone`, `Eq`, `Ord`, `Hash`) and the
+     implicit `Debug` are IMPLEMENTED, together with the `Clone`/`Eq`/`Ord`/
+     `Hashable` protocols they satisfy (§14.6). `JsonEncode`/`JsonDecode`/
+     `Schema`/`ReviewSchema` are accepted derive names with serde/review-marker
+     semantics; remaining work here is package-level serialization review facts.
    - RSScript supports a limited set of compiler-owned derive directives on
      structs and sums:
 
        struct User derives(Debug, Clone, Eq, Ord, Hash, JsonEncode, JsonDecode, Schema) { ... }
 
+   - the accepted set is exactly Debug, Clone, Eq, Ord, Hash, JsonEncode,
+     JsonDecode, Schema, ReviewSchema; any other name is rejected. Every field of
+     a derived type must itself support the derive (checked in RSScript, not by
+     the Rust backend). Resources support only Debug, Schema, and ReviewSchema.
    - generated code must produce visible .rssi signatures and review facts.
    - generated code must not introduce hidden control flow, mutation, or
      resource acquisition.
