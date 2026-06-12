@@ -42,6 +42,9 @@ pub native fn HttpResponse.status(response: read HttpResponse) -> Int
 pub native fn HttpResponse.text(response: read HttpResponse) -> fresh String
     effects(native)
 
+pub native fn HttpResponse.bytes(response: read HttpResponse) -> fresh Bytes
+    effects(native)
+
 pub native fn HttpResponse.lines(response: read HttpResponse) -> fresh List<String>
     effects(native)
 

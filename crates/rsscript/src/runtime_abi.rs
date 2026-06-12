@@ -736,6 +736,11 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     ),
     runtime_intrinsic(
         "HttpResponse",
+        "bytes",
+        "rsscript_runtime::http_response_bytes",
+    ),
+    runtime_intrinsic(
+        "HttpResponse",
         "lines",
         "rsscript_runtime::http_response_lines",
     ),

@@ -2146,6 +2146,7 @@ enum RegIntrinsic {
     HttpRequestWithHeader,
     HttpRequestWithRetry,
     HttpRequestWithTimeout,
+    HttpResponseBytes,
     HttpResponseIsSuccess,
     HttpResponseLines,
     HttpResponseStatus,
@@ -4248,6 +4249,7 @@ impl RegLowerer<'_> {
                     ("HttpRequest", "with_header") => RegIntrinsic::HttpRequestWithHeader,
                     ("HttpRequest", "with_retry") => RegIntrinsic::HttpRequestWithRetry,
                     ("HttpRequest", "with_timeout") => RegIntrinsic::HttpRequestWithTimeout,
+                    ("HttpResponse", "bytes") => RegIntrinsic::HttpResponseBytes,
                     ("HttpResponse", "is_success") => RegIntrinsic::HttpResponseIsSuccess,
                     ("HttpResponse", "lines") => RegIntrinsic::HttpResponseLines,
                     ("HttpResponse", "status") => RegIntrinsic::HttpResponseStatus,
@@ -9881,6 +9883,12 @@ impl RegVm {
                 let mut request = expect_http_request_ref(request)?;
                 request.timeout_ms = timeout_ms;
                 Ok(request.to_value())
+            }
+            RegIntrinsic::HttpResponseBytes => {
+                let response = intrinsic_arg(&self.stack, base, args, 0)?;
+                let text = read_field_ref(response, "body")?;
+                let text = expect_string_ref(&text)?;
+                Ok(VmValue::Bytes(Rc::new(text.as_bytes().to_vec())))
             }
             RegIntrinsic::HttpResponseIsSuccess => {
                 let response = intrinsic_arg(&self.stack, base, args, 0)?;

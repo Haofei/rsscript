@@ -4232,6 +4232,7 @@ async fn main() -> Result<Unit, String> {
     match Http.get(url: read url) {
         Ok(response) => {
             Log.write(message: read HttpResponse.text(response: read response))
+            Log.write(message: read String.from_int(value: Bytes.len(value: read HttpResponse.bytes(response: read response))))
         }
         Err(error) => {
             Log.write(message: read HttpError.message(error: read error))

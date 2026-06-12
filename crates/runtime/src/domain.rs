@@ -745,6 +745,10 @@ pub fn http_response_text(response: &Response) -> String {
     response.body.clone()
 }
 
+pub fn http_response_bytes(response: &Response) -> Vec<u8> {
+    response.body.as_bytes().to_vec()
+}
+
 pub fn http_response_lines(response: &Response) -> Vec<String> {
     response.body.lines().map(str::to_string).collect()
 }
