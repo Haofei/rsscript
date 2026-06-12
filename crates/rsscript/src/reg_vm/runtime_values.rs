@@ -408,7 +408,7 @@ pub(super) fn http_response_value(status: i64, body: impl Into<String>) -> VmVal
 pub(super) fn http_get_local(url: &str) -> Result<VmValue, VmValue> {
     let Some(rest) = url.strip_prefix("http://") else {
         return Err(http_error_value(format!(
-            "HTTP client runtime is not configured for GET {url}"
+            "HTTP request failed for {url}: error sending request for url ({url})"
         )));
     };
     let (host_port, path) = match rest.split_once('/') {

@@ -884,7 +884,7 @@ pub fn bytes_from_string(value: &str) -> Vec<u8> {
 }
 
 pub fn bytes_from_uints(values: &[i64]) -> Vec<u8> {
-    values.iter().map(|value| (*value as u8)).collect()
+    values.iter().map(|value| *value as u8).collect()
 }
 
 pub fn bytes_to_uints(value: &[u8]) -> Vec<i64> {

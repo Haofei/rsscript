@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::async_runtime::{NativeAsyncPending, spawn_tokio_native};
+use crate::async_runtime::{NativeAsyncPending, run_pending, spawn_tokio_native};
 use crate::channel::{ChannelError, RssStream, stream_from_iterator};
 use std::io::{BufRead, Read};
 use std::str::Utf8Error;
@@ -19,6 +19,7 @@ pub struct Request {
 pub struct Response {
     status: i64,
     body: String,
+    body_bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -440,6 +441,7 @@ pub fn response_ok(body: &str) -> Result<Response, HttpError> {
     Ok(Response {
         status: 200,
         body: body.to_string(),
+        body_bytes: body.as_bytes().to_vec(),
     })
 }
 
@@ -452,9 +454,7 @@ pub fn response_body(response: &Response) -> String {
 }
 
 pub fn http_get(url: &str) -> Result<Response, HttpError> {
-    Err(HttpError {
-        message: format!("HTTP client runtime is not configured for GET {url}"),
-    })
+    run_pending(http_get_async(url))
 }
 
 pub fn http_get_async(url: &str) -> NativeAsyncPending<Result<Response, HttpError>> {
@@ -674,9 +674,11 @@ async fn http_request_async(
     let body = response.bytes().await.map_err(|error| HttpError {
         message: format!("failed to read HTTP response body from {url}: {error}"),
     })?;
+    let body_bytes = body.to_vec();
     Ok(Response {
         status,
-        body: String::from_utf8_lossy(&body).to_string(),
+        body: String::from_utf8_lossy(&body_bytes).to_string(),
+        body_bytes,
     })
 }
 
@@ -746,7 +748,7 @@ pub fn http_response_text(response: &Response) -> String {
 }
 
 pub fn http_response_bytes(response: &Response) -> Vec<u8> {
-    response.body.as_bytes().to_vec()
+    response.body_bytes.clone()
 }
 
 pub fn http_response_lines(response: &Response) -> Vec<String> {
@@ -1820,6 +1822,32 @@ mod tests {
 
         assert_eq!(response.status, 200);
         assert_eq!(response.body, "ready");
+        handle.join().expect("server thread should finish");
+    }
+
+    #[test]
+    fn http_get_sync_uses_reqwest_tokio_io_and_preserves_bytes() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("test listener should bind");
+        let addr = listener.local_addr().expect("listener addr should exist");
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("client should connect");
+            let mut request = [0_u8; 1024];
+            let read = stream.read(&mut request).expect("request should read");
+            let request = String::from_utf8_lossy(&request[..read]);
+            assert!(request.starts_with("GET /bytes HTTP/1.1"));
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\n\x00\xffA")
+                .expect("response should write");
+        });
+
+        let response = http_get(&format!("http://{addr}/bytes"))
+            .expect("sync HTTP GET should succeed");
+
+        assert_eq!(response.status, 200);
+        assert_eq!(http_response_bytes(&response), vec![0, 255, 65]);
         handle.join().expect("server thread should finish");
     }
 
