@@ -2165,7 +2165,12 @@ enum RegIntrinsic {
     MathCeil,
     MathClamp,
     MathClampFloat,
+    MathCos,
+    MathExp,
+    MathExp2,
     MathFloor,
+    MathLog,
+    MathLog2,
     MathMax,
     MathMaxFloat,
     MathMin,
@@ -2173,7 +2178,10 @@ enum RegIntrinsic {
     MathPow,
     MathPowFloat,
     MathRound,
+    MathSin,
     MathSqrt,
+    MathTanh,
+    MathTruncFloat,
     JsonArray,
     JsonArrayBools,
     JsonArrayContainsPrefix,
@@ -4251,7 +4259,12 @@ impl RegLowerer<'_> {
                     ("Math", "ceil") => RegIntrinsic::MathCeil,
                     ("Math", "clamp") => RegIntrinsic::MathClamp,
                     ("Math", "clamp_float") => RegIntrinsic::MathClampFloat,
+                    ("Math", "cos") => RegIntrinsic::MathCos,
+                    ("Math", "exp") => RegIntrinsic::MathExp,
+                    ("Math", "exp2") => RegIntrinsic::MathExp2,
                     ("Math", "floor") => RegIntrinsic::MathFloor,
+                    ("Math", "log") => RegIntrinsic::MathLog,
+                    ("Math", "log2") => RegIntrinsic::MathLog2,
                     ("Math", "max") => RegIntrinsic::MathMax,
                     ("Math", "max_float") => RegIntrinsic::MathMaxFloat,
                     ("Math", "min") => RegIntrinsic::MathMin,
@@ -4259,7 +4272,10 @@ impl RegLowerer<'_> {
                     ("Math", "pow") => RegIntrinsic::MathPow,
                     ("Math", "pow_float") => RegIntrinsic::MathPowFloat,
                     ("Math", "round") => RegIntrinsic::MathRound,
+                    ("Math", "sin") => RegIntrinsic::MathSin,
                     ("Math", "sqrt") => RegIntrinsic::MathSqrt,
+                    ("Math", "tanh") => RegIntrinsic::MathTanh,
+                    ("Math", "trunc_float") => RegIntrinsic::MathTruncFloat,
                     ("Json", "array") => RegIntrinsic::JsonArray,
                     ("Json", "array_bools") => RegIntrinsic::JsonArrayBools,
                     ("Json", "array_contains_prefix") => RegIntrinsic::JsonArrayContainsPrefix,
@@ -9970,8 +9986,23 @@ impl RegVm {
                 }
                 Ok(VmValue::Float(value.clamp(min, max)))
             }
+            RegIntrinsic::MathCos => Ok(VmValue::Float(
+                expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.cos(),
+            )),
+            RegIntrinsic::MathExp => Ok(VmValue::Float(
+                expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.exp(),
+            )),
+            RegIntrinsic::MathExp2 => Ok(VmValue::Float(
+                expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.exp2(),
+            )),
             RegIntrinsic::MathFloor => Ok(VmValue::Int(
                 expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.floor() as i64,
+            )),
+            RegIntrinsic::MathLog => Ok(VmValue::Float(
+                expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.ln(),
+            )),
+            RegIntrinsic::MathLog2 => Ok(VmValue::Float(
+                expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.log2(),
             )),
             RegIntrinsic::MathMax => {
                 let left = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -10013,8 +10044,17 @@ impl RegVm {
             RegIntrinsic::MathRound => Ok(VmValue::Int(
                 expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.round() as i64,
             )),
+            RegIntrinsic::MathSin => Ok(VmValue::Float(
+                expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.sin(),
+            )),
             RegIntrinsic::MathSqrt => Ok(VmValue::Float(
                 expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.sqrt(),
+            )),
+            RegIntrinsic::MathTanh => Ok(VmValue::Float(
+                expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.tanh(),
+            )),
+            RegIntrinsic::MathTruncFloat => Ok(VmValue::Float(
+                expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.trunc(),
             )),
             RegIntrinsic::JsonArray => {
                 let items = expect_string_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;

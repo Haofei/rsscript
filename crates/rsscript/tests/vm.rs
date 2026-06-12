@@ -317,6 +317,10 @@ fn main() -> Unit {
     Log.write(message: read String.from_float(value: Math.pow_float(base: 2.0, exponent: 3.0)))
     Log.write(message: read String.from_float(value: Math.sqrt(value: 9.0)))
     Log.write(message: read Float.to_string(value: read Math.sqrt(value: 16.0)))
+    Log.write(message: read String.from_float(value: Math.cos(value: 0.0)))
+    Log.write(message: read String.from_float(value: Math.exp(value: 0.0)))
+    Log.write(message: read String.from_float(value: Math.log(value: 1.0)))
+    Log.write(message: read String.from_float(value: Math.tanh(value: 0.0)))
     let finite = 1.5
     let infinite = 1.0 / 0.0
     let nan = 0.0 / 0.0
@@ -369,6 +373,22 @@ fn main() -> Unit {
 "#;
 
     assert_reg_vm_matches_compiled_backend("reg-vm-math-random-uuid.rss", source, []);
+}
+
+#[test]
+fn compiled_backend_accepts_inline_read_copy_expression_args() {
+    let source = r#"
+features: local
+
+fn main() -> Unit {
+    local xs = List.new<Int>()
+    List.push<Int>(list: mut xs, value: read (0 - 1))
+    Log.write(message: read String.from_int(value: List.get<Int>(list: read xs, index: 0)))
+    return Unit
+}
+"#;
+
+    assert_reg_vm_matches_compiled_backend("reg-vm-inline-read-copy-expr.rss", source, []);
 }
 
 #[test]

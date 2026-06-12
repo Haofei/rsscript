@@ -2745,7 +2745,7 @@ impl<'a> RustLowerer<'a> {
                             lower_source_span(span)
                         )
                     } else {
-                        format!("&{}", self.lower_expr(value))
+                        format!("&({})", self.lower_expr(value))
                     }
                 }
                 DataEffect::Mut => {
@@ -3291,7 +3291,7 @@ impl<'a> RustLowerer<'a> {
                     // `mut`-param case just below.
                     rust_value_ident(name)
                 } else {
-                    format!("&{}", self.lower_expr(value))
+                    format!("&({})", self.lower_expr(value))
                 }
             }
             Expr::Effect {

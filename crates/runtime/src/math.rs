@@ -40,8 +40,40 @@ pub fn math_pow_float(base: f64, exponent: f64) -> f64 {
     base.powf(exponent)
 }
 
+pub fn math_exp2(value: f64) -> f64 {
+    value.exp2()
+}
+
+pub fn math_log2(value: f64) -> f64 {
+    value.log2()
+}
+
+pub fn math_sin(value: f64) -> f64 {
+    value.sin()
+}
+
+pub fn math_cos(value: f64) -> f64 {
+    value.cos()
+}
+
+pub fn math_exp(value: f64) -> f64 {
+    value.exp()
+}
+
+pub fn math_log(value: f64) -> f64 {
+    value.ln()
+}
+
+pub fn math_tanh(value: f64) -> f64 {
+    value.tanh()
+}
+
 pub fn math_sqrt(value: f64) -> f64 {
     value.sqrt()
+}
+
+pub fn math_trunc_float(value: f64) -> f64 {
+    value.trunc()
 }
 
 pub fn math_floor(value: f64) -> i64 {

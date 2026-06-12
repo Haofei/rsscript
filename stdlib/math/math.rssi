@@ -18,7 +18,23 @@ pub fn Math.clamp_float(value: Float, min: Float, max: Float) -> Float
 
 pub fn Math.pow_float(base: Float, exponent: Float) -> Float
 
+pub fn Math.exp2(value: Float) -> Float
+
+pub fn Math.log2(value: Float) -> Float
+
+pub fn Math.sin(value: Float) -> Float
+
+pub fn Math.cos(value: Float) -> Float
+
+pub fn Math.exp(value: Float) -> Float
+
+pub fn Math.log(value: Float) -> Float
+
+pub fn Math.tanh(value: Float) -> Float
+
 pub fn Math.sqrt(value: Float) -> Float
+
+pub fn Math.trunc_float(value: Float) -> Float
 
 pub fn Math.floor(value: Float) -> Int
 
