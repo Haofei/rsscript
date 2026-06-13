@@ -1996,8 +1996,12 @@ impl Analyzer<'_> {
                     self.check_match_exhaustiveness_block(&arm.body);
                 }
             }
-            HirStmt::Expr(expr) | HirStmt::Assign { value: expr, .. } => {
-                self.check_match_exhaustiveness_expr(expr)
+            HirStmt::Expr(expr) => self.check_match_exhaustiveness_expr(expr),
+            HirStmt::Assign { target, value, .. } => {
+                for read in crate::hir::assign_target_reads(target) {
+                    self.check_match_exhaustiveness_expr(read);
+                }
+                self.check_match_exhaustiveness_expr(value);
             }
             HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
         }
@@ -3299,8 +3303,12 @@ impl Analyzer<'_> {
                     self.check_unknown_bindings_in_block(&arm.body, &mut arm_visible);
                 }
             }
-            HirStmt::Expr(value) | HirStmt::Assign { value, .. } => {
-                self.check_unknown_bindings_in_expr(value, visible)
+            HirStmt::Expr(value) => self.check_unknown_bindings_in_expr(value, visible),
+            HirStmt::Assign { target, value, .. } => {
+                for read in crate::hir::assign_target_reads(target) {
+                    self.check_unknown_bindings_in_expr(read, visible);
+                }
+                self.check_unknown_bindings_in_expr(value, visible);
             }
             HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
         }

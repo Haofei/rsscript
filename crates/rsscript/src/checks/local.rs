@@ -1041,9 +1041,12 @@ fn collect_closure_local_moved_uses_from_stmt(statement: &HirStmt, moved_uses: &
         | HirStmt::Return {
             value: Some(value), ..
         }
-        | HirStmt::Expr(value)
-        | HirStmt::Assign { value, .. } => {
-            collect_closure_local_moved_uses_from_expr(value, moved_uses)
+        | HirStmt::Expr(value) => collect_closure_local_moved_uses_from_expr(value, moved_uses),
+        HirStmt::Assign { target, value, .. } => {
+            for read in crate::hir::assign_target_reads(target) {
+                collect_closure_local_moved_uses_from_expr(read, moved_uses);
+            }
+            collect_closure_local_moved_uses_from_expr(value, moved_uses);
         }
         HirStmt::With { resource, body, .. } => {
             collect_closure_local_moved_uses_from_expr(resource, moved_uses);
@@ -1200,9 +1203,16 @@ fn collect_retained_closure_captures_from_stmt(
         | HirStmt::Return {
             value: Some(value), ..
         }
-        | HirStmt::Expr(value)
-        | HirStmt::Assign { value, .. } => {
+        | HirStmt::Expr(value) => {
             if let Some(state) = entry_state {
+                collect_retained_closure_captures_from_expr(value, state, captures);
+            }
+        }
+        HirStmt::Assign { target, value, .. } => {
+            if let Some(state) = entry_state {
+                for read in crate::hir::assign_target_reads(target) {
+                    collect_retained_closure_captures_from_expr(read, state, captures);
+                }
                 collect_retained_closure_captures_from_expr(value, state, captures);
             }
         }
@@ -2050,8 +2060,13 @@ fn collect_hir_stmt_idents(statement: &HirStmt, uses: &mut Vec<(String, Span)>) 
         | HirStmt::Return {
             value: Some(value), ..
         }
-        | HirStmt::Expr(value)
-        | HirStmt::Assign { value, .. } => collect_hir_expr_idents(value, uses),
+        | HirStmt::Expr(value) => collect_hir_expr_idents(value, uses),
+        HirStmt::Assign { target, value, .. } => {
+            for read in crate::hir::assign_target_reads(target) {
+                collect_hir_expr_idents(read, uses);
+            }
+            collect_hir_expr_idents(value, uses);
+        }
         HirStmt::With { resource, .. } => collect_hir_expr_idents(resource, uses),
         HirStmt::If { condition, .. } => collect_hir_expr_idents(condition, uses),
         HirStmt::Loop {
@@ -2084,8 +2099,13 @@ fn collect_hir_stmt_effect_events(statement: &HirStmt, events: &mut Vec<HirEffec
         | HirStmt::Return {
             value: Some(value), ..
         }
-        | HirStmt::Expr(value)
-        | HirStmt::Assign { value, .. } => collect_hir_expr_effect_events(value, events),
+        | HirStmt::Expr(value) => collect_hir_expr_effect_events(value, events),
+        HirStmt::Assign { target, value, .. } => {
+            for read in crate::hir::assign_target_reads(target) {
+                collect_hir_expr_effect_events(read, events);
+            }
+            collect_hir_expr_effect_events(value, events);
+        }
         HirStmt::With { resource, .. } => collect_hir_expr_effect_events(resource, events),
         HirStmt::If { condition, .. } => collect_hir_expr_effect_events(condition, events),
         HirStmt::Loop {
@@ -2310,8 +2330,13 @@ fn collect_hir_stmt_inline_capture_uses(statement: &HirStmt, uses: &mut Vec<(Str
         | HirStmt::Return {
             value: Some(value), ..
         }
-        | HirStmt::Expr(value)
-        | HirStmt::Assign { value, .. } => collect_hir_expr_inline_capture_uses(value, uses),
+        | HirStmt::Expr(value) => collect_hir_expr_inline_capture_uses(value, uses),
+        HirStmt::Assign { target, value, .. } => {
+            for read in crate::hir::assign_target_reads(target) {
+                collect_hir_expr_inline_capture_uses(read, uses);
+            }
+            collect_hir_expr_inline_capture_uses(value, uses);
+        }
         HirStmt::With { resource, .. } => collect_hir_expr_inline_capture_uses(resource, uses),
         HirStmt::If { condition, .. } => collect_hir_expr_inline_capture_uses(condition, uses),
         HirStmt::Loop {

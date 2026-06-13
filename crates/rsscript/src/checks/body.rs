@@ -150,8 +150,12 @@ fn check_explicit_closure_captures_stmt(
                 check_explicit_closure_captures_block(analyzer, &arm.body, binding_names);
             }
         }
-        HirStmt::Expr(expr) | HirStmt::Assign { value: expr, .. } => {
-            check_explicit_closure_captures_expr(analyzer, expr, binding_names)
+        HirStmt::Expr(expr) => check_explicit_closure_captures_expr(analyzer, expr, binding_names),
+        HirStmt::Assign { target, value, .. } => {
+            for read in crate::hir::assign_target_reads(target) {
+                check_explicit_closure_captures_expr(analyzer, read, binding_names);
+            }
+            check_explicit_closure_captures_expr(analyzer, value, binding_names);
         }
         HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
     }
@@ -1068,7 +1072,13 @@ fn collect_stmt_uses(statement: &HirStmt, uses: &mut HashSet<String>) {
                 collect_block_uses(&arm.body, uses);
             }
         }
-        HirStmt::Expr(expr) | HirStmt::Assign { value: expr, .. } => collect_expr_uses(expr, uses),
+        HirStmt::Expr(expr) => collect_expr_uses(expr, uses),
+        HirStmt::Assign { target, value, .. } => {
+            for read in crate::hir::assign_target_reads(target) {
+                collect_expr_uses(read, uses);
+            }
+            collect_expr_uses(value, uses);
+        }
         HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
     }
 }
@@ -3645,8 +3655,13 @@ fn collect_spawn_capture_idents_from_stmt(statement: &HirStmt, captures: &mut Ve
         | HirStmt::Return {
             value: Some(value), ..
         }
-        | HirStmt::Expr(value)
-        | HirStmt::Assign { value, .. } => collect_spawn_capture_idents(value, captures),
+        | HirStmt::Expr(value) => collect_spawn_capture_idents(value, captures),
+        HirStmt::Assign { target, value, .. } => {
+            for read in crate::hir::assign_target_reads(target) {
+                collect_spawn_capture_idents(read, captures);
+            }
+            collect_spawn_capture_idents(value, captures);
+        }
         HirStmt::With { resource, body, .. } => {
             collect_spawn_capture_idents(resource, captures);
             for statement in &body.statements {
