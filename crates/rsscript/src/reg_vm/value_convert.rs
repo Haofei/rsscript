@@ -653,3 +653,228 @@ pub(super) fn vm_map_key_from_native_value(value: NativeValue) -> VmMapKey {
         other => VmMapKey::String(Rc::new(format!("{other:?}"))),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! VM <-> native value marshalling: every variant in both directions, the
+    //! `Option` bridge, managed-unwrap, the closure rejection, and the map-key
+    //! fallback. This is the host boundary, so a missed arm here is a silently
+    //! wrong value at a native call.
+    use super::*;
+    use crate::vm_value::{VmClosure, VmNative};
+    use std::collections::{BTreeMap, VecDeque};
+
+    fn to_native(value: VmValue) -> NativeValue {
+        native_value_from_vm_value(value).expect("conversion should succeed")
+    }
+
+    #[test]
+    fn vm_to_native_scalars() {
+        assert_eq!(to_native(VmValue::Unit), NativeValue::Unit);
+        assert_eq!(to_native(VmValue::Int(7)), NativeValue::Int(7));
+        assert_eq!(to_native(VmValue::Float(1.5)), NativeValue::Float(1.5));
+        assert_eq!(to_native(VmValue::Bool(true)), NativeValue::Bool(true));
+        assert_eq!(to_native(VmValue::Char('x')), NativeValue::Char('x'));
+        assert_eq!(
+            to_native(VmValue::string("hi")),
+            NativeValue::String("hi".to_string())
+        );
+        assert_eq!(
+            to_native(VmValue::Bytes(Rc::new(vec![1, 2, 3]))),
+            NativeValue::Bytes(vec![1, 2, 3])
+        );
+        assert_eq!(
+            to_native(VmValue::Json(Rc::new(serde_json::json!({"a": 1})))),
+            NativeValue::Json(serde_json::json!({"a": 1}))
+        );
+    }
+
+    #[test]
+    fn vm_to_native_collections() {
+        let list = VmValue::List(Rc::new(RefCell::new(vec![
+            VmValue::Int(1),
+            VmValue::Int(2),
+        ])));
+        assert_eq!(
+            to_native(list),
+            NativeValue::List(vec![NativeValue::Int(1), NativeValue::Int(2)])
+        );
+
+        // `Deque` also marshals to a native list.
+        let deque = VmValue::Deque(Rc::new(RefCell::new(VecDeque::from(vec![VmValue::Int(9)]))));
+        assert_eq!(
+            to_native(deque),
+            NativeValue::List(vec![NativeValue::Int(9)])
+        );
+
+        let mut map: ValueMap = ValueMap::default();
+        map.insert(VmMapKey::Int(1), VmValue::string("one"));
+        assert_eq!(
+            to_native(VmValue::Map(Rc::new(RefCell::new(map)))),
+            NativeValue::Map(vec![(
+                NativeValue::Int(1),
+                NativeValue::String("one".to_string())
+            )])
+        );
+    }
+
+    #[test]
+    fn vm_to_native_struct_variant_native() {
+        let s = VmValue::Struct(Rc::new(VmStruct::from_named(
+            "Point",
+            [("x", VmValue::Int(1)), ("y", VmValue::Int(2))],
+        )));
+        match to_native(s) {
+            NativeValue::Struct { name, fields } => {
+                assert_eq!(name, "Point");
+                assert_eq!(fields["x"], NativeValue::Int(1));
+                assert_eq!(fields["y"], NativeValue::Int(2));
+            }
+            other => panic!("expected struct, got {other:?}"),
+        }
+
+        let v = VmValue::Variant(Rc::new(VmStruct::from_named(
+            "Tag",
+            [("v", VmValue::Bool(true))],
+        )));
+        match to_native(v) {
+            NativeValue::Variant { name, fields } => {
+                assert_eq!(name, "Tag");
+                assert_eq!(fields["v"], NativeValue::Bool(true));
+            }
+            other => panic!("expected variant, got {other:?}"),
+        }
+
+        let native = VmValue::Native(Rc::new(VmNative {
+            type_name: Rc::from("Handle"),
+            id: 42,
+        }));
+        assert_eq!(
+            to_native(native),
+            NativeValue::Native {
+                type_name: "Handle".to_string(),
+                id: 42
+            }
+        );
+    }
+
+    #[test]
+    fn vm_to_native_bridges_option() {
+        match to_native(VmValue::OptionSome(Box::new(VmValue::Int(5)))) {
+            NativeValue::Variant { name, fields } => {
+                assert_eq!(name, "Some");
+                assert_eq!(fields["value"], NativeValue::Int(5));
+            }
+            other => panic!("expected Some variant, got {other:?}"),
+        }
+        match to_native(VmValue::OptionNone) {
+            NativeValue::Variant { name, fields } => {
+                assert_eq!(name, "None");
+                assert!(fields.is_empty());
+            }
+            other => panic!("expected None variant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn vm_to_native_unwraps_managed() {
+        let managed = VmValue::Managed(Rc::new(RefCell::new(VmValue::Int(11))));
+        assert_eq!(to_native(managed), NativeValue::Int(11));
+    }
+
+    #[test]
+    fn vm_to_native_rejects_closure() {
+        let closure = VmValue::Closure(Rc::new(VmClosure {
+            function: 0,
+            captures: Vec::new(),
+        }));
+        match native_value_from_vm_value(closure) {
+            Err(EvalError::Runtime(message)) => assert!(message.contains("Closure"), "{message}"),
+            other => panic!("expected closure rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn native_to_vm_round_trips_every_variant() {
+        // A native list carrying one of each variant; round-tripping the whole
+        // thing exercises every arm of `vm_value_from_native_value` and the
+        // matching arm of `native_value_from_vm_value`. Single-entry map keeps
+        // ordering stable across the HashMap hop.
+        let mut struct_fields = BTreeMap::new();
+        struct_fields.insert("a".to_string(), NativeValue::Int(1));
+        let mut variant_fields = BTreeMap::new();
+        variant_fields.insert("b".to_string(), NativeValue::Bool(true));
+
+        let native = NativeValue::List(vec![
+            NativeValue::Unit,
+            NativeValue::Int(1),
+            NativeValue::Float(2.5),
+            NativeValue::Bool(false),
+            NativeValue::Char('q'),
+            NativeValue::String("s".to_string()),
+            NativeValue::Bytes(vec![7, 8]),
+            NativeValue::Json(serde_json::json!([1, 2])),
+            NativeValue::Map(vec![(
+                NativeValue::Int(3),
+                NativeValue::String("v".to_string()),
+            )]),
+            NativeValue::Struct {
+                name: "S".to_string(),
+                fields: struct_fields,
+            },
+            NativeValue::Variant {
+                name: "Custom".to_string(),
+                fields: variant_fields,
+            },
+            NativeValue::Native {
+                type_name: "H".to_string(),
+                id: 5,
+            },
+        ]);
+
+        let back = native_value_from_vm_value(vm_value_from_native_value(native.clone()))
+            .expect("round trip should succeed");
+        assert_eq!(native, back);
+    }
+
+    #[test]
+    fn native_to_vm_bridges_option_variants() {
+        let mut some_fields = BTreeMap::new();
+        some_fields.insert("value".to_string(), NativeValue::Int(8));
+        assert!(matches!(
+            vm_value_from_native_value(NativeValue::Variant {
+                name: "Some".to_string(),
+                fields: some_fields,
+            }),
+            VmValue::OptionSome(_)
+        ));
+        assert!(matches!(
+            vm_value_from_native_value(NativeValue::Variant {
+                name: "None".to_string(),
+                fields: BTreeMap::new(),
+            }),
+            VmValue::OptionNone
+        ));
+    }
+
+    #[test]
+    fn map_key_from_native_falls_back_to_string() {
+        assert_eq!(
+            vm_map_key_from_native_value(NativeValue::Bool(true)),
+            VmMapKey::Bool(true)
+        );
+        assert_eq!(
+            vm_map_key_from_native_value(NativeValue::Int(2)),
+            VmMapKey::Int(2)
+        );
+        assert_eq!(
+            vm_map_key_from_native_value(NativeValue::String("k".to_string())),
+            VmMapKey::String(Rc::new("k".to_string()))
+        );
+        // A non-scalar key has no VM key form, so it falls back to its debug string.
+        match vm_map_key_from_native_value(NativeValue::Float(1.0)) {
+            VmMapKey::String(s) => assert!(s.contains("Float"), "{s}"),
+            other => panic!("expected string fallback, got {other:?}"),
+        }
+    }
+}
