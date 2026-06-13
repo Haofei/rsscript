@@ -2175,7 +2175,7 @@ fn s3_iam_reir_demo_lowers_native_s3_binding_to_runtime_tokio_pending() {
     assert!(
         package
             .lib_rs
-            .contains("rsscript_runtime::pending_try(rss_s3_demo_native::put_object_start(&bucket, &key, &body)"),
+            .contains("rsscript_runtime::pending_try(rss_s3_demo_native::put_object_start(&(bucket), &(key), &(body)), move |_rsscript_unit| { rsscript_runtime::pending_ready(Ok(())) })"),
         "a leaf async fn awaiting the native S3 call should compose it via pending_try:\n{}",
         package.lib_rs
     );
@@ -5176,8 +5176,7 @@ native fn Native.write(message: read String) -> String
     let _ = fs::remove_dir_all(&new_dir);
 
     assert_ne!(
-        old_lock.packages[0].review_hash,
-        new_lock.packages[0].review_hash,
+        old_lock.packages[0].review_hash, new_lock.packages[0].review_hash,
         "a capability provider swap must change the review hash"
     );
 }
@@ -8409,7 +8408,10 @@ fn package_metadata_fails_closed_on_error_diagnostics() {
     let _ = fs::remove_dir_all(&dir);
 
     assert!(!report.ok, "metadata of an erroring package must not be ok");
-    assert!(!report.written, "authoritative artifacts must not be written");
+    assert!(
+        !report.written,
+        "authoritative artifacts must not be written"
+    );
     assert!(
         !reir_written,
         "REIR bundle must not be written for an erroring package"
@@ -8426,10 +8428,9 @@ fn package_metadata_fails_closed_on_error_diagnostics() {
 
 #[test]
 fn package_review_markdown_lists_capabilities_by_risk() {
-    let review = review_package_dir(
-        &common::workspace_root().join("examples/capability-review-demo/after"),
-    )
-    .expect("demo review should succeed");
+    let review =
+        review_package_dir(&common::workspace_root().join("examples/capability-review-demo/after"))
+            .expect("demo review should succeed");
     let markdown = rsscript::format_package_review_markdown(&review);
     assert!(markdown.contains("## RSScript review:"));
     assert!(markdown.contains("### Capabilities (by risk)"));

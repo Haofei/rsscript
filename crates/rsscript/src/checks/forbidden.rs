@@ -1,8 +1,8 @@
-use crate::text_util::type_root_name;
 use crate::analyzer::Analyzer;
 use crate::diagnostic::{Diagnostic, code};
 use crate::hir::{HirBlock, HirExpr, HirStmt};
 use crate::syntax::ast::{BinaryOp, FunctionDecl, Item};
+use crate::text_util::type_root_name;
 
 pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
     check_operator_overload_attempts(analyzer);
@@ -568,4 +568,3 @@ fn is_numeric_type(type_name: &str) -> bool {
             | "Float64"
     )
 }
-

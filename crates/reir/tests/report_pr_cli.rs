@@ -98,8 +98,9 @@ fn report_pr_cli_matches_s3_demo_golden_comment() {
         .output()
         .expect("reir report-pr command should run");
 
-    let expected = fs::read_to_string(workspace.join("examples/demos/s3-iam-reir/expected/pr-comment.md"))
-        .expect("golden PR comment should be readable");
+    let expected =
+        fs::read_to_string(workspace.join("examples/demos/s3-iam-reir/expected/pr-comment.md"))
+            .expect("golden PR comment should be readable");
     let stdout = String::from_utf8(report_pr.stdout).expect("report-pr stdout should be utf-8");
     assert_eq!(stdout, expected);
     assert!(

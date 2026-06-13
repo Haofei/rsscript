@@ -24,7 +24,10 @@ fn malformed_corpus_never_panics_and_fails_closed() {
         let name = path.display().to_string();
         let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         let result = std::panic::catch_unwind(|| rsscript::analyze_source(&name, &source));
-        assert!(result.is_ok(), "analyzer panicked on malformed input {name}");
+        assert!(
+            result.is_ok(),
+            "analyzer panicked on malformed input {name}"
+        );
         let diagnostics = result.unwrap();
         if !file_name.starts_with("gap-") {
             assert!(

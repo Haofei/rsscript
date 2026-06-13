@@ -146,4 +146,3 @@ pub(crate) fn split_top_level_type_args(args: &str) -> Vec<&str> {
     }
     parts
 }
-

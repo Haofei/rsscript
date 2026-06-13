@@ -1,4 +1,4 @@
-use crate::text_util::{strip_fresh_type, split_top_level_type_args};
+use crate::text_util::{split_top_level_type_args, strip_fresh_type};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::diagnostic::Span;
@@ -2468,7 +2468,6 @@ fn is_fresh_match_scrutinee(expr: &HirExpr) -> bool {
         _ => false,
     }
 }
-
 
 fn hir_expr_ident_name(expr: &HirExpr) -> Option<&str> {
     match expr {

@@ -1552,9 +1552,6 @@ pub(super) fn rust_qualified_function_ident(namespace: &str, name: &str) -> Stri
         .join("_")
 }
 
-
-
-
 pub(super) fn rust_path_segment(segment: &str) -> String {
     if let Some((head, tail)) = segment.split_once("::<") {
         format!("{}::<{}", rust_ident(head), tail)

@@ -1,4 +1,6 @@
-use crate::text_util::{split_top_level_type_args, strip_fresh_type, type_arg_names, type_root_name};
+use crate::text_util::{
+    split_top_level_type_args, strip_fresh_type, type_arg_names, type_root_name,
+};
 use std::collections::{HashMap, HashSet};
 
 use crate::diagnostic::Span;
@@ -619,8 +621,7 @@ impl Hir {
                     // Mirror rust_lower's derive emission: an omitted derive list defaults to
                     // Debug+Clone for non-resource types, so those are cloneable too.
                     if type_decl.derives.iter().any(|d| d == "Clone")
-                        || (type_decl.derives.is_empty()
-                            && type_decl.kind != TypeKind::Resource)
+                        || (type_decl.derives.is_empty() && type_decl.kind != TypeKind::Resource)
                     {
                         self.clone_types.insert(type_decl.name.clone());
                     }
@@ -2868,7 +2869,6 @@ fn substitute_type_params(type_name: &str, substitutions: &HashMap<String, Strin
     format!("{root}<{args}>")
 }
 
-
 fn builtin_generic_type_params(root: &str) -> Option<Vec<&'static str>> {
     match root {
         "List" | "Set" | "Option" | "ResourcePool" | "Channel" | "Sender" | "Receiver"
@@ -3092,7 +3092,6 @@ fn collect_struct_pattern_binding_types(
     }
     bindings
 }
-
 
 fn classify_block_return_expr(
     hir: &Hir,
@@ -3348,7 +3347,6 @@ fn type_ref_name(ty: &TypeRef) -> String {
         name
     }
 }
-
 
 fn record_duplicate_symbol(
     duplicates: &mut Vec<DuplicateSymbol>,

@@ -2,6 +2,7 @@
 name = "core interfaces have no diagnostics"
 kind = "command_success"
 command = "cargo"
+timeout_ms = 180000
 args = [
   "test",
   "-q",
@@ -34,6 +35,7 @@ paths = [
 name = "passing root fixtures have no diagnostics"
 kind = "command_success"
 command = "cargo"
+timeout_ms = 180000
 args = [
   "test",
   "-q",

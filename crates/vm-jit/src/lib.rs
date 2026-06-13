@@ -1,13 +1,17 @@
-//! Native (Cranelift) baseline JIT for the RSScript register VM's integer /
+//! Native (Cranelift) baseline JIT for the RSScript register VM's numeric /
 //! boolean / control-flow core — Phase 2 of `docs/jit-roadmap.md`.
 //!
 //! # What it compiles
 //!
-//! A [`JitFunction`] is a stable, versioned slice of the VM's bytecode: the
-//! subset that operates purely on unboxed `i64` registers (integers, and booleans
-//! represented as `0`/`1`) with no calls, heap, async, or side effects. The main
-//! `rsscript` crate translates an eligible `RegFunction` into this IR; everything
-//! outside the subset stays on the interpreter (per-function fallback).
+//! A [`JitFunction`] is a stable, versioned slice of the VM's bytecode: the subset
+//! that operates on unboxed scalar registers — `i64` (integers, and booleans as
+//! `0`/`1`) and `f64` (floats) — plus *side-effect-free* heap **reads** of `Int`
+//! struct fields and list elements (via [`HostHelpers`]). It has no heap writes,
+//! no general calls, no async, and no other side effects. The main `rsscript` crate
+//! translates an eligible `RegFunction` into this IR; everything outside the subset
+//! stays on the interpreter (per-function fallback). [`NativeModule::compile`]
+//! re-validates the IR ([`validate`]) before codegen, so a malformed producer fails
+//! as a clean [`JitError`] rather than panicking or miscompiling.
 //!
 //! # Why a separate crate
 //!
@@ -23,9 +27,13 @@
 //! are language-level runtime errors). Rather than reproduce those error paths in
 //! native code, the generated function **bails** (returns "not completed") on any
 //! such edge — overflow, division by zero, `i64::MIN / -1`, or an out-of-range
-//! shift. Because the compiled subset is side-effect-free, the caller can then
-//! simply re-run the function on the interpreter, which is the single source of
-//! semantic truth. So the native tier can only ever be *faster*, never different.
+//! shift — and likewise on a heap read the helper can't satisfy (wrong type or out
+//! of bounds, signalled via the bail flag). Float arithmetic never traps (it
+//! mirrors the interpreter's `f64` semantics, NaN/±inf included), so it needs no
+//! bail. Because the compiled subset is side-effect-free (reads only), the caller
+//! can then simply re-run the function on the interpreter, which is the single
+//! source of semantic truth. So the native tier can only ever be *faster*, never
+//! different.
 
 use cranelift_codegen::Context;
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
@@ -35,20 +43,30 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{FuncId, Linkage, Module, default_libcall_names};
 
+/// `(struct_handle, slot) -> i64`: the struct's `slot`-th field as an `Int`.
+pub type FieldIntFn = extern "C" fn(i64, i64) -> i64;
+/// `(list_handle) -> i64`: list length.
+pub type ListLenFn = extern "C" fn(i64) -> i64;
+/// `(list_handle, index) -> i64`: the list element at `index` as an `Int`.
+pub type ListGetIntFn = extern "C" fn(i64, i64) -> i64;
+
 /// Host helper functions the compiled code calls to read heap values (struct
 /// fields, list elements) that don't fit in a scalar register. The `rsscript`
-/// crate supplies these `extern "C"` pointers; they look the value up in a
+/// crate supplies these `extern "C"` functions; they look the value up in a
 /// per-call table the VM populates and return it unboxed as `i64`, signalling any
 /// type/bounds mismatch out-of-band (the VM checks and falls back). The native
 /// code just calls and uses the result.
+///
+/// These are **typed** function pointers, not raw `*const u8`: a safe caller can
+/// only supply a real `extern "C"` function with the matching signature, so the
+/// raw-address-to-symbol conversion (which is the part with an actual safety
+/// obligation) stays private to this crate. The conversion to the `*const u8`
+/// that Cranelift's symbol table wants happens in [`NativeModule::new`].
 #[derive(Clone, Copy)]
 pub struct HostHelpers {
-    /// `(struct_handle, slot) -> i64`: the struct's `slot`-th field as an `Int`.
-    pub field_int: *const u8,
-    /// `(list_handle) -> i64`: list length.
-    pub list_len: *const u8,
-    /// `(list_handle, index) -> i64`: the list element at `index` as an `Int`.
-    pub list_get_int: *const u8,
+    pub field_int: FieldIntFn,
+    pub list_len: ListLenFn,
+    pub list_get_int: ListGetIntFn,
 }
 
 /// Version of the [`JitInstr`]/[`JitFunction`] IR this crate consumes. The
@@ -337,9 +355,12 @@ impl NativeModule {
             .map_err(|e| err("isa finish", e))?;
         let mut builder = JITBuilder::with_isa(isa, default_libcall_names());
         // Register the host helper addresses so imported calls link to them.
-        builder.symbol("rss_jit_field_int", helpers.field_int);
-        builder.symbol("rss_jit_list_len", helpers.list_len);
-        builder.symbol("rss_jit_list_get_int", helpers.list_get_int);
+        // The typed `extern "C"` pointers become the `*const u8` Cranelift's symbol
+        // table wants here, where this crate owns the obligation that the address
+        // matches the imported signature declared just below.
+        builder.symbol("rss_jit_field_int", helpers.field_int as *const u8);
+        builder.symbol("rss_jit_list_len", helpers.list_len as *const u8);
+        builder.symbol("rss_jit_list_get_int", helpers.list_get_int as *const u8);
         let mut module = JITModule::new(builder);
         let imports = HostFuncs {
             field_int: declare_import(&mut module, "rss_jit_field_int", 2)?,
@@ -359,6 +380,10 @@ impl NativeModule {
 
     /// Compile `function` to native code and return a handle to call it.
     pub fn compile(&mut self, function: &JitFunction) -> Result<CompiledId, JitError> {
+        // `JitFunction` is a public, versioned surface: a malformed producer must
+        // fail cleanly here, not panic inside `build_function` (out-of-range index)
+        // or trip Cranelift's verifier (a type mismatch) deep in codegen.
+        validate(function)?;
         let ptr_ty = self.module.target_config().pointer_type();
         self.module.clear_context(&mut self.ctx);
         self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // args ptr
@@ -402,29 +427,243 @@ impl NativeModule {
     }
 
     /// Run a compiled function. Returns `Some(result)` on completion, or `None`
-    /// when the native code bailed (an overflow/edge it leaves to the
-    /// interpreter). This is the **safe** boundary: the only `unsafe` is the call
-    /// through a pointer this module emitted with the matching ABI, and `args`
-    /// is passed as a read-only slice.
-    /// `bail_ptr` points at a `u8` the caller resets to `0` before the call; host
-    /// helpers set it to `1` on an unsatisfiable heap read, and the generated code
-    /// branches to fallback as soon as it sees it set. Returns `None` (fallback) on
-    /// either a guard bail or a helper bail.
-    // `call` is the deliberate *safe* boundary (see the type docs): marking it
-    // `unsafe` would force the `#![forbid(unsafe_code)]` consumer into `unsafe`.
-    // `bail_ptr` must point at a readable `u8` valid for the call (the consumer
-    // passes a thread-local's address); the generated code only ever loads it.
-    #[allow(clippy::not_unsafe_ptr_arg_deref)]
-    pub fn call(&self, id: CompiledId, args: &[i64], bail_ptr: *const u8) -> Option<i64> {
+    /// when the native code bailed and the interpreter should re-run the function —
+    /// either a guard bail (overflow/divide-by-zero edge) or a host-helper bail
+    /// (an unsatisfiable heap read; see [`signal_bail`]).
+    ///
+    /// This is a **fully safe** boundary: it takes no raw pointers. The bail flag
+    /// is a per-thread `u8` owned by this crate; `call` resets it, passes its own
+    /// address into the generated code, and reports a set flag as a fallback. The
+    /// only `unsafe` is the indirect call through a pointer this module emitted with
+    /// the matching ABI, with every pointer it passes derived from owned locals.
+    pub fn call(&self, id: CompiledId, args: &[i64]) -> Option<i64> {
         let f = self.funcs[id.0];
         let mut out: i64 = 0;
-        // SAFETY: `f` was produced by `compile` with the `CompiledAbi` signature;
-        // it reads `args.len()` i64s from `args.as_ptr()`, writes one i64 to
-        // `&mut out`, and only ever loads (never stores) the `u8` at `bail_ptr`.
-        // The generated code never retains the pointers.
-        let completed = unsafe { f(args.as_ptr(), args.len(), &mut out as *mut i64, bail_ptr) };
-        if completed != 0 { Some(out) } else { None }
+        BAIL_FLAG.with(|bail| {
+            bail.set(0);
+            let bail_ptr = bail.as_ptr() as *const u8;
+            // SAFETY: `f` was produced by `compile` with the `CompiledAbi`
+            // signature; it reads `args.len()` i64s from `args.as_ptr()`, writes
+            // one i64 to `&mut out`, and only ever loads (never stores) the `u8` at
+            // `bail_ptr` — this thread's `BAIL_FLAG` cell, valid for the call. The
+            // generated code never retains any of the pointers.
+            let completed = unsafe { f(args.as_ptr(), args.len(), &mut out as *mut i64, bail_ptr) };
+            if completed != 0 && bail.get() == 0 {
+                Some(out)
+            } else {
+                None
+            }
+        })
     }
+}
+
+std::thread_local! {
+    /// Per-thread bail flag shared between the in-flight compiled call (which loads
+    /// it) and the host helpers (which set it via [`signal_bail`]). `call` resets it
+    /// before each invocation, so it is only meaningful during a call.
+    static BAIL_FLAG: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+
+/// Signal from a [`HostHelpers`] callback that the in-flight native call cannot be
+/// satisfied (wrong type / out-of-bounds heap read), so the function must fall
+/// back to the interpreter. The generated code loads the flag immediately after
+/// each helper call and branches to fallback when it is set; [`NativeModule::call`]
+/// also reports it. Safe to call any time — it is a no-op outside a `call`, since
+/// `call` resets the flag at the start of every invocation.
+pub fn signal_bail() {
+    BAIL_FLAG.with(|flag| flag.set(1));
+}
+
+/// Validate public IR before codegen. `build_function` assumes well-formed input
+/// (it indexes `reg_types`/`code` directly and relies on Cranelift register types
+/// matching each opcode); this turns every such assumption into a clean
+/// [`JitError`] so a buggy producer can never reach codegen with input that would
+/// panic or generate invalid assumptions.
+///
+/// Storage-class rules mirror `build_function`'s lowering: arithmetic preserves the
+/// operand class (and forbids `Handle`), the int-only ops (`Mod`, bit/shift) require
+/// `Int`, comparisons yield an `Int` boolean, and `Handle` registers are only valid
+/// as the `base` of a heap read.
+fn validate(program: &JitFunction) -> Result<(), JitError> {
+    let n_regs = program.n_regs as usize;
+    let n = program.code.len();
+
+    if program.reg_types.len() != n_regs {
+        return Err(JitError(format!(
+            "reg_types length {} does not match n_regs {n_regs}",
+            program.reg_types.len()
+        )));
+    }
+    if program.n_params > program.n_regs {
+        return Err(JitError(format!(
+            "n_params {} exceeds n_regs {n_regs}",
+            program.n_params
+        )));
+    }
+
+    let check_reg = |r: u32| -> Result<(), JitError> {
+        if (r as usize) < n_regs {
+            Ok(())
+        } else {
+            Err(JitError(format!(
+                "register {r} out of range (n_regs {n_regs})"
+            )))
+        }
+    };
+    let class = |r: u32| program.reg_types[r as usize];
+    let check_target = |t: u32| -> Result<(), JitError> {
+        if (t as usize) < n {
+            Ok(())
+        } else {
+            Err(JitError(format!(
+                "jump target {t} out of range (code length {n})"
+            )))
+        }
+    };
+
+    // Two operands of the same scalar (non-`Handle`) class: the shape every
+    // arithmetic/comparison opcode requires.
+    let scalar_pair = |lhs: u32, rhs: u32, op: &str| -> Result<(), JitError> {
+        check_reg(lhs)?;
+        check_reg(rhs)?;
+        if class(lhs) == JitValueType::Handle || class(rhs) == JitValueType::Handle {
+            return Err(JitError(format!("{op}: operand is a Handle register")));
+        }
+        if class(lhs) != class(rhs) {
+            return Err(JitError(format!(
+                "{op}: operand classes differ ({:?} vs {:?})",
+                class(lhs),
+                class(rhs)
+            )));
+        }
+        Ok(())
+    };
+    // Arithmetic: result register has the operands' class.
+    let arith = |dst: u32, lhs: u32, rhs: u32, op: &str| -> Result<(), JitError> {
+        scalar_pair(lhs, rhs, op)?;
+        check_reg(dst)?;
+        if class(dst) != class(lhs) {
+            return Err(JitError(format!(
+                "{op}: result {:?} does not match operands {:?}",
+                class(dst),
+                class(lhs)
+            )));
+        }
+        Ok(())
+    };
+    // Integer-only ternary (Mod, bitwise, shift): every register must be `Int`.
+    let int_op = |dst: u32, lhs: u32, rhs: u32, op: &str| -> Result<(), JitError> {
+        check_reg(dst)?;
+        check_reg(lhs)?;
+        check_reg(rhs)?;
+        for r in [dst, lhs, rhs] {
+            if class(r) != JitValueType::Int {
+                return Err(JitError(format!("{op}: register {r} must be Int")));
+            }
+        }
+        Ok(())
+    };
+    // Comparison: operands share a scalar class, result is an `Int` boolean.
+    let compare = |dst: u32, lhs: u32, rhs: u32, op: &str| -> Result<(), JitError> {
+        scalar_pair(lhs, rhs, op)?;
+        check_reg(dst)?;
+        if class(dst) != JitValueType::Int {
+            return Err(JitError(format!("{op}: boolean result must be Int")));
+        }
+        Ok(())
+    };
+    let require_class = |r: u32, want: JitValueType, op: &str| -> Result<(), JitError> {
+        check_reg(r)?;
+        if class(r) != want {
+            return Err(JitError(format!(
+                "{op}: register {r} is {:?}, expected {want:?}",
+                class(r)
+            )));
+        }
+        Ok(())
+    };
+
+    for (i, instr) in program.code.iter().enumerate() {
+        // Conditional branches fall through to `i + 1` (`build_function` indexes
+        // `block_for[i + 1]`), so the instruction must not be the last one.
+        let check_fallthrough = || -> Result<(), JitError> {
+            if i + 1 < n {
+                Ok(())
+            } else {
+                Err(JitError(format!(
+                    "conditional branch at {i} has no fall-through instruction"
+                )))
+            }
+        };
+        match instr {
+            JitInstr::Nop | JitInstr::Bail => {}
+            JitInstr::LoadInt { dst, .. } => require_class(*dst, JitValueType::Int, "LoadInt")?,
+            JitInstr::LoadFloat { dst, .. } => {
+                require_class(*dst, JitValueType::Float, "LoadFloat")?
+            }
+            JitInstr::LoadBool { dst, .. } => require_class(*dst, JitValueType::Int, "LoadBool")?,
+            JitInstr::Move { dst, src } => {
+                check_reg(*dst)?;
+                check_reg(*src)?;
+                if class(*src) == JitValueType::Handle || class(*dst) == JitValueType::Handle {
+                    return Err(JitError("Move: Handle registers cannot be moved".into()));
+                }
+                if class(*dst) != class(*src) {
+                    return Err(JitError(format!(
+                        "Move: classes differ ({:?} vs {:?})",
+                        class(*dst),
+                        class(*src)
+                    )));
+                }
+            }
+            JitInstr::Add { dst, lhs, rhs } => arith(*dst, *lhs, *rhs, "Add")?,
+            JitInstr::Sub { dst, lhs, rhs } => arith(*dst, *lhs, *rhs, "Sub")?,
+            JitInstr::Mul { dst, lhs, rhs } => arith(*dst, *lhs, *rhs, "Mul")?,
+            JitInstr::Div { dst, lhs, rhs } => arith(*dst, *lhs, *rhs, "Div")?,
+            JitInstr::Mod { dst, lhs, rhs } => int_op(*dst, *lhs, *rhs, "Mod")?,
+            JitInstr::BitAnd { dst, lhs, rhs } => int_op(*dst, *lhs, *rhs, "BitAnd")?,
+            JitInstr::BitOr { dst, lhs, rhs } => int_op(*dst, *lhs, *rhs, "BitOr")?,
+            JitInstr::BitXor { dst, lhs, rhs } => int_op(*dst, *lhs, *rhs, "BitXor")?,
+            JitInstr::Shl { dst, lhs, rhs } => int_op(*dst, *lhs, *rhs, "Shl")?,
+            JitInstr::Shr { dst, lhs, rhs } => int_op(*dst, *lhs, *rhs, "Shr")?,
+            JitInstr::Compare { dst, lhs, rhs, .. } => compare(*dst, *lhs, *rhs, "Compare")?,
+            JitInstr::Equal { dst, lhs, rhs } => compare(*dst, *lhs, *rhs, "Equal")?,
+            JitInstr::NotEqual { dst, lhs, rhs } => compare(*dst, *lhs, *rhs, "NotEqual")?,
+            JitInstr::Jump { target } => check_target(*target)?,
+            JitInstr::JumpIfBool { cond, target, .. } => {
+                require_class(*cond, JitValueType::Int, "JumpIfBool")?;
+                check_target(*target)?;
+                check_fallthrough()?;
+            }
+            JitInstr::JumpIfIntCompare {
+                lhs, rhs, target, ..
+            } => {
+                scalar_pair(*lhs, *rhs, "JumpIfIntCompare")?;
+                check_target(*target)?;
+                check_fallthrough()?;
+            }
+            JitInstr::Return { src } => {
+                check_reg(*src)?;
+                if class(*src) == JitValueType::Handle {
+                    return Err(JitError("Return: cannot return a Handle register".into()));
+                }
+            }
+            JitInstr::FieldInt { dst, base, .. } => {
+                require_class(*base, JitValueType::Handle, "FieldInt base")?;
+                require_class(*dst, JitValueType::Int, "FieldInt result")?;
+            }
+            JitInstr::ListLen { dst, base } => {
+                require_class(*base, JitValueType::Handle, "ListLen base")?;
+                require_class(*dst, JitValueType::Int, "ListLen result")?;
+            }
+            JitInstr::ListGetInt { dst, base, index } => {
+                require_class(*base, JitValueType::Handle, "ListGetInt base")?;
+                require_class(*index, JitValueType::Int, "ListGetInt index")?;
+                require_class(*dst, JitValueType::Int, "ListGetInt result")?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn build_function(
@@ -473,8 +712,20 @@ fn build_function(
     }
     let zero_i = bcx.ins().iconst(types::I64, 0);
     let zero_f = bcx.ins().f64const(0.0);
-    for (i, &var) in vars.iter().enumerate().take(n_regs).skip(program.n_params as usize) {
-        bcx.def_var(var, if var_ty(i) == types::F64 { zero_f } else { zero_i });
+    for (i, &var) in vars
+        .iter()
+        .enumerate()
+        .take(n_regs)
+        .skip(program.n_params as usize)
+    {
+        bcx.def_var(
+            var,
+            if var_ty(i) == types::F64 {
+                zero_f
+            } else {
+                zero_i
+            },
+        );
     }
 
     // The shared fallback block: "not completed".
@@ -851,9 +1102,9 @@ mod tests {
     /// A module with no-op host helpers (these tests exercise only scalar ops).
     fn module() -> NativeModule {
         NativeModule::new(HostHelpers {
-            field_int: noop_field_int as *const u8,
-            list_len: noop_list_len as *const u8,
-            list_get_int: noop_list_get_int as *const u8,
+            field_int: noop_field_int,
+            list_len: noop_list_len,
+            list_get_int: noop_list_get_int,
         })
         .unwrap()
     }
@@ -901,7 +1152,12 @@ mod tests {
                 ],
             ))
             .unwrap();
-        let call = |a: f64, b: f64| f64::from_bits(m.call(id, &[a.to_bits() as i64, b.to_bits() as i64], &0u8).unwrap() as u64);
+        let call = |a: f64, b: f64| {
+            f64::from_bits(
+                m.call(id, &[a.to_bits() as i64, b.to_bits() as i64])
+                    .unwrap() as u64,
+            )
+        };
         assert_eq!(call(2.5, 4.0), 2.5 * 4.0 - 2.5);
         assert_eq!(call(3.0, 0.0), -3.0);
         let _ = Int; // silence unused in case
@@ -925,10 +1181,10 @@ mod tests {
                 ],
             ))
             .unwrap();
-        assert_eq!(m.call(id, &[3, 4], &0u8), Some(7));
-        assert_eq!(m.call(id, &[-10, 4], &0u8), Some(-6));
+        assert_eq!(m.call(id, &[3, 4]), Some(7));
+        assert_eq!(m.call(id, &[-10, 4]), Some(-6));
         // overflow bails:
-        assert_eq!(m.call(id, &[i64::MAX, 1], &0u8), None);
+        assert_eq!(m.call(id, &[i64::MAX, 1]), None);
     }
 
     #[test]
@@ -963,9 +1219,9 @@ mod tests {
             JitInstr::Return { src: 1 },  // 8 end
         ];
         let id = m.compile(&f(1, 4, code)).unwrap();
-        assert_eq!(m.call(id, &[10], &0u8), Some(55));
-        assert_eq!(m.call(id, &[0], &0u8), Some(0));
-        assert_eq!(m.call(id, &[100], &0u8), Some(5050));
+        assert_eq!(m.call(id, &[10]), Some(55));
+        assert_eq!(m.call(id, &[0]), Some(0));
+        assert_eq!(m.call(id, &[100]), Some(5050));
     }
 
     #[test]
@@ -985,8 +1241,147 @@ mod tests {
                 ],
             ))
             .unwrap();
-        assert_eq!(m.call(id, &[20, 5], &0u8), Some(4));
-        assert_eq!(m.call(id, &[20, 0], &0u8), None);
-        assert_eq!(m.call(id, &[i64::MIN, -1], &0u8), None);
+        assert_eq!(m.call(id, &[20, 5]), Some(4));
+        assert_eq!(m.call(id, &[20, 0]), None);
+        assert_eq!(m.call(id, &[i64::MIN, -1]), None);
+    }
+
+    // --- IR validation: malformed public IR must fail cleanly, not panic ---
+
+    #[test]
+    fn rejects_out_of_range_register() {
+        // `Add` reads register 5 in a 3-register function.
+        let err = validate(&f(
+            1,
+            3,
+            vec![JitInstr::Add {
+                dst: 0,
+                lhs: 5,
+                rhs: 1,
+            }],
+        ))
+        .unwrap_err();
+        assert!(err.0.contains("out of range"), "{}", err.0);
+    }
+
+    #[test]
+    fn rejects_out_of_range_jump_target() {
+        let err = validate(&f(1, 1, vec![JitInstr::Jump { target: 9 }])).unwrap_err();
+        assert!(err.0.contains("target 9"), "{}", err.0);
+    }
+
+    #[test]
+    fn rejects_conditional_branch_without_fallthrough() {
+        // A trailing conditional branch has no `i + 1` to fall through to.
+        let err = validate(&f(
+            1,
+            1,
+            vec![JitInstr::JumpIfBool {
+                cond: 0,
+                expected: true,
+                target: 0,
+            }],
+        ))
+        .unwrap_err();
+        assert!(err.0.contains("fall-through"), "{}", err.0);
+    }
+
+    #[test]
+    fn rejects_reg_types_length_mismatch() {
+        let bad = JitFunction {
+            n_params: 0,
+            n_regs: 3,
+            reg_types: vec![JitValueType::Int; 2],
+            code: vec![],
+        };
+        let err = validate(&bad).unwrap_err();
+        assert!(err.0.contains("reg_types length"), "{}", err.0);
+    }
+
+    #[test]
+    fn rejects_params_exceeding_regs() {
+        let err = validate(&f(4, 2, vec![])).unwrap_err();
+        assert!(err.0.contains("n_params"), "{}", err.0);
+    }
+
+    #[test]
+    fn rejects_int_op_on_float_register() {
+        use JitValueType::{Float, Int};
+        // `Mod` (integer-only) applied to float registers.
+        let err = validate(&ft(
+            2,
+            vec![Float, Float, Int],
+            vec![JitInstr::Mod {
+                dst: 2,
+                lhs: 0,
+                rhs: 1,
+            }],
+        ))
+        .unwrap_err();
+        assert!(err.0.contains("must be Int"), "{}", err.0);
+    }
+
+    #[test]
+    fn rejects_mismatched_arith_classes() {
+        use JitValueType::{Float, Int};
+        // `Add` with one int and one float operand.
+        let err = validate(&ft(
+            2,
+            vec![Int, Float, Int],
+            vec![JitInstr::Add {
+                dst: 2,
+                lhs: 0,
+                rhs: 1,
+            }],
+        ))
+        .unwrap_err();
+        assert!(err.0.contains("classes differ"), "{}", err.0);
+    }
+
+    #[test]
+    fn rejects_handle_outside_heap_read_base() {
+        use JitValueType::{Handle, Int};
+        // A `Handle` register used as an arithmetic operand.
+        let err = validate(&ft(
+            2,
+            vec![Handle, Int, Int],
+            vec![JitInstr::Add {
+                dst: 2,
+                lhs: 0,
+                rhs: 1,
+            }],
+        ))
+        .unwrap_err();
+        assert!(err.0.contains("Handle"), "{}", err.0);
+    }
+
+    #[test]
+    fn rejects_non_handle_heap_read_base() {
+        // `FieldInt` base must be a `Handle`, not an `Int`.
+        let err = validate(&f(
+            1,
+            2,
+            vec![JitInstr::FieldInt {
+                dst: 1,
+                base: 0,
+                slot: 0,
+            }],
+        ))
+        .unwrap_err();
+        assert!(err.0.contains("expected Handle"), "{}", err.0);
+    }
+
+    #[test]
+    fn accepts_well_formed_heap_read() {
+        use JitValueType::{Handle, Int};
+        validate(&ft(
+            1,
+            vec![Handle, Int],
+            vec![
+                JitInstr::ListLen { dst: 1, base: 0 },
+                JitInstr::Return { src: 1 },
+            ],
+        ))
+        .expect("well-formed heap read should validate");
     }
 }

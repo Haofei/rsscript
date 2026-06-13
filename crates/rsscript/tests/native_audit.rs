@@ -23,7 +23,10 @@ fn native_audit_json_reports_build_inputs_and_findings() {
     let value: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("native audit emits JSON");
     assert_eq!(value["$schema"], "rsscript.native_audit.v0.1");
-    assert_eq!(value["build_inputs"]["transitive_dependencies"], "not_audited");
+    assert_eq!(
+        value["build_inputs"]["transitive_dependencies"],
+        "not_audited"
+    );
     assert!(
         value["build_inputs"]["declared_dependencies"]
             .as_array()

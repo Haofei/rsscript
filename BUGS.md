@@ -13,10 +13,14 @@ reproduced; the HIGH items were additionally re-verified by hand.
 > - **RSS-5 / RSS-10:** the original single-line struct bodies (`{ first: T  second: T }`)
 >   additionally tripped a field-separator quirk that masked the documented symptom; with
 >   idiomatic newline-separated fields both bugs reproduce exactly as described and are fixed.
-> - Separately discovered (not one of the 11, left open): matching on a borrowed
+> - Separately discovered (not one of the 11): matching on a borrowed
 >   `read Option<T>`/`Result<…>` param and using the bound payload by value
->   (`match o { Some(s) => return s }`) lowers to `&T` and fails rustc E0308. Pre-existing
->   at `f5fab92`; independent of the RSS-4 fix.
+>   (`match o { Some(s) => return s }`) lowered to `&T` and failed rustc E0308.
+>   **FIXED:** the lowerer now rebinds a by-ref match's single payload to an owned
+>   value — `*x` for a `Copy` payload, `x.clone()` for any other cloneable type
+>   (resources, which aren't `Clone`, stay borrowed and are rejected by the resource
+>   move rules). Covers built-in `Option`/`Result` and single-field user variants.
+>   Regression test: `vm_eval_parity::parity_borrowed_match_payload_used_by_value`.
 
 Run recipe used for all repros:
 

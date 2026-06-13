@@ -1791,8 +1791,11 @@ impl<'a> RustLowerer<'a> {
                 let by_ref = self.match_scrutinee_by_ref(&stmt.value);
                 out.push_str(&format!("{pad}match {scrutinee} {{\n"));
                 for arm in &stmt.arms {
-                    let pattern =
-                        self.lower_match_pattern_typed(&arm.pattern, scrutinee_type.as_ref(), by_ref);
+                    let pattern = self.lower_match_pattern_typed(
+                        &arm.pattern,
+                        scrutinee_type.as_ref(),
+                        by_ref,
+                    );
                     let guard = arm
                         .guard
                         .as_ref()
@@ -1822,9 +1825,11 @@ impl<'a> RustLowerer<'a> {
                         }
                     }
                     if by_ref {
-                        for name in self.copy_payload_bindings(&arm.pattern, scrutinee_type.as_ref()) {
+                        for (name, rhs) in
+                            self.owned_payload_rebindings(&arm.pattern, scrutinee_type.as_ref())
+                        {
                             out.push_str(&format!(
-                                "{}let {name} = *{name};\n",
+                                "{}let {name} = {rhs};\n",
                                 "    ".repeat(indent + 2)
                             ));
                         }
@@ -2374,11 +2379,10 @@ impl<'a> RustLowerer<'a> {
                                 .as_deref()
                                 .map(rust_ident)
                                 .unwrap_or_else(|| "/* unnamed */".to_string());
-                            let is_weak_field = arg
-                                .name
-                                .as_deref()
-                                .or(field_name.as_deref())
-                                .is_some_and(|field_name| self.is_weak_field(ctor_name, field_name));
+                            let is_weak_field =
+                                arg.name.as_deref().or(field_name.as_deref()).is_some_and(
+                                    |field_name| self.is_weak_field(ctor_name, field_name),
+                                );
                             if is_weak_field {
                                 fields.push(format!(
                                     "{field}: {}",
@@ -2450,9 +2454,7 @@ impl<'a> RustLowerer<'a> {
                             // field names are validated in the checker; here we stay bounds-safe and
                             // lower each value against its declared field type (like struct ctors).
                             let field = match &arg.name {
-                                Some(name) => {
-                                    decl_fields.iter().find(|(fname, _)| fname == name)
-                                }
+                                Some(name) => decl_fields.iter().find(|(fname, _)| fname == name),
                                 None => decl_fields.get(index),
                             };
                             let Some((field_name, field_ty)) = field else {
@@ -2586,7 +2588,8 @@ impl<'a> RustLowerer<'a> {
                         namespace: namespace.clone(),
                         name: method.to_string(),
                     };
-                    let is_native_target = runtime_intrinsic_target(&native_target_callee).is_some()
+                    let is_native_target = runtime_intrinsic_target(&native_target_callee)
+                        .is_some()
                         || self
                             .native_bindings
                             .contains_key(&native_boundary_function_key(&format!(
@@ -2805,8 +2808,11 @@ impl<'a> RustLowerer<'a> {
                 let by_ref = self.match_scrutinee_by_ref(value);
                 let mut out = format!("match {scrutinee} {{\n");
                 for arm in arms {
-                    let pattern =
-                        self.lower_match_pattern_typed(&arm.pattern, scrutinee_type.as_ref(), by_ref);
+                    let pattern = self.lower_match_pattern_typed(
+                        &arm.pattern,
+                        scrutinee_type.as_ref(),
+                        by_ref,
+                    );
                     let guard = arm
                         .guard
                         .as_ref()
@@ -2814,14 +2820,15 @@ impl<'a> RustLowerer<'a> {
                         .unwrap_or_default();
                     let mut body = self.lower_expr_block(&arm.body, 1);
                     if by_ref {
-                        let binds = self.copy_payload_bindings(&arm.pattern, scrutinee_type.as_ref());
+                        let binds =
+                            self.owned_payload_rebindings(&arm.pattern, scrutinee_type.as_ref());
                         if !binds.is_empty() {
-                            let derefs = binds
+                            let rebinds = binds
                                 .iter()
-                                .map(|n| format!("let {n} = *{n};"))
+                                .map(|(n, rhs)| format!("let {n} = {rhs};"))
                                 .collect::<Vec<_>>()
                                 .join(" ");
-                            body = body.replacen('{', &format!("{{ {derefs}"), 1);
+                            body = body.replacen('{', &format!("{{ {rebinds}"), 1);
                         }
                     }
                     out.push_str(&format!("    {pattern}{guard} => {body}"));
@@ -4330,8 +4337,21 @@ impl<'a> RustLowerer<'a> {
         ty.args.is_empty()
             && matches!(
                 ty.name.as_str(),
-                "Bool" | "Byte" | "Char" | "Int" | "Int8" | "Int16" | "Int32" | "Int64"
-                    | "UInt" | "UInt8" | "UInt16" | "UInt32" | "UInt64" | "Float" | "Float32"
+                "Bool"
+                    | "Byte"
+                    | "Char"
+                    | "Int"
+                    | "Int8"
+                    | "Int16"
+                    | "Int32"
+                    | "Int64"
+                    | "UInt"
+                    | "UInt8"
+                    | "UInt16"
+                    | "UInt32"
+                    | "UInt64"
+                    | "Float"
+                    | "Float32"
                     | "Float64"
             )
     }
@@ -4734,7 +4754,8 @@ impl<'a> RustLowerer<'a> {
     // value type `T` (not `&T`), so matching it would move a non-Copy payload out of a shared
     // reference. Borrow it so the match binds by reference instead.
     fn match_scrutinee_is_forced_borrow(&self, value: &Expr) -> bool {
-        matches!(value, Expr::Field { .. } | Expr::Index { .. }) && self.match_scrutinee_by_ref(value)
+        matches!(value, Expr::Field { .. } | Expr::Index { .. })
+            && self.match_scrutinee_by_ref(value)
     }
 
     // Whether a match scrutinee lowers to a reference (`&T`): a read-view `let` binding, a `read`
@@ -4746,26 +4767,78 @@ impl<'a> RustLowerer<'a> {
                 self.read_view_bindings.contains(name)
                     || self.param_effects.get(name) == Some(&DataEffect::Read)
             }
-            Expr::Field { base, .. } | Expr::Index { base, .. } => self.match_scrutinee_by_ref(base),
-            Expr::Effect { value, .. } | Expr::Try { value, .. } => self.match_scrutinee_by_ref(value),
+            Expr::Field { base, .. } | Expr::Index { base, .. } => {
+                self.match_scrutinee_by_ref(base)
+            }
+            Expr::Effect { value, .. } | Expr::Try { value, .. } => {
+                self.match_scrutinee_by_ref(value)
+            }
             _ => false,
         }
     }
 
-    // Names of single-field payload bindings whose field is a Copy primitive. When the scrutinee is
-    // by-ref, such a binding is `&T` (match ergonomics); the arm prepends `let x = *x;` to rebind by value.
-    fn copy_payload_bindings(&self, pattern: &MatchPattern, value_type: Option<&TypeRef>) -> Vec<String> {
-        if let MatchPattern::Variant { name, binding, .. } = pattern
-            && let Some(MatchPattern::Binding { name: bind_name, .. }) = binding.as_deref()
-            && let Some((_, fields)) = self.sum_variant_fields_for_type(value_type, name)
-            && fields.len() == 1
-            && Self::is_copy_primitive(&fields[0].ty)
-        {
-            return vec![rust_ident(bind_name)];
-        }
-        Vec::new()
+    fn is_resource_type(&self, ty: &TypeRef) -> bool {
+        matches!(self.type_kinds.get(&ty.name), Some(TypeKind::Resource))
     }
 
+    // For a match arm that binds a *single* payload field to a name, return
+    // `(binding_name, payload_field_type)`. Covers the built-in `Option<T>` /
+    // `Result<T, E>` variants and single-field user sum-type variants; `None`
+    // otherwise (nullary variant, wildcard payload, multi-field, etc.).
+    fn single_payload_binding(
+        &self,
+        pattern: &MatchPattern,
+        value_type: Option<&TypeRef>,
+    ) -> Option<(String, TypeRef)> {
+        let MatchPattern::Variant { name, binding, .. } = pattern else {
+            return None;
+        };
+        let MatchPattern::Binding {
+            name: bind_name, ..
+        } = binding.as_deref()?
+        else {
+            return None;
+        };
+        let field_ty = match (name.as_str(), value_type) {
+            ("Some", Some(ty)) if ty.name == "Option" => ty.args.first().cloned()?,
+            ("Ok", Some(ty)) if ty.name == "Result" => ty.args.first().cloned()?,
+            ("Err", Some(ty)) if ty.name == "Result" => ty.args.get(1).cloned()?,
+            _ => {
+                let (_, fields) = self.sum_variant_fields_for_type(value_type, name)?;
+                if fields.len() != 1 {
+                    return None;
+                }
+                fields[0].ty.clone()
+            }
+        };
+        Some((bind_name.clone(), field_ty))
+    }
+
+    // When the scrutinee is matched by-ref, a single payload binding is `&T` (match
+    // ergonomics), but RSScript's model is that the arm sees an owned `T` — so using
+    // it by value (`return s`, passing it to a by-value param) must work without the
+    // user knowing the Rust representation. Return `(name, owned_rhs)` pairs so the
+    // arm can shadow the borrowed binding: `*x` for a `Copy` payload, `x.clone()`
+    // for any other cloneable value type. Resources aren't `Clone` and can't be
+    // moved out of a shared `read` view, so they are left as `&T` (the resource
+    // move rules reject using them by value).
+    fn owned_payload_rebindings(
+        &self,
+        pattern: &MatchPattern,
+        value_type: Option<&TypeRef>,
+    ) -> Vec<(String, String)> {
+        let Some((bind_name, field_ty)) = self.single_payload_binding(pattern, value_type) else {
+            return Vec::new();
+        };
+        let ident = rust_ident(&bind_name);
+        if Self::is_copy_primitive(&field_ty) {
+            vec![(ident.clone(), format!("*{ident}"))]
+        } else if self.is_resource_type(&field_ty) {
+            Vec::new()
+        } else {
+            vec![(ident.clone(), format!("{ident}.clone()"))]
+        }
+    }
 
     fn lower_match_pattern_typed(
         &self,

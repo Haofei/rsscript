@@ -251,7 +251,10 @@ pub fn format_package_review_markdown(review: &PackageReview) -> String {
     let mut seen = std::collections::BTreeSet::new();
     let mut rows = Vec::new();
     for capability in &capabilities {
-        if !seen.insert((capability.category.clone(), capability.binding_symbol.clone())) {
+        if !seen.insert((
+            capability.category.clone(),
+            capability.binding_symbol.clone(),
+        )) {
             continue;
         }
         let risk = match capability.risk {
@@ -286,7 +289,11 @@ pub fn format_package_review_markdown(review: &PackageReview) -> String {
 
     if let Some(native) = &review.native_rust {
         let _ = writeln!(out, "\n### Native boundary\n");
-        let _ = writeln!(out, "- crate: `{}`", native.crate_name.as_deref().unwrap_or("?"));
+        let _ = writeln!(
+            out,
+            "- crate: `{}`",
+            native.crate_name.as_deref().unwrap_or("?")
+        );
         let _ = writeln!(out, "- path: `{}`", native.path);
     }
 
@@ -315,7 +322,10 @@ fn format_package_review_capabilities_human(
     let mut seen = std::collections::BTreeSet::new();
     let mut rows: Vec<(u8, String)> = Vec::new();
     for capability in capabilities {
-        if !seen.insert((capability.category.clone(), capability.binding_symbol.clone())) {
+        if !seen.insert((
+            capability.category.clone(),
+            capability.binding_symbol.clone(),
+        )) {
             continue;
         }
         let (rank, label) = match capability.risk {

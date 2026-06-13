@@ -983,9 +983,15 @@ mod tests {
         assert_eq!(crate::http_response_text(&response), "handled /users");
         assert!(crate::http_response_is_success(&response));
 
+        // Sync `http_get` performs a real request (see `http_get_sync_*` tests); with
+        // no reachable host the request fails, surfacing the target URL in the error.
         let error = crate::http_get("https://example.test")
-            .expect_err("safe runtime should not provide ambient network");
-        assert!(crate::http_error_message(&error).contains("not configured"));
+            .expect_err("unreachable host should fail the request");
+        assert!(
+            crate::http_error_message(&error).contains("https://example.test"),
+            "error should name the failed request target: {}",
+            crate::http_error_message(&error)
+        );
     }
 
     #[test]

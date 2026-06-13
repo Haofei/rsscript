@@ -15,11 +15,10 @@ use super::contract::{
 use super::source_set::{ManifestNativeRust, PackageSource, load_package};
 use super::{
     Manifest, PackageCapabilityChange, PackageCapabilityChangeKind, PackageDiff,
-    PackageInterfaceChange, PackageInterfaceChangeKind,
-    PackageManifestChange, PackageReviewAwaitBoundary, PackageReviewAwaitSite,
-    PackageReviewFileKind, PackageRisk, feature_values_label,
-    package_feature_may_change_boundary_risk, package_identity, package_risk_label,
-    review_package_dir, toml_value_label,
+    PackageInterfaceChange, PackageInterfaceChangeKind, PackageManifestChange,
+    PackageReviewAwaitBoundary, PackageReviewAwaitSite, PackageReviewFileKind, PackageRisk,
+    feature_values_label, package_feature_may_change_boundary_risk, package_identity,
+    package_risk_label, review_package_dir, toml_value_label,
 };
 
 pub fn diff_package_dirs(old_dir: &Path, new_dir: &Path) -> Result<PackageDiff, String> {
@@ -131,8 +130,11 @@ fn diff_package_capabilities(
     ) -> BTreeMap<(String, String), crate::CapabilityRisk> {
         let mut map = BTreeMap::new();
         for capability in capabilities {
-            map.entry((capability.category.clone(), capability.binding_symbol.clone()))
-                .or_insert(capability.risk);
+            map.entry((
+                capability.category.clone(),
+                capability.binding_symbol.clone(),
+            ))
+            .or_insert(capability.risk);
         }
         map
     }
@@ -750,7 +752,11 @@ mod capability_diff_tests {
         let changes = diff_package_capabilities(&old, &new);
         // Two high-risk additions, sorted high-first by category.
         assert_eq!(changes.len(), 2);
-        assert!(changes.iter().all(|c| c.change == PackageCapabilityChangeKind::Added));
+        assert!(
+            changes
+                .iter()
+                .all(|c| c.change == PackageCapabilityChangeKind::Added)
+        );
         assert_eq!(changes[0].category, "database.write");
         assert_eq!(changes[0].risk, CapabilityRisk::High);
         assert_eq!(changes[1].category, "network.client");

@@ -159,7 +159,10 @@ pub(crate) fn default_runtime_path() -> Result<PathBuf, String> {
         candidates.push(("RSSCRIPT_RUNTIME_PATH", PathBuf::from(path)));
     }
     candidates.push(("current directory", current_dir.join("crates/runtime")));
-    candidates.push(("compiled manifest directory", manifest_dir.join("../runtime")));
+    candidates.push((
+        "compiled manifest directory",
+        manifest_dir.join("../runtime"),
+    ));
     select_runtime_path(candidates)
 }
 

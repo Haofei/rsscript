@@ -948,12 +948,28 @@ Ordering operators require numeric operands. Logical `&&` and `||` require
 `Bool` operands. RSScript has no implicit conversion or user-defined operator
 overload resolution.
 
-RSScript v0.6 has **no assignment statement** other than these initialization
-bindings: there is no `x = y`, `obj.field = y`, or `list[i] = y`. All mutation is
-expressed through explicit `mut` API calls (`Map.insert(map: mut m, ...)`), so
-mutation always participates in call-like effect, conflict-root, and resource
-checking. If assignment is added later it must itself become a call-like,
-effect-checked construct; v0.6 deliberately omits it.
+RSScript v0.6 has a **controlled assignment statement** for updating mutable
+local state. It is a statement, never an expression — it produces no value and
+cannot appear in expression position — and it participates in the same
+place-conflict, effect, and resource checking as `mut` API calls (it is not an
+"expression-shaped" side effect). It comes in two forms:
+
+- **Rebind a `let mut` local:** `x = e`. The target's root must be a reassignable
+  local (a `let mut` binding). Parameters are never reassignable — even a `mut`
+  parameter: its fields/elements may be updated, but the parameter binding itself
+  cannot be rebound. The assigned value's type must match the local's type.
+- **Update a place inside a local:** `obj.field = e` or `list[i] = e`. The place
+  must start from a `let mut` local in scope, and the same type rule applies.
+
+The target is validated to be a *place* during checking; assigning to a
+non-place, to a parameter root, or with a mismatched value type is a frontend
+diagnostic. Assignment to a place obeys the place-conflict rule (see pattern
+matching), so a single statement cannot alias-mutate overlapping places. All
+*other* mutation — of container, managed, and resource state — is still expressed
+through explicit `mut` API calls (`Map.insert(map: mut m, ...)`), so mutation
+always remains visible to effect, conflict-root, and resource checking. Resource,
+`handle`, and `weak` places follow the existing move/borrow rules; assignment
+cannot be used to bypass them.
 
 `?` is the failure-propagation operator.
 

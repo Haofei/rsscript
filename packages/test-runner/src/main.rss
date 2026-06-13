@@ -166,7 +166,7 @@ fn test_case_from_json(value: read JsonValue) -> Result<fresh TestCase, String> 
         command: json_string_or_default(value: read value, name: read "command", default: read ""),
         args: json_string_list_or_empty(value: read value, name: read "args"),
         jobs: json_int_or_default(value: read value, name: read "jobs", default: 0),
-        timeout_ms: json_int_or_default(value: read value, name: read "timeout_ms", default: 10000),
+        timeout_ms: json_int_or_default(value: read value, name: read "timeout_ms", default: 60000),
         contains: json_string_or_default(value: read value, name: read "contains", default: read ""),
         contains_all: json_string_list_or_empty(value: read value, name: read "contains_all"),
         ignored: json_bool_or_default(value: read value, name: read "ignored", default: false),

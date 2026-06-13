@@ -93,8 +93,7 @@ pub(crate) fn run_check(args: &[String]) -> ExitCode {
             // with applicability are already in `rss check --json` output.)
             println!(
                 "{}",
-                serde_json::to_string(&explanation)
-                    .expect("diagnostic explanation serializes")
+                serde_json::to_string(&explanation).expect("diagnostic explanation serializes")
             );
         } else {
             print!("{}", format_diagnostic_explanation(explanation));

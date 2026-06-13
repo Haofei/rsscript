@@ -46,7 +46,14 @@ and the compiled (Rust-lowering) backend. Built verification-first.
 A native tier lives in the **separate `vm-jit` crate**: the `rsscript` crate is
 `#![forbid(unsafe_code)]`, and executing generated machine code + calling function
 pointers requires `unsafe`, so it lives there behind a safe API
-(`NativeModule::call`).
+(`NativeModule::call`). The boundary is kept sound by construction — **no raw
+pointers cross the public API**: host helpers cross it as **typed** `extern "C"`
+function pointers (`HostHelpers`), not raw `*const u8`, and the bail flag the
+generated code reads is a per-thread `u8` owned by `vm-jit` itself (`call` resets
+it and passes its own address inward; helpers set it via the safe `signal_bail()`).
+So a safe caller can neither supply a bad helper address nor a dangling bail
+pointer; the only raw-pointer/`unsafe` work (symbol registration, the indirect
+call) is private to `vm-jit`.
 
 - **Codegen:** Cranelift (`cranelift-jit`/`-frontend`/`-codegen`/`-native`),
   `opt_level=speed`. ✓
@@ -54,13 +61,24 @@ pointers requires `unsafe`, so it lives there behind a safe API
   (`JitInstr`/`JitFunction`, `vm_jit::IR_VERSION`); `rsscript` translates eligible
   `RegFunction`s into it rather than exposing its private `RegInstr` — cleaner
   decoupling than leaking internals. ✓
-- **Value glue:** `Int`/`Bool` unbox into `i64` registers (Bool as `0`/`1`); the
-  result boxes back as `Int`. Native runs only when every argument is an `Int`, so
-  all registers are statically `i64`. Non-core ops (heap/`Float`/calls) are not
-  reimplemented — the function **bails to the interpreter** (gap-free because the
-  compiled subset is side-effect-free, so re-running is observationally identical).
-  Choosing bail-to-interpreter over `extern "C"` helper calls keeps the no-gap
-  guarantee trivial. ✓
+- **Value glue:** registers unbox into scalar slots by storage class —
+  `Int`/`Bool` into `i64` (Bool as `0`/`1`), `Float` into `f64` (passed as its
+  `to_bits` pattern) — and the result boxes back by class. Each register's class is
+  fixed by `JitFunction::reg_types`, so the same arithmetic/compare opcode lowers to
+  integer or float machine ops by operand class. Side-effect-free heap **reads** of
+  `Int` struct fields / list elements are supported via `extern "C"` host helpers
+  (`HostHelpers`) that the VM populates per call; an unsatisfiable read (wrong
+  type / out of bounds) sets a bail flag and the function **bails to the
+  interpreter**. Everything else outside this subset (heap *writes*, non-`Int`
+  reads, calls, async) also bails. Bailing is gap-free because the compiled subset
+  is side-effect-free (reads only), so re-running on the interpreter is
+  observationally identical — including for `Float` NaN/ordering, which uses the
+  ordered comparisons that mirror the interpreter's `f64` semantics. ✓
+- **Eligibility:** a function compiles only when every parameter's runtime value
+  matches its declared register class (e.g. an `Int` register actually holds an
+  `Int`); otherwise it falls back. The native crate independently re-validates the
+  IR (`vm-jit::validate`) before codegen, so a producer bug fails as a clean
+  `JitError` rather than a panic or miscompile. ✓
 - **Per-function dispatch:** native-eligible functions compile; everything else
   falls back (invariant 2). ✓
 - **Gate:** `NativeJit` (and `NativeJitForceDeopt`) differential backends;

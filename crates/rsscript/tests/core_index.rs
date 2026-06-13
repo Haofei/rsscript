@@ -7,8 +7,8 @@ fn core_package_index_snapshot_is_current() {
     let snapshot_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .join("schemas/core-package-index.json");
-    let snapshot = fs::read_to_string(snapshot_path)
-        .expect("core package index snapshot should exist");
+    let snapshot =
+        fs::read_to_string(snapshot_path).expect("core package index snapshot should exist");
     assert_eq!(snapshot, rsscript::core_package_index_json());
 }
 

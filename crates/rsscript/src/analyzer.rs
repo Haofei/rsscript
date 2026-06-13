@@ -4636,7 +4636,6 @@ fn generic_namespace_args(namespace: &str) -> Option<(&str, Vec<&str>)> {
     Some((root, split_top_level_type_args(args)))
 }
 
-
 fn effect_name(effect: &EffectDecl) -> &str {
     match effect {
         EffectDecl::Name(name) | EffectDecl::Retains(name) => name,
@@ -5879,8 +5878,6 @@ fn builtin_value_type_name(name: &str) -> Option<&'static str> {
         _ => None,
     }
 }
-
-
 
 fn constructor_pattern_is_irrefutable(pattern: &MatchPattern) -> bool {
     match pattern {

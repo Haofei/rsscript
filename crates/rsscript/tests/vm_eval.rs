@@ -790,6 +790,7 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:Diff.unified runtime:Patch.apply_text
 // parity: runtime:Bytes.concat runtime:Bytes.consume runtime:Bytes.from_string runtime:Bytes.is_empty
 // parity: runtime:Bytes.from_buffer runtime:Bytes.len runtime:Bytes.slice runtime:Bytes.view
+// parity: runtime:Bytes.from_uints runtime:Bytes.to_uints runtime:Gzip.decompress_bytes
 // parity: runtime:BytesView.is_empty runtime:BytesView.len runtime:BytesView.slice
 // parity: runtime:BytesView.starts_with runtime:BytesView.to_bytes
 // parity: runtime:Int.bit_and runtime:Int.bit_not runtime:Int.bit_or runtime:Int.bit_xor
@@ -843,6 +844,7 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:Json.value runtime:Json.value_at runtime:Json.values runtime:JsonError.message
 // parity: runtime:Instant.elapsed
 // parity: runtime:Hash.sha256_bytes runtime:Hash.sha256_file runtime:Hash.sha256_string
+// parity: runtime:Hash.sha3_224_bytes runtime:Hash.sha3_256_bytes runtime:Hash.shake128_bytes
 // parity: runtime:Hmac.sha256_bytes runtime:Hmac.sha256_string
 // parity: runtime:Hex.decode runtime:Hex.encode runtime:Hex.encode_string
 // parity: runtime:Http.get runtime:Http.get_async runtime:Http.get_retry_async
@@ -852,7 +854,7 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:Http.send_async runtime:HttpError.message
 // parity: runtime:HttpRequest.json runtime:HttpRequest.with_header
 // parity: runtime:HttpRequest.with_retry runtime:HttpRequest.with_timeout
-// parity: runtime:HttpResponse.is_success runtime:HttpResponse.lines
+// parity: runtime:HttpResponse.bytes runtime:HttpResponse.is_success runtime:HttpResponse.lines
 // parity: runtime:HttpResponse.status runtime:HttpResponse.text
 // parity: runtime:Image.inspect runtime:Image.load runtime:Image.normalize runtime:Image.resize
 // parity: runtime:Image.save runtime:Image.sharpen
@@ -920,6 +922,8 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:Math.clamp runtime:Math.clamp_float runtime:Math.floor runtime:Math.max
 // parity: runtime:Math.max_float runtime:Math.min runtime:Math.min_float runtime:Math.pow
 // parity: runtime:Math.pow_float runtime:Math.round runtime:Math.sqrt
+// parity: runtime:Math.cos runtime:Math.exp runtime:Math.exp2 runtime:Math.log
+// parity: runtime:Math.log2 runtime:Math.sin runtime:Math.tanh runtime:Math.trunc_float
 // parity: runtime:Option.and_then runtime:Option.filter runtime:Option.is_none
 // parity: runtime:Option.is_some runtime:Option.map runtime:Option.ok_or
 // parity: runtime:Option.or runtime:Option.unwrap_or runtime:Option.unwrap_or_else

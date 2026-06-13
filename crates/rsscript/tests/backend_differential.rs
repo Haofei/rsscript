@@ -1245,7 +1245,10 @@ fn render_bytes_expr(expr: &BytesExpr) -> String {
 fn render_bytes(program: &BytesProgram) -> String {
     let mut source = String::from("fn main() -> Unit {\n");
     for (index, binding) in program.bindings.iter().enumerate() {
-        source.push_str(&format!("    let b{index} = {}\n", render_bytes_expr(binding)));
+        source.push_str(&format!(
+            "    let b{index} = {}\n",
+            render_bytes_expr(binding)
+        ));
     }
     source.push_str(&format!(
         "    let result = {}\n",

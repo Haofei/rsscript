@@ -6153,19 +6153,6 @@ compile_ms={:.3} run_ms={:.3}",
 thread_local! {
     /// Heap values for the in-flight native call, indexed by handle.
     static JIT_HEAP_ARGS: RefCell<Vec<VmValue>> = const { RefCell::new(Vec::new()) };
-    /// `1` when a helper can't satisfy a read. The generated code holds a pointer
-    /// to this byte and branches to fallback immediately after each heap read, so
-    /// a bad read can't keep executing; the VM also checks it after the call.
-    static JIT_BAILED: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
-}
-
-/// Address of the per-thread bail flag, passed into compiled code so it can load
-/// and branch on it. The thread-local outlives every native call on this thread,
-/// so the pointer is valid for the call's duration. (Only the indirect deref in
-/// `vm-jit` is `unsafe`; producing the address here is not.)
-#[cfg(feature = "native-jit")]
-fn jit_bail_flag_ptr() -> *const u8 {
-    JIT_BAILED.with(|flag| flag.as_ptr() as *const u8)
 }
 
 /// Clears the per-call heap-arg table on drop, so a native attempt never retains
@@ -6182,10 +6169,13 @@ impl Drop for JitHeapArgsGuard {
 
 #[cfg(feature = "native-jit")]
 fn jit_host_helpers() -> vm_jit::HostHelpers {
+    // Typed `extern "C"` functions: `vm-jit` owns the raw-pointer conversion, so
+    // `rsscript` never hands it an untyped address. Keeps this crate's
+    // `#![forbid(unsafe_code)]` honest without an unsound safe API on the boundary.
     vm_jit::HostHelpers {
-        field_int: rss_jit_field_int as *const u8,
-        list_len: rss_jit_list_len as *const u8,
-        list_get_int: rss_jit_list_get_int as *const u8,
+        field_int: rss_jit_field_int,
+        list_len: rss_jit_list_len,
+        list_get_int: rss_jit_list_get_int,
     }
 }
 
@@ -6241,7 +6231,7 @@ extern "C" fn rss_jit_field_int(handle: i64, slot: i64) -> i64 {
     {
         Some(value) => value,
         None => {
-            JIT_BAILED.with(|b| b.set(1));
+            vm_jit::signal_bail();
             0
         }
     }
@@ -6252,7 +6242,7 @@ extern "C" fn rss_jit_list_len(handle: i64) -> i64 {
     match jit_heap_read(handle, jit_list_len) {
         Some(value) => value,
         None => {
-            JIT_BAILED.with(|b| b.set(1));
+            vm_jit::signal_bail();
             0
         }
     }
@@ -6263,7 +6253,7 @@ extern "C" fn rss_jit_list_get_int(handle: i64, index: i64) -> i64 {
     match jit_heap_read(handle, |value| jit_list_get_int(value, index)) {
         Some(value) => value,
         None => {
-            JIT_BAILED.with(|b| b.set(1));
+            vm_jit::signal_bail();
             0
         }
     }
@@ -6474,9 +6464,9 @@ impl RegVm {
         // Phase 2: marshal each argument to 64 bits per its inferred parameter
         // type. Scalars unbox directly; a `Handle` (struct/list) is registered in
         // the per-call heap table and passed as its index, for the host helpers to
-        // read. Reset the bail flag; a drop guard clears the (possibly large) heap
-        // table on every exit path so cloned args aren't retained after the call.
-        JIT_BAILED.with(|flag| flag.set(0));
+        // read. (`NativeModule::call` resets its own bail flag.) A drop guard clears
+        // the (possibly large) heap table on every exit path so cloned args aren't
+        // retained after the call.
         let _heap_guard = JitHeapArgsGuard;
         let mut inline_args = [0i64; 8];
         let mut heap_args = Vec::new();
@@ -6528,30 +6518,19 @@ impl RegVm {
         } else {
             &heap_args
         };
-        // Phase 3: call. Fall back if the native code bailed at a guard (`None`)
-        // *or* a host helper flagged an unsatisfiable heap read. The 64-bit result
-        // is boxed per the function's return type (a float register stored its
-        // `f64` bit pattern).
+        // Phase 3: call. `call` returns `None` if the native code bailed at a guard
+        // *or* a host helper flagged an unsatisfiable heap read; either way the
+        // interpreter re-runs the function. A clean result is boxed per the
+        // function's return type (a float register stored its `f64` bit pattern).
         let collect_stats = self.native.as_ref()?.collect_stats;
         let started = collect_stats.then(std::time::Instant::now);
-        let result = self
-            .native
-            .as_ref()?
-            .module
-            .call(id, args, jit_bail_flag_ptr());
+        let result = self.native.as_ref()?.module.call(id, args);
         let elapsed = started.map(|started| started.elapsed().as_nanos());
-        let helper_bailed = JIT_BAILED.with(|flag| flag.get()) != 0;
         let native = self.native.as_mut()?;
         if let Some(elapsed) = elapsed {
             native.stats.run_nanos += elapsed;
         }
         match result {
-            Some(_) if helper_bailed => {
-                if native.collect_stats {
-                    native.stats.native_bails += 1;
-                }
-                None
-            }
             Some(bits) => {
                 if native.collect_stats {
                     native.stats.native_calls += 1;

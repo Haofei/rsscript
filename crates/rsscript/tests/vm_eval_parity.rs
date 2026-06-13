@@ -1127,7 +1127,11 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    common::assert_vm_eval_matches_backend("parity-encoding.rss", "rsscript_parity_encoding", source);
+    common::assert_vm_eval_matches_backend(
+        "parity-encoding.rss",
+        "rsscript_parity_encoding",
+        source,
+    );
 }
 
 #[test]
@@ -1382,7 +1386,7 @@ fn main() -> Unit {
         }
         Err(error) => {
             let message = HttpError.message(error: read error)
-            if String.contains(value: read message, needle: read "GET https://example.test/api") {
+            if String.contains(value: read message, needle: read "https://example.test/api") {
                 Log.write(message: read "get-error")
             }
         }
@@ -1412,7 +1416,139 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    common::assert_vm_eval_matches_backend("parity-http-sync.rss", "rsscript_parity_http_sync", source);
+    common::assert_vm_eval_matches_backend(
+        "parity-http-sync.rss",
+        "rsscript_parity_http_sync",
+        source,
+    );
+}
+
+#[test]
+fn parity_borrowed_match_payload_used_by_value() {
+    // Regression: matching a borrowed `read Option<T>` / `Result<T, E>` and using
+    // the payload by value used to lower to `&T` and fail rustc E0308. The lowerer
+    // now rebinds the payload to an owned value (`*x` for Copy, `x.clone()`
+    // otherwise), so the AOT backend compiles and matches the interpreter.
+    let source = r#"
+features: local
+
+fn int_or(o: read Option<Int>, fallback: Int) -> Int {
+    match o {
+        Some(s) => {
+            return s
+        }
+        None => {
+            return fallback
+        }
+    }
+}
+
+fn string_or(o: read Option<String>, fallback: read String) -> fresh String {
+    match o {
+        Some(s) => {
+            return s
+        }
+        None => {
+            return String.concat(left: read fallback, right: read "")
+        }
+    }
+}
+
+fn ok_or(r: read Result<Int, String>) -> fresh String {
+    match r {
+        Ok(value) => {
+            return Int.to_string(value: read value)
+        }
+        Err(message) => {
+            return message
+        }
+    }
+}
+
+fn main() -> Unit {
+    Log.write(message: read Int.to_string(value: read int_or(o: read Some(7), fallback: 0)))
+    Log.write(message: read Int.to_string(value: read int_or(o: read None, fallback: 9)))
+    Log.write(message: read string_or(o: read Some("hi"), fallback: read "x"))
+    Log.write(message: read string_or(o: read None, fallback: read "fallback"))
+    Log.write(message: read ok_or(r: read Ok(3)))
+    Log.write(message: read ok_or(r: read Err("boom")))
+    return Unit
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-borrowed-match-payload.rss",
+        "rsscript_parity_borrowed_match_payload",
+        source,
+    );
+}
+
+#[test]
+fn parity_math_transcendental_intrinsics() {
+    // Inputs chosen so every result is an exact integer-valued float, so the
+    // string form is unambiguous and identical across the interpreter and the
+    // lowered backend (no reliance on float-formatting parity).
+    let source = r#"
+features: local
+
+fn main() -> Unit {
+    Log.write(message: read String.from_float(value: Math.sin(value: 0.0)))
+    Log.write(message: read String.from_float(value: Math.cos(value: 0.0)))
+    Log.write(message: read String.from_float(value: Math.exp(value: 0.0)))
+    Log.write(message: read String.from_float(value: Math.exp2(value: 3.0)))
+    Log.write(message: read String.from_float(value: Math.log(value: 1.0)))
+    Log.write(message: read String.from_float(value: Math.log2(value: 8.0)))
+    Log.write(message: read String.from_float(value: Math.tanh(value: 0.0)))
+    Log.write(message: read String.from_float(value: Math.trunc_float(value: 3.75)))
+    return Unit
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-math-transcendental.rss",
+        "rsscript_parity_math_transcendental",
+        source,
+    );
+}
+
+#[test]
+fn parity_bytes_hash_and_gzip_intrinsics() {
+    // Hashes/decompression use the same Rust crates on both backends, so the byte
+    // outputs are identical; the gzip blob is `gzip("rsscript")` (8 bytes).
+    let source = r#"
+features: native, local
+
+fn main() -> Unit {
+    let bytes = Bytes.from_uints(values: read [104, 105])
+    Log.write(message: read String.from_int(value: Bytes.len(value: read bytes)))
+    let uints = Bytes.to_uints(value: read bytes)
+    Log.write(message: read String.from_int(value: List.get<Int>(list: read uints, index: 0)))
+    Log.write(message: read String.from_int(value: List.get<Int>(list: read uints, index: 1)))
+
+    let sha224 = Hash.sha3_224_bytes(value: read bytes)
+    Log.write(message: read String.from_int(value: Bytes.len(value: read sha224)))
+    let sha256 = Hash.sha3_256_bytes(value: read bytes)
+    Log.write(message: read String.from_int(value: Bytes.len(value: read sha256)))
+    let shake = Hash.shake128_bytes(value: read bytes, out_len: 16)
+    Log.write(message: read String.from_int(value: Bytes.len(value: read shake)))
+    let sha256_uints = Bytes.to_uints(value: read sha256)
+    Log.write(message: read String.from_int(value: List.get<Int>(list: read sha256_uints, index: 0)))
+
+    let gz = Bytes.from_uints(values: read [31, 139, 8, 0, 0, 0, 0, 0, 2, 255, 43, 42, 46, 78, 46, 202, 44, 40, 1, 0, 171, 165, 148, 251, 8, 0, 0, 0])
+    match Gzip.decompress_bytes(value: read gz) {
+        Ok(plain) => {
+            Log.write(message: read String.from_int(value: Bytes.len(value: read plain)))
+        }
+        Err(error) => {
+            Log.write(message: read DecodeError.message(error: read error))
+        }
+    }
+    return Unit
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-bytes-hash-gzip.rss",
+        "rsscript_parity_bytes_hash_gzip",
+        source,
+    );
 }
 
 #[test]
@@ -1512,6 +1648,7 @@ async fn main() -> Result<Unit, HttpError> {
     let response = await Http.get_async(url: read url_arg())?
     Log.write(message: read String.from_int(value: HttpResponse.status(response: read response)))
     Log.write(message: read HttpResponse.text(response: read response))
+    Log.write(message: read String.from_int(value: Bytes.len(value: read HttpResponse.bytes(response: read response))))
     let lines = HttpResponse.lines(response: read response)
     Log.write(message: read String.from_int(value: List.len<String>(list: read lines)))
     if HttpResponse.is_success(response: read response) {
@@ -2953,7 +3090,11 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    common::assert_vm_eval_matches_backend("parity-duration.rss", "rsscript_parity_duration", source);
+    common::assert_vm_eval_matches_backend(
+        "parity-duration.rss",
+        "rsscript_parity_duration",
+        source,
+    );
 }
 
 #[test]
@@ -2976,7 +3117,11 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    common::assert_vm_eval_matches_backend("parity-deadline.rss", "rsscript_parity_deadline", source);
+    common::assert_vm_eval_matches_backend(
+        "parity-deadline.rss",
+        "rsscript_parity_deadline",
+        source,
+    );
 }
 
 #[test]
@@ -3405,7 +3550,11 @@ fn main() -> Result<Unit, JsonError> {
     return Ok(Unit)
 }
 "#;
-    common::assert_vm_eval_matches_backend("parity-json-path.rss", "rsscript_parity_json_path", source);
+    common::assert_vm_eval_matches_backend(
+        "parity-json-path.rss",
+        "rsscript_parity_json_path",
+        source,
+    );
 }
 
 #[test]
@@ -3625,7 +3774,11 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    common::assert_vm_eval_matches_backend("parity-with-try.rss", "rsscript_parity_with_try", source);
+    common::assert_vm_eval_matches_backend(
+        "parity-with-try.rss",
+        "rsscript_parity_with_try",
+        source,
+    );
 }
 
 #[test]

@@ -69,8 +69,14 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         "stdlib/clone/clone.rssi",
         include_str!("../../../stdlib/clone/clone.rssi"),
     ),
-    ("stdlib/cmp/eq.rssi", include_str!("../../../stdlib/cmp/eq.rssi")),
-    ("stdlib/cmp/ord.rssi", include_str!("../../../stdlib/cmp/ord.rssi")),
+    (
+        "stdlib/cmp/eq.rssi",
+        include_str!("../../../stdlib/cmp/eq.rssi"),
+    ),
+    (
+        "stdlib/cmp/ord.rssi",
+        include_str!("../../../stdlib/cmp/ord.rssi"),
+    ),
     (
         "stdlib/collections/buffer.rssi",
         include_str!("../../../stdlib/collections/buffer.rssi"),
@@ -123,12 +129,18 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         "stdlib/counter/counter.rssi",
         include_str!("../../../stdlib/counter/counter.rssi"),
     ),
-    ("stdlib/csv/csv.rssi", include_str!("../../../stdlib/csv/csv.rssi")),
+    (
+        "stdlib/csv/csv.rssi",
+        include_str!("../../../stdlib/csv/csv.rssi"),
+    ),
     (
         "stdlib/date/date.rssi",
         include_str!("../../../stdlib/date/date.rssi"),
     ),
-    ("stdlib/db/db.rssi", include_str!("../../../stdlib/db/db.rssi")),
+    (
+        "stdlib/db/db.rssi",
+        include_str!("../../../stdlib/db/db.rssi"),
+    ),
     (
         "stdlib/diff/diff.rssi",
         include_str!("../../../stdlib/diff/diff.rssi"),
@@ -137,12 +149,18 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         "stdlib/encoding/encoding.rssi",
         include_str!("../../../stdlib/encoding/encoding.rssi"),
     ),
-    ("stdlib/env/env.rssi", include_str!("../../../stdlib/env/env.rssi")),
+    (
+        "stdlib/env/env.rssi",
+        include_str!("../../../stdlib/env/env.rssi"),
+    ),
     (
         "stdlib/fs/directory.rssi",
         include_str!("../../../stdlib/fs/directory.rssi"),
     ),
-    ("stdlib/fs/file.rssi", include_str!("../../../stdlib/fs/file.rssi")),
+    (
+        "stdlib/fs/file.rssi",
+        include_str!("../../../stdlib/fs/file.rssi"),
+    ),
     (
         "stdlib/hash/hash.rssi",
         include_str!("../../../stdlib/hash/hash.rssi"),
@@ -171,7 +189,10 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         "stdlib/json/json.rssi",
         include_str!("../../../stdlib/json/json.rssi"),
     ),
-    ("stdlib/log/log.rssi", include_str!("../../../stdlib/log/log.rssi")),
+    (
+        "stdlib/log/log.rssi",
+        include_str!("../../../stdlib/log/log.rssi"),
+    ),
     (
         "stdlib/math/math.rssi",
         include_str!("../../../stdlib/math/math.rssi"),
@@ -180,7 +201,10 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         "stdlib/option/option.rssi",
         include_str!("../../../stdlib/option/option.rssi"),
     ),
-    ("stdlib/os/os.rssi", include_str!("../../../stdlib/os/os.rssi")),
+    (
+        "stdlib/os/os.rssi",
+        include_str!("../../../stdlib/os/os.rssi"),
+    ),
     (
         "stdlib/path/path.rssi",
         include_str!("../../../stdlib/path/path.rssi"),
@@ -225,7 +249,10 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         "stdlib/toml/toml.rssi",
         include_str!("../../../stdlib/toml/toml.rssi"),
     ),
-    ("stdlib/url/url.rssi", include_str!("../../../stdlib/url/url.rssi")),
+    (
+        "stdlib/url/url.rssi",
+        include_str!("../../../stdlib/url/url.rssi"),
+    ),
     (
         "stdlib/weak/weak.rssi",
         include_str!("../../../stdlib/weak/weak.rssi"),

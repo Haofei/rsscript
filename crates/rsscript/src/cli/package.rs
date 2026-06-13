@@ -9,10 +9,10 @@ use rsscript::{
     format_package_metadata_human, format_package_metadata_json, format_package_metadata_reir_json,
     format_package_publish_human, format_package_publish_json, format_package_review_human,
     format_package_review_json, format_package_review_markdown, format_package_tree_human,
-    format_package_tree_json,
-    format_package_tree_reir_json, format_package_vendor_human, format_package_vendor_json,
-    format_package_vendor_reir_json, lock_package_dir, package_metadata, package_metadata_verify,
-    package_tree, publish_package_dry_run_with_registry, review_package_dir, vendor_package_dir,
+    format_package_tree_json, format_package_tree_reir_json, format_package_vendor_human,
+    format_package_vendor_json, format_package_vendor_reir_json, lock_package_dir,
+    package_metadata, package_metadata_verify, package_tree, publish_package_dry_run_with_registry,
+    review_package_dir, vendor_package_dir,
 };
 
 use super::{print_usage, required_flag_value};

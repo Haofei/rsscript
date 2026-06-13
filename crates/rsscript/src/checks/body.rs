@@ -1,4 +1,6 @@
-use crate::text_util::{split_top_level_type_args, strip_fresh_type, type_arg_names, type_root_name};
+use crate::text_util::{
+    split_top_level_type_args, strip_fresh_type, type_arg_names, type_root_name,
+};
 use std::collections::{HashMap, HashSet};
 
 use crate::analyzer::Analyzer;
@@ -1581,8 +1583,7 @@ fn check_integer_literal_range(analyzer: &mut Analyzer<'_>, expr: &HirExpr) {
     let HirExpr::Number { value, span, .. } = expr else {
         return;
     };
-    let is_decimal_integer =
-        !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit());
+    let is_decimal_integer = !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit());
     if is_decimal_integer && value.parse::<i64>().is_err() {
         analyzer.diagnostics.push(
             Diagnostic::error(
@@ -1591,9 +1592,7 @@ fn check_integer_literal_range(analyzer: &mut Analyzer<'_>, expr: &HirExpr) {
                 span.clone(),
                 "integer literal out of range",
             )
-            .with_cause(
-                "RSScript `Int` is a 64-bit signed integer; literals must fit in i64.",
-            )
+            .with_cause("RSScript `Int` is a 64-bit signed integer; literals must fit in i64.")
             .with_fix(
                 "use_in_range_literal",
                 "Use a value within i64 range.",
@@ -6686,8 +6685,6 @@ fn is_resource_pool_fallible_constructor(callee: &Callee) -> bool {
 fn is_resource_pool_constructor(callee: &Callee) -> bool {
     is_resource_pool_infallible_constructor(callee) || is_resource_pool_fallible_constructor(callee)
 }
-
-
 
 fn is_resource_pool_type(type_name: &str) -> bool {
     type_root_name(type_name) == "ResourcePool"

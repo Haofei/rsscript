@@ -517,9 +517,8 @@ fn main() -> Unit {
 }
 "#;
     assert_eq!(analyze_source_with_core("uop.rss", source), Vec::new());
-    let package =
-        lower_source_to_rust_package("uop.rss", source, "uop", &common::runtime_path())
-            .unwrap_or_else(|diagnostics| panic!("uop.rss: {diagnostics:?}"));
+    let package = lower_source_to_rust_package("uop.rss", source, "uop", &common::runtime_path())
+        .unwrap_or_else(|diagnostics| panic!("uop.rss: {diagnostics:?}"));
     assert!(package.main_rs.is_some());
     let main_rs = package.main_rs.unwrap();
     assert!(!main_rs.contains("todo!"));

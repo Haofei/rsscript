@@ -269,9 +269,7 @@ fn try_run_collect(args: &[String]) -> Result<ExitCode, CliError> {
         let error_diagnostics = bundle
             .facts
             .iter()
-            .filter(|fact| {
-                fact.kind == reir::FactKind::Diagnostic && fact.unknown_reason.is_some()
-            })
+            .filter(|fact| fact.kind == reir::FactKind::Diagnostic && fact.unknown_reason.is_some())
             .count();
         if error_diagnostics > 0 {
             return Err(CliError::usage(format!(
@@ -321,9 +319,7 @@ fn try_run_report_pr(args: &[String]) -> Result<(ExitCode, String), CliError> {
             "--sarif" => sarif = true,
             "--fail-on-unknown" => cli.fail_on_unknown = Some(true),
             "--fail-on-excess" => cli.fail_on_excess = Some(true),
-            "--require-verified-capabilities" => {
-                cli.require_verified_capabilities = Some(true)
-            }
+            "--require-verified-capabilities" => cli.require_verified_capabilities = Some(true),
             "--allow-missing" => cli.fail_on_missing = Some(false),
             unknown => {
                 return Err(CliError::usage(format!(

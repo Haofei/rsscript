@@ -2602,15 +2602,12 @@ fn type_ref_display_name(ty: &TypeRef) -> String {
     )
 }
 
-
-
 fn result_ok_type_name(type_name: &str) -> Option<String> {
     if type_root_name(type_name) != "Result" {
         return None;
     }
     type_arg_names(type_name).and_then(|args| args.first().map(|ty| (*ty).to_string()))
 }
-
 
 fn capability_protocol_name(type_name: &str) -> Option<&str> {
     if type_root_name(type_name) != "Capability" {

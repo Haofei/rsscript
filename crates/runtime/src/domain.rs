@@ -1839,12 +1839,14 @@ mod tests {
             let request = String::from_utf8_lossy(&request[..read]);
             assert!(request.starts_with("GET /bytes HTTP/1.1"));
             stream
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\n\x00\xffA")
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\n\x00\xffA",
+                )
                 .expect("response should write");
         });
 
-        let response = http_get(&format!("http://{addr}/bytes"))
-            .expect("sync HTTP GET should succeed");
+        let response =
+            http_get(&format!("http://{addr}/bytes")).expect("sync HTTP GET should succeed");
 
         assert_eq!(response.status, 200);
         assert_eq!(http_response_bytes(&response), vec![0, 255, 65]);

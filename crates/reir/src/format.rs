@@ -510,9 +510,13 @@ pub fn format_sarif(reconciliations: &[Reconciliation]) -> String {
             .as_ref()
             .map(|capability| {
                 let mut parts = vec![format!("{:?}", capability.category)];
-                for value in [&capability.provider, &capability.service, &capability.action]
-                    .into_iter()
-                    .flatten()
+                for value in [
+                    &capability.provider,
+                    &capability.service,
+                    &capability.action,
+                ]
+                .into_iter()
+                .flatten()
                 {
                     parts.push(value.clone());
                 }
@@ -1629,7 +1633,9 @@ mod tests {
         let sarif = format_sarif(&[missing_reconciliation()]);
         let value: serde_json::Value = serde_json::from_str(&sarif).expect("valid SARIF JSON");
         assert_eq!(value["version"], "2.1.0");
-        let results = value["runs"][0]["results"].as_array().expect("results array");
+        let results = value["runs"][0]["results"]
+            .as_array()
+            .expect("results array");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0]["ruleId"], "missing_capability");
         assert_eq!(results[0]["level"], "error");

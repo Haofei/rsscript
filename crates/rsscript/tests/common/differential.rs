@@ -164,16 +164,19 @@ pub fn assert_backends_agree_on(
 ) {
     let mut reference: Option<(&'static str, String)> = None;
     for backend in backends {
-        let stdout = backend.run_stdout(file, source, args).unwrap_or_else(|error| {
-            panic!(
-                "backend `{}` failed on {file}: {error}\n--- source ---\n{source}",
-                backend.name()
-            )
-        });
+        let stdout = backend
+            .run_stdout(file, source, args)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "backend `{}` failed on {file}: {error}\n--- source ---\n{source}",
+                    backend.name()
+                )
+            });
         match &reference {
             None => reference = Some((backend.name(), stdout)),
             Some((reference_name, reference_stdout)) => assert_eq!(
-                &stdout, reference_stdout,
+                &stdout,
+                reference_stdout,
                 "backend divergence on {file}: `{reference_name}` vs `{}`\n--- source ---\n{source}",
                 backend.name()
             ),

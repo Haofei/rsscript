@@ -320,9 +320,11 @@ pub(super) fn read_field_ref(value: &VmValue, field: &str) -> Result<VmValue, Ev
 /// Read a struct/variant field by its precomputed slot (no name lookup).
 pub(super) fn read_field_slot(value: &VmValue, slot: usize) -> Result<VmValue, EvalError> {
     match value {
-        VmValue::Struct(data) | VmValue::Variant(data) => data.fields.get(slot).cloned().ok_or_else(|| {
-            EvalError::Runtime(format!("reg VM struct field slot {slot} out of range."))
-        }),
+        VmValue::Struct(data) | VmValue::Variant(data) => {
+            data.fields.get(slot).cloned().ok_or_else(|| {
+                EvalError::Runtime(format!("reg VM struct field slot {slot} out of range."))
+            })
+        }
         VmValue::Managed(value) => read_field_slot(&value.borrow(), slot),
         other => Err(EvalError::Runtime(format!(
             "reg VM expected Struct for field slot {slot}, got `{}`.",

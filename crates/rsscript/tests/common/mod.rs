@@ -2,6 +2,8 @@
 
 pub mod differential;
 
+use base64::Engine;
+use sha1::{Digest, Sha1};
 use std::collections::BTreeSet;
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
@@ -13,8 +15,6 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
-use base64::Engine;
-use sha1::{Digest, Sha1};
 
 use rsscript::{
     EvalError, EvalOutput, Severity, analyze_source, lower_source_to_rust_package,
@@ -39,9 +39,14 @@ pub fn runtime_path() -> String {
 }
 
 pub fn generated_target_dir() -> PathBuf {
-    workspace_root()
-        .join("target/rsscript-generated-test")
-        .join(std::process::id().to_string())
+    // A SINGLE shared target dir across every generated-package build. Each test
+    // writes its package into its own temp dir (so sources never collide), but the
+    // build output is shared: the heavy `rsscript-runtime` dependency tree
+    // (tokio, reqwest, flate2, sha3, …) is then compiled *once* and reused by
+    // every test instead of being rebuilt from scratch per nextest process.
+    // Cargo's build lock serializes concurrent builds into this dir safely, and
+    // after the first warm-up each test only recompiles its own tiny crate.
+    workspace_root().join("target/rsscript-generated-test")
 }
 
 // ---------------------------------------------------------------------------
@@ -639,10 +644,7 @@ pub fn assert_vm_eval_matches_backend_internal(
             .arg(package_dir.join("Cargo.toml"))
             .arg("--")
             .args(backend_args)
-            .env(
-                "CARGO_TARGET_DIR",
-                generated_target_dir(),
-            )
+            .env("CARGO_TARGET_DIR", generated_target_dir())
             .output()
             .expect("generated Rust package should run");
         let stdout = String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n");

@@ -58,7 +58,10 @@ fn default_recursive() -> bool {
 }
 
 fn default_timeout_ms() -> u64 {
-    10_000
+    // Generous enough that a debug-build `rss` subprocess (or a quick `cargo`
+    // invocation) survives a heavily loaded CI runner; commands that actually
+    // compile a crate set a larger explicit `timeout_ms` in the manifest.
+    60_000
 }
 
 #[derive(Debug, Default)]
@@ -701,7 +704,7 @@ mod tests {
         let test = &manifest.tests[0];
         assert_eq!(test.name, "a");
         assert!(test.recursive, "recursive should default to true");
-        assert_eq!(test.timeout_ms, 10_000);
+        assert_eq!(test.timeout_ms, 60_000);
         assert!(!test.ignored);
     }
 

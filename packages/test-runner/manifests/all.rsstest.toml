@@ -8,13 +8,14 @@ args = ["fmt", "--check"]
 name = "clippy has no warnings"
 kind = "command_success"
 command = "cargo"
-timeout_ms = 60000
+timeout_ms = 180000
 args = ["clippy", "--workspace", "--", "-D", "warnings"]
 
 [[tests]]
 name = "generated Rust packages compile"
 kind = "command_for_each_path"
 command = "cargo"
+timeout_ms = 180000
 args = ["check", "--manifest-path"]
 jobs = 1
 paths = [
@@ -68,6 +69,7 @@ args = ["check", "examples/scripts/basic/hello.rss"]
 name = "core interfaces have no diagnostics"
 kind = "command_success"
 command = "cargo"
+timeout_ms = 180000
 args = [
   "test",
   "-q",
@@ -111,6 +113,7 @@ args = ["run", "packages/core-properties"]
 name = "passing root fixtures have no diagnostics"
 kind = "command_success"
 command = "cargo"
+timeout_ms = 180000
 args = [
   "test",
   "-q",

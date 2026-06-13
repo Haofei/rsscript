@@ -380,9 +380,10 @@ mod tests {
             ..required[0].clone()
         }];
         let results = reconcile_capabilities(&required, &granted);
-        assert!(results.iter().any(|r| matches!(
-            r.kind,
-            ReconciliationKind::MissingCapability
-        )));
+        assert!(
+            results
+                .iter()
+                .any(|r| matches!(r.kind, ReconciliationKind::MissingCapability))
+        );
     }
 }

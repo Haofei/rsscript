@@ -1,4 +1,6 @@
-use crate::text_util::{split_top_level_type_args, strip_fresh_type, type_arg_names, type_root_name};
+use crate::text_util::{
+    split_top_level_type_args, strip_fresh_type, type_arg_names, type_root_name,
+};
 use std::collections::{HashMap, HashSet};
 
 use crate::analyzer::Analyzer;
@@ -1582,7 +1584,9 @@ fn protocol_bound_guidance(protocol: &str, actual: &str) -> (&'static str, Strin
     match protocol {
         "Hashable" => (
             "A `Map` key / `Set` element must be `Hashable` (and therefore `Eq`). Hashability is a compiler-derived structural contract: a builtin scalar key, or a managed struct/sum that derives `Eq` and `Hash`.",
-            format!("Add `derives(Eq, Hash)` to `{actual}` so the compiler derives a structural hash and equality, or use a hashable key type."),
+            format!(
+                "Add `derives(Eq, Hash)` to `{actual}` so the compiler derives a structural hash and equality, or use a hashable key type."
+            ),
         ),
         "Eq" => (
             "Equality is a compiler-derived structural contract: a builtin scalar, or a managed struct/sum that derives `Eq` (or `Ord`, which implies `Eq`).",
@@ -1590,7 +1594,9 @@ fn protocol_bound_guidance(protocol: &str, actual: &str) -> (&'static str, Strin
         ),
         _ => (
             "Generic protocol bounds are nominal. Use a type with a matching derive, add a compatible generic bound, or pass an explicit comparator API.",
-            format!("Add `derives({protocol})` to `{actual}` if the compiler-owned ordering is intended, or call an API that accepts an explicit comparator."),
+            format!(
+                "Add `derives({protocol})` to `{actual}` if the compiler-owned ordering is intended, or call an API that accepts an explicit comparator."
+            ),
         ),
     }
 }
@@ -4786,7 +4792,6 @@ pub(crate) fn unresolved_generic_type(type_name: &str) -> bool {
             .any(|param_type| unresolved_generic_type(param_type))
 }
 
-
 fn builtin_generic_type_params(root: &str) -> Option<Vec<&'static str>> {
     match root {
         "List" | "Set" | "Option" | "ResourcePool" | "Channel" | "Sender" | "Receiver"
@@ -4797,8 +4802,6 @@ fn builtin_generic_type_params(root: &str) -> Option<Vec<&'static str>> {
         _ => None,
     }
 }
-
-
 
 fn hir_expr_span(expr: &HirExpr) -> &Span {
     match expr {
