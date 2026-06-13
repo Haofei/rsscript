@@ -45,9 +45,44 @@ contract:
 
 - Signature: `helper(handle, …) -> i64`. `handle` indexes a per-call table the VM
   fills with the call's heap arguments (`JIT_HEAP_ARGS`).
-- Failure: the helper sets a thread-local **bail byte**; generated code loads it
-  and branches to fallback *immediately after every helper call*, so a failed
-  read can never keep executing. The VM then re-runs on the interpreter.
+- Failure: the helper calls `vm_jit::signal_bail()` (which sets a per-thread bail
+  byte owned by `vm-jit`); generated code loads the byte and branches to fallback
+  *immediately after every helper call*, so a failed read can never keep
+  executing. The VM then re-runs on the interpreter.
+
+**What helpers may do.** Helpers are **reads only** — they look a handle up in the
+per-call table and return one `Int` (a struct `Int` field, a list length, or an
+`Int` list element). They never mutate a heap value, never allocate observable
+state, never call back into user code, and never perform I/O. That is what makes
+the compiled subset side-effect-free, which is the premise of the fallback proof
+below.
+
+**Handle validity & lifetime.** A `handle` is only ever an index into the
+*current* call's `JIT_HEAP_ARGS` table, produced by the VM in the same `try_native`
+that invokes the function; the table is populated before the call and cleared by a
+drop guard on every exit path, so a handle cannot outlive its call or alias another
+call's table. A handle the helper can't satisfy — out of range, or the indexed
+value is the wrong shape (not a struct/list, or a non-`Int` field/element) — is a
+**bail**, not undefined behavior: the table lookup is bounds-checked
+(`slice::get`) and the type match is an explicit `match`, so a stale or bogus
+handle deterministically takes the fallback path. Native code never dereferences a
+raw heap pointer; it only passes opaque `i64` indices the VM owns.
+
+**Float parity.** Float registers carry an `f64` bit pattern. Native arithmetic
+emits the plain IEEE-754 ops (`fadd`/`fsub`/`fmul`/`fdiv`) and ordered comparisons
+(`FloatCC::LessThan`/…, NaN → false), which are exactly Rust's `f64` `+ - * /` and
+`< <= > >=` — the same operations the interpreter runs on `VmValue::Float`. Float
+division never traps (`x/0.0` = `±inf`/`NaN`), so floats need no guard or bail.
+NaN/±inf therefore appear identically on both backends.
+
+**Observational equivalence of fallback.** Because the compiled subset only reads
+(scalars + the read-only helpers above) and has no side effects, a bail at *any*
+point — an arithmetic guard, a divide-by-zero edge, or a helper that can't satisfy
+a read — has produced **no observable effect** before it bailed. Re-running the
+whole function on the interpreter is therefore indistinguishable from never having
+attempted native execution: same inputs, same heap (unmutated), same result or
+same error. This is why a binary bail flag suffices (next paragraph) and why the
+native tier can only ever be *faster*, never semantically different.
 
 **Decision (status vs flag):** a binary bail flag, not a `HelperStatus {
 Ok|TypeMismatch|Bounds|RuntimeError|Unsupported }` enum. Rationale: the

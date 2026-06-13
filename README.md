@@ -462,7 +462,7 @@ rss test     [--all] [--json] [--filter <substring>]
 - `rss check` loads bundled core `.rssi` signatures by default for single files; pointed at a directory with `rsspkg.toml`, it runs package check.
 - `rss lint` reuses the frontend checks and emits warnings. The first lint is `RSL001` — public signatures over the review budget for parameter count, generics, effects, or nested-type depth.
 - `rss dev` is the inner-loop watcher: it reruns `rss check` (add `--lint`, or `--run` for the cargo-backed run path) on every save, polling source modification times with no extra dependency. The default `check` loop never invokes cargo, so frontend feedback stays in the tens-of-milliseconds range; `--once` runs a single pass for scripts and CI. It watches `.rss`, `.rssi`, `.toml`, and `.lock` files, skipping `target/`, `.git/`, and generated directories. To keep behavior unambiguous, `rss dev` rejects flag combinations it would otherwise ignore: `--json` requires `--once` (watch mode interleaves human status lines that would corrupt JSON); `--lint` runs the lint loop alone and is mutually exclusive with `--run`; `--release` applies only to `--run`; and `--run` does not accept `--core`/`--no-core`/`--interface` (those apply only to the check loop).
-- `rss eval` runs the checked tree-walk interpreter for pure local feedback. P0 supports scalar/control-flow/user-function/struct/sum-pattern programs plus a small pure runtime-intrinsic subset; unsupported native, host, async, and resource boundaries fail closed instead of falling back to Rust lowering.
+- `rss eval` runs the checked in-process register-VM interpreter for pure local feedback. It supports scalar/control-flow/user-function/struct/sum-pattern programs plus a runtime-intrinsic subset; unsupported native, host, async, and resource boundaries fail closed with a diagnostic instead of falling back to Rust lowering or producing a wrong answer.
 - `rss test` runs the default test set; `--all` runs the full test set. `--filter` selects tests by name substring, and `--json` emits a machine-readable summary.
 - Human diagnostics render the offending source line in a rustc-style gutter with an aligned caret and inline label (falling back to a caret-only view when the source file is unavailable, e.g. synthetic spans). `--json` output is unchanged.
 - `rss review --map` validates inputs first, so files with frontend errors get diagnostics instead of misleading classifications. `--json` reports `unknown_ratio` and `unknown_function_ratio` directly.
@@ -472,6 +472,20 @@ rss test     [--all] [--json] [--filter <substring>]
 - `rss pkg ci` is the CI-facing package check entrypoint. It uses the same package health rules as `rss pkg`, with stable `--json` output for automation.
 - `rss pkg publish --dry-run` runs pre-publish checks without uploading and reports whether the package is ready.
 - `rss run` lowers a single file (or a package with `src/main.rss`) to a temporary Rust package and delegates to `cargo run`; package lowering carries enabled `[native.rust]` wrappers through as generated Cargo path dependencies and maps `native/bindings.rssbind.toml` call bindings into generated Rust calls. `--dry-run` prints the generated `Cargo.toml`, lowered Rust, and cargo invocation without executing it; `--release` delegates to Cargo's release profile, `--out-dir` keeps the generated package, and arguments after `--` reach the program through the core `Args` API.
+
+### Execution backends
+
+These are **not equivalent backends** — they cover different slices of the language. Only Rust lowering executes the full language; it is the semantic reference. The others are progressively narrower fast-feedback/optimization tiers that **fail closed** (or fall back) rather than silently diverging, and the N-way differential (`tests/backend_differential.rs`) gates that they agree on their shared supported subset.
+
+| Backend | Entry point | Executes | Outside its subset |
+| --- | --- | --- | --- |
+| Frontend check | `rss check` / `rss lint` / `rss dev` | nothing — type / effect / conflict / review checking only | n/a (reports diagnostics) |
+| **Rust lowering (reference)** | `rss run [--release]` | the **full** language, via generated Rust + `rustc` | — (this is the reference semantics) |
+| Register-VM interpreter | `rss eval`, `rss bench --mode vm` | scalar / control-flow / user functions / structs / sum patterns / collections / a runtime-intrinsic subset | **fails closed** with a diagnostic on unsupported native / host / async / resource boundaries |
+| Tier-0 JIT | `rss bench --mode jit-internal` | the register VM's numeric / control core plus side-effect-free heap reads | per-function **fallback** to the interpreter (gap-free) |
+| Native JIT (Cranelift) | `rss bench --mode jit-native` (feature `native-jit`) | unboxed `Int` / `Float` / `Bool` arithmetic + control flow + `Int` heap reads | **bails** to the interpreter (gap-free) |
+
+The supported/unsupported surface of the VM tiers is tracked mechanically: `vm_coverage_report()` enumerates every HIR statement/expression and runtime intrinsic versus the supported set, and `tests/execution_coverage.rs` fails if anything leaves the supported set without being on a documented, shrinking allowlist (desugared constructs and scheduler-run async). So "works in `rss eval`" and "works via `rss run`" are distinct, checked claims — not assumed equivalences.
 
 ### Hello world
 
