@@ -1,0 +1,28 @@
+// expect: RS0401
+// Use-after-move inside a match-*expression* arm body must be diagnosed, like the
+// match-statement form. The arm body is analyzed with the threaded move state.
+features: local
+
+struct Box { v: Int }
+
+fn take_it(b: take Box) -> Int {
+    return b.v
+}
+
+fn use_it(b: read Box) -> Int {
+    return b.v
+}
+
+fn main() -> Unit {
+    local b = Box(v: 1)
+    let r = match true {
+        true => {
+            let moved = take_it(b: take b)
+            use_it(b: read b)
+        }
+        false => {
+            0
+        }
+    }
+    Log.write(message: read String.from_int(value: r))
+}

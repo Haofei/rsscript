@@ -885,8 +885,118 @@ fn collect_ordered_moved_uses_from_expr(
                 if let Some(guard) = &arm.guard {
                     collect_ordered_moved_uses_from_expr(guard, state, moved_uses);
                 }
-                collect_ordered_moved_uses_from_block(&arm.body, &HashMap::new(), moved_uses);
+                // Each arm body starts from the post-scrutinee state; walk it with
+                // a per-arm clone so a move in one arm doesn't leak to siblings or
+                // later code. (Previously analyzed with an empty state, which
+                // skipped use-after-move inside match-*expression* arm bodies — the
+                // match-statement path already threads real flow states.)
+                collect_ordered_moved_uses_from_block_threaded(
+                    &arm.body,
+                    &mut state.clone(),
+                    moved_uses,
+                );
             }
+        }
+    }
+}
+
+/// Walk a block with a *threaded* move state (rather than the precomputed
+/// per-statement flow map). Used for match-*expression* arm bodies, which the CFG
+/// flow analysis does not weave in. It catches straight-line use-after-move within
+/// the arm; nested control flow is analyzed with a per-branch clone, so it may
+/// under-report across complex branches but never over-reports (no false positive
+/// move errors). The expr walker mutates `state` as it applies each statement's
+/// move events, so sequential moves are visible to later statements.
+fn collect_ordered_moved_uses_from_block_threaded(
+    block: &HirBlock,
+    state: &mut BodyState,
+    moved_uses: &mut Vec<MovedUse>,
+) {
+    for statement in &block.statements {
+        match statement {
+            HirStmt::Let {
+                value: Some(value), ..
+            }
+            | HirStmt::Return {
+                value: Some(value), ..
+            }
+            | HirStmt::Expr(value) => {
+                collect_ordered_moved_uses_from_expr(value, state, moved_uses);
+            }
+            HirStmt::Assign { target, value, .. } => {
+                collect_ordered_moved_uses_from_expr(value, state, moved_uses);
+                for read in crate::hir::assign_target_reads(target) {
+                    collect_ordered_moved_uses_from_expr(read, state, moved_uses);
+                }
+            }
+            HirStmt::With { resource, body, .. } => {
+                collect_ordered_moved_uses_from_expr(resource, state, moved_uses);
+                collect_ordered_moved_uses_from_block_threaded(
+                    body,
+                    &mut state.clone(),
+                    moved_uses,
+                );
+            }
+            HirStmt::If {
+                condition,
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_ordered_moved_uses_from_expr(condition, state, moved_uses);
+                collect_ordered_moved_uses_from_block_threaded(
+                    then_body,
+                    &mut state.clone(),
+                    moved_uses,
+                );
+                if let Some(else_body) = else_body {
+                    collect_ordered_moved_uses_from_block_threaded(
+                        else_body,
+                        &mut state.clone(),
+                        moved_uses,
+                    );
+                }
+            }
+            HirStmt::Loop {
+                condition, body, ..
+            } => {
+                if let Some(condition) = condition {
+                    collect_ordered_moved_uses_from_expr(condition, state, moved_uses);
+                }
+                collect_ordered_moved_uses_from_block_threaded(
+                    body,
+                    &mut state.clone(),
+                    moved_uses,
+                );
+            }
+            HirStmt::For { iterable, body, .. } => {
+                collect_ordered_moved_uses_from_expr(iterable, state, moved_uses);
+                collect_ordered_moved_uses_from_block_threaded(
+                    body,
+                    &mut state.clone(),
+                    moved_uses,
+                );
+            }
+            HirStmt::Match {
+                value,
+                scrutinee_effect,
+                arms,
+                ..
+            } => {
+                collect_ordered_moved_uses_from_expr(value, state, moved_uses);
+                apply_match_take_move(*scrutinee_effect, value, state);
+                for arm in arms {
+                    if let Some(guard) = &arm.guard {
+                        collect_ordered_moved_uses_from_expr(guard, state, moved_uses);
+                    }
+                    collect_ordered_moved_uses_from_block_threaded(
+                        &arm.body,
+                        &mut state.clone(),
+                        moved_uses,
+                    );
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -999,8 +1109,19 @@ fn collect_closure_local_moved_uses_from_expr(expr: &HirExpr, moved_uses: &mut V
             collect_closure_local_moved_uses_from_expr(left, moved_uses);
             collect_closure_local_moved_uses_from_expr(right, moved_uses);
         }
+        // Recurse into match-expression scrutinee, guards, and arm bodies so a
+        // closure nested under a match-expression arm is still scanned for
+        // captured moved locals (previously a no-op).
+        HirExpr::Match { value, arms, .. } => {
+            collect_closure_local_moved_uses_from_expr(value, moved_uses);
+            for arm in arms {
+                if let Some(guard) = &arm.guard {
+                    collect_closure_local_moved_uses_from_expr(guard, moved_uses);
+                }
+                collect_closure_local_moved_uses_from_block(&arm.body, moved_uses);
+            }
+        }
         HirExpr::Ident { .. }
-        | HirExpr::Match { .. }
         | HirExpr::MapLiteral { .. }
         | HirExpr::ObjectLiteral { .. }
         | HirExpr::ArrayLiteral { .. }
