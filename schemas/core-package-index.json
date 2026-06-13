@@ -102,6 +102,7 @@
         "Bytes.is_empty",
         "Bytes.len",
         "Bytes.slice",
+        "Bytes.to_string",
         "Bytes.to_uints",
         "Bytes.view",
         "BytesView.is_empty",
