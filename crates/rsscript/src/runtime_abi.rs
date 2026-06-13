@@ -167,6 +167,7 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("Bytes", "is_empty", "rsscript_runtime::bytes_is_empty"),
     runtime_intrinsic("Bytes", "len", "rsscript_runtime::bytes_len"),
     runtime_intrinsic("Bytes", "slice", "rsscript_runtime::bytes_slice"),
+    runtime_intrinsic("Bytes", "to_string", "rsscript_runtime::bytes_to_string"),
     runtime_intrinsic("Bytes", "to_uints", "rsscript_runtime::bytes_to_uints"),
     runtime_intrinsic("Bytes", "view", "rsscript_runtime::bytes_view"),
     runtime_intrinsic(

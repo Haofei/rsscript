@@ -891,6 +891,10 @@ pub fn bytes_to_uints(value: &[u8]) -> Vec<i64> {
     value.iter().map(|byte| i64::from(*byte)).collect()
 }
 
+pub fn bytes_to_string(value: &[u8]) -> String {
+    String::from_utf8_lossy(value).to_string()
+}
+
 pub fn bytes_from_buffer(buffer: &[u8]) -> Vec<u8> {
     buffer.to_vec()
 }

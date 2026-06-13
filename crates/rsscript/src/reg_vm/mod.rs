@@ -1978,6 +1978,7 @@ enum RegIntrinsic {
     BytesIsEmpty,
     BytesLen,
     BytesSlice,
+    BytesToString,
     BytesToUints,
     BytesViewStartsWith,
     BytesViewToBytes,
@@ -3930,6 +3931,7 @@ impl RegLowerer<'_> {
                     ("Bytes", "is_empty") => RegIntrinsic::BytesIsEmpty,
                     ("Bytes", "len") => RegIntrinsic::BytesLen,
                     ("Bytes", "slice") | ("Bytes", "view") => RegIntrinsic::BytesSlice,
+                    ("Bytes", "to_string") => RegIntrinsic::BytesToString,
                     ("Bytes", "to_uints") => RegIntrinsic::BytesToUints,
                     ("Buffer", "clear") => {
                         if arg_regs.len() != 1 {
@@ -8823,6 +8825,10 @@ impl RegVm {
                 let start = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 let len = expect_int_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
                 Ok(VmValue::Bytes(Rc::new(bytes_slice(value, start, len))))
+            }
+            RegIntrinsic::BytesToString => {
+                let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::string(String::from_utf8_lossy(value)))
             }
             RegIntrinsic::BytesToUints => {
                 let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;

@@ -844,6 +844,7 @@ fn main() -> Result<Unit, MyError> {
     let bytes_len = Bytes.len(value: read joined)
     let bytes_empty = Bytes.is_empty(value: read joined)
     let bytes_slice = Bytes.slice(value: read joined, start: 1, len: 2)
+    let bytes_text = Bytes.to_string(value: read bytes_slice)
 
     let buffer = Buffer.new(size: 16)
     let buffer_len = Buffer.len(buffer: read buffer)
@@ -1365,6 +1366,7 @@ fn inspect_file(path: read Path, bytes: read Bytes) -> Result<String, FileError>
     let exists = Directory.exists(path: read path)
     let metadata = Directory.metadata(path: read path)?
     let length = metadata_len(metadata: read metadata)
+    let byte_text = Bytes.to_string(value: read bytes)
     let text = Directory.read_string(path: read path)?
     Directory.write_string(path: read path, content: read text)?
     let file_hash = Hash.sha256_file(path: read path)?
@@ -1414,6 +1416,7 @@ fn fetch_status(url: read Url) -> Result<Int, HttpError> {
     assert!(rust.contains("rsscript_runtime::directory_write_string(path, &(text))?;"));
     assert!(rust.contains("let file_hash = rsscript_runtime::hash_sha256_file(path)?;"));
     assert!(rust.contains("let byte_hash = rsscript_runtime::hash_sha256_bytes(bytes);"));
+    assert!(rust.contains("let byte_text = rsscript_runtime::bytes_to_string(bytes);"));
     assert!(rust.contains("let current = rsscript_runtime::env_current_dir()?;"));
     assert!(rust.contains("let run_root = rsscript_runtime::env_run_workspace_root();"));
     assert!(rust.contains("rsscript_runtime::env_set_current_dir(&(current))?;"));

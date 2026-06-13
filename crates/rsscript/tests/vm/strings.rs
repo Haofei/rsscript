@@ -134,6 +134,7 @@ fn main() -> Unit {
 
     let part = Bytes.slice(value: read joined, start: 2, len: 3)
     Log.write(message: read String.from_int(value: Bytes.len(value: read part)))
+    Log.write(message: read Bytes.to_string(value: read part))
 
     let view = Bytes.view(value: read joined, start: 1, len: 4)
     Log.write(message: read String.from_int(value: BytesView.len(value: read view)))
