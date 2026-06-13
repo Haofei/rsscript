@@ -2511,12 +2511,19 @@ impl<'a> RustLowerer<'a> {
                         .map(type_ref_display_name)
                         .unwrap_or_else(|| "Unknown".to_string());
                     let receiver_type_root = type_root_name(&receiver_type_name).to_string();
-                    if method == "clone" && self.type_derives_clone(&receiver_type_root) {
-                        // Explicit `.clone()` on a user struct/sum that derives `Clone` -> Rust's
-                        // derived Clone (a deep copy). `.clone()` borrows its receiver, so a place
-                        // behind a `&` (read param / field of one) works without moving. Types that
-                        // don't derive Clone are rejected earlier (RS0206); builtins (JSON/Map/List/…)
-                        // keep their own clone lowering below.
+                    if method == "clone"
+                        && (self.type_derives_clone(&receiver_type_root)
+                            || Self::is_builtin_clone_value(&receiver_type_root))
+                    {
+                        // Explicit `.clone()` -> Rust's `Clone`: a user struct/sum that derives
+                        // `Clone`, or a builtin value type that lowers to a `Clone` Rust type but has
+                        // no dedicated clone intrinsic (`List`/`Map`/`Set`/…). Without the builtin
+                        // case these fell through to a dangling `List_clone`-style call (the checker
+                        // accepts `.clone()` via the `Clone` protocol, so it never errored at the
+                        // front end — E0425 at the Rust backend). `.clone()` borrows its receiver, so
+                        // a place behind a `&` (read param / field of one) works without moving. Types
+                        // that don't derive Clone are rejected earlier (RS0206). `String`/`Json` keep
+                        // their own clone intrinsics and are handled below.
                         return format!("{}.clone()", self.lower_expr(receiver));
                     }
                     let receiver_rust_type = receiver_type
@@ -4121,6 +4128,17 @@ impl<'a> RustLowerer<'a> {
             }
             _ => false,
         })
+    }
+
+    /// Builtin value types whose `.clone()` the checker resolves (via the `Clone`
+    /// protocol) and which lower to a `Clone` Rust type but have no dedicated clone
+    /// runtime intrinsic — so `.clone()` must lower to Rust's `.clone()` directly.
+    /// Without this they fell through to a dangling `List_clone`-style call (E0425).
+    /// `String`/`Json` are excluded (they have their own clone intrinsics);
+    /// `Deque`/`Set`/`Map`/resources are rejected at check time, so they never reach
+    /// here.
+    fn is_builtin_clone_value(name: &str) -> bool {
+        matches!(name, "List" | "Bytes" | "Buffer")
     }
 
     fn is_string_comparison_operand(&self, expr: &Expr) -> bool {

@@ -1944,3 +1944,31 @@ impl Writer for BufferWriter {
     let diagnostics = analyze_source_with_core("protocol-impl.rss", source);
     assert_eq!(diagnostics, Vec::new());
 }
+
+#[test]
+fn rust_lowering_builtin_value_clone_uses_rust_clone() {
+    // Regression: `.clone()` on a builtin value type whose clone the checker
+    // resolves (List/Bytes/Buffer) typechecks via the `Clone` protocol but used to
+    // lower to a dangling `List_clone`-style call (rustc E0425). It must lower to
+    // Rust's `.clone()`, which these types support.
+    let source = r#"
+features: local
+
+fn dup_list(xs: read List<Int>) -> fresh List<Int> {
+    return xs.clone()
+}
+
+fn dup_bytes(b: read Bytes) -> fresh Bytes {
+    return b.clone()
+}
+"#;
+    let rust = lower_source_to_rust("builtin-clone.rss", source).expect("source should lower");
+    assert!(
+        rust.contains(".clone()"),
+        "builtin `.clone()` should lower to Rust's clone, got:\n{rust}"
+    );
+    assert!(
+        !rust.contains("List_clone") && !rust.contains("Bytes_clone"),
+        "builtin `.clone()` must not emit a dangling `Type_clone` call, got:\n{rust}"
+    );
+}

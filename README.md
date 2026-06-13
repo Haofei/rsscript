@@ -473,6 +473,15 @@ rss test     [--all] [--json] [--filter <substring>]
 - `rss pkg publish --dry-run` runs pre-publish checks without uploading and reports whether the package is ready.
 - `rss run` lowers a single file (or a package with `src/main.rss`) to a temporary Rust package and delegates to `cargo run`; package lowering carries enabled `[native.rust]` wrappers through as generated Cargo path dependencies and maps `native/bindings.rssbind.toml` call bindings into generated Rust calls. `--dry-run` prints the generated `Cargo.toml`, lowered Rust, and cargo invocation without executing it; `--release` delegates to Cargo's release profile, `--out-dir` keeps the generated package, and arguments after `--` reach the program through the core `Args` API.
 
+> **Performance — use a release-built `rss` for package-scale checking.** On large, generics-heavy packages, `rss check` / `rss pkg` can be noticeably slow when run from a **debug** build of the compiler, because generic type-argument substitution currently re-parses type strings at each nesting level (a known, deferred ~O(n³) path — see `BUGS.md` RSS-11). The debug build leaves that path unoptimized; a release build optimizes it enough to be comfortable. For repeated package-wide validation (e.g. an inner edit→check loop on a big codebase), build the compiler once in release and use that binary:
+>
+> ```sh
+> cargo build --release --bin rss
+> ./target/release/rss pkg            # or: rss check <package-dir>
+> ```
+>
+> This is a temporary fast path; the durable fix is the parse-once refactor tracked in RSS-11.
+
 ### Execution backends
 
 These are **not equivalent backends** — they cover different slices of the language. Only Rust lowering executes the full language; it is the semantic reference. The others are progressively narrower fast-feedback/optimization tiers that **fail closed** (or fall back) rather than silently diverging, and the N-way differential (`tests/backend_differential.rs`) gates that they agree on their shared supported subset.

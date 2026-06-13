@@ -28,6 +28,11 @@ $BIN eval   file.rss
   repro used a *non-generic* `id`, which never enters the substitution recursion and stays flat —
   the trigger requires a generic callee.) Not a correctness fault.
 - **Fix:** parse type strings into a tree once / memoize substitutions.
+- **Fast path (until fixed):** package-scale `rss check` / `rss pkg` is comfortable when the
+  compiler is built in **release** (debug leaves the hot string-reparse path unoptimized). For
+  repeated package-wide validation use a release `rss` (`cargo build --release --bin rss`); this is
+  documented under "Performance" in `README.md`. Observed on generics-heavy ports (e.g. tinygrad-rss):
+  debug package check slow, release usable.
 - **Status — deferred (intentional):** the asymptotic fix means replacing the string-based type
   representation in the generic-substitution path with a parse-once tree — a sizeable refactor of
   correctness-critical, heavily-relied-upon generics code. The trigger is adversarial, self-authored
