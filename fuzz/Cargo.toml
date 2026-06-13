@@ -1,0 +1,52 @@
+# Coverage-guided fuzzing harness for the RSScript front end.
+#
+# This is a standalone crate, deliberately detached from the parent workspace
+# (note the empty `[workspace]` table below) so that `cargo build --workspace`
+# and CI on stable never try to build the libfuzzer targets, which require a
+# nightly toolchain and the libFuzzer runtime. Run it with:
+#
+#     cargo install cargo-fuzz          # once
+#     cargo +nightly fuzz run parse_check
+#     cargo +nightly fuzz run format_idempotent
+#
+# These targets are the coverage-guided deployment of the in-process generative
+# fuzzers in `crates/rsscript/tests/hostile.rs` and the seed-decoded backend
+# differential (`backends_agree_on_seed_decoded_programs`): proptest supplies a
+# few random inputs there; libFuzzer drives the same never-panic / stability
+# contracts with coverage feedback and a persistent corpus.
+
+[package]
+name = "rsscript-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Detach from the parent workspace.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.rsscript]
+path = "../crates/rsscript"
+
+# Prevent this from interfering with `cargo test` over the parent tree.
+[[bin]]
+name = "parse_check"
+path = "fuzz_targets/parse_check.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "format_idempotent"
+path = "fuzz_targets/format_idempotent.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = 1

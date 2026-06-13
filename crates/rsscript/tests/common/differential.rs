@@ -155,13 +155,15 @@ pub fn assert_backends_all_fail(file: &str, source: &str, args: &[&str]) {
     }
 }
 
-/// Like [`assert_backends_agree`] but with an explicit backend set.
+/// Like [`assert_backends_agree`] but with an explicit backend set. Returns the
+/// stdout every backend agreed on (useful for comparing a program against a
+/// semantics-preserving variant of it).
 pub fn assert_backends_agree_on(
     file: &str,
     source: &str,
     args: &[&str],
     backends: &[Box<dyn Backend>],
-) {
+) -> String {
     let mut reference: Option<(&'static str, String)> = None;
     for backend in backends {
         let stdout = backend
@@ -182,4 +184,12 @@ pub fn assert_backends_agree_on(
             ),
         }
     }
+    reference.expect("at least one backend").1
+}
+
+/// Run `source` on every backend, assert they all agree, and return the agreed
+/// stdout. The metamorphic-test entry point: it both enforces N-way parity and
+/// hands back the value to compare across equivalent program variants.
+pub fn backends_agreed_stdout(file: &str, source: &str, args: &[&str]) -> String {
+    assert_backends_agree_on(file, source, args, &all_backends())
 }
