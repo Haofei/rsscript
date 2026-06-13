@@ -51,6 +51,18 @@ impl<'a> RustLowerer<'a> {
         native_bindings: BTreeMap<String, String>,
         interface_programs: &[Program],
     ) -> Self {
+        // Type kinds (struct/class/resource) for `is_class_type`/`is_resource_type`,
+        // constructor lowering, etc. Built from the current program only.
+        //
+        // NOTE (review #8): types declared in *dependency* interfaces are not added
+        // here, so a class/resource/sum defined in another package and constructed
+        // in this source can mis-lower. A blanket ingest of `interface_programs` is
+        // *wrong*, though: the bundled stdlib interfaces declare runtime-backed
+        // types (e.g. `ProcessRequest`, lowered as `rsscript_runtime::ProcessRequest`)
+        // as plain structs, and classifying those as local user types reclassifies
+        // them and drops the `rsscript_runtime::` qualification. The correct fix must
+        // distinguish runtime-backed stdlib types from genuine dependency types and
+        // be validated with a multi-package repro — tracked in BUGS.md (RSS-14).
         let type_kinds = program
             .items
             .iter()
