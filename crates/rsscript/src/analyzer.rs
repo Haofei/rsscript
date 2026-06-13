@@ -4805,6 +4805,19 @@ fn expr_first_cancellation_token(expr: &Expr) -> Option<crate::diagnostic::Span>
     }
 }
 
+/// AST analogue of [`crate::hir::assign_target_reads`]: the evaluated
+/// sub-expressions of an assignment target (a field/index base, an index
+/// expression), excluding the write root. So awaits/`?`/calls embedded in an
+/// assignment *target* (e.g. `xs[await f()] = v`) are visited like the RHS.
+fn assign_target_reads_ast(target: &Expr) -> Vec<&Expr> {
+    match target {
+        Expr::Ident(_, _) => Vec::new(),
+        Expr::Field { base, .. } => vec![base.as_ref()],
+        Expr::Index { base, index, .. } => vec![base.as_ref(), index.as_ref()],
+        other => vec![other],
+    }
+}
+
 /// The awaited inner expression of `await x` / `await x?`.
 fn async_await_inner_ast(expr: &Expr) -> Option<&Expr> {
     match expr {
@@ -4892,6 +4905,10 @@ fn stmt_first_await_ast(statement: &Stmt) -> Option<crate::diagnostic::Span> {
         Stmt::LetElse(stmt) => {
             expr_first_await(&stmt.value).or_else(|| block_first_await(&stmt.else_body))
         }
+        Stmt::Assign(stmt) => assign_target_reads_ast(&stmt.target)
+            .into_iter()
+            .find_map(expr_first_await)
+            .or_else(|| expr_first_await(&stmt.value)),
         _ => None,
     }
 }
@@ -4923,6 +4940,17 @@ fn async_block_nonlinear_await(block: &Block) -> Option<crate::diagnostic::Span>
             },
             Stmt::Select(_) | Stmt::For(_) | Stmt::TaskGroup(_) => None,
             Stmt::If(_) | Stmt::Loop(_) | Stmt::Match(_) | Stmt::With(_) => None,
+            // An assignment's RHS follows the same rule as a `let` initializer (a
+            // direct `await` is linear; nested awaits are not). The target is an
+            // evaluated place, so any await inside a field/index base or index
+            // expression is non-linear (e.g. `xs[await f()] = v`).
+            Stmt::Assign(stmt) => assign_target_reads_ast(&stmt.target)
+                .into_iter()
+                .find_map(expr_first_await)
+                .or_else(|| match async_await_inner_ast(&stmt.value) {
+                    Some(inner) => expr_first_await(inner),
+                    None => expr_first_await(&stmt.value),
+                }),
             other => stmt_first_await_ast(other),
         };
         if nested.is_some() {

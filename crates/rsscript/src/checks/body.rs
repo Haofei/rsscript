@@ -2697,8 +2697,14 @@ fn check_await_placement_stmt(
                 check_await_placement(analyzer, &arm.body, function_is_async);
             }
         }
-        HirStmt::Expr(value) | HirStmt::Assign { value, .. } => {
-            check_await_placement_expr(analyzer, value, function_is_async)
+        HirStmt::Expr(value) => check_await_placement_expr(analyzer, value, function_is_async),
+        HirStmt::Assign { target, value, .. } => {
+            check_await_placement_expr(analyzer, value, function_is_async);
+            // The target is evaluated code too (a `?`/`await` in an index/field
+            // place must be checked just like the RHS).
+            for read in crate::hir::assign_target_reads(target) {
+                check_await_placement_expr(analyzer, read, function_is_async);
+            }
         }
         HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
     }

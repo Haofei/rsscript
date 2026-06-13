@@ -3490,6 +3490,27 @@ fn qualified_key(namespace: &str, name: &str) -> String {
     format!("{namespace}.{name}")
 }
 
+/// The evaluated sub-expressions of an assignment *target* (the place on the left
+/// of `=`), so a checker pass can analyze them like any other expression. The
+/// write root itself is excluded (assigning to `x` *defines* `x`, it doesn't read
+/// it), but a field/index base *is* read to reach the place, and an index
+/// expression is arbitrary evaluated code. So:
+///   `x = v`        -> [] (pure write)
+///   `x.field = v`  -> [base]                 (base is read)
+///   `xs[i] = v`    -> [base, index]          (base read, index evaluated)
+/// Nested places recurse naturally because the base is itself a `Field`/`Index`.
+/// Used by passes that previously only inspected the assigned `value`, missing
+/// awaits, `?`, moves, etc. inside the target (e.g. `xs[await f()] = v`).
+pub(crate) fn assign_target_reads(target: &HirExpr) -> Vec<&HirExpr> {
+    match target {
+        HirExpr::Ident { .. } => Vec::new(),
+        HirExpr::Field { base, .. } => vec![base.as_ref()],
+        HirExpr::Index { base, index, .. } => vec![base.as_ref(), index.as_ref()],
+        // Defensive: any other target shape is checked as a whole expression.
+        other => vec![other],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

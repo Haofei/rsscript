@@ -1,0 +1,16 @@
+// expect: RS0411
+// An await embedded in an assignment target's index expression is a non-linear
+// await (the target is evaluated code), so it must be rejected like an await in
+// any other expression argument — the assignment-target traversal must not be
+// skipped by the async-lowerability check.
+features: async, local
+
+async fn pick() -> Int {
+    return 0
+}
+
+async fn main() -> Unit {
+    let mut xs = [1, 2, 3]
+    xs[await pick()] = 9
+    return Unit
+}

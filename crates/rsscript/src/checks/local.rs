@@ -700,10 +700,20 @@ fn collect_ordered_moved_uses_from_stmt(
         | HirStmt::Return {
             value: Some(value), ..
         }
-        | HirStmt::Expr(value)
-        | HirStmt::Assign { value, .. } => {
+        | HirStmt::Expr(value) => {
             if let Some(mut state) = entry_state {
                 collect_ordered_moved_uses_from_expr(value, &mut state, moved_uses);
+            }
+        }
+        HirStmt::Assign { target, value, .. } => {
+            if let Some(mut state) = entry_state {
+                collect_ordered_moved_uses_from_expr(value, &mut state, moved_uses);
+                // The target is an evaluated place: a field/index base (and an
+                // index expression) reads its operands, so a moved base/index is a
+                // use-after-move. The write root itself is a def, not a use.
+                for read in crate::hir::assign_target_reads(target) {
+                    collect_ordered_moved_uses_from_expr(read, &mut state, moved_uses);
+                }
             }
         }
         HirStmt::With { resource, body, .. } => {
