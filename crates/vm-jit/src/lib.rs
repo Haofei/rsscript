@@ -308,14 +308,31 @@ fn declare_import(module: &mut JITModule, name: &str, n_args: usize) -> Result<F
         .map_err(|e| err("declare import", e))
 }
 
+/// A compiled function plus the metadata `call` needs to invoke it safely: the
+/// param count, so `call` can reject an argument slice of the wrong length (the
+/// generated entry block reads exactly `n_params` words from `args_ptr` and does
+/// not bound-check against `n_args`).
+struct CompiledFunc {
+    f: CompiledAbi,
+    n_params: usize,
+}
+
+/// Process-wide source of per-module identities, so a [`CompiledId`] minted by one
+/// [`NativeModule`] is rejected by another (it would otherwise index a different
+/// module's function table). Monotonic; wraparound is not a practical concern.
+static NEXT_MODULE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Owns the JIT-compiled machine code. Compiled functions live as long as the
 /// module, so callers keep this alive and invoke by [`CompiledId`].
 pub struct NativeModule {
     module: JITModule,
     ctx: Context,
     fbctx: FunctionBuilderContext,
-    funcs: Vec<CompiledAbi>,
+    funcs: Vec<CompiledFunc>,
     counter: u32,
+    /// Identity stamped into every [`CompiledId`] this module mints (see
+    /// [`NEXT_MODULE_ID`]).
+    id: u64,
     /// Declared host-helper imports (see [`HostHelpers`]).
     imports: HostFuncs,
 }
@@ -329,9 +346,14 @@ struct HostFuncs {
     list_get_int: FuncId,
 }
 
-/// Handle to a function compiled into a [`NativeModule`].
+/// Handle to a function compiled into a [`NativeModule`]. Carries the minting
+/// module's identity so it can't be used against a different module (which would
+/// index the wrong function table).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CompiledId(usize);
+pub struct CompiledId {
+    module_id: u64,
+    index: usize,
+}
 
 impl NativeModule {
     pub fn new(helpers: HostHelpers) -> Result<Self, JitError> {
@@ -374,6 +396,7 @@ impl NativeModule {
             fbctx: FunctionBuilderContext::new(),
             funcs: Vec::new(),
             counter: 0,
+            id: NEXT_MODULE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             imports,
         })
     }
@@ -421,8 +444,14 @@ impl NativeModule {
         // SAFETY: `code` points at the machine code we just emitted with exactly
         // the `CompiledAbi` signature declared above.
         let f: CompiledAbi = unsafe { std::mem::transmute::<*const u8, CompiledAbi>(code) };
-        let handle = CompiledId(self.funcs.len());
-        self.funcs.push(f);
+        let handle = CompiledId {
+            module_id: self.id,
+            index: self.funcs.len(),
+        };
+        self.funcs.push(CompiledFunc {
+            f,
+            n_params: function.n_params as usize,
+        });
         Ok(handle)
     }
 
@@ -437,7 +466,19 @@ impl NativeModule {
     /// only `unsafe` is the indirect call through a pointer this module emitted with
     /// the matching ABI, with every pointer it passes derived from owned locals.
     pub fn call(&self, id: CompiledId, args: &[i64]) -> Option<i64> {
-        let f = self.funcs[id.0];
+        // Reject an id from a different module and an out-of-range index: either
+        // would invoke the wrong (or no) function. Falling back is always safe.
+        if id.module_id != self.id {
+            return None;
+        }
+        let func = self.funcs.get(id.index)?;
+        // The generated entry block reads exactly `n_params` words from `args_ptr`
+        // without consulting `n_args`, so an args slice shorter than `n_params`
+        // would read out of bounds. Reject any length mismatch and fall back.
+        if args.len() != func.n_params {
+            return None;
+        }
+        let f = func.f;
         let mut out: i64 = 0;
         BAIL_FLAG.with(|bail| {
             bail.set(0);
@@ -1383,5 +1424,46 @@ mod tests {
             ],
         ))
         .expect("well-formed heap read should validate");
+    }
+
+    // fn(a, b) { return a + b } — a 2-param function for the call-guard tests.
+    fn two_param_add() -> JitFunction {
+        f(
+            2,
+            3,
+            vec![
+                JitInstr::Add {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                JitInstr::Return { src: 2 },
+            ],
+        )
+    }
+
+    #[test]
+    fn call_rejects_wrong_arg_count() {
+        // The generated entry block reads exactly `n_params` words from `args_ptr`,
+        // so a short slice must be rejected by `call` (otherwise: out-of-bounds
+        // read). Both too-few and too-many fall back rather than misread memory.
+        let mut m = module();
+        let id = m.compile(&two_param_add()).unwrap();
+        assert_eq!(m.call(id, &[2, 3]), Some(5));
+        assert_eq!(m.call(id, &[2]), None); // too few — must not read past the slice
+        assert_eq!(m.call(id, &[]), None);
+        assert_eq!(m.call(id, &[2, 3, 4]), None); // too many
+    }
+
+    #[test]
+    fn call_rejects_id_from_another_module() {
+        // A `CompiledId` minted by one module indexes that module's table; using it
+        // against another module must be rejected, not silently mis-dispatched.
+        let mut m1 = module();
+        let mut m2 = module();
+        let id1 = m1.compile(&two_param_add()).unwrap();
+        let _id2 = m2.compile(&two_param_add()).unwrap();
+        assert_eq!(m1.call(id1, &[2, 3]), Some(5));
+        assert_eq!(m2.call(id1, &[2, 3]), None); // foreign id → fallback, no panic
     }
 }

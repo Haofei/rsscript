@@ -3,10 +3,13 @@ features: native
 resource File
 
 pub fn File.open(path: read Path) -> Result<File, FileError>
+    effects(native)
 
 pub fn File.open_read(path: read Path) -> Result<File, FileError>
+    effects(native)
 
 pub fn File.open_write(path: read Path) -> Result<File, FileError>
+    effects(native)
 
 pub fn File.exists(path: read Path) -> Bool
     effects(native)

@@ -5438,7 +5438,8 @@ fn builtin_generic_type_params(root: &str) -> Option<Vec<&'static str>> {
         | "Stream" | "Pipeline" => Some(vec!["T"]),
         "FalliblePipeline" => Some(vec!["T", "E"]),
         "Capability" => Some(vec!["P"]),
-        "Map" | "Result" => Some(vec!["K", "V"]),
+        "Map" => Some(vec!["K", "V"]),
+        "Result" => Some(vec!["T", "E"]),
         _ => None,
     }
 }
@@ -5571,4 +5572,22 @@ fn lower_const_value(expr: &Expr) -> String {
 
 fn is_try_wrapped(expr: &Expr) -> bool {
     matches!(expr, Expr::Try { .. })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builtin_generic_type_params_use_each_type_s_own_param_names() {
+        // Regression: `Result` was mapped to `["K", "V"]` (Map's params), so the
+        // namespace/type-argument substitution path never bound `Result`'s real
+        // `T`/`E` params — weakening generic substitution for `Result.map` /
+        // `map_error` / `and_then`. Each type must use its own declared param names.
+        assert_eq!(builtin_generic_type_params("Map"), Some(vec!["K", "V"]));
+        assert_eq!(builtin_generic_type_params("Result"), Some(vec!["T", "E"]));
+        assert_eq!(builtin_generic_type_params("List"), Some(vec!["T"]));
+        assert_eq!(builtin_generic_type_params("Option"), Some(vec!["T"]));
+        assert_eq!(builtin_generic_type_params("NotAGeneric"), None);
+    }
 }
