@@ -146,3 +146,21 @@ pub(crate) fn split_top_level_type_args(args: &str) -> Vec<&str> {
     }
     parts
 }
+
+/// Declared generic parameter names for a builtin generic type root, e.g.
+/// `Map<K, V>` -> `["K", "V"]`, `Result<T, E>` -> `["T", "E"]`, `List<T>` ->
+/// `["T"]`. `None` for non-generic / unknown roots. Single source of truth: the
+/// HIR substitution path, the call-site substitution path, and the Rust lowerer
+/// all use this, so the names can't drift apart per layer (they did once: a
+/// `Result -> ["K","V"]` copy weakened error-combinator substitution).
+pub(crate) fn builtin_generic_type_params(root: &str) -> Option<Vec<&'static str>> {
+    match root {
+        "List" | "Set" | "Option" | "ResourcePool" | "Channel" | "Sender" | "Receiver"
+        | "Stream" | "Pipeline" => Some(vec!["T"]),
+        "FalliblePipeline" => Some(vec!["T", "E"]),
+        "Capability" => Some(vec!["P"]),
+        "Map" => Some(vec!["K", "V"]),
+        "Result" => Some(vec!["T", "E"]),
+        _ => None,
+    }
+}

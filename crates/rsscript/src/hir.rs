@@ -2869,16 +2869,7 @@ fn substitute_type_params(type_name: &str, substitutions: &HashMap<String, Strin
     format!("{root}<{args}>")
 }
 
-fn builtin_generic_type_params(root: &str) -> Option<Vec<&'static str>> {
-    match root {
-        "List" | "Set" | "Option" | "ResourcePool" | "Channel" | "Sender" | "Receiver"
-        | "Stream" | "Pipeline" => Some(vec!["T"]),
-        "FalliblePipeline" => Some(vec!["T", "E"]),
-        "Capability" => Some(vec!["P"]),
-        "Map" | "Result" => Some(vec!["K", "V"]),
-        _ => None,
-    }
-}
+use crate::text_util::builtin_generic_type_params;
 
 fn capability_protocol(type_name: &str) -> Option<&str> {
     let root = type_root_name(type_name);

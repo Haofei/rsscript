@@ -5450,17 +5450,7 @@ fn collect_type_ref_substitutions(
     }
 }
 
-fn builtin_generic_type_params(root: &str) -> Option<Vec<&'static str>> {
-    match root {
-        "List" | "Set" | "Option" | "ResourcePool" | "Channel" | "Sender" | "Receiver"
-        | "Stream" | "Pipeline" => Some(vec!["T"]),
-        "FalliblePipeline" => Some(vec!["T", "E"]),
-        "Capability" => Some(vec!["P"]),
-        "Map" => Some(vec!["K", "V"]),
-        "Result" => Some(vec!["T", "E"]),
-        _ => None,
-    }
-}
+use crate::text_util::builtin_generic_type_params;
 
 /// Type names declared by the bundled stdlib (`builtin`) interfaces. These are
 /// runtime-backed (lowered as `rsscript_runtime::X`), so they must be kept out of

@@ -4847,16 +4847,7 @@ pub(crate) fn unresolved_generic_type(type_name: &str) -> bool {
             .any(|param_type| unresolved_generic_type(param_type))
 }
 
-fn builtin_generic_type_params(root: &str) -> Option<Vec<&'static str>> {
-    match root {
-        "List" | "Set" | "Option" | "ResourcePool" | "Channel" | "Sender" | "Receiver"
-        | "Stream" | "Pipeline" => Some(vec!["T"]),
-        "FalliblePipeline" => Some(vec!["T", "E"]),
-        "Capability" => Some(vec!["P"]),
-        "Map" | "Result" => Some(vec!["K", "V"]),
-        _ => None,
-    }
-}
+use crate::text_util::builtin_generic_type_params;
 
 fn hir_expr_span(expr: &HirExpr) -> &Span {
     match expr {
