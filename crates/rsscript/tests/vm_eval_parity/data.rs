@@ -503,6 +503,7 @@ features: native, local
 fn main() -> Unit {
     let bytes = Bytes.from_uints(values: read [104, 105])
     Log.write(message: read String.from_int(value: Bytes.len(value: read bytes)))
+    Log.write(message: read Bytes.to_string(value: read bytes))
     let uints = Bytes.to_uints(value: read bytes)
     Log.write(message: read String.from_int(value: List.get<Int>(list: read uints, index: 0)))
     Log.write(message: read String.from_int(value: List.get<Int>(list: read uints, index: 1)))

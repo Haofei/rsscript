@@ -790,7 +790,7 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:Diff.unified runtime:Patch.apply_text
 // parity: runtime:Bytes.concat runtime:Bytes.consume runtime:Bytes.from_string runtime:Bytes.is_empty
 // parity: runtime:Bytes.from_buffer runtime:Bytes.len runtime:Bytes.slice runtime:Bytes.view
-// parity: runtime:Bytes.from_uints runtime:Bytes.to_uints runtime:Gzip.decompress_bytes
+// parity: runtime:Bytes.from_uints runtime:Bytes.to_uints runtime:Bytes.to_string runtime:Gzip.decompress_bytes
 // parity: runtime:BytesView.is_empty runtime:BytesView.len runtime:BytesView.slice
 // parity: runtime:BytesView.starts_with runtime:BytesView.to_bytes
 // parity: runtime:Int.bit_and runtime:Int.bit_not runtime:Int.bit_or runtime:Int.bit_xor
