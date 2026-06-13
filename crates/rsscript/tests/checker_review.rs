@@ -767,3 +767,59 @@ fn main() -> Unit {
         "should detect type alias addition: {findings:?}"
     );
 }
+
+#[test]
+fn review_diff_detects_function_removed() {
+    let old_source = r#"
+fn helper(x: read Int) -> Int {
+    return x
+}
+
+fn main() -> Unit {
+    return Unit
+}
+"#;
+    let new_source = r#"
+fn main() -> Unit {
+    return Unit
+}
+"#;
+    let findings = rsscript::review_sources("old.rss", old_source, "new.rss", new_source);
+    assert!(
+        findings
+            .iter()
+            .any(|f| f.code == "RSR002" && f.summary.contains("helper")),
+        "should detect function removal: {findings:?}"
+    );
+}
+
+#[test]
+fn review_diff_detects_parallel_boundary_added() {
+    let old_source = r#"
+fn work(x: read Int) -> Int {
+    return x
+}
+
+fn main() -> Unit {
+    return Unit
+}
+"#;
+    let new_source = r#"
+fn work(x: read Int) -> Int
+    effects(parallel)
+{
+    return x
+}
+
+fn main() -> Unit {
+    return Unit
+}
+"#;
+    let findings = rsscript::review_sources("old.rss", old_source, "new.rss", new_source);
+    assert!(
+        findings
+            .iter()
+            .any(|f| f.code == "RSR017" && f.summary.contains("work")),
+        "should detect parallel boundary addition: {findings:?}"
+    );
+}
