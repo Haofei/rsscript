@@ -2164,6 +2164,22 @@ fn collect_type_param_substitutions(
     generic_params: &HashSet<&str>,
     substitutions: &mut HashMap<String, String>,
 ) {
+    collect_type_param_substitutions_bounded(pattern, actual, generic_params, substitutions, 0);
+}
+
+fn collect_type_param_substitutions_bounded(
+    pattern: &str,
+    actual: &str,
+    generic_params: &HashSet<&str>,
+    substitutions: &mut HashMap<String, String>,
+    depth: usize,
+) {
+    // Bound the recursion for the same reason as `substitute_type_params` (RSS-11):
+    // pathological deeply-nested generics would otherwise re-parse type strings at
+    // every level. Real types never approach this depth.
+    if depth >= TYPE_SUBSTITUTION_DEPTH_LIMIT {
+        return;
+    }
     let pattern = pattern.trim();
     let actual = actual.trim();
     if actual == "?" {
@@ -2171,7 +2187,13 @@ fn collect_type_param_substitutions(
     }
     if let Some(pattern) = fresh_type_target(pattern) {
         let actual = fresh_type_target(actual).unwrap_or(actual);
-        collect_type_param_substitutions(pattern, actual, generic_params, substitutions);
+        collect_type_param_substitutions_bounded(
+            pattern,
+            actual,
+            generic_params,
+            substitutions,
+            depth + 1,
+        );
         return;
     }
     if generic_params.contains(pattern) {
@@ -2185,21 +2207,23 @@ fn collect_type_param_substitutions(
             .into_iter()
             .zip(fn_param_types(actual))
         {
-            collect_type_param_substitutions(
+            collect_type_param_substitutions_bounded(
                 pattern_param,
                 actual_param,
                 generic_params,
                 substitutions,
+                depth + 1,
             );
         }
         if let (Some(pattern_return), Some(actual_return)) =
             (fn_return_type(pattern), fn_return_type(actual))
         {
-            collect_type_param_substitutions(
+            collect_type_param_substitutions_bounded(
                 pattern_return,
                 actual_return,
                 generic_params,
                 substitutions,
+                depth + 1,
             );
         }
         return;
@@ -2215,27 +2239,58 @@ fn collect_type_param_substitutions(
         return;
     }
     for (pattern_arg, actual_arg) in pattern_args.into_iter().zip(actual_args) {
-        collect_type_param_substitutions(pattern_arg, actual_arg, generic_params, substitutions);
+        collect_type_param_substitutions_bounded(
+            pattern_arg,
+            actual_arg,
+            generic_params,
+            substitutions,
+            depth + 1,
+        );
     }
 }
 
+/// Bound on the nesting depth that generic type-parameter substitution will
+/// recurse through. Real types are shallow (the public-signature lint warns past
+/// depth 4); this limit is far above any legitimate type, and exists only to cap
+/// the per-string work so a pathological, adversarial deeply-nested type
+/// (`List<List<…<Int>>>` thousands deep) can't drive `check` into its ~O(n³)
+/// substitution blowup — the compile-time-DoS surface tracked as RSS-11. Behavior
+/// is unchanged for every type at or below the limit. (A from-scratch single-pass
+/// type parser would remove the asymptotic entirely but is a larger, separately-
+/// validated change; bounding the depth is the safe, behavior-preserving fix.)
+const TYPE_SUBSTITUTION_DEPTH_LIMIT: usize = 100;
+
 fn substitute_type_params(type_name: &str, substitutions: &HashMap<String, String>) -> String {
+    substitute_type_params_bounded(type_name, substitutions, 0)
+}
+
+fn substitute_type_params_bounded(
+    type_name: &str,
+    substitutions: &HashMap<String, String>,
+    depth: usize,
+) -> String {
+    if depth >= TYPE_SUBSTITUTION_DEPTH_LIMIT {
+        return type_name.to_string();
+    }
     if let Some(replacement) = substitutions.get(type_name) {
         return replacement.clone();
     }
     if let Some(target) = fresh_type_target(type_name) {
-        return format!("fresh {}", substitute_type_params(target, substitutions));
+        return format!(
+            "fresh {}",
+            substitute_type_params_bounded(target, substitutions, depth + 1)
+        );
     }
     if let Some(return_ty) = fn_return_type(type_name) {
         let prefix = fn_type_prefix(type_name);
         let params = fn_param_types(type_name)
             .into_iter()
-            .map(|param| substitute_type_params(param, substitutions))
+            .map(|param| substitute_type_params_bounded(param, substitutions, depth + 1))
             .collect::<Vec<_>>()
             .join(", ");
         return format!(
             "{prefix}Fn({params}) -> {}",
-            substitute_type_params(return_ty, substitutions)
+            substitute_type_params_bounded(return_ty, substitutions, depth + 1)
         );
     }
     let Some(args) = type_arg_names(type_name) else {
@@ -2244,7 +2299,7 @@ fn substitute_type_params(type_name: &str, substitutions: &HashMap<String, Strin
     let root = type_root_name(type_name);
     let args = args
         .into_iter()
-        .map(|arg| substitute_type_params(arg, substitutions))
+        .map(|arg| substitute_type_params_bounded(arg, substitutions, depth + 1))
         .collect::<Vec<_>>()
         .join(", ");
     format!("{root}<{args}>")
@@ -4823,5 +4878,45 @@ fn hir_expr_span(expr: &HirExpr) -> &Span {
         | HirExpr::Closure { span, .. }
         | HirExpr::Match { span, .. }
         | HirExpr::Unknown(span) => span,
+    }
+}
+
+#[cfg(test)]
+mod substitution_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn substitute_type_params_substitutes_within_limit() {
+        // Real (shallow) types substitute fully — unchanged by the depth bound.
+        let mut subs = HashMap::new();
+        subs.insert("T".to_string(), "Int".to_string());
+        subs.insert("E".to_string(), "String".to_string());
+        assert_eq!(substitute_type_params("T", &subs), "Int");
+        assert_eq!(substitute_type_params("List<T>", &subs), "List<Int>");
+        assert_eq!(
+            substitute_type_params("Result<T, E>", &subs),
+            "Result<Int, String>"
+        );
+        assert_eq!(
+            substitute_type_params("Map<T, List<E>>", &subs),
+            "Map<Int, List<String>>"
+        );
+        assert_eq!(substitute_type_params("fresh T", &subs), "fresh Int");
+    }
+
+    #[test]
+    fn substitute_type_params_is_bounded_on_deep_nesting() {
+        // RSS-11: a pathological deeply-nested generic must not drive substitution
+        // into its ~O(n^3) blowup (or overflow the stack). Far past the depth limit,
+        // the call still completes promptly and preserves the shallow structure.
+        let mut ty = "T".to_string();
+        for _ in 0..5000 {
+            ty = format!("List<{ty}>");
+        }
+        let mut subs = HashMap::new();
+        subs.insert("T".to_string(), "Int".to_string());
+        let out = substitute_type_params(&ty, &subs);
+        assert!(out.starts_with("List<List<"));
     }
 }

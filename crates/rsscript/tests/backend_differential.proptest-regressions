@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 351aabc18344adc027d2017de6662cd2caa2c804ad6e459df0108aaf1b226ccf # shrinks to program = Program { bindings: [[('+', [Lit(7)])], [('-', [Var(0), Var(0), Lit(12)])], [('+', [Lit(12), Var(0), Lit(4)]), ('+', [Var(1), Lit(10), Var(1)])]], guards: [Guard { lhs: [('+', [Lit(2), Var(1), Var(2)])], cmp: Lt, rhs: [('+', [Lit(0)])], adjustment: [('+', [Lit(0)])] }], result: [('+', [Lit(0)])] }
+cc b50e8828550cdf7614f7924d1c8ed680bbf90aa5e51b2528015d09cec3e96beb # shrinks to program = StringProgram { bindings: [], result: [Lit(3), Lit(4), Lit(2)] }
