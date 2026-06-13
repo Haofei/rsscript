@@ -216,3 +216,86 @@ fn library_file_name(crate_name: &str) -> String {
         format!("lib{crate_name}.so")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! The native-plugin loader's *signature → shim binding* mapping. The build +
+    //! `dlopen` half is OS plumbing (libloading) exercised by the gated e2e test;
+    //! the bug-prone logic is this type mapping, which was previously 0% covered.
+    //! Inputs are parsed from tiny interface snippets so we don't hand-build spans.
+    use super::*;
+    use crate::syntax::ast::Item;
+    use crate::syntax::parse_source;
+
+    fn sig(src: &str) -> (Vec<Param>, Option<TypeRef>) {
+        let program = parse_source("t.rssi", src);
+        for item in program.items {
+            if let Item::Function(decl) = item {
+                return (decl.params, decl.return_ty);
+            }
+        }
+        panic!("interface snippet declared no function");
+    }
+
+    #[test]
+    fn builds_plain_scalar_binding() {
+        let (params, ret) =
+            sig("native fn Adder.add(a: Int, b: Int) -> Int\n    effects(native)\n");
+        let binding = try_build_binding("Adder.add", "adder::add", &params, ret.as_ref())
+            .expect("scalar binding should build");
+        assert_eq!(binding.symbol, "Adder.add");
+        assert_eq!(binding.rust_path, "adder::add");
+        assert_eq!(binding.params, vec![ShimType::Int, ShimType::Int]);
+        assert_eq!(binding.ret, ShimReturn::Plain(ShimType::Int));
+        assert!(binding.mut_indices.is_empty());
+    }
+
+    #[test]
+    fn records_mut_param_positions() {
+        let (params, ret) =
+            sig("native fn Buf.fill(buffer: mut Bytes, value: Int) -> Unit\n    effects(native)\n");
+        let binding = try_build_binding("Buf.fill", "buf::fill", &params, ret.as_ref())
+            .expect("mut binding should build");
+        assert_eq!(binding.mut_indices, vec![0]);
+        assert_eq!(binding.params, vec![ShimType::Bytes, ShimType::Int]);
+    }
+
+    #[test]
+    fn maps_result_and_nested_container_types() {
+        let (params, ret) = sig(
+            "native fn P.run(items: read List<String>) -> Result<Option<Int>, String>\n    effects(native)\n",
+        );
+        let binding = try_build_binding("P.run", "p::run", &params, ret.as_ref())
+            .expect("container binding should build");
+        assert_eq!(
+            binding.params,
+            vec![ShimType::List(Box::new(ShimType::String))]
+        );
+        assert_eq!(
+            binding.ret,
+            ShimReturn::Result(ShimType::Option(Box::new(ShimType::Int)))
+        );
+    }
+
+    #[test]
+    fn missing_return_type_is_plain_unit() {
+        let (params, ret) = sig("native fn X.g(a: Int)\n    effects(native)\n");
+        let binding = try_build_binding("X.g", "x::g", &params, ret.as_ref())
+            .expect("unit-return binding should build");
+        assert_eq!(binding.ret, ShimReturn::Plain(ShimType::Unit));
+    }
+
+    #[test]
+    fn rejects_unsupported_param_type() {
+        // A user type the value bridge can't represent → the binding is skipped
+        // (the VM reports "no host binding" only if the program actually calls it).
+        let (params, ret) = sig("native fn X.f(cfg: read Config) -> Unit\n    effects(native)\n");
+        assert!(try_build_binding("X.f", "x::f", &params, ret.as_ref()).is_none());
+    }
+
+    #[test]
+    fn rejects_unsupported_return_type() {
+        let (params, ret) = sig("native fn X.h(a: Int) -> Config\n    effects(native)\n");
+        assert!(try_build_binding("X.h", "x::h", &params, ret.as_ref()).is_none());
+    }
+}
