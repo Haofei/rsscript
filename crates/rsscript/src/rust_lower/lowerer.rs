@@ -5554,7 +5554,9 @@ fn infer_const_type(expr: &Expr) -> String {
         }
         Expr::String(_, _) | Expr::MultilineString(_, _) => "&'static str".to_string(),
         Expr::Ident(name, _) if name == "true" || name == "false" => "bool".to_string(),
-        _ => "i64".to_string(), // fallback
+        // Non-literal const initializers are rejected by the frontend (RS0015); a
+        // value reaching here means that check regressed — fail loudly.
+        other => unreachable_lowering("const type", other.span()),
     }
 }
 
@@ -5566,7 +5568,10 @@ fn lower_const_value(expr: &Expr) -> String {
         }
         Expr::MultilineString(value, _) => format!("{value:?}"),
         Expr::Ident(name, _) if name == "true" || name == "false" => name.clone(),
-        _ => "()".to_string(), // unsupported const expression
+        // The frontend rejects non-literal const initializers (RS0015), so anything
+        // else here is a missing front-end check — fail loudly rather than emit a
+        // `()` placeholder that leaks an unmappable backend type error.
+        other => unreachable_lowering("const initializer", other.span()),
     }
 }
 

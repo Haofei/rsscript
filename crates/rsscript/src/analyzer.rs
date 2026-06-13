@@ -1308,7 +1308,24 @@ impl Analyzer<'_> {
             Item::SumType(sum) => {
                 self.check_supported_derives(&sum.derives, &sum.span);
             }
-            Item::Module(_) | Item::Use(_) | Item::TypeAlias(_) | Item::Const(_) => {}
+            Item::Const(decl) => {
+                // v0.6 `const` initializers must be literals (mirroring
+                // `lower_const_value`). Reject anything else with a stable
+                // diagnostic instead of lowering it to a `()` placeholder, which
+                // produced an unmappable backend type error (RS1102/E0308).
+                let is_literal = matches!(
+                    &decl.value,
+                    Expr::Number(_, _) | Expr::String(_, _) | Expr::MultilineString(_, _)
+                ) || matches!(&decl.value, Expr::Ident(name, _) if name == "true" || name == "false");
+                if !is_literal {
+                    self.unsupported_syntax(
+                        decl.span.clone(),
+                        "unsupported const initializer",
+                        "A v0.6 `const` initializer must be a literal (number, string, or `true`/`false`). Compute the value and write it as a literal; expressions and calls in `const` position are not supported yet.",
+                    );
+                }
+            }
+            Item::Module(_) | Item::Use(_) | Item::TypeAlias(_) => {}
         }
     }
 

@@ -1,0 +1,9 @@
+// expect: RS0015
+// A v0.6 `const` initializer must be a literal. A non-literal expression must be
+// rejected at the frontend, not lowered to a `()` placeholder (unmappable E0308).
+
+const SUM: Int = 1 + 2
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: SUM))
+}

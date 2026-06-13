@@ -1,0 +1,13 @@
+// expect: RS0015
+// `spawn` is review-visible but not executable in v0.6; it must be rejected before
+// lowering (the lowerer's Spawn arm is `unreachable_lowering`).
+features: async, local
+
+async fn work() -> Int {
+    return 1
+}
+
+async fn main() -> Unit {
+    let handle = spawn work()
+    return Unit
+}

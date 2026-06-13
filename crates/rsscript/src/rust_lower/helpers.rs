@@ -1562,10 +1562,11 @@ pub(super) fn rust_path_segment(segment: &str) -> String {
 
 pub(super) fn rust_ident(name: &str) -> String {
     let keywords: BTreeSet<&'static str> = [
-        "as", "async", "await", "box", "break", "const", "continue", "crate", "dyn", "else",
-        "enum", "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod",
-        "move", "mut", "pub", "ref", "return", "self", "Self", "static", "struct", "super",
-        "trait", "true", "type", "unsafe", "use", "where", "while",
+        "abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "crate",
+        "do", "dyn", "else", "enum", "extern", "false", "final", "fn", "for", "gen", "if", "impl",
+        "in", "let", "loop", "macro", "match", "mod", "move", "mut", "override", "priv", "pub",
+        "ref", "return", "self", "Self", "static", "struct", "super", "trait", "true", "try",
+        "type", "typeof", "unsafe", "unsized", "use", "virtual", "where", "while", "yield",
     ]
     .into_iter()
     .collect();

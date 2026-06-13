@@ -74,6 +74,24 @@ fn render(name: read String) -> fresh User {
 }
 
 #[test]
+fn rust_lowering_raw_escapes_reserved_user_function_names() {
+    let source = r#"
+fn gen(x: Int) -> Int {
+    return x + 1
+}
+
+fn main() -> Int {
+    return gen(x: 2)
+}
+"#;
+    let rust = lower_source_to_rust("reserved-fn.rss", source).expect("source should lower");
+
+    assert!(rust.contains("fn r#gen(x: i64) -> i64"), "{rust}");
+    assert!(rust.contains("return r#gen(2i64);"), "{rust}");
+    assert!(!rust.contains("fn gen("), "{rust}");
+}
+
+#[test]
 fn checker_rejects_capability_object_without_visible_protocol_impl() {
     let source = r#"
 protocol Writer {
