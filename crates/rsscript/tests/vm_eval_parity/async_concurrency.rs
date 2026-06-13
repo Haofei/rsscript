@@ -1,0 +1,203 @@
+//! eval≡lowered parity: async, streams, channels
+#![allow(unused_imports, dead_code)]
+use super::*;
+
+#[test]
+fn parity_cancellation_intrinsics() {
+    let source = r#"
+features: native, local
+
+fn main() -> Unit {
+    local source = CancellationSource.new()
+    let token = CancellationSource.token(source: read source)
+    if !CancellationToken.is_cancelled(token: read token) {
+        Log.write(message: read "not-cancelled")
+    }
+
+    CancellationSource.cancel(source: mut source)
+    if CancellationToken.is_cancelled(token: read token) {
+        Log.write(message: read "cancelled")
+    }
+
+    let second = CancellationSource.token(source: read source)
+    if CancellationToken.is_cancelled(token: read second) {
+        Log.write(message: read "second-cancelled")
+    }
+    return Unit
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-cancellation.rss",
+        "rsscript_parity_cancellation",
+        source,
+    );
+}
+
+#[test]
+fn parity_deadline_intrinsics() {
+    let source = r#"
+features: native
+
+fn main() -> Unit {
+    let immediate = Deadline.after_ms(ms: 0)
+    if Deadline.is_expired(deadline: read immediate) {
+        Log.write(message: read "expired-now")
+    }
+    Log.write(message: read String.from_int(value: Deadline.remaining_ms(deadline: read immediate)))
+
+    let negative = Deadline.after(duration: read Duration.ms(value: 0 - 1))
+    if Deadline.is_expired(deadline: read negative) {
+        Log.write(message: read "expired-negative")
+    }
+    Log.write(message: read String.from_int(value: Deadline.remaining_ms(deadline: read negative)))
+    return Unit
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-deadline.rss",
+        "rsscript_parity_deadline",
+        source,
+    );
+}
+
+#[test]
+fn parity_channel_sync_intrinsics() {
+    let source = r#"
+features: async, native, local
+
+async fn main() -> Result<Unit, ChannelError> {
+    match Channel.bounded<Int>(capacity: 0) {
+        Ok(channel) => {
+            let sender: Sender<Int> = Channel.sender<Int>(channel: read channel)
+            let _ = sender
+            Log.write(message: read "unexpected-channel")
+        }
+        Err(error) => {
+            Log.write(message: read ChannelError.message(error: read error))
+        }
+    }
+
+    let mut channel: Channel<Int> = Channel.bounded<Int>(capacity: 1)?
+    let mut sender: Sender<Int> = Channel.sender<Int>(channel: read channel)
+    Sender.close<Int>(sender: mut sender)
+    Log.write(message: read "sender-closed")
+    let mut receiver: Receiver<Int> = Channel.receiver<Int>(channel: mut channel)?
+    Receiver.close<Int>(receiver: mut receiver)
+    Log.write(message: read "receiver-closed")
+    match Channel.receiver<Int>(channel: mut channel) {
+        Ok(receiver) => {
+            let _ = receiver
+            Log.write(message: read "unexpected-receiver")
+        }
+        Err(error) => {
+            Log.write(message: read ChannelError.message(error: read error))
+        }
+    }
+
+    local items = List<String>.new()
+    List.push<String>(list: mut items, value: read "one")
+    List.push<String>(list: mut items, value: read "two")
+    let stream: Stream<String> = Stream.from_list<String>(items: take items)
+    let collected = Stream.collect_list<String>(stream: read stream)?
+    Log.write(message: read List.join<String>(list: read collected, separator: read ","))
+
+    let mut empty_channel: Channel<Int> = Channel.bounded<Int>(capacity: 1)?
+    let mut empty_sender: Sender<Int> = Channel.sender<Int>(channel: read empty_channel)
+    Sender.close<Int>(sender: mut empty_sender)
+    local empty_receiver: Receiver<Int> = Channel.receiver<Int>(channel: mut empty_channel)?
+    let empty_stream: Stream<Int> = Receiver.into_stream<Int>(receiver: take empty_receiver)
+    let empty_items = Stream.collect_list<Int>(stream: read empty_stream)?
+    Log.write(message: read String.from_int(value: List.len<Int>(list: read empty_items)))
+
+    let mut data_channel: Channel<Int> = Channel.bounded<Int>(capacity: 1)?
+    let mut data_sender: Sender<Int> = Channel.sender<Int>(channel: read data_channel)
+    let data_receiver: Receiver<Int> = Channel.receiver<Int>(channel: mut data_channel)?
+    local first = 10
+
+    let mut none_channel: Channel<Int> = Channel.bounded<Int>(capacity: 1)?
+    let mut none_sender: Sender<Int> = Channel.sender<Int>(channel: read none_channel)
+    let none_receiver: Receiver<Int> = Channel.receiver<Int>(channel: mut none_channel)?
+    Sender.close<Int>(sender: mut none_sender)
+
+    let mut cancelled_send_channel: Channel<Int> = Channel.bounded<Int>(capacity: 1)?
+    let cancelled_send_sender: Sender<Int> = Channel.sender<Int>(channel: read cancelled_send_channel)
+    local cancelled_send_source = CancellationSource.new()
+    let cancelled_send_token = CancellationSource.token(source: read cancelled_send_source)
+    CancellationSource.cancel(source: mut cancelled_send_source)
+    local cancelled_value = 30
+
+    let mut cancelled_recv_channel: Channel<Int> = Channel.bounded<Int>(capacity: 1)?
+    let cancelled_recv_receiver: Receiver<Int> = Channel.receiver<Int>(channel: mut cancelled_recv_channel)?
+    local cancelled_recv_source = CancellationSource.new()
+    let cancelled_recv_token = CancellationSource.token(source: read cancelled_recv_source)
+    CancellationSource.cancel(source: mut cancelled_recv_source)
+
+    local next_items = List<Int>.new()
+    List.push<Int>(list: mut next_items, value: read 41)
+    let next_stream: Stream<Int> = Stream.from_list<Int>(items: take next_items)
+
+    local empty_next_items = List<Int>.new()
+    let empty_next_stream: Stream<Int> = Stream.from_list<Int>(items: take empty_next_items)
+
+    await Sender.send<Int>(sender: read data_sender, value: take first)?
+    Sender.close<Int>(sender: mut data_sender)
+    match await Receiver.recv<Int>(receiver: read data_receiver)? {
+        Some(value) => {
+            Log.write(message: read String.from_int(value: value))
+        }
+        None => {
+            Log.write(message: read "recv-none")
+        }
+    }
+    match await Receiver.recv<Int>(receiver: read none_receiver)? {
+        Some(value) => {
+            Log.write(message: read String.from_int(value: value))
+        }
+        None => {
+            Log.write(message: read "recv-none")
+        }
+    }
+
+    match await Sender.send_cancellable<Int>(sender: read cancelled_send_sender, value: take cancelled_value, token: read cancelled_send_token) {
+        Ok(_) => {
+            Log.write(message: read "unexpected-send")
+        }
+        Err(error) => {
+            Log.write(message: read ChannelError.message(error: read error))
+        }
+    }
+    match await Receiver.recv_cancellable<Int>(receiver: read cancelled_recv_receiver, token: read cancelled_recv_token) {
+        Ok(_) => {
+            Log.write(message: read "unexpected-recv")
+        }
+        Err(error) => {
+            Log.write(message: read ChannelError.message(error: read error))
+        }
+    }
+    match await Stream.next<Int>(stream: read next_stream)? {
+        Some(value) => {
+            Log.write(message: read String.from_int(value: value))
+        }
+        None => {
+            Log.write(message: read "stream-none")
+        }
+    }
+    match await Stream.next<Int>(stream: read empty_next_stream)? {
+        Some(value) => {
+            Log.write(message: read String.from_int(value: value))
+        }
+        None => {
+            Log.write(message: read "stream-none")
+        }
+    }
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend_with_distinct_args_allowing_unused_mut_warning(
+        "parity-channel-sync.rss",
+        "rsscript_parity_channel_sync",
+        source,
+        &[],
+        &[],
+    );
+}
