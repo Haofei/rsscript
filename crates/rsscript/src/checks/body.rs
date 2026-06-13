@@ -2757,6 +2757,9 @@ fn check_await_placement_expr(
         HirExpr::Match { value, arms, .. } => {
             check_await_placement_expr(analyzer, value, function_is_async);
             for arm in arms {
+                if let Some(guard) = &arm.guard {
+                    check_await_placement_expr(analyzer, guard, function_is_async);
+                }
                 check_await_placement(analyzer, &arm.body, function_is_async);
             }
         }
@@ -2766,9 +2769,17 @@ fn check_await_placement_expr(
                 check_await_placement_expr(analyzer, &entry.value, function_is_async);
             }
         }
-        HirExpr::ObjectLiteral { .. }
-        | HirExpr::ArrayLiteral { .. }
-        | HirExpr::Ident { .. }
+        HirExpr::ObjectLiteral { fields, .. } => {
+            for field in fields {
+                check_await_placement_expr(analyzer, &field.value, function_is_async);
+            }
+        }
+        HirExpr::ArrayLiteral { items, .. } => {
+            for item in items {
+                check_await_placement_expr(analyzer, item, function_is_async);
+            }
+        }
+        HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => {}

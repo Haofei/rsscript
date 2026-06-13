@@ -2366,18 +2366,29 @@ fn collect_body_facts_in_expr(
         Expr::Match { value, arms, .. } => {
             collect_body_facts_in_expr(hir, function_name, value, value_types, facts);
             for arm in arms {
+                if let Some(guard) = &arm.guard {
+                    collect_body_facts_in_expr(hir, function_name, guard, value_types, facts);
+                }
                 collect_body_facts_in_block(hir, function_name, &arm.body, value_types, facts);
             }
         }
-        Expr::ObjectLiteral { .. } => {}
+        Expr::ObjectLiteral { fields, .. } => {
+            for field in fields {
+                collect_body_facts_in_expr(hir, function_name, &field.value, value_types, facts);
+            }
+        }
         Expr::MapLiteral { entries, .. } => {
             for entry in entries {
                 collect_body_facts_in_expr(hir, function_name, &entry.key, value_types, facts);
                 collect_body_facts_in_expr(hir, function_name, &entry.value, value_types, facts);
             }
         }
-        Expr::ArrayLiteral { .. }
-        | Expr::Ident(_, _)
+        Expr::ArrayLiteral { items, .. } => {
+            for item in items {
+                collect_body_facts_in_expr(hir, function_name, item, value_types, facts);
+            }
+        }
+        Expr::Ident(_, _)
         | Expr::Number(_, _)
         | Expr::String(_, _)
         | Expr::MultilineString(_, _)

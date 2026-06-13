@@ -4847,6 +4847,10 @@ fn expr_first_await(expr: &Expr) -> Option<crate::diagnostic::Span> {
         | Expr::Try { value, .. } => expr_first_await(value),
         Expr::Closure { body, .. } => block_first_await(body),
         Expr::Match { value, arms, .. } => expr_first_await(value)
+            .or_else(|| {
+                arms.iter()
+                    .find_map(|arm| arm.guard.as_ref().and_then(expr_first_await))
+            })
             .or_else(|| arms.iter().find_map(|arm| block_first_await(&arm.body))),
         Expr::MapLiteral { entries, .. } => entries
             .iter()
@@ -4856,9 +4860,11 @@ fn expr_first_await(expr: &Expr) -> Option<crate::diagnostic::Span> {
                     .iter()
                     .find_map(|entry| expr_first_await(&entry.value))
             }),
-        Expr::ObjectLiteral { .. }
-        | Expr::ArrayLiteral { .. }
-        | Expr::Ident(..)
+        Expr::ObjectLiteral { fields, .. } => fields
+            .iter()
+            .find_map(|field| expr_first_await(&field.value)),
+        Expr::ArrayLiteral { items, .. } => items.iter().find_map(expr_first_await),
+        Expr::Ident(..)
         | Expr::Number(..)
         | Expr::String(..)
         | Expr::MultilineString(..)
