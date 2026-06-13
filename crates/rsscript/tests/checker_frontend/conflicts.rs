@@ -1,0 +1,684 @@
+//! Spec §8 — places, conflict roots, same-call conflicts
+#![allow(unused_imports, dead_code)]
+use super::*;
+
+#[test]
+fn checker_rejects_misplaced_or_duplicate_module_use_declarations() {
+    let source = r#"
+use rss.review.ReviewMap
+
+module rss.package.review
+
+fn first() -> Unit {
+    return Unit
+}
+
+use rss.package.contract.PackageContract
+
+module rss.package.other
+"#;
+    let diagnostics = analyze_source("bad-module-layout.rss", source);
+
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "RS0015" && diagnostic.label == "misplaced use declaration"
+    }));
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "RS0015" && diagnostic.label == "duplicate module declaration"
+    }));
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "RS0015" && diagnostic.label == "misplaced module declaration"
+    }));
+}
+
+#[test]
+fn managed_closure_capture_makes_fresh_local_unclean() {
+    let source = r#"
+features: local
+
+struct Image {
+    pixels: Buffer
+}
+
+fn bad_fresh(path: read Path) -> fresh Image {
+    local image = Image.load(path: read path)
+
+    let callback = || {
+        Image.inspect(image: read image)
+    }
+
+    return image
+}
+"#;
+    let codes = analyze_source("fresh-closure-capture.rss", source)
+        .into_iter()
+        .map(|diagnostic| diagnostic.code)
+        .collect::<Vec<_>>();
+
+    assert!(codes.contains(&"RS0801".to_string()));
+    assert!(codes.contains(&"RS0601".to_string()));
+}
+
+#[test]
+fn checker_rejects_resource_capture_in_wrapped_managed_closure() {
+    let source = r#"
+features: local
+
+resource File {
+    fd: Int
+
+    drop {
+        OS.close(fd: fd)
+    }
+}
+
+fn File.open(path: read Path) -> File
+fn File.read_all(file: mut File) -> String
+
+fn bad_capture(path: read Path) -> Unit {
+    with File.open(path: read path) as file {
+        let callback = Some(|| {
+            File.read_all(file: mut file)
+        })
+    }
+}
+"#;
+    let diagnostics = analyze_source("resource-closure-wrapper.rss", source);
+
+    assert!(
+        diagnostics.iter().any(
+            |diagnostic| diagnostic.code == "RS0702" && diagnostic.label == "resource captured"
+        ),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_noescape_callback_return_type_mismatch() {
+    let source = r#"
+fn apply(callback: noescape Fn() -> String) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    apply(callback: || 42)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("callback-return-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "callback argument `callback` for `apply` returns `Int`, expected `String`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_noescape_callback_result_payload_mismatch() {
+    let source = r#"
+fn apply(callback: noescape Fn() -> Result<String, BuildError>) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    apply(callback: || Ok(42))
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("callback-result-return-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "callback argument `callback` for `apply` returns `Int`, expected `String`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_noescape_callback_nested_result_payload_mismatch() {
+    let source = r#"
+class BuildProblem {
+    code: Int
+}
+
+fn apply(callback: noescape Fn() -> Result<Option<String>, BuildProblem>) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    apply(callback: || Ok(Some(42)))
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("callback-nested-result-return-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "callback argument `callback` for `apply` returns `Int`, expected `String`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_noescape_callback_fresh_return_captured_managed_value() {
+    let source = r#"
+struct ImageData {
+    size: Int
+}
+
+fn apply(callback: noescape Fn() -> fresh ImageData) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    let image = ImageData(size: 1)
+    apply(callback: || image)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("callback-fresh-captured-managed.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "callback argument `callback` for `apply` returns non-fresh value `image`, expected `fresh ImageData`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_noescape_callback_result_fresh_payload_captured_managed_value() {
+    let source = r#"
+struct ImageData {
+    size: Int
+}
+
+class BuildProblem {
+    code: Int
+}
+
+fn apply(callback: noescape Fn() -> Result<fresh ImageData, BuildProblem>) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    let image = ImageData(size: 1)
+    apply(callback: || Ok(image))
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("callback-result-fresh-captured-managed.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "callback argument `callback` for `apply` returns non-fresh value `image`, expected `fresh ImageData`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_accepts_noescape_callback_result_fresh_payload_constructor() {
+    let source = r#"
+struct ImageData {
+    size: Int
+}
+
+class BuildProblem {
+    code: Int
+}
+
+fn apply(callback: noescape Fn() -> Result<fresh ImageData, BuildProblem>) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    apply(callback: || Ok(ImageData(size: 1)))
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("callback-result-fresh-constructor.rss", source);
+
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_noescape_callback_early_return_type_mismatch() {
+    let source = r#"
+fn apply(callback: noescape Fn() -> Result<String, BuildError>) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    apply(callback: || {
+        if true {
+            return Ok(42)
+        }
+        return Ok("ok")
+    })
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("callback-early-return-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "callback argument `callback` for `apply` returns `Int`, expected `String`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_noescape_callback_nested_early_return_type_mismatch() {
+    let source = r#"
+class BuildProblem {
+    code: Int
+}
+
+fn apply(callback: noescape Fn() -> Result<Option<String>, BuildProblem>) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    apply(callback: || {
+        if true {
+            return Ok(Some(42))
+        }
+        return Ok(None)
+    })
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("callback-nested-early-return-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "callback argument `callback` for `apply` returns `Int`, expected `String`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_noescape_callback_match_arm_return_type_mismatch() {
+    let source = r#"
+fn apply(callback: noescape Fn() -> Result<String, BuildError>) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    let value = Some("x")
+    apply(callback: || {
+        match value {
+            Some(result) => return Ok(result)
+            None => return Ok(42)
+        }
+    })
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("callback-match-return-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "callback argument `callback` for `apply` returns `Int`, expected `String`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_noescape_callback_parameter_count_mismatch() {
+    let source = r#"
+fn apply(callback: noescape Fn(Int) -> String) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    apply(callback: || "x")
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("callback-arity-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "callback argument `callback` for `apply` has 0 parameter(s), expected 1."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_uses_noescape_callback_parameter_type_for_return_contract() {
+    let source = r#"
+fn stringify(callback: noescape Fn(Int) -> String) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    stringify(callback: |value| value)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("callback-param-return-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "callback argument `callback` for `stringify` returns `Int`, expected `String`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn rust_lowering_accepts_noescape_callback_with_parameter() {
+    let source = r#"
+fn apply(callback: noescape Fn(Int) -> Int) -> Int {
+    return callback(41)
+}
+
+fn main() -> Unit {
+    let value = apply(callback: |item| item + 1)
+    return Unit
+}
+"#;
+    let rust = lower_source_to_rust("callback-param.rss", source)
+        .expect("callback with parameter should lower");
+
+    assert!(rust.contains("callback(41i64)"));
+    assert!(rust.contains("|item: i64|"));
+}
+
+#[test]
+fn checker_reports_noescape_callback_call_argument_type_mismatch() {
+    let source = r#"
+fn apply(callback: noescape Fn(Int) -> Int) -> Int {
+    return callback("x")
+}
+
+fn main() -> Unit {
+    let value = apply(callback: |item| item)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("callback-call-arg-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "argument 1 for callback `callback` has type `String`, expected `Int`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_noescape_callback_call_arity_mismatch() {
+    let source = r#"
+fn apply(callback: noescape Fn(Int, Int) -> Int) -> Int {
+    return callback(1)
+}
+
+fn main() -> Unit {
+    let value = apply(callback: |left, right| left)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("callback-call-arity.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "callback `callback` called with 1 argument(s), expected 2."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_uses_noescape_callback_parameter_type_for_body_call_arguments() {
+    let source = r#"
+fn apply(callback: noescape Fn(Int) -> Int) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    apply(callback: |value| String.len(value: read value))
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("callback-body-call-arg-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "argument `value` for `String.len` has type `Int`, expected `String`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_accepts_noescape_callback_that_temporarily_uses_local() {
+    let source = r#"
+features: local
+
+fn apply(callback: noescape Fn()) -> Unit {
+    callback()
+    return Unit
+}
+
+fn use_local(path: read Path) -> Result<fresh Image, ImageError> {
+    local image = Image.load(path: read path)?
+    apply(callback: || {
+        Image.inspect(image: read image)
+    })
+    return Ok(image)
+}
+
+fn main() -> Result<Unit, ImageError> {
+    let path = Path.from_string(value: read "rsscript-image-input.bin")
+    use_local(path: read path)?
+    return Ok(Unit)
+}
+"#;
+    let diagnostics = analyze_source("noescape.rss", source);
+    assert_eq!(diagnostics, Vec::new());
+
+    let program = parse_source("noescape.rss", source);
+    let function = program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(function) => Some(function),
+            _ => None,
+        })
+        .find(|function| function.name == "apply")
+        .expect("apply should parse");
+    assert!(function.params[0].ty.is_noescape);
+    assert_eq!(function.params[0].ty.name, "Fn");
+
+    let lowered = lower_source_to_rust("noescape.rss", source)
+        .expect("noescape callback source should lower");
+    assert!(lowered.contains("mut callback: impl FnMut()"));
+    assert!(lowered.contains("callback();"));
+}
+
+#[test]
+fn rust_lowering_noescape_callbacks_are_non_consuming_fnmut() {
+    let source = r#"
+features: local
+
+fn apply_twice(callback: noescape Fn()) -> Unit {
+    callback()
+    callback()
+    return Unit
+}
+
+fn use_local_buffer() -> Unit {
+    local buffer = Buffer.new(size: 16)
+    apply_twice(callback: || {
+        Buffer.clear(buffer: mut buffer)
+    })
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("noescape-twice.rss", source);
+    assert_eq!(diagnostics, Vec::new());
+
+    let lowered = lower_source_to_rust("noescape-twice.rss", source)
+        .expect("noescape callback source should lower");
+    assert!(lowered.contains("fn apply_twice(mut callback: impl FnMut())"));
+    assert_eq!(lowered.matches("callback();").count(), 2);
+}
+
+#[test]
+fn rust_lowering_accepts_explicit_fn_capture_contract() {
+    let source = r#"
+features: local
+
+fn run() -> Int {
+    let offset = 2
+    local add = fn(value) captures(read offset) effects(pure) {
+        return value + offset
+    }
+    return add(40)
+}
+"#;
+    let diagnostics = analyze_source("explicit-fn-capture.rss", source);
+    assert_eq!(diagnostics, Vec::new());
+
+    let lowered = lower_source_to_rust("explicit-fn-capture.rss", source)
+        .expect("explicit fn capture source should lower");
+    assert!(lowered.contains("let add = |value|"));
+    assert!(lowered.contains("value + offset"));
+    assert!(lowered.contains("add(40i64)"));
+}
+
+#[test]
+fn checker_accepts_user_authored_owned_fn_parameter_with_explicit_capture_contract() {
+    let source = r#"
+fn apply(callback: owned Fn(Int) -> Int, value: Int) -> Int {
+    return callback(value)
+}
+
+fn run() -> Int {
+    let offset = 2
+    return apply(
+        callback: fn(value) captures(read offset) effects(pure) {
+            return value + offset
+        },
+        value: 40,
+    )
+}
+"#;
+    let diagnostics = analyze_source("owned-fn.rss", source);
+
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
+#[test]
+fn rust_lowering_uses_move_for_owned_explicit_fn_capture() {
+    let source = r#"
+fn apply(callback: owned Fn(Int) -> Int, value: Int) -> Int {
+    return callback(value)
+}
+
+fn run() -> Int {
+    let offset = 2
+    return apply(
+        callback: fn(value) captures(read offset) effects(pure) {
+            return value + offset
+        },
+        value: 40,
+    )
+}
+"#;
+
+    let lowered = lower_source_to_rust("owned-fn-lowering.rss", source)
+        .expect("owned explicit fn should lower");
+
+    assert!(
+        lowered.contains("mut callback: impl FnMut(i64) -> i64"),
+        "{lowered}"
+    );
+    assert!(lowered.contains("callback(value)"), "{lowered}");
+    assert!(lowered.contains("move |value: i64|"), "{lowered}");
+}
+
+#[test]
+fn checker_allows_lazy_factory_internal_bindings_without_treating_them_as_captures() {
+    let source = r#"
+features: local
+
+fn run(max_connections: Int) -> Result<Unit, PoolError> {
+    local pool = ResourcePool<DbConnection>.lazy(
+        create: || {
+            local host = Url.from_string(value: read "db://local")
+            DbConnection.open(url: read host)
+        },
+        max_size: max_connections,
+    )
+    return Ok(Unit)
+}
+"#;
+    let diagnostics = analyze_source("lazy-internal-binding.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "RS0711"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn type_alias_chain_resolves_correctly() {
+    let source = r#"
+type MyString = String
+type Alias = MyString
+
+fn greet(name: read Alias) -> Alias {
+    return name
+}
+"#;
+    let diagnostics = analyze_source("alias-chain.rss", source);
+    // Should not report unknown type for Alias since it resolves through MyString to String
+    assert!(
+        !diagnostics.iter().any(|d| d.code == "RS0024"),
+        "should resolve type alias chain: {diagnostics:?}"
+    );
+}
