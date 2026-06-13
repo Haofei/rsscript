@@ -52,20 +52,26 @@ impl<'a> RustLowerer<'a> {
         interface_programs: &[Program],
     ) -> Self {
         // Type kinds (struct/class/resource) for `is_class_type`/`is_resource_type`,
-        // constructor lowering, etc. Built from the current program only.
+        // constructor lowering, etc. Built from the current program *and* dependency
+        // interfaces, so a class/resource/struct defined in another package and
+        // constructed/held in this source is classified correctly (otherwise it
+        // falls through to the unknown-type path and mis-lowers, e.g. a named-field
+        // class constructed as a positional `Widget(1)` call — review #8).
         //
-        // NOTE (review #8): types declared in *dependency* interfaces are not added
-        // here, so a class/resource/sum defined in another package and constructed
-        // in this source can mis-lower. A blanket ingest of `interface_programs` is
-        // *wrong*, though: the bundled stdlib interfaces declare runtime-backed
+        // Bundled stdlib interface types are EXCLUDED: they declare runtime-backed
         // types (e.g. `ProcessRequest`, lowered as `rsscript_runtime::ProcessRequest`)
-        // as plain structs, and classifying those as local user types reclassifies
-        // them and drops the `rsscript_runtime::` qualification. The correct fix must
-        // distinguish runtime-backed stdlib types from genuine dependency types and
-        // be validated with a multi-package repro — tracked in BUGS.md (RSS-14).
-        let type_kinds = program
-            .items
+        // as plain structs, and classifying those as local user types would drop the
+        // `rsscript_runtime::` qualification. So only *non-builtin* (dependency)
+        // interface types are ingested; the current program wins on any conflict.
+        let builtin_type_names = builtin_interface_type_names();
+        let type_kinds = interface_programs
             .iter()
+            .flat_map(|interface| interface.items.iter())
+            .filter(|item| match item {
+                Item::Type(ty) => !builtin_type_names.contains(ty.name.as_str()),
+                _ => false,
+            })
+            .chain(program.items.iter())
             .filter_map(|item| match item {
                 Item::Type(ty) => Some((ty.name.clone(), ty.kind)),
                 Item::SumType(_) => None, // sum types don't contribute to type_kinds map
@@ -5454,6 +5460,25 @@ fn builtin_generic_type_params(root: &str) -> Option<Vec<&'static str>> {
         "Result" => Some(vec!["T", "E"]),
         _ => None,
     }
+}
+
+/// Type names declared by the bundled stdlib (`builtin`) interfaces. These are
+/// runtime-backed (lowered as `rsscript_runtime::X`), so they must be kept out of
+/// the per-package `type_kinds` map even though they appear among the interface
+/// programs — otherwise they would be reclassified as local user types. Parsed
+/// once and cached (the builtin interface set is fixed at compile time).
+fn builtin_interface_type_names() -> &'static std::collections::HashSet<String> {
+    static NAMES: std::sync::OnceLock<std::collections::HashSet<String>> =
+        std::sync::OnceLock::new();
+    NAMES.get_or_init(|| {
+        crate::interfaces::builtin_interfaces()
+            .flat_map(|(file, source)| crate::syntax::parse_source(file, source).items.into_iter())
+            .filter_map(|item| match item {
+                Item::Type(ty) => Some(ty.name),
+                _ => None,
+            })
+            .collect()
+    })
 }
 
 fn fn_type_ref(params: Vec<TypeRef>, return_ty: Option<TypeRef>, span: &Span) -> TypeRef {

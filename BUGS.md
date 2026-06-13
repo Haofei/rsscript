@@ -50,24 +50,3 @@ $BIN eval   file.rss
   unified) and be guarded by a differential/fuzz test comparing old vs new output across many type
   strings — otherwise it risks silently changing which programs typecheck. That verification, not the
   tree itself, is the bulk of the work and the reason this stays a dedicated, separately-reviewed change.
-
-### RSS-14 — [VALID · DEFERRED] — dependency-defined types not in the lowering type environment
-- **Source:** `crates/rsscript/src/rust_lower/lowerer.rs` — `RustLowerer`'s `type_kinds` map (and the
-  `self.program.items` lookups for sum variants / fields) is built from the **current program only**;
-  the `interface_programs` (builtin + dependency `.rssi`) are not folded in.
-- **Effect:** a `class`/`resource`/`struct`/`sum` declared in a *dependency* package's interface and
-  then constructed/held/matched in the current source can typecheck against the contract but lower
-  incorrectly, because `is_class_type`/`is_resource_type`/`field_type`/`sum_variant_fields_for_type`
-  don't know its kind/fields. Not reproducible from a single file (`rss run` takes no `--interface`);
-  it needs a real multi-package build.
-- **Why not a blanket fix:** simply ingesting every `interface_programs` `Item::Type` into `type_kinds`
-  is **wrong** — the bundled stdlib interfaces declare *runtime-backed* types (e.g. `ProcessRequest`,
-  which must lower as `rsscript_runtime::ProcessRequest`) as plain structs. Classifying those as local
-  user types drops the `rsscript_runtime::` qualification and changes their lowering (verified: it
-  breaks `rust_lowering_maps_process_request/stream/rules_config_reload` while parity stays green, i.e.
-  a silent shape regression).
-- **Fix:** build a lowering type environment that ingests dependency interface types **while
-  distinguishing runtime-backed stdlib types from genuine dependency types** (e.g. by interface
-  origin / a runtime-binding marker), and validate with a multi-package fixture that constructs and
-  matches a dependency-defined class/resource/sum. Deferred so this isn't rushed into a stdlib-lowering
-  regression.

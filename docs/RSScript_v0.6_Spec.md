@@ -641,7 +641,9 @@ read / mut / take effects
 resource values through with
 ResourcePool<T: Resource>
 bodyless native declarations through package binding metadata
-restricted executable async bodies and direct await
+async fn bodies: direct await plus statement-boundary awaits in if/loop/match/with
+structured concurrency: task_group { async let ... }, select, await for
+bounded MPSC Channel and Stream (Receiver.into_stream / Stream.next), via rss-async
 receiver-call shorthand with unique resolution
 match expressions in expression position
 extended collection pipeline (List/Map noescape operations)
@@ -656,20 +658,26 @@ REIR adapter for capability-binding evidence
 The following may be parsed and surfaced for review but are not executable lowering targets in v0.6:
 
 ```text
-spawn
-future task runtime
+spawn (unstructured task creation)
+public Future / Waker / task-handle surface
 Rust-style open enum machinery beyond sealed RSScript sum types
 general user FFI
 advanced protocol/dynamic dispatch model (capability objects)
-Stream<T> / await-for
 scoped views / slices
-compiler-owned derives
 ```
 
-`async fn` signatures are review-visible contracts. v0.6 admits a restricted
-executable async MVP: `await` may appear only inside an `async fn`, and it must
-directly consume an async call. RSScript does not expose `Future`, `Pin`, `Poll`,
-`Waker`, Rust executor internals, or task handles as source-level types.
+`async fn` signatures are review-visible contracts. v0.6 admits an executable async
+MVP: `await` appears inside an `async fn`, either directly consuming an async call
+at a statement boundary or inside an `if`/`loop`/`match`/`with` body (which lowers
+as an explicit async statement boundary); awaits embedded in ordinary expression
+arguments are rejected (`RS0411`) until full async expression lowering lands.
+Structured concurrency is executable: `task_group { async let ... }` constructs
+isolate-local child operations driven by one cooperative poll loop, `select`
+awaits the first ready arm, and `await for` iterates a `Stream` / channel
+`Receiver`. The user-facing async library (`Channel`, `Stream`, async file/HTTP/
+process IO, timers, cancellation) lives in the `rss-async` package. RSScript does
+not expose `Future`, `Pin`, `Poll`, `Waker`, Rust executor internals, or public
+task handles as source-level types.
 
 The v0.6 execution target is single-isolate and cooperative. `await` is a
 suspension boundary in the async function frame: Copy values and managed handles

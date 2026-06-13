@@ -585,3 +585,34 @@ fn run() -> Result<Unit, ChannelError> {
         "typed Channel<Int> let should emit a concrete Rust annotation, got:\n{lowered}"
     );
 }
+
+#[test]
+fn rust_lowering_classifies_dependency_interface_types() {
+    // Review #8: a class declared in a *dependency* interface (not the current
+    // source) must be classified so it lowers correctly. Previously it fell through
+    // to the unknown-type path and lowered as a positional `Widget(1i64)` call,
+    // which can't construct a named-field struct/class. Now it lowers as a managed
+    // named-field construction. Runtime-backed stdlib types are excluded from this
+    // ingest (covered by the process/config lowering tests staying qualified).
+    let interfaces = vec![(
+        "dep/widget.rssi".to_string(),
+        "class Widget {\n    v: Int\n}\n".to_string(),
+    )];
+    let sources = vec![(
+        "main.rss".to_string(),
+        "fn build() -> Widget {\n    return Widget(v: 1)\n}\n\nfn main() -> Unit {\n    let w = build()\n    return Unit\n}\n".to_string(),
+    )];
+    let package =
+        lower_sources_to_rust_package_with_options(&sources, "dep-types", "/rt", &interfaces, &[])
+            .expect("dependency-typed source should lower");
+    assert!(
+        package.lib_rs.contains("Widget { v: 1i64 }"),
+        "dependency class should construct a named-field struct, got:\n{}",
+        package.lib_rs
+    );
+    assert!(
+        !package.lib_rs.contains("Widget(1i64)"),
+        "dependency class must not lower to a positional tuple-struct call:\n{}",
+        package.lib_rs
+    );
+}
