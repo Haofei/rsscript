@@ -42,21 +42,24 @@ fn resource_result_return_arg_allowed(
 
 pub fn analyze_source(file: &str, source: &str) -> Vec<Diagnostic> {
     let tokens = lex(file, source);
-    let syntax_program = parse_source(file, source);
+    let mut syntax_program = parse_source(file, source);
+    crate::syntax::isolate_module_namespaces(&mut syntax_program);
     let hir = Hir::from_syntax_with_standard_package_interfaces(&syntax_program);
     analyze_program(tokens, syntax_program, hir, builtin_interface_programs())
 }
 
 pub fn analyze_syntax_source(file: &str, source: &str) -> Vec<Diagnostic> {
     let tokens = lex(file, source);
-    let syntax_program = parse_source(file, source);
+    let mut syntax_program = parse_source(file, source);
+    crate::syntax::isolate_module_namespaces(&mut syntax_program);
     let hir = Hir::from_syntax(&syntax_program);
     analyze_syntax_program(tokens, syntax_program, hir)
 }
 
 pub fn analyze_source_without_core(file: &str, source: &str) -> Vec<Diagnostic> {
     let tokens = lex(file, source);
-    let syntax_program = parse_source(file, source);
+    let mut syntax_program = parse_source(file, source);
+    crate::syntax::isolate_module_namespaces(&mut syntax_program);
     let hir = Hir::from_syntax_without_builtin_interfaces(&syntax_program);
     analyze_program(tokens, syntax_program, hir, Vec::new())
 }
@@ -79,7 +82,8 @@ pub fn analyze_source_with_interfaces(
     interfaces: &[(&str, &str)],
 ) -> Vec<Diagnostic> {
     let tokens = lex(file, source);
-    let syntax_program = parse_source(file, source);
+    let mut syntax_program = parse_source(file, source);
+    crate::syntax::isolate_module_namespaces(&mut syntax_program);
     let interface_programs = interfaces
         .iter()
         .map(|(file, source)| parse_source(file, source))
@@ -94,7 +98,8 @@ pub fn analyze_source_with_interfaces_without_core(
     interfaces: &[(&str, &str)],
 ) -> Vec<Diagnostic> {
     let tokens = lex(file, source);
-    let syntax_program = parse_source(file, source);
+    let mut syntax_program = parse_source(file, source);
+    crate::syntax::isolate_module_namespaces(&mut syntax_program);
     let interface_programs = interfaces
         .iter()
         .map(|(file, source)| parse_source(file, source))
@@ -114,11 +119,12 @@ pub fn analyze_sources_with_interfaces(
         .iter()
         .flat_map(|(file, source)| lex(file, source))
         .collect::<Vec<_>>();
-    let syntax_program = merge_programs(
+    let mut syntax_program = merge_programs(
         sources
             .iter()
             .map(|(file, source)| parse_source(file, source)),
     );
+    crate::syntax::isolate_module_namespaces(&mut syntax_program);
     let interface_programs = interfaces
         .iter()
         .map(|(file, source)| parse_source(file, source))
@@ -135,11 +141,12 @@ pub fn analyze_sources_with_interfaces_without_core(
         .iter()
         .flat_map(|(file, source)| lex(file, source))
         .collect::<Vec<_>>();
-    let syntax_program = merge_programs(
+    let mut syntax_program = merge_programs(
         sources
             .iter()
             .map(|(file, source)| parse_source(file, source)),
     );
+    crate::syntax::isolate_module_namespaces(&mut syntax_program);
     let interface_programs = interfaces
         .iter()
         .map(|(file, source)| parse_source(file, source))
@@ -182,7 +189,9 @@ fn analyze_program(
         async_let_names: Vec::new(),
     };
     analyzer.run();
-    analyzer.diagnostics
+    let mut diagnostics = analyzer.diagnostics;
+    crate::syntax::demangle_diagnostics(&analyzer.syntax_program, &mut diagnostics);
+    diagnostics
 }
 
 fn type_aliases_from_program(
@@ -214,7 +223,9 @@ fn analyze_syntax_program(
         async_let_names: Vec::new(),
     };
     analyzer.run_syntax_only();
-    analyzer.diagnostics
+    let mut diagnostics = analyzer.diagnostics;
+    crate::syntax::demangle_diagnostics(&analyzer.syntax_program, &mut diagnostics);
+    diagnostics
 }
 
 fn type_ref_display_name(ty: &crate::syntax::ast::TypeRef) -> String {
@@ -1170,52 +1181,56 @@ impl Analyzer<'_> {
     }
 
     fn check_module_use_layout(&mut self) {
-        let mut seen_module = false;
-        let mut seen_use = false;
-        let mut seen_non_organization_item = false;
+        // Layout is per source file: a merged multi-file program legitimately has
+        // one `module` declaration per file, so the "at most one module" /
+        // ordering rules are tracked by the declaration's originating file.
+        let mut seen_module: HashSet<String> = HashSet::new();
+        let mut seen_use: HashSet<String> = HashSet::new();
+        let mut seen_non_organization_item: HashSet<String> = HashSet::new();
         let items = self.syntax_program.items.clone();
         for item in &items {
+            let file = item_span_file(item);
             match item {
                 Item::Module(module) => {
-                    if seen_module {
+                    if seen_module.contains(&file) {
                         self.unsupported_syntax(
                             module.span.clone(),
                             "duplicate module declaration",
                             "A source or interface file may declare at most one `module` identity.",
                         );
                     }
-                    if seen_non_organization_item {
+                    if seen_non_organization_item.contains(&file) {
                         self.unsupported_syntax(
                             module.span.clone(),
                             "misplaced module declaration",
                             "`module` is source-organization metadata and must appear before declarations.",
                         );
                     }
-                    if seen_use {
+                    if seen_use.contains(&file) {
                         self.unsupported_syntax(
                             module.span.clone(),
                             "misplaced module declaration",
                             "`module` must be the first organization declaration when present; `use` declarations follow it.",
                         );
                     }
-                    seen_module = true;
+                    seen_module.insert(file);
                 }
                 Item::Use(use_decl) => {
-                    if seen_non_organization_item {
+                    if seen_non_organization_item.contains(&file) {
                         self.unsupported_syntax(
                             use_decl.span.clone(),
                             "misplaced use declaration",
                             "`use` is source-organization metadata and must appear before declarations.",
                         );
                     }
-                    seen_use = true;
+                    seen_use.insert(file);
                 }
                 Item::Type(_)
                 | Item::SumType(_)
                 | Item::TypeAlias(_)
                 | Item::Const(_)
                 | Item::Function(_) => {
-                    seen_non_organization_item = true;
+                    seen_non_organization_item.insert(file);
                 }
             }
         }
@@ -6317,6 +6332,19 @@ fn type_ref_name(ty: &TypeRef) -> String {
         format!("fresh {name}")
     } else {
         name
+    }
+}
+
+/// The originating source file of a top-level item (from its span).
+fn item_span_file(item: &Item) -> String {
+    match item {
+        Item::Function(decl) => decl.span.file.clone(),
+        Item::Const(decl) => decl.span.file.clone(),
+        Item::Type(decl) => decl.span.file.clone(),
+        Item::SumType(decl) => decl.span.file.clone(),
+        Item::TypeAlias(decl) => decl.span.file.clone(),
+        Item::Module(decl) => decl.span.file.clone(),
+        Item::Use(decl) => decl.span.file.clone(),
     }
 }
 

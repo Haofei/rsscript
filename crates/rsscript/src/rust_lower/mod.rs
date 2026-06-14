@@ -492,7 +492,11 @@ fn lower_program_to_rust_with_map_with_native_bindings(
     native_bindings: BTreeMap<String, String>,
     interface_programs: &[Program],
 ) -> LoweredRust {
-    RustLowerer::new(program, native_bindings, interface_programs).lower()
+    // Apply module namespace isolation so the emitted Rust symbols match the
+    // names the checker validated (single application per lowering run).
+    let mut program = program.clone();
+    crate::syntax::isolate_module_namespaces(&mut program);
+    RustLowerer::new(&program, native_bindings, interface_programs).lower()
 }
 
 fn lower_program_to_rust_with_map_with_interfaces(

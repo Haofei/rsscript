@@ -30,6 +30,61 @@ fn keyword_named_source_lowers_to_a_valid_crate_name() {
 }
 
 #[test]
+fn module_isolation_lets_two_modules_share_a_symbol_name() {
+    // `helpers.count` and `device.count` are distinct module-scoped symbols, so
+    // both must lower to unique Rust functions rather than colliding (RS0005 /
+    // rustc E0428). A bare call resolves to the `use`-imported module's symbol.
+    let sources = vec![
+        (
+            "helpers.rss".to_string(),
+            "module helpers\n\nfn count() -> Int {\n    return 10\n}\n".to_string(),
+        ),
+        (
+            "device.rss".to_string(),
+            "module device\n\nfn count() -> Int {\n    return 20\n}\n".to_string(),
+        ),
+        (
+            "main.rss".to_string(),
+            concat!(
+                "module app\n\n",
+                "use helpers.count\n\n",
+                "fn main() -> Unit {\n",
+                "    Log.write(message: read String.from_int(value: count()))\n",
+                "    return Unit\n",
+                "}\n",
+            )
+            .to_string(),
+        ),
+    ];
+    let package =
+        lower_sources_to_rust_package_with_options(&sources, "ns-demo", "/rt", &[], &[])
+            .expect("multi-module package with a shared symbol name should lower");
+    // Both modules' `count` coexist as distinct, module-qualified Rust symbols.
+    assert!(
+        package.lib_rs.contains("fn helpers__count("),
+        "helpers.count should lower to a module-qualified symbol:\n{}",
+        package.lib_rs
+    );
+    assert!(
+        package.lib_rs.contains("fn device__count("),
+        "device.count should lower to a module-qualified symbol:\n{}",
+        package.lib_rs
+    );
+    // The bare `count()` in module `app` resolves to the imported `helpers.count`.
+    assert!(
+        package.lib_rs.contains("helpers__count()"),
+        "the imported bare call should resolve to helpers__count:\n{}",
+        package.lib_rs
+    );
+    // The runnable entry point keeps its global `main` symbol.
+    assert!(
+        package.lib_rs.contains("fn main("),
+        "the entry point must stay `main`:\n{}",
+        package.lib_rs
+    );
+}
+
+#[test]
 fn lower_name_pin_renames_definition_and_call_sites() {
     let source = r#"
 #lower_name("helpers__count")

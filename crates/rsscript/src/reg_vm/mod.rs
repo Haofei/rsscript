@@ -1163,12 +1163,13 @@ pub fn reg_vm_compile_package(package_dir: &Path) -> Result<RegVmExecutable, Eva
         return Err(EvalError::Diagnostics(errors));
     }
 
-    let program = merge_programs(
+    let mut program = merge_programs(
         input
             .sources
             .iter()
             .map(|(path, source)| parse_source(path, source)),
     );
+    crate::syntax::isolate_module_namespaces(&mut program);
     let interface_programs = interface_refs
         .iter()
         .map(|(path, source)| parse_source(path, source))
@@ -1194,7 +1195,8 @@ pub fn reg_vm_compile_source(file: &str, source: &str) -> Result<RegVmExecutable
         return Err(EvalError::Diagnostics(errors));
     }
 
-    let program = parse_source(file, source);
+    let mut program = parse_source(file, source);
+    crate::syntax::isolate_module_namespaces(&mut program);
     let hir = Hir::from_syntax_with_standard_package_interfaces(&program);
     Ok(RegVmExecutable {
         unit: Rc::new(RegUnit::lower(&hir)?),
