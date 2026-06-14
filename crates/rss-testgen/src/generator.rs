@@ -377,7 +377,7 @@ impl<'a> Generator<'a> {
     fn gen_stmt(&mut self, scope: &mut Scope) -> String {
         // Bias toward lets; sometimes assign, a `?`-unwrap, or a populated
         // collection.
-        match self.seed.weighted(&[6, 2, 2, 3, 2]) {
+        match self.seed.weighted(&[6, 2, 2, 3, 2, 1]) {
             0 => self.gen_let(scope),
             1 => self
                 .gen_assign(scope)
@@ -387,8 +387,32 @@ impl<'a> Generator<'a> {
                 .or_else(|| self.gen_assign(scope))
                 .unwrap_or_else(|| self.gen_let(scope)),
             3 => self.gen_collection_stmt(scope),
-            _ => self.gen_closure_stmt(scope),
+            4 => self.gen_closure_stmt(scope),
+            _ => self.gen_cancellation_stmt(),
         }
+    }
+
+    /// Deterministic concurrency primitive: create a `CancellationSource`, observe
+    /// its token is not cancelled, cancel it, observe it is. Both observations are
+    /// backend-deterministic (no scheduler/timing), exercising the cancellation
+    /// runtime objects' lowering across backends.
+    fn gen_cancellation_stmt(&mut self) -> String {
+        let source = self.fresh_var();
+        let token = self.fresh_var();
+        let observe = |token: &str| {
+            format!(
+                "Log.write(message: read String.from_bool(value: \
+                 CancellationToken.is_cancelled(token: read {token})))"
+            )
+        };
+        [
+            format!("let mut {source} = CancellationSource.new()"),
+            format!("let {token} = CancellationSource.token(source: read {source})"),
+            observe(&token),
+            format!("CancellationSource.cancel(source: mut {source})"),
+            observe(&token),
+        ]
+        .join("\n    ")
     }
 
     /// Build a populated `List<T>` and `List.filter` it with a capture-free
