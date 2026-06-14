@@ -1537,10 +1537,8 @@ pub(super) fn lower_source_span(span: &Span) -> String {
 }
 
 pub(super) fn rust_function_ident(name: &str) -> String {
-    name.split('.')
-        .map(rust_ident)
-        .collect::<Vec<_>>()
-        .join("_")
+    let joined = name.split('.').collect::<Vec<_>>().join("_");
+    rust_ident(&joined)
 }
 
 pub(super) fn rust_qualified_function_ident(namespace: &str, name: &str) -> String {
@@ -1734,4 +1732,16 @@ pub(super) fn cargo_crate_name(package_name: &str) -> String {
 
 pub(super) fn toml_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{rust_function_ident, rust_ident};
+
+    #[test]
+    fn rust_function_ident_escapes_after_flattening_dotted_names() {
+        assert_eq!(rust_function_ident("MultiBuffer.ref"), "MultiBuffer_ref");
+        assert_eq!(rust_function_ident("gen"), "r#gen");
+        assert_eq!(rust_ident("ref"), "r#ref");
+    }
 }
