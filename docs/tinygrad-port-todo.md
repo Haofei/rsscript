@@ -16,6 +16,29 @@ manual wrapper.
   type alias, struct, method, and generated helper with related names cannot
   collide after Rust lowering; diagnostics report the RSS source symbol, not only
   the lowered Rust name.
+  _Status (open — architectural):_ identical names across files are currently
+  *rejected*, not isolated — every source merges into one `Program`/HIR
+  (`merge_programs` → `Hir::duplicate_symbols`, RS0005) and lowers into one flat
+  Rust namespace, so this item is not a detection gap but a request to *allow*
+  per-module coexistence. That requires a scope-aware, module-qualified
+  name-resolution layer, not a local patch:
+  (1) key the symbol table / HIR by `(module, name)` (module = the file's `module`
+  decl) instead of bare name, so same-named symbols in different modules are
+  distinct rather than duplicates;
+  (2) resolve every reference through module scope — local defs, then `use`
+  imports, then fully-qualified `mod.name` — while honoring shadowing by
+  locals/params/fields (this scope tracking is the bulk of the work and the main
+  regression risk, since it touches name resolution for *all* programs);
+  (3) lower each symbol to a module-mangled, globally unique Rust ident and
+  rewrite all resolved references to it (the per-run override hook added for
+  `#lower_name` is the lowering seam, but it must become module/file-aware);
+  (4) keep diagnostics reporting the module-qualified RSS source symbol.
+  _Interim mitigation (shipped):_ the `#lower_name("...")` escape hatch lets a
+  port pin a unique backend symbol for a colliding declaration today (see the
+  lowered-name item below), which is exactly the manual workaround this item
+  would automate. Deferred as a dedicated change: rushing the resolver risks
+  breaking name resolution for every program, so it is intentionally not bundled
+  with the smaller items.
 
 - [ ] **Stable source-qualified symbol identity.** Store and expose a symbol's
   module path, source qualified name, kind, visibility, and lowered backend name.
