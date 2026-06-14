@@ -511,8 +511,7 @@ risk = "unknown"
 
 #[test]
 fn package_manager_spec_uses_implemented_provider_resolution_manifest_shape() {
-    let root = common::workspace_root();
-    let spec = fs::read_to_string(root.join("docs/RSScript_Package_Manager_Design_v0.6.md"))
+    let spec = fs::read_to_string(common::package_manager_spec_path())
         .expect("package manager spec should be readable");
 
     for stale in ["[provider]", "mode = \"platform_provided\""] {

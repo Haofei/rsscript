@@ -9,12 +9,17 @@ fn docs_do_not_reintroduce_legacy_gc_runtime_surface() {
     let legacy_runtime_path = ["rsscript_runtime::", "G", "c"].concat();
     let legacy_review_category = ["safe", "_to_", "skip"].concat();
 
-    for relative_path in [
-        "README.md",
-        "docs/RSScript_v0.6_Spec.md",
-        "docs/RSScript_Package_Manager_Design_v0.6.md",
+    for doc_path in [
+        root.join("README.md"),
+        common::language_spec_path(),
+        common::package_manager_spec_path(),
     ] {
-        let source = fs::read_to_string(root.join(relative_path))
+        let relative_path = doc_path
+            .strip_prefix(&root)
+            .unwrap_or(&doc_path)
+            .display()
+            .to_string();
+        let source = fs::read_to_string(&doc_path)
             .unwrap_or_else(|error| panic!("{relative_path} should read: {error}"));
 
         assert!(
@@ -34,8 +39,7 @@ fn docs_do_not_reintroduce_legacy_gc_runtime_surface() {
 
 #[test]
 fn package_manager_spec_uses_current_http_and_env_facade_shapes() {
-    let root = common::workspace_root();
-    let spec = fs::read_to_string(root.join("docs/RSScript_Package_Manager_Design_v0.6.md"))
+    let spec = fs::read_to_string(common::package_manager_spec_path())
         .expect("package manager spec should be readable");
 
     for stale in [
@@ -67,8 +71,7 @@ fn package_manager_spec_uses_current_http_and_env_facade_shapes() {
 
 #[test]
 fn rss_spec_keeps_protocol_dynamic_dispatch_deferred() {
-    let root = common::workspace_root();
-    let spec = fs::read_to_string(root.join("docs/RSScript_v0.6_Spec.md"))
+    let spec = fs::read_to_string(common::language_spec_path())
         .unwrap_or_else(|error| panic!("RSScript spec should read: {error}"));
 
     for forbidden in [
@@ -80,10 +83,10 @@ fn rss_spec_keeps_protocol_dynamic_dispatch_deferred() {
     ] {
         assert!(
             !spec.contains(forbidden),
-            "v0.6 protocol dynamic dispatch must remain deferred, found `{forbidden}`"
+            "protocol dynamic dispatch must remain deferred, found `{forbidden}`"
         );
     }
-    assert!(spec.contains("Dynamic dispatch (deferred, not admitted in v0.6)"));
+    assert!(spec.contains("Dynamic dispatch (deferred, not admitted in v"));
     assert!(spec.contains("The only implemented and specified protocol call form is"));
     assert!(spec.contains("explicit `Protocol.method(...)` dispatch"));
 }

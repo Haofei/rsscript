@@ -1,68 +1,55 @@
-# RSScript (Reviewable System Script) Language Specification v0.6
+# RSScript (Reviewable System Script) Language Specification v0.7
 
 Audience: language designers, compiler implementers, standard-library authors, review-tool authors
-Architecture note: v0.6 uses **RSScript frontend -> Rust source lowering -> rustc backend**.
+Architecture note: v0.7 uses **RSScript frontend -> Rust source lowering -> rustc backend**.
 
-### Changes from v0.5
+### Implemented surface (v0.7)
 
-```text
-Language features implemented:
-  - Receiver-call shorthand (§14.6.1): `mut cache.put(key: read k, value: read v)`
-    with mandatory effect keyword, unique resolution, and ambiguity rejection.
-  - Match expressions in expression position: `let x = match read v { ... }`
-    with same exhaustiveness and payload-binding rules as statement form.
-  - Extended collection pipeline (§18.2): List.sort_by, List.group_by,
-    List.partition, List.flat_map, List.take, List.skip, List.first,
-    List.last, List.join; Map.map_values, Map.filter, Map.try_fold,
-    Map.fold, Map.merge.
-  - Error composition APIs (§18.2): Result.map_error, Result.and_then,
-    Result.map; Option.map, Option.and_then, Option.ok_or,
-    Option.unwrap_or_else.
-  - Receiver-call ambiguity detection: multiple candidates → rejection.
-  - Missing-argument diagnostics no longer suppressed by unnamed args.
-
-Spec documentation expanded:
-  - Post-v0.6 design directions (§20.1) expanded to items G–N:
-    capability objects, Stream<T>/await-for, scoped views/slices,
-    noescape pipeline principle, explicit error composition principle,
-    compiler-owned derives, module visibility hardening, native boundary
-    contracts.
-  - Sum type hardening (E) updated to reflect match expression implementation.
-
-Package/REIR integration:
-  - REIR adapter layer connects compiler review facts to evidence IR.
-  - S3 IAM capability-binding scenarios exercise REIR proof/reconciliation.
-  - Package review now tracks capability-binding chains with call-graph
-    propagation.
-```
-
-### Changes since the v0.6 baseline
+This section is a current-status index of the implemented language surface; the
+normative rules live in the chapters it points to. Future, not-yet-admitted
+directions are in §20.1.
 
 ```text
-Value-semantics protocols and derives (§14.6, §20.1 L) — IMPLEMENTED:
-  - Compiler-owned protocols `Clone`, `Eq`, `Ord`, `Hashable` with their
-    contracts in stdlib (`clone/`, `cmp/`, `hash/`).
-  - `derives(...)` clause on struct/sum: accepted set is Debug, Clone, Eq,
-    Ord, Hash, JsonEncode, JsonDecode, Schema, ReviewSchema. Field-level
-    derive support is checked in RSScript before lowering; resources accept
-    only Debug/Schema/ReviewSchema.
-  - `Clone.clone<T>(self: read x) -> fresh T` closes the read-borrow clone
-    gap; `String.clone` and per-type synthesized `.clone()` are the same
-    managed-value copy.
-  - `Map<K,V>` keys and `Set<K>` elements are bound by `Hashable`; a
-    non-hashable key is rejected in RSScript with a `derives(Eq, Hash)` fix.
+Core execution:
+  - Managed application code, local values under `features: local`, fresh struct
+    returns, read/mut/take effects, resources through `with`,
+    `ResourcePool<T: Resource>`, and bodyless native declarations (Chapters 3–15).
+  - Executable async MVP: `async fn` bodies with direct/statement-boundary
+    `await`, structured concurrency `task_group { async let ... }`, `select`,
+    `await for`, and bounded MPSC `Channel`/`Stream` via `rss-async` (§14.4).
 
-Numeric surface (§18.2) — IMPLEMENTED:
-  - `Math` module: Int intrinsics (abs/min/max/clamp/pow) and Float intrinsics
-    (abs/min/max/clamp/pow, exp/exp2/log/log2/sin/cos/tanh, sqrt, trunc_float,
-    floor/ceil/round).
-  - Scalar conversions/inspection: `Int.to_float`, `Int.to_string`,
-    `Float.to_string`, `Float.is_nan`/`is_finite`/`is_infinite`,
-    `String.from_float`, `String.parse_float`.
+Surface and control flow:
+  - Receiver-call shorthand with mandatory effect keyword and unique resolution
+    (§14.6.1); match in expression position (§5A).
+  - `?` early-return on both `Result` and `Option`; the two forms do not mix
+    (§5A; mismatch `RS0013`).
+  - Default parameter values `name: Type = <expr>`, filled by name at lowering
+    (§9.2, §14.1; `RS0204`/`RS0207`).
+  - Top-level and type-associated constants `const [Type.]NAME: T = literal`,
+    literal initializers only, inlined at every reference (§6.9; `RS0015`).
+  - Tuples: `(T0, T1, ...)` types/literals, `.itemN` access, tuple patterns, and
+    `let (a, _, c) = ...` destructuring, with generic field/match inference
+    (§6.10, §5A).
+  - List slice patterns in `match`: `[]`, `[a, b]`, `[first, ..rest]`,
+    `[..init, last]`, `[a, ..mid, z]`; `..name` binds `List<T>` (§5A).
 
-Soundness/feature fixes folded into the prose (see BUGS.md RSS-1…RSS-13):
-  - Nested generics, sound payload-variant construction, borrowed-match
-    payload extraction, callable clone, let-mut clone of read-param init.
+Types, protocols, and stdlib:
+  - Compiler-owned protocols `Clone`, `Eq`, `Ord`, `Hashable` and a `derives(...)`
+    clause on struct/sum (Debug, Clone, Eq, Ord, Hash, JsonEncode, JsonDecode,
+    Schema, ReviewSchema); `Map`/`Set` keys are `Hashable`-bound (§14.6).
+  - Extended collection pipeline and explicit error-composition APIs
+    (`Result.map_error/and_then/map`, `Option.map/and_then/ok_or/...`) (§18.2).
+  - Numeric surface: `Math` Int/Float intrinsics and scalar
+    conversions/inspection (§18.2).
+
+Lowering and tooling:
+  - Rust source lowering with mandatory source maps; review map / review diff
+    metadata; REIR adapter for capability-binding evidence (Chapters 4, 16, 17).
+  - Generated-namespace isolation: a `module` declaration namespaces its file's
+    top-level symbols so two files may share a source name; module-less files
+    lower byte-identically (§14.8).
+  - `#lower_name("...")` escape hatch to pin a function's backend symbol
+    (§14.8; invalid/colliding pin `RS0035`).
 ```
 
 ---
@@ -166,7 +153,7 @@ must be weighed as such. (Detail: section 2B.)
 
 ## 0. Reading Guide and Normative Hierarchy
 
-This document reorganizes the v0.5 draft around the semantic boundaries that the compiler must enforce before Rust lowering. The previous draft had many correct rules, but several were scattered across runtime, data-effect, resource, closure, review, and example chapters. This edition treats the following chapters as the primary semantic authority:
+This document is organized around the semantic boundaries that the compiler must enforce before Rust lowering. It treats the following chapters as the primary semantic authority:
 
 ```text
 Chapter 5   Expression modes and materialization
@@ -226,7 +213,7 @@ freshness guarantees
 native/unsafe boundaries
 ```
 
-v0.6 makes one implementation decision normative for the MVP:
+v0.7 makes one implementation decision normative for the MVP:
 
 ```text
 RSScript lowers to Rust source.
@@ -627,17 +614,23 @@ for the other's and must be decided openly, not assumed to be a pure win.
 
 ---
 
-## 3. v0.6 Scope
+## 3. v0.7 Scope
 
 ### 3.1 Executable MVP
 
-v0.6 executable support covers:
+v0.7 executable support covers:
 
 ```text
 managed application code
 local values under features: local
 fresh struct returns
 read / mut / take effects
+tuples, tuple patterns, and let destructuring
+list slice patterns in match
+top-level and type-associated constants
+default parameter values
+`?` early-return on Option and Result
+generated-namespace isolation via module declarations; #lower_name pin
 resource values through with
 ResourcePool<T: Resource>
 bodyless native declarations through package binding metadata
@@ -653,9 +646,9 @@ review map / review diff metadata
 REIR adapter for capability-binding evidence
 ```
 
-### 3.2 Review-visible but not executable in v0.6
+### 3.2 Review-visible but not executable in v0.7
 
-The following may be parsed and surfaced for review but are not executable lowering targets in v0.6:
+The following may be parsed and surfaced for review but are not executable lowering targets in v0.7:
 
 ```text
 spawn (unstructured task creation)
@@ -666,7 +659,7 @@ advanced protocol/dynamic dispatch model (capability objects)
 scoped views / slices
 ```
 
-`async fn` signatures are review-visible contracts. v0.6 admits an executable async
+`async fn` signatures are review-visible contracts. v0.7 admits an executable async
 MVP: `await` appears inside an `async fn`, either directly consuming an async call
 at a statement boundary or inside an `if`/`loop`/`match`/`with` body (which lowers
 as an explicit async statement boundary); awaits embedded in ordinary expression
@@ -679,14 +672,14 @@ process IO, timers, cancellation) lives in the `rss-async` package. RSScript doe
 not expose `Future`, `Pin`, `Poll`, `Waker`, Rust executor internals, or public
 task handles as source-level types.
 
-The v0.6 execution target is single-isolate and cooperative. `await` is a
+The v0.7 execution target is single-isolate and cooperative. `await` is a
 suspension boundary in the async function frame: Copy values and managed handles
 may cross it, but local values, resources, with-bound resource leases, runtime
 read/write guards, noescape closure frames, and unmanaged native borrows must
 not. `await` inside an ordinary closure is not in the surrounding async frame and
 is rejected unless a future async-closure form is explicitly introduced.
 
-`spawn` remains review-visible but not executable in v0.6. It is reserved for a
+`spawn` remains review-visible but not executable in v0.7. It is reserved for a
 future structured task API and must be rejected before lowering.
 
 Future task support must follow the same single-isolate model: `spawn` means
@@ -755,7 +748,7 @@ rules). Lowering is a separate stage defined by a backend-agnostic shape
 contract (section 4.3). The same contract could be satisfied against another
 systems backend — for example Zig or C — without changing RSScript semantics.
 
-Targeting Rust in v0.6 is an engineering decision, not an identity. rustc, LLVM,
+Targeting Rust in v0.7 is an engineering decision, not an identity. rustc, LLVM,
 Cargo, and the crate ecosystem supply a mature backend — codegen, optimization,
 platform support, linking, libraries, and a type-checking backstop for generated
 code — that would otherwise take years to build. Reusing it lets RSScript spend
@@ -803,7 +796,7 @@ source-span hooks
 native function registry
 ```
 
-For v0.6, `Managed<T>` is part of the single-isolate ABI: it is non-atomic,
+For v0.7, `Managed<T>` is part of the single-isolate ABI: it is non-atomic,
 intentionally `!Send` and `!Sync`, and valid only inside one RSScript isolate.
 Generated Rust must not require or promise ordinary Rust thread sharing for
 managed handles.
@@ -819,7 +812,7 @@ rssc 0.5.x -> rss_rt 0.5.x
 
 ### 4.5 Managed runtime reference model
 
-Managed values are runtime-mediated handles. The reference v0.6 implementation
+Managed values are runtime-mediated handles. The reference v0.7 implementation
 is single-isolate and `Rc<RefCell<T>>`-like:
 
 ```text
@@ -827,7 +820,7 @@ read x  acquires a shared runtime read view
 mut x   acquires an exclusive runtime write view
 ```
 
-RSScript v0.6 exposes a single-isolate source model. Within that model,
+RSScript v0.7 exposes a single-isolate source model. Within that model,
 frontend-visible conflicts such as same-call `read`/`mut`/`take`/`manage`
 overlap are static diagnostics. Managed handles are intentionally not `Send` or
 `Sync`; Rust's type system must prevent them from being moved to ordinary
@@ -837,7 +830,7 @@ failures; they must become RSScript runtime diagnostics with source spans, not
 raw Rust panics or deadlocks.
 
 Waiting or serializing ordinary contention is a future cross-thread or
-cross-isolate runtime behavior, not a v0.6 source-level promise.
+cross-isolate runtime behavior, not a v0.7 source-level promise.
 
 Alternative runtimes may optimize internally only if they preserve RSScript-observable semantics:
 
@@ -847,7 +840,7 @@ read/mut do not expose backend-specific borrow errors
 runtime failures are reported as RSScript diagnostics
 ```
 
-RSScript v0.6 has a single-isolate model. Managed handles do not cross isolates.
+RSScript v0.7 has a single-isolate model. Managed handles do not cross isolates.
 Future cross-thread or cross-isolate transfer requires explicit message or
 channel capabilities rather than implicit shared managed handles.
 
@@ -923,14 +916,14 @@ without renumbering later chapters. It is a primary semantic-boundary chapter: i
 defines where resources drop, where local-move and freshness state change, and
 where source maps mark boundaries.
 
-This chapter defines the v0.6 executable statement and control-flow surface. It
+This chapter defines the v0.7 executable statement and control-flow surface. It
 is normative for where resources drop, where freshness and local-move state
 change, and where source maps mark boundaries; the Rust lowering must preserve
 these semantics.
 
 ### Statements
 
-The v0.6 statement forms are:
+The v0.7 statement forms are:
 
 ```text
 let binding
@@ -956,7 +949,7 @@ Ordering operators require numeric operands. Logical `&&` and `||` require
 `Bool` operands. RSScript has no implicit conversion or user-defined operator
 overload resolution.
 
-RSScript v0.6 has a **controlled assignment statement** for updating mutable
+RSScript v0.7 has a **controlled assignment statement** for updating mutable
 local state. It is a statement, never an expression — it produces no value and
 cannot appear in expression position — and it participates in the same
 place-conflict, effect, and resource checking as `mut` API calls (it is not an
@@ -982,14 +975,26 @@ cannot be used to bypass them.
 `?` is the failure-propagation operator.
 
 ```text
-- `?` is allowed only inside a function whose return type is Result<_, E>;
-  applying it elsewhere is a diagnostic (it requires a Result value).
-- on Ok(v) it evaluates to v and control continues.
-- on Err(e) it is an early return of Err(e) from the enclosing function.
+- `?` is allowed only inside a function whose return type is Result<_, E> or
+  Option<_>; applying it elsewhere is a diagnostic (it requires a matching
+  Result or Option value).
+- on a Result operand: on Ok(v) it evaluates to v and control continues; on
+  Err(e) it is an early return of Err(e) from the enclosing function.
+- on an Option operand: on Some(v) it evaluates to v and control continues; on
+  None it is an early return of None from the enclosing function. The enclosing
+  function's return type must be Option<_>.
+- the operand must be an owned value (for example a call result). A borrowed
+  `read Result`/`read Option` is not a `?` operand.
 - on that early return, every active `with` resource in scope is dropped, in
   reverse order of acquisition, before the function returns — the same drop that
   a normal block exit, `return`, `break`, or `continue` performs (Chapter 12).
 ```
+
+The `Result` form and the `Option` form do not mix: `?` on a `Result` operand
+is only valid in a `Result`-returning function, and `?` on an `Option` operand
+is only valid in an `Option`-returning function. There is no implicit
+`Result`↔`Option` bridging. A mismatched operand or enclosing return type is
+reported as `RS0013`.
 
 `?` performs **no implicit error conversion**. For `expr?` inside a function
 returning `Result<U, E>`, `expr` must have type `Result<T, E>` with the *same*
@@ -1013,7 +1018,7 @@ A future version may add an explicit `Result.map_err` API for this in canonical
 call form (`Result.map_err(result: ..., mapper: ...)`); it would still be an
 explicit, named call, never an implicit backend conversion. It is described here
 in prose because the closure-parameter syntax it would need is not part of the
-v0.6 surface.
+v0.7 surface.
 
 Core error types may expose explicit lossy message conversion helpers, for
 example `JsonError.message(error: read e)` or `FileError.message(error: read e)`.
@@ -1025,7 +1030,7 @@ source as the `?` token.
 
 This is the one implicit control transfer RSScript allows, and it lowers to
 Rust's `?`, whose default behavior is exactly the `From` conversion Article III
-forbids. The sound v0.6 rule has two obligations:
+forbids. The sound v0.7 rule has two obligations:
 
 ```text
 1. RSScript lowering emits no `From`/`Into` conversions for error types. With
@@ -1125,8 +1130,44 @@ Variant                            // payload-free variant
 Variant { field, other: read x }   // structured variant payload
 Struct { field, other: mut x }     // struct destructuring
 Struct { field, .. }               // ignore the remaining fields
+(a, name)                          // tuple pattern (see §6.10)
+[], [only], [first, ..rest]        // list slice patterns (see below)
 42, "ready", true                  // scalar literal patterns
 ```
+
+A **tuple pattern** `(p0, p1, ...)` matches a tuple scrutinee positionally; each
+element pattern is a binding, wildcard, or scalar literal and is checked against
+the corresponding tuple element type (§6.10).
+
+A **list slice pattern** matches a `List<T>` scrutinee by shape. The element
+patterns are checked against `T`, and an optional rest segment captures the
+remaining elements:
+
+```text
+[]                  // empty list
+[only]              // exactly one element
+[a, b]              // exactly two elements
+[first, ..rest]     // head element, then the rest
+[..init, last]      // all but the last, then the last element
+[a, ..mid, z]       // first, middle, and last
+```
+
+Rest forms:
+
+```text
+..        // ignored rest (binds nothing)
+.._       // ignored rest (explicit underscore)
+..name    // bound rest; `name` has type List<T> (the remaining elements)
+```
+
+A list slice pattern is only valid on a `List<T>` scrutinee, and — like struct
+and tuple patterns — requires an explicit scrutinee effect (`read`, `mut`, or
+`take`); a missing effect is `RS0202`. Exhaustiveness for list patterns holds when some rest
+pattern covers all lengths at or above its prefix/suffix length and every shorter
+length is covered by a fixed-length arm (for example `[]` plus `[x, ..rest]`); a
+match that can leave a length uncovered is reported as a non-exhaustive match
+(`RS0021`). Only `[..]` / `[..name]` is irrefutable; every other list pattern is
+refutable.
 
 A declared `sum` variant is **constructed** with the same named-field call form as a
 struct: a payload-free variant is written bare (`North`, `ArgNone`), and a payload
@@ -1192,7 +1233,7 @@ match take node {
 }
 ```
 
-Managed values are read-only under structured patterns in v0.6. Matching a
+Managed values are read-only under structured patterns in v0.7. Matching a
 managed `class`, managed `struct`, managed `Option`, managed `Result`, or managed
 sum value binds only read views of its fields or payloads. Field mutation of a
 managed object remains an explicit API operation such as
@@ -1500,7 +1541,7 @@ do not keep the target object alive
 terminate local-inline paths
 cannot be taken as inline local fields
 must target a class type: a weak field whose type is not a class is a
-  diagnostic (RS0902). v0.6 weak references break managed cycles only between
+  diagnostic (RS0902). v0.7 weak references break managed cycles only between
   class identities; a weak struct/container field is not permitted.
 must be explicitly upgraded before use
 must be initialized from an explicit weak-handle expression
@@ -1547,9 +1588,9 @@ Use `with` or `ResourcePool<T: Resource>`.
 
 `Copy` is a core distinction: Copy parameters do not require a data effect
 (§10.5), Copy fields are inline (§6.5), and managed containers and closures may
-hold Copy values freely. v0.6 therefore fixes the Copy set explicitly.
+hold Copy values freely. v0.7 therefore fixes the Copy set explicitly.
 
-The Copy types in v0.6 are exactly the compiler-declared scalar primitives:
+The Copy types in v0.7 are exactly the compiler-declared scalar primitives:
 
 ```text
 Bool
@@ -1564,7 +1605,7 @@ Two further types are **exempt from data-effect syntax** but are **not Copy** �
 do not read this as "freely copyable":
 
 ```text
-Fd       a descriptor handle. Fd is not a user-facing ordinary value in v0.6: it
+Fd       a descriptor handle. Fd is not a user-facing ordinary value in v0.7: it
          appears only inside native/resource implementations such as File, and is
          exempt from data effects only in trusted native/resource internals, not
          as a general public API type. Copying an Fd value is not a sanctioned
@@ -1575,11 +1616,11 @@ closure  closure-typed parameters do not use read/mut/take syntax, but closures
          retention (§10.8) is unchanged.
 ```
 
-The sized and unsized scalar names are **distinct types in v0.6, not aliases**:
+The sized and unsized scalar names are **distinct types in v0.7, not aliases**:
 `Int` is not an alias for `Int64`, `Byte` is not an alias for `UInt8`, and so on.
 There is no implicit conversion between them (§2.4); width changes are explicit
 through a `T.from` constructor (`let n: Int64 = Int64.from(value: x)`). Whether
-any of these should later become aliases is deferred; v0.6 keeps them distinct so
+any of these should later become aliases is deferred; v0.7 keeps them distinct so
 no conversion is hidden.
 
 How the checker knows it is "inside a trusted native/resource internal" for the
@@ -1596,10 +1637,91 @@ containers (`List`, `Map`, `Set`), `String`, `Bytes`, `Buffer`, generic type
 parameters, and every user-defined `class`, `struct`, or `resource` — including a
 struct all of whose fields are Copy.
 
-User-defined types are non-Copy in v0.6 with no implicit derivation; a struct is
+User-defined types are non-Copy in v0.7 with no implicit derivation; a struct is
 never silently Copy because its fields are. A future explicit `copy struct` or
 `derives(copy)` is deferred, not excluded (Article VI), and would have to be
 explicit per the no-hidden-behavior rule (§2.4).
+
+### 6.9 Constants
+
+A top-level `const` declares a named compile-time value:
+
+```rust
+const MAX_RETRIES: Int = 4
+const PROMPT: String = "ready"
+```
+
+A constant may also be **associated with a type namespace** using a dotted name,
+mirroring the call namespacing used elsewhere in the surface:
+
+```rust
+const Device.DEFAULT: String = "cpu"
+const Device.COUNT: Int = 4
+```
+
+Associated constants are referenced through the same dotted form
+(`Device.DEFAULT`, `Device.COUNT`). The type namespace is an organizing prefix,
+not membership in the type's value layout: a constant is a standalone top-level
+binding, not a field, and reading it constructs no instance of the type.
+
+Rules:
+
+```text
+- A `const` initializer must be a literal in v0.7: a number, a string, or a
+  boolean (`true`/`false`). Expressions and calls in `const` position are not
+  supported yet and are rejected (RS0015). Compute the value and write it as a
+  literal.
+- The type annotation is optional; it is inferred from the literal when absent.
+- `pub const` makes the constant part of the public review surface.
+- A local binding of the same name shadows a constant within its scope.
+```
+
+Constants carry no runtime storage of their own: every reference is replaced by
+its literal value during lowering, so the register VM and the Rust backend
+resolve a constant identically. The dotted spelling is preserved in formatted
+source and in the symbol inventory; it is flattened to a backend identifier only
+during lowering.
+
+### 6.10 Tuples
+
+A tuple is a fixed-arity, positional grouping of values written with parentheses.
+
+```rust
+let pair: (Int, String) = (7, "b")
+let counts: (Int, Int, Int) = (1, 2, 3)
+```
+
+```text
+type form:     (T0, T1, ...)      arity >= 2
+literal form:  (e0, e1, ...)      arity >= 2
+```
+
+Tuple arity is at least 2; a single parenthesized expression `(x)` is grouping,
+not a one-tuple, and `()` is not a tuple (the empty/unit value is `Unit`).
+
+Elements are read positionally with `.itemN`, where `N` runs from `0` to
+`arity - 1`:
+
+```rust
+fn first_two(triple: read (Int, Int, Int)) -> Int {
+    return triple.item0 + triple.item1
+}
+```
+
+Tuples participate in `match` through tuple patterns (§5A) and in `let` through
+positional destructuring, where `_` skips an element:
+
+```rust
+let (first, _, third) = (1, 2, 3)
+```
+
+A tuple is an ordinary managed value type; its element data-effect, move, and
+freshness rules are the same as a struct with fields `item0`, `item1`, ….
+Internally a tuple of arity *N* is the synthetic generic type `__TupleN<...>`;
+this spelling is an implementation detail of lowering and is reversed to the
+`(...)` form in formatted source. Generic field and match-pattern types are
+resolved by substituting the tuple's element types, the same generic
+field/pattern inference that applies to any generic struct.
 
 ---
 
@@ -1614,6 +1736,16 @@ let image = Image.load(path: read path)?
 ```
 
 For Copy values, the value is copied normally.
+
+A `let` may also bind a tuple positionally, where `_` skips an element
+(§6.10):
+
+```rust
+let (first, _, third) = (1, 2, 3)
+```
+
+Each bound element follows the ordinary `let` rules for its element type; the
+destructuring is a positional projection, not a new binding mode.
 
 ### 7.2 `local`
 
@@ -1816,7 +1948,7 @@ Foo.run(
 )
 ```
 
-RSScript v0.6 does not prove index inequality.
+RSScript v0.7 does not prove index inequality.
 
 ### 8.4 Same-call compatibility matrix
 
@@ -1914,7 +2046,7 @@ function*:
 ```
 
 The earlier "value type ⇒ splittable" reading was wrong: a struct is a value
-type but a `mut` struct parameter can still be managed-backed. The v0.6 checker
+type but a `mut` struct parameter can still be managed-backed. The v0.7 checker
 therefore tracks field-splittable local exclusivity separately from ordinary
 `mut` parameter access.
 
@@ -1979,6 +2111,10 @@ None
 ```
 
 The payload position is still a call-like argument slot for checker purposes.
+
+A parameter that declares a default value (§14.1) may be omitted at the call
+site. The omitted argument is filled in by name during lowering, so every call
+reduces to a complete named-argument list before checking and lowering.
 
 ### 9.3 Constructor field effects
 
@@ -2131,7 +2267,7 @@ work has joined. The backend's thread pool, work-stealing model, `Send`/`Sync`
 rules, trait extension APIs, and lifetime machinery are not part of the RSScript
 surface.
 
-The only v0.6 admitted parallel surface is fixed native facade functions whose
+The only v0.7 admitted parallel surface is fixed native facade functions whose
 contracts mark both `native` and `parallel`, for example numeric reductions or
 sorts over `List<Int>`. User-provided parallel closures, parallel iterators,
 structured joins/scopes, thread-pool configuration, and partitioned mutable
@@ -2289,7 +2425,7 @@ Those positional types also apply to ordinary calls inside callback bodies; for
 example `callback: |value| String.len(value: read value)` is rejected for
 `Fn(Int) -> Int` because the `String.len` argument expects `String`, not `Int`.
 
-v0.6 `noescape Fn` closures are **non-consuming**: a callee may call the closure
+v0.7 `noescape Fn` closures are **non-consuming**: a callee may call the closure
 any number of times (for example `ResourcePool.new` calls its factory `max_size`
 times), so the closure may `read` or `mut` a captured local but must not `take`
 or `manage` a captured local — that would move it on the first call and leave it
@@ -2418,11 +2554,11 @@ approved resource container insertion
 immediate resource lease APIs
 ```
 
-In v0.6 these last two are concrete and closed: the only approved resource
+In v0.7 these last two are concrete and closed: the only approved resource
 container is `ResourcePool<T: Resource>`, and the only standard immediate resource
 lease API is `ResourcePool.borrow`. There is no general mechanism for a package to
-declare a new approved container or lease API in v0.6; any other container or
-lease API is rejected by the v0.6 checker. The extension points are reserved for a
+declare a new approved container or lease API in v0.7; any other container or
+lease API is rejected by the v0.7 checker. The extension points are reserved for a
 future version, which must define how approval is expressed in `.rssi` and how the
 checker recognizes it.
 
@@ -2443,7 +2579,7 @@ with File.open(path: read path)? as file {
 ```
 
 `with File.open(...) as file` is valid only when the producer returns a bare
-resource `R`. When the producer returns `Result<R, E>`, omitting `?` is a v0.6
+resource `R`. When the producer returns `Result<R, E>`, omitting `?` is a v0.7
 diagnostic, not a compatibility warning. RSScript has no legacy source corpus, so
 the checker keeps one canonical resource-producer spelling.
 
@@ -2491,7 +2627,7 @@ Hard rules:
 ```text
 ResourcePool itself must be local.
 ResourcePool is allowed only with features: local.
-ResourcePool is the privileged long-lived resource container in v0.6.
+ResourcePool is the privileged long-lived resource container in v0.7.
 Pool drop releases all held resources.
 Borrow returns a with-compatible resource lease.
 Resource values cannot escape the pool lease.
@@ -2509,9 +2645,9 @@ apply to `ResourcePool<T>`.
 
 This is a hard implementation boundary.
 
-The v0.6 standard ResourcePool factory is eager and noescape.
+The v0.7 standard ResourcePool factory is eager and noescape.
 
-Conceptual contract for the v0.6 constructor:
+Conceptual contract for the v0.7 constructor:
 
 ```rust
 fn ResourcePool<T: Resource>.new(
@@ -2520,11 +2656,11 @@ fn ResourcePool<T: Resource>.new(
 ) -> fresh ResourcePool<T>
 ```
 
-`new` is the v0.6 constructor and requires an **infallible** factory: `create` must return a resource `T`, never `Result<T, E>`. Construction is eager and exact: the runtime calls `create` exactly `max_size` times, stores the `max_size` resources in the local pool, then discards the factory closure. In v0.6, `max_size` must be a positive `Int` literal; a non-positive literal is a diagnostic (RS0708), not a runtime condition — this keeps `new` infallible without needing a `Result` for a degenerate pool size. Because construction cannot fail, `new` returns the pool directly, not a `Result`. "Eager" and "exactly `max_size`" together remove any ambiguity with lazy replenishment: the pool never creates a resource after construction.
+`new` is the v0.7 constructor and requires an **infallible** factory: `create` must return a resource `T`, never `Result<T, E>`. Construction is eager and exact: the runtime calls `create` exactly `max_size` times, stores the `max_size` resources in the local pool, then discards the factory closure. In v0.7, `max_size` must be a positive `Int` literal; a non-positive literal is a diagnostic (RS0708), not a runtime condition — this keeps `new` infallible without needing a `Result` for a degenerate pool size. Because construction cannot fail, `new` returns the pool directly, not a `Result`. "Eager" and "exactly `max_size`" together remove any ambiguity with lazy replenishment: the pool never creates a resource after construction.
 
 Implementation note (non-normative): a prototype runtime may defensively diagnose
 invalid or empty pools, but this is not RSScript source semantics. A conforming
-v0.6 frontend rejects non-positive `max_size` literals (RS0708) before lowering.
+v0.7 frontend rejects non-positive `max_size` literals (RS0708) before lowering.
 
 A fallible factory passed to `new` is rejected (diagnostic RS0707): hiding a creation failure inside `new` would violate no-hidden-behavior, since failure is represented by a return type (section 14.3). The closure literal is checked against the expected `noescape Fn() -> T` parameter contract, including its result type: the user need not annotate the closure's return type, but the checker takes the expected result `T` from the parameter and rejects a factory whose result is `Result<T, E>` (that is the RS0707 case). The `-> T` in the contract is the expected result the checker enforces, not mere documentation.
 
@@ -2532,7 +2668,7 @@ The canonical example below uses `DbConnection.open` as an *infallible* factory 
 
 #### Fallible construction: `try_new`
 
-The realistic case is a factory that can fail. `try_new` is part of the v0.6
+The realistic case is a factory that can fail. `try_new` is part of the v0.7
 executable MVP because resource allocation failure must stay explicit instead
 of being hidden behind an infallible pool constructor.
 
@@ -2543,7 +2679,7 @@ fn ResourcePool<T: Resource>.try_new<E>(
 ) -> Result<fresh ResourcePool<T>, E>
 ```
 
-`try_new` is eager like `new`, but because `create` can fail, construction can fail, so it returns a `Result` and the caller writes `?`. Binding semantics for v0.6 lowering and the reference runtime:
+`try_new` is eager like `new`, but because `create` can fail, construction can fail, so it returns a `Result` and the caller writes `?`. Binding semantics for v0.7 lowering and the reference runtime:
 
 ```text
 1. eager: create is called up to max_size times at construction.
@@ -2600,7 +2736,7 @@ with ResourcePool.borrow(pool: mut pool) as conn {
 
 The lease cannot escape the `with` body, be returned through `Ok`/`Some`, be captured by a managed closure, or be stored in managed data.
 
-Exhaustion and nesting, made precise for v0.6:
+Exhaustion and nesting, made precise for v0.7:
 
 ```text
 - borrow does not return Result and must not block.
@@ -2612,7 +2748,7 @@ Exhaustion and nesting, made precise for v0.6:
   introspection or multi-borrow; until then, use one lease per pool at a time.
 ```
 
-Exhaustion is not expected in ordinary v0.6 source: `max_size` is a positive
+Exhaustion is not expected in ordinary v0.7 source: `max_size` is a positive
 literal and nested same-pool borrow is rejected, so a single sequential lease per
 pool cannot exhaust it. Borrowing from an exhausted pool is therefore a
 **defensive** runtime diagnostic (with a source span, not a block and not a
@@ -2622,13 +2758,13 @@ is expected to handle. This is why `borrow` need not return a `Result`.
 
 ```rust
 with ResourcePool.borrow(pool: mut pool) as a {
-    with ResourcePool.borrow(pool: mut pool) as b {   // rejected in v0.6
+    with ResourcePool.borrow(pool: mut pool) as b {   // rejected in v0.7
         ...
     }
 }
 ```
 
-*v0.6 enforcement status: exhausted borrow is enforced at runtime (an empty pool
+*v0.7 enforcement status: exhausted borrow is enforced at runtime (an empty pool
 produces a resource-pool-empty diagnostic with a source span). The static active
 lease rule is a frontend obligation: nested borrow and any other read/mut/take
 or manage use of the same pool root inside the lease body are diagnostics before
@@ -2690,7 +2826,7 @@ Local containers may hold local struct values. Container elements do not partici
 
 ### 13.3 Resource containers
 
-Only approved resource containers may store resources. In v0.6, the standard resource container is:
+Only approved resource containers may store resources. In v0.7, the standard resource container is:
 
 ```text
 ResourcePool<T: Resource>
@@ -2719,6 +2855,44 @@ Example:
 pub fn resize(image: mut Image, width: Int, height: Int) -> Unit
     effects(no_panic)
 ```
+
+**Default parameter values.** A parameter may declare a default value with
+`name: Type = <expr>`:
+
+```rust
+fn box_volume(width: Int, height: Int = 2, depth: Int = 3) -> Int {
+    return width * height * depth
+}
+```
+
+A call may omit any parameter that declares a default; the omitted argument is
+supplied as a named argument during lowering, so the default is visible in the
+signature and the call site never carries hidden positional state:
+
+```rust
+box_volume(width: 5)                       // height = 2, depth = 3
+box_volume(width: 5, height: 4)            // depth = 3
+box_volume(width: 5, height: 4, depth: 6)  // all explicit
+```
+
+Rules:
+
+```text
+- A default value is written only in a function parameter declaration. The `=`
+  terminates the parameter type; the default expression follows.
+- The default expression is type-checked against the parameter type; a mismatch
+  is a diagnostic (RS0207).
+- An omitted required (non-defaulted) parameter is a diagnostic (RS0204); a
+  default does not weaken effect or freshness checking of the supplied form.
+- The default is filled per call site (each call materializes the default
+  expression), and is always filled by name — there is no positional defaulting.
+- Defaults compose with named arguments: a defaulted parameter may still be
+  passed explicitly by name in any order.
+```
+
+This is a desugaring, not a new runtime mechanism: after defaults are filled the
+checker and every backend see an ordinary complete named-argument list. The
+feature replaces hand-written overload sets with one reviewable signature.
 
 ### 14.2 Return modes
 
@@ -2770,10 +2944,10 @@ fn load(path: read Path) -> Result<Image, ImageError>
 ### 14.4 Executable async MVP
 
 `async fn` is a review-visible signature boundary and a restricted executable
-function kind in v0.6.
+function kind in v0.7.
 
 `features: async` permits declaring `async fn` signatures and writing executable
-async bodies that use direct `await`. It also permits the v0.6 structured
+async bodies that use direct `await`. It also permits the v0.7 structured
 `task_group { ... }` form with `async let` bindings; the group is isolate-local
 and exists only to make concurrent suspension boundaries explicit.
 
@@ -2793,7 +2967,7 @@ async fn main() -> Result<Unit, TimerError> {
 `async` is not an effect and must not be written in `effects(...)`. Internally,
 normalized metadata may record async functions as `function_kind: async` and
 `effects: ["suspends"]` so review tools can reason about suspension uniformly,
-but `suspends` is not a user-authored effect in v0.6.
+but `suspends` is not a user-authored effect in v0.7.
 
 `await` may appear only inside an `async fn` body. It does not become valid inside
 ordinary inline closures nested in an async function; those closures have their
@@ -2834,7 +3008,7 @@ and timeout joins so native wrappers can build nonblocking drivers without
 exposing Rust `Future`/`Waker` types. These are runtime implementation hooks, not
 RSScript source features.
 
-The v0.6 runtime may also host Rust async IO futures behind that pending ABI.
+The v0.7 runtime may also host Rust async IO futures behind that pending ABI.
 The reference runtime provides a Tokio-backed native future adapter for Rust
 wrappers that need high-concurrency IO. Tokio remains a runtime dependency and
 native-wrapper implementation detail: RSScript source still sees only
@@ -2847,10 +3021,10 @@ resolves `await handle` back to the `async let handle = callee(...)`
 initializer so the package review and REIR `async_boundary` fact still name the
 concrete awaited callee rather than only the lexical handle name.
 
-`spawn` is not executable in v0.6. Future unstructured task support must lower to
+`spawn` is not executable in v0.7. Future unstructured task support must lower to
 an isolate-local primitive or an explicit cross-isolate message API; it must not
 imply `Send`, shared heap transfer, or multi-threaded execution. Streams,
-channels, async closures, and public task handles remain post-v0.6 design work.
+channels, async closures, and public task handles remain post-v0.7 design work.
 
 ### 14.5 Generics
 
@@ -2943,10 +3117,10 @@ contracts raised to the type level — but they are not the same thing, and the
 shared word must not be reused for the language feature.
 
 A `protocol` is an app-layer capability contract, not a general trait system.
-The v0.6 MVP supports the static contract surface: protocol declarations,
+The v0.7 MVP supports the static contract surface: protocol declarations,
 protocol method signatures, protocol generic bounds, and explicit
 `Protocol.method(...)` calls checked against those signatures. Dynamic dispatch
-is not admitted in v0.6 source or package contracts.
+is not admitted in v0.7 source or package contracts.
 
 #### Positive model (what a protocol is)
 
@@ -3255,21 +3429,21 @@ Receiver-call shorthand satisfies the feature admission rule because:
    explicitly marked with the effect keyword and mechanically expandable.
 ```
 
-#### Dynamic dispatch (deferred, not admitted in v0.6)
+#### Dynamic dispatch (deferred, not admitted in v0.7)
 
-RSScript v0.6 does not admit protocol-typed dynamic dispatch, trait objects, or
+RSScript v0.7 does not admit protocol-typed dynamic dispatch, trait objects, or
 protocol-typed values. The only implemented and specified protocol call form is
 static, explicit `Protocol.method(...)` dispatch backed by an explicit generic
 bound or an explicit `impl Protocol for Type` declaration.
 
-Future protocol dynamic dispatch is a design target, not a v0.6 promise. It must
+Future protocol dynamic dispatch is a design target, not a v0.7 promise. It must
 go through feature admission again and must not be described as implemented,
 settled, or available to package contracts until syntax, checking, lowering,
 review evidence, and package metadata exist together.
 
 Closed sets should still prefer sealed sum types with exhaustive match
 (section 20.1), which are strictly more reviewable. For open sets such as
-runtime-registered plugins or third-party extensions, v0.6 packages should use
+runtime-registered plugins or third-party extensions, v0.7 packages should use
 explicit `.rssi` wrapper contracts and native/review boundaries rather than
 pretending that RSScript source has Rust trait-object power.
 
@@ -3289,11 +3463,11 @@ A form that cannot meet them is not admitted:
 5. Review classification: a protocol-dynamic call would need an explicit
    must-review reason owned by that future feature, with effects bounded by the
    protocol contract. It must not be treated as implemented package metadata in
-   v0.6.
+   v0.7.
 ```
 
 These constraints are necessary but not sufficient. They explain the review bar
-for a future feature; they do not grant v0.6 source, `.rssi`, package review, or
+for a future feature; they do not grant v0.7 source, `.rssi`, package review, or
 REIR permission to model protocol values or dynamic protocol calls.
 
 ### 14.7 `.rssi` interface files
@@ -3311,7 +3485,7 @@ feature set, but it must then ask the frontend to validate the effective
 interface. Package tooling must not implement an independent semantic
 normalizer and must not infer RSScript effects from Rust signatures.
 
-Provisional v0.6 interface-only surface:
+Provisional v0.7 interface-only surface:
 
 ```text
 features: <file features>       # same file-feature gate as source files
@@ -3330,7 +3504,7 @@ package public contract. New `.rssi` examples should prefer explicit `pub` for
 ordinary RSScript contracts, while `native fn ... effects(native)` remains the
 accepted bodyless native-wrapper shorthand.
 
-There is no package-level `namespace` shorthand in v0.6. Public contract symbols
+There is no package-level `namespace` shorthand in v0.7. Public contract symbols
 use the same fully-qualified canonical names as source files:
 
 ```rust
@@ -3368,19 +3542,52 @@ use rss.review.ReviewMap
 ```
 
 The module path is the file's declared package/module identity. A `use` path
-names an imported contract or module symbol and must be fully qualified. In the
-v0.6 prototype these declarations are parsed, preserved by formatting, and
-available to package/review tooling as organization metadata. `rss review map
---json` includes them in a top-level `modules` array with exact source locations
-so downstream REIR tooling can emit `module_declaration` and `use_declaration`
-facts. Package tooling must not infer hidden effects, implicit receiver methods,
-or Rust module semantics from them.
+names an imported contract or module symbol and must be fully qualified. These
+declarations are parsed, preserved by formatting, and available to package/review
+tooling as organization metadata. `rss review map --json` includes them in a
+top-level `modules` array with exact source locations so downstream REIR tooling
+can emit `module_declaration` and `use_declaration` facts. Package tooling must
+not infer hidden effects or implicit receiver methods from them.
 
-The organization header is strict: at most one `module` declaration may appear
-in a file, and all `module` / `use` declarations must appear before ordinary
-type, const, function, protocol, or implementation declarations. A misplaced or
-duplicate organization declaration is a frontend diagnostic before lowering, not
-a package-tool warning.
+**Generated-namespace isolation.** A `module` declaration also gives the file's
+top-level symbols a distinct namespace identity in lowering, so two files can
+declare the same source name without colliding in the merged program. Symbols
+declared in a file that carries a `module` declaration are lowered under a name
+qualified by their module path; references are resolved with module-aware scope —
+local bindings first, then the current module, then `use` imports, then
+fully-qualified `module.name` access. The executable entry point `main` is never
+qualified and stays global. A file with **no** `module` declaration lives in the
+root namespace and is lowered unchanged, so module-less programs lower
+byte-identically to before. This isolation is a lowering and name-resolution
+property only — it adds no Rust module semantics, hidden effects, or implicit
+receiver methods to the source model, and diagnostics report the original source
+symbol (`helpers.count`), not the lowered backend name.
+
+The organization header is strict: each file may carry at most one `module`
+declaration, and all `module` / `use` declarations must appear before ordinary
+type, const, function, protocol, or implementation declarations in that file
+(checked per source file, since a merged multi-file program legitimately holds
+one `module` per file). A misplaced or duplicate organization declaration is a
+frontend diagnostic before lowering, not a package-tool warning.
+
+**`#lower_name("...")` backend-name escape hatch.** A function may pin the exact
+backend symbol it lowers to with a `#lower_name("...")` attribute, following the
+same attribute form as `#deprecated("...")`:
+
+```rust
+#lower_name("helpers__count")
+fn count(value: read Int) -> Int {
+    return value
+}
+```
+
+The pinned name is honored at the definition and at every call site, and is the
+name reported in the symbol inventory. It is reserved for rare boundary cases —
+FFI, autogenerated bindings, and compiler transitions — where a specific backend
+symbol is required; ordinary code relies on the default lowering and on
+generated-namespace isolation instead. The pin must be a valid Rust identifier
+and must not collide with another declaration's final backend name; either
+violation is reported as `RS0035`. The entry point `main` cannot be pinned.
 
 Visibility remains declaration-local and explicit. `pub` marks exported types,
 sum types, type aliases, constants, and functions. Items without `pub` are
@@ -3406,7 +3613,7 @@ candidates.
 
 A file without a `features:` declaration is managed-only.
 
-Recognized v0.6 active capability gates:
+Recognized v0.7 active capability gates:
 
 ```text
 local
@@ -3415,7 +3622,7 @@ unsafe
 async
 ```
 
-Reserved v0.6 review markers:
+Reserved v0.7 review markers:
 
 ```text
 device
@@ -3424,7 +3631,7 @@ reflection
 ```
 
 The reserved markers may be parsed and reported as review risk, but they do not
-unlock syntax, lowering, runtime behavior, or package-manager semantics in v0.6.
+unlock syntax, lowering, runtime behavior, or package-manager semantics in v0.7.
 Feature names are semantic capability gates or reserved review markers, not
 library categories. `Json`, `HTTP`, `Image`, and `Regex` are not file features.
 
@@ -3467,7 +3674,7 @@ native module File {
 }
 ```
 
-`native fn` declarations are bodyless in v0.6. A function with an RSScript body may be marked `effects(native)` only when its contract crosses a native boundary through calls or package wrapper bindings.
+`native fn` declarations are bodyless in v0.7. A function with an RSScript body may be marked `effects(native)` only when its contract crosses a native boundary through calls or package wrapper bindings.
 
 Native implementations must preserve RSScript semantics:
 
@@ -3486,9 +3693,9 @@ must preserve source location hooks where applicable
 
 The safe RSScript surface has no specified undefined behavior. Managed aliasing conflicts, resource-pool borrow conflicts, and runtime ownership conflicts must become diagnostics or runtime errors, not unchecked memory behavior.
 
-#### 15.4.1 v0.6 unsafe enforcement
+#### 15.4.1 v0.7 unsafe enforcement
 
-This is what the v0.6 checker enforces, with no contradiction:
+This is what the v0.7 checker enforces, with no contradiction:
 
 ```text
 - Declaring an effects(unsafe) function requires features: unsafe.
@@ -3496,14 +3703,14 @@ This is what the v0.6 checker enforces, with no contradiction:
   file, so a file cannot touch unsafe while looking feature-clean.
 - A function that contains an unsafe call is classified must-review (§16.3), and
   so is the file (file-level unsafe feature is high risk).
-- No per-call `unsafe` marker is accepted or required in v0.6. There is no
-  "missing unsafe marker" diagnostic in v0.6.
+- No per-call `unsafe` marker is accepted or required in v0.7. There is no
+  "missing unsafe marker" diagnostic in v0.7.
 ```
 
 A function that contains an unsafe call is **not** forced to declare
 `effects(unsafe)` itself: establishing a safe, reviewed abstraction over unsafe
 operations is the purpose of `unsafe`, the same way a safe function may contain a
-Rust `unsafe` block. In v0.6 what keeps unsafe from hiding is the `features:
+Rust `unsafe` block. In v0.7 what keeps unsafe from hiding is the `features:
 unsafe` file gate plus must-review classification; a function may still propagate
 `effects(unsafe)` when its own contract is unsafe.
 
@@ -3511,7 +3718,7 @@ unsafe` file gate plus must-review classification; a function may still propagat
 
 A future version may add a per-call `unsafe` marker for call-site-line locality
 (every unsafe crossing visible where it is read, like `read`/`mut`). It is
-deferred, not excluded; v0.6 ships no unsafe code, so it is scheduled for when
+deferred, not excluded; v0.7 ships no unsafe code, so it is scheduled for when
 unsafe usage makes line-level locality worth its cost. Its fixed contract:
 
 ```text
@@ -3523,7 +3730,7 @@ unsafe usage makes line-level locality worth its cost. Its fixed contract:
 ```
 
 When this lands, §15.4.1 gains the marker rules; until then those rules are not
-enforced and must not be, so v0.6 code never writes `unsafe` at a call site.
+enforced and must not be, so v0.7 code never writes `unsafe` at a call site.
 
 ---
 
@@ -3550,7 +3757,7 @@ low_semantic_risk
 unknown
 ```
 
-The old skip-safety label is not a v0.6 review-map category. Implementations
+The old skip-safety label is not a v0.7 review-map category. Implementations
 must emit `low_semantic_risk`.
 
 A region carries exactly one **classification** plus a list of **reasons**.
@@ -3574,7 +3781,7 @@ Reasons are a list and never collapse: a region may report
 `["public_api", "unresolved_call"]` with classification `unknown`. This keeps the
 single displayed category deterministic while preserving why.
 
-*v0.6 implementation status: the checker emits `must_review`, `low_semantic_risk`,
+*v0.7 implementation status: the checker emits `must_review`, `low_semantic_risk`,
 and `unknown` as classifications, reports `entry_point` as a marker, and folds
 `review_if_changed` into `must_review`; `unknown` propagates to any region that
 calls an `unknown` region. A future version may split out `review_if_changed`
@@ -3711,6 +3918,7 @@ weak field initialized without explicit weak handle
 weak field used without explicit upgrade
 implicit conversion attempt
 operator overload attempt
+`#lower_name` pin invalid or colliding backend name
 feature violation
 unsupported syntax
 unstructured spawn used before source-level task support
@@ -3726,7 +3934,7 @@ native boundary violation
 
 Diagnostic codes are `RSnnnn` and stable. They are allocated by range so codes
 are not invented ad hoc; new codes join the range matching their concern. This is
-the v0.6 allocation (it reflects the implemented codes, not an idealized scheme):
+the v0.7 allocation (it reflects the implemented codes, not an idealized scheme):
 
 ```text
 RS00xx  signature / declaration / syntax / effect validity, match exhaustiveness,
@@ -3829,11 +4037,11 @@ Raw rustc diagnostics may be attached under a verbose flag but must not be the p
 
 ### 17.5 Semantic guarantee table
 
-This table records the enforcement tier for the main v0.6 promises. The tier is
+This table records the enforcement tier for the main v0.7 promises. The tier is
 part of the specification contract: implementations must not present a
 `review-only` or `unsupported` fact as a static safety guarantee.
 
-| Promise / behavior | v0.6 tier | Enforcement source |
+| Promise / behavior | v0.7 tier | Enforcement source |
 |---|---:|---|
 | Named arguments and required `read` / `mut` / `take` data effects | static | frontend checker |
 | Same-call conflict roots, including constructor and variant call-like forms | static | frontend checker |
@@ -3845,7 +4053,7 @@ part of the specification contract: implementations must not present a
 | Fresh return preservation for `fresh T`, `Result<fresh T, E>`, and `Option<fresh T>` | static | frontend checker |
 | Resource escape, resource-in-container rejection, and `with` scope boundaries | static | frontend checker |
 | Deterministic resource drop on ordinary control-flow exits | dynamic | generated Rust/runtime lowering contract |
-| Resource cleanup after isolate abort or runtime termination | unsupported | no v0.6 guarantee |
+| Resource cleanup after isolate abort or runtime termination | unsupported | no v0.7 guarantee |
 | `ResourcePool<T>` local-only materialization, eager/noescape factory, and positive literal `max_size` | static | frontend checker |
 | Exhausted `ResourcePool.borrow` | dynamic defensive diagnostic | runtime, for non-conforming or future multi-borrow cases |
 | Weak field target kind and explicit upgrade requirement | static | frontend checker |
@@ -4681,14 +4889,14 @@ Writer.write(self: mut writer, message: read message)
 
 ## 20. Implementation Roadmap
 
-v0.6 continues the Rust-lowering roadmap as a hardening and expansion plan.
+v0.7 continues the Rust-lowering roadmap as a hardening and expansion plan.
 The prototype has the full front-end parser/checker path, deterministic
 formatting, review metadata, Rust source lowering, source maps, rustc diagnostic
 remapping, a single-isolate runtime, core `.rssi` interface loading, receiver-call
 shorthand, match expressions, extended collection/error APIs, and REIR adapter
 integration.
 
-Remaining v0.6 work preserves this dependency order:
+Remaining v0.7 work preserves this dependency order:
 
 ```text
 spec invariant
@@ -4703,21 +4911,21 @@ spec invariant
 Implementation priorities:
 
 ```text
-0.6.x  harden source-map completeness (match patterns, closure params, binary ops)
-0.6.x  replace package native text-scanning with structured adapter metadata
-0.6.x  expand REIR adapter coverage to all package-review capability categories
-0.6.x  close receiver-call edge cases (nested generics, aliased types)
-0.6.x  expand self-hosted validation to exercise REIR capability-binding scenarios
-0.6.x  keep package-manager features behind stable language facts and normalized interfaces
+0.7.x  harden source-map completeness (match patterns, closure params, binary ops)
+0.7.x  replace package native text-scanning with structured adapter metadata
+0.7.x  expand REIR adapter coverage to all package-review capability categories
+0.7.x  close receiver-call edge cases (nested generics, aliased types)
+0.7.x  expand self-hosted validation to exercise REIR capability-binding scenarios
+0.7.x  keep package-manager features behind stable language facts and normalized interfaces
 ```
 
 Do not add package-manager shortcuts, lowering placeholders, or compatibility
 aliases that contradict the semantic model. Do not defer source mapping until
 after lowering.
 
-### 20.1 Post-v0.6 design directions
+### 20.1 Post-v0.7 design directions
 
-These directions are not part of the v0.6 executable surface. They are recorded
+These directions are not part of the v0.7 executable surface. They are recorded
 because they have high future value and are consistent with RSScript's
 review-first, no-hidden-machinery model. Several are influenced by Dart, which
 demonstrates that an ergonomic managed application surface can be built without
@@ -4730,7 +4938,7 @@ across threads either, so RSScript can expose ergonomic async boundaries without
 Rust's `Pin`/`Poll`/`Waker` machinery leaking into source.
 
 ```text
-A. Extended async surface beyond the v0.6 MVP
+A. Extended async surface beyond the v0.7 MVP
    - Async operation/task handles, if exposed, are isolate-local managed handles,
      not a user-facing Future/Pin/Poll type system.
    - async closures and a stream / "await for" async-sequence form.
@@ -4758,7 +4966,7 @@ D. Structured-fix tooling and analysis server
      serving both human editors and AI repair agents as first-class consumers.
 
 E. Sum type hardening
-   - v0.6 has closed RSScript `sum` declarations with exhaustive match checking,
+   - v0.7 has closed RSScript `sum` declarations with exhaustive match checking,
      including match expressions in expression position.
    - future work: named payload fields in variants (`Authorized(id: String)`),
      package/interface contract metadata for sum variants, and semantic diff
@@ -4827,7 +5035,7 @@ I. Scoped views and slices (zero-copy borrowed regions)
    - not adopted: general lifetime annotations, lifetime elision rules,
      self-referential structs, or Pin/Unpin for views.
 
-J. Noescape collection pipeline (design principle — v0.6 implemented)
+J. Noescape collection pipeline (design principle — v0.7 implemented)
    - collection operations (List.map, List.filter, Map.fold, etc.) use noescape
      closures by contract: captured values cannot be retained, control flow is
      bounded, and effect side-channels are statically computable.
@@ -4837,7 +5045,7 @@ J. Noescape collection pipeline (design principle — v0.6 implemented)
    - not adopted: lazy iterators, iterator adaptors with hidden state,
      custom Iterator protocol for user types, or open-ended trait composition.
 
-K. Explicit error composition (design principle — v0.6 implemented)
+K. Explicit error composition (design principle — v0.7 implemented)
    - error mapping across type boundaries uses explicit Result.map_error at
      each crossing, keeping error-boundary changes visible to review.
    - the `?` operator propagates within a single error type; crossing error
@@ -4874,7 +5082,7 @@ L. Compiler-owned derives (restricted code generation)
      suppress review facts.
 
 M. Module visibility and re-export hardening
-   - modules and visibility are already part of v0.6 (.rssi files, pub markers).
+   - modules and visibility are already part of v0.7 (.rssi files, pub markers).
    - future work: semantic diff for public API changes (added/removed/modified),
      re-export chains tracked in review metadata, and package contract validation
      that public surface matches declared .rssi.
@@ -4910,7 +5118,7 @@ implicit flow promotion       any record-like form must use named fields
 
 ## 21. Non-goals
 
-RSScript v0.6 does not attempt to support:
+RSScript v0.7 does not attempt to support:
 
 ```text
 custom VM as primary execution target
@@ -4937,20 +5145,20 @@ auto method resolution, object safety rules, and type-erased dispatch with no
 effect contract. The receiver-call shorthand (§14.6.1) is not auto method
 resolution: it requires a mandatory effect keyword at the call site, resolves
 only when exactly one candidate exists, and expands to a single canonical
-qualified call. Protocol-typed dynamic dispatch is also not part of v0.6; any
+qualified call. Protocol-typed dynamic dispatch is also not part of v0.7; any
 future explicit, effect-carrying form must be admitted as a separate feature
 with source, checker, lowering, package-review, and REIR support (section 14.6).
 
 ### 21.1 Deferred, not excluded: managed memory strategy
 
-The v0.6 managed runtime is single-isolate reference counted
+The v0.7 managed runtime is single-isolate reference counted
 (`Rc`/`RefCell`-like). Reference counting does not collect reference cycles on
-its own, so v0.6 requires `weak` fields to break managed cycles, the same way
-Swift does. This is an accepted v0.6 limitation, not a permanent language
+its own, so v0.7 requires `weak` fields to break managed cycles, the same way
+Swift does. This is an accepted v0.7 limitation, not a permanent language
 guarantee.
 
 A future major version may add a tracing or moving collector for managed memory
-as an alternative backend. The following are therefore **deferred beyond v0.6,
+as an alternative backend. The following are therefore **deferred beyond v0.7,
 not permanent non-goals**:
 
 ```text
@@ -4972,7 +5180,7 @@ to reference counting and this option would close.
 
 ## 22. Reviewer Checklist
 
-Reviewers should evaluate v0.6 by asking:
+Reviewers should evaluate v0.7 by asking:
 
 ```text
 1. Is RSScript still managed-first?

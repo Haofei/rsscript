@@ -31,6 +31,40 @@ pub fn workspace_root() -> PathBuf {
     crate_root().join("../..")
 }
 
+/// Locate the language spec under `docs/` by its stable, version-independent
+/// name shape `RSScript_v<version>_Spec.md`, so tests never hard-code the spec
+/// version. Panics if zero or more than one match is found.
+pub fn language_spec_path() -> PathBuf {
+    find_versioned_doc("RSScript_v", "_Spec.md")
+}
+
+/// Locate the package-manager design doc by its version-independent name shape
+/// `RSScript_Package_Manager_Design_v<version>.md`.
+pub fn package_manager_spec_path() -> PathBuf {
+    find_versioned_doc("RSScript_Package_Manager_Design_v", ".md")
+}
+
+/// Find exactly one file in `docs/` whose name starts with `prefix` and ends
+/// with `suffix` (the span between them is the version and is not constrained).
+fn find_versioned_doc(prefix: &str, suffix: &str) -> PathBuf {
+    let docs = workspace_root().join("docs");
+    let mut matches: Vec<PathBuf> = fs::read_dir(&docs)
+        .unwrap_or_else(|error| panic!("docs/ should be readable: {error}"))
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(prefix) && name.ends_with(suffix))
+        })
+        .collect();
+    matches.sort();
+    match matches.as_slice() {
+        [path] => path.clone(),
+        [] => panic!("no docs/ file matched `{prefix}*{suffix}`"),
+        many => panic!("expected exactly one docs/ file matching `{prefix}*{suffix}`, found {many:?}"),
+    }
+}
+
 pub fn runtime_path() -> String {
     workspace_root()
         .join("crates/runtime")

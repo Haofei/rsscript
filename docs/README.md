@@ -8,7 +8,7 @@ LLMs); everything else lives here.
 
 | Doc | What it governs |
 |-----|-----------------|
-| [RSScript_v0.6_Spec.md](RSScript_v0.6_Spec.md) | The language. Opens with a binding **Constitution** (Articles I–IX) that overrides every chapter. |
+| [RSScript_v0.7_Spec.md](RSScript_v0.7_Spec.md) | The language. Opens with a binding **Constitution** (Articles I–IX) that overrides every chapter. |
 | [RSScript_Package_Manager_Design_v0.6.md](RSScript_Package_Manager_Design_v0.6.md) | The package manager (`rss pkg`): `.rssi` contracts, `rsspkg.toml`/`.lock`, semantic dependency review. |
 | [Review_Evidence_IR_Spec_v0.2.md](Review_Evidence_IR_Spec_v0.2.md) | REIR — the review-evidence IR consumed by `--reir` tooling and CI gates. |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Module boundaries of the checker/lowering implementation. |
