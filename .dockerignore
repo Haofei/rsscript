@@ -1,0 +1,12 @@
+# The dev image bind-mounts the source instead of copying it, so the build
+# context only needs to be small. Keep heavy/host-specific paths out of it.
+.git/
+target/
+**/target/
+**/Cargo.lock.bak
+tests/generated/
+benchmarks/**/target/
+demos/
+*.log
+.DS_Store
+.claude/

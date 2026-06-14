@@ -1,0 +1,23 @@
+{
+  "name": "RSScript Dev",
+  "dockerComposeFile": ["../compose.yaml"],
+  "service": "dev",
+  "workspaceFolder": "/work",
+  // Reuse the same toolchain image, caches, and system libraries as the
+  // `docker compose` workflow, so editor and CLI builds are identical across
+  // macOS, Windows, and Linux (and GitHub Codespaces).
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml",
+        "vadimcn.vscode-lldb"
+      ],
+      "settings": {
+        "rust-analyzer.check.command": "clippy"
+      }
+    }
+  },
+  // Keep the container running for an attached editor session.
+  "overrideCommand": true
+}

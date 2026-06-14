@@ -13,6 +13,7 @@ LLMs); everything else lives here.
 | [Review_Evidence_IR_Spec_v0.2.md](Review_Evidence_IR_Spec_v0.2.md) | REIR — the review-evidence IR consumed by `--reir` tooling and CI gates. |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Module boundaries of the checker/lowering implementation. |
 | [DEVELOPMENT.md](DEVELOPMENT.md) | Local verification flow and development discipline. |
+| [DOCKER.md](DOCKER.md) | Containerized, cross-platform dev environment (Docker / VS Code / Codespaces). |
 
 ## Implementation-planning specs (not yet normative)
 

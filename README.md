@@ -511,6 +511,13 @@ fn main() -> Unit {
 
 Development discipline and the full local verification flow live in [DEVELOPMENT.md](docs/DEVELOPMENT.md): spec prerequisites first, self-hosted validation as the main pressure test, no fixture-only shortcuts, and a broad-first testing loop.
 
+Prefer a containerized toolchain? [DOCKER.md](docs/DOCKER.md) gives an identical, reproducible build/test environment on macOS, Windows, and Linux (and VS Code / Codespaces) with no local Rust install:
+
+```sh
+docker compose build
+docker compose run --rm dev cargo run --bin rss -- test --all
+```
+
 ---
 
 ## Roadmap

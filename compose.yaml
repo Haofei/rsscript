@@ -1,0 +1,37 @@
+# Cross-platform development environment for RSScript.
+#
+# Quick start:
+#   docker compose build                                   # build the dev image
+#   docker compose run --rm dev cargo run --bin rss -- test --all
+#   docker compose run --rm dev bash                       # interactive shell
+#
+# The repo is bind-mounted at /work, so host edits are picked up immediately.
+# Build artifacts and crate caches live in named volumes (not on the bind mount)
+# so compilation persists between runs and stays fast on macOS/Windows.
+services:
+  dev:
+    build: .
+    image: rsscript-dev
+    working_dir: /work
+    volumes:
+      - .:/work
+      # Keep target/ and the cargo caches off the (slow, host-backed) bind mount
+      # and out of the host tree. Mounting only the cache subdirs of CARGO_HOME
+      # preserves the toolchain and nextest installed under /usr/local/cargo/bin.
+      - target:/work/target
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+    environment:
+      CARGO_TERM_COLOR: always
+      # The workspace target lives in a volume; point every nested build at it
+      # too so generated-package builds share one warm cache.
+      CARGO_HOME: /usr/local/cargo
+    # Keep an interactive TTY for `docker compose run dev bash`.
+    tty: true
+    stdin_open: true
+    command: bash
+
+volumes:
+  target:
+  cargo-registry:
+  cargo-git:
