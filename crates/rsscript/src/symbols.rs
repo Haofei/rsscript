@@ -120,8 +120,12 @@ pub fn symbol_inventory(file: &str, source: &str) -> Vec<SymbolInventoryEntry> {
         .and_then(|stem| stem.to_str())
         .unwrap_or(file)
         .to_string();
+    // Install this file's `#lower_name(...)` pins so the reported `lowered_name`
+    // matches the symbol the backend actually emits.
+    let overrides = crate::rust_lower::collect_lower_name_overrides(&parse_source_raw(file, source));
+    let previous = crate::rust_lower::set_lower_name_overrides(overrides);
     let index = symbol_index(file, source);
-    index
+    let entries = index
         .definitions()
         .iter()
         .filter(|definition| {
@@ -137,7 +141,9 @@ pub fn symbol_inventory(file: &str, source: &str) -> Vec<SymbolInventoryEntry> {
             span: definition.span.clone(),
             lowered_name: crate::rust_lower::lowered_symbol_name(&definition.name),
         })
-        .collect()
+        .collect();
+    crate::rust_lower::set_lower_name_overrides(previous);
+    entries
 }
 
 /// Parse `source` and return a top-level document outline.
@@ -987,6 +993,23 @@ mod tests {
         assert_eq!(find("MAX_RETRIES").kind, SymbolKind::Const);
         assert_eq!(find("MAX_RETRIES").lowered_name, "MAX_RETRIES");
         assert_eq!(find("Device").kind, SymbolKind::Type);
+    }
+
+    #[test]
+    fn symbol_inventory_reflects_lower_name_pin() {
+        let source = concat!(
+            "#lower_name(\"helpers__count\")\n",
+            "fn count(value: read Int) -> Int {\n",
+            "    return value\n",
+            "}\n",
+        );
+        let inventory = symbol_inventory("helpers.rss", source);
+        let count = inventory
+            .iter()
+            .find(|entry| entry.qualname == "count")
+            .expect("count in inventory");
+        // The pinned backend name overrides the default flattened symbol.
+        assert_eq!(count.lowered_name, "helpers__count");
     }
 
     const SOURCE: &str = concat!(

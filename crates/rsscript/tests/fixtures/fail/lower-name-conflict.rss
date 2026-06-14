@@ -1,0 +1,14 @@
+// expect: RS0035
+#lower_name("dup_symbol")
+fn first() -> Int {
+    return 0
+}
+
+#lower_name("dup_symbol")
+fn second() -> Int {
+    return 1
+}
+
+fn main() -> Unit {
+    return Unit
+}

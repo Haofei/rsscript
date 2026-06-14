@@ -1,0 +1,12 @@
+// `#lower_name("...")` pins a function's backend Rust symbol (for FFI/autogen
+// boundaries and compiler transitions). The pin is checked for validity and
+// uniqueness and is reflected in the symbol inventory and generated Rust.
+#lower_name("helpers__count")
+fn count(value: read Int) -> Int {
+    return value
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: count(value: read 3)))
+    return Unit
+}

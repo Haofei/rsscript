@@ -1260,7 +1260,10 @@ pub(super) fn lower_callee(callee: &Callee) -> String {
     }
 
     match callee {
-        Callee::Name(name) => rust_ident(type_root_name(name)),
+        Callee::Name(name) => {
+            let canonical = type_root_name(name);
+            lower_name_override(canonical).unwrap_or_else(|| rust_ident(canonical))
+        }
         Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" => {
             format!(
                 "rsscript_runtime::ResourcePool::{}",
@@ -1613,12 +1616,41 @@ pub(super) fn lower_source_span(span: &Span) -> String {
     )
 }
 
+thread_local! {
+    /// Per-lowering-run map from a function's source qualified name (e.g.
+    /// `helpers.count`) to its pinned backend name from `#lower_name("...")`.
+    /// Populated before a lowering run (and before building the symbol inventory)
+    /// and consulted by the canonical name-lowering helpers so the emitted Rust
+    /// symbol and the reported `lowered_name` always agree.
+    static LOWER_NAME_OVERRIDES: std::cell::RefCell<std::collections::HashMap<String, String>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Install the pinned-name overrides for the current thread; pass an empty map to
+/// disable. Returns the previous map so callers can restore it.
+pub(crate) fn set_lower_name_overrides(
+    overrides: std::collections::HashMap<String, String>,
+) -> std::collections::HashMap<String, String> {
+    LOWER_NAME_OVERRIDES.with(|cell| cell.replace(overrides))
+}
+
+fn lower_name_override(source_name: &str) -> Option<String> {
+    LOWER_NAME_OVERRIDES.with(|cell| cell.borrow().get(source_name).cloned())
+}
+
 pub(super) fn rust_function_ident(name: &str) -> String {
+    if let Some(pinned) = lower_name_override(name) {
+        return pinned;
+    }
     let joined = name.split('.').collect::<Vec<_>>().join("_");
     rust_ident(&joined)
 }
 
 pub(super) fn rust_qualified_function_ident(namespace: &str, name: &str) -> String {
+    let source_name = format!("{namespace}.{}", type_root_name(name));
+    if let Some(pinned) = lower_name_override(&source_name) {
+        return pinned;
+    }
     namespace
         .split('.')
         .chain(std::iter::once(type_root_name(name)))
@@ -1637,7 +1669,7 @@ pub(super) fn rust_path_segment(segment: &str) -> String {
 
 /// Whether `name` is a Rust keyword (strict or reserved) that cannot be used as a
 /// bare identifier.
-pub(super) fn is_rust_keyword(name: &str) -> bool {
+pub(crate) fn is_rust_keyword(name: &str) -> bool {
     const KEYWORDS: &[&str] = &[
         "abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "crate",
         "do", "dyn", "else", "enum", "extern", "false", "final", "fn", "for", "gen", "if", "impl",

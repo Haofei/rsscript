@@ -272,6 +272,11 @@ pub struct FunctionDecl {
     pub has_body: bool,
     pub default_impl_marker: bool,
     pub deprecated_reason: Option<String>,
+    /// An explicit pinned backend name from `#lower_name("...")`. When set, the
+    /// function lowers to exactly this Rust symbol (rather than the flattened
+    /// default) and the symbol inventory reports it. Used for FFI/autogen
+    /// boundaries and compiler transitions.
+    pub lower_name: Option<String>,
     pub type_params: Vec<GenericParam>,
     pub malformed_generic_param_spans: Vec<Span>,
     pub params: Vec<Param>,

@@ -1,0 +1,9 @@
+// expect: RS0035
+#lower_name("has-a-dash")
+fn helper() -> Int {
+    return 0
+}
+
+fn main() -> Unit {
+    return Unit
+}

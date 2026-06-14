@@ -1039,6 +1039,7 @@ impl Analyzer<'_> {
         self.check_async_fn_lowerable();
         self.check_match_exhaustiveness();
         self.check_duplicate_declarations();
+        self.check_lowered_name_conflicts();
         self.check_protocol_contracts();
         self.check_signature_explicitness();
         self.check_unknown_types();
@@ -3737,6 +3738,72 @@ impl Analyzer<'_> {
         }
     }
 
+    /// Validate `#lower_name("...")` pins: each must be a valid Rust identifier,
+    /// and no pin may collide with another function's final backend name (pinned
+    /// or default), so generated symbols stay unique. Only conflicts that involve
+    /// at least one pin are reported here (plain default collisions, if any, are a
+    /// separate concern from this escape hatch).
+    fn check_lowered_name_conflicts(&mut self) {
+        use crate::rust_lower::lowered_symbol_name;
+        let mut seen: HashMap<String, (String, bool)> = HashMap::new();
+        let mut conflicts: Vec<(crate::diagnostic::Span, String, String)> = Vec::new();
+        let mut invalid: Vec<(crate::diagnostic::Span, String)> = Vec::new();
+        for item in &self.syntax_program.items {
+            let crate::syntax::ast::Item::Function(function) = item else {
+                continue;
+            };
+            let pinned = function.lower_name.as_deref();
+            if let Some(pin) = pinned
+                && !is_valid_rust_identifier(pin)
+            {
+                invalid.push((function.span.clone(), pin.to_string()));
+                continue;
+            }
+            let lowered = pinned
+                .map(str::to_string)
+                .unwrap_or_else(|| lowered_symbol_name(&function.name));
+            let is_pinned = pinned.is_some();
+            if let Some((first_name, first_pinned)) = seen.get(&lowered) {
+                if is_pinned || *first_pinned {
+                    conflicts.push((function.span.clone(), lowered.clone(), first_name.clone()));
+                }
+            } else {
+                seen.insert(lowered, (function.name.clone(), is_pinned));
+            }
+        }
+        for (span, pin) in invalid {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::LOWER_NAME_CONFLICT,
+                    format!("`#lower_name(\"{pin}\")` is not a valid Rust identifier."),
+                    span,
+                    "invalid lowered name",
+                )
+                .with_cause(
+                    "A pinned backend name must be a plain Rust identifier (letters, digits, and underscores, not starting with a digit).",
+                ),
+            );
+        }
+        for (span, lowered, first_name) in conflicts {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::LOWER_NAME_CONFLICT,
+                    format!("lowered backend name `{lowered}` is already used by `{first_name}`."),
+                    span,
+                    "lowered name conflict",
+                )
+                .with_cause(
+                    "Two declarations would lower to the same Rust symbol; a `#lower_name(\"...\")` pin must be unique.",
+                )
+                .with_fix(
+                    "rename_lowered",
+                    "Choose a different `#lower_name(\"...\")` value.",
+                    "manual",
+                ),
+            );
+        }
+    }
+
     fn check_duplicate_declarations(&mut self) {
         for duplicate in self.hir.duplicate_symbols() {
             self.diagnostics.push(
@@ -6251,6 +6318,19 @@ fn type_ref_name(ty: &TypeRef) -> String {
     } else {
         name
     }
+}
+
+/// Whether `name` is a plain Rust identifier (used verbatim as a pinned backend
+/// symbol): non-empty, starts with a letter or `_`, and otherwise alphanumeric or
+/// `_`. Raw identifiers and keywords are intentionally rejected.
+fn is_valid_rust_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        && !crate::rust_lower::is_rust_keyword(name)
 }
 
 fn type_ref_is_noescape(ty: &TypeRef) -> bool {

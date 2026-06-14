@@ -38,6 +38,7 @@ pub mod code {
     pub const PROTOCOL_NOT_SATISFIED: &str = "RS0032";
     pub const INTEGER_LITERAL_OUT_OF_RANGE: &str = "RS0033";
     pub const UNINFERABLE_BINDING_TYPE: &str = "RS0034";
+    pub const LOWER_NAME_CONFLICT: &str = "RS0035";
     pub const FEATURE_VIOLATION: &str = "RS0101";
     pub const UNNAMED_ARGUMENT: &str = "RS0201";
     pub const MISSING_DATA_EFFECT: &str = "RS0202";
@@ -444,6 +445,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::INVALID_NOALLOC_CALL,
         title: "invalid noalloc call",
         explanation: "`effects(noalloc)` is a guarantee that the function performs no heap allocation. Calls inside it must target enum variants or functions also declared `effects(noalloc)`, while direct constructors and `manage` are allocation diagnostics.",
+    },
+    DiagnosticExplanation {
+        code: code::LOWER_NAME_CONFLICT,
+        title: "lowered name conflict",
+        explanation: "A `#lower_name(\"...\")` pin must be a valid Rust identifier and must not collide with any other declaration's lowered backend name, so generated symbols stay unique.",
     },
     DiagnosticExplanation {
         code: code::NON_EXHAUSTIVE_MATCH,

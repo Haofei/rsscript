@@ -30,6 +30,36 @@ fn keyword_named_source_lowers_to_a_valid_crate_name() {
 }
 
 #[test]
+fn lower_name_pin_renames_definition_and_call_sites() {
+    let source = r#"
+#lower_name("helpers__count")
+fn count(value: read Int) -> Int {
+    return value
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: count(value: read 3)))
+    return Unit
+}
+"#;
+    let rust = lower_source_to_rust("helpers.rss", source).expect("source should lower");
+    // The pinned name is used at the definition...
+    assert!(
+        rust.contains("fn helpers__count("),
+        "definition should use the pinned name:\n{rust}"
+    );
+    // ...and at the call site, with no leftover default `count` symbol.
+    assert!(
+        rust.contains("helpers__count("),
+        "call site should use the pinned name:\n{rust}"
+    );
+    assert!(
+        !rust.contains("fn count("),
+        "the default symbol must not be emitted:\n{rust}"
+    );
+}
+
+#[test]
 fn rust_lowering_emits_checked_rust_source() {
     let source = r#"
 struct Point {

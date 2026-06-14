@@ -461,23 +461,32 @@ impl Parser<'_> {
         let start = self.index;
         let span = self.current()?.span.clone();
         let mut deprecated_reason = None;
+        let mut lower_name = None;
         while self.at_symbol("#") {
             self.index += 1;
-            if !self.at_ident("deprecated") {
+            let attribute = if self.at_ident("deprecated") {
+                "deprecated"
+            } else if self.at_ident("lower_name") {
+                "lower_name"
+            } else {
                 self.index = start;
                 return None;
-            }
+            };
             self.index += 1;
             if !self.at_symbol("(") {
                 self.index = start;
                 return None;
             }
             self.index += 1;
-            let Some(TokenKind::String(reason)) = self.current().map(|token| &token.kind) else {
+            let Some(TokenKind::String(value)) = self.current().map(|token| &token.kind) else {
                 self.index = start;
                 return None;
             };
-            deprecated_reason = Some(reason.clone());
+            match attribute {
+                "deprecated" => deprecated_reason = Some(value.clone()),
+                "lower_name" => lower_name = Some(value.clone()),
+                _ => unreachable!(),
+            }
             self.index += 1;
             if !self.at_symbol(")") {
                 self.index = start;
@@ -585,6 +594,7 @@ impl Parser<'_> {
             has_body,
             default_impl_marker,
             deprecated_reason,
+            lower_name,
             type_params,
             malformed_generic_param_spans,
             params,

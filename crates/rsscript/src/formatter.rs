@@ -254,6 +254,9 @@ impl Formatter {
     }
 
     fn function_decl(&mut self, function: &FunctionDecl) {
+        if let Some(lower_name) = &function.lower_name {
+            self.out.push_str(&format!("#lower_name({})\n", quoted_string(lower_name)));
+        }
         let mut prefix = String::new();
         if function.is_public {
             prefix.push_str("pub ");
@@ -1890,6 +1893,18 @@ impl Writer for BufferWriter {
 }
 "#
         );
+    }
+
+    #[test]
+    fn round_trips_lower_name_attribute() {
+        let source = "#lower_name(\"helpers__count\")\nfn count(value: read Int) -> Int {\n    return value\n}\n";
+        // The pin must survive formatting (idempotent + lossless).
+        let formatted = format_source("pin.rss", source);
+        assert!(
+            formatted.contains("#lower_name(\"helpers__count\")"),
+            "formatter dropped the lower_name pin:\n{formatted}"
+        );
+        assert_eq!(format_source("pin.rss", &formatted), formatted);
     }
 
     #[test]

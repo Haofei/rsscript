@@ -131,11 +131,19 @@ manual wrapper.
   _Acceptance:_ a Rust backend error reports the RSS file, source span, source
   symbol, and lowered Rust symbol.
 
-- [ ] **Explicit lowered-name escape hatch.** Add an attribute for rare cases
+- [x] **Explicit lowered-name escape hatch.** Add an attribute for rare cases
   where a declaration needs a pinned backend name.
   _Why:_ useful during compiler transition and for FFI/autogen boundaries.
   _Acceptance:_ something like `#[lower_name = "helpers__count"]` is checked for
   uniqueness and reflected in the symbol inventory.
+  _Done:_ functions accept `#lower_name("...")` (following the existing
+  `#deprecated("...")` attribute convention). The pin is validated (RS0035: must
+  be a valid Rust identifier and unique across functions' final backend names),
+  honored by the lowerer at the definition and every call site (via a per-run
+  override consulted by the canonical name-lowering helpers), reflected in the
+  symbol inventory's `lowered_name`, and round-tripped by the formatter. See
+  `tests/fixtures/pass/lower_name_attribute.rss`, `fixtures/fail/lower-name-*`,
+  and `lower_name_pin_renames_definition_and_call_sites`.
 
 - [ ] **Generated/internal helper namespace.** Keep compiler-generated helpers
   separate from user declarations.
