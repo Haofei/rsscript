@@ -36,6 +36,9 @@ struct Generator<'a> {
     var_counter: usize,
     structs: Vec<StructDef>,
     sums: Vec<SumDef>,
+    /// Names of declared unbounded generic helper functions `fn gN<T>(p: read T)
+    /// -> Int`. Called with varied concrete type args to exercise monomorphization.
+    generic_fns: Vec<String>,
 }
 
 impl<'a> Generator<'a> {
@@ -45,6 +48,7 @@ impl<'a> Generator<'a> {
             var_counter: 0,
             structs: Vec::new(),
             sums: Vec::new(),
+            generic_fns: Vec::new(),
         }
     }
 
@@ -105,6 +109,18 @@ impl<'a> Generator<'a> {
         for index in 0..sum_count {
             let def = self.gen_sum_decl(index, &mut source);
             self.sums.push(def);
+        }
+
+        let generic_count = self.seed.choice(3); // 0..=2
+        for index in 0..generic_count {
+            let name = format!("g{index}");
+            let body = self.seed.range_i64(0, 1000);
+            // Unbounded `T`: the body can't operate on an opaque value, so it
+            // returns a constant; the coverage is in monomorphizing the call sites.
+            source.push_str(&format!(
+                "fn {name}<T>(p: read T) -> Int {{\n    return {body}\n}}\n\n"
+            ));
+            self.generic_fns.push(name);
         }
 
         let mut functions: Vec<FnSig> = Vec::new();
@@ -624,6 +640,10 @@ impl<'a> Generator<'a> {
         if fuel == 0 {
             return self.gen_atom(ty, scope);
         }
+        // Occasionally satisfy an `Int` target with a monomorphized generic call.
+        if *ty == Ty::Int && !self.generic_fns.is_empty() && fuel > 0 && self.seed.choice(4) == 0 {
+            return self.gen_generic_call(scope, fuel);
+        }
         match self.seed.weighted(&[3, 2, 4]) {
             0 => self.gen_atom(ty, scope),
             1 => self
@@ -744,6 +764,16 @@ impl<'a> Generator<'a> {
             .collect::<Vec<_>>()
             .join(", ");
         format!("{}({args})", sig.name)
+    }
+
+    /// `gN<C>(p: read <arg>)` — a generic helper instantiated at a concrete scalar
+    /// type `C`. Returns `Int`. Different call sites monomorphize to distinct Rust
+    /// instantiations while the VM erases the type — both must agree.
+    fn gen_generic_call(&mut self, scope: &Scope, fuel: u32) -> String {
+        let name = self.generic_fns[self.seed.choice(self.generic_fns.len())].clone();
+        let concrete = self.pick_scalar();
+        let arg = self.gen_expr(&concrete, scope, fuel.saturating_sub(1));
+        format!("{name}<{}>(p: read {arg})", concrete.render())
     }
 
     /// A type-specific compound expression.
