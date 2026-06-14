@@ -361,7 +361,7 @@ impl<'a> Generator<'a> {
     fn gen_stmt(&mut self, scope: &mut Scope) -> String {
         // Bias toward lets; sometimes assign, a `?`-unwrap, or a populated
         // collection.
-        match self.seed.weighted(&[6, 2, 2, 3]) {
+        match self.seed.weighted(&[6, 2, 2, 3, 2]) {
             0 => self.gen_let(scope),
             1 => self
                 .gen_assign(scope)
@@ -370,8 +370,55 @@ impl<'a> Generator<'a> {
                 .gen_try(scope)
                 .or_else(|| self.gen_assign(scope))
                 .unwrap_or_else(|| self.gen_let(scope)),
-            _ => self.gen_collection_stmt(scope),
+            3 => self.gen_collection_stmt(scope),
+            _ => self.gen_closure_stmt(scope),
         }
+    }
+
+    /// Build a populated `List<T>` and `List.filter` it with a capture-free
+    /// closure predicate, observing the filtered length. Exercises closure
+    /// lowering (parameter, body, `noescape Fn(T) -> Bool`) without capturing
+    /// outer state, and the length is deterministic across backends (insertion
+    /// order is preserved, unlike `Set`/`Map` iteration).
+    fn gen_closure_stmt(&mut self, scope: &mut Scope) -> String {
+        let elem = self.pick_scalar();
+        let list = self.fresh_var();
+        let count = 1 + self.seed.choice(3); // 1..=3
+        let mut lines = vec![format!(
+            "let mut {list}: List<{e}> = List.new<{e}>()",
+            e = elem.render()
+        )];
+        for _ in 0..count {
+            let value = self.gen_literal(&elem);
+            lines.push(format!("List.push(list: mut {list}, value: read {value})"));
+        }
+        let predicate = match elem {
+            Ty::Int => "(x > 0)",
+            Ty::Bool => "x",
+            Ty::Float => "(x > 0.0)",
+            Ty::String => "(String.len(value: read x) > 0)",
+            _ => "true",
+        };
+        let result = self.fresh_var();
+        lines.push(format!(
+            "let {result}: List<{e}> = List.filter(list: read {list}, predicate: |x| {{ return {predicate} }})",
+            e = elem.render()
+        ));
+        lines.push(format!(
+            "Log.write(message: read String.from_int(value: List.len(list: read {result})))"
+        ));
+        let list_ty = Ty::List(Box::new(elem));
+        scope.bindings.push(Binding {
+            name: list,
+            ty: list_ty.clone(),
+            mutable: true,
+        });
+        scope.bindings.push(Binding {
+            name: result,
+            ty: list_ty,
+            mutable: false,
+        });
+        lines.join("\n    ")
     }
 
     /// Build a populated collection: `let mut v: C = C.new<..>()` followed by a
