@@ -98,6 +98,48 @@ pub fn symbol_index(file: &str, source: &str) -> SymbolIndex {
     }
 }
 
+/// One entry in the source-qualified symbol inventory: a declaration's module,
+/// source-qualified name, kind, span, and the Rust symbol it lowers to. This is
+/// the "stable source-qualified symbol identity" the port tooling (portman)
+/// needs to map `helpers.rss::count` to its backend symbol without guessing.
+#[derive(Debug, Clone)]
+pub struct SymbolInventoryEntry {
+    pub module: String,
+    pub qualname: String,
+    pub kind: SymbolKind,
+    pub span: Span,
+    pub lowered_name: String,
+}
+
+/// Build the source-qualified symbol inventory for `file`: every item-level
+/// declaration (functions incl. `Type.method`, types, consts, sum variants) with
+/// its module path and lowered Rust name.
+pub fn symbol_inventory(file: &str, source: &str) -> Vec<SymbolInventoryEntry> {
+    let module = std::path::Path::new(file)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(file)
+        .to_string();
+    let index = symbol_index(file, source);
+    index
+        .definitions()
+        .iter()
+        .filter(|definition| {
+            matches!(
+                definition.kind,
+                SymbolKind::Function | SymbolKind::Type | SymbolKind::Const | SymbolKind::Variant
+            )
+        })
+        .map(|definition| SymbolInventoryEntry {
+            module: module.clone(),
+            qualname: definition.name.clone(),
+            kind: definition.kind,
+            span: definition.span.clone(),
+            lowered_name: crate::rust_lower::lowered_symbol_name(&definition.name),
+        })
+        .collect()
+}
+
 /// Parse `source` and return a top-level document outline.
 pub fn document_symbols(file: &str, source: &str) -> Vec<RssDocumentSymbol> {
     let program = parse_source(file, source);
@@ -902,6 +944,37 @@ impl Builder<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn symbol_inventory_carries_module_qualname_and_lowered_name() {
+        let source = concat!(
+            "const MAX_RETRIES: Int = 3\n",
+            "struct Device { id: Int }\n",
+            "fn Device.open(id: Int) -> fresh Device {\n",
+            "    return Device(id: id)\n",
+            "}\n",
+        );
+        let inventory = symbol_inventory("helpers.rss", source);
+        let find = |qualname: &str| {
+            inventory
+                .iter()
+                .find(|entry| entry.qualname == qualname)
+                .unwrap_or_else(|| panic!("missing `{qualname}` in inventory: {inventory:?}"))
+        };
+
+        // Every entry is tagged with the source module.
+        assert!(inventory.iter().all(|entry| entry.module == "helpers"));
+
+        // A dotted member function lowers to a flattened Rust symbol.
+        let open = find("Device.open");
+        assert_eq!(open.kind, SymbolKind::Function);
+        assert_eq!(open.lowered_name, "Device_open");
+
+        // Const and type symbols keep their (keyword-safe) names.
+        assert_eq!(find("MAX_RETRIES").kind, SymbolKind::Const);
+        assert_eq!(find("MAX_RETRIES").lowered_name, "MAX_RETRIES");
+        assert_eq!(find("Device").kind, SymbolKind::Type);
+    }
 
     const SOURCE: &str = concat!(
         "fn helper(value: read Int) -> Int {\n",

@@ -107,6 +107,7 @@ pub use review::{
     format_review_human, format_review_json, format_review_map_human, format_review_map_json,
     review_map_sources, review_sources,
 };
+pub use rust_lower::lowered_symbol_name;
 pub use rust_lower::{
     GeneratedRustPackage, LowerCoverageReport, LoweredRust, NativeRustDependency,
     RemappedRustcDiagnostic, RustBackendCheckResult, RustSourceMapEntry,
@@ -118,7 +119,7 @@ pub use rust_lower::{
     remap_rustc_diagnostic_json_lines, write_generated_rust_package,
 };
 pub use symbols::{
-    Definition, Reference, RssDocumentSymbol, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
-    document_symbols, symbol_index,
+    Definition, Reference, RssDocumentSymbol, SymbolIndex, SymbolInfo, SymbolInventoryEntry,
+    SymbolKind, SymbolLookup, document_symbols, symbol_index, symbol_inventory,
 };
 pub use vm_coverage::{VmCoverageReport, vm_coverage_report};

@@ -33,6 +33,14 @@ use helpers::{
 };
 use lowerer::RustLowerer;
 
+/// The Rust symbol name a source-qualified RSScript name lowers to (dotted
+/// member names are flattened and Rust keywords are raw-escaped) — e.g.
+/// `helpers.count` → `helpers_count`, `async` → `r#async`. Exposed so port
+/// tooling can map an RSScript symbol to its backend identity without guessing.
+pub fn lowered_symbol_name(qualified_name: &str) -> String {
+    helpers::rust_function_ident(qualified_name)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct LowerCoverageReport {
     pub runtime_intrinsics: CoverageBucket,
