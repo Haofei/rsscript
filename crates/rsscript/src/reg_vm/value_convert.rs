@@ -285,7 +285,7 @@ pub(super) fn vm_value_to_json_literal(value: &VmValue) -> Result<serde_json::Va
         VmValue::Map(entries) => {
             let mut object = serde_json::Map::new();
             for (key, value) in entries.borrow().iter() {
-                let VmMapKey::String(key) = key else {
+                let Some(key) = key.as_str() else {
                     return Err(EvalError::Runtime(format!(
                         "cannot convert map key `{}` to a JSON literal.",
                         key.display()
@@ -460,6 +460,10 @@ pub(super) fn unmanage_vm_value(value: VmValue) -> VmValue {
 /// reference type, so it keeps its handle (mirroring the backend, which shares
 /// `Managed` and treats plain collections as value types). Immutable handles
 /// (`String`/`Bytes`/`Json`) and opaque values are cloned shallowly.
+// See the note in `runtime_values::json_decode_field_value`: a `VmMapKey` is
+// interior-mutable but the `retains(key)` effect makes mutating a live key
+// unreachable in well-typed programs.
+#[allow(clippy::mutable_key_type)]
 pub(super) fn deep_copy_value(value: &VmValue) -> VmValue {
     match value {
         VmValue::List(items) => {
@@ -647,10 +651,10 @@ pub(super) fn vm_value_from_native_value(value: NativeValue) -> VmValue {
 
 pub(super) fn vm_map_key_from_native_value(value: NativeValue) -> VmMapKey {
     match value {
-        NativeValue::Bool(value) => VmMapKey::Bool(value),
-        NativeValue::Int(value) => VmMapKey::Int(value),
-        NativeValue::String(value) => VmMapKey::String(Rc::new(value)),
-        other => VmMapKey::String(Rc::new(format!("{other:?}"))),
+        NativeValue::Bool(value) => VmMapKey::new(VmValue::Bool(value)),
+        NativeValue::Int(value) => VmMapKey::new(VmValue::Int(value)),
+        NativeValue::String(value) => VmMapKey::from_string(value),
+        other => VmMapKey::from_string(format!("{other:?}")),
     }
 }
 
@@ -708,7 +712,7 @@ mod tests {
         );
 
         let mut map: ValueMap = ValueMap::default();
-        map.insert(VmMapKey::Int(1), VmValue::string("one"));
+        map.insert(VmMapKey::new(VmValue::Int(1)), VmValue::string("one"));
         assert_eq!(
             to_native(VmValue::Map(Rc::new(RefCell::new(map)))),
             NativeValue::Map(vec![(
@@ -861,20 +865,20 @@ mod tests {
     fn map_key_from_native_falls_back_to_string() {
         assert_eq!(
             vm_map_key_from_native_value(NativeValue::Bool(true)),
-            VmMapKey::Bool(true)
+            VmMapKey::new(VmValue::Bool(true))
         );
         assert_eq!(
             vm_map_key_from_native_value(NativeValue::Int(2)),
-            VmMapKey::Int(2)
+            VmMapKey::new(VmValue::Int(2))
         );
         assert_eq!(
             vm_map_key_from_native_value(NativeValue::String("k".to_string())),
-            VmMapKey::String(Rc::new("k".to_string()))
+            VmMapKey::from_string("k")
         );
         // A non-scalar key has no VM key form, so it falls back to its debug string.
-        match vm_map_key_from_native_value(NativeValue::Float(1.0)) {
-            VmMapKey::String(s) => assert!(s.contains("Float"), "{s}"),
-            other => panic!("expected string fallback, got {other:?}"),
+        match vm_map_key_from_native_value(NativeValue::Float(1.0)).as_str() {
+            Some(s) => assert!(s.contains("Float"), "{s}"),
+            None => panic!("expected string fallback"),
         }
     }
 }

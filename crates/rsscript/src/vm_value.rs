@@ -168,28 +168,133 @@ pub(crate) struct VmNative {
     pub(crate) id: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) enum VmMapKey {
-    Bool(bool),
-    Int(i64),
-    String(Rc<String>),
-}
+/// A `Map`/`Set` key: any hashable `VmValue`. Keys are not restricted to scalars
+/// — RSScript's `Hashable` bound also admits `derives(Eq, Hash)` structs/sums and
+/// the structural `List`/`Option` containers over hashable types, all of which
+/// the compiled backend keys on directly. Equality reuses `VmValue`'s structural
+/// `PartialEq`; `Hash` is a matching recursive projection (see [`hash_vm_value`]),
+/// so equal keys hash equal and the VM stays in lockstep with the derived
+/// `Hash`/`Eq` of the lowered Rust.
+#[derive(Debug, Clone)]
+pub(crate) struct VmMapKey(VmValue);
 
 impl VmMapKey {
-    pub(crate) fn display(&self) -> String {
-        match self {
-            Self::Bool(value) => value.to_string(),
-            Self::Int(value) => value.to_string(),
-            Self::String(value) => value.to_string(),
+    pub(crate) fn new(value: VmValue) -> Self {
+        VmMapKey(value)
+    }
+
+    pub(crate) fn from_string(value: impl Into<String>) -> Self {
+        VmMapKey(VmValue::string(value))
+    }
+
+    /// The underlying value, returned as-is by `Map.keys()` / `Set.to_list()`.
+    pub(crate) fn value(&self) -> &VmValue {
+        &self.0
+    }
+
+    /// The key's string contents, when it is a `String` key (e.g. JSON object
+    /// keys must be strings).
+    pub(crate) fn as_str(&self) -> Option<&str> {
+        match &self.0 {
+            VmValue::String(value) => Some(value),
+            _ => None,
         }
     }
 
+    pub(crate) fn display(&self) -> String {
+        self.0.display()
+    }
+
     pub(crate) fn native_value(&self) -> NativeValue {
-        match self {
-            Self::Bool(value) => NativeValue::Bool(*value),
-            Self::Int(value) => NativeValue::Int(*value),
-            Self::String(value) => NativeValue::String(value.to_string()),
+        // Every hashable key has a native form; the string fallback only covers
+        // shapes the host ABI lacks a slot for (e.g. an `Option` key), keeping
+        // this total rather than panicking on the boundary.
+        self.0
+            .native_value()
+            .unwrap_or_else(|| NativeValue::String(self.0.display()))
+    }
+}
+
+impl PartialEq for VmMapKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl Eq for VmMapKey {}
+
+impl std::hash::Hash for VmMapKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        hash_vm_value(&self.0, state);
+    }
+}
+
+/// Recursively hash a `VmValue` consistently with [`VmValue`]'s `PartialEq`:
+/// equal values must hash equal. `Managed` is transparent in equality, so it is
+/// unwrapped here *before* the discriminant is mixed in (a `Managed(Int(1))`
+/// must hash like `Int(1)`). `Float` keys cannot occur (not `Hashable`), but the
+/// ±0.0 case is normalized anyway so the function is a correct `Hash` for any
+/// `VmValue`.
+fn hash_vm_value<H: std::hash::Hasher>(value: &VmValue, state: &mut H) {
+    use std::hash::Hash;
+
+    if let VmValue::Managed(inner) = value {
+        hash_vm_value(&inner.borrow(), state);
+        return;
+    }
+
+    std::mem::discriminant(value).hash(state);
+    match value {
+        VmValue::Unit | VmValue::OptionNone => {}
+        VmValue::Bool(value) => value.hash(state),
+        VmValue::Int(value) => value.hash(state),
+        VmValue::Char(value) => value.hash(state),
+        VmValue::String(value) => value.hash(state),
+        VmValue::Bytes(value) => value.hash(state),
+        VmValue::Float(value) => {
+            let bits = if *value == 0.0 { 0 } else { value.to_bits() };
+            bits.hash(state);
         }
+        VmValue::Json(value) => value.to_string().hash(state),
+        VmValue::List(items) => {
+            let items = items.borrow();
+            items.len().hash(state);
+            for item in items.iter() {
+                hash_vm_value(item, state);
+            }
+        }
+        VmValue::Deque(items) => {
+            let items = items.borrow();
+            items.len().hash(state);
+            for item in items.iter() {
+                hash_vm_value(item, state);
+            }
+        }
+        VmValue::OptionSome(inner) => hash_vm_value(inner, state),
+        VmValue::Struct(data) | VmValue::Variant(data) => {
+            data.name.hash(state);
+            for field in &data.fields {
+                hash_vm_value(field, state);
+            }
+        }
+        VmValue::Native(data) => {
+            data.type_name.hash(state);
+            data.id.hash(state);
+        }
+        // Not a hashable key shape (the checker rejects `Map`/closure keys), but
+        // stay total: an order-independent fold so equal maps hash equally.
+        VmValue::Map(entries) => {
+            let mut acc: u64 = 0;
+            for (key, value) in entries.borrow().iter() {
+                let mut hasher = FnvHasher::default();
+                key.hash(&mut hasher);
+                hash_vm_value(value, &mut hasher);
+                acc = acc.wrapping_add(std::hash::Hasher::finish(&hasher));
+            }
+            acc.hash(state);
+        }
+        VmValue::Closure(closure) => (Rc::as_ptr(closure) as usize).hash(state),
+        VmValue::Managed(_) => unreachable!("Managed handled above"),
     }
 }
 

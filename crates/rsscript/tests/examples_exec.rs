@@ -61,23 +61,6 @@ fn needs_runtime_resources(source: &str) -> bool {
         .any(|marker| source.contains(marker))
 }
 
-/// Example scripts that lower and run on the compiled backend but hit a known
-/// *capability* gap in the register VM (a clean `Runtime` error, not a crash),
-/// so they can't take part in the N-way agreement check. Each entry documents
-/// the specific gap. Path suffixes (matched with `ends_with`) to stay
-/// location-independent.
-const KNOWN_VM_UNSUPPORTED: &[&str] = &[
-    // The register VM does not support struct-typed Map/Set keys; the compiled
-    // backend does. This example interns `Uop` structs in a Map<Uop, _>/Set<Uop>.
-    "examples/scripts/core/uop_interning.rss",
-];
-
-fn known_vm_unsupported(name: &str) -> bool {
-    KNOWN_VM_UNSUPPORTED
-        .iter()
-        .any(|suffix| name.replace('\\', "/").ends_with(suffix))
-}
-
 #[test]
 fn example_scripts_agree_across_backends() {
     let mut executed = Vec::new();
@@ -87,7 +70,7 @@ fn example_scripts_agree_across_backends() {
         let source = common::read_fixture(&path);
         let name = path.to_str().expect("utf-8 path");
 
-        if needs_runtime_resources(&source) || known_vm_unsupported(name) {
+        if needs_runtime_resources(&source) {
             skipped.push(name.to_string());
             continue;
         }

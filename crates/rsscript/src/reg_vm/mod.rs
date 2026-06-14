@@ -6617,6 +6617,10 @@ impl RegVm {
     /// the interpreter (`drive`) and the JIT executor (`run_jit`), so the two can
     /// never silently diverge. Jumps update `*ip`; `Return` is handed back to the
     /// caller (which owns frame unwinding); everything else is [`PureStep::NotPure`].
+    // `VmMapKey` is interior-mutable (List/struct keys hold `Rc<RefCell<…>>`),
+    // but `Map.insert`'s `retains(key)` effect makes mutating a live key
+    // unreachable in well-typed RSScript, so the lint's hazard cannot occur.
+    #[allow(clippy::mutable_key_type)]
     fn try_exec_pure(
         &mut self,
         instr: &RegInstr,
@@ -8687,6 +8691,9 @@ impl RegVm {
         }
     }
 
+    // See `try_exec_pure`: interior-mutable `VmMapKey` is safe because
+    // `retains(key)` forbids mutating a key while it is in a map.
+    #[allow(clippy::mutable_key_type)]
     fn call_intrinsic(
         &mut self,
         unit: &RegUnit,
@@ -13080,23 +13087,43 @@ fn ensure_option_value(value: VmValue) -> Result<VmValue, EvalError> {
 }
 
 fn map_key_from_value(value: &VmValue) -> Result<VmMapKey, EvalError> {
-    match value {
-        VmValue::Bool(value) => Ok(VmMapKey::Bool(*value)),
-        VmValue::Int(value) => Ok(VmMapKey::Int(*value)),
-        VmValue::String(value) => Ok(VmMapKey::String(Rc::clone(value))),
-        other => Err(EvalError::Runtime(format!(
+    // The checker guarantees a key's static type is `Hashable`, so this is a
+    // defensive gate: it accepts every shape RSScript admits as a key — scalars,
+    // strings/bytes, the structural `List`/`Deque`/`Option` containers, and
+    // `derives(Eq, Hash)` structs/sums (recursively) — and rejects only the
+    // genuinely unhashable values (`Float`, `Map`, raw `Json`, closures) with a
+    // clean runtime error rather than a host panic.
+    fn is_hashable(value: &VmValue) -> bool {
+        match value {
+            VmValue::Unit
+            | VmValue::Bool(_)
+            | VmValue::Int(_)
+            | VmValue::Char(_)
+            | VmValue::String(_)
+            | VmValue::Bytes(_)
+            | VmValue::Native(_)
+            | VmValue::OptionNone => true,
+            VmValue::OptionSome(inner) => is_hashable(inner),
+            VmValue::List(items) => items.borrow().iter().all(is_hashable),
+            VmValue::Deque(items) => items.borrow().iter().all(is_hashable),
+            VmValue::Struct(data) | VmValue::Variant(data) => data.fields.iter().all(is_hashable),
+            VmValue::Managed(inner) => is_hashable(&inner.borrow()),
+            VmValue::Float(_) | VmValue::Map(_) | VmValue::Json(_) | VmValue::Closure(_) => false,
+        }
+    }
+
+    if is_hashable(value) {
+        Ok(VmMapKey::new(value.clone()))
+    } else {
+        Err(EvalError::Runtime(format!(
             "reg VM Map key does not support `{}`.",
-            other.display()
-        ))),
+            value.display()
+        )))
     }
 }
 
 fn vm_value_from_map_key(key: &VmMapKey) -> VmValue {
-    match key {
-        VmMapKey::Bool(value) => VmValue::Bool(*value),
-        VmMapKey::Int(value) => VmValue::Int(*value),
-        VmMapKey::String(value) => VmValue::String(Rc::clone(value)),
-    }
+    key.value().clone()
 }
 
 fn json_kind(value: &serde_json::Value) -> &'static str {

@@ -419,6 +419,53 @@ fn main() -> Unit {
     common::differential::assert_backends_agree("struct-field-writes.rss", source, &[]);
 }
 
+/// A `derives(Eq, Hash)` struct (with nested `List`/`Option` fields) used as a
+/// `Map` key and `Set` element. The VM keys on a structural projection of the
+/// value while the compiled backend keys on the derived `Hash`/`Eq`; both must
+/// agree on dedup (a structurally-equal, separately-constructed key overwrites),
+/// membership, and the round-trip through `Map.keys()` (key value reconstruction).
+/// Output is reduced to counts/booleans so hash *iteration order* — which legitimately
+/// differs between the backends — is not under test. interp == jit == compiled.
+#[test]
+fn backends_agree_on_struct_keyed_collections() {
+    let source = "\
+struct Point derives(Clone, Eq, Hash) {
+    x: Int,
+    y: Int,
+    tags: List<Int>
+}
+
+fn main() -> Unit {
+    let counts = Map.new<Point, Int>()
+    let p1 = Point(x: 1, y: 2, tags: List.new<Int>())
+    let p2 = Point(x: 3, y: 4, tags: List.new<Int>())
+    // Structurally identical to `p1` but a distinct allocation.
+    let p1_again = Point(x: 1, y: 2, tags: List.new<Int>())
+
+    Map.insert(map: mut counts, key: read p1, value: read 10)
+    Map.insert(map: mut counts, key: read p2, value: read 20)
+    // Same structural key: overwrites rather than adds.
+    Map.insert(map: mut counts, key: read p1_again, value: read 99)
+
+    Log.write(message: read String.from_int(value: Map.len(map: read counts)))
+    Log.write(message: read String.from_bool(value: Map.contains_key(map: read counts, key: read p1_again)))
+    let absent = Point(x: 9, y: 9, tags: List.new<Int>())
+    Log.write(message: read String.from_bool(value: Map.contains_key(map: read counts, key: read absent)))
+    // Round-trips keys back to `Point` values (key reconstruction).
+    Log.write(message: read String.from_int(value: List.len(list: read Map.keys(map: read counts))))
+
+    let seen = Set.new<Point>()
+    Set.insert(set: mut seen, value: read p1)
+    Set.insert(set: mut seen, value: read p2)
+    Set.insert(set: mut seen, value: read p1_again)
+    Log.write(message: read String.from_int(value: Set.len(set: read seen)))
+    Log.write(message: read String.from_bool(value: Set.contains(set: read seen, value: read p1_again)))
+    return Unit
+}
+";
+    common::differential::assert_backends_agree("struct-keyed-collections.rss", source, &[]);
+}
+
 /// Deque / Set / SortedSet / SortedMap mutations with out-of-order inserts,
 /// duplicates, and removes, then sorted/ordered dumps. This gates the collection
 /// backing/representation optimizations: the VM (`Vec`-backed) and the compiled

@@ -263,6 +263,12 @@ pub(super) fn json_decode_struct_value(
     ))))
 }
 
+// `VmMapKey` wraps a `VmValue`, which has interior mutability (a `List`/struct
+// key holds `Rc<RefCell<…>>`). The `mutable_key_type` hazard — mutating a key
+// while it sits in a map — cannot occur in well-typed RSScript: `Map.insert`
+// declares `retains(key)`, so the move checker forbids mutating a key after
+// insertion. The hash projection reads the (immutable-by-contract) contents.
+#[allow(clippy::mutable_key_type)]
 pub(super) fn json_decode_field_value(
     unit: &RegUnit,
     type_name: &str,
@@ -334,7 +340,7 @@ pub(super) fn json_decode_field_value(
             let mut decoded = ValueMap::with_capacity_and_hasher(object.len(), Default::default());
             for (key, value) in object {
                 decoded.insert(
-                    VmMapKey::String(Rc::new(key.clone())),
+                    VmMapKey::from_string(key.clone()),
                     json_decode_field_value(unit, args[1], value)?,
                 );
             }
