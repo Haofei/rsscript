@@ -479,6 +479,10 @@ pub struct Hir {
     function_bodies: HashMap<String, HirFunctionBody>,
     resource_drop_bodies: HashMap<String, HirBlock>,
     protocol_impls: Vec<HirProtocolImpl>,
+    /// Top-level `const` values (name → literal initializer). References to a
+    /// const are inlined to this literal during expression lowering, so the
+    /// register VM (which has no global/const slots) resolves them.
+    const_values: HashMap<String, Expr>,
 }
 
 impl Hir {
@@ -508,6 +512,18 @@ impl Hir {
         Self::from_syntax_with_interfaces_options(program, interfaces, false, false)
     }
 
+    /// Record top-level `const` initializers so references can be inlined during
+    /// lowering (the register VM has no const/global slots). Initializers are
+    /// literals (the checker enforces this), so inlining is exact.
+    fn collect_const_values(&mut self, program: &SyntaxProgram) {
+        for item in &program.items {
+            if let Item::Const(decl) = item {
+                self.const_values
+                    .insert(decl.name.clone(), decl.value.clone());
+            }
+        }
+    }
+
     fn from_syntax_with_interfaces_options(
         program: &SyntaxProgram,
         interfaces: &[SyntaxProgram],
@@ -530,6 +546,7 @@ impl Hir {
         hir.extend_protocol_impls(&program.protocol_impls, true);
         hir.collect_item_signatures(program, &mut type_symbols, &mut callable_symbols);
         hir.normalize_class_typed_handle_fields();
+        hir.collect_const_values(program);
         hir.collect_resource_drop_bodies(program);
         hir.collect_body_facts(program);
         hir
@@ -1665,6 +1682,15 @@ fn lower_hir_expr(
     value_types: &HashMap<String, String>,
 ) -> HirExpr {
     match expr {
+        // A reference to a top-level `const` is inlined to its literal value: the
+        // register VM has no const/global slots, and the literal carries the value
+        // to every backend. A local binding of the same name shadows the const.
+        Expr::Ident(name, _)
+            if !value_types.contains_key(name) && hir.const_values.contains_key(name) =>
+        {
+            let value = hir.const_values[name].clone();
+            lower_hir_expr(hir, function_name, &value, value_types)
+        }
         Expr::Ident(name, span) => HirExpr::Ident {
             name: name.clone(),
             type_name: value_types.get(name).cloned(),

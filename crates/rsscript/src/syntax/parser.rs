@@ -13,7 +13,18 @@ use crate::syntax::ast::{
     WithStmt,
 };
 
+/// Parse `source`, then apply source-preserving desugarings (currently:
+/// associated-constant references). This is what every *semantic* consumer
+/// (checker, HIR, lowering) uses. Tools that must preserve the exact source
+/// surface (formatter, symbol index) use [`parse_source_raw`] instead.
 pub fn parse_source(file: &str, source: &str) -> Program {
+    let mut program = parse_source_raw(file, source);
+    super::desugar::desugar_associated_consts(&mut program);
+    program
+}
+
+/// Parse `source` without desugaring — the AST mirrors the written surface.
+pub fn parse_source_raw(file: &str, source: &str) -> Program {
     let tokens = lex(file, source);
     Parser {
         tokens: &tokens,
@@ -340,7 +351,10 @@ impl Parser<'_> {
             return None;
         }
         self.index += 1;
-        let name = self.take_ident_name()?;
+        // A dotted, type-associated name (`const Device.DEFAULT: ...`) or a plain
+        // one (`const MAX_RETRIES: ...`). Associated names are flattened to an
+        // ordinary const by the `desugar_associated_consts` pass.
+        let name = self.take_function_name()?;
         let type_annotation = if self.at_symbol(":") {
             self.index += 1;
             let ty_start = self.index;

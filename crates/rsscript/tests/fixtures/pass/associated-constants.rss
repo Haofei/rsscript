@@ -1,0 +1,14 @@
+// Type-associated constants: `const Type.NAME` declares a constant referenced as
+// `Type.NAME` (e.g. `Device.DEFAULT`, `dtypes.count`). They desugar to ordinary
+// constants, so they resolve, type-check, and lower like any other const.
+const Device.DEFAULT: String = "cpu"
+const Device.COUNT: Int = 4
+
+fn describe() -> String {
+    return String.concat(left: read Device.DEFAULT, right: read String.from_int(value: Device.COUNT))
+}
+
+fn main() -> Unit {
+    Log.write(message: read describe())
+    return Unit
+}

@@ -14,7 +14,7 @@ use crate::syntax::ast::{
     Block, Callee, ConstDecl, Expr, FieldDecl, FunctionDecl, Item, MatchPattern, Param, Program,
     Stmt, SumTypeDecl, TypeAliasDecl, TypeDecl, TypeKind, TypeRef,
 };
-use crate::syntax::parse_source;
+use crate::syntax::parse_source_raw;
 
 /// What a definition is, kept for document symbols and to disambiguate a few
 /// name collisions (a type reference prefers a type definition).
@@ -84,7 +84,7 @@ pub struct SymbolIndex {
 
 /// Parse `source` and build its [`SymbolIndex`].
 pub fn symbol_index(file: &str, source: &str) -> SymbolIndex {
-    let program = parse_source(file, source);
+    let program = parse_source_raw(file, source);
     let mut builder = Builder {
         source,
         definitions: Vec::new(),
@@ -142,7 +142,7 @@ pub fn symbol_inventory(file: &str, source: &str) -> Vec<SymbolInventoryEntry> {
 
 /// Parse `source` and return a top-level document outline.
 pub fn document_symbols(file: &str, source: &str) -> Vec<RssDocumentSymbol> {
-    let program = parse_source(file, source);
+    let program = parse_source_raw(file, source);
     program
         .items
         .iter()

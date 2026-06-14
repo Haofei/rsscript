@@ -1168,6 +1168,48 @@ fn main() -> Unit {
 }
 
 #[test]
+fn parity_top_level_constants_resolve_on_the_vm() {
+    // Top-level consts are inlined to their literal during lowering, so they
+    // resolve on the register VM (which has no const/global slots) identically to
+    // the compiled backend.
+    let source = r#"
+const LIMIT: Int = 42
+const LABEL: String = "n="
+
+fn main() -> Unit {
+    Log.write(message: read String.concat(left: read LABEL, right: read String.from_int(value: LIMIT)))
+    return Unit
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-top-level-consts.rss",
+        "rsscript_parity_top_level_consts",
+        source,
+    );
+}
+
+#[test]
+fn parity_associated_constants_resolve_identically() {
+    // Type-associated constants (`Device.DEFAULT`) resolve to the same values on
+    // the VM and the compiled backend.
+    let source = r#"
+const Device.DEFAULT: String = "cpu"
+const Device.COUNT: Int = 4
+
+fn main() -> Unit {
+    Log.write(message: read Device.DEFAULT)
+    Log.write(message: read String.from_int(value: Device.COUNT))
+    return Unit
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-associated-consts.rss",
+        "rsscript_parity_associated_consts",
+        source,
+    );
+}
+
+#[test]
 fn parity_boolean_operators_short_circuit() {
     let source = r#"
 fn side_effect() -> Bool {

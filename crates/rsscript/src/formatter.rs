@@ -3,7 +3,7 @@ use crate::syntax::ast::{
     FunctionDecl, GenericBound, GenericParam, Item, LetKind, MapLiteralEntry, MatchPattern,
     ObjectLiteralField, Param, Program, ProtocolImpl, Stmt, TypeDecl, TypeKind, TypeRef,
 };
-use crate::syntax::parse_source;
+use crate::syntax::parse_source_raw;
 
 const MAX_INLINE_LITERAL_LEN: usize = 88;
 const MAX_INLINE_SIGNATURE_LEN: usize = 100;
@@ -12,7 +12,7 @@ type ReceiverCallSegment<'a> = (&'a str, &'a [CallArg]);
 type ReceiverCallSegments<'a> = (&'a Expr, Vec<ReceiverCallSegment<'a>>);
 
 pub fn format_source(file: &str, source: &str) -> String {
-    format_program(&parse_source(file, source))
+    format_program(&parse_source_raw(file, source))
 }
 
 pub fn format_program(program: &Program) -> String {
@@ -1420,6 +1420,14 @@ native fn Host.emit(message: read String) -> Unit
     effects(native)
 "#
         );
+    }
+
+    #[test]
+    fn preserves_associated_constant_names() {
+        // The formatter parses raw (no desugaring), so a type-associated const
+        // keeps its dotted source form rather than the flattened lowered name.
+        let source = "const Device.DEFAULT: String = \"cpu\"\n";
+        assert_eq!(format_source("assoc.rss", source), source);
     }
 
     #[test]
