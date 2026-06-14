@@ -2,9 +2,9 @@
 //!
 //! Kept deliberately small and `rsscript`-independent: it mirrors the *surface*
 //! types a generated program uses, not the compiler's internal type
-//! representation. New tiers extend [`Ty`] (structs, sums, collections, …); the
-//! scope tracks what is in scope so the generator only ever emits well-typed
-//! references and calls.
+//! representation. The generator only ever emits well-typed references, calls,
+//! constructions, and matches by consulting the scope and the declared user
+//! types.
 
 /// A surface type the generator can produce values of.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -13,33 +13,47 @@ pub enum Ty {
     Bool,
     Float,
     String,
+    Option(Box<Ty>),
+    /// `Result<T, E>`. The generator fixes `E = String` so `?` chains compose.
+    Result(Box<Ty>, Box<Ty>),
+    /// A declared `struct` by name.
+    Struct(String),
+    /// A declared (nullary-variant) `sum` by name.
+    Sum(String),
 }
 
 impl Ty {
     /// The RSScript spelling of the type.
-    pub fn render(&self) -> &'static str {
+    pub fn render(&self) -> String {
         match self {
-            Ty::Int => "Int",
-            Ty::Bool => "Bool",
-            Ty::Float => "Float",
-            Ty::String => "String",
+            Ty::Int => "Int".to_string(),
+            Ty::Bool => "Bool".to_string(),
+            Ty::Float => "Float".to_string(),
+            Ty::String => "String".to_string(),
+            Ty::Option(inner) => format!("Option<{}>", inner.render()),
+            Ty::Result(ok, err) => format!("Result<{}, {}>", ok.render(), err.render()),
+            Ty::Struct(name) | Ty::Sum(name) => name.clone(),
         }
     }
 
     /// Whether a *parameter* of this type is declared with a `read` effect prefix.
-    /// Copy scalars (Int/Bool/Float) are declared bare (`a: Int`); reference types
-    /// like `String` are declared `s: read String` (matches the stdlib `.rssi`
-    /// conventions and the example corpus).
+    /// Copy scalars (Int/Bool/Float) are declared bare (`a: Int`); every reference
+    /// type (`String`, `Option`, `Result`, structs, sums) is declared `x: read T`.
     pub fn param_is_read(&self) -> bool {
-        matches!(self, Ty::String)
+        !matches!(self, Ty::Int | Ty::Bool | Ty::Float)
     }
 
-    /// Whether a value of this type can be printed deterministically across every
-    /// backend. `Float` is excluded: its textual formatting is not guaranteed
-    /// identical between the VM and the compiled backend, so floats are only ever
-    /// *observed* through comparisons reduced to `Bool`.
-    pub fn is_printable(&self) -> bool {
+    /// Whether a value of this type can be printed directly and deterministically
+    /// (via `String.from_int` / `String.from_bool` / itself). `Float` is excluded
+    /// (formatting isn't backend-stable; it is observed through comparisons), as
+    /// are all compound types (observed by destructuring).
+    pub fn is_printable_scalar(&self) -> bool {
         matches!(self, Ty::Int | Ty::Bool | Ty::String)
+    }
+
+    /// A scalar/string type (no further structure to destructure).
+    pub fn is_scalar(&self) -> bool {
+        matches!(self, Ty::Int | Ty::Bool | Ty::Float | Ty::String)
     }
 }
 
@@ -59,6 +73,20 @@ pub struct FnSig {
     pub ret: Ty,
 }
 
+/// A declared `struct` with named, scalar/string-typed fields.
+#[derive(Debug, Clone)]
+pub struct StructDef {
+    pub name: String,
+    pub fields: Vec<(String, Ty)>,
+}
+
+/// A declared `sum` with nullary variants.
+#[derive(Debug, Clone)]
+pub struct SumDef {
+    pub name: String,
+    pub variants: Vec<String>,
+}
+
 /// Lexical scope during generation: visible bindings plus the functions declared
 /// so far. Function calls are restricted to *earlier* declarations (a DAG), which
 /// guarantees generated programs terminate (no mutual or self recursion).
@@ -66,6 +94,9 @@ pub struct FnSig {
 pub struct Scope {
     pub bindings: Vec<Binding>,
     pub functions: Vec<FnSig>,
+    /// The enclosing function's return type, when it is a `Result<_, String>` —
+    /// gates whether the `?` operator may be emitted.
+    pub result_error: Option<Ty>,
 }
 
 impl Scope {

@@ -7,12 +7,14 @@
 //! backends. Arithmetic edges (overflow, divide-by-zero) are *not* avoided: they
 //! trap identically on every backend, so "all fail" is still agreement.
 //!
-//! Generated values of un-printable types (`Float`) are observed only through
-//! comparisons reduced to `Bool`, so backend float-formatting differences never
-//! reach stdout.
+//! Coverage: scalars (Int/Bool/Float/String), control flow, functions, plus
+//! `struct`s, nullary `sum`s, `Option`, and `Result` (with the `?` operator).
+//! Values of un-printable shapes (`Float`, compounds) are observed only through
+//! comparisons / destructuring reduced to a printable scalar, so backend
+//! float-formatting and hash-iteration-order differences never reach stdout.
 
 use crate::seed::SeedReader;
-use crate::ty::{Binding, FnSig, Scope, Ty};
+use crate::ty::{Binding, FnSig, Scope, StructDef, SumDef, Ty};
 
 /// A generated program plus the metadata a harness needs.
 #[derive(Debug, Clone)]
@@ -27,11 +29,13 @@ pub fn generate(seed: &[u8]) -> GeneratedProgram {
     Generator::new(seed).program()
 }
 
-const ALL_TYPES: &[Ty] = &[Ty::Int, Ty::Bool, Ty::Float, Ty::String];
+const SCALARS: &[Ty] = &[Ty::Int, Ty::Bool, Ty::Float, Ty::String];
 
 struct Generator<'a> {
     seed: SeedReader<'a>,
     var_counter: usize,
+    structs: Vec<StructDef>,
+    sums: Vec<SumDef>,
 }
 
 impl<'a> Generator<'a> {
@@ -39,6 +43,8 @@ impl<'a> Generator<'a> {
         Generator {
             seed: SeedReader::new(seed),
             var_counter: 0,
+            structs: Vec::new(),
+            sums: Vec::new(),
         }
     }
 
@@ -48,16 +54,47 @@ impl<'a> Generator<'a> {
         name
     }
 
+    fn pick_scalar(&mut self) -> Ty {
+        SCALARS[self.seed.choice(SCALARS.len())].clone()
+    }
+
+    /// A type for a binding/param/return: scalars dominate; compounds appear when
+    /// available. Compound payloads are restricted to scalars to keep the surface
+    /// finite and generation simple.
     fn pick_type(&mut self) -> Ty {
-        ALL_TYPES[self.seed.choice(ALL_TYPES.len())].clone()
+        match self.seed.weighted(&[10, 2, 2, 3, 3]) {
+            0 => self.pick_scalar(),
+            1 => Ty::Option(Box::new(self.pick_scalar())),
+            2 => Ty::Result(Box::new(self.pick_scalar()), Box::new(Ty::String)),
+            3 if !self.structs.is_empty() => Ty::Struct(
+                self.structs[self.seed.choice(self.structs.len())]
+                    .name
+                    .clone(),
+            ),
+            4 if !self.sums.is_empty() => {
+                Ty::Sum(self.sums[self.seed.choice(self.sums.len())].name.clone())
+            }
+            _ => self.pick_scalar(),
+        }
     }
 
     // -- top level -------------------------------------------------------
 
     fn program(&mut self) -> GeneratedProgram {
         let mut source = String::new();
-        let mut functions: Vec<FnSig> = Vec::new();
 
+        let struct_count = self.seed.choice(3); // 0..=2
+        for index in 0..struct_count {
+            let def = self.gen_struct_decl(index, &mut source);
+            self.structs.push(def);
+        }
+        let sum_count = self.seed.choice(3); // 0..=2
+        for index in 0..sum_count {
+            let def = self.gen_sum_decl(index, &mut source);
+            self.sums.push(def);
+        }
+
+        let mut functions: Vec<FnSig> = Vec::new();
         let fn_count = self.seed.choice(4); // 0..=3 helpers
         for index in 0..fn_count {
             let sig = self.gen_fn(index, &functions, &mut source);
@@ -69,6 +106,38 @@ impl<'a> Generator<'a> {
             source,
             is_async: false,
         }
+    }
+
+    // -- type declarations -----------------------------------------------
+
+    fn gen_struct_decl(&mut self, index: usize, out: &mut String) -> StructDef {
+        let name = format!("S{index}");
+        let field_count = 1 + self.seed.choice(3); // 1..=3
+        let mut fields = Vec::new();
+        for f in 0..field_count {
+            fields.push((format!("f{f}"), self.pick_scalar()));
+        }
+        let body = fields
+            .iter()
+            .map(|(n, t)| format!("    {n}: {}", t.render()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        // `derives(Clone)` so the struct can be freely read/copied in arguments.
+        out.push_str(&format!("struct {name} derives(Clone) {{\n{body}\n}}\n\n"));
+        StructDef { name, fields }
+    }
+
+    fn gen_sum_decl(&mut self, index: usize, out: &mut String) -> SumDef {
+        let name = format!("E{index}");
+        let variant_count = 2 + self.seed.choice(3); // 2..=4
+        let variants: Vec<String> = (0..variant_count).map(|v| format!("{name}V{v}")).collect();
+        let body = variants
+            .iter()
+            .map(|v| format!("    {v}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        out.push_str(&format!("sum {name} derives(Clone) {{\n{body}\n}}\n\n"));
+        SumDef { name, variants }
     }
 
     // -- helper functions ------------------------------------------------
@@ -92,31 +161,35 @@ impl<'a> Generator<'a> {
             });
         }
         let ret = self.pick_type();
+        // A `Result<_, String>`-returning function may use `?`.
+        if let Ty::Result(_, err) = &ret {
+            scope.result_error = Some((**err).clone());
+        }
 
-        // Signature line.
         let param_src = params
             .iter()
-            .map(|(n, t)| {
-                if t.param_is_read() {
-                    format!("{n}: read {}", t.render())
-                } else {
-                    format!("{n}: {}", t.render())
-                }
-            })
+            .map(|(n, t)| self.render_param(n, t))
             .collect::<Vec<_>>()
             .join(", ");
         out.push_str(&format!("fn {name}({param_src}) -> {} {{\n", ret.render()));
 
-        // A couple of optional let bindings, then `return <ret expr>`.
         let stmt_count = self.seed.choice(3); // 0..=2
         for _ in 0..stmt_count {
-            let stmt = self.gen_let(&mut scope);
+            let stmt = self.gen_stmt(&mut scope);
             out.push_str(&format!("    {stmt}\n"));
         }
         let ret_expr = self.gen_expr(&ret, &scope, 3);
         out.push_str(&format!("    return {ret_expr}\n}}\n\n"));
 
         FnSig { name, params, ret }
+    }
+
+    fn render_param(&self, name: &str, ty: &Ty) -> String {
+        if ty.param_is_read() {
+            format!("{name}: read {}", ty.render())
+        } else {
+            format!("{name}: {}", ty.render())
+        }
     }
 
     // -- main ------------------------------------------------------------
@@ -126,77 +199,180 @@ impl<'a> Generator<'a> {
             functions: functions.to_vec(),
             ..Scope::default()
         };
-        out.push_str("fn main() -> Unit {\n");
+        // main may return Result<Unit, String> to host `?`.
+        let main_is_result = self.seed.bool() && self.any_fn_returns_result(functions);
+        if main_is_result {
+            scope.result_error = Some(Ty::String);
+            out.push_str("fn main() -> Result<Unit, String> {\n");
+        } else {
+            out.push_str("fn main() -> Unit {\n");
+        }
 
-        let setup = 2 + self.seed.choice(4); // 2..=5 statements
+        let setup = 2 + self.seed.choice(4); // 2..=5
         for _ in 0..setup {
             let stmt = self.gen_stmt(&mut scope);
             out.push_str(&format!("    {stmt}\n"));
         }
 
-        // Optional control blocks (bounded; always terminating).
         let control = self.seed.choice(3); // 0..=2
         for _ in 0..control {
             let block = self.gen_control(&mut scope);
             out.push_str(&block);
         }
 
-        // At least one observation so stdout is non-empty and deterministic.
         let observations = 1 + self.seed.choice(4); // 1..=4
         for _ in 0..observations {
-            let line = self.gen_observation(&scope);
-            out.push_str(&format!("    {line}\n"));
+            let line = self.gen_observation(&mut scope);
+            out.push_str(&line);
         }
 
-        out.push_str("    return Unit\n}\n");
+        if main_is_result {
+            out.push_str("    return Ok(Unit)\n}\n");
+        } else {
+            out.push_str("    return Unit\n}\n");
+        }
     }
 
-    /// A `Log.write(...)` line printing an Int/Bool/String observation.
-    fn gen_observation(&mut self, scope: &Scope) -> String {
-        // Pick a printable type.
-        let printable = [Ty::Int, Ty::Bool, Ty::String];
-        let ty = printable[self.seed.choice(printable.len())].clone();
+    fn any_fn_returns_result(&self, functions: &[FnSig]) -> bool {
+        functions.iter().any(|f| matches!(f.ret, Ty::Result(_, _)))
+    }
+
+    /// One or more `Log.write` lines observing a freshly generated value. Compound
+    /// values are destructured down to a printable scalar.
+    fn gen_observation(&mut self, scope: &mut Scope) -> String {
+        let ty = self.pick_type();
         let expr = self.gen_expr(&ty, scope, 3);
+        let binding = self.fresh_var();
+        // Annotate the binding with its full type. For `Result<T, E>` this pins
+        // `E`, which a bare `let v = Ok(x)` leaves unconstrained — accepted by the
+        // checker but un-lowerable to Rust (E0282). Harmless for other types.
+        let mut out = format!("    let {binding}: {} = {expr}\n", ty.render());
+        out.push_str(&self.observe(&binding, &ty, 1));
+        out
+    }
+
+    /// Emit statements that print a scalar derived from the value named `access`
+    /// of type `ty`. `indent` is the current block depth (1 = main body).
+    fn observe(&mut self, access: &str, ty: &Ty, indent: usize) -> String {
+        let pad = "    ".repeat(indent);
+        match ty {
+            Ty::Int | Ty::Bool | Ty::String | Ty::Float => {
+                format!("{pad}{}\n", self.log_scalar(access, ty))
+            }
+            Ty::Option(inner) => {
+                let some = self.observe("x", inner, indent + 1);
+                let inner_pad = "    ".repeat(indent + 1);
+                format!(
+                    "{pad}match {access} {{\n\
+                     {pad}    Some(x) => {{\n{some}{inner_pad}}}\n\
+                     {pad}    None => {{ Log.write(message: read \"none\") }}\n\
+                     {pad}}}\n"
+                )
+            }
+            Ty::Result(ok, _) => {
+                let ok_obs = self.observe("x", ok, indent + 1);
+                let inner_pad = "    ".repeat(indent + 1);
+                format!(
+                    "{pad}match {access} {{\n\
+                     {pad}    Ok(x) => {{\n{ok_obs}{inner_pad}}}\n\
+                     {pad}    Err(e) => {{ Log.write(message: read e) }}\n\
+                     {pad}}}\n"
+                )
+            }
+            Ty::Struct(name) => {
+                let def = self.struct_def(name);
+                let (fname, fty) = def.fields[0].clone();
+                self.observe(&format!("{access}.{fname}"), &fty, indent)
+            }
+            Ty::Sum(name) => {
+                let def = self.sum_def(name);
+                let arms = def
+                    .variants
+                    .iter()
+                    .map(|v| format!("{pad}    {v} => {{ Log.write(message: read \"{v}\") }}"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                format!("{pad}match {access} {{\n{arms}\n{pad}}}\n")
+            }
+        }
+    }
+
+    /// A `Log.write(...)` line printing a *scalar* access expression.
+    fn log_scalar(&self, access: &str, ty: &Ty) -> String {
         let message = match ty {
-            Ty::Int => format!("String.from_int(value: {expr})"),
-            Ty::Bool => format!("String.from_bool(value: {expr})"),
-            Ty::String => expr,
-            Ty::Float => unreachable!("float is not printable"),
+            Ty::Int => format!("String.from_int(value: {access})"),
+            Ty::Bool => format!("String.from_bool(value: {access})"),
+            Ty::String => access.to_string(),
+            Ty::Float => format!("String.from_bool(value: ({access} > 0.0))"),
+            _ => unreachable!("log_scalar called on non-scalar"),
         };
         format!("Log.write(message: read {message})")
+    }
+
+    fn struct_def(&self, name: &str) -> StructDef {
+        self.structs
+            .iter()
+            .find(|d| d.name == name)
+            .expect("declared struct")
+            .clone()
+    }
+
+    fn sum_def(&self, name: &str) -> SumDef {
+        self.sums
+            .iter()
+            .find(|d| d.name == name)
+            .expect("declared sum")
+            .clone()
     }
 
     // -- statements ------------------------------------------------------
 
     fn gen_stmt(&mut self, scope: &mut Scope) -> String {
-        // Bias toward lets so later statements have material to reference.
-        match self.seed.weighted(&[5, 2]) {
+        // Bias toward lets; sometimes assign; sometimes a `?`-unwrap.
+        match self.seed.weighted(&[6, 2, 2]) {
             0 => self.gen_let(scope),
-            _ => self
+            1 => self
                 .gen_assign(scope)
+                .unwrap_or_else(|| self.gen_let(scope)),
+            _ => self
+                .gen_try(scope)
+                .or_else(|| self.gen_assign(scope))
                 .unwrap_or_else(|| self.gen_let(scope)),
         }
     }
 
     fn gen_let(&mut self, scope: &mut Scope) -> String {
         let ty = self.pick_type();
-        let expr = self.gen_expr(&ty, scope, 3);
+        // Occasionally exercise the None/Err constructors (they need a known type,
+        // unlike the inferable Some/Ok).
+        let (expr, force_immutable) = match &ty {
+            Ty::Option(_) if self.seed.choice(4) == 0 => ("None".to_string(), true),
+            Ty::Result(_, _) if self.seed.choice(4) == 0 => {
+                let msg = self.gen_literal(&Ty::String);
+                (format!("Err({msg})"), true)
+            }
+            _ => (self.gen_expr(&ty, scope, 3), false),
+        };
         let name = self.fresh_var();
-        let mutable = self.seed.bool();
+        let mutable = !force_immutable && self.seed.bool();
+        // Compound types are annotated. Critically, this pins `Result<T, E>`'s
+        // error type: a bare `let v = Ok(x)` leaves `E` unconstrained, which the
+        // checker accepts but the Rust backend cannot infer (E0282).
+        let annotate = !ty.is_scalar();
         scope.bindings.push(Binding {
             name: name.clone(),
-            ty,
+            ty: ty.clone(),
             mutable,
         });
-        if mutable {
-            format!("let mut {name} = {expr}")
+        let mut_kw = if mutable { "mut " } else { "" };
+        if annotate {
+            format!("let {mut_kw}{name}: {} = {expr}", ty.render())
         } else {
-            format!("let {name} = {expr}")
+            format!("let {mut_kw}{name} = {expr}")
         }
     }
 
-    /// `name = <expr>` to an existing mutable binding (controlled assignment to a
-    /// local). Returns `None` if there is no mutable binding to assign to.
+    /// `name = <expr>` to an existing mutable binding (controlled assignment).
     fn gen_assign(&mut self, scope: &Scope) -> Option<String> {
         let ty = self.pick_type();
         let candidates = scope.mutable_bindings_of(&ty);
@@ -208,11 +384,39 @@ impl<'a> Generator<'a> {
         Some(format!("{name} = {expr}"))
     }
 
+    /// `let v = <call returning Result<T, String>>?` — only inside a function that
+    /// itself returns `Result<_, String>`.
+    fn gen_try(&mut self, scope: &mut Scope) -> Option<String> {
+        scope.result_error.as_ref()?;
+        // Find an earlier function returning Result<T, String> for some T.
+        let candidates: Vec<FnSig> = scope
+            .functions
+            .iter()
+            .filter(|f| matches!(&f.ret, Ty::Result(_, err) if **err == Ty::String))
+            .cloned()
+            .collect();
+        if candidates.is_empty() {
+            return None;
+        }
+        let sig = candidates[self.seed.choice(candidates.len())].clone();
+        let Ty::Result(ok, _) = &sig.ret else {
+            return None;
+        };
+        let ok_ty = (**ok).clone();
+        let call = self.render_call(&sig, scope);
+        let name = self.fresh_var();
+        scope.bindings.push(Binding {
+            name: name.clone(),
+            ty: ok_ty,
+            mutable: false,
+        });
+        Some(format!("let {name} = {call}?"))
+    }
+
     /// An `if` or a bounded counting `while`. Bodies see a cloned scope so any
-    /// bindings they introduce don't leak (and can't be observed un-initialized).
+    /// bindings they introduce don't leak.
     fn gen_control(&mut self, scope: &mut Scope) -> String {
         if self.seed.bool() {
-            // if [else]
             let cond = self.gen_expr(&Ty::Bool, scope, 2);
             let mut body_scope = scope.clone();
             let then_stmt = self.gen_stmt(&mut body_scope);
@@ -226,12 +430,9 @@ impl<'a> Generator<'a> {
             }
             out
         } else {
-            // Bounded counting loop, guaranteed to terminate.
             let counter = self.fresh_var();
             let limit = 1 + self.seed.range_i64(0, 5); // 1..=6
             let mut body_scope = scope.clone();
-            // Mutate an existing mutable Int accumulator if one exists, else just
-            // do a harmless statement; either way the counter bounds the loop.
             let body_stmt = self
                 .gen_assign(&body_scope)
                 .unwrap_or_else(|| self.gen_let(&mut body_scope));
@@ -248,7 +449,6 @@ impl<'a> Generator<'a> {
         if fuel == 0 {
             return self.gen_atom(ty, scope);
         }
-        // Weighted choice between an atom, a call, and a type-specific compound.
         match self.seed.weighted(&[3, 2, 4]) {
             0 => self.gen_atom(ty, scope),
             1 => self
@@ -258,20 +458,51 @@ impl<'a> Generator<'a> {
         }
     }
 
-    /// A leaf expression: a literal or an in-scope variable reference.
+    /// A leaf: an in-scope variable, or a freshly constructed value.
     fn gen_atom(&mut self, ty: &Ty, scope: &Scope) -> String {
         let vars = scope.bindings_of(ty);
         if !vars.is_empty() && self.seed.bool() {
             return vars[self.seed.choice(vars.len())].name.clone();
         }
-        self.gen_literal(ty)
+        self.gen_construct(ty, scope)
+    }
+
+    /// Construct a value of `ty` (literal for scalars; constructor for compounds).
+    fn gen_construct(&mut self, ty: &Ty, scope: &Scope) -> String {
+        match ty {
+            Ty::Int | Ty::Bool | Ty::Float | Ty::String => self.gen_literal(ty),
+            Ty::Option(inner) => {
+                let value = self.gen_expr(inner, scope, 1);
+                format!("Some({value})")
+            }
+            Ty::Result(ok, _) => {
+                let value = self.gen_expr(ok, scope, 1);
+                format!("Ok({value})")
+            }
+            Ty::Struct(name) => {
+                let def = self.struct_def(name);
+                let args = def
+                    .fields
+                    .iter()
+                    .map(|(fname, fty)| {
+                        let value = self.gen_literal(fty);
+                        format!("{fname}: {value}")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{name}({args})")
+            }
+            Ty::Sum(name) => {
+                let def = self.sum_def(name);
+                def.variants[self.seed.choice(def.variants.len())].clone()
+            }
+        }
     }
 
     fn gen_literal(&mut self, ty: &Ty) -> String {
         match ty {
             // Non-negative only: RSScript has no negative-literal / unary-minus
-            // parse surface (`-3` is RS0015; negatives are written `0 - 3`), so a
-            // bare negative literal would be rejected.
+            // parse surface (`-3` is RS0015; negatives are written `0 - 3`).
             Ty::Int => self.seed.range_i64(0, 1000).to_string(),
             Ty::Bool => if self.seed.bool() { "true" } else { "false" }.to_string(),
             Ty::Float => {
@@ -289,7 +520,16 @@ impl<'a> Generator<'a> {
                 }
                 format!("\"{s}\"")
             }
+            // Compounds are not "literals"; construct them via gen_construct.
+            other => self.gen_construct_scalar_fallback(other),
         }
+    }
+
+    /// Fallback when `gen_literal` is asked for a compound (only happens for struct
+    /// fields, which are restricted to scalars, so this is effectively unreachable
+    /// — but stay total rather than panic).
+    fn gen_construct_scalar_fallback(&mut self, _ty: &Ty) -> String {
+        "0".to_string()
     }
 
     /// A call to an earlier-declared function returning `ty`.
@@ -299,11 +539,19 @@ impl<'a> Generator<'a> {
             return None;
         }
         let sig = candidates[self.seed.choice(candidates.len())].clone();
+        Some(self.render_call_with_fuel(&sig, scope, fuel))
+    }
+
+    fn render_call(&mut self, sig: &FnSig, scope: &Scope) -> String {
+        self.render_call_with_fuel(sig, scope, 2)
+    }
+
+    fn render_call_with_fuel(&mut self, sig: &FnSig, scope: &Scope, fuel: u32) -> String {
         let args = sig
             .params
             .iter()
             .map(|(pname, pty)| {
-                let arg = self.gen_expr(pty, scope, fuel - 1);
+                let arg = self.gen_expr(pty, scope, fuel.saturating_sub(1));
                 if pty.param_is_read() {
                     format!("{pname}: read {arg}")
                 } else {
@@ -312,7 +560,7 @@ impl<'a> Generator<'a> {
             })
             .collect::<Vec<_>>()
             .join(", ");
-        Some(format!("{}({args})", sig.name))
+        format!("{}({args})", sig.name)
     }
 
     /// A type-specific compound expression.
@@ -326,8 +574,6 @@ impl<'a> Generator<'a> {
                 format!("({lhs} {op} {rhs})")
             }
             Ty::Float => {
-                // No `/` for floats: avoids inf/NaN, which only matter for
-                // formatting and are never printed anyway, but keeps results finite.
                 let ops = ["+", "-", "*"];
                 let op = ops[self.seed.choice(ops.len())];
                 let lhs = self.gen_expr(&Ty::Float, scope, fuel - 1);
@@ -335,23 +581,24 @@ impl<'a> Generator<'a> {
                 format!("({lhs} {op} {rhs})")
             }
             Ty::Bool => self.gen_bool_compound(scope, fuel),
-            Ty::String => {
-                // String.concat, or a bridge from a scalar.
-                match self.seed.choice(3) {
-                    0 => {
-                        let lhs = self.gen_expr(&Ty::String, scope, fuel - 1);
-                        let rhs = self.gen_expr(&Ty::String, scope, fuel - 1);
-                        format!("String.concat(left: read {lhs}, right: read {rhs})")
-                    }
-                    1 => {
-                        let inner = self.gen_expr(&Ty::Int, scope, fuel - 1);
-                        format!("String.from_int(value: {inner})")
-                    }
-                    _ => {
-                        let inner = self.gen_expr(&Ty::Bool, scope, fuel - 1);
-                        format!("String.from_bool(value: {inner})")
-                    }
+            Ty::String => match self.seed.choice(3) {
+                0 => {
+                    let lhs = self.gen_expr(&Ty::String, scope, fuel - 1);
+                    let rhs = self.gen_expr(&Ty::String, scope, fuel - 1);
+                    format!("String.concat(left: read {lhs}, right: read {rhs})")
                 }
+                1 => {
+                    let inner = self.gen_expr(&Ty::Int, scope, fuel - 1);
+                    format!("String.from_int(value: {inner})")
+                }
+                _ => {
+                    let inner = self.gen_expr(&Ty::Bool, scope, fuel - 1);
+                    format!("String.from_bool(value: {inner})")
+                }
+            },
+            // Compounds have no operator forms: just construct.
+            Ty::Option(_) | Ty::Result(_, _) | Ty::Struct(_) | Ty::Sum(_) => {
+                self.gen_construct(ty, scope)
             }
         }
     }
@@ -359,7 +606,6 @@ impl<'a> Generator<'a> {
     fn gen_bool_compound(&mut self, scope: &Scope, fuel: u32) -> String {
         match self.seed.choice(4) {
             0 | 1 => {
-                // Numeric comparison (Int or Float operands).
                 let operand = if self.seed.bool() { Ty::Int } else { Ty::Float };
                 let cmps = ["<", "<=", ">", ">=", "==", "!="];
                 let cmp = cmps[self.seed.choice(cmps.len())];
@@ -368,14 +614,12 @@ impl<'a> Generator<'a> {
                 format!("({lhs} {cmp} {rhs})")
             }
             2 => {
-                // Boolean equality.
                 let cmp = if self.seed.bool() { "==" } else { "!=" };
                 let lhs = self.gen_expr(&Ty::Bool, scope, fuel - 1);
                 let rhs = self.gen_expr(&Ty::Bool, scope, fuel - 1);
                 format!("({lhs} {cmp} {rhs})")
             }
             _ => {
-                // Logical connective.
                 let op = if self.seed.bool() { "&&" } else { "||" };
                 let lhs = self.gen_expr(&Ty::Bool, scope, fuel - 1);
                 let rhs = self.gen_expr(&Ty::Bool, scope, fuel - 1);
