@@ -33,6 +33,9 @@ libfuzzer-sys = "0.4"
 [dependencies.rsscript]
 path = "../crates/rsscript"
 
+[dependencies.rss-testgen]
+path = "../crates/rss-testgen"
+
 # Prevent this from interfering with `cargo test` over the parent tree.
 [[bin]]
 name = "parse_check"
@@ -44,6 +47,17 @@ bench = false
 [[bin]]
 name = "format_idempotent"
 path = "fuzz_targets/format_idempotent.rs"
+test = false
+doc = false
+bench = false
+
+# Coverage-guided generative differential: a seed -> well-typed program (via
+# rss-testgen) -> every in-process backend must agree. This is the deep target
+# (vs the raw-bytes parse_check), pointing libFuzzer at the *structured*
+# generator so it explores the language by program shape, not byte soup.
+[[bin]]
+name = "differential"
+path = "fuzz_targets/differential.rs"
 test = false
 doc = false
 bench = false

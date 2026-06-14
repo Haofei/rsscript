@@ -524,6 +524,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rss-testgen"
+version = "0.1.0"
+dependencies = [
+ "rsscript",
+]
+
+[[package]]
 name = "rsscript"
 version = "0.1.0"
 dependencies = [
@@ -551,6 +558,7 @@ name = "rsscript-fuzz"
 version = "0.0.0"
 dependencies = [
  "libfuzzer-sys",
+ "rss-testgen",
  "rsscript",
 ]
 

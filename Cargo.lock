@@ -2046,6 +2046,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rss-testgen"
+version = "0.1.0"
+dependencies = [
+ "rsscript",
+]
+
+[[package]]
 name = "rss_cli_native"
 version = "0.1.0"
 
@@ -2103,6 +2110,7 @@ dependencies = [
  "regex",
  "reir",
  "rss-native-abi",
+ "rss-testgen",
  "serde",
  "serde_json",
  "serde_yaml_ng",

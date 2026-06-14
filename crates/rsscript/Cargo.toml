@@ -44,6 +44,7 @@ toml = "0.8"
 sha1 = "0.10"
 libtest-mimic = "0.8"
 proptest = "1"
+rss-testgen = { path = "../rss-testgen" }
 
 # The differential corpus runner uses a custom (libtest-mimic) harness so each
 # fixture is an individually named, filterable test case.

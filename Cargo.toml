@@ -7,6 +7,7 @@ members = [
     "crates/reir",
     "crates/native-abi",
     "crates/vm-jit",
+    "crates/rss-testgen",
     "packages/core/cli/native/rust",
     "packages/core/crypto/native/rust",
     "packages/core/http-server/native/rust",

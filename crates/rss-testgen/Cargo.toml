@@ -1,0 +1,22 @@
+[package]
+name = "rss-testgen"
+version = "0.1.0"
+edition = "2024"
+description = "Generative-testing framework for RSScript: type-directed program generation + differential / robustness / metamorphic / fail-closed property drivers, shared by the in-suite proptest tests and the libFuzzer harness."
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "rss_testgen"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rss-testgen"
+path = "src/bin/repro.rs"
+
+[dependencies]
+rsscript = { path = "../rsscript" }
+
+[features]
+# Pull the native (Cranelift) tier into the in-process backend set so the
+# differential also checks `vm-jit-native` and its force-deopt twin.
+native-jit = ["rsscript/native-jit"]
