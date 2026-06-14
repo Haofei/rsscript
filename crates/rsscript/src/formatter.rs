@@ -929,7 +929,24 @@ fn format_param(param: &Param) -> String {
         .map(data_effect_name)
         .map(|effect| format!("{effect} "))
         .unwrap_or_default();
-    format!("{}: {effect}{}", param.name, type_ref_text(&param.ty))
+    let default = param
+        .default
+        .as_ref()
+        .map(|expr| format!(" = {}", expr_text(expr)))
+        .unwrap_or_default();
+    format!(
+        "{}: {effect}{}{default}",
+        param.name,
+        type_ref_text(&param.ty)
+    )
+}
+
+/// Render a standalone expression to RSScript source (used for parameter
+/// defaults), reusing the buffer-based expression formatter.
+fn expr_text(expr: &Expr) -> String {
+    let mut formatter = Formatter { out: String::new() };
+    formatter.expr(expr, 0);
+    formatter.out
 }
 
 fn format_params_text(params: &[Param]) -> String {
@@ -1403,6 +1420,18 @@ native fn Host.emit(message: read String) -> Unit
     effects(native)
 "#
         );
+    }
+
+    #[test]
+    fn preserves_parameter_default_values() {
+        let source = "fn f(a: Int, b: Int = 5) -> Int {\n    return a + b\n}\n";
+        // Reformatting must preserve the default value (idempotent + lossless).
+        let formatted = format_source("defaults.rss", source);
+        assert!(
+            formatted.contains("b: Int = 5"),
+            "formatter dropped the parameter default:\n{formatted}"
+        );
+        assert_eq!(format_source("defaults.rss", &formatted), formatted);
     }
 
     #[test]

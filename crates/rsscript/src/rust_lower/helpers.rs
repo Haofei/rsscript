@@ -475,6 +475,42 @@ fn collect_program_function_param_types(
     }
 }
 
+/// Per-function ordered list of parameter default-value expressions (parallel to
+/// the param-type list). Used to fill omitted trailing arguments at call sites,
+/// since Rust has no default parameters.
+pub(super) fn collect_function_param_defaults(
+    program: &Program,
+    interface_programs: &[Program],
+) -> BTreeMap<String, Vec<Option<crate::syntax::ast::Expr>>> {
+    let mut defaults = BTreeMap::new();
+    for (file, source) in builtin_interfaces() {
+        collect_program_function_param_defaults(&parse_source(file, source), &mut defaults);
+    }
+    for interface_program in interface_programs {
+        collect_program_function_param_defaults(interface_program, &mut defaults);
+    }
+    collect_program_function_param_defaults(program, &mut defaults);
+    defaults
+}
+
+fn collect_program_function_param_defaults(
+    program: &Program,
+    defaults: &mut BTreeMap<String, Vec<Option<crate::syntax::ast::Expr>>>,
+) {
+    for item in &program.items {
+        if let Item::Function(function) = item {
+            defaults.insert(
+                function.name.clone(),
+                function
+                    .params
+                    .iter()
+                    .map(|param| param.default.clone())
+                    .collect(),
+            );
+        }
+    }
+}
+
 pub(super) fn collect_function_retained_params(
     program: &Program,
     interface_programs: &[Program],
@@ -1207,6 +1243,21 @@ pub(super) fn lower_callee(callee: &Callee) -> String {
         }
         Callee::Qualified { namespace, name } => rust_qualified_function_ident(namespace, name),
         Callee::ReceiverCall { method, .. } => rust_ident(type_root_name(method)),
+    }
+}
+
+/// The source-qualified function name a callee refers to (`greet`,
+/// `Type.method`), keyed the same way as the function signature maps. `None` for
+/// receiver-style calls (which resolve dynamically by receiver type).
+pub(super) fn callee_source_name(callee: &Callee) -> Option<String> {
+    match callee {
+        Callee::Name(name) => Some(type_root_name(name).to_string()),
+        Callee::Qualified { namespace, name } => Some(format!(
+            "{}.{}",
+            type_root_name(namespace),
+            type_root_name(name)
+        )),
+        Callee::ReceiverCall { .. } => None,
     }
 }
 

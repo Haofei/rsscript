@@ -289,6 +289,10 @@ pub struct Param {
     pub name: String,
     pub effect: Option<DataEffect>,
     pub ty: TypeRef,
+    /// A default value (`name: Type = <expr>`). When a call omits this argument,
+    /// the default is filled in during HIR lowering so every backend sees a
+    /// complete call.
+    pub default: Option<Expr>,
     pub span: Span,
 }
 

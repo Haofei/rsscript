@@ -41,6 +41,8 @@ pub struct ParamSig {
     pub name: String,
     pub effect: Option<ParamEffect>,
     pub type_name: String,
+    /// The parameter's default value expression, if it has one (`name: T = expr`).
+    pub default: Option<crate::syntax::ast::Expr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -847,6 +849,7 @@ impl Hir {
                                 name: "self".to_string(),
                                 effect: Some(ParamEffect::Read),
                                 type_name: receiver_type.to_string(),
+                                default: None,
                             }],
                             return_type: Some(receiver_type.to_string()),
                             returns_fresh: true,
@@ -1775,6 +1778,31 @@ fn lower_hir_expr(
                 value_types,
             );
             let type_name = infer_hir_expr_type(hir, expr, value_types);
+            let mut hir_args: Vec<HirCallArg> = args
+                .iter()
+                .map(|arg| HirCallArg {
+                    name: arg.name.clone(),
+                    value: lower_hir_expr(hir, function_name, &arg.value, value_types),
+                    span: arg.span.clone(),
+                })
+                .collect();
+            // Fill omitted parameters that declare a default value, so every
+            // backend sees a complete call (defaults are desugared once, here).
+            if let CallResolution::Resolved { signature, .. } = &resolution {
+                let provided: std::collections::HashSet<&str> =
+                    args.iter().filter_map(|arg| arg.name.as_deref()).collect();
+                for param in &signature.params {
+                    if let Some(default) = &param.default
+                        && !provided.contains(param.name.as_str())
+                    {
+                        hir_args.push(HirCallArg {
+                            name: Some(param.name.clone()),
+                            value: lower_hir_expr(hir, function_name, default, value_types),
+                            span: span.clone(),
+                        });
+                    }
+                }
+            }
             HirExpr::Call {
                 callee: callee.clone(),
                 receiver: match callee {
@@ -1788,14 +1816,7 @@ fn lower_hir_expr(
                     }),
                     _ => None,
                 },
-                args: args
-                    .iter()
-                    .map(|arg| HirCallArg {
-                        name: arg.name.clone(),
-                        value: lower_hir_expr(hir, function_name, &arg.value, value_types),
-                        span: arg.span.clone(),
-                    })
-                    .collect(),
+                args: hir_args,
                 type_name,
                 resolution,
                 events,
@@ -3402,6 +3423,7 @@ fn param_sig_from_decl(param: &Param) -> ParamSig {
         name: param.name.clone(),
         effect: param.effect.map(param_effect_from_data_effect),
         type_name: type_ref_name(&param.ty),
+        default: param.default.clone(),
     }
 }
 
@@ -3469,6 +3491,7 @@ fn constructor_sig_from_type(type_info: &TypeInfo, is_builtin: bool) -> Function
                 name: field.name.clone(),
                 effect: None,
                 type_name: field.type_name.clone(),
+                default: None,
             })
             .collect(),
         // A generic struct's constructor returns the type *applied to its params*

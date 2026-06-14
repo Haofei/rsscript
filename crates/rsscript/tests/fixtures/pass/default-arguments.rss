@@ -1,0 +1,13 @@
+// Default parameter values: a call may omit a trailing parameter that declares a
+// default (`name: Type = <expr>`); the default is filled in at lowering so every
+// backend sees a complete call.
+fn box_volume(width: Int, height: Int = 2, depth: Int = 3) -> Int {
+    return width * height * depth
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: box_volume(width: 5)))
+    Log.write(message: read String.from_int(value: box_volume(width: 5, height: 4)))
+    Log.write(message: read String.from_int(value: box_volume(width: 5, height: 4, depth: 6)))
+    return Unit
+}

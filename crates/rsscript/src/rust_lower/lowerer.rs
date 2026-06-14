@@ -21,6 +21,7 @@ pub(super) struct RustLowerer<'a> {
     function_return_types: BTreeMap<String, TypeRef>,
     function_type_params: BTreeMap<String, Vec<String>>,
     function_param_types: BTreeMap<String, Vec<(String, TypeRef)>>,
+    function_param_defaults: BTreeMap<String, Vec<Option<Expr>>>,
     function_param_effects: BTreeMap<String, Vec<(String, Option<DataEffect>)>>,
     retained_params_by_callee: BTreeMap<String, BTreeSet<String>>,
     param_effects: BTreeMap<String, DataEffect>,
@@ -93,6 +94,7 @@ impl<'a> RustLowerer<'a> {
         let function_return_types = collect_function_return_types(program, interface_programs);
         let function_type_params = collect_function_type_params(program, interface_programs);
         let function_param_types = collect_function_param_types(program, interface_programs);
+        let function_param_defaults = collect_function_param_defaults(program, interface_programs);
         let function_param_effects = collect_function_param_effects(program, interface_programs);
         let retained_params_by_callee =
             collect_function_retained_params(program, interface_programs);
@@ -107,6 +109,7 @@ impl<'a> RustLowerer<'a> {
             function_return_types,
             function_type_params,
             function_param_types,
+            function_param_defaults,
             function_param_effects,
             retained_params_by_callee,
             param_effects: BTreeMap::new(),
@@ -2747,11 +2750,32 @@ impl<'a> RustLowerer<'a> {
                 } else {
                     lower_callee(callee)
                 };
+                let provided = args.len();
                 let mut args = args
                     .iter()
                     .enumerate()
                     .map(|(index, arg)| self.lower_call_arg_for_callee(callee, arg, index))
                     .collect::<Vec<_>>();
+                // Fill omitted trailing parameters that declare a default value
+                // (Rust has no default params, so each call site supplies them).
+                // Calls lower positionally, so omitted args are always the trailing
+                // defaulted ones.
+                if let Some(name) = callee_source_name(callee)
+                    && let Some(defaults) = self.function_param_defaults.get(&name).cloned()
+                    && defaults.len() > provided
+                {
+                    let param_types = self.function_param_types.get(&name).cloned();
+                    for (index, default) in defaults.iter().enumerate().skip(provided) {
+                        if let Some(default) = default {
+                            let lowered =
+                                match param_types.as_ref().and_then(|params| params.get(index)) {
+                                    Some((_, ty)) => self.lower_expr_for_expected_type(default, ty),
+                                    None => self.lower_owned_expr(default),
+                                };
+                            args.push(lowered);
+                        }
+                    }
+                }
                 if is_resource_pool_borrow {
                     args.push(lower_source_span(span));
                 }

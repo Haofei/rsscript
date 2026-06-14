@@ -1038,6 +1038,7 @@ fn parse_params(tokens: &[Token], start: usize, end: usize) -> ParsedParams {
                     fn_return: None,
                     span: tokens[start].span.clone(),
                 },
+                default: None,
                 span: tokens[start].span.clone(),
             });
             continue;
@@ -1047,7 +1048,11 @@ fn parse_params(tokens: &[Token], start: usize, end: usize) -> ParsedParams {
         let effect = parse_data_effect(tokens.get(ty_start)).inspect(|_| {
             ty_start += 1;
         });
-        let ty = parse_type_ref(tokens, ty_start, end).unwrap_or_else(|| TypeRef {
+        // A default value: `name: Type = <expr>`. The type ends at the `=`.
+        let default_eq = (ty_start..end).find(|&i| tokens[i].symbol("="));
+        let ty_end = default_eq.unwrap_or(end);
+        let default = default_eq.and_then(|eq| parse_expr(tokens, eq + 1, end));
+        let ty = parse_type_ref(tokens, ty_start, ty_end).unwrap_or_else(|| TypeRef {
             name: String::new(),
             args: Vec::new(),
             malformed_arg_spans: Vec::new(),
@@ -1062,6 +1067,7 @@ fn parse_params(tokens: &[Token], start: usize, end: usize) -> ParsedParams {
             name: name.to_string(),
             effect,
             ty,
+            default,
             span: tokens[start].span.clone(),
         });
     }

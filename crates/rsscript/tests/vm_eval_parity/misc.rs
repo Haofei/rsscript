@@ -1144,6 +1144,30 @@ fn main() -> Unit {
 }
 
 #[test]
+fn parity_default_arguments_fill_omitted_trailing_params() {
+    // Omitted trailing parameters with defaults are filled identically on the VM
+    // and the compiled backend (Rust has no default params, so each call site
+    // supplies them during lowering).
+    let source = r#"
+fn box_volume(width: Int, height: Int = 2, depth: Int = 3) -> Int {
+    return width * height * depth
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: box_volume(width: 5)))
+    Log.write(message: read String.from_int(value: box_volume(width: 5, height: 4)))
+    Log.write(message: read String.from_int(value: box_volume(width: 5, height: 4, depth: 6)))
+    return Unit
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-default-args.rss",
+        "rsscript_parity_default_args",
+        source,
+    );
+}
+
+#[test]
 fn parity_boolean_operators_short_circuit() {
     let source = r#"
 fn side_effect() -> Bool {
