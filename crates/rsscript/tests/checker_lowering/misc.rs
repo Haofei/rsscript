@@ -3,6 +3,33 @@
 use super::*;
 
 #[test]
+fn keyword_named_source_lowers_to_a_valid_crate_name() {
+    // Regression (found while building rss-testgen's async tier): a source whose
+    // name is a Rust keyword (e.g. `async.rss`) derived a keyword crate name, so
+    // the harness emitted `async::main()` — a Rust parse error (RS1102), and both
+    // Cargo and rustc reject keyword crate names. The package/lib/crate-reference
+    // names must all be sanitized.
+    let source = "fn main() -> Unit {\n    Log.write(message: read \"ok\")\n    return Unit\n}\n";
+    let package = lower_source_to_rust_package("async.rss", source, "async", "/tmp/runtime")
+        .expect("keyword-named source should lower");
+
+    assert_ne!(
+        package.package_name, "async",
+        "package name must not be the bare keyword"
+    );
+    let main_rs = package.main_rs.expect("runnable main");
+    assert!(
+        main_rs.contains("rss_async::main"),
+        "main.rs should reference the sanitized crate name, not the keyword:\n{main_rs}"
+    );
+    // No bare keyword crate path (e.g. a line starting `    async::`).
+    assert!(
+        !main_rs.contains(" async::") && !main_rs.contains("\nasync::"),
+        "main.rs must not reference a bare keyword crate:\n{main_rs}"
+    );
+}
+
+#[test]
 fn rust_lowering_emits_checked_rust_source() {
     let source = r#"
 struct Point {

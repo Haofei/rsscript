@@ -1558,18 +1558,21 @@ pub(super) fn rust_path_segment(segment: &str) -> String {
     }
 }
 
-pub(super) fn rust_ident(name: &str) -> String {
-    let keywords: BTreeSet<&'static str> = [
+/// Whether `name` is a Rust keyword (strict or reserved) that cannot be used as a
+/// bare identifier.
+pub(super) fn is_rust_keyword(name: &str) -> bool {
+    const KEYWORDS: &[&str] = &[
         "abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "crate",
         "do", "dyn", "else", "enum", "extern", "false", "final", "fn", "for", "gen", "if", "impl",
         "in", "let", "loop", "macro", "match", "mod", "move", "mut", "override", "priv", "pub",
         "ref", "return", "self", "Self", "static", "struct", "super", "trait", "true", "try",
         "type", "typeof", "unsafe", "unsized", "use", "virtual", "where", "while", "yield",
-    ]
-    .into_iter()
-    .collect();
+    ];
+    KEYWORDS.contains(&name)
+}
 
-    if keywords.contains(name) {
+pub(super) fn rust_ident(name: &str) -> String {
+    if is_rust_keyword(name) {
         format!("r#{name}")
     } else {
         name.to_string()
@@ -1620,6 +1623,12 @@ pub(super) fn cargo_package_name(name: &str) -> String {
 
     if out.is_empty() {
         "rsscript-generated".to_string()
+    } else if is_rust_keyword(&out) {
+        // A package named after a Rust keyword (e.g. `async.rss`) would derive a
+        // keyword crate/lib name, which both Cargo and rustc reject (and the
+        // generated `async::main()` harness is a parse error). Prefix it so the
+        // package name, lib name, and `<crate>::main()` reference are all valid.
+        format!("rss-{out}")
     } else {
         out
     }
