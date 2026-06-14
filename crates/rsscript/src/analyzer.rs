@@ -1187,6 +1187,9 @@ impl Analyzer<'_> {
         let mut seen_module: HashSet<String> = HashSet::new();
         let mut seen_use: HashSet<String> = HashSet::new();
         let mut seen_non_organization_item: HashSet<String> = HashSet::new();
+        // Per file, the local import names already bound, so a second import that
+        // would silently shadow the first is rejected instead of overwritten.
+        let mut seen_import_local: HashMap<String, HashSet<String>> = HashMap::new();
         let items = self.syntax_program.items.clone();
         for item in &items {
             let file = item_span_file(item);
@@ -1221,6 +1224,18 @@ impl Analyzer<'_> {
                             use_decl.span.clone(),
                             "misplaced use declaration",
                             "`use` is source-organization metadata and must appear before declarations.",
+                        );
+                    }
+                    if let Some(local) = use_decl.local_name()
+                        && !seen_import_local
+                            .entry(file.clone())
+                            .or_default()
+                            .insert(local.to_string())
+                    {
+                        self.unsupported_syntax(
+                            use_decl.span.clone(),
+                            "duplicate import name",
+                            "Two `use` declarations bind the same local name in this file. Rename one with `use module.name as other_name` so each import is unambiguous.",
                         );
                     }
                     seen_use.insert(file);

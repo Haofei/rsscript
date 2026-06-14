@@ -47,7 +47,9 @@ Lowering and tooling:
     metadata; REIR adapter for capability-binding evidence (Chapters 4, 16, 17).
   - Generated-namespace isolation: a `module` declaration namespaces its file's
     top-level symbols so two files may share a source name; module-less files
-    lower byte-identically (§14.8).
+    lower byte-identically. Same-leaf references are disambiguated by `use … as`
+    aliasing or module-qualified `module.fn()` calls; a colliding bare import is
+    `RS0015` (§14.8).
   - `#lower_name("...")` escape hatch to pin a function's backend symbol
     (§14.8; invalid/colliding pin `RS0035`).
 ```
@@ -3553,15 +3555,23 @@ not infer hidden effects or implicit receiver methods from them.
 top-level symbols a distinct namespace identity in lowering, so two files can
 declare the same source name without colliding in the merged program. Symbols
 declared in a file that carries a `module` declaration are lowered under a name
-qualified by their module path; references are resolved with module-aware scope —
-local bindings first, then the current module, then `use` imports, then
-fully-qualified `module.name` access. The executable entry point `main` is never
-qualified and stays global. A file with **no** `module` declaration lives in the
-root namespace and is lowered unchanged, so module-less programs lower
-byte-identically to before. This isolation is a lowering and name-resolution
-property only — it adds no Rust module semantics, hidden effects, or implicit
-receiver methods to the source model, and diagnostics report the original source
-symbol (`helpers.count`), not the lowered backend name.
+qualified by their module path. A reference is resolved with module-aware scope,
+in this order:
+
+```text
+1. a local binding (parameter, let, loop/match binding) — shadows everything
+2. a symbol declared by the reference's own module
+3. a `use` import in the file (by its local name; see aliasing below)
+4. a module-qualified call `module.fn()` that names the owner at the call site
+```
+
+The executable entry point `main` is never qualified and stays global. A file
+with **no** `module` declaration lives in the root namespace and is lowered
+unchanged, so module-less programs lower byte-identically to before. This
+isolation is a lowering and name-resolution property only — it adds no Rust
+module semantics, hidden effects, or implicit receiver methods to the source
+model, and diagnostics report the original source symbol (`helpers.count`), not
+the lowered backend name.
 
 The organization header is strict: each file may carry at most one `module`
 declaration, and all `module` / `use` declarations must appear before ordinary
@@ -3569,6 +3579,37 @@ type, const, function, protocol, or implementation declarations in that file
 (checked per source file, since a merged multi-file program legitimately holds
 one `module` per file). A misplaced or duplicate organization declaration is a
 frontend diagnostic before lowering, not a package-tool warning.
+
+**Disambiguating same-leaf names.** When one file references a short ("leaf")
+name owned by more than one module, the bare name is ambiguous. Two explicit,
+machine-checked mechanisms resolve it; the common unambiguous case still uses the
+bare name, so only the genuine departure is marked (§2A).
+
+A `use … as` import binds the imported symbol under a chosen local name:
+
+```rust
+use helpers.count as helpers_count
+use device.count as device_count
+
+// helpers_count() and device_count() now name distinct module symbols.
+```
+
+A module-qualified call names the owner at the call site, without a `use`:
+
+```rust
+helpers.count()
+device.count()
+```
+
+The qualified form accepts a multi-segment module path (`a.b.count()`) and
+resolves to that module's symbol. It is distinct from receiver-call shorthand
+(§14.6.1): a receiver that names an in-scope local is a value receiver call,
+while a receiver that names a module whose free function is the called method is
+a module-qualified call.
+
+Without one of these, two `use` declarations that would bind the same local name
+in a file are a frontend diagnostic (`RS0015`) rather than a silent
+last-one-wins shadow; the fix is to alias one of them.
 
 **`#lower_name("...")` backend-name escape hatch.** A function may pin the exact
 backend symbol it lowers to with a `#lower_name("...")` attribute, following the

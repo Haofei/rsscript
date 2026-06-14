@@ -1,0 +1,9 @@
+// expect: RS0015
+// Two imports bind the same local name `thing`; without `as` this would silently
+// shadow, so it is rejected. The fix is `use widgets.thing as widget_thing`.
+use gadgets.thing
+use widgets.thing
+
+fn main() -> Unit {
+    return Unit
+}

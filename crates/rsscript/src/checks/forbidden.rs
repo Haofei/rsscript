@@ -111,7 +111,10 @@ fn token_can_start_expr(token: &crate::lexer::Token) -> bool {
 
 fn check_implicit_conversion_attempts(analyzer: &mut Analyzer<'_>) {
     for index in 0..analyzer.tokens.len() {
-        if !analyzer.tokens[index].is_ident_text("as") || as_belongs_to_with(analyzer, index) {
+        if !analyzer.tokens[index].is_ident_text("as")
+            || as_belongs_to_with(analyzer, index)
+            || as_belongs_to_use(analyzer, index)
+        {
             continue;
         }
         analyzer.diagnostics.push(
@@ -129,6 +132,25 @@ fn check_implicit_conversion_attempts(analyzer: &mut Analyzer<'_>) {
             ),
         );
     }
+}
+
+/// `use module.name as alias` — the `as` renames an import and is not a cast. A
+/// use header is only identifiers and dots before the `as`, so scanning back to a
+/// `use` keyword without crossing any other token confirms the import context.
+fn as_belongs_to_use(analyzer: &Analyzer<'_>, as_index: usize) -> bool {
+    for token in analyzer.tokens[..as_index].iter().rev() {
+        if token.is_ident_text("use") {
+            return true;
+        }
+        let is_path_token = matches!(
+            token.kind,
+            crate::lexer::TokenKind::Ident(_) | crate::lexer::TokenKind::Keyword(_)
+        ) || token.symbol(".");
+        if !is_path_token {
+            return false;
+        }
+    }
+    false
 }
 
 fn as_belongs_to_with(analyzer: &Analyzer<'_>, as_index: usize) -> bool {

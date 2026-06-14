@@ -147,6 +147,90 @@ fn module_isolation_distinguishes_dotted_and_underscored_module_paths() {
 }
 
 #[test]
+fn aliasing_lets_one_file_import_two_same_leaf_symbols() {
+    // `helpers.count` and `device.count` share a leaf; `use ... as` binds each to
+    // a distinct local name so one file can reference both unambiguously.
+    let sources = vec![
+        (
+            "helpers.rss".to_string(),
+            "module helpers\n\nfn count() -> Int {\n    return 10\n}\n".to_string(),
+        ),
+        (
+            "device.rss".to_string(),
+            "module device\n\nfn count() -> Int {\n    return 20\n}\n".to_string(),
+        ),
+        (
+            "main.rss".to_string(),
+            concat!(
+                "module app\n\n",
+                "use helpers.count as helpers_count\n",
+                "use device.count as device_count\n\n",
+                "fn main() -> Unit {\n",
+                "    Log.write(message: read String.from_int(value: helpers_count()))\n",
+                "    Log.write(message: read String.from_int(value: device_count()))\n",
+                "    return Unit\n",
+                "}\n",
+            )
+            .to_string(),
+        ),
+    ];
+    let package =
+        lower_sources_to_rust_package_with_options(&sources, "ns-alias", "/rt", &[], &[])
+            .expect("aliased multi-module package should lower");
+    assert!(
+        package.lib_rs.contains("helpers__count()"),
+        "the `helpers_count` alias should resolve to helpers__count:\n{}",
+        package.lib_rs
+    );
+    assert!(
+        package.lib_rs.contains("device__count()"),
+        "the `device_count` alias should resolve to device__count:\n{}",
+        package.lib_rs
+    );
+}
+
+#[test]
+fn qualified_module_calls_disambiguate_same_leaf_symbols() {
+    // Without any `use`, a `module.fn()` call names the owner at the call site and
+    // resolves to that module's symbol — even though it parses as a receiver call.
+    let sources = vec![
+        (
+            "helpers.rss".to_string(),
+            "module helpers\n\nfn count() -> Int {\n    return 10\n}\n".to_string(),
+        ),
+        (
+            "device.rss".to_string(),
+            "module device\n\nfn count() -> Int {\n    return 20\n}\n".to_string(),
+        ),
+        (
+            "main.rss".to_string(),
+            concat!(
+                "module app\n\n",
+                "fn main() -> Unit {\n",
+                "    Log.write(message: read String.from_int(value: helpers.count()))\n",
+                "    Log.write(message: read String.from_int(value: device.count()))\n",
+                "    return Unit\n",
+                "}\n",
+            )
+            .to_string(),
+        ),
+    ];
+    let package =
+        lower_sources_to_rust_package_with_options(&sources, "ns-qual", "/rt", &[], &[])
+            .expect("qualified-call multi-module package should lower");
+    assert!(
+        package.lib_rs.contains("helpers__count()"),
+        "`helpers.count()` should resolve to helpers__count:\n{}",
+        package.lib_rs
+    );
+    assert!(
+        package.lib_rs.contains("device__count()"),
+        "`device.count()` should resolve to device__count:\n{}",
+        package.lib_rs
+    );
+}
+
+#[test]
 fn lower_name_pin_renames_definition_and_call_sites() {
     let source = r#"
 #lower_name("helpers__count")

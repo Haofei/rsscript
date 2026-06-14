@@ -124,6 +124,10 @@ impl Formatter {
                 Item::Use(u) => {
                     self.out.push_str("use ");
                     self.out.push_str(&u.path.join("."));
+                    if let Some(alias) = &u.alias {
+                        self.out.push_str(" as ");
+                        self.out.push_str(alias);
+                    }
                     self.out.push('\n');
                 }
             }
@@ -1905,6 +1909,17 @@ impl Writer for BufferWriter {
             "formatter dropped the lower_name pin:\n{formatted}"
         );
         assert_eq!(format_source("pin.rss", &formatted), formatted);
+    }
+
+    #[test]
+    fn round_trips_use_alias() {
+        let source = "module app\n\nuse helpers.count as helpers_count\n\nfn run() -> Int {\n    return helpers_count()\n}\n";
+        let formatted = format_source("alias.rss", source);
+        assert!(
+            formatted.contains("use helpers.count as helpers_count"),
+            "formatter dropped the use alias:\n{formatted}"
+        );
+        assert_eq!(format_source("alias.rss", &formatted), formatted);
     }
 
     #[test]

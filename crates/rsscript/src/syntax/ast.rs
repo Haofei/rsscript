@@ -142,7 +142,20 @@ pub struct ModuleDecl {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UseDecl {
     pub path: Vec<String>,
+    /// Optional `as <alias>` local name. When present, the import is referenced
+    /// in this file by the alias instead of the path's last segment.
+    pub alias: Option<String>,
     pub span: Span,
+}
+
+impl UseDecl {
+    /// The local name this import is referenced by in its file: the alias when
+    /// present, otherwise the path's last segment.
+    pub fn local_name(&self) -> Option<&str> {
+        self.alias
+            .as_deref()
+            .or_else(|| self.path.last().map(String::as_str))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

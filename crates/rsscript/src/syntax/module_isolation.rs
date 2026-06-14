@@ -82,8 +82,10 @@ struct Resolver {
     /// `SCREAMING_SNAKE_CASE`, so their mangled symbol is upper-cased to stay
     /// consistent between declaration and reference.
     module_consts: HashMap<String, HashSet<String>>,
-    /// file -> (imported bare name -> module prefix it was imported from).
-    file_imports: HashMap<String, HashMap<String, String>>,
+    /// file -> (local import name -> (module prefix, real symbol name)). The
+    /// local name is the `as` alias when present, otherwise the path's last
+    /// segment; the real name is always the path's last segment.
+    file_imports: HashMap<String, HashMap<String, (String, String)>>,
 }
 
 impl Resolver {
@@ -91,7 +93,7 @@ impl Resolver {
         let mut module_defs: HashMap<String, HashSet<String>> = HashMap::new();
         let mut module_types: HashMap<String, HashSet<String>> = HashMap::new();
         let mut module_consts: HashMap<String, HashSet<String>> = HashMap::new();
-        let mut file_imports: HashMap<String, HashMap<String, String>> = HashMap::new();
+        let mut file_imports: HashMap<String, HashMap<String, (String, String)>> = HashMap::new();
 
         for item in &program.items {
             let Some(file) = item_file(item) else {
@@ -156,12 +158,16 @@ impl Resolver {
                 }
                 Item::Use(decl) => {
                     if decl.path.len() >= 2 {
-                        let name = decl.path[decl.path.len() - 1].clone();
+                        let real_name = decl.path[decl.path.len() - 1].clone();
                         let import_prefix = module_prefix(&decl.path[..decl.path.len() - 1]);
+                        let local = decl
+                            .local_name()
+                            .map(str::to_string)
+                            .unwrap_or_else(|| real_name.clone());
                         file_imports
                             .entry(decl.span.file.clone())
                             .or_default()
-                            .insert(name, import_prefix);
+                            .insert(local, (import_prefix, real_name));
                     }
                 }
                 Item::Module(_) => {}
@@ -206,42 +212,46 @@ impl Resolver {
         {
             return Some(self.mangle_value(prefix, name));
         }
-        // Otherwise a `use module.name` import that names a known module symbol.
-        if let Some(import_prefix) = self
+        // Otherwise a `use module.name [as local]` import that names a known
+        // module symbol. The reference uses the local name; the mangled symbol
+        // uses the imported module's real name.
+        if let Some((import_prefix, real)) = self
             .file_imports
             .get(file)
             .and_then(|imports| imports.get(name))
             && self
                 .module_defs
                 .get(import_prefix)
-                .is_some_and(|names| names.contains(name))
+                .is_some_and(|names| names.contains(real))
         {
-            return Some(self.mangle_value(import_prefix, name));
+            return Some(self.mangle_value(import_prefix, real));
         }
         None
     }
 
-    /// The module prefix that owns type `name` as seen from `file` (own module,
-    /// then `use` import), or `None` if it is not a module-scoped type.
-    fn resolve_type_module(&self, file: &str, name: &str) -> Option<String> {
+    /// The `(module prefix, real type name)` that owns type `name` as seen from
+    /// `file` (own module, then `use` import), or `None` if it is not a
+    /// module-scoped type. The real name differs from `name` when `name` is a
+    /// `use … as` alias.
+    fn resolve_type_module(&self, file: &str, name: &str) -> Option<(String, String)> {
         if let Some(prefix) = self.file_module.get(file)
             && self
                 .module_types
                 .get(prefix)
                 .is_some_and(|types| types.contains(name))
         {
-            return Some(prefix.clone());
+            return Some((prefix.clone(), name.to_string()));
         }
-        if let Some(import_prefix) = self
+        if let Some((import_prefix, real)) = self
             .file_imports
             .get(file)
             .and_then(|imports| imports.get(name))
             && self
                 .module_types
                 .get(import_prefix)
-                .is_some_and(|types| types.contains(name))
+                .is_some_and(|types| types.contains(real))
         {
-            return Some(import_prefix.clone());
+            return Some((import_prefix.clone(), real.clone()));
         }
         None
     }
@@ -250,7 +260,7 @@ impl Resolver {
     /// namespace names a module-scoped type, return its mangled type name.
     fn resolve_type_namespace(&self, file: &str, namespace: &str) -> Option<String> {
         self.resolve_type_module(file, namespace)
-            .map(|prefix| format!("{prefix}{MODULE_SEP}{namespace}"))
+            .map(|(prefix, real)| format!("{prefix}{MODULE_SEP}{real}"))
     }
 
     fn rewrite(&self, program: &mut Program) {
@@ -539,9 +549,9 @@ impl Resolver {
                 // where the access lives in a different file than the declaration.
                 if let Expr::Ident(type_name, _) = base.as_ref()
                     && !scope.contains(type_name)
-                    && let Some(type_module) = self.resolve_type_module(file, type_name)
+                    && let Some((type_module, real_type)) = self.resolve_type_module(file, type_name)
                 {
-                    let flat = flatten_associated_const(type_name, name);
+                    let flat = flatten_associated_const(&real_type, name);
                     if self
                         .module_defs
                         .get(&type_module)
@@ -634,7 +644,23 @@ impl Resolver {
                     *callee = Callee::Name(format!("{prefix}{MODULE_SEP}{name}"));
                 }
             }
-            Callee::ReceiverCall { receiver, .. } => {
+            Callee::ReceiverCall {
+                receiver, method, ..
+            } => {
+                // A lowercase `module.fn()` parses as a receiver call, but if the
+                // receiver names a module (not a local in scope) whose free
+                // function is `method`, it is a module-qualified call: collapse it
+                // to the module's mangled symbol. Otherwise it is a real value
+                // receiver call and only the receiver is rewritten.
+                if let Some(prefix) = module_path_of_receiver(receiver, scope)
+                    && self
+                        .module_defs
+                        .get(&prefix)
+                        .is_some_and(|names| names.contains(method))
+                {
+                    *callee = Callee::Name(format!("{prefix}{MODULE_SEP}{method}"));
+                    return;
+                }
                 self.rewrite_expr(receiver, file, scope);
             }
         }
@@ -814,6 +840,80 @@ mod tests {
         isolate_module_namespaces(&mut program);
         assert!(function_names(&program).contains(&"main".to_string()));
     }
+
+    fn body_of(program: &Program, name: &str) -> String {
+        let function = program
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Function(function) if function.name == name => Some(function),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{name} present"));
+        format!("{:?}", function.body)
+    }
+
+    #[test]
+    fn aliased_import_resolves_to_the_imported_module_symbol() {
+        // `use lib.count as lib_count` lets `app` reference `lib`'s `count` under
+        // a distinct local name; the reference resolves to the real module symbol.
+        let lib = parse_source(
+            "lib.rss",
+            "module lib\n\nfn count() -> Int {\n    return 1\n}\n",
+        );
+        let app = parse_source(
+            "app.rss",
+            "module app\n\nuse lib.count as lib_count\n\nfn run() -> Int {\n    return lib_count()\n}\n",
+        );
+        let mut program = merge_programs([lib, app]);
+        isolate_module_namespaces(&mut program);
+        let body = body_of(&program, "app__run");
+        assert!(
+            body.contains("lib__count"),
+            "alias should resolve to lib__count: {body}"
+        );
+    }
+
+    #[test]
+    fn qualified_module_call_resolves_to_the_module_symbol() {
+        // `helpers.count()` names the owner at the call site, with no `use`.
+        let helpers = parse_source(
+            "helpers.rss",
+            "module helpers\n\nfn count() -> Int {\n    return 1\n}\n",
+        );
+        let app = parse_source(
+            "app.rss",
+            "module app\n\nfn run() -> Int {\n    return helpers.count()\n}\n",
+        );
+        let mut program = merge_programs([helpers, app]);
+        isolate_module_namespaces(&mut program);
+        let body = body_of(&program, "app__run");
+        assert!(
+            body.contains("helpers__count"),
+            "qualified call should resolve to helpers__count: {body}"
+        );
+    }
+
+    #[test]
+    fn multi_segment_qualified_module_call_resolves() {
+        // A dotted module path (`a.b`) is mangled to `a_b` and the call collapses
+        // to its module-qualified symbol.
+        let inner = parse_source(
+            "inner.rss",
+            "module a.b\n\nfn count() -> Int {\n    return 1\n}\n",
+        );
+        let app = parse_source(
+            "app.rss",
+            "module app\n\nfn run() -> Int {\n    return a.b.count()\n}\n",
+        );
+        let mut program = merge_programs([inner, app]);
+        isolate_module_namespaces(&mut program);
+        let body = body_of(&program, "app__run");
+        assert!(
+            body.contains("a_b__count"),
+            "multi-segment qualified call should resolve to a_b__count: {body}"
+        );
+    }
 }
 
 /// The flattened symbol for an associated constant `Type.MEMBER`, matching the
@@ -821,6 +921,37 @@ mod tests {
 /// resolves to the same constant the per-file desugar produced.
 fn flatten_associated_const(type_name: &str, member: &str) -> String {
     format!("{type_name}_{member}").to_uppercase()
+}
+
+/// If `receiver` is a chain of plain identifiers (`a` or `a.b.c`) whose root is
+/// not shadowed by a local binding, return the candidate module prefix (encoded
+/// with the same injective scheme as declarations). Anything else (a method call,
+/// an indexed value, a literal, or a root that names an in-scope local) is a
+/// value receiver, not a module path.
+fn module_path_of_receiver(receiver: &Expr, scope: &HashSet<String>) -> Option<String> {
+    fn collect(expr: &Expr, segments: &mut Vec<String>) -> bool {
+        match expr {
+            Expr::Ident(name, _) => {
+                segments.push(name.clone());
+                true
+            }
+            Expr::Field { base, name, .. } => {
+                collect(base, segments) && {
+                    segments.push(name.clone());
+                    true
+                }
+            }
+            _ => false,
+        }
+    }
+    let mut segments = Vec::new();
+    if !collect(receiver, &mut segments) || segments.is_empty() {
+        return None;
+    }
+    if scope.contains(&segments[0]) {
+        return None;
+    }
+    Some(module_prefix(&segments))
 }
 
 fn item_file(item: &Item) -> Option<&str> {

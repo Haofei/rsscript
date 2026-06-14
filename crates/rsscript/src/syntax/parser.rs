@@ -853,7 +853,15 @@ impl Parser<'_> {
         }
         self.index += 1;
         let path = self.parse_dotted_path()?;
-        Some(UseDecl { path, span })
+        // Optional `as <alias>` renames the import locally so a file can pull two
+        // same-leaf symbols from different modules without collision.
+        let alias = if self.at_ident("as") {
+            self.index += 1;
+            self.take_ident_name()
+        } else {
+            None
+        };
+        Some(UseDecl { path, alias, span })
     }
 
     /// Parse a dot-separated path like `package.contract.PackageContract`.
