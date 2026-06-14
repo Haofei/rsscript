@@ -52,3 +52,21 @@ fn generated_programs_agree_across_all_backends() {
         "no generated program was checked across backends ({cases} cases)"
     );
 }
+
+#[test]
+fn generated_programs_fail_closed_when_mutated() {
+    // Negative generation: inject one targeted defect into each generated program
+    // and require the checker to reject it (with the expected diagnostic) AND
+    // produce no Rust — the "RSScript owns semantics" contract. In-process only
+    // (no compiled backend), so this can sweep many cases cheaply.
+    for n in 0..200u64 {
+        let base = generate(&seed_for(n));
+        // Only mutate programs the checker already accepts, so a failure is
+        // attributable to the injected defect, not a pre-existing one.
+        if !checker_accepts("mutate.rss", &base.source) {
+            continue;
+        }
+        let mutated = rss_testgen::mutate::mutate(&base, &seed_for(n.wrapping_mul(31)));
+        rss_testgen::properties::assert_fails_closed("mutate.rss", &mutated);
+    }
+}

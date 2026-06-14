@@ -100,6 +100,31 @@ pub fn exercise_front_end(file: &str, source: &str) -> bool {
     accepted
 }
 
+/// Fail-closed contract for a mutated (deliberately invalid) program: the
+/// checker must report its expected diagnostic **and** lowering must produce no
+/// Rust. Panics (naming the mutation and source) on violation.
+pub fn assert_fails_closed(file: &str, mutated: &crate::mutate::MutatedProgram) {
+    let codes: Vec<String> = rsscript::analyze_source(file, &mutated.source)
+        .into_iter()
+        .filter(|diagnostic| diagnostic.severity == rsscript::Severity::Error)
+        .map(|diagnostic| diagnostic.code)
+        .collect();
+    assert!(
+        codes.iter().any(|code| code == mutated.expected_code),
+        "mutation `{}` expected {} but the checker reported {codes:?}\n--- source ---\n{}",
+        mutated.mutation,
+        mutated.expected_code,
+        mutated.source,
+    );
+    assert!(
+        rsscript::lower_source_to_rust(file, &mutated.source).is_err(),
+        "mutation `{}` was rejected by the checker but still lowered to Rust \
+         (the defect reached the backend)\n--- source ---\n{}",
+        mutated.mutation,
+        mutated.source,
+    );
+}
+
 /// Whether the checker accepts `source` (no error-severity diagnostics). Used by
 /// the generative drivers to assert the generator's accept rate stays high.
 pub fn checker_accepts(file: &str, source: &str) -> bool {

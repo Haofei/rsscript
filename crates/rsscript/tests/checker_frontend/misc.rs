@@ -48,7 +48,10 @@ fn uninferable_binding_diagnostic_is_sound() {
         let src = format!(
             "fn main() -> Unit {{\n    let v = {value}\n    Log.write(message: read \"x\")\n    return Unit\n}}\n"
         );
-        assert!(has_rs0034(&src), "expected RS0034 for unused `{value}`:\n{src}");
+        assert!(
+            has_rs0034(&src),
+            "expected RS0034 for unused `{value}`:\n{src}"
+        );
     }
 
     // Negative: fully determined, annotated, or constrained by downstream use.

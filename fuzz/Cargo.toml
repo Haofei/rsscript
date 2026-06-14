@@ -62,5 +62,14 @@ test = false
 doc = false
 bench = false
 
+# Coverage-guided negative generation: seed -> program -> inject one defect ->
+# the checker must reject it with the expected diagnostic and produce no Rust.
+[[bin]]
+name = "fail_closed"
+path = "fuzz_targets/fail_closed.rs"
+test = false
+doc = false
+bench = false
+
 [profile.release]
 debug = 1

@@ -12,6 +12,7 @@
 
 pub mod backends;
 pub mod generator;
+pub mod mutate;
 pub mod properties;
 pub mod seed;
 pub mod ty;
