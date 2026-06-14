@@ -68,11 +68,7 @@ impl<'a> Generator<'a> {
     /// available. Compound payloads are restricted to scalars to keep the surface
     /// finite and generation simple.
     fn pick_type(&mut self) -> Ty {
-        // Collections are deliberately *not* pickable here: an empty `C.new<T>()`
-        // in an inferred position lowers to a Rust `C::new()` whose element type
-        // can't be inferred (E0282) when only `len()` is observed. Collections are
-        // instead emitted, always populated, by `gen_collection_stmt`.
-        match self.seed.weighted(&[10, 2, 2, 3, 3]) {
+        match self.seed.weighted(&[10, 2, 2, 3, 3, 2, 2, 2, 1]) {
             0 => self.pick_scalar(),
             1 => Ty::Option(Box::new(self.pick_scalar())),
             2 => Ty::Result(Box::new(self.pick_scalar()), Box::new(Ty::String)),
@@ -84,6 +80,13 @@ impl<'a> Generator<'a> {
             4 if !self.sums.is_empty() => {
                 Ty::Sum(self.sums[self.seed.choice(self.sums.len())].name.clone())
             }
+            5 => Ty::List(Box::new(self.pick_scalar())),
+            6 => Ty::Map(
+                Box::new(self.pick_hashable_scalar()),
+                Box::new(self.pick_scalar()),
+            ),
+            7 => Ty::Set(Box::new(self.pick_hashable_scalar())),
+            8 => Ty::Deque(Box::new(self.pick_scalar())),
             _ => self.pick_scalar(),
         }
     }
@@ -376,10 +379,10 @@ impl<'a> Generator<'a> {
     /// continuation lines are pre-indented to match the caller's block.
     fn gen_collection_stmt(&mut self, scope: &mut Scope) -> String {
         let name = self.fresh_var();
-        // Always at least one element: a non-empty collection lets the Rust
-        // backend infer the element type from the pushed literal (an empty
-        // `C.new<T>()` observed only via `len()` is un-inferable — E0282).
-        let count = 1 + self.seed.choice(3); // 1..=3 elements
+        // Empty collections are fine now that typed `let` bindings carry their
+        // annotation through lowering (the Deque/SortedMap/SortedSet gap that made
+        // an empty `C.new<T>()` un-inferable — E0282 — is fixed in the lowerer).
+        let count = self.seed.choice(4); // 0..=3 elements
         let (ty, new_expr, mut inserts, len_expr): (Ty, String, Vec<String>, String) =
             match self.seed.choice(4) {
                 0 => {

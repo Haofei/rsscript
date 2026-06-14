@@ -587,6 +587,38 @@ fn run() -> Result<Unit, ChannelError> {
 }
 
 #[test]
+fn typed_let_emits_deque_and_sorted_container_annotations() {
+    // Regression (found by rss-testgen): `Deque`, `SortedMap`, and `SortedSet`
+    // were missing from the generic-container annotation allowlist, so a
+    // `let v: Deque<Float> = Deque.new<Float>()` whose only use was `len()`
+    // dropped its annotation and lowered to an un-inferable `VecDeque<_>`
+    // (E0282) — accepted by the checker but un-compilable. Every generic
+    // container must carry its annotation into Rust.
+    for (decl, expected) in [
+        (
+            "let v: Deque<Float> = Deque.new<Float>()",
+            "let v: std::collections::VecDeque<f64> =",
+        ),
+        (
+            "let v: SortedMap<Int, String> = SortedMap.new<Int, String>()",
+            "let v: std::collections::BTreeMap<i64, String> =",
+        ),
+        (
+            "let v: SortedSet<Int> = SortedSet.new<Int>()",
+            "let v: std::collections::BTreeSet<i64> =",
+        ),
+    ] {
+        let source = format!("fn main() -> Unit {{\n    {decl}\n    return Unit\n}}\n");
+        let lowered = lower_source_to_rust("typed-container.rss", &source)
+            .unwrap_or_else(|diagnostics| panic!("{decl} should lower: {diagnostics:?}"));
+        assert!(
+            lowered.contains(expected),
+            "`{decl}` should emit `{expected}`, got:\n{lowered}"
+        );
+    }
+}
+
+#[test]
 fn rust_lowering_classifies_dependency_interface_types() {
     // Review #8: a class declared in a *dependency* interface (not the current
     // source) must be classified so it lowers correctly. Previously it fell through
