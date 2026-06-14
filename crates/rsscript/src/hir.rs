@@ -1753,10 +1753,11 @@ fn lower_hir_expr(
         },
         Expr::Field { base, name, span } => {
             let base_type = infer_hir_expr_type(hir, base, value_types);
-            let field = base_type
-                .as_deref()
-                .and_then(|type_name| hir.type_info(type_name))
-                .and_then(|type_info| type_info.fields.get(name));
+            let resolved = base_type.as_deref().and_then(|type_name| {
+                let type_info = hir.type_info(type_name)?;
+                let field = type_info.fields.get(name)?;
+                Some((type_info, type_name, field))
+            });
             HirExpr::Field {
                 base: Box::new(lower_hir_expr(hir, function_name, base, value_types)),
                 name: name.clone(),
@@ -1764,10 +1765,13 @@ fn lower_hir_expr(
                     function_name: function_name.to_string(),
                     name: name.clone(),
                     span: span.clone(),
+                    type_name: resolved.map(|(type_info, type_name, field)| {
+                        substituted_field_type(type_info, type_name, field)
+                    }),
+                    is_handle: resolved
+                        .is_some_and(|(_, _, field)| field.is_handle || field.is_weak),
+                    is_weak: resolved.is_some_and(|(_, _, field)| field.is_weak),
                     base_type,
-                    type_name: field.map(|field| field.type_name.clone()),
-                    is_handle: field.is_some_and(|field| field.is_handle || field.is_weak),
-                    is_weak: field.is_some_and(|field| field.is_weak),
                 },
                 span: span.clone(),
             }
@@ -2388,18 +2392,21 @@ fn collect_body_facts_in_expr(
         }
         Expr::Field { base, name, span } => {
             let base_type = infer_hir_expr_type(hir, base, value_types);
-            let field = base_type
-                .as_deref()
-                .and_then(|type_name| hir.type_info(type_name))
-                .and_then(|type_info| type_info.fields.get(name));
+            let resolved = base_type.as_deref().and_then(|type_name| {
+                let type_info = hir.type_info(type_name)?;
+                let field = type_info.fields.get(name)?;
+                Some((type_info, type_name, field))
+            });
             facts.field_accesses.push(HirFieldAccess {
                 function_name: function_name.to_string(),
                 name: name.clone(),
                 span: span.clone(),
+                type_name: resolved.map(|(type_info, type_name, field)| {
+                    substituted_field_type(type_info, type_name, field)
+                }),
+                is_handle: resolved.is_some_and(|(_, _, field)| field.is_handle || field.is_weak),
+                is_weak: resolved.is_some_and(|(_, _, field)| field.is_weak),
                 base_type,
-                type_name: field.map(|field| field.type_name.clone()),
-                is_handle: field.is_some_and(|field| field.is_handle || field.is_weak),
-                is_weak: field.is_some_and(|field| field.is_weak),
             });
             collect_body_facts_in_expr(hir, function_name, base, value_types, facts);
         }
@@ -2601,10 +2608,9 @@ pub(crate) fn infer_hir_expr_type(
         }
         Expr::Field { base, name, .. } => {
             let base_type = infer_hir_expr_type(hir, base, value_types)?;
-            hir.type_info(&base_type)?
-                .fields
-                .get(name)
-                .map(|field| field.type_name.clone())
+            let type_info = hir.type_info(&base_type)?;
+            let field = type_info.fields.get(name)?;
+            Some(substituted_field_type(type_info, &base_type, field))
         }
         Expr::Index { .. } => None,
         Expr::Number(value, _) => Some(number_literal_type_name(value).to_string()),
@@ -2843,12 +2849,11 @@ fn infer_arg_expr_type(
             infer_hir_expr_type(hir, expr, value_types)
         }
         Expr::Field { .. } => infer_hir_expr_type(hir, expr, value_types),
-        Expr::Index { .. }
-        | Expr::Binary { .. }
-        | Expr::Number(_, _)
-        | Expr::String(_, _)
-        | Expr::MultilineString(_, _)
-        | Expr::Unknown(_) => None,
+        // Scalar literals carry a type so generic construction can unify it with a
+        // type parameter (`Pair(item0: 1)` -> `A = Int`).
+        Expr::Number(value, _) => Some(number_literal_type_name(value).to_string()),
+        Expr::String(_, _) | Expr::MultilineString(_, _) => Some("String".to_string()),
+        Expr::Index { .. } | Expr::Binary { .. } | Expr::Unknown(_) => None,
     }
 }
 
@@ -2898,6 +2903,23 @@ fn collect_type_substitutions(
     for (pattern_arg, actual_arg) in pattern_args.into_iter().zip(actual_args) {
         collect_type_substitutions(pattern_arg, actual_arg, generic_params, substitutions);
     }
+}
+
+/// The type of `field` accessed on a value of type `base_type`, with the type's
+/// generic parameters replaced by `base_type`'s concrete arguments — so `item0`
+/// on `__Tuple2<Int, String>` resolves to `Int`, not the declared parameter `A`.
+fn substituted_field_type(type_info: &TypeInfo, base_type: &str, field: &FieldInfo) -> String {
+    let args = type_arg_names(base_type).unwrap_or_default();
+    if args.is_empty() || type_info.type_params.is_empty() {
+        return field.type_name.clone();
+    }
+    let substitutions: HashMap<String, String> = type_info
+        .type_params
+        .iter()
+        .cloned()
+        .zip(args.into_iter().map(str::to_string))
+        .collect();
+    substitute_type_params(&field.type_name, &substitutions)
 }
 
 fn substitute_type_params(type_name: &str, substitutions: &HashMap<String, String>) -> String {
@@ -3081,7 +3103,9 @@ fn match_pattern_binding_types(
             && let Some(field_types) = hir.sum_variant_fields.get(name)
             && let Some(field_type) = field_types.first()
         {
-            return match_pattern_binding_types(hir, binding, Some(&field_type.type_name));
+            let substitutions = binding_substitutions(hir, value_type);
+            let field_type_name = substitute_type_params(&field_type.type_name, &substitutions);
+            return match_pattern_binding_types(hir, binding, Some(&field_type_name));
         }
     }
 
@@ -3102,24 +3126,49 @@ fn match_pattern_binding_types(
         None
     };
 
+    let substitutions = binding_substitutions(hir, value_type);
     if let Some(field_types) = field_types {
-        return collect_struct_pattern_binding_types(hir, fields, field_types);
+        return collect_struct_pattern_binding_types(hir, fields, field_types, &substitutions);
     }
 
     if name == root
         && let Some(type_info) = hir.type_info(root)
     {
         let field_types = type_info.fields.values().cloned().collect::<Vec<_>>();
-        return collect_struct_pattern_binding_types(hir, fields, &field_types);
+        return collect_struct_pattern_binding_types(hir, fields, &field_types, &substitutions);
     }
 
     Vec::new()
+}
+
+/// Build a substitution from a generic type's declared parameters to the
+/// concrete arguments in `value_type` (`Pair<Int, Int>` -> `{A: Int, B: Int}`),
+/// so match-bound fields carry their resolved element types.
+fn binding_substitutions(hir: &Hir, value_type: &str) -> HashMap<String, String> {
+    let args = type_arg_names(value_type).unwrap_or_default();
+    if args.is_empty() {
+        return HashMap::new();
+    }
+    let root = type_root_name(value_type);
+    let params = hir
+        .type_info(root)
+        .map(|type_info| type_info.type_params.to_vec())
+        .or_else(|| {
+            builtin_generic_type_params(root)
+                .map(|params| params.into_iter().map(String::from).collect())
+        })
+        .unwrap_or_default();
+    params
+        .into_iter()
+        .zip(args.into_iter().map(String::from))
+        .collect()
 }
 
 fn collect_struct_pattern_binding_types(
     hir: &Hir,
     fields: &[crate::syntax::ast::MatchFieldPattern],
     field_types: &[FieldInfo],
+    substitutions: &HashMap<String, String>,
 ) -> Vec<(String, String)> {
     let mut bindings = Vec::new();
     for field in fields.iter().filter(|field| !field.ignored) {
@@ -3129,14 +3178,11 @@ fn collect_struct_pattern_binding_types(
         else {
             continue;
         };
+        let field_type_name = substitute_type_params(&field_type.type_name, substitutions);
         if let Some(pattern) = &field.pattern {
-            bindings.extend(match_pattern_binding_types(
-                hir,
-                pattern,
-                Some(&field_type.type_name),
-            ));
+            bindings.extend(match_pattern_binding_types(hir, pattern, Some(&field_type_name)));
         } else if let Some(binding) = &field.binding {
-            bindings.push((binding.clone(), field_type.type_name.clone()));
+            bindings.push((binding.clone(), field_type_name));
         }
     }
     bindings

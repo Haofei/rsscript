@@ -1233,3 +1233,104 @@ fn main() -> Unit {
         source,
     );
 }
+
+#[test]
+fn parity_tuple_literal_and_field_access() {
+    // Tuples desugar to synthetic `__TupleN` generic structs; literals, return
+    // types, bindings, and `.itemN` field access must agree across backends.
+    let source = r#"
+fn pair() -> (Int, String) {
+    return (5, "x")
+}
+
+fn main() -> Unit {
+    let p: (Int, String) = pair()
+    Log.write(message: read String.from_int(value: p.item0))
+    Log.write(message: read p.item1)
+    let inline = (true, 7, "z")
+    Log.write(message: read String.from_int(value: inline.item1))
+    return Unit
+}
+"#;
+    common::assert_vm_eval_matches_backend("parity-tuple.rss", "rsscript_parity_tuple", source);
+}
+
+#[test]
+fn parity_tuple_match_patterns() {
+    // Tuple patterns desugar to `__TupleN` struct patterns; literal and binding
+    // element patterns must dispatch identically on both backends.
+    let source = r#"
+fn classify(p: read (Int, String)) -> fresh String {
+    match read p {
+        (0, name) => { return String.concat(left: read "zero-", right: read name) }
+        (n, name) => { return String.concat(left: read String.from_int(value: n), right: read name) }
+    }
+}
+
+fn main() -> Unit {
+    let a: (Int, String) = (0, "a")
+    let b: (Int, String) = (7, "b")
+    Log.write(message: read classify(p: read a))
+    Log.write(message: read classify(p: read b))
+    return Unit
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tuple-match.rss",
+        "rsscript_parity_tuple_match",
+        source,
+    );
+}
+
+#[test]
+fn parity_tuple_let_destructuring() {
+    // `let (a, b) = expr` expands to a temporary plus per-element field reads;
+    // `_` skips an element. Both backends must agree on the bound values.
+    let source = r#"
+fn main() -> Unit {
+    let (a, b) = (5, "x")
+    Log.write(message: read String.from_int(value: a))
+    Log.write(message: read b)
+    let (first, _, third) = (1, 2, 3)
+    Log.write(message: read String.from_int(value: first + third))
+    return Unit
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tuple-destructure.rss",
+        "rsscript_parity_tuple_destructure",
+        source,
+    );
+}
+
+#[test]
+fn parity_generic_struct_match_and_field_inference() {
+    // Generic struct field access and literal field patterns resolve type
+    // parameters from the scrutinee's arguments on both backends.
+    let source = r#"
+struct Pair<A, B> derives(Clone) {
+    item0: A
+    item1: B
+}
+
+fn main() -> Unit {
+    let p = Pair(item0: 3, item1: 4)
+    let sum = p.item0 + p.item1
+    Log.write(message: read String.from_int(value: sum))
+    match read p {
+        Pair { item0: 3, item1: other } => {
+            Log.write(message: read String.from_int(value: other))
+        }
+        Pair { item0: first, item1: other } => {
+            Log.write(message: read String.from_int(value: first + other))
+        }
+    }
+    return Unit
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-generic-struct.rss",
+        "rsscript_parity_generic_struct",
+        source,
+    );
+}

@@ -379,6 +379,11 @@ pub struct LetStmt {
     pub value: Option<Expr>,
     pub is_async: bool,
     pub is_mut: bool,
+    /// Tuple-destructuring binding names from `let (a, b) = expr` (`_` for an
+    /// ignored element). Expanded into a temporary plus per-element `let`
+    /// bindings by the tuple desugar, so downstream stages only ever see a
+    /// single-name `let`.
+    pub destructure: Option<Vec<String>>,
     pub malformed: bool,
     pub span: Span,
 }

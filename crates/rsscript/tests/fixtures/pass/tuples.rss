@@ -1,0 +1,23 @@
+// Tuples desugar to synthetic `__TupleN` generic structs: literals `(a, b)`,
+// types `(Int, String)`, `.itemN` field access, tuple patterns in `match`, and
+// `let (a, b) = ...` destructuring (with `_` to skip an element).
+fn classify(p: read (Int, String)) -> fresh String {
+    match read p {
+        (0, name) => { return String.concat(left: read "zero-", right: read name) }
+        (n, name) => { return String.concat(left: read String.from_int(value: n), right: read name) }
+    }
+}
+
+fn sum_first_two(triple: read (Int, Int, Int)) -> Int {
+    return triple.item0 + triple.item1
+}
+
+fn main() -> Unit {
+    let pair: (Int, String) = (7, "b")
+    Log.write(message: read classify(p: read pair))
+    let counts: (Int, Int, Int) = (1, 2, 3)
+    Log.write(message: read String.from_int(value: sum_first_two(triple: read counts)))
+    let (first, _, third) = (1, 2, 3)
+    Log.write(message: read String.from_int(value: first + third))
+    return Unit
+}

@@ -115,6 +115,30 @@ pub(crate) fn type_root_name(name: &str) -> &str {
     base.split_once('<').map_or(base, |(root, _)| root)
 }
 
+/// Substitute generic parameter names for concrete argument names in a type
+/// string. `substitute_type_args("A", {A: Int})` → `"Int"`;
+/// `substitute_type_args("List<A>", {A: Int})` → `"List<Int>"`. Nested arguments
+/// are rewritten recursively; unknown names pass through unchanged.
+pub(crate) fn substitute_type_args(
+    type_name: &str,
+    substitutions: &std::collections::HashMap<String, String>,
+) -> String {
+    let trimmed = type_name.trim();
+    if let Some(replacement) = substitutions.get(trimmed) {
+        return replacement.clone();
+    }
+    let Some(args) = type_arg_names(trimmed) else {
+        return trimmed.to_string();
+    };
+    let root = type_root_name(trimmed);
+    let args = args
+        .into_iter()
+        .map(|arg| substitute_type_args(arg, substitutions))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{root}<{args}>")
+}
+
 /// The top-level generic arguments of a type, or `None` if it isn't generic.
 /// `Map<K, Result<A, B>>` → `["K", "Result<A, B>"]`.
 pub(crate) fn type_arg_names(type_name: &str) -> Option<Vec<&str>> {

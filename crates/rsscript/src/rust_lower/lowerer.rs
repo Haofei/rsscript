@@ -4890,17 +4890,97 @@ impl<'a> RustLowerer<'a> {
         pattern: &MatchPattern,
         value_type: Option<&TypeRef>,
     ) -> Vec<(String, String)> {
-        let Some((bind_name, field_ty)) = self.single_payload_binding(pattern, value_type) else {
+        // Single-payload variants (`Some(x)`, `Ok(x)`, single-field user variant).
+        if let Some((bind_name, field_ty)) = self.single_payload_binding(pattern, value_type) {
+            return self.owned_rebinding_for(&bind_name, &field_ty).into_iter().collect();
+        }
+        // Struct / tuple patterns: each bound field of a by-ref scrutinee is `&T`
+        // under match ergonomics, but the arm should see an owned `T` — so shadow
+        // every binding with its owned form, recursing through nested patterns.
+        if let MatchPattern::Struct { name, fields, .. } = pattern {
+            let declared = self.pattern_declared_field_types(value_type, name);
+            let params = self.pattern_type_params(value_type, name);
+            let args: Vec<TypeRef> =
+                value_type.map(|ty| ty.args.clone()).unwrap_or_default();
+            let mut rebindings = Vec::new();
+            for field in fields {
+                if field.ignored {
+                    continue;
+                }
+                let declared_ty = declared.as_ref().and_then(|fields| {
+                    fields
+                        .iter()
+                        .find(|candidate| candidate.name == field.name)
+                        .map(|field| substitute_generic_type(&field.ty, &params, &args))
+                });
+                if let Some(binding) = &field.binding {
+                    // `mut` bindings stay borrowed: rebinding would discard the
+                    // mutable view the user asked for.
+                    if field.effect == Some(crate::syntax::ast::DataEffect::Mut) {
+                        continue;
+                    }
+                    if let Some(field_ty) = &declared_ty {
+                        rebindings.extend(self.owned_rebinding_for(binding, field_ty));
+                    }
+                } else if let Some(nested) = &field.pattern {
+                    rebindings.extend(
+                        self.owned_payload_rebindings(nested, declared_ty.as_ref()),
+                    );
+                }
+            }
+            return rebindings;
+        }
+        Vec::new()
+    }
+
+    /// The owned rebinding for a single by-ref match binding: `*x` for a `Copy`
+    /// payload, `x.clone()` for any other cloneable value type, and nothing for a
+    /// resource (it can't be moved out of a shared `read` view).
+    fn owned_rebinding_for(&self, bind_name: &str, field_ty: &TypeRef) -> Option<(String, String)> {
+        let ident = rust_ident(bind_name);
+        if Self::is_copy_primitive(field_ty) {
+            Some((ident.clone(), format!("*{ident}")))
+        } else if self.is_resource_type(field_ty) {
+            None
+        } else {
+            Some((ident.clone(), format!("{ident}.clone()")))
+        }
+    }
+
+    /// The generic type parameters declared by the type backing `pattern_name`
+    /// when matched against `value_type` (struct or sum variant), in declaration
+    /// order — so concrete arguments from `value_type` can be substituted in.
+    fn pattern_type_params(
+        &self,
+        value_type: Option<&TypeRef>,
+        pattern_name: &str,
+    ) -> Vec<String> {
+        let Some(root) = value_type.map(|ty| ty.name.as_str()) else {
             return Vec::new();
         };
-        let ident = rust_ident(&bind_name);
-        if Self::is_copy_primitive(&field_ty) {
-            vec![(ident.clone(), format!("*{ident}"))]
-        } else if self.is_resource_type(&field_ty) {
-            Vec::new()
-        } else {
-            vec![(ident.clone(), format!("{ident}.clone()"))]
+        for item in &self.program.items {
+            match item {
+                Item::Type(type_decl) if type_decl.name == root && pattern_name == root => {
+                    return type_decl
+                        .type_params
+                        .iter()
+                        .map(|param| param.name.clone())
+                        .collect();
+                }
+                Item::SumType(sum)
+                    if sum.name == root
+                        && sum.variants.iter().any(|v| v.name == pattern_name) =>
+                {
+                    return sum
+                        .type_params
+                        .iter()
+                        .map(|param| param.name.clone())
+                        .collect();
+                }
+                _ => {}
+            }
         }
+        Vec::new()
     }
 
     fn lower_match_pattern_typed(
@@ -5232,6 +5312,38 @@ fn stmt_contains_try(statement: &Stmt) -> bool {
 
 fn block_contains_try(block: &Block) -> bool {
     block.statements.iter().any(stmt_contains_try)
+}
+
+/// Substitute concrete `args` for the generic type parameters `params` in `ty`.
+/// A declared field type that names a parameter (e.g. `A` in `__Tuple2<A, B>`)
+/// resolves to the matching argument from the scrutinee's `value_type`; nested
+/// type arguments are substituted recursively. Unresolved names are left as-is
+/// (treated as non-`Copy`, cloneable values).
+fn substitute_generic_type(ty: &TypeRef, params: &[String], args: &[TypeRef]) -> TypeRef {
+    if ty.args.is_empty()
+        && ty.fn_params.is_empty()
+        && ty.fn_return.is_none()
+        && let Some(index) = params.iter().position(|param| param == &ty.name)
+        && let Some(arg) = args.get(index)
+    {
+        return arg.clone();
+    }
+    let mut resolved = ty.clone();
+    resolved.args = ty
+        .args
+        .iter()
+        .map(|arg| substitute_generic_type(arg, params, args))
+        .collect();
+    resolved.fn_params = ty
+        .fn_params
+        .iter()
+        .map(|param| substitute_generic_type(param, params, args))
+        .collect();
+    resolved.fn_return = ty
+        .fn_return
+        .as_ref()
+        .map(|ret| Box::new(substitute_generic_type(ret, params, args)));
+    resolved
 }
 
 fn match_binding_type_ref(

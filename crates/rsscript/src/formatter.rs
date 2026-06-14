@@ -336,7 +336,13 @@ impl Formatter {
                 if stmt.is_mut {
                     self.out.push_str("mut ");
                 }
-                self.out.push_str(&stmt.name);
+                if let Some(names) = &stmt.destructure {
+                    self.out.push('(');
+                    self.out.push_str(&names.join(", "));
+                    self.out.push(')');
+                } else {
+                    self.out.push_str(&stmt.name);
+                }
                 if let Some(type_annotation) = &stmt.type_annotation {
                     self.out.push_str(": ");
                     self.type_ref(type_annotation);
@@ -511,6 +517,9 @@ impl Formatter {
                 self.out.push(']');
             }
             Expr::Call { callee, args, .. } => {
+                if self.tuple_literal(callee, args, indent) {
+                    return;
+                }
                 if self.receiver_call_chain(expr, indent) {
                     return;
                 }
@@ -681,6 +690,35 @@ impl Formatter {
         self.out.push(']');
     }
 
+    /// Render a synthetic tuple constructor `__TupleN(item0: .., item1: ..)` back
+    /// as `(.., ..)`. Returns `false` if the call is not a well-formed tuple
+    /// literal, leaving it to the ordinary call renderer.
+    fn tuple_literal(&mut self, callee: &Callee, args: &[CallArg], indent: usize) -> bool {
+        let Callee::Name(name) = callee else {
+            return false;
+        };
+        let Some(arity) = tuple_arity_of(name) else {
+            return false;
+        };
+        if args.len() != arity
+            || !args
+                .iter()
+                .enumerate()
+                .all(|(index, arg)| arg.name.as_deref() == Some(format!("item{index}").as_str()))
+        {
+            return false;
+        }
+        self.out.push('(');
+        for (index, arg) in args.iter().enumerate() {
+            if index > 0 {
+                self.out.push_str(", ");
+            }
+            self.expr_at(&arg.value, 0, indent);
+        }
+        self.out.push(')');
+        true
+    }
+
     fn call_expr(&mut self, callee: &Callee, args: &[CallArg], indent: usize) {
         if let Some(inline) = inline_call_expr(callee, args) {
             if inline.len() <= MAX_INLINE_SIGNATURE_LEN {
@@ -790,6 +828,33 @@ impl Formatter {
                 self.out.push(')');
             }
             MatchPattern::Variant { name, .. } => self.out.push_str(name),
+            MatchPattern::Struct {
+                name,
+                fields,
+                has_rest,
+                ..
+            } if tuple_arity_of(name) == Some(fields.len())
+                && !has_rest
+                && fields.iter().enumerate().all(|(index, field)| {
+                    field.name == format!("item{index}") && field.effect.is_none()
+                }) =>
+            {
+                // Render a synthetic tuple struct pattern back as `(p0, p1, ..)`.
+                self.out.push('(');
+                for (index, field) in fields.iter().enumerate() {
+                    if index > 0 {
+                        self.out.push_str(", ");
+                    }
+                    if field.ignored {
+                        self.out.push('_');
+                    } else if let Some(pattern) = &field.pattern {
+                        self.match_pattern(pattern);
+                    } else if let Some(binding) = &field.binding {
+                        self.out.push_str(binding);
+                    }
+                }
+                self.out.push(')');
+            }
             MatchPattern::Struct {
                 name,
                 fields,
@@ -1025,6 +1090,9 @@ fn inline_expr(expr: &Expr) -> Option<String> {
             Some(format!("{}[{}]", inline_expr(base)?, inline_expr(index)?))
         }
         Expr::Call { callee, args, .. } => {
+            if let Some(tuple) = inline_tuple_literal(callee, args) {
+                return Some(tuple);
+            }
             let args = args
                 .iter()
                 .map(inline_call_arg)
@@ -1043,6 +1111,29 @@ fn inline_expr(expr: &Expr) -> Option<String> {
         Expr::Await { value, .. } => Some(format!("await {}", inline_expr(value)?)),
         Expr::Closure { .. } | Expr::Match { .. } | Expr::Unknown(_) => None,
     }
+}
+
+/// Render a synthetic tuple constructor `__TupleN(item0: .., ..)` inline as
+/// `(.., ..)`, or `None` if the call is not a well-formed tuple literal.
+fn inline_tuple_literal(callee: &Callee, args: &[CallArg]) -> Option<String> {
+    let Callee::Name(name) = callee else {
+        return None;
+    };
+    let arity = tuple_arity_of(name)?;
+    if args.len() != arity
+        || !args
+            .iter()
+            .enumerate()
+            .all(|(index, arg)| arg.name.as_deref() == Some(format!("item{index}").as_str()))
+    {
+        return None;
+    }
+    let inner = args
+        .iter()
+        .map(|arg| inline_expr(&arg.value))
+        .collect::<Option<Vec<_>>>()?
+        .join(", ");
+    Some(format!("({inner})"))
 }
 
 fn inline_call_arg(arg: &CallArg) -> Option<String> {
@@ -1175,7 +1266,31 @@ fn format_effect(effect: &EffectDecl) -> String {
     }
 }
 
+/// The tuple arity encoded in a synthetic `__TupleN` name (`N >= 2`), if any.
+fn tuple_arity_of(name: &str) -> Option<usize> {
+    name.strip_prefix("__Tuple")
+        .and_then(|n| n.parse::<usize>().ok())
+        .filter(|arity| *arity >= 2)
+}
+
 fn type_ref_text(ty: &TypeRef) -> String {
+    // Render synthetic tuple types `__TupleN<...>` back as `(A, B, ...)`.
+    if let Some(arity) = tuple_arity_of(&ty.name)
+        && ty.args.len() == arity
+    {
+        let inner = ty
+            .args
+            .iter()
+            .map(type_ref_text)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let tuple = format!("({inner})");
+        return if ty.is_fresh {
+            format!("fresh {tuple}")
+        } else {
+            tuple
+        };
+    }
     let text = if ty.name == "Fn" {
         let params = ty
             .fn_params
@@ -1738,6 +1853,46 @@ fn write_line<W: Writer>(writer: mut W, message: read String) -> Unit {
 
 impl Writer for BufferWriter {
     write = BufferWriter.write
+}
+"#
+        );
+    }
+
+    #[test]
+    fn renders_tuple_literals_types_patterns_and_destructuring() {
+        let source = r#"fn first(p:read (Int,String))->Int{
+match read p{
+(0,_)=>{return 0}
+(n,_)=>{return n}
+}
+}
+
+fn main()->Unit{
+let (a,b)=(5,"x")
+Log.write(message:read b)
+Log.write(message:read String.from_int(value:first(p:read (a,b))))
+return Unit
+}
+"#;
+
+        assert_eq!(
+            format_source("tuples.rss", source),
+            r#"fn first(p: read (Int, String)) -> Int {
+    match read p {
+        (0, _) => {
+            return 0
+        }
+        (n, _) => {
+            return n
+        }
+    }
+}
+
+fn main() -> Unit {
+    let (a, b) = (5, "x")
+    Log.write(message: read b)
+    Log.write(message: read String.from_int(value: first(p: read (a, b))))
+    return Unit
 }
 "#
         );

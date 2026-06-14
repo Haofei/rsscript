@@ -1,5 +1,6 @@
 use crate::text_util::{
-    split_top_level_type_args, strip_fresh_type, type_arg_names, type_root_name,
+    split_top_level_type_args, strip_fresh_type, substitute_type_args, type_arg_names,
+    type_root_name,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -2041,13 +2042,23 @@ fn check_match_pattern_matches_type(
                 push_variant_or_struct_cannot_match(analyzer, name, type_name, span);
                 return;
             };
+            // Map the type's declared parameters (`A`, `B`) to the scrutinee's
+            // concrete arguments so a field declared `A` is checked as `Int`.
+            let type_params = analyzer
+                .hir
+                .type_info(root)
+                .map(|info| info.type_params.to_vec())
+                .unwrap_or_default();
+            let substitutions = generic_substitutions(&type_params, type_name);
             for field in fields {
                 if let Some(pattern) = &field.pattern
                     && let Some(field_info) = declared
                         .iter()
                         .find(|candidate| candidate.name == field.name)
                 {
-                    check_match_pattern_matches_type(analyzer, pattern, &field_info.type_name);
+                    let field_type =
+                        substitute_type_args(&field_info.type_name, &substitutions);
+                    check_match_pattern_matches_type(analyzer, pattern, &field_type);
                 }
             }
         }
@@ -2118,6 +2129,20 @@ fn allowed_sum_variant_names(analyzer: &Analyzer<'_>, root: &str) -> Vec<String>
             _ => None,
         })
         .unwrap_or_default()
+}
+
+/// Build a map from a type's declared generic parameters to the concrete
+/// arguments named in `type_name`, e.g. params `[A, B]` against
+/// `__Tuple2<Int, String>` → `{A: Int, B: String}`.
+fn generic_substitutions(type_params: &[String], type_name: &str) -> HashMap<String, String> {
+    let Some(args) = type_arg_names(type_name) else {
+        return HashMap::new();
+    };
+    type_params
+        .iter()
+        .zip(args)
+        .map(|(param, arg)| (param.clone(), arg.to_string()))
+        .collect()
 }
 
 fn pattern_sum_variant_fields(

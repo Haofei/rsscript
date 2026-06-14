@@ -79,6 +79,10 @@ manual wrapper.
   conditionals would be slow to write and hard to audit.
   _Acceptance:_ match arms can bind values, match enum/variant tags, constants,
   tuples, and optional values; exhaustiveness or explicit fallback is checked.
+  _Partial:_ variants, options, constants, and tuple patterns (incl. literal and
+  binding element patterns) now match at VM/compiled parity; plain (non-variant)
+  generic struct patterns and generic field/binding types resolve their element
+  types from the scrutinee's arguments. List patterns remain open.
 
 - [ ] **Callable and limited closure support.** Support function values and
   simple captures well enough for callbacks and rewrite rules.
@@ -94,11 +98,16 @@ manual wrapper.
   _Acceptance:_ defaulted parameters lower deterministically and appear in docs
   or symbol inventory without changing the call ABI unexpectedly.
 
-- [ ] **Tuple and destructuring ergonomics.** Make multiple-return and unpacking
+- [x] **Tuple and destructuring ergonomics.** Make multiple-return and unpacking
   patterns concise.
   _Why:_ tinygrad frequently returns and unpacks grouped values.
   _Acceptance:_ tuple literals, tuple returns, and local destructuring work with
   ownership and borrowing tracked normally.
+  _Done:_ tuples desugar to synthetic `__TupleN` generic structs at parse time —
+  literals `(a, b)`, types `(Int, String)`, `.itemN` access, tuple patterns in
+  `match`, and `let (a, b) = expr` destructuring (`_` skips an element), all at
+  VM/compiled parity and round-tripped by the formatter. See
+  `tests/fixtures/pass/tuples.rss` and the `parity_tuple_*` parity tests.
 
 - [ ] **String and bytes utility coverage.** Fill gaps for split/join/search,
   prefix/suffix checks, formatting, byte conversion, and cheap slicing where

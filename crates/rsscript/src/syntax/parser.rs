@@ -20,6 +20,8 @@ use crate::syntax::ast::{
 pub fn parse_source(file: &str, source: &str) -> Program {
     let mut program = parse_source_raw(file, source);
     super::desugar::desugar_associated_consts(&mut program);
+    super::desugar::expand_tuple_destructuring(&mut program);
+    super::desugar::inject_tuple_structs(&mut program);
     program
 }
 
@@ -1447,6 +1449,12 @@ fn parse_let_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize)
             .get(start + 1)
             .is_some_and(|t| t.is_ident_text("mut"));
     let name_index = if is_mut { start + 2 } else { start + 1 };
+    // `let (a, b) = expr` destructures a tuple. The element names are recorded on
+    // the binding and expanded into a temporary plus per-element `let`s by the
+    // tuple desugar.
+    if tokens.get(name_index).is_some_and(|token| token.symbol("(")) {
+        return parse_let_tuple_stmt(tokens, start, kind, name_index, limit);
+    }
     let parsed_name = tokens.get(name_index).and_then(ident_name);
     let name = parsed_name.unwrap_or("").to_string();
     let end = statement_end(tokens, start, limit);
@@ -1467,6 +1475,54 @@ fn parse_let_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize)
             value,
             is_async: false,
             is_mut,
+            destructure: None,
+            malformed,
+            span: tokens[start].span.clone(),
+        }),
+        end,
+    )
+}
+
+/// Parse `let (a, b) = expr` / `local (a, b) = expr`. `name_index` points at the
+/// opening `(`. Records the element names in `LetStmt::destructure`; the value is
+/// the right-hand expression.
+fn parse_let_tuple_stmt(
+    tokens: &[Token],
+    start: usize,
+    kind: LetKind,
+    name_index: usize,
+    limit: usize,
+) -> (Stmt, usize) {
+    let end = statement_end(tokens, start, limit);
+    let close = find_matching(tokens, name_index, "(", ")");
+    let names = close.and_then(|close| {
+        let ranges = split_param_ranges(tokens, name_index + 1, close);
+        let mut names = Vec::new();
+        for range in ranges {
+            if range.empty_span.is_some() {
+                continue;
+            }
+            // Each element must be a single binding identifier (or `_`).
+            if range.start + 1 != range.end {
+                return None;
+            }
+            names.push(ident_name(&tokens[range.start])?.to_string());
+        }
+        (names.len() >= 2).then_some(names)
+    });
+    let equals = close.and_then(|close| (close + 1..end).find(|index| tokens[*index].symbol("=")));
+    let value = equals.and_then(|equals| parse_expr(tokens, equals + 1, end));
+    let malformed = names.is_none() || value.is_none();
+
+    (
+        Stmt::Let(LetStmt {
+            kind,
+            name: String::new(),
+            type_annotation: None,
+            value,
+            is_async: false,
+            is_mut: false,
+            destructure: names,
             malformed,
             span: tokens[start].span.clone(),
         }),
@@ -1493,6 +1549,7 @@ fn parse_async_let_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, 
             value,
             is_async: true,
             is_mut: false,
+            destructure: None,
             malformed,
             span: tokens[start].span.clone(),
         }),
@@ -2237,6 +2294,12 @@ fn split_match_pattern_guard(tokens: &[Token], start: usize, end: usize) -> Opti
 }
 
 fn parse_match_pattern(tokens: &[Token], start: usize, end: usize) -> Option<MatchPattern> {
+    // A tuple pattern `(p0, p1, ..)` desugars to the synthetic `__TupleN` struct
+    // pattern `__TupleN { item0: p0, item1: p1, .. }`. Checked before `trim_outer`
+    // strips the parens as grouping.
+    if let Some(tuple) = parse_tuple_pattern(tokens, start, end) {
+        return Some(tuple);
+    }
     let (start, end) = trim_outer(tokens, start, end);
     if start >= end {
         return None;
@@ -2311,6 +2374,71 @@ fn parse_match_pattern(tokens: &[Token], start: usize, end: usize) -> Option<Mat
     Some(MatchPattern::Variant {
         name,
         binding,
+        span: tokens[start].span.clone(),
+    })
+}
+
+/// Parse `(p0, p1, ..)` as the synthetic tuple struct pattern. Returns `None`
+/// for anything that is not a `(`...`)` wrapping at least two comma-separated
+/// element patterns (a single parenthesised pattern is grouping, not a tuple).
+fn parse_tuple_pattern(tokens: &[Token], start: usize, end: usize) -> Option<MatchPattern> {
+    if !tokens.get(start)?.symbol("(") || !tokens.get(end.checked_sub(1)?)?.symbol(")") {
+        return None;
+    }
+    let close = find_matching(tokens, start, "(", ")")?;
+    if close + 1 != end {
+        return None;
+    }
+    let ranges: Vec<_> = split_param_ranges(tokens, start + 1, close)
+        .into_iter()
+        .filter(|range| range.empty_span.is_none())
+        .collect();
+    if ranges.len() < 2 {
+        return None;
+    }
+    let mut fields = Vec::with_capacity(ranges.len());
+    for (index, range) in ranges.iter().enumerate() {
+        // A single-token element distinguishes binding/literal/constructor exactly
+        // as a struct field RHS does; multi-token elements are nested patterns.
+        let element = if range.start + 1 == range.end {
+            *parse_single_payload_pattern(tokens, range.start)?
+        } else {
+            parse_match_pattern(tokens, range.start, range.end)?
+        };
+        let name = format!("item{index}");
+        let span = tokens[range.start].span.clone();
+        let field = match element {
+            MatchPattern::Binding { name: binding, .. } => MatchFieldPattern {
+                name,
+                binding: Some(binding),
+                pattern: None,
+                effect: None,
+                ignored: false,
+                span,
+            },
+            MatchPattern::Wildcard(_) => MatchFieldPattern {
+                name,
+                binding: None,
+                pattern: None,
+                effect: None,
+                ignored: true,
+                span,
+            },
+            other => MatchFieldPattern {
+                name,
+                binding: None,
+                pattern: Some(Box::new(other)),
+                effect: None,
+                ignored: false,
+                span,
+            },
+        };
+        fields.push(field);
+    }
+    Some(MatchPattern::Struct {
+        name: format!("__Tuple{}", ranges.len()),
+        fields,
+        has_rest: false,
         span: tokens[start].span.clone(),
     })
 }
@@ -2460,6 +2588,11 @@ fn starts_like_constructor(name: &str) -> bool {
 }
 
 fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
+    // A tuple literal must be detected before `trim_outer` strips the wrapping
+    // parens (which would otherwise turn `(a, b)` into the invalid `a, b`).
+    if let Some(tuple) = parse_tuple_expr(tokens, start, end) {
+        return Some(tuple);
+    }
     let (start, end) = trim_outer(tokens, start, end);
     if start >= end {
         return None;
@@ -2539,7 +2672,10 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
             if close + 1 != end {
                 return Some(Expr::Unknown(tokens[start].span.clone()));
             }
-            parse_expr(tokens, value_start + 1, close)
+            // Parse the whole parenthesised operand so a tuple literal
+            // (`read (a, b)`) is recognised; a single `(expr)` is still unwrapped
+            // as grouping by `parse_expr`.
+            parse_expr(tokens, value_start, end)
         } else {
             parse_expr(tokens, value_start, end)
         }?;
@@ -2562,7 +2698,10 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
             if close + 1 != end {
                 return Some(Expr::Unknown(tokens[start].span.clone()));
             }
-            parse_expr(tokens, value_start + 1, close)
+            // Parse the whole parenthesised operand so a tuple literal
+            // (`read (a, b)`) is recognised; a single `(expr)` is still unwrapped
+            // as grouping by `parse_expr`.
+            parse_expr(tokens, value_start, end)
         } else {
             parse_expr(tokens, value_start, end)
         }?;
@@ -2817,6 +2956,43 @@ fn parse_array_literal_expr(tokens: &[Token], start: usize, end: usize) -> Optio
         .collect();
     Some(Expr::ArrayLiteral {
         items,
+        span: tokens[start].span.clone(),
+    })
+}
+
+/// A tuple literal `(a, b, ...)` (two or more comma-separated elements). Desugars
+/// directly to a synthetic generic-struct construction `__TupleN(item0: a, ...)`;
+/// `__TupleN` declarations are injected by [`super::parse_source`]. A single
+/// parenthesized expression `(e)` is grouping, not a tuple, so it returns `None`
+/// and the normal `trim_outer` grouping path handles it.
+fn parse_tuple_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
+    if !tokens.get(start)?.symbol("(") || !tokens.get(end.checked_sub(1)?)?.symbol(")") {
+        return None;
+    }
+    let close = find_matching(tokens, start, "(", ")")?;
+    if close + 1 != end {
+        return None;
+    }
+    let ranges: Vec<_> = split_param_ranges(tokens, start + 1, close)
+        .into_iter()
+        .filter(|range| range.empty_span.is_none())
+        .collect();
+    if ranges.len() < 2 {
+        return None;
+    }
+    let mut args = Vec::with_capacity(ranges.len());
+    for (index, range) in ranges.iter().enumerate() {
+        let value = parse_expr(tokens, range.start, range.end)?;
+        args.push(CallArg {
+            name: Some(format!("item{index}")),
+            value,
+            malformed: false,
+            span: tokens[range.start].span.clone(),
+        });
+    }
+    Some(Expr::Call {
+        callee: Callee::Name(format!("__Tuple{}", ranges.len())),
+        args,
         span: tokens[start].span.clone(),
     })
 }
@@ -3578,7 +3754,47 @@ fn parse_call_args(tokens: &[Token], start: usize, end: usize) -> Vec<CallArg> {
         .collect()
 }
 
+/// A tuple type `(T, U, ...)` desugars to the synthetic generic struct
+/// `__TupleN<T, U, ...>`. `(T)` is grouping, not a tuple.
+fn parse_tuple_type_ref(tokens: &[Token], start: usize, end: usize) -> Option<TypeRef> {
+    if !tokens.get(start)?.symbol("(") || !tokens.get(end.checked_sub(1)?)?.symbol(")") {
+        return None;
+    }
+    let close = find_matching(tokens, start, "(", ")")?;
+    if close + 1 != end {
+        return None;
+    }
+    let ranges: Vec<_> = split_param_ranges(tokens, start + 1, close)
+        .into_iter()
+        .filter(|range| range.empty_span.is_none())
+        .collect();
+    if ranges.len() < 2 {
+        return None;
+    }
+    let args: Vec<TypeRef> = ranges
+        .iter()
+        .filter_map(|range| parse_type_ref(tokens, range.start, range.end))
+        .collect();
+    if args.len() != ranges.len() {
+        return None;
+    }
+    Some(TypeRef {
+        name: format!("__Tuple{}", ranges.len()),
+        args,
+        malformed_arg_spans: Vec::new(),
+        is_fresh: false,
+        is_noescape: false,
+        is_owned: false,
+        fn_params: Vec::new(),
+        fn_return: None,
+        span: tokens[start].span.clone(),
+    })
+}
+
 fn parse_type_ref(tokens: &[Token], start: usize, end: usize) -> Option<TypeRef> {
+    if let Some(tuple) = parse_tuple_type_ref(tokens, start, end) {
+        return Some(tuple);
+    }
     let is_fresh = tokens
         .get(start)
         .and_then(ident_name)

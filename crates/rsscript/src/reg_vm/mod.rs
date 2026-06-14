@@ -21,8 +21,8 @@ use sha3::{
 use crate::diagnostic::Severity;
 use crate::eval_types::{EvalError, EvalOutput, NativeInterpreterFn, NativeValue};
 use crate::hir::{
-    Hir, HirBlock, HirCallArg, HirCallReceiver, HirExpr, HirMatchArm, HirStmt, ParamEffect,
-    TypeInfo,
+    Hir, HirBlock, HirCallArg, HirCallReceiver, HirExpr, HirMatchArm, HirStmt, HirTypeKind,
+    ParamEffect, TypeInfo,
 };
 use crate::interfaces::builtin_interfaces;
 use crate::package::package_lowering_input;
@@ -5315,6 +5315,7 @@ impl RegLowerer<'_> {
             {
                 self.lower_user_struct_variant_pattern(src, name, fields)
             }
+            MatchPattern::Struct { fields, .. } => self.lower_struct_field_patterns(src, fields),
             MatchPattern::Literal { value, .. } => self.lower_literal_pattern(src, value),
             _ => Err(EvalError::Runtime(
                 "reg VM v0 does not support this match pattern.".to_string(),
@@ -5341,7 +5342,11 @@ impl RegLowerer<'_> {
                         .is_none_or(|binding| self.is_supported_match_pattern(binding))
             }
             MatchPattern::Struct { name, fields, .. } => {
-                self.hir.sum_type_for_variant(name).is_some()
+                (self.hir.sum_type_for_variant(name).is_some()
+                    || matches!(
+                        self.hir.type_kind(name),
+                        Some(HirTypeKind::Struct | HirTypeKind::Class)
+                    ))
                     && fields.iter().all(|field| {
                         field.ignored
                             || field
@@ -5351,6 +5356,43 @@ impl RegLowerer<'_> {
                     })
             }
         }
+    }
+
+    /// Lower a plain (non-variant) struct pattern: there is no tag to test, so
+    /// refutability comes only from nested field sub-patterns (e.g. literals).
+    /// Each field is projected and either bound or recursively matched.
+    fn lower_struct_field_patterns(
+        &mut self,
+        src: Reg,
+        fields: &[MatchFieldPattern],
+    ) -> Result<Vec<MatchFailurePatch>, EvalError> {
+        let mut failures = Vec::new();
+        for field in fields {
+            if field.ignored {
+                continue;
+            }
+            let field_reg = self.temp();
+            self.emit(RegInstr::GetField {
+                dst: field_reg,
+                base: src,
+                name: field.name.clone(),
+            });
+            if let Some(pattern) = field.pattern.as_deref() {
+                failures.extend(self.lower_match_pattern(pattern, field_reg)?);
+            } else if let Some(binding) = field.binding.as_ref() {
+                let dst = self.local(binding);
+                self.emit(RegInstr::Move {
+                    dst,
+                    src: field_reg,
+                });
+            } else {
+                return Err(EvalError::Runtime(format!(
+                    "reg VM struct pattern field `{}` has no binding or nested pattern.",
+                    field.name
+                )));
+            }
+        }
+        Ok(failures)
     }
 
     fn lower_literal_pattern(
