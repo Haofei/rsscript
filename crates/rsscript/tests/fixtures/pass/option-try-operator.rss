@@ -1,0 +1,25 @@
+// `?` on an `Option` short-circuits on `None` (early-return) inside an
+// `Option`-returning function, mirroring `?` on `Result`.
+fn make(n: Int) -> Option<Int> {
+    if n > 0 {
+        return Some(n)
+    }
+    return None
+}
+
+fn checked_double(n: Int) -> Option<Int> {
+    let v = make(n: n)?
+    return Some(v + v)
+}
+
+fn main() -> Unit {
+    match checked_double(n: 21) {
+        Some(x) => { Log.write(message: read String.from_int(value: x)) }
+        None => { Log.write(message: read "none") }
+    }
+    match checked_double(n: 0) {
+        Some(x) => { Log.write(message: read String.from_int(value: x)) }
+        None => { Log.write(message: read "none") }
+    }
+    return Unit
+}

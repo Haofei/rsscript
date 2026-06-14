@@ -3459,10 +3459,12 @@ impl Analyzer<'_> {
             let Item::Function(function) = item else {
                 continue;
             };
+            // `?` short-circuits on the failure variant of the function's return
+            // type: `Err` for `Result`, `None` for `Option`. Both are permitted.
             if function
                 .return_ty
                 .as_ref()
-                .is_some_and(|return_ty| return_ty.name == "Result")
+                .is_some_and(|return_ty| matches!(return_ty.name.as_str(), "Result" | "Option"))
             {
                 continue;
             }

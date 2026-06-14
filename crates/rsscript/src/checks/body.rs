@@ -4245,23 +4245,25 @@ fn check_try_value_is_result(analyzer: &mut Analyzer<'_>, value: &HirExpr, span:
     let Some(type_name) = hir_expr_type_name(value) else {
         return;
     };
-    if is_result_type(type_name) {
+    // `?` applies to either failure-carrying type: `Result` (short-circuits `Err`)
+    // or `Option` (short-circuits `None`).
+    if is_result_type(type_name) || is_option_type(type_name) {
         return;
     }
 
     analyzer.diagnostics.push(
         Diagnostic::error(
             code::INVALID_TRY_OPERATOR,
-            "`?` can only be applied to a Result value.",
+            "`?` can only be applied to a `Result` or `Option` value.",
             span.clone(),
             "invalid try operator",
         )
         .with_cause(format!(
-            "The expression before `?` has type `{type_name}`, not `Result<T, E>`."
+            "The expression before `?` has type `{type_name}`, not `Result<T, E>` or `Option<T>`."
         ))
         .with_fix(
             "remove_try_or_return_result",
-            "Remove `?`, or call an API that returns `Result<T, E>`.",
+            "Remove `?`, or call an API that returns `Result<T, E>` or `Option<T>`.",
             "manual",
         ),
     );
@@ -4480,6 +4482,10 @@ fn hir_expr_span(expr: &HirExpr) -> &Span {
 
 fn is_result_type(type_name: &str) -> bool {
     type_name == "Result" || type_name.starts_with("Result<")
+}
+
+fn is_option_type(type_name: &str) -> bool {
+    type_name == "Option" || type_name.starts_with("Option<")
 }
 
 fn result_error_type_ref_name(return_ty: &TypeRef) -> Option<String> {

@@ -7993,27 +7993,40 @@ impl RegVm {
                             self.set_reg(base + *dst, value);
                         }
                         RegInstr::TryResult { dst, src, cleanup } => {
-                            let value = self.reg(base + *src);
-                            let result = result_variant_payload(value)?;
-                            match result {
-                                Ok(value) => self.set_reg(base + *dst, value),
-                                Err(error) => {
-                                    for resource in cleanup {
-                                        let value = self.reg(base + *resource).clone();
-                                        self.run_resource_drop(unit, value, next_base)?;
-                                    }
-                                    // `?` short-circuit: return the `Err` from the *current*
-                                    // frame only (pop one frame like `Return`), not out of the
-                                    // whole stackless driver.
-                                    let err_value = value_err(error);
-                                    let frame = self.frames.pop().expect("active frame");
-                                    self.apply_mut_writeback(&frame);
-                                    if self.frames.len() == floor {
-                                        return Ok(Outcome::Completed(err_value));
-                                    }
-                                    self.set_reg(frame.ret_dst, err_value);
-                                    continue 'frames;
+                            let value = self.reg(base + *src).clone();
+                            // `?` keeps the success payload (`Ok(x)`/`Some(x)`) and
+                            // short-circuits on failure (`Err(e)`/`None`), returning
+                            // that failure from the current frame. Option support
+                            // mirrors Result so `?` works in `Option`-returning fns.
+                            let short_circuit = match &value {
+                                VmValue::OptionSome(inner) => {
+                                    self.set_reg(base + *dst, (**inner).clone());
+                                    None
                                 }
+                                VmValue::OptionNone => Some(VmValue::OptionNone),
+                                _ => match result_variant_payload(&value)? {
+                                    Ok(payload) => {
+                                        self.set_reg(base + *dst, payload);
+                                        None
+                                    }
+                                    Err(error) => Some(value_err(error)),
+                                },
+                            };
+                            if let Some(return_value) = short_circuit {
+                                for resource in cleanup {
+                                    let resource_value = self.reg(base + *resource).clone();
+                                    self.run_resource_drop(unit, resource_value, next_base)?;
+                                }
+                                // Short-circuit: return the failure from the *current*
+                                // frame only (pop one frame like `Return`), not out of
+                                // the whole stackless driver.
+                                let frame = self.frames.pop().expect("active frame");
+                                self.apply_mut_writeback(&frame);
+                                if self.frames.len() == floor {
+                                    return Ok(Outcome::Completed(return_value));
+                                }
+                                self.set_reg(frame.ret_dst, return_value);
+                                continue 'frames;
                             }
                         }
                         // `Return` and the rest of the pure subset are handled above by

@@ -1102,6 +1102,48 @@ fn main() -> Unit {
 }
 
 #[test]
+fn parity_try_on_option_short_circuits_on_none() {
+    // `?` on an `Option` keeps `Some(x)` and early-returns `None`, matching `?`
+    // on `Result`. Must behave identically on the VM and the compiled backend.
+    let source = r#"
+fn make(n: Int) -> Option<Int> {
+    if n > 0 {
+        return Some(n)
+    }
+    return None
+}
+
+fn doubled(n: Int) -> Option<Int> {
+    let v = make(n: n)?
+    return Some(v + v)
+}
+
+fn show(label: read String, value: read Option<Int>) -> Unit {
+    match value {
+        Some(x) => {
+            Log.write(message: read String.concat(left: read label, right: read String.from_int(value: read x)))
+        }
+        None => {
+            Log.write(message: read String.concat(left: read label, right: read "none"))
+        }
+    }
+    return Unit
+}
+
+fn main() -> Unit {
+    show(label: read "pos: ", value: read doubled(n: 21))
+    show(label: read "zero: ", value: read doubled(n: 0))
+    return Unit
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-try-option.rss",
+        "rsscript_parity_try_option",
+        source,
+    );
+}
+
+#[test]
 fn parity_boolean_operators_short_circuit() {
     let source = r#"
 fn side_effect() -> Bool {
