@@ -98,6 +98,11 @@ impl<'a> Generator<'a> {
     // -- top level -------------------------------------------------------
 
     fn program(&mut self) -> GeneratedProgram {
+        // Occasionally emit a self-contained async channel pipeline instead.
+        if self.seed.choice(5) == 0 {
+            return self.gen_async_program();
+        }
+
         // Always declare `features: local` so generated `local` bindings are
         // allowed; the feature is harmless when unused.
         let mut source = String::from("features: local\n\n");
@@ -136,6 +141,54 @@ impl<'a> Generator<'a> {
         GeneratedProgram {
             source,
             is_async: false,
+        }
+    }
+
+    /// A self-contained async channel pipeline: a producer sends `k` values, a
+    /// consumer receives exactly `k` (so there is no deadlock), counts them, and
+    /// returns the count, which `main` prints. Exercises the cooperative
+    /// scheduler, `task_group` / `async let`, channels, `await`, and `?` across
+    /// every backend. Send/receive counts are matched and the channel is buffered
+    /// (capacity >= k), so completion and the printed count are deterministic.
+    fn gen_async_program(&mut self) -> GeneratedProgram {
+        let k = 1 + self.seed.choice(4); // 1..=4 items
+
+        let mut produce = String::from(
+            "async fn produce(sender: read Sender<Int>) -> Result<Unit, ChannelError> {\n",
+        );
+        for i in 0..k {
+            let value = self.seed.range_i64(0, 1000);
+            produce.push_str(&format!("    local s{i} = {value}\n"));
+            produce.push_str(&format!(
+                "    await Sender.send(sender: read sender, value: take s{i})?\n"
+            ));
+        }
+        produce.push_str("    return Ok(Unit)\n}\n\n");
+
+        let mut consume = String::from(
+            "async fn consume(receiver: read Receiver<Int>) -> Result<Int, ChannelError> {\n    let mut n = 0\n",
+        );
+        for _ in 0..k {
+            consume.push_str("    let _ = await Receiver.recv(receiver: read receiver)?\n");
+            consume.push_str("    n = n + 1\n");
+        }
+        consume.push_str("    return Ok(n)\n}\n\n");
+
+        let main = "fn main() -> Result<Unit, ChannelError> {\n    \
+             let mut channel = Channel.bounded<Int>(capacity: 4)?\n    \
+             let sender = Channel.sender(channel: read channel)\n    \
+             let receiver = Channel.receiver(channel: mut channel)?\n    \
+             task_group {\n        \
+             async let producer = produce(sender: read sender)\n        \
+             async let consumer = consume(receiver: read receiver)\n        \
+             await producer?\n        \
+             let count = await consumer?\n        \
+             Log.write(message: read String.from_int(value: count))\n    }\n    \
+             return Ok(Unit)\n}\n";
+
+        GeneratedProgram {
+            source: format!("features: async, local\n\n{produce}{consume}{main}"),
+            is_async: true,
         }
     }
 
