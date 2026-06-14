@@ -98,7 +98,9 @@ impl<'a> Generator<'a> {
     // -- top level -------------------------------------------------------
 
     fn program(&mut self) -> GeneratedProgram {
-        let mut source = String::new();
+        // Always declare `features: local` so generated `local` bindings are
+        // allowed; the feature is harmless when unused.
+        let mut source = String::from("features: local\n\n");
 
         let struct_count = self.seed.choice(3); // 0..=2
         for index in 0..struct_count {
@@ -377,7 +379,7 @@ impl<'a> Generator<'a> {
     fn gen_stmt(&mut self, scope: &mut Scope) -> String {
         // Bias toward lets; sometimes assign, a `?`-unwrap, or a populated
         // collection.
-        match self.seed.weighted(&[6, 2, 2, 3, 2, 1]) {
+        match self.seed.weighted(&[6, 2, 2, 3, 2, 1, 2]) {
             0 => self.gen_let(scope),
             1 => self
                 .gen_assign(scope)
@@ -388,8 +390,29 @@ impl<'a> Generator<'a> {
                 .unwrap_or_else(|| self.gen_let(scope)),
             3 => self.gen_collection_stmt(scope),
             4 => self.gen_closure_stmt(scope),
-            _ => self.gen_cancellation_stmt(),
+            5 => self.gen_cancellation_stmt(),
+            _ => self.gen_counter_stmt(),
         }
+    }
+
+    /// A `Counter` resource: create, add a few times, observe the value. A
+    /// runtime-backed mutable resource whose final value is deterministic, so it
+    /// exercises resource construction / `mut` receiver calls across backends.
+    fn gen_counter_stmt(&mut self) -> String {
+        let counter = self.fresh_var();
+        let start = self.seed.range_i64(0, 1000);
+        let mut lines = vec![format!("let {counter} = Counter.new(value: {start})")];
+        let adds = self.seed.choice(3); // 0..=2
+        for _ in 0..adds {
+            let amount = self.seed.range_i64(0, 1000);
+            lines.push(format!(
+                "Counter.add(counter: mut {counter}, amount: {amount})"
+            ));
+        }
+        lines.push(format!(
+            "Log.write(message: read String.from_int(value: Counter.value(counter: read {counter})))"
+        ));
+        lines.join("\n    ")
     }
 
     /// Deterministic concurrency primitive: create a `CancellationSource`, observe
@@ -582,6 +605,10 @@ impl<'a> Generator<'a> {
         let mut_kw = if mutable { "mut " } else { "" };
         if annotate {
             format!("let {mut_kw}{name}: {} = {expr}", ty.render())
+        } else if !mutable && ty.is_scalar() && self.seed.choice(3) == 0 {
+            // Exercise the `local` binding kind for an immutable scalar (copyable,
+            // so it can still be read/returned without escaping a resource).
+            format!("local {name} = {expr}")
         } else {
             format!("let {mut_kw}{name} = {expr}")
         }
