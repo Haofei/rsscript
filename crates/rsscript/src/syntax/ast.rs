@@ -497,6 +497,16 @@ pub enum MatchPattern {
         value: MatchLiteral,
         span: Span,
     },
+    /// A `List<T>` slice pattern: `[]`, `[a, b]`, `[first, ..rest]`,
+    /// `[..init, last]`, `[a, ..mid, z]`. `rest` is `None` for a fixed-length
+    /// pattern, `Some(None)` for an ignored `..`, and `Some(Some(name))` for a
+    /// bound `..name`.
+    List {
+        prefix: Vec<MatchPattern>,
+        rest: Option<Option<String>>,
+        suffix: Vec<MatchPattern>,
+        span: Span,
+    },
     Wildcard(Span),
 }
 
@@ -504,7 +514,10 @@ impl MatchPattern {
     pub fn constructor_name(&self) -> Option<&str> {
         match self {
             Self::Variant { name, .. } | Self::Struct { name, .. } => Some(name),
-            Self::Binding { .. } | Self::Literal { .. } | Self::Wildcard(_) => None,
+            Self::Binding { .. }
+            | Self::Literal { .. }
+            | Self::List { .. }
+            | Self::Wildcard(_) => None,
         }
     }
 
@@ -527,6 +540,24 @@ impl MatchPattern {
                     }
                 })
                 .collect(),
+            Self::List {
+                prefix,
+                rest,
+                suffix,
+                ..
+            } => {
+                let mut names = Vec::new();
+                for pattern in prefix {
+                    names.extend(pattern.binding_names());
+                }
+                if let Some(Some(rest_name)) = rest {
+                    names.push(rest_name.as_str());
+                }
+                for pattern in suffix {
+                    names.extend(pattern.binding_names());
+                }
+                names
+            }
             Self::Variant { binding: None, .. } | Self::Literal { .. } | Self::Wildcard(_) => {
                 Vec::new()
             }

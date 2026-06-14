@@ -1807,9 +1807,14 @@ impl<'a> RustLowerer<'a> {
             }
             Stmt::Match(stmt) => {
                 let scrutinee_type = self.infer_expr_type(&stmt.value);
-                let scrutinee =
+                let mut scrutinee =
                     self.lower_match_scrutinee_expr(&stmt.value, scrutinee_type.as_ref());
                 let by_ref = self.match_scrutinee_by_ref(&stmt.value);
+                // Native Rust slice patterns match a `[T]`, not a `Vec<T>`; view the
+                // list scrutinee as a slice so `[a, b]` / `[first, rest @ ..]` apply.
+                if arms_have_list_pattern(&stmt.arms) {
+                    scrutinee = format!("({scrutinee}).as_slice()");
+                }
                 out.push_str(&format!("{pad}match {scrutinee} {{\n"));
                 for arm in &stmt.arms {
                     let pattern = self.lower_match_pattern_typed(
@@ -1845,7 +1850,9 @@ impl<'a> RustLowerer<'a> {
                             self.managed_bindings.remove(binding);
                         }
                     }
-                    if by_ref {
+                    // List arms always bind through a slice, so they need owned
+                    // rebindings even when the scrutinee itself is owned (not by_ref).
+                    if by_ref || matches!(arm.pattern, MatchPattern::List { .. }) {
                         for (name, rhs) in
                             self.owned_payload_rebindings(&arm.pattern, scrutinee_type.as_ref())
                         {
@@ -2853,8 +2860,11 @@ impl<'a> RustLowerer<'a> {
             }
             Expr::Match { value, arms, .. } => {
                 let scrutinee_type = self.infer_expr_type(value);
-                let scrutinee = self.lower_match_scrutinee_expr(value, scrutinee_type.as_ref());
+                let mut scrutinee = self.lower_match_scrutinee_expr(value, scrutinee_type.as_ref());
                 let by_ref = self.match_scrutinee_by_ref(value);
+                if arms_have_list_pattern(arms) {
+                    scrutinee = format!("({scrutinee}).as_slice()");
+                }
                 let mut out = format!("match {scrutinee} {{\n");
                 for arm in arms {
                     let pattern = self.lower_match_pattern_typed(
@@ -2868,7 +2878,7 @@ impl<'a> RustLowerer<'a> {
                         .map(|guard| format!(" if {}", self.lower_expr(guard)))
                         .unwrap_or_default();
                     let mut body = self.lower_expr_block(&arm.body, 1);
-                    if by_ref {
+                    if by_ref || matches!(arm.pattern, MatchPattern::List { .. }) {
                         let binds =
                             self.owned_payload_rebindings(&arm.pattern, scrutinee_type.as_ref());
                         if !binds.is_empty() {
@@ -4930,6 +4940,33 @@ impl<'a> RustLowerer<'a> {
             }
             return rebindings;
         }
+        // List slice patterns always bind through a `&[T]` slice (the scrutinee is
+        // matched via `.as_slice()`), so element bindings are `&T` and the rest
+        // binding is `&[T]`; rebind each to its owned `T` / `List<T>` form.
+        if let MatchPattern::List {
+            prefix,
+            rest,
+            suffix,
+            ..
+        } = pattern
+        {
+            let element_ty = value_type.and_then(|ty| ty.args.first());
+            let mut rebindings = Vec::new();
+            for element in prefix.iter().chain(suffix) {
+                if let MatchPattern::Binding { name, .. } = element {
+                    if let Some(element_ty) = element_ty {
+                        rebindings.extend(self.owned_rebinding_for(name, element_ty));
+                    }
+                } else {
+                    rebindings.extend(self.owned_payload_rebindings(element, element_ty));
+                }
+            }
+            if let Some(Some(rest_name)) = rest {
+                let ident = rust_ident(rest_name);
+                rebindings.push((ident.clone(), format!("{ident}.to_vec()")));
+            }
+            return rebindings;
+        }
         Vec::new()
     }
 
@@ -5056,6 +5093,30 @@ impl<'a> RustLowerer<'a> {
                 has_rest,
                 ..
             } => self.lower_struct_match_pattern_typed(name, fields, *has_rest, value_type, by_ref),
+            MatchPattern::List {
+                prefix,
+                rest,
+                suffix,
+                ..
+            } => {
+                let element_type = value_type.and_then(|ty| ty.args.first());
+                let mut parts: Vec<String> = prefix
+                    .iter()
+                    .map(|pattern| self.lower_match_pattern_typed(pattern, element_type, by_ref))
+                    .collect();
+                if let Some(rest_binding) = rest {
+                    match rest_binding {
+                        Some(name) => parts.push(format!("{} @ ..", rust_ident(name))),
+                        None => parts.push("..".to_string()),
+                    }
+                }
+                parts.extend(
+                    suffix
+                        .iter()
+                        .map(|pattern| self.lower_match_pattern_typed(pattern, element_type, by_ref)),
+                );
+                format!("[{}]", parts.join(", "))
+            }
         }
     }
 
@@ -5164,11 +5225,19 @@ impl<'a> RustLowerer<'a> {
     }
 }
 
+/// Whether any arm matches with a list slice pattern, so the scrutinee must be
+/// lowered as a `[T]` slice rather than a `Vec<T>`.
+fn arms_have_list_pattern(arms: &[crate::syntax::ast::MatchArm]) -> bool {
+    arms.iter()
+        .any(|arm| matches!(arm.pattern, MatchPattern::List { .. }))
+}
+
 fn match_pattern_span(pattern: &MatchPattern) -> Span {
     match pattern {
         MatchPattern::Variant { span, .. }
         | MatchPattern::Struct { span, .. }
         | MatchPattern::Literal { span, .. }
+        | MatchPattern::List { span, .. }
         | MatchPattern::Binding { span, .. }
         | MatchPattern::Wildcard(span) => span.clone(),
     }

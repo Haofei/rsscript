@@ -74,15 +74,21 @@ manual wrapper.
   _Acceptance:_ common option patterns require no custom helpers and preserve
   ownership/borrow rules clearly.
 
-- [ ] **Pattern matching over variants, options, constants, tuples, and lists.**
+- [x] **Pattern matching over variants, options, constants, tuples, and lists.**
   _Why:_ the UOp/UPat rewrite system is pattern-heavy. Lowering it as nested
   conditionals would be slow to write and hard to audit.
   _Acceptance:_ match arms can bind values, match enum/variant tags, constants,
   tuples, and optional values; exhaustiveness or explicit fallback is checked.
-  _Partial:_ variants, options, constants, and tuple patterns (incl. literal and
-  binding element patterns) now match at VM/compiled parity; plain (non-variant)
-  generic struct patterns and generic field/binding types resolve their element
-  types from the scrutinee's arguments. List patterns remain open.
+  _Done:_ variants, options, constants, tuple, and list patterns now match at
+  VM/compiled parity. List slice patterns support `[]`, fixed-length `[a, b]`,
+  head/rest `[first, ..rest]`, tail `[..init, last]`, and middle-rest
+  `[a, ..mid, z]` (element bindings come out owned; the rest binding is a
+  `List<T>`); the VM lowers them to a length test plus `ListGet`/`List.slice`,
+  the compiled backend to native Rust slice patterns with owned rebindings.
+  Exhaustiveness understands list lengths (`[]` + `[x, ..rest]` is exhaustive).
+  Plain (non-variant) generic struct patterns and generic field/binding types
+  resolve their element types from the scrutinee's arguments. See
+  `tests/fixtures/pass/list_patterns.rss` and the `parity_list_match` test.
 
 - [ ] **Callable and limited closure support.** Support function values and
   simple captures well enough for callbacks and rewrite rules.

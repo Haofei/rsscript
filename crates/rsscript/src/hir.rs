@@ -3109,6 +3109,32 @@ fn match_pattern_binding_types(
         }
     }
 
+    if let MatchPattern::List {
+        prefix,
+        rest,
+        suffix,
+        ..
+    } = pattern
+    {
+        let Some(value_type) = value_type else {
+            return Vec::new();
+        };
+        // Element patterns bind at the list's element type `T` (`List<T>`); a
+        // bound rest segment is itself a `List<T>`.
+        let element_type = value_type
+            .strip_prefix("List<")
+            .and_then(|rest| rest.strip_suffix('>'))
+            .map(str::trim);
+        let mut bindings = Vec::new();
+        for element in prefix.iter().chain(suffix) {
+            bindings.extend(match_pattern_binding_types(hir, element, element_type));
+        }
+        if let Some(Some(rest_name)) = rest {
+            bindings.push((rest_name.clone(), value_type.to_string()));
+        }
+        return bindings;
+    }
+
     let MatchPattern::Struct { name, fields, .. } = pattern else {
         return Vec::new();
     };

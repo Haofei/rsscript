@@ -830,6 +830,19 @@ impl Builder<'_> {
                     }
                 }
             }
+            MatchPattern::List {
+                prefix,
+                rest,
+                suffix,
+                span,
+            } => {
+                for pattern in prefix.iter().chain(suffix) {
+                    self.visit_pattern(pattern);
+                }
+                if let Some(Some(rest_name)) = rest {
+                    self.define(rest_name, SymbolKind::Local, span, None);
+                }
+            }
             MatchPattern::Variant { binding: None, .. }
             | MatchPattern::Literal { .. }
             | MatchPattern::Wildcard(_) => {}

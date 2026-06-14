@@ -1334,3 +1334,50 @@ fn main() -> Unit {
         source,
     );
 }
+
+#[test]
+fn parity_list_match_patterns() {
+    // List slice patterns lower to a length test plus `ListGet`/`List.slice` in
+    // the VM and to native Rust slice patterns (with owned rebindings) in the
+    // compiled backend; both must dispatch and bind identically.
+    let source = r#"features: local
+
+fn head_tail(xs: read List<Int>) -> fresh String {
+    match read xs {
+        [] => { return "empty" }
+        [only] => { return String.concat(left: read "one:", right: read String.from_int(value: only)) }
+        [first, ..rest] => {
+            let n = List.len(list: read rest)
+            return String.concat(left: read String.from_int(value: first), right: read String.from_int(value: n))
+        }
+    }
+}
+
+fn ends(xs: read List<Int>) -> Int {
+    match read xs {
+        [a, ..mid, z] => { return a + z + List.len(list: read mid) }
+        [..init, last] => { return last + List.len(list: read init) }
+        _ => { return -1 }
+    }
+}
+
+fn main() -> Unit {
+    let mut a: List<Int> = List.new<Int>()
+    Log.write(message: read head_tail(xs: read a))
+    Log.write(message: read String.from_int(value: ends(xs: read a)))
+    List.push(list: mut a, value: read 10)
+    Log.write(message: read head_tail(xs: read a))
+    Log.write(message: read String.from_int(value: ends(xs: read a)))
+    List.push(list: mut a, value: read 20)
+    List.push(list: mut a, value: read 30)
+    Log.write(message: read head_tail(xs: read a))
+    Log.write(message: read String.from_int(value: ends(xs: read a)))
+    return Unit
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-list-match.rss",
+        "rsscript_parity_list_match",
+        source,
+    );
+}

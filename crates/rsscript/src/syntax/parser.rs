@@ -2300,6 +2300,9 @@ fn parse_match_pattern(tokens: &[Token], start: usize, end: usize) -> Option<Mat
     if let Some(tuple) = parse_tuple_pattern(tokens, start, end) {
         return Some(tuple);
     }
+    if let Some(list) = parse_list_pattern(tokens, start, end) {
+        return Some(list);
+    }
     let (start, end) = trim_outer(tokens, start, end);
     if start >= end {
         return None;
@@ -2441,6 +2444,81 @@ fn parse_tuple_pattern(tokens: &[Token], start: usize, end: usize) -> Option<Mat
         has_rest: false,
         span: tokens[start].span.clone(),
     })
+}
+
+/// Parse `[p0, p1, ..]` list slice patterns: `[]`, `[a, b]`, `[first, ..rest]`,
+/// `[..init, last]`, `[a, ..mid, z]`. At most one `..`/`..name` rest segment is
+/// permitted; elements before it form the prefix, elements after it the suffix.
+/// Returns `None` for anything not wrapped in a single matched `[` ... `]`.
+fn parse_list_pattern(tokens: &[Token], start: usize, end: usize) -> Option<MatchPattern> {
+    if !tokens.get(start)?.symbol("[") || !tokens.get(end.checked_sub(1)?)?.symbol("]") {
+        return None;
+    }
+    let close = find_matching(tokens, start, "[", "]")?;
+    if close + 1 != end {
+        return None;
+    }
+    let span = tokens[start].span.clone();
+    let mut prefix = Vec::new();
+    let mut suffix = Vec::new();
+    let mut rest: Option<Option<String>> = None;
+    for range in split_param_ranges(tokens, start + 1, close) {
+        if range.empty_span.is_some() {
+            return None;
+        }
+        if let Some(rest_binding) = parse_list_rest_segment(tokens, range.start, range.end) {
+            if rest.is_some() {
+                return None;
+            }
+            rest = Some(rest_binding);
+            continue;
+        }
+        let element = if range.start + 1 == range.end {
+            *parse_single_payload_pattern(tokens, range.start)?
+        } else {
+            parse_match_pattern(tokens, range.start, range.end)?
+        };
+        if rest.is_none() {
+            prefix.push(element);
+        } else {
+            suffix.push(element);
+        }
+    }
+    Some(MatchPattern::List {
+        prefix,
+        rest,
+        suffix,
+        span,
+    })
+}
+
+/// If `[start, end)` is a `..` / `..name` rest segment, return `Some(binding)`
+/// where `binding` is `None` for an ignored `..` (or `.._`) and `Some(name)`
+/// for `..name`. Returns `None` (the outer option) when the range is an ordinary
+/// element pattern. `..` may tokenise as one `..` token or two `.` tokens.
+fn parse_list_rest_segment(
+    tokens: &[Token],
+    start: usize,
+    end: usize,
+) -> Option<Option<String>> {
+    let dots_end = if tokens.get(start)?.symbol("..") {
+        start + 1
+    } else if tokens.get(start)?.symbol(".") && tokens.get(start + 1).is_some_and(|t| t.symbol(".")) {
+        start + 2
+    } else {
+        return None;
+    };
+    if dots_end == end {
+        return Some(None);
+    }
+    if dots_end + 1 == end {
+        let name = ident_name(tokens.get(dots_end)?)?.to_string();
+        if name == "_" {
+            return Some(None);
+        }
+        return Some(Some(name));
+    }
+    None
 }
 
 fn parse_match_field_patterns(

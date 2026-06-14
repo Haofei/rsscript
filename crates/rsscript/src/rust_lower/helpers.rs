@@ -1107,7 +1107,33 @@ pub(super) fn lower_match_pattern(pattern: &MatchPattern) -> String {
             has_rest,
             ..
         } => lower_struct_match_pattern(None, name, fields, *has_rest),
+        MatchPattern::List {
+            prefix,
+            rest,
+            suffix,
+            ..
+        } => lower_list_match_pattern(prefix, rest.as_ref(), suffix),
     }
+}
+
+/// Render a list slice pattern as a native Rust slice pattern: `[]`, `[a, b]`,
+/// `[first, rest @ ..]`, `[init @ .., last]`. Element/rest bindings come out as
+/// references (`&T` / `&[T]`); callers that need owned values add clone
+/// rebindings.
+pub(super) fn lower_list_match_pattern(
+    prefix: &[MatchPattern],
+    rest: Option<&Option<String>>,
+    suffix: &[MatchPattern],
+) -> String {
+    let mut parts: Vec<String> = prefix.iter().map(lower_match_pattern).collect();
+    if let Some(rest_binding) = rest {
+        match rest_binding {
+            Some(name) => parts.push(format!("{} @ ..", rust_ident(name))),
+            None => parts.push("..".to_string()),
+        }
+    }
+    parts.extend(suffix.iter().map(lower_match_pattern));
+    format!("[{}]", parts.join(", "))
 }
 
 fn lower_struct_match_pattern(

@@ -1882,7 +1882,7 @@ fn check_match_scrutinee_type(analyzer: &mut Analyzer<'_>, expr: &HirExpr) {
     let Some(type_name) = hir_expr_type_name(expr) else {
         return;
     };
-    if type_root_name(type_name) == "Option" || type_root_name(type_name) == "Result" {
+    if matches!(type_root_name(type_name), "Option" | "Result" | "List") {
         return;
     }
     if matches!(type_name, "Int" | "String" | "Bool") {
@@ -1898,7 +1898,7 @@ fn check_match_scrutinee_type(analyzer: &mut Analyzer<'_>, expr: &HirExpr) {
     analyzer.diagnostics.push(
         Diagnostic::error(
             code::CONTROL_FLOW_TYPE_MISMATCH,
-            format!("match scrutinee has type `{type_name}`, expected `Option<T>`, `Result<T, E>`, a declared sum/struct/class type, or an `Int`/`String`/`Bool` literal match."),
+            format!("match scrutinee has type `{type_name}`, expected `Option<T>`, `Result<T, E>`, `List<T>`, a declared sum/struct/class type, or an `Int`/`String`/`Bool` literal match."),
             hir_expr_span(expr).clone(),
             "control-flow type mismatch",
         )
@@ -2062,6 +2062,26 @@ fn check_match_pattern_matches_type(
                 }
             }
         }
+        MatchPattern::List {
+            prefix,
+            suffix,
+            span,
+            ..
+        } => {
+            if root != "List" {
+                push_variant_or_struct_cannot_match(analyzer, "[..]", type_name, span);
+                return;
+            }
+            // Each element pattern is checked against the list's element type `T`
+            // (`List<T>`); the rest binding (if any) is itself a `List<T>`.
+            if let Some(element_type) =
+                type_arg_names(type_name).and_then(|args| args.first().copied())
+            {
+                for pattern in prefix.iter().chain(suffix) {
+                    check_match_pattern_matches_type(analyzer, pattern, element_type);
+                }
+            }
+        }
     }
 }
 
@@ -2191,7 +2211,11 @@ fn check_match_pattern_effects(
         );
     }
     for arm in arms {
-        if matches!(arm.pattern, MatchPattern::Struct { .. }) && scrutinee_effect.is_none() {
+        if matches!(
+            arm.pattern,
+            MatchPattern::Struct { .. } | MatchPattern::List { .. }
+        ) && scrutinee_effect.is_none()
+        {
             analyzer.diagnostics.push(
                 Diagnostic::error(
                     code::MISSING_DATA_EFFECT,

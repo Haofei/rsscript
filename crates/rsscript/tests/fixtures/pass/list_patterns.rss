@@ -1,0 +1,32 @@
+// List slice patterns in `match`: `[]`, fixed-length `[only]`, head/rest
+// `[first, ..rest]`, tail `[..init, last]`, and middle-rest `[a, ..mid, z]`.
+// Element bindings come out owned; the rest binding is a `List<T>`.
+features: local
+
+fn head_tail(xs: read List<Int>) -> String {
+    match read xs {
+        [] => { return "empty" }
+        [only] => { return String.from_int(value: only) }
+        [first, ..rest] => {
+            return String.from_int(value: first + List.len(list: read rest))
+        }
+    }
+}
+
+fn ends(xs: read List<Int>) -> Int {
+    match read xs {
+        [a, ..mid, z] => { return a + z + List.len(list: read mid) }
+        [..init, last] => { return last + List.len(list: read init) }
+        _ => { return 0 }
+    }
+}
+
+fn main() -> Unit {
+    let mut xs: List<Int> = List.new<Int>()
+    List.push(list: mut xs, value: read 4)
+    List.push(list: mut xs, value: read 5)
+    List.push(list: mut xs, value: read 6)
+    Log.write(message: read head_tail(xs: read xs))
+    Log.write(message: read String.from_int(value: ends(xs: read xs)))
+    return Unit
+}

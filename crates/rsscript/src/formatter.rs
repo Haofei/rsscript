@@ -897,6 +897,40 @@ impl Formatter {
                 }
                 self.out.push_str(" }");
             }
+            MatchPattern::List {
+                prefix,
+                rest,
+                suffix,
+                ..
+            } => {
+                self.out.push('[');
+                let mut first = true;
+                for pattern in prefix {
+                    if !first {
+                        self.out.push_str(", ");
+                    }
+                    first = false;
+                    self.match_pattern(pattern);
+                }
+                if let Some(rest_binding) = rest {
+                    if !first {
+                        self.out.push_str(", ");
+                    }
+                    first = false;
+                    self.out.push_str("..");
+                    if let Some(name) = rest_binding {
+                        self.out.push_str(name);
+                    }
+                }
+                for pattern in suffix {
+                    if !first {
+                        self.out.push_str(", ");
+                    }
+                    first = false;
+                    self.match_pattern(pattern);
+                }
+                self.out.push(']');
+            }
         }
     }
 
@@ -1853,6 +1887,52 @@ fn write_line<W: Writer>(writer: mut W, message: read String) -> Unit {
 
 impl Writer for BufferWriter {
     write = BufferWriter.write
+}
+"#
+        );
+    }
+
+    #[test]
+    fn renders_list_slice_patterns() {
+        let source = r#"features: local
+
+fn describe(xs:read List<Int>)->Int{
+match read xs{
+[]=>{return 0}
+[only]=>{return only}
+[first,..rest]=>{return first}
+[..init,last]=>{return last}
+[a,..mid,z]=>{return a}
+_=>{return -1}
+}
+}
+"#;
+
+        assert_eq!(
+            format_source("list.rss", source),
+            r#"features: local
+
+fn describe(xs: read List<Int>) -> Int {
+    match read xs {
+        [] => {
+            return 0
+        }
+        [only] => {
+            return only
+        }
+        [first, ..rest] => {
+            return first
+        }
+        [..init, last] => {
+            return last
+        }
+        [a, ..mid, z] => {
+            return a
+        }
+        _ => {
+            return -1
+        }
+    }
 }
 "#
         );

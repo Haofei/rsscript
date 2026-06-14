@@ -5316,6 +5316,12 @@ impl RegLowerer<'_> {
                 self.lower_user_struct_variant_pattern(src, name, fields)
             }
             MatchPattern::Struct { fields, .. } => self.lower_struct_field_patterns(src, fields),
+            MatchPattern::List {
+                prefix,
+                rest,
+                suffix,
+                ..
+            } => self.lower_list_pattern(src, prefix, rest, suffix),
             MatchPattern::Literal { value, .. } => self.lower_literal_pattern(src, value),
             _ => Err(EvalError::Runtime(
                 "reg VM v0 does not support this match pattern.".to_string(),
@@ -5355,6 +5361,12 @@ impl RegLowerer<'_> {
                                 .is_none_or(|pattern| self.is_supported_match_pattern(pattern))
                     })
             }
+            MatchPattern::List {
+                prefix, suffix, ..
+            } => prefix
+                .iter()
+                .chain(suffix)
+                .all(|pattern| self.is_supported_match_pattern(pattern)),
         }
     }
 
@@ -5390,6 +5402,115 @@ impl RegLowerer<'_> {
                     "reg VM struct pattern field `{}` has no binding or nested pattern.",
                     field.name
                 )));
+            }
+        }
+        Ok(failures)
+    }
+
+    /// Lower a `List<T>` slice pattern. Refutability is a length test (`==` for a
+    /// fixed pattern, `>=` when a rest segment is present); elements are projected
+    /// with `ListGet` and the rest segment (if bound) with `List.slice`.
+    fn lower_list_pattern(
+        &mut self,
+        src: Reg,
+        prefix: &[MatchPattern],
+        rest: &Option<Option<String>>,
+        suffix: &[MatchPattern],
+    ) -> Result<Vec<MatchFailurePatch>, EvalError> {
+        let mut failures = Vec::new();
+        let required = (prefix.len() + suffix.len()) as i64;
+        let len = self.temp();
+        self.emit(RegInstr::ListLen { dst: len, list: src });
+        let bound = self.temp();
+        self.emit(RegInstr::LoadInt {
+            dst: bound,
+            value: required,
+        });
+        // Fail (jump to the next arm) when the length constraint does not hold.
+        // `RegIntCompare` has no `Equal`, so a fixed length is bracketed by `>=`
+        // and `<=`; a rest pattern only needs the lower bound.
+        let lower = self.emit(RegInstr::JumpIfIntCompare {
+            lhs: len,
+            rhs: bound,
+            op: RegIntCompare::GreaterEqual,
+            expected: false,
+            target: usize::MAX,
+        });
+        failures.push(MatchFailurePatch::Jump(lower));
+        if rest.is_none() {
+            let upper = self.emit(RegInstr::JumpIfIntCompare {
+                lhs: len,
+                rhs: bound,
+                op: RegIntCompare::LessEqual,
+                expected: false,
+                target: usize::MAX,
+            });
+            failures.push(MatchFailurePatch::Jump(upper));
+        }
+        for (index, pattern) in prefix.iter().enumerate() {
+            let idx = self.temp();
+            self.emit(RegInstr::LoadInt {
+                dst: idx,
+                value: index as i64,
+            });
+            let elem = self.temp();
+            self.emit(RegInstr::ListGet {
+                dst: elem,
+                list: src,
+                index: idx,
+            });
+            failures.extend(self.lower_match_pattern(pattern, elem)?);
+        }
+        if let Some(Some(rest_name)) = rest {
+            let start = self.temp();
+            self.emit(RegInstr::LoadInt {
+                dst: start,
+                value: prefix.len() as i64,
+            });
+            let slice_len = self.temp();
+            self.emit(RegInstr::SubInt {
+                dst: slice_len,
+                lhs: len,
+                rhs: bound,
+            });
+            let dst = self.local(rest_name);
+            self.emit(RegInstr::CallIntrinsic {
+                dst,
+                intrinsic: RegIntrinsic::ListSlice,
+                args: vec![src, start, slice_len],
+            });
+        }
+        if !suffix.is_empty() {
+            let suffix_count = self.temp();
+            self.emit(RegInstr::LoadInt {
+                dst: suffix_count,
+                value: suffix.len() as i64,
+            });
+            let base = self.temp();
+            self.emit(RegInstr::SubInt {
+                dst: base,
+                lhs: len,
+                rhs: suffix_count,
+            });
+            for (offset, pattern) in suffix.iter().enumerate() {
+                let offset_reg = self.temp();
+                self.emit(RegInstr::LoadInt {
+                    dst: offset_reg,
+                    value: offset as i64,
+                });
+                let idx = self.temp();
+                self.emit(RegInstr::AddInt {
+                    dst: idx,
+                    lhs: base,
+                    rhs: offset_reg,
+                });
+                let elem = self.temp();
+                self.emit(RegInstr::ListGet {
+                    dst: elem,
+                    list: src,
+                    index: idx,
+                });
+                failures.extend(self.lower_match_pattern(pattern, elem)?);
             }
         }
         Ok(failures)

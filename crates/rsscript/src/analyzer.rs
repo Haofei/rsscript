@@ -2034,6 +2034,36 @@ impl Analyzer<'_> {
             return true;
         }
         let root = self.resolve_type_alias(type_root_name(type_name));
+        if root == "List" {
+            // A rest pattern `[a.., ..rest, ..z]` covers every length `>= a+z`; a
+            // fixed pattern covers exactly its element count. The match is
+            // exhaustive iff some rest pattern caps the open tail and every shorter
+            // length is covered by a fixed pattern. With no rest pattern, infinitely
+            // many lengths are uncovered, so an explicit `_` is required (handled
+            // above).
+            let mut min_rest: Option<usize> = None;
+            let mut fixed_lengths = HashSet::new();
+            for pattern in patterns {
+                if let MatchPattern::List {
+                    prefix,
+                    rest,
+                    suffix,
+                    ..
+                } = pattern
+                {
+                    let count = prefix.len() + suffix.len();
+                    if rest.is_some() {
+                        min_rest = Some(min_rest.map_or(count, |m: usize| m.min(count)));
+                    } else {
+                        fixed_lengths.insert(count);
+                    }
+                }
+            }
+            let Some(min_rest) = min_rest else {
+                return false;
+            };
+            return (0..min_rest).all(|length| fixed_lengths.contains(&length));
+        }
         if root == "Bool" {
             let bool_literals = patterns
                 .iter()
@@ -2300,7 +2330,7 @@ impl Analyzer<'_> {
                 value: crate::syntax::ast::MatchLiteral::Bool(value),
                 ..
             } => matches!(witness, PatternWitness::Bool(candidate) if candidate == value),
-            MatchPattern::Literal { .. } => false,
+            MatchPattern::Literal { .. } | MatchPattern::List { .. } => false,
             MatchPattern::Variant { name, binding, .. } => {
                 let PatternWitness::Constructor {
                     name: witness_name,
@@ -5960,6 +5990,14 @@ fn constructor_pattern_is_irrefutable(pattern: &MatchPattern) -> bool {
                     )
                 })
         }),
+        // `[..]` / `[..rest]` matches any list; every other list pattern adds a
+        // length or element constraint and so is refutable.
+        MatchPattern::List {
+            prefix,
+            rest,
+            suffix,
+            ..
+        } => prefix.is_empty() && suffix.is_empty() && rest.is_some(),
         MatchPattern::Literal { .. } => false,
     }
 }
@@ -5991,9 +6029,10 @@ fn constrained_field_patterns(pattern: &MatchPattern) -> Vec<(String, &MatchPatt
                 }
             })
             .collect(),
-        MatchPattern::Binding { .. } | MatchPattern::Literal { .. } | MatchPattern::Wildcard(_) => {
-            Vec::new()
-        }
+        MatchPattern::Binding { .. }
+        | MatchPattern::Literal { .. }
+        | MatchPattern::List { .. }
+        | MatchPattern::Wildcard(_) => Vec::new(),
     }
 }
 
