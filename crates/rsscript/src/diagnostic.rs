@@ -37,6 +37,7 @@ pub mod code {
     pub const AWAIT_LIVE_LOCAL: &str = "RS0031";
     pub const PROTOCOL_NOT_SATISFIED: &str = "RS0032";
     pub const INTEGER_LITERAL_OUT_OF_RANGE: &str = "RS0033";
+    pub const UNINFERABLE_BINDING_TYPE: &str = "RS0034";
     pub const FEATURE_VIOLATION: &str = "RS0101";
     pub const UNNAMED_ARGUMENT: &str = "RS0201";
     pub const MISSING_DATA_EFFECT: &str = "RS0202";
@@ -353,6 +354,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::MISSING_PARAMETER_TYPE,
         title: "missing parameter type",
         explanation: "Parameters must have explicit types so call effects, freshness, and resource rules can be checked against a stable signature.",
+    },
+    DiagnosticExplanation {
+        code: code::UNINFERABLE_BINDING_TYPE,
+        title: "binding type cannot be inferred",
+        explanation: "A `let` binding whose value is a bare `Ok(...)`, `Err(...)`, or `None` leaves a type parameter open (the `Result` error type, the `Result` ok type, or the `Option` value type). RSScript normally resolves that parameter from how the binding is later used; when the binding is never used, nothing can constrain it, so the type is genuinely ambiguous and the program would not lower to valid Rust. The checker reports this in RSScript — instead of letting it surface as a backend `type annotations needed` error — and the fix is to add a type annotation (e.g. `let v: Result<Int, String> = Ok(value)`) or to remove the unused binding.",
     },
     DiagnosticExplanation {
         code: code::UNKNOWN_EFFECT,

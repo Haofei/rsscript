@@ -32,6 +32,40 @@ fn fail_fixtures_report_expected_diagnostic_codes() {
 }
 
 #[test]
+fn uninferable_binding_diagnostic_is_sound() {
+    // RS0034 fires only for a bare Ok/Err/None bound to an *unused* name (the
+    // type param is then provably unconstrainable). It must NOT fire when an
+    // annotation or downstream use pins the param, nor for the fully-determined
+    // `Some(x)`. Found-and-fixed via rss-testgen; this locks in no-false-positives.
+    let has_rs0034 = |src: &str| {
+        common::error_codes("uninferable.rss", src)
+            .iter()
+            .any(|code| code == "RS0034")
+    };
+
+    // Positive: unused bare Ok/Err/None.
+    for value in ["Ok(1.0)", "Err(\"e\")", "None"] {
+        let src = format!(
+            "fn main() -> Unit {{\n    let v = {value}\n    Log.write(message: read \"x\")\n    return Unit\n}}\n"
+        );
+        assert!(has_rs0034(&src), "expected RS0034 for unused `{value}`:\n{src}");
+    }
+
+    // Negative: fully determined, annotated, or constrained by downstream use.
+    let sound_cases = [
+        "fn main() -> Unit {\n    let v = Some(1.0)\n    Log.write(message: read \"x\")\n    return Unit\n}\n",
+        "fn main() -> Unit {\n    let v: Result<Float, String> = Ok(1.0)\n    Log.write(message: read \"x\")\n    return Unit\n}\n",
+        "fn pick() -> Result<Int, String> {\n    let v = Ok(1)\n    return v\n}\nfn main() -> Unit {\n    let _ = pick()\n    Log.write(message: read \"x\")\n    return Unit\n}\n",
+    ];
+    for src in sound_cases {
+        assert!(
+            !has_rs0034(src),
+            "RS0034 false-positive on a constrained binding:\n{src}"
+        );
+    }
+}
+
+#[test]
 fn core_interface_files_have_no_diagnostics() {
     for path in common::recursive_fixture_paths("stdlib") {
         let source = common::read_fixture(&path);

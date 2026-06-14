@@ -1,0 +1,11 @@
+// expect: RS0034
+
+// A bare `Ok(...)` leaves the `Result` error type open, and `v` is never used,
+// so nothing can constrain it. The checker rejects this (instead of letting it
+// surface as a backend `type annotations needed` error); annotate the binding
+// (`let v: Result<Float, String> = ...`) or remove it.
+fn main() -> Unit {
+    let v = Ok(1.0)
+    Log.write(message: read "ok")
+    return Unit
+}
