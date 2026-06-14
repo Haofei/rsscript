@@ -58,10 +58,20 @@ impl<'a> Generator<'a> {
         SCALARS[self.seed.choice(SCALARS.len())].clone()
     }
 
+    /// A scalar usable as a `Map` key / `Set` element (`Hashable`): no `Float`.
+    fn pick_hashable_scalar(&mut self) -> Ty {
+        const HASHABLE: &[Ty] = &[Ty::Int, Ty::Bool, Ty::String];
+        HASHABLE[self.seed.choice(HASHABLE.len())].clone()
+    }
+
     /// A type for a binding/param/return: scalars dominate; compounds appear when
     /// available. Compound payloads are restricted to scalars to keep the surface
     /// finite and generation simple.
     fn pick_type(&mut self) -> Ty {
+        // Collections are deliberately *not* pickable here: an empty `C.new<T>()`
+        // in an inferred position lowers to a Rust `C::new()` whose element type
+        // can't be inferred (E0282) when only `len()` is observed. Collections are
+        // instead emitted, always populated, by `gen_collection_stmt`.
         match self.seed.weighted(&[10, 2, 2, 3, 3]) {
             0 => self.pick_scalar(),
             1 => Ty::Option(Box::new(self.pick_scalar())),
@@ -294,6 +304,24 @@ impl<'a> Generator<'a> {
                     .join("\n");
                 format!("{pad}match {access} {{\n{arms}\n{pad}}}\n")
             }
+            // Collections are observed by their length (a deterministic Int);
+            // element iteration order isn't guaranteed identical across backends.
+            Ty::List(_) => {
+                let len = format!("List.len(list: read {access})");
+                format!("{pad}{}\n", self.log_scalar(&len, &Ty::Int))
+            }
+            Ty::Map(_, _) => {
+                let len = format!("Map.len(map: read {access})");
+                format!("{pad}{}\n", self.log_scalar(&len, &Ty::Int))
+            }
+            Ty::Set(_) => {
+                let len = format!("Set.len(set: read {access})");
+                format!("{pad}{}\n", self.log_scalar(&len, &Ty::Int))
+            }
+            Ty::Deque(_) => {
+                let len = format!("Deque.len(deque: read {access})");
+                format!("{pad}{}\n", self.log_scalar(&len, &Ty::Int))
+            }
         }
     }
 
@@ -328,17 +356,114 @@ impl<'a> Generator<'a> {
     // -- statements ------------------------------------------------------
 
     fn gen_stmt(&mut self, scope: &mut Scope) -> String {
-        // Bias toward lets; sometimes assign; sometimes a `?`-unwrap.
-        match self.seed.weighted(&[6, 2, 2]) {
+        // Bias toward lets; sometimes assign, a `?`-unwrap, or a populated
+        // collection.
+        match self.seed.weighted(&[6, 2, 2, 3]) {
             0 => self.gen_let(scope),
             1 => self
                 .gen_assign(scope)
                 .unwrap_or_else(|| self.gen_let(scope)),
-            _ => self
+            2 => self
                 .gen_try(scope)
                 .or_else(|| self.gen_assign(scope))
                 .unwrap_or_else(|| self.gen_let(scope)),
+            _ => self.gen_collection_stmt(scope),
         }
+    }
+
+    /// Build a populated collection: `let mut v: C = C.new<..>()` followed by a
+    /// few inserts. Returned as a single (possibly multi-line) statement whose
+    /// continuation lines are pre-indented to match the caller's block.
+    fn gen_collection_stmt(&mut self, scope: &mut Scope) -> String {
+        let name = self.fresh_var();
+        // Always at least one element: a non-empty collection lets the Rust
+        // backend infer the element type from the pushed literal (an empty
+        // `C.new<T>()` observed only via `len()` is un-inferable — E0282).
+        let count = 1 + self.seed.choice(3); // 1..=3 elements
+        let (ty, new_expr, mut inserts, len_expr): (Ty, String, Vec<String>, String) =
+            match self.seed.choice(4) {
+                0 => {
+                    let elem = self.pick_scalar();
+                    let ty = Ty::List(Box::new(elem.clone()));
+                    let inserts = (0..count)
+                        .map(|_| {
+                            let v = self.gen_literal(&elem);
+                            format!("List.push(list: mut {name}, value: read {v})")
+                        })
+                        .collect();
+                    (
+                        ty,
+                        format!("List.new<{}>()", elem.render()),
+                        inserts,
+                        format!("List.len(list: read {name})"),
+                    )
+                }
+                1 => {
+                    let elem = self.pick_scalar();
+                    let ty = Ty::Deque(Box::new(elem.clone()));
+                    let inserts = (0..count)
+                        .map(|_| {
+                            let v = self.gen_literal(&elem);
+                            format!("Deque.push_back(deque: mut {name}, value: read {v})")
+                        })
+                        .collect();
+                    (
+                        ty,
+                        format!("Deque.new<{}>()", elem.render()),
+                        inserts,
+                        format!("Deque.len(deque: read {name})"),
+                    )
+                }
+                2 => {
+                    let elem = self.pick_hashable_scalar();
+                    let ty = Ty::Set(Box::new(elem.clone()));
+                    let inserts = (0..count)
+                        .map(|_| {
+                            let v = self.gen_literal(&elem);
+                            format!("Set.insert(set: mut {name}, value: read {v})")
+                        })
+                        .collect();
+                    (
+                        ty,
+                        format!("Set.new<{}>()", elem.render()),
+                        inserts,
+                        format!("Set.len(set: read {name})"),
+                    )
+                }
+                _ => {
+                    let key = self.pick_hashable_scalar();
+                    let value = self.pick_scalar();
+                    let ty = Ty::Map(Box::new(key.clone()), Box::new(value.clone()));
+                    let inserts = (0..count)
+                        .map(|_| {
+                            let k = self.gen_literal(&key);
+                            let v = self.gen_literal(&value);
+                            format!("Map.insert(map: mut {name}, key: read {k}, value: read {v})")
+                        })
+                        .collect();
+                    (
+                        ty,
+                        format!("Map.new<{}, {}>()", key.render(), value.render()),
+                        inserts,
+                        format!("Map.len(map: read {name})"),
+                    )
+                }
+            };
+        let ty_render = ty.render();
+        scope.bindings.push(Binding {
+            name: name.clone(),
+            ty,
+            mutable: true,
+        });
+        let mut lines = vec![format!("let mut {name}: {ty_render} = {new_expr}")];
+        lines.append(&mut inserts);
+        // Observe the length so the collection contributes to stdout (deterministic
+        // across backends, unlike element iteration order).
+        lines.push(format!(
+            "Log.write(message: read String.from_int(value: {len_expr}))"
+        ));
+        // Caller prefixes the first line with one indent; pre-indent the rest.
+        lines.join("\n    ")
     }
 
     fn gen_let(&mut self, scope: &mut Scope) -> String {
@@ -496,6 +621,14 @@ impl<'a> Generator<'a> {
                 let def = self.sum_def(name);
                 def.variants[self.seed.choice(def.variants.len())].clone()
             }
+            // Collections are constructed empty here; populated instances are
+            // built by `gen_collection_stmt` (new + a few inserts).
+            Ty::List(inner) => format!("List.new<{}>()", inner.render()),
+            Ty::Map(key, value) => {
+                format!("Map.new<{}, {}>()", key.render(), value.render())
+            }
+            Ty::Set(inner) => format!("Set.new<{}>()", inner.render()),
+            Ty::Deque(inner) => format!("Deque.new<{}>()", inner.render()),
         }
     }
 
@@ -597,9 +730,14 @@ impl<'a> Generator<'a> {
                 }
             },
             // Compounds have no operator forms: just construct.
-            Ty::Option(_) | Ty::Result(_, _) | Ty::Struct(_) | Ty::Sum(_) => {
-                self.gen_construct(ty, scope)
-            }
+            Ty::Option(_)
+            | Ty::Result(_, _)
+            | Ty::Struct(_)
+            | Ty::Sum(_)
+            | Ty::List(_)
+            | Ty::Map(_, _)
+            | Ty::Set(_)
+            | Ty::Deque(_) => self.gen_construct(ty, scope),
         }
     }
 

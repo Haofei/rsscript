@@ -20,6 +20,10 @@ pub enum Ty {
     Struct(String),
     /// A declared (nullary-variant) `sum` by name.
     Sum(String),
+    List(Box<Ty>),
+    Map(Box<Ty>, Box<Ty>),
+    Set(Box<Ty>),
+    Deque(Box<Ty>),
 }
 
 impl Ty {
@@ -33,7 +37,17 @@ impl Ty {
             Ty::Option(inner) => format!("Option<{}>", inner.render()),
             Ty::Result(ok, err) => format!("Result<{}, {}>", ok.render(), err.render()),
             Ty::Struct(name) | Ty::Sum(name) => name.clone(),
+            Ty::List(inner) => format!("List<{}>", inner.render()),
+            Ty::Map(key, value) => format!("Map<{}, {}>", key.render(), value.render()),
+            Ty::Set(inner) => format!("Set<{}>", inner.render()),
+            Ty::Deque(inner) => format!("Deque<{}>", inner.render()),
         }
+    }
+
+    /// A builtin scalar usable as a `Map` key / `Set` element (`Hashable`):
+    /// `Int`/`Bool`/`String` (not `Float`).
+    pub fn is_hashable_scalar(&self) -> bool {
+        matches!(self, Ty::Int | Ty::Bool | Ty::String)
     }
 
     /// Whether a *parameter* of this type is declared with a `read` effect prefix.
