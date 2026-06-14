@@ -137,7 +137,11 @@ impl<'a> RustLowerer<'a> {
         out.push_str(
             "// Runtime hooks are intentionally explicit while Rust lowering is stabilizing.\n",
         );
-        out.push_str("#![allow(dead_code, non_snake_case)]\n");
+        // Module-isolated symbols carry a lowercase module prefix (`device__Device`,
+        // `helpers__count`), so the camel/snake/upper-case lints don't apply.
+        out.push_str(
+            "#![allow(dead_code, non_snake_case, non_camel_case_types, non_upper_case_globals)]\n",
+        );
         let feature_names = lowered_feature_names(&self.program.features);
         if feature_names.is_empty() {
             out.push_str("// RSScript features: <none>\n");

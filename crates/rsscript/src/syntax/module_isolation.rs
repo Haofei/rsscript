@@ -23,6 +23,27 @@ use super::ast::{
 /// the boundary readable in diagnostics and generated Rust (`a_b__name`).
 const MODULE_SEP: &str = "__";
 
+/// Encode a dotted module path as a single Rust-identifier prefix, injectively:
+/// each segment's own underscores are doubled before segments are joined with a
+/// single underscore, so distinct paths (`a.b` vs `a_b`) never collide.
+fn module_prefix(segments: &[String]) -> String {
+    segments
+        .iter()
+        .map(|segment| segment.replace('_', "__"))
+        .collect::<Vec<_>>()
+        .join("_")
+}
+
+/// The module prefix for a dotted namespace string (`a.b` -> `a_b`).
+fn module_prefix_from_dotted(namespace: &str) -> String {
+    module_prefix(
+        &namespace
+            .split('.')
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+    )
+}
+
 /// Rewrite a program so each `module`-scoped symbol becomes globally unique.
 pub fn isolate_module_namespaces(program: &mut Program) {
     let file_module = collect_file_modules(program);
@@ -42,7 +63,7 @@ fn collect_file_modules(program: &Program) -> HashMap<String, String> {
         if let Item::Module(module) = item {
             file_module
                 .entry(module.span.file.clone())
-                .or_insert_with(|| module.path.join("_"));
+                .or_insert_with(|| module_prefix(&module.path));
         }
     }
     file_module
@@ -57,6 +78,10 @@ struct Resolver {
     /// module prefix -> the type names it declares (for `Type.method` / `Type.X`
     /// namespace resolution).
     module_types: HashMap<String, HashSet<String>>,
+    /// module prefix -> the constant names it declares. Constants lower to
+    /// `SCREAMING_SNAKE_CASE`, so their mangled symbol is upper-cased to stay
+    /// consistent between declaration and reference.
+    module_consts: HashMap<String, HashSet<String>>,
     /// file -> (imported bare name -> module prefix it was imported from).
     file_imports: HashMap<String, HashMap<String, String>>,
 }
@@ -65,6 +90,7 @@ impl Resolver {
     fn build(program: &Program, file_module: &HashMap<String, String>) -> Self {
         let mut module_defs: HashMap<String, HashSet<String>> = HashMap::new();
         let mut module_types: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut module_consts: HashMap<String, HashSet<String>> = HashMap::new();
         let mut file_imports: HashMap<String, HashMap<String, String>> = HashMap::new();
 
         for item in &program.items {
@@ -89,6 +115,10 @@ impl Resolver {
                 Item::Const(decl) => {
                     if !decl.name.contains('.') {
                         module_defs
+                            .entry(prefix.clone())
+                            .or_default()
+                            .insert(decl.name.clone());
+                        module_consts
                             .entry(prefix.clone())
                             .or_default()
                             .insert(decl.name.clone());
@@ -127,7 +157,7 @@ impl Resolver {
                 Item::Use(decl) => {
                     if decl.path.len() >= 2 {
                         let name = decl.path[decl.path.len() - 1].clone();
-                        let import_prefix = decl.path[..decl.path.len() - 1].join("_");
+                        let import_prefix = module_prefix(&decl.path[..decl.path.len() - 1]);
                         file_imports
                             .entry(decl.span.file.clone())
                             .or_default()
@@ -142,7 +172,24 @@ impl Resolver {
             file_module: file_module.clone(),
             module_defs,
             module_types,
+            module_consts,
             file_imports,
+        }
+    }
+
+    /// Build the mangled value symbol for `name` declared in module `prefix`,
+    /// upper-casing constants so the symbol matches the Rust backend's
+    /// `SCREAMING_SNAKE_CASE` const lowering at both declaration and reference.
+    fn mangle_value(&self, prefix: &str, name: &str) -> String {
+        let mangled = format!("{prefix}{MODULE_SEP}{name}");
+        if self
+            .module_consts
+            .get(prefix)
+            .is_some_and(|consts| consts.contains(name))
+        {
+            mangled.to_uppercase()
+        } else {
+            mangled
         }
     }
 
@@ -157,7 +204,7 @@ impl Resolver {
                 .get(prefix)
                 .is_some_and(|names| names.contains(name))
         {
-            return Some(format!("{prefix}{MODULE_SEP}{name}"));
+            return Some(self.mangle_value(prefix, name));
         }
         // Otherwise a `use module.name` import that names a known module symbol.
         if let Some(import_prefix) = self
@@ -169,7 +216,32 @@ impl Resolver {
                 .get(import_prefix)
                 .is_some_and(|names| names.contains(name))
         {
-            return Some(format!("{import_prefix}{MODULE_SEP}{name}"));
+            return Some(self.mangle_value(import_prefix, name));
+        }
+        None
+    }
+
+    /// The module prefix that owns type `name` as seen from `file` (own module,
+    /// then `use` import), or `None` if it is not a module-scoped type.
+    fn resolve_type_module(&self, file: &str, name: &str) -> Option<String> {
+        if let Some(prefix) = self.file_module.get(file)
+            && self
+                .module_types
+                .get(prefix)
+                .is_some_and(|types| types.contains(name))
+        {
+            return Some(prefix.clone());
+        }
+        if let Some(import_prefix) = self
+            .file_imports
+            .get(file)
+            .and_then(|imports| imports.get(name))
+            && self
+                .module_types
+                .get(import_prefix)
+                .is_some_and(|types| types.contains(name))
+        {
+            return Some(import_prefix.clone());
         }
         None
     }
@@ -177,26 +249,8 @@ impl Resolver {
     /// Resolve a `Type.` namespace (for `Type.method` / `Type.CONST`): if the
     /// namespace names a module-scoped type, return its mangled type name.
     fn resolve_type_namespace(&self, file: &str, namespace: &str) -> Option<String> {
-        if let Some(prefix) = self.file_module.get(file)
-            && self
-                .module_types
-                .get(prefix)
-                .is_some_and(|types| types.contains(namespace))
-        {
-            return Some(format!("{prefix}{MODULE_SEP}{namespace}"));
-        }
-        if let Some(import_prefix) = self
-            .file_imports
-            .get(file)
-            .and_then(|imports| imports.get(namespace))
-            && self
-                .module_types
-                .get(import_prefix)
-                .is_some_and(|types| types.contains(namespace))
-        {
-            return Some(format!("{import_prefix}{MODULE_SEP}{namespace}"));
-        }
-        None
+        self.resolve_type_module(file, namespace)
+            .map(|prefix| format!("{prefix}{MODULE_SEP}{namespace}"))
     }
 
     fn rewrite(&self, program: &mut Program) {
@@ -243,8 +297,13 @@ impl Resolver {
     }
 
     fn rewrite_const(&self, decl: &mut ConstDecl, file: &str, in_module: bool) {
-        if in_module {
-            decl.name = self.mangle_decl_name(file, &decl.name);
+        // Constants are mangled through `mangle_value` (upper-cased) so the
+        // declaration matches references and the backend's const lowering.
+        if in_module
+            && !decl.name.contains('.')
+            && let Some(prefix) = self.file_module.get(file)
+        {
+            decl.name = self.mangle_value(prefix, &decl.name);
         }
         if let Some(ty) = &mut decl.type_annotation {
             self.rewrite_type(ty, file);
@@ -472,7 +531,28 @@ impl Resolver {
                     self.rewrite_expr(&mut arg.value, file, scope);
                 }
             }
-            Expr::Field { base, .. } => self.rewrite_expr(base, file, scope),
+            Expr::Field { base, name, span } => {
+                // `Type.CONST` associated-const access: when the base is a
+                // module-scoped type and that module declares the (per-file
+                // flattened) associated constant, resolve the whole access to the
+                // module-qualified const symbol. This handles the cross-file case,
+                // where the access lives in a different file than the declaration.
+                if let Expr::Ident(type_name, _) = base.as_ref()
+                    && !scope.contains(type_name)
+                    && let Some(type_module) = self.resolve_type_module(file, type_name)
+                {
+                    let flat = flatten_associated_const(type_name, name);
+                    if self
+                        .module_defs
+                        .get(&type_module)
+                        .is_some_and(|names| names.contains(&flat))
+                    {
+                        *expr = Expr::Ident(self.mangle_value(&type_module, &flat), span.clone());
+                        return;
+                    }
+                }
+                self.rewrite_expr(base, file, scope);
+            }
             Expr::Index { base, index, .. } => {
                 self.rewrite_expr(base, file, scope);
                 self.rewrite_expr(index, file, scope);
@@ -545,14 +625,13 @@ impl Resolver {
                 }
                 // `module.function`: a module-qualified free call collapses to the
                 // module's mangled function symbol.
-                let module_prefix = namespace.replace('.', "_");
+                let prefix = module_prefix_from_dotted(namespace);
                 if self
                     .module_defs
-                    .get(&module_prefix)
+                    .get(&prefix)
                     .is_some_and(|names| names.contains(name))
                 {
-                    let mangled = format!("{module_prefix}{MODULE_SEP}{name}");
-                    *callee = Callee::Name(mangled);
+                    *callee = Callee::Name(format!("{prefix}{MODULE_SEP}{name}"));
                 }
             }
             Callee::ReceiverCall { receiver, .. } => {
@@ -705,6 +784,28 @@ mod tests {
     }
 
     #[test]
+    fn module_prefix_is_injective_across_dotted_and_underscored_paths() {
+        // `a.b` and `a_b` are distinct module paths and must not share a prefix.
+        let dotted = module_prefix(&["a".to_string(), "b".to_string()]);
+        let underscored = module_prefix(&["a_b".to_string()]);
+        assert_ne!(dotted, underscored);
+        assert_eq!(dotted, "a_b");
+        assert_eq!(underscored, "a__b");
+        assert_eq!(module_prefix_from_dotted("a.b"), "a_b");
+    }
+
+    #[test]
+    fn two_modules_with_colliding_join_keep_distinct_symbols() {
+        let ab = parse_source("ab.rss", "module a.b\n\nfn count() -> Int {\n    return 1\n}\n");
+        let a_b = parse_source("a_b.rss", "module a_b\n\nfn count() -> Int {\n    return 2\n}\n");
+        let mut program = merge_programs([ab, a_b]);
+        isolate_module_namespaces(&mut program);
+        let names = function_names(&program);
+        assert!(names.contains(&"a_b__count".to_string()), "{names:?}");
+        assert!(names.contains(&"a__b__count".to_string()), "{names:?}");
+    }
+
+    #[test]
     fn entry_point_main_is_never_qualified() {
         let mut program = parse_source(
             "main.rss",
@@ -713,6 +814,13 @@ mod tests {
         isolate_module_namespaces(&mut program);
         assert!(function_names(&program).contains(&"main".to_string()));
     }
+}
+
+/// The flattened symbol for an associated constant `Type.MEMBER`, matching the
+/// `desugar::associated_consts` flattening (`.` -> `_`, upper-cased) so isolation
+/// resolves to the same constant the per-file desugar produced.
+fn flatten_associated_const(type_name: &str, member: &str) -> String {
+    format!("{type_name}_{member}").to_uppercase()
 }
 
 fn item_file(item: &Item) -> Option<&str> {

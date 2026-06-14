@@ -85,6 +85,68 @@ fn module_isolation_lets_two_modules_share_a_symbol_name() {
 }
 
 #[test]
+fn module_isolation_resolves_cross_file_associated_constant() {
+    // `Device.DEFAULT` is declared in one module and read from another (via
+    // `use device.Device`). The associated-const access must resolve to the
+    // module-qualified, upper-cased constant rather than a dangling field access.
+    let sources = vec![
+        (
+            "device.rss".to_string(),
+            "module device\n\nstruct Device {\n    name: String\n}\n\nconst Device.DEFAULT: String = \"cpu\"\n".to_string(),
+        ),
+        (
+            "main.rss".to_string(),
+            concat!(
+                "module app\n\n",
+                "use device.Device\n\n",
+                "fn main() -> Unit {\n",
+                "    Log.write(message: read Device.DEFAULT)\n",
+                "    return Unit\n",
+                "}\n",
+            )
+            .to_string(),
+        ),
+    ];
+    let package =
+        lower_sources_to_rust_package_with_options(&sources, "assoc-demo", "/rt", &[], &[])
+            .expect("cross-file associated constant should lower");
+    // The constant lowers to a module-qualified SCREAMING_SNAKE symbol, used at
+    // both declaration and the cross-file reference.
+    assert!(
+        package.lib_rs.contains("DEVICE__DEVICE_DEFAULT"),
+        "associated const should lower to a module-qualified symbol:\n{}",
+        package.lib_rs
+    );
+}
+
+#[test]
+fn module_isolation_distinguishes_dotted_and_underscored_module_paths() {
+    // `module a.b` and `module a_b` are distinct and must not collide (RS0005).
+    let sources = vec![
+        (
+            "ab.rss".to_string(),
+            "module a.b\n\nfn count() -> Int {\n    return 1\n}\n".to_string(),
+        ),
+        (
+            "a_b.rss".to_string(),
+            "module a_b\n\nfn count() -> Int {\n    return 2\n}\n".to_string(),
+        ),
+        (
+            "main.rss".to_string(),
+            "module app\n\nfn main() -> Unit {\n    return Unit\n}\n".to_string(),
+        ),
+    ];
+    let package =
+        lower_sources_to_rust_package_with_options(&sources, "collide-demo", "/rt", &[], &[])
+            .expect("distinct module paths should lower without collision");
+    assert!(
+        package.lib_rs.contains("fn a_b__count(") && package.lib_rs.contains("fn a__b__count("),
+        "distinct module paths must yield distinct symbols:\n{}",
+        package.lib_rs
+    );
+}
+
+#[test]
 fn lower_name_pin_renames_definition_and_call_sites() {
     let source = r#"
 #lower_name("helpers__count")
