@@ -669,7 +669,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::FRESHNESS_UNKNOWN,
         title: "freshness unknown",
-        explanation: "The MVP checker could not prove the returned value is fresh. Current proof support trusts clean locals, clean inline fields of locals, struct constructors, and known fresh calls.",
+        explanation: "The MVP checker could not prove the returned value is fresh. Current proof support trusts clean locals, clean inline fields of locals, struct constructors, known fresh calls, and literals.",
     },
     DiagnosticExplanation {
         code: code::INVALID_FRESH_RETURN_TYPE,

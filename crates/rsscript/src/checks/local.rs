@@ -573,8 +573,10 @@ fn collect_fresh_return_issue(
                     .clone(),
             );
         }
-        HirReturnProof::NoValue | HirReturnProof::StructConstructor | HirReturnProof::FreshCall => {
-        }
+        HirReturnProof::NoValue
+        | HirReturnProof::StructConstructor
+        | HirReturnProof::FreshCall
+        | HirReturnProof::Literal => {}
     }
 }
 

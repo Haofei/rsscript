@@ -208,6 +208,9 @@ pub enum HirReturnProof {
     Ident { name: String },
     StructConstructor,
     FreshCall,
+    /// A literal (string, number, or boolean). A literal owns no borrowed or
+    /// aliased resource, so returning it is trivially fresh.
+    Literal,
     Unknown,
 }
 
@@ -3255,6 +3258,8 @@ fn classify_return_expr(
     value_types: &HashMap<String, String>,
 ) -> HirReturnProof {
     match expr {
+        // `true` / `false` are boolean literals (lexed as identifiers).
+        Expr::Ident(name, _) if name == "true" || name == "false" => HirReturnProof::Literal,
         Expr::Ident(name, _) => HirReturnProof::Ident { name: name.clone() },
         Expr::Call { callee, args, .. } => {
             if matches!(callee_name(callee), "Err" | "None") {
@@ -3312,13 +3317,14 @@ fn classify_return_expr(
         Expr::ObjectLiteral { .. } | Expr::MapLiteral { .. } | Expr::ArrayLiteral { .. } => {
             HirReturnProof::FreshCall
         }
+        // String / numeric literals own nothing borrowed; returning one is fresh.
+        Expr::Number(_, _) | Expr::String(_, _) | Expr::MultilineString(_, _) => {
+            HirReturnProof::Literal
+        }
         Expr::Field { .. }
         | Expr::Index { .. }
         | Expr::Binary { .. }
         | Expr::Closure { .. }
-        | Expr::Number(_, _)
-        | Expr::String(_, _)
-        | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => HirReturnProof::Unknown,
     }
 }

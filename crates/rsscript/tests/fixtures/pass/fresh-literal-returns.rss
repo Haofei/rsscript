@@ -1,0 +1,27 @@
+// A literal owns no borrowed or aliased resource, so returning one from a
+// `fresh` function is trivially fresh — no RS0602 "freshness unknown" warning.
+// This is the dominant shape in string-table functions (op -> name lookups).
+
+fn op_name(op: Int) -> fresh String {
+    if op == 0 {
+        return "ADD"
+    }
+    if op == 1 {
+        return "MUL"
+    }
+    return "OTHER"
+}
+
+fn op_name_match(op: Int) -> fresh String {
+    match read op {
+        0 => {
+            return "ADD"
+        }
+        1 => {
+            return "MUL"
+        }
+        _ => {
+            return "OTHER"
+        }
+    }
+}

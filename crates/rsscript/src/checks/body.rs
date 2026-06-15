@@ -7447,7 +7447,7 @@ fn freshness_unknown_diagnostic(
             "freshness unknown",
         )
         .with_cause(
-            "This MVP checker trusts clean locals, clean inline fields of locals, struct constructors, and known fresh functions.",
+            "This MVP checker trusts clean locals, clean inline fields of locals, struct constructors, known fresh functions, and literals.",
         ),
     );
 }
