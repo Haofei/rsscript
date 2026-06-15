@@ -196,6 +196,34 @@ fn main() -> Unit {
 }
 
 #[test]
+fn parity_scoped_view_binding() {
+    // The `view name = expr` scoped-view form (spec §20.2-1) desugars to a
+    // `with`-lease whose scope ends at the enclosing block. It must run
+    // identically across backends, including a view derived from another view.
+    let source = r#"
+fn main() -> Unit {
+    let text = "hello world"
+    view v = String.view(value: read text, start: 0, len: 5)
+    Log.write(message: read StringView.to_string(value: read v))
+    view w = StringView.slice(value: read v, start: 1, len: 3)
+    Log.write(message: read String.from_int(value: StringView.len(value: read w)))
+    Log.write(message: read StringView.to_string(value: read w))
+    return Unit
+}
+"#;
+    // The `with`-lease lowering binds the view as `let mut`, which rustc flags as
+    // unused_mut for a read-only view (same benign warning as other `with`
+    // resources); tolerate it — the values + stdout match across backends.
+    common::assert_vm_eval_matches_backend_with_distinct_args_allowing_unused_mut_warning(
+        "parity-scoped-view.rss",
+        "rsscript_parity_scoped_view",
+        source,
+        &[],
+        &[],
+    );
+}
+
+#[test]
 fn parity_char_and_string_chars_intrinsics() {
     let source = r#"
 fn main() -> Unit {
