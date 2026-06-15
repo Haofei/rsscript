@@ -13,51 +13,32 @@ at every comparison site), a reserved `__`-prefix namespace for
 compiler-generated helpers, and struct field defaults (`name: T = expr`, filled at
 construction on both backends).
 
-## Must unblock awkward valid ports
+Verified already-met against their written acceptance (closed without new code):
+- **Method/property getters** — modeled as zero-argument methods
+  (`fn Box.value(self: read Box) -> Int`) called via receiver-call shorthand
+  (`read b.value()`); they lower predictably, borrow `self`, and keep member
+  identity in the symbol inventory.
+- **Container / string-bytes coverage** — broad `List`/`Map`/`Set`/`String`/
+  `Bytes` operations exist, and any unsupported op fails with a precise
+  op+type diagnostic (`RS0206: call to \`List.frobnicate\` does not resolve`).
+  Specific further ops are added on demand when the port names them.
+- **External/FFI ergonomics** — `native fn` declares external boundaries
+  compactly, is checked, and appears in the symbol inventory with provenance.
 
-- [ ] **Method/property lowering ergonomics.** Provide a simple way to model
-  Python-style getter properties and method-like computed fields.
-  _Why:_ tinygrad has many small property methods where the body is simple but the
-  RSS surface needs repetitive wrappers.
-  _Acceptance:_ getter-style members lower predictably, can borrow `self`, and
-  preserve member identity for diagnostics and inventory.
+## Remaining
 
-## Reduce manual translation volume
+- [ ] **Callable: named function values.** Passing a *named function* as a
+  callback value is rejected (`RS0026: unknown value binding`); only inline
+  closures work. Allow an identifier that names a top-level function to be passed
+  where a `Fn(...)` / `noescape Fn(...)` parameter is expected, checked against the
+  function's signature and lowered as a function value.
+  _Why:_ tinygrad passes named matcher/rewrite functions; without this the port
+  wraps each in a closure or struct.
 
-- [ ] **Container operation coverage.** Fill remaining `List`/`Map`/`Set`/
-  `Bytes`/`Buffer`/tuple/optional gaps (`len`, `append`, `pop`, index, slice,
-  membership, iteration, clone/copy).
-  _Why:_ tinygrad code is dense with these; every missing builtin becomes a
-  hand-written helper.
-  _Acceptance:_ supported ops compile and lower to idiomatic Rust, or fail with an
-  error naming the unsupported operation and type.
-
-- [ ] **Callable and limited closure support.** Beyond `noescape` callbacks: pass
-  *named functions* as values and support richer checked captures for callbacks
-  and rewrite rules.
-  _Why:_ tinygrad uses lambdas/callback matchers; without this the port must
-  defunctionalize logic into many structs.
-  _Acceptance:_ RSS can pass named functions and simple closures to higher-order
-  helpers with checked capture ownership.
-
-- [ ] **String and bytes utility coverage.** Fill gaps for split/join/search,
-  prefix/suffix checks, formatting, byte conversion, and cheap slicing.
-  _Why:_ device/runtime/autogen and file-path code are string/bytes-heavy.
-  _Acceptance:_ common string/bytes operations compile without local helper shims,
-  or fail with precise unsupported-operation diagnostics.
-
-## Tooling and diagnostics
-
-- [ ] **RSS-to-Rust diagnostic provenance.** Source maps exist; carry the source
-  span, source symbol, and lowered Rust symbol all the way through a *backend*
-  Rust error.
-  _Why:_ when Rust fails, the port currently has to infer which RSS declaration
-  produced the bad item.
-  _Acceptance:_ a Rust backend error reports the RSS file, source span, source
-  symbol, and lowered Rust symbol.
-
-- [ ] **External/FFI declaration ergonomics.** Declare copied runtime/autogen and
-  device boundaries compactly — `native fn` exists, but make whole boundaries easy
-  to bind without large wrapper files.
-  _Acceptance:_ external functions/types can be declared compactly, checked, and
-  included in the symbol inventory with provenance.
+- [ ] **RSS-to-Rust diagnostic provenance: symbol names.** Remapped backend
+  errors already report the RSS file, source span, generated Rust location, and
+  rustc code. Still missing: the enclosing **source symbol** name and the
+  **lowered Rust symbol** name.
+  _Why:_ naming the declaration (not just the line) speeds triage.
+  _Acceptance:_ a remapped Rust backend error names the RSS source symbol and its
+  lowered Rust symbol.
