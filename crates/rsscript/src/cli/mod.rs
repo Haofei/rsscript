@@ -277,6 +277,9 @@ pub(crate) fn print_usage() {
     eprintln!(
         "  rss dev [--lint] [--run] [--release] [--json] [--once] [--core|--no-core] [--interface <file.rssi> ...] <file-or-package-directory>"
     );
+    eprintln!(
+        "         # --run uses the fast reg-VM dev tier; add --release for the Rust-lowering AOT tier"
+    );
     eprintln!("  rss eval [--json] <file.rss> [-- <args>...]");
     eprintln!(
         "  rss fix [--write] [--json] [--interface <file.rssi> ...] <file.rss>  # apply machine-applicable fixes"
