@@ -65,6 +65,31 @@ fn qualified_variant_in_match_pattern_checks_clean() {
 }
 
 #[test]
+fn read_qualified_module_call_parses_as_read_of_call() {
+    // `read m.fn(args)` in argument position is read-of-the-call, not a receiver
+    // call on the module — identical to `read flat()` / `read (m.fn())`.
+    let diagnostics = analyze_sources_with_interfaces(
+        &[
+            ("m.rss", "module m\n\nfn order_names() -> fresh String { return \"x\" }\n"),
+            (
+                "app.rss",
+                concat!(
+                    "module app\n\n",
+                    "fn sink(v: read String) -> Unit { return Unit }\n\n",
+                    "fn use_it() -> Unit { return sink(v: read m.order_names()) }\n",
+                ),
+            ),
+        ],
+        &[],
+    );
+    assert_eq!(
+        diagnostics,
+        Vec::new(),
+        "`read m.fn()` should resolve as read-of-call: {diagnostics:?}"
+    );
+}
+
+#[test]
 fn glob_import_brings_module_symbols_into_scope() {
     // `use ops.*` imports the module's type, const, and functions; bare variants
     // resolve globally. The snippet checks clean. (`module-glob-import.md`.)
