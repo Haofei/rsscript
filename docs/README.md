@@ -14,6 +14,7 @@ LLMs); everything else lives here.
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Module boundaries of the checker/lowering implementation. |
 | [DEVELOPMENT.md](DEVELOPMENT.md) | Local verification flow and development discipline. |
 | [DOCKER.md](DOCKER.md) | Containerized, cross-platform dev environment (Docker / VS Code / Codespaces). |
+| [spec-todo.md](spec-todo.md) | Prioritized list of unimplemented spec surface (the §3.2 / §20.1 superset). |
 
 ## Implementation-planning specs (not yet normative)
 
