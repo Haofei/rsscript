@@ -3734,1277 +3734,711 @@ impl RegLowerer<'_> {
             Callee::Qualified { namespace, name } => {
                 let namespace_root = type_root_name(namespace);
                 let name_root = type_root_name(name);
-                let intrinsic = match (namespace_root, name_root) {
-                    ("Args", "all") => RegIntrinsic::ArgsAll,
-                    ("Args", "count") => RegIntrinsic::ArgsCount,
-                    ("Args", "get") => RegIntrinsic::ArgsGet,
-                    ("Args", "get_or_default") => RegIntrinsic::ArgsGetOrDefault,
-                    ("Assert", "equal") => RegIntrinsic::AssertEqual,
-                    ("Assert", "equal_bool") => RegIntrinsic::AssertEqualBool,
-                    ("Assert", "equal_int") => RegIntrinsic::AssertEqualInt,
-                    ("Base64", "decode") => RegIntrinsic::Base64Decode,
-                    ("Base64", "decode_string") => RegIntrinsic::Base64DecodeString,
-                    ("Base64", "encode") => RegIntrinsic::Base64Encode,
-                    ("Base64", "encode_bytes") => RegIntrinsic::Base64EncodeBytes,
-                    ("Bytes", "concat") => RegIntrinsic::BytesConcat,
-                    ("Bytes", "consume") => RegIntrinsic::BytesConsume,
-                    ("Bytes", "from_buffer") => RegIntrinsic::BytesViewToBytes,
-                    ("Bytes", "from_string") => RegIntrinsic::BytesFromString,
-                    ("Bytes", "from_uints") => RegIntrinsic::BytesFromUints,
-                    ("Bytes", "is_empty") => RegIntrinsic::BytesIsEmpty,
-                    ("Bytes", "len") => RegIntrinsic::BytesLen,
-                    ("Bytes", "slice") | ("Bytes", "view") => RegIntrinsic::BytesSlice,
-                    ("Bytes", "to_string") => RegIntrinsic::BytesToString,
-                    ("Bytes", "to_uints") => RegIntrinsic::BytesToUints,
-                    ("Buffer", "clear") => {
-                        if arg_regs.len() != 1 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM Buffer.clear expected 1 arg, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::BufferClear {
-                            dst,
-                            buffer: arg_regs[0],
-                        });
-                        return Ok(dst);
-                    }
-                    ("Buffer", "consume") => RegIntrinsic::BytesConsume,
-                    ("Buffer", "is_empty") => RegIntrinsic::BytesIsEmpty,
-                    ("Buffer", "len") => RegIntrinsic::BytesLen,
-                    ("Buffer", "new") => RegIntrinsic::BufferNew,
-                    ("Buffer", "view") => RegIntrinsic::BytesSlice,
-                    ("BufferView", "is_empty") => RegIntrinsic::BytesIsEmpty,
-                    ("BufferView", "len") => RegIntrinsic::BytesLen,
-                    ("BufferView", "slice") => RegIntrinsic::BytesSlice,
-                    ("BufferView", "to_bytes") => RegIntrinsic::BytesViewToBytes,
-                    ("BytesView", "is_empty") => RegIntrinsic::BytesIsEmpty,
-                    ("BytesView", "len") => RegIntrinsic::BytesLen,
-                    ("BytesView", "slice") => RegIntrinsic::BytesSlice,
-                    ("BytesView", "starts_with") => RegIntrinsic::BytesViewStartsWith,
-                    ("BytesView", "to_bytes") => RegIntrinsic::BytesViewToBytes,
-                    ("Cache", "insert") => {
-                        if arg_regs.len() != 3 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM Cache.insert expected 3 args, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::MapInsert {
-                            dst,
-                            map: arg_regs[0],
-                            key: arg_regs[1],
-                            value: arg_regs[2],
-                        });
-                        return Ok(dst);
-                    }
-                    ("Cache", "get") => RegIntrinsic::CacheGet,
-                    ("Cache", "lookup") => RegIntrinsic::CacheLookup,
-                    ("Cache", "new") => RegIntrinsic::MapNew,
-                    ("CancellationSource", "cancel") => RegIntrinsic::CancellationSourceCancel,
-                    ("CancellationSource", "new") => RegIntrinsic::CancellationSourceNew,
-                    ("CancellationSource", "token") => RegIntrinsic::CancellationSourceToken,
-                    ("CancellationToken", "is_cancelled") => {
-                        RegIntrinsic::CancellationTokenIsCancelled
-                    }
-                    ("Channel", "bounded") => RegIntrinsic::ChannelBounded,
-                    // A message channel reuses the bounded-channel runtime; the
-                    // cross-isolate payload contract is enforced at check time.
-                    ("Channel", "message") => RegIntrinsic::ChannelBounded,
-                    ("Channel", "receiver") => RegIntrinsic::ChannelReceiver,
-                    ("Channel", "sender") => RegIntrinsic::ChannelSender,
-                    ("ChannelError", "message") => RegIntrinsic::ChannelErrorMessage,
-                    ("Char", "compare") => RegIntrinsic::CharCompare,
-                    ("Char", "from_code") => RegIntrinsic::CharFromCode,
-                    ("Char", "is_alphanumeric") => RegIntrinsic::CharIsAlphanumeric,
-                    ("Char", "is_alpha") => RegIntrinsic::CharIsAlpha,
-                    ("Char", "is_digit") => RegIntrinsic::CharIsDigit,
-                    ("Char", "is_lower") => RegIntrinsic::CharIsLower,
-                    ("Char", "is_upper") => RegIntrinsic::CharIsUpper,
-                    ("Char", "is_whitespace") => RegIntrinsic::CharIsWhitespace,
-                    ("Char", "to_code") => RegIntrinsic::CharToCode,
-                    ("Char", "to_lower") => RegIntrinsic::CharToLower,
-                    ("Char", "to_string") => RegIntrinsic::CharToString,
-                    ("Char", "to_upper") => RegIntrinsic::CharToUpper,
-                    ("Clock", "now") => RegIntrinsic::ClockNow,
-                    ("Clock", "system_unix_ms") => RegIntrinsic::ClockSystemUnixMs,
-                    ("Config", "load") => RegIntrinsic::ConfigLoad,
-                    ("Capability", "from") => RegIntrinsic::CapabilityFrom,
-                    ("Config", "name") => RegIntrinsic::ConfigName,
-                    ("Config", "new") => RegIntrinsic::ConfigNew,
-                    ("Config", "rule_count") => RegIntrinsic::ConfigRuleCount,
-                    ("ConfigStore", "name") => RegIntrinsic::ConfigStoreName,
-                    ("ConfigStore", "new") => RegIntrinsic::ConfigStoreNew,
-                    ("ConfigStore", "replace") => {
-                        if arg_regs.len() != 2 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM ConfigStore.replace expected 2 args, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::ConfigStoreReplace {
-                            dst,
-                            store: arg_regs[0],
-                            value: arg_regs[1],
-                        });
-                        return Ok(dst);
-                    }
-                    ("Counter", "add") => {
-                        if arg_regs.len() != 2 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM Counter.add expected 2 args, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::CounterAdd {
-                            dst,
-                            counter: arg_regs[0],
-                            amount: arg_regs[1],
-                        });
-                        return Ok(dst);
-                    }
-                    ("Counter", "new") => RegIntrinsic::CounterNew,
-                    ("Counter", "value") => RegIntrinsic::CounterValue,
-                    ("Csv", "open_read") => RegIntrinsic::CsvOpenRead,
-                    ("Csv", "parse_row") => RegIntrinsic::CsvParseRow,
-                    ("Csv", "read_into") => RegIntrinsic::CsvReadInto,
-                    ("Csv", "rows") => RegIntrinsic::CsvRows,
-                    ("Deadline", "after") => RegIntrinsic::DeadlineAfter,
-                    ("Deadline", "after_ms") => RegIntrinsic::DeadlineAfterMs,
-                    ("Deadline", "is_expired") => RegIntrinsic::DeadlineIsExpired,
-                    ("Deadline", "remaining_ms") => RegIntrinsic::DeadlineRemainingMs,
-                    ("DecodeError", "message") => RegIntrinsic::DecodeErrorMessage,
-                    ("Deque", "clear") => {
-                        if arg_regs.len() != 1 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM Deque.clear expected 1 arg, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::DequeClear {
-                            dst,
-                            deque: arg_regs[0],
-                        });
-                        return Ok(dst);
-                    }
-                    ("Deque", "is_empty") => RegIntrinsic::DequeIsEmpty,
-                    ("Deque", "len") => RegIntrinsic::DequeLen,
-                    ("Deque", "new") => RegIntrinsic::DequeNew,
-                    ("Deque", "pop_back") => {
-                        if arg_regs.len() != 1 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM Deque.pop_back expected 1 arg, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::DequePopBack {
-                            dst,
-                            deque: arg_regs[0],
-                        });
-                        return Ok(dst);
-                    }
-                    ("Deque", "pop_front") => {
-                        if arg_regs.len() != 1 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM Deque.pop_front expected 1 arg, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::DequePopFront {
-                            dst,
-                            deque: arg_regs[0],
-                        });
-                        return Ok(dst);
-                    }
-                    ("Deque", "push_back") => {
-                        if arg_regs.len() != 2 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM Deque.push_back expected 2 args, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::DequePushBack {
-                            dst,
-                            deque: arg_regs[0],
-                            value: arg_regs[1],
-                        });
-                        return Ok(dst);
-                    }
-                    ("Deque", "push_front") => {
-                        if arg_regs.len() != 2 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM Deque.push_front expected 2 args, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::DequePushFront {
-                            dst,
-                            deque: arg_regs[0],
-                            value: arg_regs[1],
-                        });
-                        return Ok(dst);
-                    }
-                    ("Deque", "to_list") => RegIntrinsic::DequeToList,
-                    ("Diff", "unified") => RegIntrinsic::DiffUnified,
-                    ("Directory", "copy_file") => RegIntrinsic::DirectoryCopyFile,
-                    ("Directory", "create") => RegIntrinsic::DirectoryCreate,
-                    ("Directory", "create_all") => RegIntrinsic::DirectoryCreateAll,
-                    ("Directory", "create_dir_all") => RegIntrinsic::DirectoryCreateDirAll,
-                    ("Directory", "exists") => RegIntrinsic::DirectoryExists,
-                    ("Directory", "is_dir") => RegIntrinsic::DirectoryIsDir,
-                    ("Directory", "is_file") => RegIntrinsic::DirectoryIsFile,
-                    ("Directory", "list_files") => RegIntrinsic::DirectoryListFiles,
-                    ("Directory", "list_paths") => RegIntrinsic::DirectoryListPaths,
-                    ("Directory", "metadata") => RegIntrinsic::DirectoryMetadata,
-                    ("Directory", "read_string") => RegIntrinsic::DirectoryReadString,
-                    ("Directory", "remove_dir_all") => RegIntrinsic::DirectoryRemoveDirAll,
-                    ("Directory", "remove_file") => RegIntrinsic::DirectoryRemoveFile,
-                    ("Directory", "rename") => RegIntrinsic::DirectoryRename,
-                    ("Directory", "write_string") => RegIntrinsic::DirectoryWriteString,
-                    ("Db", "close") => RegIntrinsic::DbClose,
-                    ("DbConnection", "open") => RegIntrinsic::DbConnectionOpen,
-                    ("DbConnection", "query") => RegIntrinsic::DbConnectionQuery,
-                    ("DbConnection", "try_open") => RegIntrinsic::DbConnectionTryOpen,
-                    ("Date", "add_days") => RegIntrinsic::DateAddDays,
-                    ("Date", "add_ms") => RegIntrinsic::DateAddMs,
-                    ("Date", "day") => RegIntrinsic::DateDay,
-                    ("Date", "days_between") => RegIntrinsic::DateDaysBetween,
-                    ("Date", "days_in_month") => RegIntrinsic::DateDaysInMonth,
-                    ("Date", "format_iso") => RegIntrinsic::DateFormatIso,
-                    ("Date", "format_ymd") => RegIntrinsic::DateFormatYmd,
-                    ("Date", "hour") => RegIntrinsic::DateHour,
-                    ("Date", "is_leap_year") => RegIntrinsic::DateIsLeapYear,
-                    ("Date", "minute") => RegIntrinsic::DateMinute,
-                    ("Date", "month") => RegIntrinsic::DateMonth,
-                    ("Date", "parse_iso") => RegIntrinsic::DateParseIso,
-                    ("Date", "parse_ymd") => RegIntrinsic::DateParseYmd,
-                    ("Date", "second") => RegIntrinsic::DateSecond,
-                    ("Date", "start_of_day") => RegIntrinsic::DateStartOfDay,
-                    ("Date", "weekday") => RegIntrinsic::DateWeekday,
-                    ("Date", "year") => RegIntrinsic::DateYear,
-                    ("Duration", "add") => RegIntrinsic::DurationAdd,
-                    ("Duration", "as_ms") => RegIntrinsic::DurationAsMs,
-                    ("Duration", "as_seconds") => RegIntrinsic::DurationAsSeconds,
-                    ("Duration", "ms") => RegIntrinsic::DurationMs,
-                    ("Duration", "seconds") => RegIntrinsic::DurationSeconds,
-                    ("Environment", "bind_function") => RegIntrinsic::EnvironmentBindFunction,
-                    ("Environment", "child") => RegIntrinsic::EnvironmentChild,
-                    ("Environment", "has_function") => RegIntrinsic::EnvironmentHasFunction,
-                    ("Environment", "has_parent") => RegIntrinsic::EnvironmentHasParent,
-                    ("Environment", "root") => RegIntrinsic::EnvironmentRoot,
-                    ("Env", "current_dir") => RegIntrinsic::EnvCurrentDir,
-                    ("Env", "get") => RegIntrinsic::EnvGet,
-                    ("Env", "get_or_default") => RegIntrinsic::EnvGetOrDefault,
-                    ("Env", "home_dir") => RegIntrinsic::EnvHomeDir,
-                    ("Env", "run_workspace_root") => RegIntrinsic::EnvRunWorkspaceRoot,
-                    ("Env", "set") => RegIntrinsic::EnvSet,
-                    ("Env", "set_current_dir") => RegIntrinsic::EnvSetCurrentDir,
-                    ("Env", "temp_dir") => RegIntrinsic::EnvTempDir,
-                    ("File", "append_bytes") => RegIntrinsic::FileAppendBytes,
-                    ("File", "append_string") => RegIntrinsic::FileAppendString,
-                    ("File", "bytes_stream") => RegIntrinsic::FileBytesStream,
-                    ("File", "exists") => RegIntrinsic::FileExists,
-                    ("File", "open") => RegIntrinsic::FileOpen,
-                    ("File", "open_read") => RegIntrinsic::FileOpenRead,
-                    ("File", "open_write") => RegIntrinsic::FileOpenWrite,
-                    ("File", "read_all") => RegIntrinsic::FileReadAll,
-                    ("File", "read_all_async") => RegIntrinsic::FileReadAllAsync,
-                    ("File", "read_all_string") => RegIntrinsic::FileReadAllString,
-                    ("File", "read_all_string_async") => RegIntrinsic::FileReadAllStringAsync,
-                    ("File", "read_bytes") => RegIntrinsic::FileReadBytes,
-                    ("File", "read_into") => RegIntrinsic::FileReadInto,
-                    ("File", "read_string") => RegIntrinsic::FileReadString,
-                    ("File", "remove") => RegIntrinsic::FileRemove,
-                    ("File", "write") => RegIntrinsic::FileWrite,
-                    ("File", "write_async") => RegIntrinsic::FileWriteAsync,
-                    ("File", "write_atomic") => RegIntrinsic::FileWriteAtomic,
-                    ("File", "write_bytes") => RegIntrinsic::FileWriteBytes,
-                    ("File", "write_bytes_view") => RegIntrinsic::FileWriteBytesView,
-                    ("File", "write_buffer") => RegIntrinsic::FileWriteBuffer,
-                    ("File", "write_buffer_view") => RegIntrinsic::FileWriteBufferView,
-                    ("File", "write_string") => RegIntrinsic::FileWriteString,
-                    ("File", "write_string_async") => RegIntrinsic::FileWriteStringAsync,
-                    ("File", "write_string_to_path") => RegIntrinsic::FileWriteStringToPath,
-                    ("FalliblePipeline", "collect") => RegIntrinsic::FalliblePipelineCollect,
-                    ("FalliblePipeline", "each") => RegIntrinsic::FalliblePipelineEach,
-                    ("FalliblePipeline", "filter") => RegIntrinsic::FalliblePipelineFilter,
-                    ("FalliblePipeline", "map") => RegIntrinsic::FalliblePipelineMap,
-                    ("FalliblePipeline", "try_map") => RegIntrinsic::FalliblePipelineTryMap,
-                    ("FileError", "message") => RegIntrinsic::FileErrorMessage,
-                    ("FunctionObject", "has_closure") => RegIntrinsic::FunctionObjectHasClosure,
-                    ("FunctionObject", "new") => RegIntrinsic::FunctionObjectNew,
-                    ("Hash", "sha256_bytes") => RegIntrinsic::HashSha256Bytes,
-                    ("Hash", "sha256_file") => RegIntrinsic::HashSha256File,
-                    ("Hash", "sha256_string") => RegIntrinsic::HashSha256String,
-                    ("Hash", "sha3_224_bytes") => RegIntrinsic::HashSha3_224Bytes,
-                    ("Hash", "sha3_256_bytes") => RegIntrinsic::HashSha3_256Bytes,
-                    ("Hash", "shake128_bytes") => RegIntrinsic::HashShake128Bytes,
-                    ("Hmac", "sha256_bytes") => RegIntrinsic::HmacSha256Bytes,
-                    ("Hmac", "sha256_string") => RegIntrinsic::HmacSha256String,
-                    ("GlobalConfig", "new") => RegIntrinsic::GlobalConfigNew,
-                    ("GlobalConfig", "replace") => {
-                        if arg_regs.len() != 2 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM GlobalConfig.replace expected 2 args, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::GlobalConfigReplace {
-                            dst,
-                            global: arg_regs[0],
-                            value: arg_regs[1],
-                        });
-                        return Ok(dst);
-                    }
-                    ("GlobalConfig", "rule_count") => RegIntrinsic::GlobalConfigRuleCount,
-                    ("Gzip", "decompress_bytes") => RegIntrinsic::GzipDecompressBytes,
-                    ("Hex", "decode") => RegIntrinsic::HexDecode,
-                    ("Hex", "encode") => RegIntrinsic::HexEncode,
-                    ("Hex", "encode_string") => RegIntrinsic::HexEncodeString,
-                    ("HttpError", "message") => RegIntrinsic::HttpErrorMessage,
-                    ("Http", "get") => RegIntrinsic::HttpGet,
-                    ("Http", "get_async") => RegIntrinsic::HttpGetAsync,
-                    ("Http", "get_retry_async") => RegIntrinsic::HttpGetRetryAsync,
-                    ("Http", "get_timeout_async") => RegIntrinsic::HttpGetTimeoutAsync,
-                    ("Http", "post_form") => RegIntrinsic::HttpPostForm,
-                    ("Http", "post_form_async") => RegIntrinsic::HttpPostFormAsync,
-                    ("Http", "post_json") => RegIntrinsic::HttpPostJson,
-                    ("Http", "post_json_async") => RegIntrinsic::HttpPostJsonAsync,
-                    ("Http", "post_json_bearer_retry_async") => {
-                        RegIntrinsic::HttpPostJsonBearerRetryAsync
-                    }
-                    ("Http", "post_json_retry_async") => RegIntrinsic::HttpPostJsonRetryAsync,
-                    ("Http", "post_json_timeout_async") => RegIntrinsic::HttpPostJsonTimeoutAsync,
-                    ("Http", "send_async") => RegIntrinsic::HttpSendAsync,
-                    ("HttpRequest", "json") => RegIntrinsic::HttpRequestJson,
-                    ("HttpRequest", "with_header") => RegIntrinsic::HttpRequestWithHeader,
-                    ("HttpRequest", "with_retry") => RegIntrinsic::HttpRequestWithRetry,
-                    ("HttpRequest", "with_timeout") => RegIntrinsic::HttpRequestWithTimeout,
-                    ("HttpResponse", "bytes") => RegIntrinsic::HttpResponseBytes,
-                    ("HttpResponse", "is_success") => RegIntrinsic::HttpResponseIsSuccess,
-                    ("HttpResponse", "lines") => RegIntrinsic::HttpResponseLines,
-                    ("HttpResponse", "status") => RegIntrinsic::HttpResponseStatus,
-                    ("HttpResponse", "text") => RegIntrinsic::HttpResponseText,
-                    ("Image", "inspect") => RegIntrinsic::ImageInspect,
-                    ("Image", "load") => RegIntrinsic::ImageLoad,
-                    ("Image", "normalize") => RegIntrinsic::ImageNormalize,
-                    ("Image", "resize") => RegIntrinsic::ImageResize,
-                    ("Image", "save") => RegIntrinsic::ImageSave,
-                    ("Image", "sharpen") => RegIntrinsic::ImageSharpen,
-                    ("Instant", "elapsed") => RegIntrinsic::InstantElapsed,
-                    ("Float", "is_finite") => RegIntrinsic::FloatIsFinite,
-                    ("Float", "is_infinite") => RegIntrinsic::FloatIsInfinite,
-                    ("Float", "is_nan") => RegIntrinsic::FloatIsNan,
-                    ("Float", "to_string") => RegIntrinsic::FloatToString,
-                    ("Int", "bit_and") => RegIntrinsic::IntBitAnd,
-                    ("Int", "bit_not") => RegIntrinsic::IntBitNot,
-                    ("Int", "bit_or") => RegIntrinsic::IntBitOr,
-                    ("Int", "bit_xor") => RegIntrinsic::IntBitXor,
-                    ("Int", "shift_left") => RegIntrinsic::IntShiftLeft,
-                    ("Int", "shift_right") => RegIntrinsic::IntShiftRight,
-                    ("Int", "to_string") => RegIntrinsic::IntToString,
-                    ("Int", "to_float") => RegIntrinsic::IntToFloat,
-                    ("Math", "abs") => RegIntrinsic::MathAbs,
-                    ("Math", "abs_float") => RegIntrinsic::MathAbsFloat,
-                    ("Math", "ceil") => RegIntrinsic::MathCeil,
-                    ("Math", "clamp") => RegIntrinsic::MathClamp,
-                    ("Math", "clamp_float") => RegIntrinsic::MathClampFloat,
-                    ("Math", "cos") => RegIntrinsic::MathCos,
-                    ("Math", "exp") => RegIntrinsic::MathExp,
-                    ("Math", "exp2") => RegIntrinsic::MathExp2,
-                    ("Math", "floor") => RegIntrinsic::MathFloor,
-                    ("Math", "log") => RegIntrinsic::MathLog,
-                    ("Math", "log2") => RegIntrinsic::MathLog2,
-                    ("Math", "max") => RegIntrinsic::MathMax,
-                    ("Math", "max_float") => RegIntrinsic::MathMaxFloat,
-                    ("Math", "min") => RegIntrinsic::MathMin,
-                    ("Math", "min_float") => RegIntrinsic::MathMinFloat,
-                    ("Math", "pow") => RegIntrinsic::MathPow,
-                    ("Math", "pow_float") => RegIntrinsic::MathPowFloat,
-                    ("Math", "round") => RegIntrinsic::MathRound,
-                    ("Math", "sin") => RegIntrinsic::MathSin,
-                    ("Math", "sqrt") => RegIntrinsic::MathSqrt,
-                    ("Math", "tanh") => RegIntrinsic::MathTanh,
-                    ("Math", "trunc_float") => RegIntrinsic::MathTruncFloat,
-                    ("Json", "array") => RegIntrinsic::JsonArray,
-                    ("Json", "array_bools") => RegIntrinsic::JsonArrayBools,
-                    ("Json", "array_contains_prefix") => RegIntrinsic::JsonArrayContainsPrefix,
-                    ("Json", "array_contains_string") => RegIntrinsic::JsonArrayContainsString,
-                    ("Json", "array_contains_substring") => {
-                        RegIntrinsic::JsonArrayContainsSubstring
-                    }
-                    ("Json", "array_count_where") => RegIntrinsic::JsonArrayCountWhere,
-                    ("Json", "array_fold") => RegIntrinsic::JsonArrayFold,
-                    ("Json", "array_get") => RegIntrinsic::JsonArrayGet,
-                    ("Json", "array_ints") => RegIntrinsic::JsonArrayInts,
-                    ("Json", "array_len") => RegIntrinsic::JsonArrayLen,
-                    ("Json", "array_strings") => RegIntrinsic::JsonArrayStrings,
-                    ("Json", "at") | ("Json", "value_at") => RegIntrinsic::JsonAt,
-                    ("Json", "at_bool") => RegIntrinsic::JsonAtBool,
-                    ("Json", "at_bool_or") => RegIntrinsic::JsonAtBoolOr,
-                    ("Json", "at_int") => RegIntrinsic::JsonAtInt,
-                    ("Json", "at_int_or") => RegIntrinsic::JsonAtIntOr,
-                    ("Json", "at_optional") => RegIntrinsic::JsonAtOptional,
-                    ("Json", "at_optional_bool") => RegIntrinsic::JsonAtOptionalBool,
-                    ("Json", "at_optional_int") => RegIntrinsic::JsonAtOptionalInt,
-                    ("Json", "at_optional_string") => RegIntrinsic::JsonAtOptionalString,
-                    ("Json", "at_or") => RegIntrinsic::JsonAtOr,
-                    ("Json", "at_string") => RegIntrinsic::JsonAtString,
-                    ("Json", "at_string_or") => RegIntrinsic::JsonAtStringOr,
-                    ("Json", "at_to_string") => RegIntrinsic::JsonAtToString,
-                    ("Json", "at_to_string_or") => RegIntrinsic::JsonAtToStringOr,
-                    ("Json", "as_bool") => RegIntrinsic::JsonAsBool,
-                    ("Json", "as_int") => RegIntrinsic::JsonAsInt,
-                    ("Json", "as_string") => RegIntrinsic::JsonAsString,
-                    ("Json", "bool_at") => RegIntrinsic::JsonBoolAt,
-                    ("Json", "bool_at_or") | ("Json", "json_bool_at_or") => {
-                        RegIntrinsic::JsonBoolAtOr
-                    }
-                    ("Json", "bool_field") => RegIntrinsic::JsonBoolField,
-                    ("Json", "clone") => RegIntrinsic::JsonClone,
-                    ("Json", "decode") => RegIntrinsic::JsonDecode,
-                    ("Json", "decode_text") => RegIntrinsic::JsonDecodeText,
-                    ("Json", "encode") => RegIntrinsic::JsonEncode,
-                    ("Json", "field") => RegIntrinsic::JsonField,
-                    ("Json", "field_bool") => RegIntrinsic::JsonFieldBool,
-                    ("Json", "field_int") => RegIntrinsic::JsonFieldInt,
-                    ("Json", "field_optional") => RegIntrinsic::JsonFieldOptional,
-                    ("Json", "field_optional_bool") => RegIntrinsic::JsonFieldOptionalBool,
-                    ("Json", "field_optional_int") => RegIntrinsic::JsonFieldOptionalInt,
-                    ("Json", "field_optional_string") => RegIntrinsic::JsonFieldOptionalString,
-                    ("Json", "field_string") => RegIntrinsic::JsonFieldString,
-                    ("Json", "int_at") => RegIntrinsic::JsonIntAt,
-                    ("Json", "int_at_or") | ("Json", "json_int_at_or") => RegIntrinsic::JsonIntAtOr,
-                    ("Json", "is_array") => RegIntrinsic::JsonIsArray,
-                    ("Json", "is_null") => RegIntrinsic::JsonIsNull,
-                    ("Json", "is_object") => RegIntrinsic::JsonIsObject,
-                    ("Json", "int_field") => RegIntrinsic::JsonIntField,
-                    ("Json", "kind") => RegIntrinsic::JsonKind,
-                    ("Json", "object") => RegIntrinsic::JsonObject,
-                    ("Json", "json_parse") | ("Json", "parse") => RegIntrinsic::JsonParse,
-                    ("Json", "parse_file") => RegIntrinsic::JsonParseFile,
-                    ("Json", "object_keys") => RegIntrinsic::JsonObjectKeys,
-                    ("Json", "object_len") => RegIntrinsic::JsonObjectLen,
-                    ("Json", "quote_string") => RegIntrinsic::JsonQuoteString,
-                    ("Json", "raw_field") => RegIntrinsic::JsonRawField,
-                    ("Json", "string_at") => RegIntrinsic::JsonStringAt,
-                    ("Json", "string_at_or") | ("Json", "json_string_at_or") => {
-                        RegIntrinsic::JsonStringAtOr
-                    }
-                    ("Json", "string_array") => RegIntrinsic::JsonStringArray,
-                    ("Json", "string_field") => RegIntrinsic::JsonStringField,
-                    ("Json", "strings") => RegIntrinsic::JsonStrings,
-                    ("Json", "to_string_at") => RegIntrinsic::JsonToStringAt,
-                    ("Json", "to_string_at_or") => RegIntrinsic::JsonToStringAtOr,
-                    ("Json", "to_string") => RegIntrinsic::JsonToString,
-                    ("Json", "value") => RegIntrinsic::JsonValue,
-                    ("Json", "values") => RegIntrinsic::JsonValues,
-                    ("JsonError", "message") => RegIntrinsic::JsonErrorMessage,
-                    ("List", "append") => {
-                        if arg_regs.len() != 2 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM List.append expected 2 args, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::ListAppend {
-                            dst,
-                            list: arg_regs[0],
-                            values: arg_regs[1],
-                        });
-                        return Ok(dst);
-                    }
-                    ("List", "clear") => {
-                        if arg_regs.len() != 1 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM List.clear expected 1 arg, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::ListClear {
-                            dst,
-                            list: arg_regs[0],
-                        });
-                        return Ok(dst);
-                    }
-                    ("List", "all") => RegIntrinsic::ListAll,
-                    ("List", "any") => RegIntrinsic::ListAny,
-                    ("List", "contains") => RegIntrinsic::ListContains,
-                    ("List", "contains_value") => RegIntrinsic::ListContainsValue,
-                    ("List", "count_where") => RegIntrinsic::ListCountWhere,
-                    ("List", "consume") => RegIntrinsic::ListConsume,
-                    ("List", "find") => RegIntrinsic::ListFind,
-                    ("List", "flat_map") => RegIntrinsic::ListFlatMap,
-                    ("List", "flatten") => RegIntrinsic::ListFlatten,
-                    ("List", "first") => RegIntrinsic::ListFirst,
-                    ("List", "filter") => {
-                        if arg_regs.len() != 2 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM List.filter expected 2 args, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::ListFilter {
-                            dst,
-                            list: arg_regs[0],
-                            predicate: arg_regs[1],
-                        });
-                        return Ok(dst);
-                    }
-                    ("List", "fold") => {
-                        if arg_regs.len() != 3 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM List.fold expected 3 args, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::ListFold {
-                            dst,
-                            list: arg_regs[0],
-                            state: arg_regs[1],
-                            folder: arg_regs[2],
-                        });
-                        return Ok(dst);
-                    }
-                    ("List", "get") => {
-                        if arg_regs.len() != 2 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM List.get expected 2 args, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::ListGet {
-                            dst,
-                            list: arg_regs[0],
-                            index: arg_regs[1],
-                        });
-                        return Ok(dst);
-                    }
-                    ("List", "len") => {
-                        if arg_regs.len() != 1 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM List.len expected 1 arg, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::ListLen {
-                            dst,
-                            list: arg_regs[0],
-                        });
-                        return Ok(dst);
-                    }
-                    ("List", "map") => {
-                        if arg_regs.len() != 2 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM List.map expected 2 args, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::ListMap {
-                            dst,
-                            list: arg_regs[0],
-                            mapper: arg_regs[1],
-                        });
-                        return Ok(dst);
-                    }
-                    ("List", "is_empty") => RegIntrinsic::ListIsEmpty,
-                    ("List", "join") => RegIntrinsic::ListJoin,
-                    ("List", "group_by") => RegIntrinsic::ListGroupBy,
-                    ("List", "last") => RegIntrinsic::ListLast,
-                    ("List", "dedup") => RegIntrinsic::ListDedup,
-                    ("List", "enumerate") => RegIntrinsic::ListEnumerate,
-                    ("List", "max") => RegIntrinsic::ListMax,
-                    ("List", "min") => RegIntrinsic::ListMin,
-                    ("List", "new") => RegIntrinsic::ListNew,
-                    ("List", "partition") => RegIntrinsic::ListPartition,
-                    ("List", "pipeline") => RegIntrinsic::ListPipeline,
-                    ("List", "pop") => {
-                        if arg_regs.len() != 1 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM List.pop expected 1 arg, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::ListPop {
-                            dst,
-                            list: arg_regs[0],
-                        });
-                        return Ok(dst);
-                    }
-                    ("List", "remove_at") => {
-                        if arg_regs.len() != 2 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM List.remove_at expected 2 args, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::ListRemoveAt {
-                            dst,
-                            list: arg_regs[0],
-                            index: arg_regs[1],
-                        });
-                        return Ok(dst);
-                    }
-                    ("List", "reverse") => RegIntrinsic::ListReverse,
-                    ("List", "set") => {
-                        if arg_regs.len() != 3 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM List.set expected 3 args, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::ListSet {
-                            dst,
-                            list: arg_regs[0],
-                            index: arg_regs[1],
-                            value: arg_regs[2],
-                        });
-                        return Ok(dst);
-                    }
-                    ("List", "skip") => RegIntrinsic::ListSkip,
-                    ("List", "slice") => RegIntrinsic::ListSlice,
-                    ("List", "sum") => RegIntrinsic::ListSum,
-                    ("List", "zip") => RegIntrinsic::ListZip,
-                    ("List", "sort") => {
-                        if arg_regs.len() != 1 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM List.sort expected 1 arg, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::ListSort {
-                            dst,
-                            list: arg_regs[0],
-                        });
-                        return Ok(dst);
-                    }
-                    ("List", "sort_by") => {
-                        if arg_regs.len() != 3 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM List.sort_by expected 3 args, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::ListSortBy {
-                            dst,
-                            list: arg_regs[0],
-                            key: arg_regs[1],
-                            compare: arg_regs[2],
-                        });
-                        return Ok(dst);
-                    }
-                    ("List", "sort_with") => {
-                        if arg_regs.len() != 2 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM List.sort_with expected 2 args, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::ListSortWith {
-                            dst,
-                            list: arg_regs[0],
-                            compare: arg_regs[1],
-                        });
-                        return Ok(dst);
-                    }
-                    ("List", "push") => {
-                        if arg_regs.len() != 2 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM List.push expected 2 args, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::ListPush {
-                            dst,
-                            list: arg_regs[0],
-                            value: arg_regs[1],
-                        });
-                        return Ok(dst);
-                    }
-                    ("List", "take") => RegIntrinsic::ListTake,
-                    ("List", "to_json_strings") => RegIntrinsic::ListToJsonStrings,
-                    ("List", "to_json_values") => RegIntrinsic::ListToJsonValues,
-                    ("List", "try_fold") => RegIntrinsic::ListTryFold,
-                    ("Log", "error") => RegIntrinsic::LogError,
-                    ("Log", "error_json") => RegIntrinsic::LogErrorJson,
-                    ("Log", "trace") => RegIntrinsic::LogTrace,
-                    ("Log", "write") => RegIntrinsic::LogWrite,
-                    ("Log", "write_json") => RegIntrinsic::LogWriteJson,
-                    ("Map", "clear") => {
-                        if arg_regs.len() != 1 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM Map.clear expected 1 arg, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::MapClear {
-                            dst,
-                            map: arg_regs[0],
-                        });
-                        return Ok(dst);
-                    }
-                    ("Map", "contains_key") => RegIntrinsic::MapContainsKey,
-                    ("Map", "filter") => RegIntrinsic::MapFilter,
-                    ("Map", "fold") => RegIntrinsic::MapFold,
-                    ("Map", "for_each") => RegIntrinsic::MapForEach,
-                    ("Map", "get") => {
-                        if arg_regs.len() != 2 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM Map.get expected 2 args, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::MapGet {
-                            dst,
-                            map: arg_regs[0],
-                            key: arg_regs[1],
-                        });
-                        return Ok(dst);
-                    }
-                    ("Map", "get_or_default") => RegIntrinsic::MapGetOrDefault,
-                    ("Map", "is_empty") => RegIntrinsic::MapIsEmpty,
-                    ("Map", "insert") => {
-                        if arg_regs.len() != 3 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM Map.insert expected 3 args, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::MapInsert {
-                            dst,
-                            map: arg_regs[0],
-                            key: arg_regs[1],
-                            value: arg_regs[2],
-                        });
-                        return Ok(dst);
-                    }
-                    ("Map", "insert_old") => {
-                        if arg_regs.len() != 3 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM Map.insert_old expected 3 args, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::MapInsertOld {
-                            dst,
-                            map: arg_regs[0],
-                            key: arg_regs[1],
-                            value: arg_regs[2],
-                        });
-                        return Ok(dst);
-                    }
-                    ("Map", "keys") => RegIntrinsic::MapKeys,
-                    ("Map", "len") => RegIntrinsic::MapLen,
-                    ("Map", "map_values") => RegIntrinsic::MapMapValues,
-                    ("Map", "merge") => RegIntrinsic::MapMerge,
-                    ("Map", "new") => RegIntrinsic::MapNew,
-                    ("Map", "remove") => {
-                        if arg_regs.len() != 2 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM Map.remove expected 2 args, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::MapRemove {
-                            dst,
-                            map: arg_regs[0],
-                            key: arg_regs[1],
-                        });
-                        return Ok(dst);
-                    }
-                    ("Map", "try_fold") => RegIntrinsic::MapTryFold,
-                    ("Map", "values") => RegIntrinsic::MapValues,
-                    ("Option", "and_then") => RegIntrinsic::OptionAndThen,
-                    ("Option", "filter") => RegIntrinsic::OptionFilter,
-                    ("Option", "is_none") => RegIntrinsic::OptionIsNone,
-                    ("Option", "is_some") => RegIntrinsic::OptionIsSome,
-                    ("Option", "map") => RegIntrinsic::OptionMap,
-                    ("Option", "ok_or") => RegIntrinsic::OptionOkOr,
-                    ("Option", "or") => RegIntrinsic::OptionOr,
-                    ("Option", "unwrap_or") => RegIntrinsic::OptionUnwrapOr,
-                    ("Option", "unwrap_or_else") => RegIntrinsic::OptionUnwrapOrElse,
-                    ("Clone", "clone") => RegIntrinsic::CloneClone,
-                    ("Ord", "compare") => RegIntrinsic::OrdCompare,
-                    ("OS", "close") => RegIntrinsic::OsClose,
-                    ("Patch", "apply_text") => RegIntrinsic::PatchApplyText,
-                    ("Path", "exists") => RegIntrinsic::PathExists,
-                    ("Path", "extension") => RegIntrinsic::PathExtension,
-                    ("Path", "file_name") => RegIntrinsic::PathFileName,
-                    ("Path", "from_string") => RegIntrinsic::PathFromString,
-                    ("Path", "is_absolute") => RegIntrinsic::PathIsAbsolute,
-                    ("Path", "is_dir") => RegIntrinsic::PathIsDir,
-                    ("Path", "is_file") => RegIntrinsic::PathIsFile,
-                    ("Path", "join") => RegIntrinsic::PathJoin,
-                    ("Path", "list_files") => RegIntrinsic::PathListFiles,
-                    ("Path", "list_paths") => RegIntrinsic::PathListPaths,
-                    ("Path", "normalize") => RegIntrinsic::PathNormalize,
-                    ("Path", "parent") => RegIntrinsic::PathParent,
-                    ("Path", "read_string") => RegIntrinsic::PathReadString,
-                    ("Path", "resolve_relative") => RegIntrinsic::PathResolveRelative,
-                    ("Path", "safe_relative") => RegIntrinsic::PathSafeRelative,
-                    ("Path", "starts_with") => RegIntrinsic::PathStartsWith,
-                    ("Path", "to_string") => RegIntrinsic::PathToString,
-                    ("Path", "with_extension") => RegIntrinsic::PathWithExtension,
-                    ("Path", "write_string") => RegIntrinsic::PathWriteString,
-                    ("PersistentMap", "clear") => RegIntrinsic::PersistentMapClear,
-                    ("PersistentMap", "contains_key") => RegIntrinsic::PersistentMapContainsKey,
-                    ("PersistentMap", "get") => RegIntrinsic::PersistentMapGet,
-                    ("PersistentMap", "insert") => RegIntrinsic::PersistentMapInsert,
-                    ("PersistentMap", "is_empty") => RegIntrinsic::PersistentMapIsEmpty,
-                    ("PersistentMap", "len") => RegIntrinsic::PersistentMapLen,
-                    ("PersistentMap", "new") => RegIntrinsic::PersistentMapNew,
-                    ("PersistentMap", "remove") => RegIntrinsic::PersistentMapRemove,
-                    ("Pipeline", "collect") => RegIntrinsic::PipelineCollect,
-                    ("Pipeline", "each") => RegIntrinsic::PipelineEach,
-                    ("Pipeline", "try_map") => RegIntrinsic::PipelineTryMap,
-                    ("PoolError", "message") => RegIntrinsic::PoolErrorMessage,
-                    ("PoolStats", "available") => RegIntrinsic::PoolStatsAvailable,
-                    ("PoolStats", "capacity") => RegIntrinsic::PoolStatsCapacity,
-                    ("PoolStats", "created") => RegIntrinsic::PoolStatsCreated,
-                    ("PoolStats", "in_use") => RegIntrinsic::PoolStatsInUse,
-                    ("Process", "run") => RegIntrinsic::ProcessRun,
-                    ("Process", "run_async") => RegIntrinsic::ProcessRunAsync,
-                    ("Process", "run_many_stdout") => RegIntrinsic::ProcessRunManyStdout,
-                    ("Process", "run_many_stdout_async") => RegIntrinsic::ProcessRunManyStdoutAsync,
-                    ("Process", "run_many_stdout_timeout") => {
-                        RegIntrinsic::ProcessRunManyStdoutTimeout
-                    }
-                    ("Process", "run_many_stdout_timeout_async") => {
-                        RegIntrinsic::ProcessRunManyStdoutTimeoutAsync
-                    }
-                    ("Process", "run_request") => RegIntrinsic::ProcessRunRequest,
-                    ("Process", "run_request_async") => RegIntrinsic::ProcessRunRequestAsync,
-                    ("Process", "run_request_cancellable_async") => {
-                        RegIntrinsic::ProcessRunRequestCancellableAsync
-                    }
-                    ("Process", "run_stdout") => RegIntrinsic::ProcessRunStdout,
-                    ("Process", "run_stdout_async") => RegIntrinsic::ProcessRunStdoutAsync,
-                    ("Process", "run_stdout_timeout") => RegIntrinsic::ProcessRunStdoutTimeout,
-                    ("Process", "run_stdout_timeout_async") => {
-                        RegIntrinsic::ProcessRunStdoutTimeoutAsync
-                    }
-                    ("Process", "run_timeout") => RegIntrinsic::ProcessRunTimeout,
-                    ("Process", "run_timeout_async") => RegIntrinsic::ProcessRunTimeoutAsync,
-                    ("Process", "stream") => RegIntrinsic::ProcessStream,
-                    ("Random", "bool") => RegIntrinsic::RandomBool,
-                    ("Random", "bytes") => RegIntrinsic::RandomBytes,
-                    ("Random", "float") => RegIntrinsic::RandomFloat,
-                    ("Random", "int") => RegIntrinsic::RandomInt,
-                    ("Random", "string") => RegIntrinsic::RandomString,
-                    ("Pipeline", "filter") => {
-                        if arg_regs.len() != 2 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM Pipeline.filter expected 2 args, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::ListFilter {
-                            dst,
-                            list: arg_regs[0],
-                            predicate: arg_regs[1],
-                        });
-                        return Ok(dst);
-                    }
-                    ("Pipeline", "map") => {
-                        if arg_regs.len() != 2 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM Pipeline.map expected 2 args, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::ListMap {
-                            dst,
-                            list: arg_regs[0],
-                            mapper: arg_regs[1],
-                        });
-                        return Ok(dst);
-                    }
-                    ("Regex", "captures") => RegIntrinsic::RegexCaptures,
-                    ("Regex", "compile") => RegIntrinsic::RegexCompile,
-                    ("Regex", "find") => RegIntrinsic::RegexFind,
-                    ("Regex", "is_match") => RegIntrinsic::RegexIsMatch,
-                    ("Regex", "replace_all") => RegIntrinsic::RegexReplaceAll,
-                    ("Regex", "split") => RegIntrinsic::RegexSplit,
-                    ("RegexError", "message") => RegIntrinsic::RegexErrorMessage,
-                    ("String", "concat") => {
-                        if arg_regs.len() != 2 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM String.concat expected 2 args, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::StringConcat {
-                            dst,
-                            left: arg_regs[0],
-                            right: arg_regs[1],
-                        });
-                        return Ok(dst);
-                    }
-                    ("Result", "and_then") => RegIntrinsic::ResultAndThen,
-                    ("Result", "err") => RegIntrinsic::ResultErr,
-                    ("Result", "err_message") => RegIntrinsic::ResultErrMessage,
-                    ("Result", "is_err") => RegIntrinsic::ResultIsErr,
-                    ("Result", "is_ok") => RegIntrinsic::ResultIsOk,
-                    ("Result", "map") => RegIntrinsic::ResultMap,
-                    ("Result", "map_error") => RegIntrinsic::ResultMapError,
-                    ("Result", "ok") => RegIntrinsic::ResultOk,
-                    ("Result", "unwrap_or") => RegIntrinsic::ResultUnwrapOr,
-                    ("Result", "unwrap_or_else") => RegIntrinsic::ResultUnwrapOrElse,
-                    ("Request", "new") => RegIntrinsic::RequestNew,
-                    ("Request", "path") => RegIntrinsic::RequestPath,
-                    ("Receiver", "close") => RegIntrinsic::ReceiverClose,
-                    ("Receiver", "into_stream") => RegIntrinsic::ReceiverIntoStream,
-                    ("Receiver", "recv") => RegIntrinsic::ReceiverRecv,
-                    ("Receiver", "recv_cancellable") => RegIntrinsic::ReceiverRecvCancellable,
-                    ("Response", "body") => RegIntrinsic::ResponseBody,
-                    ("Response", "ok") => RegIntrinsic::ResponseOk,
-                    ("Response", "status") => RegIntrinsic::ResponseStatus,
-                    ("Row", "field_string") => RegIntrinsic::RowFieldString,
-                    ("RowBuffer", "new") => RegIntrinsic::RowBufferNew,
-                    ("RuleLoader", "load_rules") => RegIntrinsic::RuleLoaderLoadRules,
-                    ("ResourcePool", "borrow") => RegIntrinsic::ResourcePoolBorrow,
-                    ("ResourcePool", "discard") => RegIntrinsic::ResourcePoolDiscard,
-                    ("ResourcePool", "lazy") => RegIntrinsic::ResourcePoolLazy,
-                    ("ResourcePool", "new") => RegIntrinsic::ResourcePoolNew,
-                    ("ResourcePool", "stats") => RegIntrinsic::ResourcePoolStats,
-                    ("ResourcePool", "try_borrow") => RegIntrinsic::ResourcePoolTryBorrow,
-                    ("ResourcePool", "try_lazy") => RegIntrinsic::ResourcePoolTryLazy,
-                    ("ResourcePool", "try_new") => RegIntrinsic::ResourcePoolTryNew,
-                    ("Set", "clear") => {
-                        if arg_regs.len() != 1 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM Set.clear expected 1 arg, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::SetClear {
-                            dst,
-                            set: arg_regs[0],
-                        });
-                        return Ok(dst);
-                    }
-                    ("Set", "contains") => RegIntrinsic::SetContains,
-                    ("Set", "difference") => RegIntrinsic::SetDifference,
-                    ("Set", "for_each") => {
-                        if arg_regs.len() != 2 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM Set.for_each expected 2 args, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::SetForEach {
-                            dst,
-                            set: arg_regs[0],
-                            callback: arg_regs[1],
-                        });
-                        return Ok(dst);
-                    }
-                    ("Set", "insert") => {
-                        if arg_regs.len() != 2 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM Set.insert expected 2 args, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::SetInsert {
-                            dst,
-                            set: arg_regs[0],
-                            value: arg_regs[1],
-                        });
-                        return Ok(dst);
-                    }
-                    ("Set", "intersection") => RegIntrinsic::SetIntersection,
-                    ("Set", "is_empty") => RegIntrinsic::SetIsEmpty,
-                    ("Set", "is_subset") => RegIntrinsic::SetIsSubset,
-                    ("Set", "len") => RegIntrinsic::SetLen,
-                    ("Set", "new") => RegIntrinsic::SetNew,
-                    ("Set", "remove") => {
-                        if arg_regs.len() != 2 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM Set.remove expected 2 args, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::SetRemove {
-                            dst,
-                            set: arg_regs[0],
-                            value: arg_regs[1],
-                        });
-                        return Ok(dst);
-                    }
-                    ("Set", "to_list") => RegIntrinsic::SetToList,
-                    ("Set", "union") => RegIntrinsic::SetUnion,
-                    ("SortedSet", "clear") => {
-                        if arg_regs.len() != 1 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM SortedSet.clear expected 1 arg, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::SortedSetClear {
-                            dst,
-                            set: arg_regs[0],
-                        });
-                        return Ok(dst);
-                    }
-                    ("SortedSet", "contains") => RegIntrinsic::SortedSetContains,
-                    ("SortedSet", "insert") => {
-                        if arg_regs.len() != 2 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM SortedSet.insert expected 2 args, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::SortedSetInsert {
-                            dst,
-                            set: arg_regs[0],
-                            value: arg_regs[1],
-                        });
-                        return Ok(dst);
-                    }
-                    ("SortedSet", "is_empty") => RegIntrinsic::SortedSetIsEmpty,
-                    ("SortedSet", "len") => RegIntrinsic::SortedSetLen,
-                    ("SortedSet", "new") => RegIntrinsic::SortedSetNew,
-                    ("SortedSet", "remove") => {
-                        if arg_regs.len() != 2 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM SortedSet.remove expected 2 args, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::SortedSetRemove {
-                            dst,
-                            set: arg_regs[0],
-                            value: arg_regs[1],
-                        });
-                        return Ok(dst);
-                    }
-                    ("SortedSet", "to_list") => RegIntrinsic::SortedSetToList,
-                    ("SortedMap", "clear") => {
-                        if arg_regs.len() != 1 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM SortedMap.clear expected 1 arg, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::SortedMapClear {
-                            dst,
-                            map: arg_regs[0],
-                        });
-                        return Ok(dst);
-                    }
-                    ("SortedMap", "contains_key") => RegIntrinsic::SortedMapContainsKey,
-                    ("SortedMap", "get") => RegIntrinsic::SortedMapGet,
-                    ("SortedMap", "insert") => {
-                        if arg_regs.len() != 3 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM SortedMap.insert expected 3 args, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::SortedMapInsert {
-                            dst,
-                            map: arg_regs[0],
-                            key: arg_regs[1],
-                            value: arg_regs[2],
-                        });
-                        return Ok(dst);
-                    }
-                    ("SortedMap", "is_empty") => RegIntrinsic::SortedMapIsEmpty,
-                    ("SortedMap", "keys") => RegIntrinsic::SortedMapKeys,
-                    ("SortedMap", "len") => RegIntrinsic::SortedMapLen,
-                    ("SortedMap", "new") => RegIntrinsic::SortedMapNew,
-                    ("SortedMap", "remove") => {
-                        if arg_regs.len() != 2 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM SortedMap.remove expected 2 args, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::SortedMapRemove {
-                            dst,
-                            map: arg_regs[0],
-                            key: arg_regs[1],
-                        });
-                        return Ok(dst);
-                    }
-                    ("SortedMap", "values") => RegIntrinsic::SortedMapValues,
-                    ("String", "after") => RegIntrinsic::StringAfter,
-                    ("String", "before") => RegIntrinsic::StringBefore,
-                    ("String", "char_at") => RegIntrinsic::StringCharAt,
-                    ("String", "contains") => RegIntrinsic::StringContains,
-                    ("String", "count") => RegIntrinsic::StringCount,
-                    ("String", "copy") | ("String", "clone") => RegIntrinsic::StringCopy,
-                    ("String", "ends_with") => RegIntrinsic::StringEndsWith,
-                    ("String", "env") => RegIntrinsic::EnvGet,
-                    ("String", "env_or") => RegIntrinsic::EnvGetOrDefault,
-                    ("String", "format") => RegIntrinsic::StringFormat,
-                    ("String", "from_bool") => RegIntrinsic::StringFromBool,
-                    ("String", "from_float") => RegIntrinsic::StringFromFloat,
-                    ("String", "from_int") => RegIntrinsic::StringFromInt,
-                    ("String", "index_of") => RegIntrinsic::StringIndexOf,
-                    ("String", "is_empty") => RegIntrinsic::StringIsEmpty,
-                    ("String", "join") => RegIntrinsic::StringJoin,
-                    ("String", "lines") => RegIntrinsic::StringLines,
-                    ("String", "chars") => RegIntrinsic::StringChars,
-                    ("String", "len") => RegIntrinsic::StringLen,
-                    ("String", "pad_left") => RegIntrinsic::StringPadLeft,
-                    ("String", "pad_right") => RegIntrinsic::StringPadRight,
-                    ("String", "parse_float") => RegIntrinsic::StringParseFloat,
-                    ("String", "parse_int") => RegIntrinsic::StringParseInt,
-                    ("String", "repeat") => RegIntrinsic::StringRepeat,
-                    ("String", "replace") => RegIntrinsic::StringReplace,
-                    ("String", "replace_first") => RegIntrinsic::StringReplaceFirst,
-                    ("String", "reverse") => RegIntrinsic::StringReverse,
-                    ("String", "slice") | ("String", "view") => RegIntrinsic::StringSlice,
-                    ("String", "split") => RegIntrinsic::StringSplit,
-                    ("String", "starts_with") => RegIntrinsic::StringStartsWith,
-                    ("String", "strip_prefix") => RegIntrinsic::StringStripPrefix,
-                    ("String", "safe_relative") => RegIntrinsic::PathSafeRelative,
-                    ("String", "to_path") => RegIntrinsic::PathFromString,
-                    ("String", "to_url") => RegIntrinsic::UrlFromString,
-                    ("String", "to_bytes") => RegIntrinsic::BytesFromString,
-                    ("String", "to_lowercase") => RegIntrinsic::StringToLowercase,
-                    ("String", "to_uppercase") => RegIntrinsic::StringToUppercase,
-                    ("String", "trim") => RegIntrinsic::StringTrim,
-                    ("String", "trim_end") => RegIntrinsic::StringTrimEnd,
-                    ("String", "trim_start") => RegIntrinsic::StringTrimStart,
-                    ("TcpError", "message") => RegIntrinsic::TcpErrorMessage,
-                    ("Toml", "parse_file") => RegIntrinsic::TomlParseFile,
-                    ("StringBuilder", "finish") => RegIntrinsic::StringCopy,
-                    ("StringBuilder", "new") => RegIntrinsic::StringBuilderNew,
-                    ("StringBuilder", "push") => {
-                        if arg_regs.len() != 2 {
-                            return Err(EvalError::Runtime(format!(
-                                "reg VM StringBuilder.push expected 2 args, got {}.",
-                                arg_regs.len()
-                            )));
-                        }
-                        self.emit(RegInstr::StringBuilderPush {
-                            dst,
-                            builder: arg_regs[0],
-                            value: arg_regs[1],
-                        });
-                        return Ok(dst);
-                    }
-                    ("Stream", "collect_list") => RegIntrinsic::StreamCollectList,
-                    ("Stream", "from_list") => RegIntrinsic::StreamFromList,
-                    ("Stream", "next") => RegIntrinsic::StreamNext,
-                    ("Sender", "close") => RegIntrinsic::SenderClose,
-                    ("Sender", "send") => RegIntrinsic::SenderSend,
-                    ("Sender", "send_cancellable") => RegIntrinsic::SenderSendCancellable,
-                    ("StringView", "after") => RegIntrinsic::StringAfter,
-                    ("StringView", "before") => RegIntrinsic::StringBefore,
-                    ("StringView", "contains") => RegIntrinsic::StringContains,
-                    ("StringView", "is_empty") => RegIntrinsic::StringIsEmpty,
-                    ("StringView", "len") => RegIntrinsic::StringLen,
-                    ("StringView", "slice") => RegIntrinsic::StringSlice,
-                    ("StringView", "starts_with") => RegIntrinsic::StringStartsWith,
-                    ("StringView", "to_string") => RegIntrinsic::StringCopy,
-                    ("Tcp", "connect") => RegIntrinsic::TcpConnect,
-                    ("TempDir", "keep") => RegIntrinsic::TempDirKeep,
-                    ("TempDir", "new") => RegIntrinsic::TempDirNew,
-                    ("TempDir", "new_in") => RegIntrinsic::TempDirNewIn,
-                    ("TempDir", "path") => RegIntrinsic::TempDirPath,
-                    ("TcpStream", "read") => RegIntrinsic::TcpStreamRead,
-                    ("TcpStream", "shutdown") => RegIntrinsic::TcpStreamShutdown,
-                    ("TcpStream", "write") => RegIntrinsic::TcpStreamWrite,
-                    ("TcpStream", "write_all") => RegIntrinsic::TcpStreamWriteAll,
-                    ("Timer", "sleep") => RegIntrinsic::TimerSleep,
-                    ("Timer", "sleep_cancellable") => RegIntrinsic::TimerSleepCancellable,
-                    ("Timer", "sleep_until") => RegIntrinsic::TimerSleepUntil,
-                    ("Url", "decode_component") => RegIntrinsic::UrlDecodeComponent,
-                    ("Url", "encode_component") => RegIntrinsic::UrlEncodeComponent,
-                    ("Url", "from_string") => RegIntrinsic::UrlFromString,
-                    ("Url", "to_string") => RegIntrinsic::UrlToString,
-                    ("Uuid", "new_v4") => RegIntrinsic::UuidNewV4,
-                    ("Workspace", "resolve") => RegIntrinsic::PathResolveRelative,
-                    ("WebSocket", "close") => RegIntrinsic::WebSocketClose,
-                    ("WebSocket", "connect") => RegIntrinsic::WebSocketConnect,
-                    ("WebSocket", "recv_bytes") => RegIntrinsic::WebSocketRecvBytes,
-                    ("WebSocket", "recv_text") => RegIntrinsic::WebSocketRecvText,
-                    ("WebSocket", "send_bytes") => RegIntrinsic::WebSocketSendBytes,
-                    ("WebSocket", "send_text") => RegIntrinsic::WebSocketSendText,
-                    ("WebSocketError", "message") => RegIntrinsic::WebSocketErrorMessage,
-                    ("Yaml", "parse") => RegIntrinsic::YamlParse,
-                    ("Yaml", "parse_file") => RegIntrinsic::YamlParseFile,
-                    ("Weak", "downgrade") => RegIntrinsic::WeakDowngrade,
-                    ("Weak", "from") => RegIntrinsic::WeakFrom,
-                    ("Weak", "upgrade") => RegIntrinsic::WeakUpgrade,
-                    _ => {
-                        let qualified_key = format!("{namespace_root}.{name_root}");
-                        // Native declarations also appear in `function_ids` (with
-                        // empty bodies), so dispatch them as native boundaries
-                        // first. A user-defined qualified function (e.g.
-                        // `pub fn Sqlx.execute`) is never native, so it falls
-                        // through to the `function_ids` lookup below.
-                        if self.is_native_function(Some(namespace_root), name_root) {
-                            let mut_args =
-                                self.native_mut_arg_positions(Some(namespace_root), name_root);
-                            self.emit(RegInstr::CallNative {
+                let intrinsic = if let Some(intrinsic) =
+                    qualified_intrinsic(namespace_root, name_root)
+                {
+                    intrinsic
+                } else {
+                    match (namespace_root, name_root) {
+                        ("Buffer", "clear") => {
+                            if arg_regs.len() != 1 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM Buffer.clear expected 1 arg, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::BufferClear {
                                 dst,
-                                key: qualified_key,
-                                args: arg_regs,
-                                mut_args,
+                                buffer: arg_regs[0],
                             });
                             return Ok(dst);
                         }
-                        // Dynamic protocol dispatch: `Protocol.method(self: x, ...)`
-                        // where `Protocol` is a protocol with impls. The concrete
-                        // function is selected at runtime by `args[0]`'s struct type
-                        // (capability objects + generic bounds) — the VM equivalent
-                        // of the compiled backend's closed-world enum dispatch.
-                        // Checked before the `function_ids` lookup because a protocol
-                        // method also appears there as a bodyless stub (which would
-                        // wrongly return `Unit`).
-                        let dispatch: Vec<(String, usize)> = self
-                            .hir
-                            .protocol_method_targets(namespace_root, name_root)
-                            .into_iter()
-                            .filter_map(|(type_name, target)| {
-                                self.function_ids
-                                    .get(type_root_name(&target))
-                                    .copied()
-                                    .map(|function| (type_name, function))
-                            })
-                            .collect();
-                        if !dispatch.is_empty() {
-                            let mut_args =
-                                self.native_mut_arg_positions(Some(namespace_root), name_root);
-                            self.emit(RegInstr::CallDynamic {
+                        ("Cache", "insert") => {
+                            if arg_regs.len() != 3 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM Cache.insert expected 3 args, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::MapInsert {
                                 dst,
-                                dispatch,
-                                args: arg_regs,
-                                mut_args,
+                                map: arg_regs[0],
+                                key: arg_regs[1],
+                                value: arg_regs[2],
                             });
                             return Ok(dst);
                         }
-                        if let Some(function) = self.function_ids.get(&qualified_key).copied() {
-                            let mut_args =
-                                self.native_mut_arg_positions(Some(namespace_root), name_root);
-                            self.emit(RegInstr::CallKnown {
+                        ("CancellationToken", "is_cancelled") => {
+                            RegIntrinsic::CancellationTokenIsCancelled
+                        }
+                        ("ConfigStore", "replace") => {
+                            if arg_regs.len() != 2 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM ConfigStore.replace expected 2 args, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::ConfigStoreReplace {
                                 dst,
-                                function,
-                                args: arg_regs,
-                                mut_args,
+                                store: arg_regs[0],
+                                value: arg_regs[1],
                             });
                             return Ok(dst);
                         }
-                        // `.clone()` (a derived `Clone`) deep-copies any value. A
-                        // receiver call resolves its namespace to the concrete type
-                        // (e.g. `Ops.clone`), not `Clone`, so map an otherwise
-                        // unresolved `clone` to the deep-clone intrinsic.
-                        if name_root == "clone" && arg_regs.len() == 1 {
-                            self.emit(RegInstr::CallIntrinsic {
+                        ("Counter", "add") => {
+                            if arg_regs.len() != 2 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM Counter.add expected 2 args, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::CounterAdd {
                                 dst,
-                                intrinsic: RegIntrinsic::CloneClone,
-                                args: arg_regs,
+                                counter: arg_regs[0],
+                                amount: arg_regs[1],
                             });
                             return Ok(dst);
                         }
-                        return Err(EvalError::Runtime(format!(
-                            "reg VM v0 does not support intrinsic `{namespace}.{name}`."
-                        )));
+                        ("Deque", "clear") => {
+                            if arg_regs.len() != 1 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM Deque.clear expected 1 arg, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::DequeClear {
+                                dst,
+                                deque: arg_regs[0],
+                            });
+                            return Ok(dst);
+                        }
+                        ("Deque", "pop_back") => {
+                            if arg_regs.len() != 1 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM Deque.pop_back expected 1 arg, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::DequePopBack {
+                                dst,
+                                deque: arg_regs[0],
+                            });
+                            return Ok(dst);
+                        }
+                        ("Deque", "pop_front") => {
+                            if arg_regs.len() != 1 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM Deque.pop_front expected 1 arg, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::DequePopFront {
+                                dst,
+                                deque: arg_regs[0],
+                            });
+                            return Ok(dst);
+                        }
+                        ("Deque", "push_back") => {
+                            if arg_regs.len() != 2 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM Deque.push_back expected 2 args, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::DequePushBack {
+                                dst,
+                                deque: arg_regs[0],
+                                value: arg_regs[1],
+                            });
+                            return Ok(dst);
+                        }
+                        ("Deque", "push_front") => {
+                            if arg_regs.len() != 2 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM Deque.push_front expected 2 args, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::DequePushFront {
+                                dst,
+                                deque: arg_regs[0],
+                                value: arg_regs[1],
+                            });
+                            return Ok(dst);
+                        }
+                        ("GlobalConfig", "replace") => {
+                            if arg_regs.len() != 2 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM GlobalConfig.replace expected 2 args, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::GlobalConfigReplace {
+                                dst,
+                                global: arg_regs[0],
+                                value: arg_regs[1],
+                            });
+                            return Ok(dst);
+                        }
+                        ("Http", "post_json_bearer_retry_async") => {
+                            RegIntrinsic::HttpPostJsonBearerRetryAsync
+                        }
+                        ("Json", "array_contains_substring") => {
+                            RegIntrinsic::JsonArrayContainsSubstring
+                        }
+                        ("Json", "bool_at_or") | ("Json", "json_bool_at_or") => {
+                            RegIntrinsic::JsonBoolAtOr
+                        }
+                        ("Json", "string_at_or") | ("Json", "json_string_at_or") => {
+                            RegIntrinsic::JsonStringAtOr
+                        }
+                        ("List", "append") => {
+                            if arg_regs.len() != 2 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM List.append expected 2 args, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::ListAppend {
+                                dst,
+                                list: arg_regs[0],
+                                values: arg_regs[1],
+                            });
+                            return Ok(dst);
+                        }
+                        ("List", "clear") => {
+                            if arg_regs.len() != 1 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM List.clear expected 1 arg, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::ListClear {
+                                dst,
+                                list: arg_regs[0],
+                            });
+                            return Ok(dst);
+                        }
+                        ("List", "filter") => {
+                            if arg_regs.len() != 2 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM List.filter expected 2 args, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::ListFilter {
+                                dst,
+                                list: arg_regs[0],
+                                predicate: arg_regs[1],
+                            });
+                            return Ok(dst);
+                        }
+                        ("List", "fold") => {
+                            if arg_regs.len() != 3 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM List.fold expected 3 args, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::ListFold {
+                                dst,
+                                list: arg_regs[0],
+                                state: arg_regs[1],
+                                folder: arg_regs[2],
+                            });
+                            return Ok(dst);
+                        }
+                        ("List", "get") => {
+                            if arg_regs.len() != 2 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM List.get expected 2 args, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::ListGet {
+                                dst,
+                                list: arg_regs[0],
+                                index: arg_regs[1],
+                            });
+                            return Ok(dst);
+                        }
+                        ("List", "len") => {
+                            if arg_regs.len() != 1 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM List.len expected 1 arg, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::ListLen {
+                                dst,
+                                list: arg_regs[0],
+                            });
+                            return Ok(dst);
+                        }
+                        ("List", "map") => {
+                            if arg_regs.len() != 2 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM List.map expected 2 args, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::ListMap {
+                                dst,
+                                list: arg_regs[0],
+                                mapper: arg_regs[1],
+                            });
+                            return Ok(dst);
+                        }
+                        ("List", "pop") => {
+                            if arg_regs.len() != 1 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM List.pop expected 1 arg, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::ListPop {
+                                dst,
+                                list: arg_regs[0],
+                            });
+                            return Ok(dst);
+                        }
+                        ("List", "remove_at") => {
+                            if arg_regs.len() != 2 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM List.remove_at expected 2 args, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::ListRemoveAt {
+                                dst,
+                                list: arg_regs[0],
+                                index: arg_regs[1],
+                            });
+                            return Ok(dst);
+                        }
+                        ("List", "set") => {
+                            if arg_regs.len() != 3 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM List.set expected 3 args, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::ListSet {
+                                dst,
+                                list: arg_regs[0],
+                                index: arg_regs[1],
+                                value: arg_regs[2],
+                            });
+                            return Ok(dst);
+                        }
+                        ("List", "sort") => {
+                            if arg_regs.len() != 1 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM List.sort expected 1 arg, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::ListSort {
+                                dst,
+                                list: arg_regs[0],
+                            });
+                            return Ok(dst);
+                        }
+                        ("List", "sort_by") => {
+                            if arg_regs.len() != 3 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM List.sort_by expected 3 args, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::ListSortBy {
+                                dst,
+                                list: arg_regs[0],
+                                key: arg_regs[1],
+                                compare: arg_regs[2],
+                            });
+                            return Ok(dst);
+                        }
+                        ("List", "sort_with") => {
+                            if arg_regs.len() != 2 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM List.sort_with expected 2 args, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::ListSortWith {
+                                dst,
+                                list: arg_regs[0],
+                                compare: arg_regs[1],
+                            });
+                            return Ok(dst);
+                        }
+                        ("List", "push") => {
+                            if arg_regs.len() != 2 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM List.push expected 2 args, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::ListPush {
+                                dst,
+                                list: arg_regs[0],
+                                value: arg_regs[1],
+                            });
+                            return Ok(dst);
+                        }
+                        ("Map", "clear") => {
+                            if arg_regs.len() != 1 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM Map.clear expected 1 arg, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::MapClear {
+                                dst,
+                                map: arg_regs[0],
+                            });
+                            return Ok(dst);
+                        }
+                        ("Map", "get") => {
+                            if arg_regs.len() != 2 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM Map.get expected 2 args, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::MapGet {
+                                dst,
+                                map: arg_regs[0],
+                                key: arg_regs[1],
+                            });
+                            return Ok(dst);
+                        }
+                        ("Map", "insert") => {
+                            if arg_regs.len() != 3 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM Map.insert expected 3 args, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::MapInsert {
+                                dst,
+                                map: arg_regs[0],
+                                key: arg_regs[1],
+                                value: arg_regs[2],
+                            });
+                            return Ok(dst);
+                        }
+                        ("Map", "insert_old") => {
+                            if arg_regs.len() != 3 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM Map.insert_old expected 3 args, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::MapInsertOld {
+                                dst,
+                                map: arg_regs[0],
+                                key: arg_regs[1],
+                                value: arg_regs[2],
+                            });
+                            return Ok(dst);
+                        }
+                        ("Map", "remove") => {
+                            if arg_regs.len() != 2 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM Map.remove expected 2 args, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::MapRemove {
+                                dst,
+                                map: arg_regs[0],
+                                key: arg_regs[1],
+                            });
+                            return Ok(dst);
+                        }
+                        ("Process", "run_many_stdout_timeout") => {
+                            RegIntrinsic::ProcessRunManyStdoutTimeout
+                        }
+                        ("Process", "run_many_stdout_timeout_async") => {
+                            RegIntrinsic::ProcessRunManyStdoutTimeoutAsync
+                        }
+                        ("Process", "run_request_cancellable_async") => {
+                            RegIntrinsic::ProcessRunRequestCancellableAsync
+                        }
+                        ("Process", "run_stdout_timeout_async") => {
+                            RegIntrinsic::ProcessRunStdoutTimeoutAsync
+                        }
+                        ("Pipeline", "filter") => {
+                            if arg_regs.len() != 2 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM Pipeline.filter expected 2 args, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::ListFilter {
+                                dst,
+                                list: arg_regs[0],
+                                predicate: arg_regs[1],
+                            });
+                            return Ok(dst);
+                        }
+                        ("Pipeline", "map") => {
+                            if arg_regs.len() != 2 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM Pipeline.map expected 2 args, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::ListMap {
+                                dst,
+                                list: arg_regs[0],
+                                mapper: arg_regs[1],
+                            });
+                            return Ok(dst);
+                        }
+                        ("String", "concat") => {
+                            if arg_regs.len() != 2 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM String.concat expected 2 args, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::StringConcat {
+                                dst,
+                                left: arg_regs[0],
+                                right: arg_regs[1],
+                            });
+                            return Ok(dst);
+                        }
+                        ("Set", "clear") => {
+                            if arg_regs.len() != 1 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM Set.clear expected 1 arg, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::SetClear {
+                                dst,
+                                set: arg_regs[0],
+                            });
+                            return Ok(dst);
+                        }
+                        ("Set", "for_each") => {
+                            if arg_regs.len() != 2 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM Set.for_each expected 2 args, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::SetForEach {
+                                dst,
+                                set: arg_regs[0],
+                                callback: arg_regs[1],
+                            });
+                            return Ok(dst);
+                        }
+                        ("Set", "insert") => {
+                            if arg_regs.len() != 2 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM Set.insert expected 2 args, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::SetInsert {
+                                dst,
+                                set: arg_regs[0],
+                                value: arg_regs[1],
+                            });
+                            return Ok(dst);
+                        }
+                        ("Set", "remove") => {
+                            if arg_regs.len() != 2 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM Set.remove expected 2 args, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::SetRemove {
+                                dst,
+                                set: arg_regs[0],
+                                value: arg_regs[1],
+                            });
+                            return Ok(dst);
+                        }
+                        ("SortedSet", "clear") => {
+                            if arg_regs.len() != 1 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM SortedSet.clear expected 1 arg, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::SortedSetClear {
+                                dst,
+                                set: arg_regs[0],
+                            });
+                            return Ok(dst);
+                        }
+                        ("SortedSet", "insert") => {
+                            if arg_regs.len() != 2 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM SortedSet.insert expected 2 args, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::SortedSetInsert {
+                                dst,
+                                set: arg_regs[0],
+                                value: arg_regs[1],
+                            });
+                            return Ok(dst);
+                        }
+                        ("SortedSet", "remove") => {
+                            if arg_regs.len() != 2 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM SortedSet.remove expected 2 args, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::SortedSetRemove {
+                                dst,
+                                set: arg_regs[0],
+                                value: arg_regs[1],
+                            });
+                            return Ok(dst);
+                        }
+                        ("SortedMap", "clear") => {
+                            if arg_regs.len() != 1 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM SortedMap.clear expected 1 arg, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::SortedMapClear {
+                                dst,
+                                map: arg_regs[0],
+                            });
+                            return Ok(dst);
+                        }
+                        ("SortedMap", "insert") => {
+                            if arg_regs.len() != 3 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM SortedMap.insert expected 3 args, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::SortedMapInsert {
+                                dst,
+                                map: arg_regs[0],
+                                key: arg_regs[1],
+                                value: arg_regs[2],
+                            });
+                            return Ok(dst);
+                        }
+                        ("SortedMap", "remove") => {
+                            if arg_regs.len() != 2 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM SortedMap.remove expected 2 args, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::SortedMapRemove {
+                                dst,
+                                map: arg_regs[0],
+                                key: arg_regs[1],
+                            });
+                            return Ok(dst);
+                        }
+                        ("StringBuilder", "push") => {
+                            if arg_regs.len() != 2 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM StringBuilder.push expected 2 args, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::StringBuilderPush {
+                                dst,
+                                builder: arg_regs[0],
+                                value: arg_regs[1],
+                            });
+                            return Ok(dst);
+                        }
+                        _ => {
+                            let qualified_key = format!("{namespace_root}.{name_root}");
+                            // Native declarations also appear in `function_ids` (with
+                            // empty bodies), so dispatch them as native boundaries
+                            // first. A user-defined qualified function (e.g.
+                            // `pub fn Sqlx.execute`) is never native, so it falls
+                            // through to the `function_ids` lookup below.
+                            if self.is_native_function(Some(namespace_root), name_root) {
+                                let mut_args =
+                                    self.native_mut_arg_positions(Some(namespace_root), name_root);
+                                self.emit(RegInstr::CallNative {
+                                    dst,
+                                    key: qualified_key,
+                                    args: arg_regs,
+                                    mut_args,
+                                });
+                                return Ok(dst);
+                            }
+                            // Dynamic protocol dispatch: `Protocol.method(self: x, ...)`
+                            // where `Protocol` is a protocol with impls. The concrete
+                            // function is selected at runtime by `args[0]`'s struct type
+                            // (capability objects + generic bounds) — the VM equivalent
+                            // of the compiled backend's closed-world enum dispatch.
+                            // Checked before the `function_ids` lookup because a protocol
+                            // method also appears there as a bodyless stub (which would
+                            // wrongly return `Unit`).
+                            let dispatch: Vec<(String, usize)> = self
+                                .hir
+                                .protocol_method_targets(namespace_root, name_root)
+                                .into_iter()
+                                .filter_map(|(type_name, target)| {
+                                    self.function_ids
+                                        .get(type_root_name(&target))
+                                        .copied()
+                                        .map(|function| (type_name, function))
+                                })
+                                .collect();
+                            if !dispatch.is_empty() {
+                                let mut_args =
+                                    self.native_mut_arg_positions(Some(namespace_root), name_root);
+                                self.emit(RegInstr::CallDynamic {
+                                    dst,
+                                    dispatch,
+                                    args: arg_regs,
+                                    mut_args,
+                                });
+                                return Ok(dst);
+                            }
+                            if let Some(function) = self.function_ids.get(&qualified_key).copied() {
+                                let mut_args =
+                                    self.native_mut_arg_positions(Some(namespace_root), name_root);
+                                self.emit(RegInstr::CallKnown {
+                                    dst,
+                                    function,
+                                    args: arg_regs,
+                                    mut_args,
+                                });
+                                return Ok(dst);
+                            }
+                            // `.clone()` (a derived `Clone`) deep-copies any value. A
+                            // receiver call resolves its namespace to the concrete type
+                            // (e.g. `Ops.clone`), not `Clone`, so map an otherwise
+                            // unresolved `clone` to the deep-clone intrinsic.
+                            if name_root == "clone" && arg_regs.len() == 1 {
+                                self.emit(RegInstr::CallIntrinsic {
+                                    dst,
+                                    intrinsic: RegIntrinsic::CloneClone,
+                                    args: arg_regs,
+                                });
+                                return Ok(dst);
+                            }
+                            return Err(EvalError::Runtime(format!(
+                                "reg VM v0 does not support intrinsic `{namespace}.{name}`."
+                            )));
+                        }
                     }
                 };
                 match intrinsic {
@@ -5751,6 +5185,587 @@ impl RegLowerer<'_> {
     }
 }
 
+/// Pure name->intrinsic mapping for qualified/receiver calls. Returns the
+/// stdlib `RegIntrinsic` for the simple `Ns.method` mappings, or `None` for
+/// names that need inline lowering logic or fall through to native/dynamic
+/// dispatch (handled by the caller's remaining match arms).
+fn qualified_intrinsic(namespace: &str, name: &str) -> Option<RegIntrinsic> {
+    match (namespace, name) {
+        ("Args", "all") => Some(RegIntrinsic::ArgsAll),
+        ("Args", "count") => Some(RegIntrinsic::ArgsCount),
+        ("Args", "get") => Some(RegIntrinsic::ArgsGet),
+        ("Args", "get_or_default") => Some(RegIntrinsic::ArgsGetOrDefault),
+        ("Assert", "equal") => Some(RegIntrinsic::AssertEqual),
+        ("Assert", "equal_bool") => Some(RegIntrinsic::AssertEqualBool),
+        ("Assert", "equal_int") => Some(RegIntrinsic::AssertEqualInt),
+        ("Base64", "decode") => Some(RegIntrinsic::Base64Decode),
+        ("Base64", "decode_string") => Some(RegIntrinsic::Base64DecodeString),
+        ("Base64", "encode") => Some(RegIntrinsic::Base64Encode),
+        ("Base64", "encode_bytes") => Some(RegIntrinsic::Base64EncodeBytes),
+        ("Bytes", "concat") => Some(RegIntrinsic::BytesConcat),
+        ("Bytes", "consume") => Some(RegIntrinsic::BytesConsume),
+        ("Bytes", "from_buffer") => Some(RegIntrinsic::BytesViewToBytes),
+        ("Bytes", "from_string") => Some(RegIntrinsic::BytesFromString),
+        ("Bytes", "from_uints") => Some(RegIntrinsic::BytesFromUints),
+        ("Bytes", "is_empty") => Some(RegIntrinsic::BytesIsEmpty),
+        ("Bytes", "len") => Some(RegIntrinsic::BytesLen),
+        ("Bytes", "slice") | ("Bytes", "view") => Some(RegIntrinsic::BytesSlice),
+        ("Bytes", "to_string") => Some(RegIntrinsic::BytesToString),
+        ("Bytes", "to_uints") => Some(RegIntrinsic::BytesToUints),
+        ("Buffer", "consume") => Some(RegIntrinsic::BytesConsume),
+        ("Buffer", "is_empty") => Some(RegIntrinsic::BytesIsEmpty),
+        ("Buffer", "len") => Some(RegIntrinsic::BytesLen),
+        ("Buffer", "new") => Some(RegIntrinsic::BufferNew),
+        ("Buffer", "view") => Some(RegIntrinsic::BytesSlice),
+        ("BufferView", "is_empty") => Some(RegIntrinsic::BytesIsEmpty),
+        ("BufferView", "len") => Some(RegIntrinsic::BytesLen),
+        ("BufferView", "slice") => Some(RegIntrinsic::BytesSlice),
+        ("BufferView", "to_bytes") => Some(RegIntrinsic::BytesViewToBytes),
+        ("BytesView", "is_empty") => Some(RegIntrinsic::BytesIsEmpty),
+        ("BytesView", "len") => Some(RegIntrinsic::BytesLen),
+        ("BytesView", "slice") => Some(RegIntrinsic::BytesSlice),
+        ("BytesView", "starts_with") => Some(RegIntrinsic::BytesViewStartsWith),
+        ("BytesView", "to_bytes") => Some(RegIntrinsic::BytesViewToBytes),
+        ("Cache", "get") => Some(RegIntrinsic::CacheGet),
+        ("Cache", "lookup") => Some(RegIntrinsic::CacheLookup),
+        ("Cache", "new") => Some(RegIntrinsic::MapNew),
+        ("CancellationSource", "cancel") => Some(RegIntrinsic::CancellationSourceCancel),
+        ("CancellationSource", "new") => Some(RegIntrinsic::CancellationSourceNew),
+        ("CancellationSource", "token") => Some(RegIntrinsic::CancellationSourceToken),
+        ("Channel", "bounded") => Some(RegIntrinsic::ChannelBounded),
+        // A message channel reuses the bounded-channel runtime; the
+        // cross-isolate payload contract is enforced at check time.
+        ("Channel", "message") => Some(RegIntrinsic::ChannelBounded),
+        ("Channel", "receiver") => Some(RegIntrinsic::ChannelReceiver),
+        ("Channel", "sender") => Some(RegIntrinsic::ChannelSender),
+        ("ChannelError", "message") => Some(RegIntrinsic::ChannelErrorMessage),
+        ("Char", "compare") => Some(RegIntrinsic::CharCompare),
+        ("Char", "from_code") => Some(RegIntrinsic::CharFromCode),
+        ("Char", "is_alphanumeric") => Some(RegIntrinsic::CharIsAlphanumeric),
+        ("Char", "is_alpha") => Some(RegIntrinsic::CharIsAlpha),
+        ("Char", "is_digit") => Some(RegIntrinsic::CharIsDigit),
+        ("Char", "is_lower") => Some(RegIntrinsic::CharIsLower),
+        ("Char", "is_upper") => Some(RegIntrinsic::CharIsUpper),
+        ("Char", "is_whitespace") => Some(RegIntrinsic::CharIsWhitespace),
+        ("Char", "to_code") => Some(RegIntrinsic::CharToCode),
+        ("Char", "to_lower") => Some(RegIntrinsic::CharToLower),
+        ("Char", "to_string") => Some(RegIntrinsic::CharToString),
+        ("Char", "to_upper") => Some(RegIntrinsic::CharToUpper),
+        ("Clock", "now") => Some(RegIntrinsic::ClockNow),
+        ("Clock", "system_unix_ms") => Some(RegIntrinsic::ClockSystemUnixMs),
+        ("Config", "load") => Some(RegIntrinsic::ConfigLoad),
+        ("Capability", "from") => Some(RegIntrinsic::CapabilityFrom),
+        ("Config", "name") => Some(RegIntrinsic::ConfigName),
+        ("Config", "new") => Some(RegIntrinsic::ConfigNew),
+        ("Config", "rule_count") => Some(RegIntrinsic::ConfigRuleCount),
+        ("ConfigStore", "name") => Some(RegIntrinsic::ConfigStoreName),
+        ("ConfigStore", "new") => Some(RegIntrinsic::ConfigStoreNew),
+        ("Counter", "new") => Some(RegIntrinsic::CounterNew),
+        ("Counter", "value") => Some(RegIntrinsic::CounterValue),
+        ("Csv", "open_read") => Some(RegIntrinsic::CsvOpenRead),
+        ("Csv", "parse_row") => Some(RegIntrinsic::CsvParseRow),
+        ("Csv", "read_into") => Some(RegIntrinsic::CsvReadInto),
+        ("Csv", "rows") => Some(RegIntrinsic::CsvRows),
+        ("Deadline", "after") => Some(RegIntrinsic::DeadlineAfter),
+        ("Deadline", "after_ms") => Some(RegIntrinsic::DeadlineAfterMs),
+        ("Deadline", "is_expired") => Some(RegIntrinsic::DeadlineIsExpired),
+        ("Deadline", "remaining_ms") => Some(RegIntrinsic::DeadlineRemainingMs),
+        ("DecodeError", "message") => Some(RegIntrinsic::DecodeErrorMessage),
+        ("Deque", "is_empty") => Some(RegIntrinsic::DequeIsEmpty),
+        ("Deque", "len") => Some(RegIntrinsic::DequeLen),
+        ("Deque", "new") => Some(RegIntrinsic::DequeNew),
+        ("Deque", "to_list") => Some(RegIntrinsic::DequeToList),
+        ("Diff", "unified") => Some(RegIntrinsic::DiffUnified),
+        ("Directory", "copy_file") => Some(RegIntrinsic::DirectoryCopyFile),
+        ("Directory", "create") => Some(RegIntrinsic::DirectoryCreate),
+        ("Directory", "create_all") => Some(RegIntrinsic::DirectoryCreateAll),
+        ("Directory", "create_dir_all") => Some(RegIntrinsic::DirectoryCreateDirAll),
+        ("Directory", "exists") => Some(RegIntrinsic::DirectoryExists),
+        ("Directory", "is_dir") => Some(RegIntrinsic::DirectoryIsDir),
+        ("Directory", "is_file") => Some(RegIntrinsic::DirectoryIsFile),
+        ("Directory", "list_files") => Some(RegIntrinsic::DirectoryListFiles),
+        ("Directory", "list_paths") => Some(RegIntrinsic::DirectoryListPaths),
+        ("Directory", "metadata") => Some(RegIntrinsic::DirectoryMetadata),
+        ("Directory", "read_string") => Some(RegIntrinsic::DirectoryReadString),
+        ("Directory", "remove_dir_all") => Some(RegIntrinsic::DirectoryRemoveDirAll),
+        ("Directory", "remove_file") => Some(RegIntrinsic::DirectoryRemoveFile),
+        ("Directory", "rename") => Some(RegIntrinsic::DirectoryRename),
+        ("Directory", "write_string") => Some(RegIntrinsic::DirectoryWriteString),
+        ("Db", "close") => Some(RegIntrinsic::DbClose),
+        ("DbConnection", "open") => Some(RegIntrinsic::DbConnectionOpen),
+        ("DbConnection", "query") => Some(RegIntrinsic::DbConnectionQuery),
+        ("DbConnection", "try_open") => Some(RegIntrinsic::DbConnectionTryOpen),
+        ("Date", "add_days") => Some(RegIntrinsic::DateAddDays),
+        ("Date", "add_ms") => Some(RegIntrinsic::DateAddMs),
+        ("Date", "day") => Some(RegIntrinsic::DateDay),
+        ("Date", "days_between") => Some(RegIntrinsic::DateDaysBetween),
+        ("Date", "days_in_month") => Some(RegIntrinsic::DateDaysInMonth),
+        ("Date", "format_iso") => Some(RegIntrinsic::DateFormatIso),
+        ("Date", "format_ymd") => Some(RegIntrinsic::DateFormatYmd),
+        ("Date", "hour") => Some(RegIntrinsic::DateHour),
+        ("Date", "is_leap_year") => Some(RegIntrinsic::DateIsLeapYear),
+        ("Date", "minute") => Some(RegIntrinsic::DateMinute),
+        ("Date", "month") => Some(RegIntrinsic::DateMonth),
+        ("Date", "parse_iso") => Some(RegIntrinsic::DateParseIso),
+        ("Date", "parse_ymd") => Some(RegIntrinsic::DateParseYmd),
+        ("Date", "second") => Some(RegIntrinsic::DateSecond),
+        ("Date", "start_of_day") => Some(RegIntrinsic::DateStartOfDay),
+        ("Date", "weekday") => Some(RegIntrinsic::DateWeekday),
+        ("Date", "year") => Some(RegIntrinsic::DateYear),
+        ("Duration", "add") => Some(RegIntrinsic::DurationAdd),
+        ("Duration", "as_ms") => Some(RegIntrinsic::DurationAsMs),
+        ("Duration", "as_seconds") => Some(RegIntrinsic::DurationAsSeconds),
+        ("Duration", "ms") => Some(RegIntrinsic::DurationMs),
+        ("Duration", "seconds") => Some(RegIntrinsic::DurationSeconds),
+        ("Environment", "bind_function") => Some(RegIntrinsic::EnvironmentBindFunction),
+        ("Environment", "child") => Some(RegIntrinsic::EnvironmentChild),
+        ("Environment", "has_function") => Some(RegIntrinsic::EnvironmentHasFunction),
+        ("Environment", "has_parent") => Some(RegIntrinsic::EnvironmentHasParent),
+        ("Environment", "root") => Some(RegIntrinsic::EnvironmentRoot),
+        ("Env", "current_dir") => Some(RegIntrinsic::EnvCurrentDir),
+        ("Env", "get") => Some(RegIntrinsic::EnvGet),
+        ("Env", "get_or_default") => Some(RegIntrinsic::EnvGetOrDefault),
+        ("Env", "home_dir") => Some(RegIntrinsic::EnvHomeDir),
+        ("Env", "run_workspace_root") => Some(RegIntrinsic::EnvRunWorkspaceRoot),
+        ("Env", "set") => Some(RegIntrinsic::EnvSet),
+        ("Env", "set_current_dir") => Some(RegIntrinsic::EnvSetCurrentDir),
+        ("Env", "temp_dir") => Some(RegIntrinsic::EnvTempDir),
+        ("File", "append_bytes") => Some(RegIntrinsic::FileAppendBytes),
+        ("File", "append_string") => Some(RegIntrinsic::FileAppendString),
+        ("File", "bytes_stream") => Some(RegIntrinsic::FileBytesStream),
+        ("File", "exists") => Some(RegIntrinsic::FileExists),
+        ("File", "open") => Some(RegIntrinsic::FileOpen),
+        ("File", "open_read") => Some(RegIntrinsic::FileOpenRead),
+        ("File", "open_write") => Some(RegIntrinsic::FileOpenWrite),
+        ("File", "read_all") => Some(RegIntrinsic::FileReadAll),
+        ("File", "read_all_async") => Some(RegIntrinsic::FileReadAllAsync),
+        ("File", "read_all_string") => Some(RegIntrinsic::FileReadAllString),
+        ("File", "read_all_string_async") => Some(RegIntrinsic::FileReadAllStringAsync),
+        ("File", "read_bytes") => Some(RegIntrinsic::FileReadBytes),
+        ("File", "read_into") => Some(RegIntrinsic::FileReadInto),
+        ("File", "read_string") => Some(RegIntrinsic::FileReadString),
+        ("File", "remove") => Some(RegIntrinsic::FileRemove),
+        ("File", "write") => Some(RegIntrinsic::FileWrite),
+        ("File", "write_async") => Some(RegIntrinsic::FileWriteAsync),
+        ("File", "write_atomic") => Some(RegIntrinsic::FileWriteAtomic),
+        ("File", "write_bytes") => Some(RegIntrinsic::FileWriteBytes),
+        ("File", "write_bytes_view") => Some(RegIntrinsic::FileWriteBytesView),
+        ("File", "write_buffer") => Some(RegIntrinsic::FileWriteBuffer),
+        ("File", "write_buffer_view") => Some(RegIntrinsic::FileWriteBufferView),
+        ("File", "write_string") => Some(RegIntrinsic::FileWriteString),
+        ("File", "write_string_async") => Some(RegIntrinsic::FileWriteStringAsync),
+        ("File", "write_string_to_path") => Some(RegIntrinsic::FileWriteStringToPath),
+        ("FalliblePipeline", "collect") => Some(RegIntrinsic::FalliblePipelineCollect),
+        ("FalliblePipeline", "each") => Some(RegIntrinsic::FalliblePipelineEach),
+        ("FalliblePipeline", "filter") => Some(RegIntrinsic::FalliblePipelineFilter),
+        ("FalliblePipeline", "map") => Some(RegIntrinsic::FalliblePipelineMap),
+        ("FalliblePipeline", "try_map") => Some(RegIntrinsic::FalliblePipelineTryMap),
+        ("FileError", "message") => Some(RegIntrinsic::FileErrorMessage),
+        ("FunctionObject", "has_closure") => Some(RegIntrinsic::FunctionObjectHasClosure),
+        ("FunctionObject", "new") => Some(RegIntrinsic::FunctionObjectNew),
+        ("Hash", "sha256_bytes") => Some(RegIntrinsic::HashSha256Bytes),
+        ("Hash", "sha256_file") => Some(RegIntrinsic::HashSha256File),
+        ("Hash", "sha256_string") => Some(RegIntrinsic::HashSha256String),
+        ("Hash", "sha3_224_bytes") => Some(RegIntrinsic::HashSha3_224Bytes),
+        ("Hash", "sha3_256_bytes") => Some(RegIntrinsic::HashSha3_256Bytes),
+        ("Hash", "shake128_bytes") => Some(RegIntrinsic::HashShake128Bytes),
+        ("Hmac", "sha256_bytes") => Some(RegIntrinsic::HmacSha256Bytes),
+        ("Hmac", "sha256_string") => Some(RegIntrinsic::HmacSha256String),
+        ("GlobalConfig", "new") => Some(RegIntrinsic::GlobalConfigNew),
+        ("GlobalConfig", "rule_count") => Some(RegIntrinsic::GlobalConfigRuleCount),
+        ("Gzip", "decompress_bytes") => Some(RegIntrinsic::GzipDecompressBytes),
+        ("Hex", "decode") => Some(RegIntrinsic::HexDecode),
+        ("Hex", "encode") => Some(RegIntrinsic::HexEncode),
+        ("Hex", "encode_string") => Some(RegIntrinsic::HexEncodeString),
+        ("HttpError", "message") => Some(RegIntrinsic::HttpErrorMessage),
+        ("Http", "get") => Some(RegIntrinsic::HttpGet),
+        ("Http", "get_async") => Some(RegIntrinsic::HttpGetAsync),
+        ("Http", "get_retry_async") => Some(RegIntrinsic::HttpGetRetryAsync),
+        ("Http", "get_timeout_async") => Some(RegIntrinsic::HttpGetTimeoutAsync),
+        ("Http", "post_form") => Some(RegIntrinsic::HttpPostForm),
+        ("Http", "post_form_async") => Some(RegIntrinsic::HttpPostFormAsync),
+        ("Http", "post_json") => Some(RegIntrinsic::HttpPostJson),
+        ("Http", "post_json_async") => Some(RegIntrinsic::HttpPostJsonAsync),
+        ("Http", "post_json_retry_async") => Some(RegIntrinsic::HttpPostJsonRetryAsync),
+        ("Http", "post_json_timeout_async") => Some(RegIntrinsic::HttpPostJsonTimeoutAsync),
+        ("Http", "send_async") => Some(RegIntrinsic::HttpSendAsync),
+        ("HttpRequest", "json") => Some(RegIntrinsic::HttpRequestJson),
+        ("HttpRequest", "with_header") => Some(RegIntrinsic::HttpRequestWithHeader),
+        ("HttpRequest", "with_retry") => Some(RegIntrinsic::HttpRequestWithRetry),
+        ("HttpRequest", "with_timeout") => Some(RegIntrinsic::HttpRequestWithTimeout),
+        ("HttpResponse", "bytes") => Some(RegIntrinsic::HttpResponseBytes),
+        ("HttpResponse", "is_success") => Some(RegIntrinsic::HttpResponseIsSuccess),
+        ("HttpResponse", "lines") => Some(RegIntrinsic::HttpResponseLines),
+        ("HttpResponse", "status") => Some(RegIntrinsic::HttpResponseStatus),
+        ("HttpResponse", "text") => Some(RegIntrinsic::HttpResponseText),
+        ("Image", "inspect") => Some(RegIntrinsic::ImageInspect),
+        ("Image", "load") => Some(RegIntrinsic::ImageLoad),
+        ("Image", "normalize") => Some(RegIntrinsic::ImageNormalize),
+        ("Image", "resize") => Some(RegIntrinsic::ImageResize),
+        ("Image", "save") => Some(RegIntrinsic::ImageSave),
+        ("Image", "sharpen") => Some(RegIntrinsic::ImageSharpen),
+        ("Instant", "elapsed") => Some(RegIntrinsic::InstantElapsed),
+        ("Float", "is_finite") => Some(RegIntrinsic::FloatIsFinite),
+        ("Float", "is_infinite") => Some(RegIntrinsic::FloatIsInfinite),
+        ("Float", "is_nan") => Some(RegIntrinsic::FloatIsNan),
+        ("Float", "to_string") => Some(RegIntrinsic::FloatToString),
+        ("Int", "bit_and") => Some(RegIntrinsic::IntBitAnd),
+        ("Int", "bit_not") => Some(RegIntrinsic::IntBitNot),
+        ("Int", "bit_or") => Some(RegIntrinsic::IntBitOr),
+        ("Int", "bit_xor") => Some(RegIntrinsic::IntBitXor),
+        ("Int", "shift_left") => Some(RegIntrinsic::IntShiftLeft),
+        ("Int", "shift_right") => Some(RegIntrinsic::IntShiftRight),
+        ("Int", "to_string") => Some(RegIntrinsic::IntToString),
+        ("Int", "to_float") => Some(RegIntrinsic::IntToFloat),
+        ("Math", "abs") => Some(RegIntrinsic::MathAbs),
+        ("Math", "abs_float") => Some(RegIntrinsic::MathAbsFloat),
+        ("Math", "ceil") => Some(RegIntrinsic::MathCeil),
+        ("Math", "clamp") => Some(RegIntrinsic::MathClamp),
+        ("Math", "clamp_float") => Some(RegIntrinsic::MathClampFloat),
+        ("Math", "cos") => Some(RegIntrinsic::MathCos),
+        ("Math", "exp") => Some(RegIntrinsic::MathExp),
+        ("Math", "exp2") => Some(RegIntrinsic::MathExp2),
+        ("Math", "floor") => Some(RegIntrinsic::MathFloor),
+        ("Math", "log") => Some(RegIntrinsic::MathLog),
+        ("Math", "log2") => Some(RegIntrinsic::MathLog2),
+        ("Math", "max") => Some(RegIntrinsic::MathMax),
+        ("Math", "max_float") => Some(RegIntrinsic::MathMaxFloat),
+        ("Math", "min") => Some(RegIntrinsic::MathMin),
+        ("Math", "min_float") => Some(RegIntrinsic::MathMinFloat),
+        ("Math", "pow") => Some(RegIntrinsic::MathPow),
+        ("Math", "pow_float") => Some(RegIntrinsic::MathPowFloat),
+        ("Math", "round") => Some(RegIntrinsic::MathRound),
+        ("Math", "sin") => Some(RegIntrinsic::MathSin),
+        ("Math", "sqrt") => Some(RegIntrinsic::MathSqrt),
+        ("Math", "tanh") => Some(RegIntrinsic::MathTanh),
+        ("Math", "trunc_float") => Some(RegIntrinsic::MathTruncFloat),
+        ("Json", "array") => Some(RegIntrinsic::JsonArray),
+        ("Json", "array_bools") => Some(RegIntrinsic::JsonArrayBools),
+        ("Json", "array_contains_prefix") => Some(RegIntrinsic::JsonArrayContainsPrefix),
+        ("Json", "array_contains_string") => Some(RegIntrinsic::JsonArrayContainsString),
+        ("Json", "array_count_where") => Some(RegIntrinsic::JsonArrayCountWhere),
+        ("Json", "array_fold") => Some(RegIntrinsic::JsonArrayFold),
+        ("Json", "array_get") => Some(RegIntrinsic::JsonArrayGet),
+        ("Json", "array_ints") => Some(RegIntrinsic::JsonArrayInts),
+        ("Json", "array_len") => Some(RegIntrinsic::JsonArrayLen),
+        ("Json", "array_strings") => Some(RegIntrinsic::JsonArrayStrings),
+        ("Json", "at") | ("Json", "value_at") => Some(RegIntrinsic::JsonAt),
+        ("Json", "at_bool") => Some(RegIntrinsic::JsonAtBool),
+        ("Json", "at_bool_or") => Some(RegIntrinsic::JsonAtBoolOr),
+        ("Json", "at_int") => Some(RegIntrinsic::JsonAtInt),
+        ("Json", "at_int_or") => Some(RegIntrinsic::JsonAtIntOr),
+        ("Json", "at_optional") => Some(RegIntrinsic::JsonAtOptional),
+        ("Json", "at_optional_bool") => Some(RegIntrinsic::JsonAtOptionalBool),
+        ("Json", "at_optional_int") => Some(RegIntrinsic::JsonAtOptionalInt),
+        ("Json", "at_optional_string") => Some(RegIntrinsic::JsonAtOptionalString),
+        ("Json", "at_or") => Some(RegIntrinsic::JsonAtOr),
+        ("Json", "at_string") => Some(RegIntrinsic::JsonAtString),
+        ("Json", "at_string_or") => Some(RegIntrinsic::JsonAtStringOr),
+        ("Json", "at_to_string") => Some(RegIntrinsic::JsonAtToString),
+        ("Json", "at_to_string_or") => Some(RegIntrinsic::JsonAtToStringOr),
+        ("Json", "as_bool") => Some(RegIntrinsic::JsonAsBool),
+        ("Json", "as_int") => Some(RegIntrinsic::JsonAsInt),
+        ("Json", "as_string") => Some(RegIntrinsic::JsonAsString),
+        ("Json", "bool_at") => Some(RegIntrinsic::JsonBoolAt),
+        ("Json", "bool_field") => Some(RegIntrinsic::JsonBoolField),
+        ("Json", "clone") => Some(RegIntrinsic::JsonClone),
+        ("Json", "decode") => Some(RegIntrinsic::JsonDecode),
+        ("Json", "decode_text") => Some(RegIntrinsic::JsonDecodeText),
+        ("Json", "encode") => Some(RegIntrinsic::JsonEncode),
+        ("Json", "field") => Some(RegIntrinsic::JsonField),
+        ("Json", "field_bool") => Some(RegIntrinsic::JsonFieldBool),
+        ("Json", "field_int") => Some(RegIntrinsic::JsonFieldInt),
+        ("Json", "field_optional") => Some(RegIntrinsic::JsonFieldOptional),
+        ("Json", "field_optional_bool") => Some(RegIntrinsic::JsonFieldOptionalBool),
+        ("Json", "field_optional_int") => Some(RegIntrinsic::JsonFieldOptionalInt),
+        ("Json", "field_optional_string") => Some(RegIntrinsic::JsonFieldOptionalString),
+        ("Json", "field_string") => Some(RegIntrinsic::JsonFieldString),
+        ("Json", "int_at") => Some(RegIntrinsic::JsonIntAt),
+        ("Json", "int_at_or") | ("Json", "json_int_at_or") => Some(RegIntrinsic::JsonIntAtOr),
+        ("Json", "is_array") => Some(RegIntrinsic::JsonIsArray),
+        ("Json", "is_null") => Some(RegIntrinsic::JsonIsNull),
+        ("Json", "is_object") => Some(RegIntrinsic::JsonIsObject),
+        ("Json", "int_field") => Some(RegIntrinsic::JsonIntField),
+        ("Json", "kind") => Some(RegIntrinsic::JsonKind),
+        ("Json", "object") => Some(RegIntrinsic::JsonObject),
+        ("Json", "json_parse") | ("Json", "parse") => Some(RegIntrinsic::JsonParse),
+        ("Json", "parse_file") => Some(RegIntrinsic::JsonParseFile),
+        ("Json", "object_keys") => Some(RegIntrinsic::JsonObjectKeys),
+        ("Json", "object_len") => Some(RegIntrinsic::JsonObjectLen),
+        ("Json", "quote_string") => Some(RegIntrinsic::JsonQuoteString),
+        ("Json", "raw_field") => Some(RegIntrinsic::JsonRawField),
+        ("Json", "string_at") => Some(RegIntrinsic::JsonStringAt),
+        ("Json", "string_array") => Some(RegIntrinsic::JsonStringArray),
+        ("Json", "string_field") => Some(RegIntrinsic::JsonStringField),
+        ("Json", "strings") => Some(RegIntrinsic::JsonStrings),
+        ("Json", "to_string_at") => Some(RegIntrinsic::JsonToStringAt),
+        ("Json", "to_string_at_or") => Some(RegIntrinsic::JsonToStringAtOr),
+        ("Json", "to_string") => Some(RegIntrinsic::JsonToString),
+        ("Json", "value") => Some(RegIntrinsic::JsonValue),
+        ("Json", "values") => Some(RegIntrinsic::JsonValues),
+        ("JsonError", "message") => Some(RegIntrinsic::JsonErrorMessage),
+        ("List", "all") => Some(RegIntrinsic::ListAll),
+        ("List", "any") => Some(RegIntrinsic::ListAny),
+        ("List", "contains") => Some(RegIntrinsic::ListContains),
+        ("List", "contains_value") => Some(RegIntrinsic::ListContainsValue),
+        ("List", "count_where") => Some(RegIntrinsic::ListCountWhere),
+        ("List", "consume") => Some(RegIntrinsic::ListConsume),
+        ("List", "find") => Some(RegIntrinsic::ListFind),
+        ("List", "flat_map") => Some(RegIntrinsic::ListFlatMap),
+        ("List", "flatten") => Some(RegIntrinsic::ListFlatten),
+        ("List", "first") => Some(RegIntrinsic::ListFirst),
+        ("List", "is_empty") => Some(RegIntrinsic::ListIsEmpty),
+        ("List", "join") => Some(RegIntrinsic::ListJoin),
+        ("List", "group_by") => Some(RegIntrinsic::ListGroupBy),
+        ("List", "last") => Some(RegIntrinsic::ListLast),
+        ("List", "dedup") => Some(RegIntrinsic::ListDedup),
+        ("List", "enumerate") => Some(RegIntrinsic::ListEnumerate),
+        ("List", "max") => Some(RegIntrinsic::ListMax),
+        ("List", "min") => Some(RegIntrinsic::ListMin),
+        ("List", "new") => Some(RegIntrinsic::ListNew),
+        ("List", "partition") => Some(RegIntrinsic::ListPartition),
+        ("List", "pipeline") => Some(RegIntrinsic::ListPipeline),
+        ("List", "reverse") => Some(RegIntrinsic::ListReverse),
+        ("List", "skip") => Some(RegIntrinsic::ListSkip),
+        ("List", "slice") => Some(RegIntrinsic::ListSlice),
+        ("List", "sum") => Some(RegIntrinsic::ListSum),
+        ("List", "zip") => Some(RegIntrinsic::ListZip),
+        ("List", "take") => Some(RegIntrinsic::ListTake),
+        ("List", "to_json_strings") => Some(RegIntrinsic::ListToJsonStrings),
+        ("List", "to_json_values") => Some(RegIntrinsic::ListToJsonValues),
+        ("List", "try_fold") => Some(RegIntrinsic::ListTryFold),
+        ("Log", "error") => Some(RegIntrinsic::LogError),
+        ("Log", "error_json") => Some(RegIntrinsic::LogErrorJson),
+        ("Log", "trace") => Some(RegIntrinsic::LogTrace),
+        ("Log", "write") => Some(RegIntrinsic::LogWrite),
+        ("Log", "write_json") => Some(RegIntrinsic::LogWriteJson),
+        ("Map", "contains_key") => Some(RegIntrinsic::MapContainsKey),
+        ("Map", "filter") => Some(RegIntrinsic::MapFilter),
+        ("Map", "fold") => Some(RegIntrinsic::MapFold),
+        ("Map", "for_each") => Some(RegIntrinsic::MapForEach),
+        ("Map", "get_or_default") => Some(RegIntrinsic::MapGetOrDefault),
+        ("Map", "is_empty") => Some(RegIntrinsic::MapIsEmpty),
+        ("Map", "keys") => Some(RegIntrinsic::MapKeys),
+        ("Map", "len") => Some(RegIntrinsic::MapLen),
+        ("Map", "map_values") => Some(RegIntrinsic::MapMapValues),
+        ("Map", "merge") => Some(RegIntrinsic::MapMerge),
+        ("Map", "new") => Some(RegIntrinsic::MapNew),
+        ("Map", "try_fold") => Some(RegIntrinsic::MapTryFold),
+        ("Map", "values") => Some(RegIntrinsic::MapValues),
+        ("Option", "and_then") => Some(RegIntrinsic::OptionAndThen),
+        ("Option", "filter") => Some(RegIntrinsic::OptionFilter),
+        ("Option", "is_none") => Some(RegIntrinsic::OptionIsNone),
+        ("Option", "is_some") => Some(RegIntrinsic::OptionIsSome),
+        ("Option", "map") => Some(RegIntrinsic::OptionMap),
+        ("Option", "ok_or") => Some(RegIntrinsic::OptionOkOr),
+        ("Option", "or") => Some(RegIntrinsic::OptionOr),
+        ("Option", "unwrap_or") => Some(RegIntrinsic::OptionUnwrapOr),
+        ("Option", "unwrap_or_else") => Some(RegIntrinsic::OptionUnwrapOrElse),
+        ("Clone", "clone") => Some(RegIntrinsic::CloneClone),
+        ("Ord", "compare") => Some(RegIntrinsic::OrdCompare),
+        ("OS", "close") => Some(RegIntrinsic::OsClose),
+        ("Patch", "apply_text") => Some(RegIntrinsic::PatchApplyText),
+        ("Path", "exists") => Some(RegIntrinsic::PathExists),
+        ("Path", "extension") => Some(RegIntrinsic::PathExtension),
+        ("Path", "file_name") => Some(RegIntrinsic::PathFileName),
+        ("Path", "from_string") => Some(RegIntrinsic::PathFromString),
+        ("Path", "is_absolute") => Some(RegIntrinsic::PathIsAbsolute),
+        ("Path", "is_dir") => Some(RegIntrinsic::PathIsDir),
+        ("Path", "is_file") => Some(RegIntrinsic::PathIsFile),
+        ("Path", "join") => Some(RegIntrinsic::PathJoin),
+        ("Path", "list_files") => Some(RegIntrinsic::PathListFiles),
+        ("Path", "list_paths") => Some(RegIntrinsic::PathListPaths),
+        ("Path", "normalize") => Some(RegIntrinsic::PathNormalize),
+        ("Path", "parent") => Some(RegIntrinsic::PathParent),
+        ("Path", "read_string") => Some(RegIntrinsic::PathReadString),
+        ("Path", "resolve_relative") => Some(RegIntrinsic::PathResolveRelative),
+        ("Path", "safe_relative") => Some(RegIntrinsic::PathSafeRelative),
+        ("Path", "starts_with") => Some(RegIntrinsic::PathStartsWith),
+        ("Path", "to_string") => Some(RegIntrinsic::PathToString),
+        ("Path", "with_extension") => Some(RegIntrinsic::PathWithExtension),
+        ("Path", "write_string") => Some(RegIntrinsic::PathWriteString),
+        ("PersistentMap", "clear") => Some(RegIntrinsic::PersistentMapClear),
+        ("PersistentMap", "contains_key") => Some(RegIntrinsic::PersistentMapContainsKey),
+        ("PersistentMap", "get") => Some(RegIntrinsic::PersistentMapGet),
+        ("PersistentMap", "insert") => Some(RegIntrinsic::PersistentMapInsert),
+        ("PersistentMap", "is_empty") => Some(RegIntrinsic::PersistentMapIsEmpty),
+        ("PersistentMap", "len") => Some(RegIntrinsic::PersistentMapLen),
+        ("PersistentMap", "new") => Some(RegIntrinsic::PersistentMapNew),
+        ("PersistentMap", "remove") => Some(RegIntrinsic::PersistentMapRemove),
+        ("Pipeline", "collect") => Some(RegIntrinsic::PipelineCollect),
+        ("Pipeline", "each") => Some(RegIntrinsic::PipelineEach),
+        ("Pipeline", "try_map") => Some(RegIntrinsic::PipelineTryMap),
+        ("PoolError", "message") => Some(RegIntrinsic::PoolErrorMessage),
+        ("PoolStats", "available") => Some(RegIntrinsic::PoolStatsAvailable),
+        ("PoolStats", "capacity") => Some(RegIntrinsic::PoolStatsCapacity),
+        ("PoolStats", "created") => Some(RegIntrinsic::PoolStatsCreated),
+        ("PoolStats", "in_use") => Some(RegIntrinsic::PoolStatsInUse),
+        ("Process", "run") => Some(RegIntrinsic::ProcessRun),
+        ("Process", "run_async") => Some(RegIntrinsic::ProcessRunAsync),
+        ("Process", "run_many_stdout") => Some(RegIntrinsic::ProcessRunManyStdout),
+        ("Process", "run_many_stdout_async") => Some(RegIntrinsic::ProcessRunManyStdoutAsync),
+        ("Process", "run_request") => Some(RegIntrinsic::ProcessRunRequest),
+        ("Process", "run_request_async") => Some(RegIntrinsic::ProcessRunRequestAsync),
+        ("Process", "run_stdout") => Some(RegIntrinsic::ProcessRunStdout),
+        ("Process", "run_stdout_async") => Some(RegIntrinsic::ProcessRunStdoutAsync),
+        ("Process", "run_stdout_timeout") => Some(RegIntrinsic::ProcessRunStdoutTimeout),
+        ("Process", "run_timeout") => Some(RegIntrinsic::ProcessRunTimeout),
+        ("Process", "run_timeout_async") => Some(RegIntrinsic::ProcessRunTimeoutAsync),
+        ("Process", "stream") => Some(RegIntrinsic::ProcessStream),
+        ("Random", "bool") => Some(RegIntrinsic::RandomBool),
+        ("Random", "bytes") => Some(RegIntrinsic::RandomBytes),
+        ("Random", "float") => Some(RegIntrinsic::RandomFloat),
+        ("Random", "int") => Some(RegIntrinsic::RandomInt),
+        ("Random", "string") => Some(RegIntrinsic::RandomString),
+        ("Regex", "captures") => Some(RegIntrinsic::RegexCaptures),
+        ("Regex", "compile") => Some(RegIntrinsic::RegexCompile),
+        ("Regex", "find") => Some(RegIntrinsic::RegexFind),
+        ("Regex", "is_match") => Some(RegIntrinsic::RegexIsMatch),
+        ("Regex", "replace_all") => Some(RegIntrinsic::RegexReplaceAll),
+        ("Regex", "split") => Some(RegIntrinsic::RegexSplit),
+        ("RegexError", "message") => Some(RegIntrinsic::RegexErrorMessage),
+        ("Result", "and_then") => Some(RegIntrinsic::ResultAndThen),
+        ("Result", "err") => Some(RegIntrinsic::ResultErr),
+        ("Result", "err_message") => Some(RegIntrinsic::ResultErrMessage),
+        ("Result", "is_err") => Some(RegIntrinsic::ResultIsErr),
+        ("Result", "is_ok") => Some(RegIntrinsic::ResultIsOk),
+        ("Result", "map") => Some(RegIntrinsic::ResultMap),
+        ("Result", "map_error") => Some(RegIntrinsic::ResultMapError),
+        ("Result", "ok") => Some(RegIntrinsic::ResultOk),
+        ("Result", "unwrap_or") => Some(RegIntrinsic::ResultUnwrapOr),
+        ("Result", "unwrap_or_else") => Some(RegIntrinsic::ResultUnwrapOrElse),
+        ("Request", "new") => Some(RegIntrinsic::RequestNew),
+        ("Request", "path") => Some(RegIntrinsic::RequestPath),
+        ("Receiver", "close") => Some(RegIntrinsic::ReceiverClose),
+        ("Receiver", "into_stream") => Some(RegIntrinsic::ReceiverIntoStream),
+        ("Receiver", "recv") => Some(RegIntrinsic::ReceiverRecv),
+        ("Receiver", "recv_cancellable") => Some(RegIntrinsic::ReceiverRecvCancellable),
+        ("Response", "body") => Some(RegIntrinsic::ResponseBody),
+        ("Response", "ok") => Some(RegIntrinsic::ResponseOk),
+        ("Response", "status") => Some(RegIntrinsic::ResponseStatus),
+        ("Row", "field_string") => Some(RegIntrinsic::RowFieldString),
+        ("RowBuffer", "new") => Some(RegIntrinsic::RowBufferNew),
+        ("RuleLoader", "load_rules") => Some(RegIntrinsic::RuleLoaderLoadRules),
+        ("ResourcePool", "borrow") => Some(RegIntrinsic::ResourcePoolBorrow),
+        ("ResourcePool", "discard") => Some(RegIntrinsic::ResourcePoolDiscard),
+        ("ResourcePool", "lazy") => Some(RegIntrinsic::ResourcePoolLazy),
+        ("ResourcePool", "new") => Some(RegIntrinsic::ResourcePoolNew),
+        ("ResourcePool", "stats") => Some(RegIntrinsic::ResourcePoolStats),
+        ("ResourcePool", "try_borrow") => Some(RegIntrinsic::ResourcePoolTryBorrow),
+        ("ResourcePool", "try_lazy") => Some(RegIntrinsic::ResourcePoolTryLazy),
+        ("ResourcePool", "try_new") => Some(RegIntrinsic::ResourcePoolTryNew),
+        ("Set", "contains") => Some(RegIntrinsic::SetContains),
+        ("Set", "difference") => Some(RegIntrinsic::SetDifference),
+        ("Set", "intersection") => Some(RegIntrinsic::SetIntersection),
+        ("Set", "is_empty") => Some(RegIntrinsic::SetIsEmpty),
+        ("Set", "is_subset") => Some(RegIntrinsic::SetIsSubset),
+        ("Set", "len") => Some(RegIntrinsic::SetLen),
+        ("Set", "new") => Some(RegIntrinsic::SetNew),
+        ("Set", "to_list") => Some(RegIntrinsic::SetToList),
+        ("Set", "union") => Some(RegIntrinsic::SetUnion),
+        ("SortedSet", "contains") => Some(RegIntrinsic::SortedSetContains),
+        ("SortedSet", "is_empty") => Some(RegIntrinsic::SortedSetIsEmpty),
+        ("SortedSet", "len") => Some(RegIntrinsic::SortedSetLen),
+        ("SortedSet", "new") => Some(RegIntrinsic::SortedSetNew),
+        ("SortedSet", "to_list") => Some(RegIntrinsic::SortedSetToList),
+        ("SortedMap", "contains_key") => Some(RegIntrinsic::SortedMapContainsKey),
+        ("SortedMap", "get") => Some(RegIntrinsic::SortedMapGet),
+        ("SortedMap", "is_empty") => Some(RegIntrinsic::SortedMapIsEmpty),
+        ("SortedMap", "keys") => Some(RegIntrinsic::SortedMapKeys),
+        ("SortedMap", "len") => Some(RegIntrinsic::SortedMapLen),
+        ("SortedMap", "new") => Some(RegIntrinsic::SortedMapNew),
+        ("SortedMap", "values") => Some(RegIntrinsic::SortedMapValues),
+        ("String", "after") => Some(RegIntrinsic::StringAfter),
+        ("String", "before") => Some(RegIntrinsic::StringBefore),
+        ("String", "char_at") => Some(RegIntrinsic::StringCharAt),
+        ("String", "contains") => Some(RegIntrinsic::StringContains),
+        ("String", "count") => Some(RegIntrinsic::StringCount),
+        ("String", "copy") | ("String", "clone") => Some(RegIntrinsic::StringCopy),
+        ("String", "ends_with") => Some(RegIntrinsic::StringEndsWith),
+        ("String", "env") => Some(RegIntrinsic::EnvGet),
+        ("String", "env_or") => Some(RegIntrinsic::EnvGetOrDefault),
+        ("String", "format") => Some(RegIntrinsic::StringFormat),
+        ("String", "from_bool") => Some(RegIntrinsic::StringFromBool),
+        ("String", "from_float") => Some(RegIntrinsic::StringFromFloat),
+        ("String", "from_int") => Some(RegIntrinsic::StringFromInt),
+        ("String", "index_of") => Some(RegIntrinsic::StringIndexOf),
+        ("String", "is_empty") => Some(RegIntrinsic::StringIsEmpty),
+        ("String", "join") => Some(RegIntrinsic::StringJoin),
+        ("String", "lines") => Some(RegIntrinsic::StringLines),
+        ("String", "chars") => Some(RegIntrinsic::StringChars),
+        ("String", "len") => Some(RegIntrinsic::StringLen),
+        ("String", "pad_left") => Some(RegIntrinsic::StringPadLeft),
+        ("String", "pad_right") => Some(RegIntrinsic::StringPadRight),
+        ("String", "parse_float") => Some(RegIntrinsic::StringParseFloat),
+        ("String", "parse_int") => Some(RegIntrinsic::StringParseInt),
+        ("String", "repeat") => Some(RegIntrinsic::StringRepeat),
+        ("String", "replace") => Some(RegIntrinsic::StringReplace),
+        ("String", "replace_first") => Some(RegIntrinsic::StringReplaceFirst),
+        ("String", "reverse") => Some(RegIntrinsic::StringReverse),
+        ("String", "slice") | ("String", "view") => Some(RegIntrinsic::StringSlice),
+        ("String", "split") => Some(RegIntrinsic::StringSplit),
+        ("String", "starts_with") => Some(RegIntrinsic::StringStartsWith),
+        ("String", "strip_prefix") => Some(RegIntrinsic::StringStripPrefix),
+        ("String", "safe_relative") => Some(RegIntrinsic::PathSafeRelative),
+        ("String", "to_path") => Some(RegIntrinsic::PathFromString),
+        ("String", "to_url") => Some(RegIntrinsic::UrlFromString),
+        ("String", "to_bytes") => Some(RegIntrinsic::BytesFromString),
+        ("String", "to_lowercase") => Some(RegIntrinsic::StringToLowercase),
+        ("String", "to_uppercase") => Some(RegIntrinsic::StringToUppercase),
+        ("String", "trim") => Some(RegIntrinsic::StringTrim),
+        ("String", "trim_end") => Some(RegIntrinsic::StringTrimEnd),
+        ("String", "trim_start") => Some(RegIntrinsic::StringTrimStart),
+        ("TcpError", "message") => Some(RegIntrinsic::TcpErrorMessage),
+        ("Toml", "parse_file") => Some(RegIntrinsic::TomlParseFile),
+        ("StringBuilder", "finish") => Some(RegIntrinsic::StringCopy),
+        ("StringBuilder", "new") => Some(RegIntrinsic::StringBuilderNew),
+        ("Stream", "collect_list") => Some(RegIntrinsic::StreamCollectList),
+        ("Stream", "from_list") => Some(RegIntrinsic::StreamFromList),
+        ("Stream", "next") => Some(RegIntrinsic::StreamNext),
+        ("Sender", "close") => Some(RegIntrinsic::SenderClose),
+        ("Sender", "send") => Some(RegIntrinsic::SenderSend),
+        ("Sender", "send_cancellable") => Some(RegIntrinsic::SenderSendCancellable),
+        ("StringView", "after") => Some(RegIntrinsic::StringAfter),
+        ("StringView", "before") => Some(RegIntrinsic::StringBefore),
+        ("StringView", "contains") => Some(RegIntrinsic::StringContains),
+        ("StringView", "is_empty") => Some(RegIntrinsic::StringIsEmpty),
+        ("StringView", "len") => Some(RegIntrinsic::StringLen),
+        ("StringView", "slice") => Some(RegIntrinsic::StringSlice),
+        ("StringView", "starts_with") => Some(RegIntrinsic::StringStartsWith),
+        ("StringView", "to_string") => Some(RegIntrinsic::StringCopy),
+        ("Tcp", "connect") => Some(RegIntrinsic::TcpConnect),
+        ("TempDir", "keep") => Some(RegIntrinsic::TempDirKeep),
+        ("TempDir", "new") => Some(RegIntrinsic::TempDirNew),
+        ("TempDir", "new_in") => Some(RegIntrinsic::TempDirNewIn),
+        ("TempDir", "path") => Some(RegIntrinsic::TempDirPath),
+        ("TcpStream", "read") => Some(RegIntrinsic::TcpStreamRead),
+        ("TcpStream", "shutdown") => Some(RegIntrinsic::TcpStreamShutdown),
+        ("TcpStream", "write") => Some(RegIntrinsic::TcpStreamWrite),
+        ("TcpStream", "write_all") => Some(RegIntrinsic::TcpStreamWriteAll),
+        ("Timer", "sleep") => Some(RegIntrinsic::TimerSleep),
+        ("Timer", "sleep_cancellable") => Some(RegIntrinsic::TimerSleepCancellable),
+        ("Timer", "sleep_until") => Some(RegIntrinsic::TimerSleepUntil),
+        ("Url", "decode_component") => Some(RegIntrinsic::UrlDecodeComponent),
+        ("Url", "encode_component") => Some(RegIntrinsic::UrlEncodeComponent),
+        ("Url", "from_string") => Some(RegIntrinsic::UrlFromString),
+        ("Url", "to_string") => Some(RegIntrinsic::UrlToString),
+        ("Uuid", "new_v4") => Some(RegIntrinsic::UuidNewV4),
+        ("Workspace", "resolve") => Some(RegIntrinsic::PathResolveRelative),
+        ("WebSocket", "close") => Some(RegIntrinsic::WebSocketClose),
+        ("WebSocket", "connect") => Some(RegIntrinsic::WebSocketConnect),
+        ("WebSocket", "recv_bytes") => Some(RegIntrinsic::WebSocketRecvBytes),
+        ("WebSocket", "recv_text") => Some(RegIntrinsic::WebSocketRecvText),
+        ("WebSocket", "send_bytes") => Some(RegIntrinsic::WebSocketSendBytes),
+        ("WebSocket", "send_text") => Some(RegIntrinsic::WebSocketSendText),
+        ("WebSocketError", "message") => Some(RegIntrinsic::WebSocketErrorMessage),
+        ("Yaml", "parse") => Some(RegIntrinsic::YamlParse),
+        ("Yaml", "parse_file") => Some(RegIntrinsic::YamlParseFile),
+        ("Weak", "downgrade") => Some(RegIntrinsic::WeakDowngrade),
+        ("Weak", "from") => Some(RegIntrinsic::WeakFrom),
+        ("Weak", "upgrade") => Some(RegIntrinsic::WeakUpgrade),
+        _ => None,
+    }
+}
 fn closure_capture_names(
     body: &HirBlock,
     params: &[String],

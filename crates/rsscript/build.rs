@@ -203,19 +203,40 @@ fn workspace_root(manifest_dir: &Path) -> Result<PathBuf, String> {
 }
 
 fn collect_reg_vm_resolver_signatures(source: &str) -> Result<Vec<String>, String> {
-    let start_marker = "let intrinsic = match (namespace_root, name_root) {";
-    let start = source
-        .find(start_marker)
-        .ok_or_else(|| "reg VM intrinsic resolver match was not found".to_string())?;
-    let resolver = &source[start + start_marker.len()..];
-    let end_marker = "\n                    _ => {";
-    let end = resolver
-        .find(end_marker)
-        .ok_or_else(|| "reg VM intrinsic resolver fallback was not found".to_string())?;
-    let resolver = &resolver[..end];
-
-    let bytes = resolver.as_bytes();
+    // The name->intrinsic lowering table lives in two regions of reg_vm/mod.rs:
+    //   1. `qualified_intrinsic(...)` — the pure `(ns, name) => RegIntrinsic`
+    //      mappings, extracted into a standalone helper.
+    //   2. the `else { match (namespace_root, name_root) { ... } }` in `call`
+    //      — the special arms with inline lowering logic.
+    // Both are scanned so the generated runtime/special-form indices stay
+    // complete regardless of which region a signature lives in.
     let mut signatures = BTreeMap::<String, ()>::new();
+
+    let pure_marker = "fn qualified_intrinsic(namespace: &str, name: &str) -> Option<RegIntrinsic> {";
+    let pure_start = source
+        .find(pure_marker)
+        .ok_or_else(|| "reg VM intrinsic resolver helper was not found".to_string())?;
+    let pure_region = &source[pure_start + pure_marker.len()..];
+    let pure_end = pure_region
+        .find("\n        _ => None,")
+        .ok_or_else(|| "reg VM intrinsic resolver helper fallback was not found".to_string())?;
+    collect_signature_pairs(&pure_region[..pure_end], &mut signatures);
+
+    let special_marker = "let intrinsic = if let Some(intrinsic) =";
+    let special_start = source
+        .find(special_marker)
+        .ok_or_else(|| "reg VM intrinsic resolver match was not found".to_string())?;
+    let special_region = &source[special_start + special_marker.len()..];
+    let special_end = special_region
+        .find("\n                    _ => {")
+        .ok_or_else(|| "reg VM intrinsic resolver fallback was not found".to_string())?;
+    collect_signature_pairs(&special_region[..special_end], &mut signatures);
+
+    Ok(signatures.into_keys().collect())
+}
+
+fn collect_signature_pairs(resolver: &str, signatures: &mut BTreeMap<String, ()>) {
+    let bytes = resolver.as_bytes();
     let mut index = 0;
     while index + 2 < bytes.len() {
         if bytes[index] != b'(' || bytes[index + 1] != b'"' {
@@ -245,8 +266,6 @@ fn collect_reg_vm_resolver_signatures(source: &str) -> Result<Vec<String>, Strin
         signatures.insert(format!("{namespace}.{name}"), ());
         index = after_name;
     }
-
-    Ok(signatures.into_keys().collect())
 }
 
 fn collect_runtime_abi_signatures(source: &str) -> BTreeSet<String> {
