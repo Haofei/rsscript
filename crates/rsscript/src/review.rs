@@ -1001,72 +1001,77 @@ fn review_map_local_closure_bindings(block: &Block) -> BTreeSet<String> {
     bindings
 }
 
-fn collect_review_map_local_closure_bindings_block(block: &Block, bindings: &mut BTreeSet<String>) {
-    for statement in &block.statements {
-        collect_review_map_local_closure_bindings_stmt(statement, bindings);
-    }
+/// A child of an AST [`Stmt`]/[`Expr`] reached during structural descent: either
+/// a sub-expression or a sub-block. The child-walkers hand these to a single
+/// visitor callback so the callback can hold one mutable borrow of the
+/// accumulator it is filling.
+enum AstChild<'a> {
+    Expr(&'a Expr),
+    Block(&'a Block),
 }
 
-fn collect_review_map_local_closure_bindings_stmt(stmt: &Stmt, bindings: &mut BTreeSet<String>) {
+/// Drives the structural recursion for an AST [`Stmt`]: invokes `visit` for each
+/// child expression / block in evaluation order. Side effects collected per node
+/// live in the callers; this only centralizes the "recurse into the children"
+/// skeleton shared by the AST fact collectors. Pure restructuring — order is
+/// identical to the hand-written descent it replaces.
+fn walk_ast_stmt_children(stmt: &Stmt, visit: &mut dyn FnMut(AstChild<'_>)) {
     match stmt {
         Stmt::Let(stmt) => {
-            if stmt.kind == LetKind::Local && matches!(stmt.value, Some(Expr::Closure { .. })) {
-                bindings.insert(stmt.name.clone());
-            }
             if let Some(value) = &stmt.value {
-                collect_review_map_local_closure_bindings_expr(value, bindings);
+                visit(AstChild::Expr(value));
             }
         }
         Stmt::Return(stmt) => {
             if let Some(value) = &stmt.value {
-                collect_review_map_local_closure_bindings_expr(value, bindings);
+                visit(AstChild::Expr(value));
             }
         }
         Stmt::With(stmt) => {
-            collect_review_map_local_closure_bindings_expr(&stmt.resource, bindings);
-            collect_review_map_local_closure_bindings_block(&stmt.body, bindings);
+            visit(AstChild::Expr(&stmt.resource));
+            visit(AstChild::Block(&stmt.body));
         }
         Stmt::If(stmt) => {
-            collect_review_map_local_closure_bindings_expr(&stmt.condition, bindings);
-            collect_review_map_local_closure_bindings_block(&stmt.then_body, bindings);
+            visit(AstChild::Expr(&stmt.condition));
+            visit(AstChild::Block(&stmt.then_body));
             if let Some(else_body) = &stmt.else_body {
-                collect_review_map_local_closure_bindings_block(else_body, bindings);
+                visit(AstChild::Block(else_body));
             }
         }
         Stmt::Loop(stmt) => {
             if let Some(condition) = &stmt.condition {
-                collect_review_map_local_closure_bindings_expr(condition, bindings);
+                visit(AstChild::Expr(condition));
             }
-            collect_review_map_local_closure_bindings_block(&stmt.body, bindings);
+            visit(AstChild::Block(&stmt.body));
         }
         Stmt::For(stmt) => {
-            collect_review_map_local_closure_bindings_expr(&stmt.iterable, bindings);
-            collect_review_map_local_closure_bindings_block(&stmt.body, bindings);
+            visit(AstChild::Expr(&stmt.iterable));
+            visit(AstChild::Block(&stmt.body));
         }
         Stmt::TaskGroup(stmt) => {
-            collect_review_map_local_closure_bindings_block(&stmt.body, bindings);
+            visit(AstChild::Block(&stmt.body));
         }
         Stmt::Select(stmt) => {
             for arm in &stmt.arms {
-                collect_review_map_local_closure_bindings_expr(&arm.operation, bindings);
-                collect_review_map_local_closure_bindings_block(&arm.body, bindings);
+                visit(AstChild::Expr(&arm.operation));
+                visit(AstChild::Block(&arm.body));
             }
         }
         Stmt::Match(stmt) => {
-            collect_review_map_local_closure_bindings_expr(&stmt.value, bindings);
+            visit(AstChild::Expr(&stmt.value));
             for arm in &stmt.arms {
-                collect_review_map_local_closure_bindings_block(&arm.body, bindings);
+                visit(AstChild::Block(&arm.body));
             }
         }
         Stmt::LetElse(stmt) => {
-            collect_review_map_local_closure_bindings_expr(&stmt.value, bindings);
-            collect_review_map_local_closure_bindings_block(&stmt.else_body, bindings);
+            visit(AstChild::Expr(&stmt.value));
+            visit(AstChild::Block(&stmt.else_body));
         }
         Stmt::Assign(stmt) => {
-            collect_review_map_local_closure_bindings_expr(&stmt.target, bindings);
-            collect_review_map_local_closure_bindings_expr(&stmt.value, bindings);
+            visit(AstChild::Expr(&stmt.target));
+            visit(AstChild::Expr(&stmt.value));
         }
-        Stmt::Expr(expr) => collect_review_map_local_closure_bindings_expr(expr, bindings),
+        Stmt::Expr(expr) => visit(AstChild::Expr(expr)),
         Stmt::Break(_)
         | Stmt::Continue(_)
         | Stmt::MalformedWith(_)
@@ -1078,11 +1083,13 @@ fn collect_review_map_local_closure_bindings_stmt(stmt: &Stmt, bindings: &mut BT
     }
 }
 
-fn collect_review_map_local_closure_bindings_expr(expr: &Expr, bindings: &mut BTreeSet<String>) {
+/// Drives the structural recursion for an AST [`Expr`]: invokes `visit` for each
+/// child expression / block in evaluation order. See [`walk_ast_stmt_children`].
+fn walk_ast_expr_children(expr: &Expr, visit: &mut dyn FnMut(AstChild<'_>)) {
     match expr {
         Expr::Call { args, .. } => {
             for arg in args {
-                collect_review_map_local_closure_bindings_expr(&arg.value, bindings);
+                visit(AstChild::Expr(&arg.value));
             }
         }
         Expr::Effect { value, .. }
@@ -1091,7 +1098,7 @@ fn collect_review_map_local_closure_bindings_expr(expr: &Expr, bindings: &mut BT
         | Expr::Await { value, .. }
         | Expr::Try { value, .. }
         | Expr::Field { base: value, .. } => {
-            collect_review_map_local_closure_bindings_expr(value, bindings);
+            visit(AstChild::Expr(value));
         }
         Expr::Index { base, index, .. }
         | Expr::Binary {
@@ -1099,22 +1106,20 @@ fn collect_review_map_local_closure_bindings_expr(expr: &Expr, bindings: &mut BT
             right: index,
             ..
         } => {
-            collect_review_map_local_closure_bindings_expr(base, bindings);
-            collect_review_map_local_closure_bindings_expr(index, bindings);
+            visit(AstChild::Expr(base));
+            visit(AstChild::Expr(index));
         }
-        Expr::Closure { body, .. } => {
-            collect_review_map_local_closure_bindings_block(body, bindings)
-        }
+        Expr::Closure { body, .. } => visit(AstChild::Block(body)),
         Expr::Match { value, arms, .. } => {
-            collect_review_map_local_closure_bindings_expr(value, bindings);
+            visit(AstChild::Expr(value));
             for arm in arms {
-                collect_review_map_local_closure_bindings_block(&arm.body, bindings);
+                visit(AstChild::Block(&arm.body));
             }
         }
         Expr::MapLiteral { entries, .. } => {
             for entry in entries {
-                collect_review_map_local_closure_bindings_expr(&entry.key, bindings);
-                collect_review_map_local_closure_bindings_expr(&entry.value, bindings);
+                visit(AstChild::Expr(&entry.key));
+                visit(AstChild::Expr(&entry.value));
             }
         }
         Expr::ObjectLiteral { .. }
@@ -1125,6 +1130,32 @@ fn collect_review_map_local_closure_bindings_expr(expr: &Expr, bindings: &mut BT
         | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => {}
     }
+}
+
+fn collect_review_map_local_closure_bindings_block(block: &Block, bindings: &mut BTreeSet<String>) {
+    for statement in &block.statements {
+        collect_review_map_local_closure_bindings_stmt(statement, bindings);
+    }
+}
+
+fn collect_review_map_local_closure_bindings_stmt(stmt: &Stmt, bindings: &mut BTreeSet<String>) {
+    if let Stmt::Let(let_stmt) = stmt
+        && let_stmt.kind == LetKind::Local
+        && matches!(let_stmt.value, Some(Expr::Closure { .. }))
+    {
+        bindings.insert(let_stmt.name.clone());
+    }
+    walk_ast_stmt_children(stmt, &mut |child| match child {
+        AstChild::Expr(value) => collect_review_map_local_closure_bindings_expr(value, bindings),
+        AstChild::Block(block) => collect_review_map_local_closure_bindings_block(block, bindings),
+    });
+}
+
+fn collect_review_map_local_closure_bindings_expr(expr: &Expr, bindings: &mut BTreeSet<String>) {
+    walk_ast_expr_children(expr, &mut |child| match child {
+        AstChild::Expr(value) => collect_review_map_local_closure_bindings_expr(value, bindings),
+        AstChild::Block(block) => collect_review_map_local_closure_bindings_block(block, bindings),
+    });
 }
 
 fn collect_review_map_facts_block(
@@ -1152,6 +1183,45 @@ fn collect_review_map_facts_stmt(
     local_closure_bindings: &BTreeSet<String>,
     facts: &mut ReviewMapFacts,
 ) {
+    // `Match` interleaves scoped-binding bookkeeping with the descent into each
+    // arm, so it cannot route through the shared child-walker; handle it here and
+    // return. Every other statement is "record side effects, then recurse into
+    // children", which the walker drives.
+    if let Stmt::Match(stmt) = statement {
+        collect_review_map_facts_expr(
+            &stmt.value,
+            hir,
+            callback_params,
+            local_closure_bindings,
+            facts,
+        );
+        let value_type = review_map_expr_type_name_with_facts(&stmt.value, hir, &facts.value_types);
+        for arm in &stmt.arms {
+            let scoped_binding = review_map_match_binding_type(&arm.pattern, value_type.as_deref());
+            let previous = scoped_binding
+                .as_ref()
+                .and_then(|(binding, _)| facts.value_types.get(binding).cloned());
+            if let Some((binding, type_name)) = &scoped_binding {
+                facts.value_types.insert(binding.clone(), type_name.clone());
+            }
+            collect_review_map_facts_block(
+                &arm.body,
+                hir,
+                callback_params,
+                local_closure_bindings,
+                facts,
+            );
+            if let Some((binding, _)) = scoped_binding {
+                if let Some(previous) = previous {
+                    facts.value_types.insert(binding, previous);
+                } else {
+                    facts.value_types.remove(&binding);
+                }
+            }
+        }
+        return;
+    }
+
     match statement {
         Stmt::Let(stmt) => {
             if stmt.kind == LetKind::Local {
@@ -1162,215 +1232,26 @@ fn collect_review_map_facts_stmt(
                     .value_types
                     .insert(stmt.name.clone(), type_ref_display_name(ty));
             }
-            if let Some(value) = &stmt.value {
-                if !facts.value_types.contains_key(&stmt.name)
-                    && let Some(type_name) =
-                        review_map_expr_type_name_with_facts(value, hir, &facts.value_types)
-                {
-                    facts.value_types.insert(stmt.name.clone(), type_name);
-                }
-                collect_review_map_facts_expr(
-                    value,
-                    hir,
-                    callback_params,
-                    local_closure_bindings,
-                    facts,
-                );
+            if let Some(value) = &stmt.value
+                && !facts.value_types.contains_key(&stmt.name)
+                && let Some(type_name) =
+                    review_map_expr_type_name_with_facts(value, hir, &facts.value_types)
+            {
+                facts.value_types.insert(stmt.name.clone(), type_name);
             }
         }
-        Stmt::Return(stmt) => {
-            if let Some(value) = &stmt.value {
-                collect_review_map_facts_expr(
-                    value,
-                    hir,
-                    callback_params,
-                    local_closure_bindings,
-                    facts,
-                );
-            }
-        }
-        Stmt::With(stmt) => {
-            facts.has_with = true;
-            collect_review_map_facts_expr(
-                &stmt.resource,
-                hir,
-                callback_params,
-                local_closure_bindings,
-                facts,
-            );
-            collect_review_map_facts_block(
-                &stmt.body,
-                hir,
-                callback_params,
-                local_closure_bindings,
-                facts,
-            );
-        }
-        Stmt::If(stmt) => {
-            collect_review_map_facts_expr(
-                &stmt.condition,
-                hir,
-                callback_params,
-                local_closure_bindings,
-                facts,
-            );
-            collect_review_map_facts_block(
-                &stmt.then_body,
-                hir,
-                callback_params,
-                local_closure_bindings,
-                facts,
-            );
-            if let Some(else_body) = &stmt.else_body {
-                collect_review_map_facts_block(
-                    else_body,
-                    hir,
-                    callback_params,
-                    local_closure_bindings,
-                    facts,
-                );
-            }
-        }
-        Stmt::Loop(stmt) => {
-            if let Some(condition) = &stmt.condition {
-                collect_review_map_facts_expr(
-                    condition,
-                    hir,
-                    callback_params,
-                    local_closure_bindings,
-                    facts,
-                );
-            }
-            collect_review_map_facts_block(
-                &stmt.body,
-                hir,
-                callback_params,
-                local_closure_bindings,
-                facts,
-            );
-        }
-        Stmt::For(stmt) => {
-            collect_review_map_facts_expr(
-                &stmt.iterable,
-                hir,
-                callback_params,
-                local_closure_bindings,
-                facts,
-            );
-            collect_review_map_facts_block(
-                &stmt.body,
-                hir,
-                callback_params,
-                local_closure_bindings,
-                facts,
-            );
-        }
-        Stmt::TaskGroup(stmt) => {
-            collect_review_map_facts_block(
-                &stmt.body,
-                hir,
-                callback_params,
-                local_closure_bindings,
-                facts,
-            );
-        }
-        Stmt::Select(stmt) => {
-            for arm in &stmt.arms {
-                collect_review_map_facts_expr(
-                    &arm.operation,
-                    hir,
-                    callback_params,
-                    local_closure_bindings,
-                    facts,
-                );
-                collect_review_map_facts_block(
-                    &arm.body,
-                    hir,
-                    callback_params,
-                    local_closure_bindings,
-                    facts,
-                );
-            }
-        }
-        Stmt::Match(stmt) => {
-            collect_review_map_facts_expr(
-                &stmt.value,
-                hir,
-                callback_params,
-                local_closure_bindings,
-                facts,
-            );
-            let value_type =
-                review_map_expr_type_name_with_facts(&stmt.value, hir, &facts.value_types);
-            for arm in &stmt.arms {
-                let scoped_binding =
-                    review_map_match_binding_type(&arm.pattern, value_type.as_deref());
-                let previous = scoped_binding
-                    .as_ref()
-                    .and_then(|(binding, _)| facts.value_types.get(binding).cloned());
-                if let Some((binding, type_name)) = &scoped_binding {
-                    facts.value_types.insert(binding.clone(), type_name.clone());
-                }
-                collect_review_map_facts_block(
-                    &arm.body,
-                    hir,
-                    callback_params,
-                    local_closure_bindings,
-                    facts,
-                );
-                if let Some((binding, _)) = scoped_binding {
-                    if let Some(previous) = previous {
-                        facts.value_types.insert(binding, previous);
-                    } else {
-                        facts.value_types.remove(&binding);
-                    }
-                }
-            }
-        }
-        Stmt::LetElse(stmt) => {
-            collect_review_map_facts_expr(
-                &stmt.value,
-                hir,
-                callback_params,
-                local_closure_bindings,
-                facts,
-            );
-            collect_review_map_facts_block(
-                &stmt.else_body,
-                hir,
-                callback_params,
-                local_closure_bindings,
-                facts,
-            );
-        }
-        Stmt::Assign(stmt) => {
-            collect_review_map_facts_expr(
-                &stmt.target,
-                hir,
-                callback_params,
-                local_closure_bindings,
-                facts,
-            );
-            collect_review_map_facts_expr(
-                &stmt.value,
-                hir,
-                callback_params,
-                local_closure_bindings,
-                facts,
-            );
-        }
-        Stmt::Expr(expr) => {
-            collect_review_map_facts_expr(expr, hir, callback_params, local_closure_bindings, facts)
-        }
-        Stmt::Break(_)
-        | Stmt::Continue(_)
-        | Stmt::MalformedWith(_)
-        | Stmt::MalformedIf(_)
-        | Stmt::MalformedLoop(_)
-        | Stmt::MalformedFor(_)
-        | Stmt::MalformedMatch(_)
-        | Stmt::Unknown(_) => {}
+        Stmt::With(_) => facts.has_with = true,
+        _ => {}
     }
+
+    walk_ast_stmt_children(statement, &mut |child| match child {
+        AstChild::Expr(value) => {
+            collect_review_map_facts_expr(value, hir, callback_params, local_closure_bindings, facts)
+        }
+        AstChild::Block(block) => {
+            collect_review_map_facts_block(block, hir, callback_params, local_closure_bindings, facts)
+        }
+    });
 }
 
 fn review_map_expr_type_name(expr: &Expr, hir: &Hir) -> Option<String> {
@@ -1417,6 +1298,10 @@ fn collect_review_map_facts_expr(
     local_closure_bindings: &BTreeSet<String>,
     facts: &mut ReviewMapFacts,
 ) {
+    // Record this node's contribution to the facts, then recurse into its
+    // children via the shared walker. The descent order is unchanged: every arm
+    // below previously recursed into exactly the same children after its side
+    // effects, which the walker now drives.
     match expr {
         Expr::Call { callee, args, span } => {
             if is_resource_pool_callee(callee) {
@@ -1489,126 +1374,20 @@ fn collect_review_map_facts_expr(
                     CallResolution::EnumVariant => {}
                 }
             }
-            for arg in args {
-                collect_review_map_facts_expr(
-                    &arg.value,
-                    hir,
-                    callback_params,
-                    local_closure_bindings,
-                    facts,
-                );
-            }
         }
-        Expr::Effect { effect, value, .. } => {
-            match effect {
-                DataEffect::Mut => facts.has_mut = true,
-                DataEffect::Take => facts.has_take = true,
-                DataEffect::Read => {}
-            }
-            collect_review_map_facts_expr(
-                value,
-                hir,
-                callback_params,
-                local_closure_bindings,
-                facts,
-            );
-        }
-        Expr::Manage { value, .. } => {
-            facts.has_manage = true;
-            collect_review_map_facts_expr(
-                value,
-                hir,
-                callback_params,
-                local_closure_bindings,
-                facts,
-            );
-        }
+        Expr::Effect { effect, .. } => match effect {
+            DataEffect::Mut => facts.has_mut = true,
+            DataEffect::Take => facts.has_take = true,
+            DataEffect::Read => {}
+        },
+        Expr::Manage { .. } => facts.has_manage = true,
         Expr::Spawn { value, .. } => {
             facts.has_spawn = true;
             collect_spawn_capture_names(value, &mut facts.spawn_captures);
-            collect_review_map_facts_expr(
-                value,
-                hir,
-                callback_params,
-                local_closure_bindings,
-                facts,
-            );
         }
-        Expr::Await { value, .. } => {
-            facts.has_await = true;
-            collect_review_map_facts_expr(
-                value,
-                hir,
-                callback_params,
-                local_closure_bindings,
-                facts,
-            );
-        }
-        Expr::Try { value, .. } => {
-            facts.has_error_boundary = true;
-            collect_review_map_facts_expr(
-                value,
-                hir,
-                callback_params,
-                local_closure_bindings,
-                facts,
-            );
-        }
-        Expr::Match { value, arms, .. } => {
-            collect_review_map_facts_expr(
-                value,
-                hir,
-                callback_params,
-                local_closure_bindings,
-                facts,
-            );
-            for arm in arms {
-                collect_review_map_facts_block(
-                    &arm.body,
-                    hir,
-                    callback_params,
-                    local_closure_bindings,
-                    facts,
-                );
-            }
-        }
-        Expr::Binary { left, right, .. } => {
-            collect_review_map_facts_expr(
-                left,
-                hir,
-                callback_params,
-                local_closure_bindings,
-                facts,
-            );
-            collect_review_map_facts_expr(
-                right,
-                hir,
-                callback_params,
-                local_closure_bindings,
-                facts,
-            );
-        }
-        Expr::Field { base, .. } => {
-            collect_review_map_facts_expr(base, hir, callback_params, local_closure_bindings, facts)
-        }
-        Expr::Index { base, index, .. } => {
-            collect_review_map_facts_expr(
-                base,
-                hir,
-                callback_params,
-                local_closure_bindings,
-                facts,
-            );
-            collect_review_map_facts_expr(
-                index,
-                hir,
-                callback_params,
-                local_closure_bindings,
-                facts,
-            );
-        }
+        Expr::Await { .. } => facts.has_await = true,
+        Expr::Try { .. } => facts.has_error_boundary = true,
         Expr::Closure {
-            body,
             captures,
             declared_effects,
             explicit,
@@ -1628,33 +1407,13 @@ fn collect_review_map_facts_expr(
                         .insert(format!("effects({})", declared_effects.join(", ")));
                 }
             }
-            collect_review_map_facts_block(
-                body,
-                hir,
-                callback_params,
-                local_closure_bindings,
-                facts,
-            )
         }
-        Expr::MapLiteral { entries, .. } => {
-            for entry in entries {
-                collect_review_map_facts_expr(
-                    &entry.key,
-                    hir,
-                    callback_params,
-                    local_closure_bindings,
-                    facts,
-                );
-                collect_review_map_facts_expr(
-                    &entry.value,
-                    hir,
-                    callback_params,
-                    local_closure_bindings,
-                    facts,
-                );
-            }
-        }
-        Expr::ObjectLiteral { .. }
+        Expr::Match { .. }
+        | Expr::Binary { .. }
+        | Expr::Field { .. }
+        | Expr::Index { .. }
+        | Expr::MapLiteral { .. }
+        | Expr::ObjectLiteral { .. }
         | Expr::ArrayLiteral { .. }
         | Expr::Ident(_, _)
         | Expr::Number(_, _)
@@ -1662,6 +1421,15 @@ fn collect_review_map_facts_expr(
         | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => {}
     }
+
+    walk_ast_expr_children(expr, &mut |child| match child {
+        AstChild::Expr(value) => {
+            collect_review_map_facts_expr(value, hir, callback_params, local_closure_bindings, facts)
+        }
+        AstChild::Block(block) => {
+            collect_review_map_facts_block(block, hir, callback_params, local_closure_bindings, facts)
+        }
+    });
 }
 
 fn collect_call_boundary_facts(signature: &HirFunctionSig, facts: &mut ReviewMapFacts) {
@@ -1864,6 +1632,118 @@ fn spawn_capture_path(expr: &Expr) -> Option<String> {
     }
 }
 
+/// A child of a HIR [`HirStmt`]/[`HirExpr`] reached during structural descent.
+/// See [`AstChild`]; the single-visitor shape lets the callback hold one mutable
+/// borrow of the accumulator.
+enum HirChild<'a> {
+    Expr(&'a HirExpr),
+    Block(&'a HirBlock),
+}
+
+/// Drives the default structural recursion for a [`HirStmt`]: invokes `visit` for
+/// each child expression / block in evaluation order. Nodes whose descent the HIR
+/// fact collector specializes (closure-valued `Let`, `Call` with noescape closure
+/// args, `Closure`) are handled by the caller and do not route through here. Pure
+/// restructuring — order matches the hand-written descent it replaces.
+fn walk_hir_stmt_children(stmt: &HirStmt, visit: &mut dyn FnMut(HirChild<'_>)) {
+    match stmt {
+        HirStmt::Let { value, .. } | HirStmt::Return { value, .. } => {
+            if let Some(value) = value {
+                visit(HirChild::Expr(value));
+            }
+        }
+        HirStmt::With { resource, body, .. } => {
+            visit(HirChild::Expr(resource));
+            visit(HirChild::Block(body));
+        }
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            visit(HirChild::Expr(condition));
+            visit(HirChild::Block(then_body));
+            if let Some(else_body) = else_body {
+                visit(HirChild::Block(else_body));
+            }
+        }
+        HirStmt::Loop {
+            condition, body, ..
+        } => {
+            if let Some(condition) = condition {
+                visit(HirChild::Expr(condition));
+            }
+            visit(HirChild::Block(body));
+        }
+        HirStmt::For { iterable, body, .. } => {
+            visit(HirChild::Expr(iterable));
+            visit(HirChild::Block(body));
+        }
+        HirStmt::Match { value, arms, .. } => {
+            visit(HirChild::Expr(value));
+            for arm in arms {
+                visit(HirChild::Block(&arm.body));
+            }
+        }
+        HirStmt::Select { arms, .. } => {
+            for arm in arms {
+                visit(HirChild::Expr(&arm.operation));
+                visit(HirChild::Block(&arm.body));
+            }
+        }
+        HirStmt::Expr(expr) | HirStmt::Assign { value: expr, .. } => visit(HirChild::Expr(expr)),
+        HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
+    }
+}
+
+/// Drives the default structural recursion for a [`HirExpr`]: invokes `visit` for
+/// each child expression / block in evaluation order. See [`walk_hir_stmt_children`].
+fn walk_hir_expr_children(expr: &HirExpr, visit: &mut dyn FnMut(HirChild<'_>)) {
+    match expr {
+        HirExpr::Binary { left, right, .. } => {
+            visit(HirChild::Expr(left));
+            visit(HirChild::Expr(right));
+        }
+        HirExpr::Field { base, .. } => visit(HirChild::Expr(base)),
+        HirExpr::Index { base, index, .. } => {
+            visit(HirChild::Expr(base));
+            visit(HirChild::Expr(index));
+        }
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                visit(HirChild::Expr(&arg.value));
+            }
+        }
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. }
+        | HirExpr::Try { value, .. } => {
+            visit(HirChild::Expr(value));
+        }
+        HirExpr::Closure { body, .. } => visit(HirChild::Block(body)),
+        HirExpr::Match { value, arms, .. } => {
+            visit(HirChild::Expr(value));
+            for arm in arms {
+                visit(HirChild::Block(&arm.body));
+            }
+        }
+        HirExpr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                visit(HirChild::Expr(&entry.key));
+                visit(HirChild::Expr(&entry.value));
+            }
+        }
+        HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
+        | HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
+    }
+}
+
 fn collect_review_map_hir_facts_block(
     block: &HirBlock,
     local_bindings: &BTreeSet<&str>,
@@ -1887,6 +1767,10 @@ fn collect_review_map_hir_facts_stmt(
     local_bindings: &BTreeSet<&str>,
     facts: &mut ReviewMapFacts,
 ) {
+    // Closure-valued `Let`s specialize their descent (managed lets also harvest
+    // capture names, and both recurse into the closure body rather than treating
+    // the value as a plain expression). Everything else recurses via the shared
+    // walker, which reproduces the original child order exactly.
     match statement {
         HirStmt::Let {
             kind: HirBindingKind::ManagedLet,
@@ -1903,55 +1787,12 @@ fn collect_review_map_hir_facts_stmt(
         } => {
             collect_review_map_hir_facts_block(body, local_bindings, facts);
         }
-        HirStmt::Let { value, .. } | HirStmt::Return { value, .. } => {
-            if let Some(value) = value {
-                collect_review_map_hir_facts_expr(value, local_bindings, facts);
+        _ => walk_hir_stmt_children(statement, &mut |child| match child {
+            HirChild::Expr(value) => collect_review_map_hir_facts_expr(value, local_bindings, facts),
+            HirChild::Block(block) => {
+                collect_review_map_hir_facts_block(block, local_bindings, facts)
             }
-        }
-        HirStmt::With { resource, body, .. } => {
-            collect_review_map_hir_facts_expr(resource, local_bindings, facts);
-            collect_review_map_hir_facts_block(body, local_bindings, facts);
-        }
-        HirStmt::If {
-            condition,
-            then_body,
-            else_body,
-            ..
-        } => {
-            collect_review_map_hir_facts_expr(condition, local_bindings, facts);
-            collect_review_map_hir_facts_block(then_body, local_bindings, facts);
-            if let Some(else_body) = else_body {
-                collect_review_map_hir_facts_block(else_body, local_bindings, facts);
-            }
-        }
-        HirStmt::Loop {
-            condition, body, ..
-        } => {
-            if let Some(condition) = condition {
-                collect_review_map_hir_facts_expr(condition, local_bindings, facts);
-            }
-            collect_review_map_hir_facts_block(body, local_bindings, facts);
-        }
-        HirStmt::For { iterable, body, .. } => {
-            collect_review_map_hir_facts_expr(iterable, local_bindings, facts);
-            collect_review_map_hir_facts_block(body, local_bindings, facts);
-        }
-        HirStmt::Match { value, arms, .. } => {
-            collect_review_map_hir_facts_expr(value, local_bindings, facts);
-            for arm in arms {
-                collect_review_map_hir_facts_block(&arm.body, local_bindings, facts);
-            }
-        }
-        HirStmt::Select { arms, .. } => {
-            for arm in arms {
-                collect_review_map_hir_facts_expr(&arm.operation, local_bindings, facts);
-                collect_review_map_hir_facts_block(&arm.body, local_bindings, facts);
-            }
-        }
-        HirStmt::Expr(expr) | HirStmt::Assign { value: expr, .. } => {
-            collect_review_map_hir_facts_expr(expr, local_bindings, facts)
-        }
-        HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
+        }),
     }
 }
 
@@ -1966,18 +1807,10 @@ fn collect_review_map_hir_facts_expr(
     if hir_expr_writes_to_managed_state(expr, local_bindings) {
         facts.has_managed_state_write = true;
     }
+    // `Call` (per-argument noescape closure descent) and `Closure` (capture-name
+    // harvesting) specialize their descent and are handled here; every other node
+    // recurses via the shared walker, preserving the original child order.
     match expr {
-        HirExpr::Binary { left, right, .. } => {
-            collect_review_map_hir_facts_expr(left, local_bindings, facts);
-            collect_review_map_hir_facts_expr(right, local_bindings, facts);
-        }
-        HirExpr::Field { base, .. } => {
-            collect_review_map_hir_facts_expr(base, local_bindings, facts)
-        }
-        HirExpr::Index { base, index, .. } => {
-            collect_review_map_hir_facts_expr(base, local_bindings, facts);
-            collect_review_map_hir_facts_expr(index, local_bindings, facts);
-        }
         HirExpr::Call {
             args, resolution, ..
         } => {
@@ -1992,35 +1825,16 @@ fn collect_review_map_hir_facts_expr(
                 }
             }
         }
-        HirExpr::Effect { value, .. }
-        | HirExpr::Manage { value, .. }
-        | HirExpr::Spawn { value, .. }
-        | HirExpr::Await { value, .. }
-        | HirExpr::Try { value, .. } => {
-            collect_review_map_hir_facts_expr(value, local_bindings, facts);
-        }
         HirExpr::Closure { body, .. } => {
             collect_managed_closure_capture_names(body, local_bindings, facts);
             collect_review_map_hir_facts_block(body, local_bindings, facts);
         }
-        HirExpr::Match { value, arms, .. } => {
-            collect_review_map_hir_facts_expr(value, local_bindings, facts);
-            for arm in arms {
-                collect_review_map_hir_facts_block(&arm.body, local_bindings, facts);
+        _ => walk_hir_expr_children(expr, &mut |child| match child {
+            HirChild::Expr(value) => collect_review_map_hir_facts_expr(value, local_bindings, facts),
+            HirChild::Block(block) => {
+                collect_review_map_hir_facts_block(block, local_bindings, facts)
             }
-        }
-        HirExpr::MapLiteral { entries, .. } => {
-            for entry in entries {
-                collect_review_map_hir_facts_expr(&entry.key, local_bindings, facts);
-                collect_review_map_hir_facts_expr(&entry.value, local_bindings, facts);
-            }
-        }
-        HirExpr::ObjectLiteral { .. }
-        | HirExpr::ArrayLiteral { .. }
-        | HirExpr::Ident { .. }
-        | HirExpr::Number { .. }
-        | HirExpr::String { .. }
-        | HirExpr::Unknown(_) => {}
+        }),
     }
 }
 
