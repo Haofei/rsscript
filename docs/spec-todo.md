@@ -45,20 +45,23 @@ model without reversing a review-first tenet. Ordered by readiness/value.
   dispatch. Verified at parity (`parity_capability_dynamic_dispatch`, two impls). The
   review map already flags dynamic dispatch (`has_dynamic_protocol_dispatch`).
 
-- [ ] **Cross-isolate message API (zero-copy transfer)** (§20.1-B, §20.2-3) —
-  _blocked on foundational runtime work; design recorded._ Unlike the other three
-  roadmap items (which were largely already built), this has **no foundation**: the
-  runtime is strictly single-isolate (one cooperative-task heap; the channel is an
-  explicit single-isolate `Rc<RefCell>` MPSC), so "managed handles never cross
-  isolates" has no boundary to be enforced at yet — exactly why the spec gates it on
-  "the isolate model maturing first." Faking it (cooperative tasks sharing a heap)
-  would not be a real isolate boundary, so it is **not** implemented here.
-  The smallest *sound* slice and the full feasibility analysis are recorded in
-  [cross-isolate-design.md](cross-isolate-design.md): a static
-  `is_cross_isolate_safe(T)` payload rule (Copy/owned, no managed handles) + a
-  distinct `Mailbox<T>` surface over the cooperative scheduler (~1–2 weeks, holds
-  parity). True multi-thread/multi-heap isolates are a separate multi-quarter
-  refactor. Pick up when the mailbox surface is prioritized.
+- [~] **Cross-isolate message API (zero-copy transfer)** (§20.1-B, §20.2-3) —
+  _message contract landed; multi-isolate execution still future._ The reviewable
+  core — the **message payload contract** — is implemented: `Channel.message<T>`
+  creates a channel whose payload `T` is statically verified
+  **cross-isolate-transferable** (`is_cross_isolate_transferable`: a self-contained
+  value with no managed handle — v1 allows Copy scalars, `String`, `Bytes`),
+  rejecting managed/container payloads at check time (`RS0036`). It reuses the
+  bounded-channel runtime, so it runs today at VM↔compiled parity
+  (`parity_message_channel_roundtrip`) and is the forward-compatible transport for
+  real isolates: nothing crossing it ever shares mutable state. This realizes the
+  "message is the right choice for a solo isolate" decision — message semantics +
+  `take` move-in, no reference-capability machinery.
+  _Remaining (future):_ (a) broaden the payload contract to data-only structs/sums
+  and owned containers via deep-snapshot; (b) a structured isolate-spawn so two
+  isolates actually run with disjoint heaps. True multi-thread/multi-heap isolates
+  are a separate multi-quarter refactor. Full plan in
+  [cross-isolate-design.md](cross-isolate-design.md).
 
 ## Removed — non-goals (not deferred; deleted from the roadmap)
 

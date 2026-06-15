@@ -39,6 +39,7 @@ pub mod code {
     pub const INTEGER_LITERAL_OUT_OF_RANGE: &str = "RS0033";
     pub const UNINFERABLE_BINDING_TYPE: &str = "RS0034";
     pub const LOWER_NAME_CONFLICT: &str = "RS0035";
+    pub const MESSAGE_PAYLOAD_NOT_TRANSFERABLE: &str = "RS0036";
     pub const FEATURE_VIOLATION: &str = "RS0101";
     pub const UNNAMED_ARGUMENT: &str = "RS0201";
     pub const MISSING_DATA_EFFECT: &str = "RS0202";

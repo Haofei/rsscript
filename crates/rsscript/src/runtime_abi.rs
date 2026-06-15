@@ -310,6 +310,9 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "rsscript_runtime::cancellation_token_is_cancelled",
     ),
     runtime_intrinsic("Channel", "bounded", "rsscript_runtime::channel_bounded"),
+    // Message channel: same runtime as `bounded`; the cross-isolate payload
+    // contract is a compile-time check, not a runtime difference.
+    runtime_intrinsic("Channel", "message", "rsscript_runtime::channel_bounded"),
     runtime_intrinsic("Channel", "sender", "rsscript_runtime::channel_sender"),
     runtime_intrinsic("Channel", "receiver", "rsscript_runtime::channel_receiver"),
     runtime_intrinsic("Sender", "send", "rsscript_runtime::sender_send"),

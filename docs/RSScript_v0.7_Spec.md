@@ -5276,7 +5276,14 @@ A. Extended async surface beyond the v0.7 MVP
    - must not expose Future / Pin / Poll / Waker to RSScript users (section 14.4).
 
 B. Cross-isolate message API with zero-copy transfer
-   - now in scope: committed roadmap (§20.2).
+   - partially implemented (§20.2-3): the **message payload contract** is enforced.
+     `Channel.message<T>` creates a channel whose payload `T` is statically verified
+     cross-isolate-transferable (a self-contained value with no managed handle; v1:
+     Copy scalars, `String`, `Bytes`), rejecting managed/container payloads with
+     `RS0036`. It reuses the bounded-channel runtime, so it runs today at parity and
+     is the forward-compatible transport for real isolates. Remaining: broaden the
+     contract to data-only structs/containers, and a structured isolate-spawn with
+     disjoint heaps.
    - explicit typed send/receive channels between isolates.
    - cross-isolate payloads are owned/Copy data or values moved with take.
    - take-based move across an isolate boundary is the no-shared-alias transfer
