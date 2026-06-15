@@ -2781,13 +2781,41 @@ impl<'a> RustLowerer<'a> {
                     && defaults.len() > provided
                 {
                     let param_types = self.function_param_types.get(&name).cloned();
+                    let param_effects = self
+                        .function_param_effects
+                        .get(&native_boundary_callee_key(callee))
+                        .cloned();
                     for (index, default) in defaults.iter().enumerate().skip(provided) {
                         if let Some(default) = default {
-                            let lowered =
+                            let effect = param_effects
+                                .as_ref()
+                                .and_then(|params| params.get(index))
+                                .and_then(|(_, effect)| *effect);
+                            let lowered = if let Some(effect) = effect {
+                                // A non-Copy default is materialized at the call and
+                                // passed under the parameter's declared effect;
+                                // route it through the normal argument path so the
+                                // borrow/managed-handle ABI matches the signature.
+                                let synthetic = CallArg {
+                                    name: param_types
+                                        .as_ref()
+                                        .and_then(|params| params.get(index))
+                                        .map(|(param_name, _)| param_name.clone()),
+                                    value: Expr::Effect {
+                                        effect,
+                                        value: Box::new(default.clone()),
+                                        span: span.clone(),
+                                    },
+                                    malformed: false,
+                                    span: span.clone(),
+                                };
+                                self.lower_call_arg_for_callee(callee, &synthetic, index)
+                            } else {
                                 match param_types.as_ref().and_then(|params| params.get(index)) {
                                     Some((_, ty)) => self.lower_expr_for_expected_type(default, ty),
                                     None => self.lower_owned_expr(default),
-                                };
+                                }
+                            };
                             args.push(lowered);
                         }
                     }

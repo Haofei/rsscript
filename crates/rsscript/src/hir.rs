@@ -1828,9 +1828,25 @@ fn lower_hir_expr(
                     if let Some(default) = &param.default
                         && !provided.contains(param.name.as_str())
                     {
+                        let mut value = lower_hir_expr(hir, function_name, default, value_types);
+                        // A non-Copy default is materialized at the call site and
+                        // bound under the parameter's declared effect. Carry that
+                        // effect on the synthesized argument so the call-site
+                        // effect check is satisfied — the effect is reviewed at the
+                        // declaration (`axes: read List<Int> = ...`), not at the
+                        // omitted call where the argument is implicit.
+                        if let Some(effect) = param.effect {
+                            value = HirExpr::Effect {
+                                effect,
+                                value: Box::new(value),
+                                events: Vec::new(),
+                                type_name: Some(param.type_name.clone()),
+                                span: span.clone(),
+                            };
+                        }
                         hir_args.push(HirCallArg {
                             name: Some(param.name.clone()),
-                            value: lower_hir_expr(hir, function_name, default, value_types),
+                            value,
                             span: span.clone(),
                         });
                     }
@@ -3260,6 +3276,9 @@ fn classify_return_expr(
     match expr {
         // `true` / `false` are boolean literals (lexed as identifiers).
         Expr::Ident(name, _) if name == "true" || name == "false" => HirReturnProof::Literal,
+        // A bare payload-free sum variant (`return MUL`) names a freshly-valued
+        // variant constant; it owns nothing borrowed, so it is fresh.
+        Expr::Ident(name, _) if hir.sum_type_for_variant(name).is_some() => HirReturnProof::Literal,
         Expr::Ident(name, _) => HirReturnProof::Ident { name: name.clone() },
         Expr::Call { callee, args, .. } => {
             if matches!(callee_name(callee), "Err" | "None") {
@@ -3300,8 +3319,12 @@ fn classify_return_expr(
                         },
                     ..
                 } => HirReturnProof::StructConstructor,
+                // A sum/enum variant constructor (`Pair(a: 1, b: 2)`,
+                // `ArgInts(values: take vals)`, `Some(x)`/`Ok(x)` wrappers) builds
+                // a brand-new value, so the result is fresh; a moved-in (`take`)
+                // payload transfers ownership into the fresh shell.
+                CallResolution::EnumVariant => HirReturnProof::Literal,
                 CallResolution::Resolved { .. }
-                | CallResolution::EnumVariant
                 | CallResolution::Ambiguous { .. }
                 | CallResolution::Unknown => HirReturnProof::Unknown,
             }

@@ -120,6 +120,39 @@ fn module_isolation_resolves_cross_file_associated_constant() {
 }
 
 #[test]
+fn qualified_module_type_in_type_position_resolves() {
+    // `dtype.DType` in a parameter type resolves to the module-scoped type symbol
+    // without requiring a `use dtype.DType` line in the consuming file.
+    let sources = vec![
+        (
+            "dtype.rss".to_string(),
+            "module dtype\n\nstruct DType {\n    bits: Int\n}\n".to_string(),
+        ),
+        (
+            "main.rss".to_string(),
+            concat!(
+                "module app\n\n",
+                "fn bits_of(d: read dtype.DType) -> Int {\n",
+                "    return d.bits\n",
+                "}\n\n",
+                "fn main() -> Unit {\n",
+                "    return Unit\n",
+                "}\n",
+            )
+            .to_string(),
+        ),
+    ];
+    let package =
+        lower_sources_to_rust_package_with_options(&sources, "ns-qualtype", "/rt", &[], &[])
+            .expect("qualified module.Type in type position should lower");
+    assert!(
+        package.lib_rs.contains("dtype__DType"),
+        "qualified `dtype.DType` should lower to the module-scoped type symbol:\n{}",
+        package.lib_rs
+    );
+}
+
+#[test]
 fn module_isolation_distinguishes_dotted_and_underscored_module_paths() {
     // `module a.b` and `module a_b` are distinct and must not collide (RS0005).
     let sources = vec![

@@ -4,7 +4,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use crate::diagnostic::Span;
 use crate::hir::{
     CallResolution, HirBinding, HirBindingKind, HirBlock, HirCallArg, HirEffectEvent,
-    HirEffectEventKind, HirExpr, HirFunctionBody, HirReturnProof, HirStmt, ParamEffect,
+    HirEffectEventKind, HirExpr, HirFunctionBody, HirReturnProof, HirStmt, HirTypeKind, ParamEffect,
+    ResolvedCalleeKind,
 };
 use crate::syntax::ast::{Callee, Expr};
 
@@ -115,6 +116,11 @@ struct LocalFlowBinding {
     value_handle_field: Option<(String, Span)>,
     fresh_from_local_source: Option<String>,
     fresh_from_scrutinee: bool,
+    /// The binding's initializer is itself a fresh value (a fresh-returning call,
+    /// a struct/variant constructor, or a literal). Such a binding holds a fresh,
+    /// unaliased value, so returning it directly preserves freshness — until it is
+    /// moved, retained, or captured (which clears its fresh-returnable status).
+    fresh_from_fresh_value: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -520,18 +526,22 @@ fn collect_fresh_return_issue(
                 .unwrap_or(return_span)
                 .clone();
             if let Some(state) = entry_states.get(return_span) {
-                if state.is_managed(name)
-                    || (state.is_local(name)
-                        && (!state.is_clean_local(name) || !state.is_fresh_returnable_local(name)))
-                {
+                // A binding bound from a fresh value (a `let s = <fresh source>`)
+                // stays returnable-as-fresh until it is moved, retained, or
+                // captured — including a *managed* `let`, not only an exclusive
+                // `local`. Those invalidations clear the fresh-returnable flag, so
+                // an aliased binding falls back to NotClean.
+                let returns_fresh =
+                    state.is_clean_local(name) && state.is_fresh_returnable_local(name);
+                if state.is_managed(name) || state.is_local(name) {
+                    if returns_fresh {
+                        return;
+                    }
                     push_fresh_return_issue(
                         issues,
                         FreshReturnIssueKind::NotClean { name: name.clone() },
                         span,
                     );
-                    return;
-                }
-                if state.is_local(name) {
                     return;
                 }
             }
@@ -2598,6 +2608,7 @@ fn collect_select_local_flow(
                 value_handle_field: None,
                 fresh_from_local_source: None,
                 fresh_from_scrutinee: false,
+            fresh_from_fresh_value: false,
             };
             let binding_node = push_pattern_binding_flow_step(steps, &arm.span, binding);
             if let Some(body_entry) = arm_flow.entry {
@@ -2674,6 +2685,7 @@ fn fresh_match_pattern_binding(
         value_handle_field: None,
         fresh_from_local_source: source.map(str::to_string),
         fresh_from_scrutinee,
+        fresh_from_fresh_value: false,
     })
 }
 
@@ -3011,7 +3023,14 @@ fn collect_flow_entry_states(
 fn transfer_flow_step(step: &LocalFlowStep, mut state: BodyState) -> BodyState {
     if let Some(binding) = &step.binding {
         match binding.kind {
-            HirBindingKind::ManagedLet => state.bind_managed(binding.name.clone()),
+            HirBindingKind::ManagedLet => {
+                state.bind_managed(binding.name.clone());
+                // A managed binding initialized from a fresh value is returnable
+                // as fresh until aliased (move/retain/capture clear this).
+                if binding.fresh_from_fresh_value {
+                    state.mark_fresh_returnable(binding.name.clone());
+                }
+            }
             HirBindingKind::LocalLet => {
                 if binding.fresh_from_scrutinee {
                     state.bind_local(binding.name.clone());
@@ -3039,7 +3058,9 @@ fn transfer_flow_step(step: &LocalFlowStep, mut state: BodyState) -> BodyState {
     }
 
     for capture in &step.managed_closure_captures {
-        if state.is_local(capture) {
+        // Capturing a local, or a managed binding that is currently returnable as
+        // fresh, into a managed closure aliases it — clear its fresh/clean status.
+        if state.is_local(capture) || state.is_fresh_returnable_local(capture) {
             state.mark_retained(capture);
         }
     }
@@ -3176,6 +3197,7 @@ fn local_flow_step_binding(statement: &HirStmt) -> Option<LocalFlowBinding> {
             value_handle_field: value.as_ref().and_then(local_binding_handle_field_source),
             fresh_from_local_source: None,
             fresh_from_scrutinee: false,
+            fresh_from_fresh_value: value.as_ref().is_some_and(hir_expr_is_fresh_value),
         }),
         HirStmt::Return { .. }
         | HirStmt::With { .. }
@@ -3189,6 +3211,35 @@ fn local_flow_step_binding(statement: &HirStmt) -> Option<LocalFlowBinding> {
         | HirStmt::Expr(_)
         | HirStmt::Assign { .. }
         | HirStmt::Unknown(_) => None,
+    }
+}
+
+/// True if `value` is itself a fresh, unaliased value: a literal, a collection
+/// literal, a struct/variant constructor, or a fresh-returning call (seen through
+/// `?` and effect wrappers). A managed `let` bound to such a value can be returned
+/// directly as `fresh` until it is moved, retained, or captured — exactly the
+/// invalidations the flow analysis already applies to clean locals.
+fn hir_expr_is_fresh_value(value: &HirExpr) -> bool {
+    match value {
+        HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::ObjectLiteral { .. }
+        | HirExpr::MapLiteral { .. }
+        | HirExpr::ArrayLiteral { .. } => true,
+        HirExpr::Call { resolution, .. } => match resolution {
+            CallResolution::EnumVariant => true,
+            CallResolution::Resolved {
+                kind:
+                    ResolvedCalleeKind::Constructor {
+                        type_kind: HirTypeKind::Struct,
+                    },
+                ..
+            } => true,
+            CallResolution::Resolved { signature, .. } => signature.returns_fresh,
+            _ => false,
+        },
+        HirExpr::Try { value, .. } | HirExpr::Effect { value, .. } => hir_expr_is_fresh_value(value),
+        _ => false,
     }
 }
 
@@ -3357,6 +3408,15 @@ impl BodyState {
         }
     }
 
+    /// Mark a (managed) binding as returnable-as-fresh: it currently holds a
+    /// fresh, unaliased value. Cleared by `mark_moved`/`mark_retained` when the
+    /// binding is aliased.
+    pub(crate) fn mark_fresh_returnable(&mut self, name: impl Into<String>) {
+        let name = name.into();
+        self.clean_locals.insert(name.clone());
+        self.fresh_returnable_locals.insert(name);
+    }
+
     pub(crate) fn bind_managed(&mut self, name: impl Into<String>) {
         self.managed.insert(name.into());
     }
@@ -3480,7 +3540,9 @@ impl BodyState {
                 if path_root(&event.binding_name).is_some_and(|root| self.locals.contains(root)) {
                     self.mark_moved(&event.binding_name, event.span.clone());
                 }
-            } else if self.locals.contains(&event.binding_name) {
+            } else if self.locals.contains(&event.binding_name)
+                || self.fresh_returnable_locals.contains(&event.binding_name)
+            {
                 self.mark_moved(&event.binding_name, event.span.clone());
             }
         }
@@ -3491,7 +3553,12 @@ impl BodyState {
             if !matches!(event.kind, HirEffectEventKind::Retain { .. }) {
                 continue;
             }
-            if self.locals.contains(&event.binding_name) {
+            // Retaining a local, or a managed binding that is currently returnable
+            // as fresh, aliases it into retained state — clear its fresh status so
+            // it can no longer be returned as `fresh`.
+            if self.locals.contains(&event.binding_name)
+                || self.fresh_returnable_locals.contains(&event.binding_name)
+            {
                 self.mark_retained(&event.binding_name);
             }
         }

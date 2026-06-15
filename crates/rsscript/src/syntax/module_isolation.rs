@@ -671,6 +671,19 @@ impl Resolver {
         // that resolve to a module-scoped type are rewritten.
         if let Some(mangled) = self.resolve_type_namespace(file, &ty.name) {
             ty.name = mangled;
+        } else if let Some((namespace, type_name)) = ty.name.rsplit_once('.') {
+            // A qualified `module.Type` reference (`dtype.DType`): if `module`
+            // names a module that declares `Type`, mangle to its module-scoped
+            // type symbol. This lets a type-defining module be referenced without
+            // a `use` line in every consuming file.
+            let prefix = module_prefix_from_dotted(namespace);
+            if self
+                .module_types
+                .get(&prefix)
+                .is_some_and(|types| types.contains(type_name))
+            {
+                ty.name = format!("{prefix}{MODULE_SEP}{type_name}");
+            }
         }
         for arg in &mut ty.args {
             self.rewrite_type(arg, file);

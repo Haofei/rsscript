@@ -1,0 +1,25 @@
+// #1 A bare payload-free sum variant return and a variant-constructor return are
+// fresh (own nothing borrowed / freshly built). #2 A managed `let` bound from a
+// fresh-returning call is returnable as fresh (no defensive copy needed).
+
+sum Ops {
+    ADD
+    MUL
+    Pair(left: Int, right: Int)
+}
+
+fn kind_to_op(k: Int) -> fresh Ops {
+    if k == 0 {
+        return ADD
+    }
+    return MUL
+}
+
+fn make_pair(a: Int, b: Int) -> fresh Ops {
+    return Pair(left: a, right: b)
+}
+
+fn from_local(k: Int) -> fresh Ops {
+    let op = kind_to_op(k: k)
+    return op
+}
