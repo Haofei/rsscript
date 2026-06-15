@@ -203,11 +203,13 @@ fn analyze_program(
     diagnostics
 }
 
-/// `__TupleN` (N digits) is the synthetic tuple struct injected by the tuple
-/// desugar, not a user declaration, so it is exempt from the reserved-name rule.
-fn is_synthetic_tuple_name(name: &str) -> bool {
-    name.strip_prefix("__Tuple")
-        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+/// Namespaces that the compiler generates and a user declaration must not claim:
+/// desugaring temporaries (`__rss_*`) and runtime helpers (`__rsscript_*`). Other
+/// `__`-prefixed names (Python-style dunders like `__hash__`, `__eq__`, and the
+/// synthetic `__TupleN` structs the tuple desugar injects) are legal — they don't
+/// collide with any generated namespace.
+fn is_reserved_generated_name(leaf: &str) -> bool {
+    leaf.starts_with("__rss_") || leaf.starts_with("__rsscript_")
 }
 
 fn type_aliases_from_program(
@@ -1257,11 +1259,11 @@ impl Analyzer<'_> {
         }
     }
 
-    /// Identifiers beginning with `__` are reserved for compiler-generated
-    /// symbols (tuple structs `__TupleN`, desugaring temporaries `__rss_*`,
-    /// runtime helpers `__rsscript_*`). Reject user declarations that claim a
-    /// reserved name so generated helpers can never collide with source symbols.
-    /// The synthetic `__TupleN` structs the tuple desugar injects are exempt.
+    /// The `__rss_*` and `__rsscript_*` namespaces are reserved for
+    /// compiler-generated desugaring temporaries and runtime helpers. Reject user
+    /// declarations that claim one so generated helpers can never collide with
+    /// source symbols. Other `__`-prefixed names (Python-style dunders like
+    /// `__hash__`, and the synthetic `__TupleN` tuple structs) are left legal.
     fn check_reserved_declaration_names(&mut self) {
         use crate::syntax::ast::Item;
         for item in self.syntax_program.items.clone() {
@@ -1275,11 +1277,11 @@ impl Analyzer<'_> {
             };
             // `Type.method` reserves on the member, not the (user) type prefix.
             let leaf = name.rsplit('.').next().unwrap_or(name);
-            if leaf.starts_with("__") && !is_synthetic_tuple_name(leaf) {
+            if is_reserved_generated_name(leaf) {
                 self.unsupported_syntax(
                     span.clone(),
                     "reserved declaration name",
-                    "Identifiers beginning with `__` are reserved for compiler-generated symbols; rename this declaration.",
+                    "The `__rss_` and `__rsscript_` prefixes are reserved for compiler-generated symbols; rename this declaration.",
                 );
             }
         }

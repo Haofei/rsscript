@@ -9,8 +9,9 @@ lists), tuples & destructuring, `#lower_name` escape hatch, source-qualified
 symbol inventory, type-associated constants & static methods, value-semantics
 clone/derives, Option ergonomics (`?`-on-Option + combinators), default
 parameters (Copy and non-Copy), type aliases (generic + non-generic, expanded
-at every comparison site), a reserved `__`-prefix namespace for
-compiler-generated helpers, and struct field defaults (`name: T = expr`, filled at
+at every comparison site), reserved `__rss_`/`__rsscript_` namespaces for
+compiler-generated helpers (Python-style dunders like `__hash__` stay legal), and
+struct field defaults (`name: T = expr`, filled at
 construction on both backends).
 
 Verified already-met against their written acceptance (closed without new code):

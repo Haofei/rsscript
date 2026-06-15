@@ -1,7 +1,8 @@
 // expect: RS0015
-// Identifiers beginning with `__` are reserved for compiler-generated symbols
-// (tuple structs, desugaring temporaries, runtime helpers).
-fn __helper() -> Int {
+// The `__rss_` and `__rsscript_` prefixes are reserved for compiler-generated
+// symbols (desugaring temporaries, runtime helpers). Plain Python-style dunders
+// like `__hash__` are NOT reserved — only the generated namespaces are.
+fn __rss_helper() -> Int {
     return 1
 }
 
