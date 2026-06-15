@@ -7,7 +7,8 @@ The spec is a deliberate **superset** of the implementation, in three tiers:
 1. **Executable MVP (§3.1)** — implemented and tested at VM↔compiled parity.
 2. **Review-visible but not executable (§3.2)** — parsed and surfaced for review,
    but rejected before lowering with stable diagnostics (verified: `spawn` →
-   `RS0015`/`RS0101`, `await`-in-argument → `RS0411`). This file tracks these.
+   `RS0015`/`RS0101`, `await` in a short-circuit `&&`/`||` RHS → `RS0411`). This
+   file tracks these.
 3. **Post-v0.7 deferred directions (§20.1)** — future work (items J/K/L are
    already done).
 
@@ -17,14 +18,15 @@ actual driver (see "Basis" at the bottom).
 
 ## P1 — highest leverage (unblocks real code / dev loop)
 
-- [ ] **`await` in expression position** (§3.2, §20.1-A) — _effort: medium._
-  The one *executable* gap: `f(x: await g())` is rejected (`RS0411`); `await` only
-  works at statement boundaries and in `if`/`loop`/`match`/`with` bodies.
-  Approach: an await-hoisting (A-normal-form) desugar that lifts a nested await to
-  a preceding `let __rss_await_N = await <op>` — producing the linear awaits both
-  backends already lower. Keep it sound: don't hoist across short-circuit
-  (`&&`/`||`) RHS, `match`/`if` arms, or closure bodies. Verify at VM↔compiled
-  parity.
+- [x] **`await` in expression position** (§3.2, §20.1-A, §14.6.2) — _done._
+  Implemented as an await-hoisting (A-normal-form) syntax pass
+  (`syntax/async_await_hoist.rs`, run in `isolate_module_namespaces` for every
+  backend): a nested `await` in a call argument, return value, or assignment-target
+  index is lifted, in left-to-right order, to a preceding
+  `let __rss_await_N = await <op>` — the linear form both backends already lower.
+  Verified at VM↔compiled parity (`parity_await_in_expression`). The one remaining
+  non-linear position, the short-circuit `&&`/`||` RHS, stays rejected (`RS0411`)
+  to preserve conditional-evaluation semantics.
 
 - [ ] **Structured-fix tooling + analysis server** (§20.1-D) — _effort: medium–large._
   `rss fix` applying machine-applicable structured fixes (the `Fix`/applicability

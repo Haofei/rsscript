@@ -1,12 +1,15 @@
 // expect: RS0411
-
+// Most `await`-in-expression positions are now lowered by hoisting the await to
+// a preceding `let` binding. The exception is the right-hand operand of a
+// short-circuit `&&`/`||`: it is only conditionally evaluated, so hoisting it
+// would change semantics. Those stay rejected as non-linear awaits.
 features: async
 
-async fn text() -> Result<fresh String, TimerError> {
-    return Ok("x")
+async fn ready() -> Result<Bool, TimerError> {
+    return Ok(true)
 }
 
-async fn bad() -> Result<fresh String, TimerError> {
-    let value = String.concat(left: read "a", right: read await text()?)
+async fn bad() -> Result<Bool, TimerError> {
+    let value = false || await ready()?
     return Ok(value)
 }

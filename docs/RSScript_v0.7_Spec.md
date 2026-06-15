@@ -14,9 +14,10 @@ Core execution:
   - Managed application code, local values under `features: local`, fresh struct
     returns, read/mut/take effects, resources through `with`,
     `ResourcePool<T: Resource>`, and bodyless native declarations (Chapters 3–15).
-  - Executable async MVP: `async fn` bodies with direct/statement-boundary
-    `await`, structured concurrency `task_group { async let ... }`, `select`,
-    `await for`, and bounded MPSC `Channel`/`Stream` via `rss-async` (§14.4).
+  - Executable async MVP: `async fn` bodies with `await` in statement and
+    expression positions (nested awaits are hoisted to `let` bindings; §14.6.2),
+    structured concurrency `task_group { async let ... }`, `select`, `await for`,
+    and bounded MPSC `Channel`/`Stream` via `rss-async` (§14.4).
 
 Surface and control flow:
   - Receiver-call shorthand with mandatory effect keyword and unique resolution
@@ -642,7 +643,7 @@ generated-namespace isolation via module declarations; #lower_name pin
 resource values through with
 ResourcePool<T: Resource>
 bodyless native declarations through package binding metadata
-async fn bodies: direct await plus statement-boundary awaits in if/loop/match/with
+async fn bodies: await in statement and expression positions (nested awaits hoisted)
 structured concurrency: task_group { async let ... }, select, await for
 bounded MPSC Channel and Stream (Receiver.into_stream / Stream.next), via rss-async
 receiver-call shorthand with unique resolution
@@ -668,10 +669,13 @@ scoped views / slices
 ```
 
 `async fn` signatures are review-visible contracts. v0.7 admits an executable async
-MVP: `await` appears inside an `async fn`, either directly consuming an async call
-at a statement boundary or inside an `if`/`loop`/`match`/`with` body (which lowers
-as an explicit async statement boundary); awaits embedded in ordinary expression
-arguments are rejected (`RS0411`) until full async expression lowering lands.
+MVP: `await` appears inside an `async fn` at a statement boundary, inside an
+`if`/`loop`/`match`/`with` body, or **nested in an expression** — an `await` in a
+call argument, return value, or assignment-target index is hoisted to a preceding
+`let __rss_await_N = await ...` binding (§14.6.2), producing the linear awaits both
+backends lower identically. The one remaining non-linear position is the
+conditionally-evaluated right operand of a short-circuit `&&`/`||`, which is still
+rejected (`RS0411`) to avoid changing evaluation semantics.
 Structured concurrency is executable: `task_group { async let ... }` constructs
 isolate-local child operations driven by one cooperative poll loop, `select`
 awaits the first ready arm, and `await for` iterates a `Stream` / channel
@@ -3606,6 +3610,36 @@ Receiver-call shorthand satisfies the feature admission rule because:
    explicitly marked with the effect keyword and mechanically expandable.
 ```
 
+#### 14.6.2 `await` in expression position (await-hoisting)
+
+The async lowering treats each `await` as a cooperative suspension point and only
+lowers it at a **statement boundary** — `let x = await f()`, `return await f()`, a
+bare `await f()` statement — or as the boundary created by an `if`/`loop`/`match`/
+`with` body. An `await` nested inside a larger expression (a call argument, a
+return value, an assignment-target index) is normalized to that linear form by an
+**await-hoisting** desugar before lowering: each nested `await <op>` is lifted, in
+left-to-right evaluation order, into a preceding `let __rss_await_N = await <op>`
+binding and replaced by a reference to that temporary.
+
+```rust
+// written
+let total = add(a: await step(n: 1)?, b: await step(n: 2)?)
+// lowered (conceptually)
+let __rss_await_0 = await step(n: 1)?
+let __rss_await_1 = await step(n: 2)?
+let total = add(a: __rss_await_0, b: __rss_await_1)
+```
+
+The hoist runs as a syntax pass shared by every backend, so the interpreter and
+the compiled output observe the same suspension points and the same
+left-to-right evaluation order (guaranteed by parity fixtures). The `__rss_await_`
+prefix is reserved (§14.8); user code may not introduce it.
+
+One position is deliberately **not** hoisted: the right operand of a
+short-circuit `&&`/`||`, which is only conditionally evaluated. Hoisting it would
+force unconditional evaluation, so such an `await` stays rejected as a non-linear
+await (`RS0411`).
+
 #### Dynamic dispatch (deferred, not admitted in v0.7)
 
 RSScript v0.7 does not admit protocol-typed dynamic dispatch, trait objects, or
@@ -5228,6 +5262,8 @@ Rust's `Pin`/`Poll`/`Waker` machinery leaking into source.
 
 ```text
 A. Extended async surface beyond the v0.7 MVP
+   - `await` in expression position is implemented (await-hoisting, §14.6.2); the
+     remaining gap is the conditionally-evaluated short-circuit `&&`/`||` RHS.
    - Async operation/task handles, if exposed, are isolate-local managed handles,
      not a user-facing Future/Pin/Poll type system.
    - async closures and a stream / "await for" async-sequence form.

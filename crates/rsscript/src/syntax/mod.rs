@@ -1,4 +1,5 @@
 pub mod ast;
+pub(crate) mod async_await_hoist;
 pub(crate) mod desugar;
 pub(crate) mod function_value_desugar;
 pub(crate) mod module_isolation;

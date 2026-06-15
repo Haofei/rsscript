@@ -201,3 +201,34 @@ async fn main() -> Result<Unit, ChannelError> {
         &[],
     );
 }
+
+#[test]
+fn parity_await_in_expression() {
+    // `await` nested inside argument, return, and assignment-target expressions
+    // is hoisted to preceding `let` bindings. Evaluation order (left-to-right)
+    // and the doubly-nested `await g(await f())` form must match across backends.
+    let source = r#"
+features: async, local
+
+async fn step(n: Int) -> Result<Int, String> {
+    Log.write(message: read String.from_int(value: n))
+    return Ok(n)
+}
+
+fn add(a: Int, b: Int) -> Int { return a + b }
+
+async fn main() -> Result<Unit, String> {
+    let total = add(a: await step(n: 1)?, b: await step(n: 2)?)
+    let nested = await step(n: await step(n: 3)?)?
+    let mut xs = [0, 0, 0]
+    xs[await step(n: 0)?] = total + nested
+    Log.write(message: read String.from_int(value: xs[0]))
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-await-in-expression.rss",
+        "rsscript_parity_await_in_expression",
+        source,
+    );
+}
