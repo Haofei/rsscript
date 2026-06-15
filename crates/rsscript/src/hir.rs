@@ -84,6 +84,9 @@ pub struct FieldInfo {
     pub type_name: String,
     pub is_handle: bool,
     pub is_weak: bool,
+    /// Default value for the field, if declared (`name: Type = <expr>`); lets a
+    /// constructor call omit the field and have it filled.
+    pub default: Option<crate::syntax::ast::Expr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3599,6 +3602,7 @@ fn field_info_from_decl(field: &FieldDecl) -> FieldInfo {
         type_name: type_ref_name(&field.ty),
         is_handle: field.is_handle,
         is_weak: field.is_weak,
+        default: field.default.clone(),
     }
 }
 
@@ -3618,7 +3622,7 @@ fn constructor_sig_from_type(type_info: &TypeInfo, is_builtin: bool) -> Function
                 name: field.name.clone(),
                 effect: None,
                 type_name: field.type_name.clone(),
-                default: None,
+                default: field.default.clone(),
             })
             .collect(),
         // A generic struct's constructor returns the type *applied to its params*

@@ -264,6 +264,9 @@ pub struct FieldDecl {
     pub ty: TypeRef,
     pub is_handle: bool,
     pub is_weak: bool,
+    /// Default value for the field (`name: Type = <expr>`). When present, the
+    /// field may be omitted from a constructor call and is filled with this.
+    pub default: Option<Expr>,
     pub span: Span,
 }
 

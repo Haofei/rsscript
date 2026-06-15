@@ -2449,6 +2449,40 @@ impl<'a> RustLowerer<'a> {
                                 fields.push(format!("{field}: {value}"));
                             }
                         }
+                        // Fill omitted fields that declare a default value
+                        // (`name: T = expr`) so the Rust struct literal is complete.
+                        let provided: std::collections::HashSet<String> = args
+                            .iter()
+                            .filter_map(|arg| self.constructor_field_arg_name(ctor_name, arg))
+                            .collect();
+                        let defaulted: Vec<(String, Expr)> = self
+                            .program
+                            .items
+                            .iter()
+                            .find_map(|item| match item {
+                                Item::Type(decl) if type_root_name(&decl.name) == ctor_name => Some(
+                                    decl.fields
+                                        .iter()
+                                        .filter_map(|f| {
+                                            f.default.clone().map(|d| (f.name.clone(), d))
+                                        })
+                                        .collect::<Vec<_>>(),
+                                ),
+                                _ => None,
+                            })
+                            .unwrap_or_default();
+                        for (field_name, default) in defaulted {
+                            if provided.contains(&field_name) {
+                                continue;
+                            }
+                            let value = self
+                                .field_type(ctor_name, &field_name)
+                                .map(|expected| {
+                                    self.lower_expr_for_expected_type(&default, &expected)
+                                })
+                                .unwrap_or_else(|| self.lower_owned_expr(&default));
+                            fields.push(format!("{}: {value}", rust_ident(&field_name)));
+                        }
                         let fields = fields.join(", ");
                         let constructed = format!("{} {{ {fields} }}", rust_ident(ctor_name));
                         if type_kind == TypeKind::Class {

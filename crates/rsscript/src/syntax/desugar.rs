@@ -474,6 +474,7 @@ fn make_tuple_struct(arity: usize) -> Item {
             },
             is_handle: false,
             is_weak: false,
+            default: None,
             span: span.clone(),
         })
         .collect();

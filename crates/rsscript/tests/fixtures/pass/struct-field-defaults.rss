@@ -1,0 +1,18 @@
+// Struct fields may declare default values (`name: T = expr`); a constructor call
+// may omit them and they are filled — the construction-helper analog of default
+// function parameters, on both the VM and compiled backends.
+
+struct MyOpts {
+    name: String = "default"
+    retries: Int = 3
+    verbose: Bool = false
+}
+
+fn main() -> Unit {
+    let a = MyOpts(retries: 5)
+    let b = MyOpts(name: "custom", retries: 1, verbose: true)
+    Log.write(message: read a.name)
+    Log.write(message: read String.from_int(value: a.retries))
+    Log.write(message: read b.name)
+    return Unit
+}

@@ -327,6 +327,7 @@ impl Parser<'_> {
                             ty,
                             is_handle: false,
                             is_weak: false,
+                            default: None,
                             span: self.tokens[pos].span.clone(),
                         });
                     }
@@ -961,13 +962,18 @@ fn parse_fields(tokens: &[Token], start: usize, end: usize) -> ParsedFields {
                     break;
                 }
             }
-            let ty_end = next_line_or_block_end(tokens, ty_start, end);
+            let line_limit = next_line_or_block_end(tokens, ty_start, end);
+            // A default value: `name: Type = <expr>`. The type ends at the `=`.
+            let default_eq = (ty_start..line_limit).find(|&i| tokens[i].symbol("="));
+            let ty_end = default_eq.unwrap_or(line_limit);
+            let default = default_eq.and_then(|eq| parse_expr(tokens, eq + 1, line_limit));
             if let Some(ty) = parse_type_ref(tokens, ty_start, ty_end) {
                 fields.push(FieldDecl {
                     name: name.to_string(),
                     ty,
                     is_handle,
                     is_weak,
+                    default,
                     span: tokens[name_index].span.clone(),
                 });
             } else {

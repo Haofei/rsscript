@@ -257,6 +257,10 @@ impl Formatter {
             self.out.push_str("handle ");
         }
         self.type_ref(&field.ty);
+        if let Some(default) = &field.default {
+            self.out.push_str(" = ");
+            self.out.push_str(&expr_text(default));
+        }
     }
 
     fn function_decl(&mut self, function: &FunctionDecl) {
@@ -1911,6 +1915,18 @@ impl Writer for BufferWriter {
             "formatter dropped the lower_name pin:\n{formatted}"
         );
         assert_eq!(format_source("pin.rss", &formatted), formatted);
+    }
+
+    #[test]
+    fn round_trips_struct_field_default() {
+        let source = "struct MyOpts {\n    name: String = \"default\"\n    retries: Int = 3\n}\n";
+        let formatted = format_source("opts.rss", source);
+        assert!(
+            formatted.contains("name: String = \"default\"")
+                && formatted.contains("retries: Int = 3"),
+            "formatter dropped a struct field default:\n{formatted}"
+        );
+        assert_eq!(format_source("opts.rss", &formatted), formatted);
     }
 
     #[test]

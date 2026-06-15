@@ -9,8 +9,9 @@ lists), tuples & destructuring, `#lower_name` escape hatch, source-qualified
 symbol inventory, type-associated constants & static methods, value-semantics
 clone/derives, Option ergonomics (`?`-on-Option + combinators), default
 parameters (Copy and non-Copy), type aliases (generic + non-generic, expanded
-at every comparison site), and a reserved `__`-prefix namespace for
-compiler-generated helpers.
+at every comparison site), a reserved `__`-prefix namespace for
+compiler-generated helpers, and struct field defaults (`name: T = expr`, filled at
+construction on both backends).
 
 ## Must unblock awkward valid ports
 
@@ -38,12 +39,6 @@ compiler-generated helpers.
   defunctionalize logic into many structs.
   _Acceptance:_ RSS can pass named functions and simple closures to higher-order
   helpers with checked capture ownership.
-
-- [ ] **Construction helpers.** (Default parameters — Copy and non-Copy — are
-  done.) Provide first-class defaulted-constructor / builder-style helpers so
-  Python-default-heavy constructor APIs don't inflate into overload/wrapper sets.
-  _Acceptance:_ defaulted construction lowers deterministically and appears in the
-  symbol inventory without changing the call ABI unexpectedly.
 
 - [ ] **String and bytes utility coverage.** Fill gaps for split/join/search,
   prefix/suffix checks, formatting, byte conversion, and cheap slicing.
