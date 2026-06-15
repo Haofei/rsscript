@@ -46,10 +46,19 @@ model without reversing a review-first tenet. Ordered by readiness/value.
   review map already flags dynamic dispatch (`has_dynamic_protocol_dispatch`).
 
 - [ ] **Cross-isolate message API (zero-copy transfer)** (§20.1-B, §20.2-3) —
-  _large._ Typed send/receive channels between isolates; payloads are Copy/owned data
-  or values moved with `take`; managed handles never cross. Single ownership enforced
-  statically. Depends on the isolate model maturing first. _Touches:_ async/isolate
-  runtime, type/effect checking for `take`-across-boundary, lowering + reg-VM.
+  _blocked on foundational runtime work; design recorded._ Unlike the other three
+  roadmap items (which were largely already built), this has **no foundation**: the
+  runtime is strictly single-isolate (one cooperative-task heap; the channel is an
+  explicit single-isolate `Rc<RefCell>` MPSC), so "managed handles never cross
+  isolates" has no boundary to be enforced at yet — exactly why the spec gates it on
+  "the isolate model maturing first." Faking it (cooperative tasks sharing a heap)
+  would not be a real isolate boundary, so it is **not** implemented here.
+  The smallest *sound* slice and the full feasibility analysis are recorded in
+  [cross-isolate-design.md](cross-isolate-design.md): a static
+  `is_cross_isolate_safe(T)` payload rule (Copy/owned, no managed handles) + a
+  distinct `Mailbox<T>` surface over the cooperative scheduler (~1–2 weeks, holds
+  parity). True multi-thread/multi-heap isolates are a separate multi-quarter
+  refactor. Pick up when the mailbox surface is prioritized.
 
 ## Removed — non-goals (not deferred; deleted from the roadmap)
 
