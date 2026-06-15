@@ -39,6 +39,35 @@ fn main() -> Unit {
 }
 
 #[test]
+fn parity_named_function_value_as_callback() {
+    // A named function passed where a `Fn` is expected desugars to a forwarding
+    // closure, so the VM and compiled backend filter identically.
+    let source = r#"
+features: local
+
+fn is_even(x: read Int) -> Bool {
+    return x % 2 == 0
+}
+
+fn main() -> Unit {
+    local xs = List.new<Int>()
+    List.push(list: mut xs, value: read 1)
+    List.push(list: mut xs, value: read 2)
+    List.push(list: mut xs, value: read 3)
+    List.push(list: mut xs, value: read 4)
+    let evens = List.filter(list: read xs, predicate: is_even)
+    Log.write(message: read String.from_int(value: List.len(list: read evens)))
+    return Unit
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-fn-value.rss",
+        "rsscript_parity_fn_value",
+        source,
+    );
+}
+
+#[test]
 fn parity_struct_match_field_and_assignment() {
     let source = r#"
 struct Point {

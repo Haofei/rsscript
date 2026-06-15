@@ -46,6 +46,11 @@ fn module_prefix_from_dotted(namespace: &str) -> String {
 
 /// Rewrite a program so each `module`-scoped symbol becomes globally unique.
 pub fn isolate_module_namespaces(program: &mut Program) {
+    // Desugar named-function values into forwarding closures first, so the
+    // synthesized calls are then mangled by isolation like any other reference.
+    // This runs for every program (module-less ones included), unlike the module
+    // rewriting below.
+    super::function_value_desugar::desugar_function_values(program);
     let file_module = collect_file_modules(program);
     if file_module.is_empty() {
         // No `module` declarations anywhere: pure root namespace, nothing to do.
