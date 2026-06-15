@@ -5,6 +5,12 @@ use std::process::ExitCode;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use rsscript::{
+    EvalError, EvalOutput, NativeValue, eval_package_main_with_args_and_native_bindings,
+    format_diagnostics_human, format_diagnostics_json, load_package_native_bindings,
+    reg_vm_eval_source_main_with_args,
+};
+
 use super::check::run_check;
 use super::lint::run_lint;
 use super::run_cmd::run_generated_rust;
@@ -165,7 +171,12 @@ fn run_once(options: &DevOptions<'_>, path: &str) -> ExitCode {
             }
             run_check(&check_args(options, path))
         }
-        DevAction::Run => run_generated_rust(&run_args(options, path)),
+        // Two-tier execution (spec §20.2-4): the inner edit→run loop uses the
+        // reg-VM interpreter tier (no rustc cost); `--release` switches to the
+        // Rust-lowering AOT tier. Both observe identical semantics + diagnostics
+        // (the VM↔compiled parity invariant), so the fast tier is trustworthy.
+        DevAction::Run if options.release => run_generated_rust(&run_args(options, path)),
+        DevAction::Run => run_via_vm(options, path),
     };
 
     if !options.json {
@@ -178,6 +189,68 @@ fn run_once(options: &DevOptions<'_>, path: &str) -> ExitCode {
         );
     }
     status
+}
+
+/// Run `path` through the reg-VM dev tier (fast, no rustc). A package directory
+/// runs through the package VM with its native host bindings loaded; a single
+/// file runs through the source VM, mirroring `rss eval`.
+fn run_via_vm(options: &DevOptions<'_>, path: &str) -> ExitCode {
+    let result = if is_package_directory(path) {
+        run_package_via_vm(path)
+    } else {
+        match fs::read_to_string(path) {
+            Ok(source) => {
+                reg_vm_eval_source_main_with_args(path, &source, std::iter::empty::<&str>())
+            }
+            Err(error) => {
+                eprintln!("failed to read {path}: {error}");
+                return ExitCode::from(2);
+            }
+        }
+    };
+    finish_vm_run(options, result)
+}
+
+fn run_package_via_vm(path: &str) -> Result<EvalOutput, EvalError> {
+    let package_dir = Path::new(path);
+    let bindings = load_package_native_bindings(package_dir).map_err(EvalError::Runtime)?;
+    eval_package_main_with_args_and_native_bindings(
+        package_dir,
+        std::iter::empty::<&str>(),
+        bindings,
+    )
+}
+
+/// Render a VM run result the same way `rss eval` does: program stdout/stderr,
+/// then the `main` return value, with an `Err` return reported as a failed run
+/// (matching the AOT backend's exit behavior).
+fn finish_vm_run(options: &DevOptions<'_>, result: Result<EvalOutput, EvalError>) -> ExitCode {
+    match result {
+        Ok(output) => {
+            print!("{}", output.stdout);
+            eprint!("{}", output.stderr);
+            if let Some(NativeValue::Variant { name, .. }) = &output.native_value
+                && name == "Err"
+            {
+                eprintln!("RSScript main returned an error: {}", output.value);
+                return ExitCode::from(1);
+            }
+            println!("{}", output.value);
+            ExitCode::SUCCESS
+        }
+        Err(EvalError::Diagnostics(diagnostics)) => {
+            if options.json {
+                println!("{}", format_diagnostics_json(&diagnostics));
+            } else {
+                print!("{}", format_diagnostics_human(&diagnostics));
+            }
+            ExitCode::from(1)
+        }
+        Err(EvalError::Runtime(error)) => {
+            eprintln!("{error}");
+            ExitCode::from(1)
+        }
+    }
 }
 
 fn check_args(options: &DevOptions<'_>, path: &str) -> Vec<String> {
@@ -212,7 +285,8 @@ fn run_args(options: &DevOptions<'_>, path: &str) -> Vec<String> {
 
 fn action_label(options: &DevOptions<'_>) -> &'static str {
     match (options.action, options.lint) {
-        (DevAction::Run, _) => "run",
+        (DevAction::Run, _) if options.release => "run (release AOT)",
+        (DevAction::Run, _) => "run (dev VM)",
         (DevAction::Check, true) => "check + lint",
         (DevAction::Check, false) => "check",
     }
@@ -343,6 +417,22 @@ mod tests {
         assert_eq!(options.action, super::DevAction::Run);
         assert!(options.release);
         assert_eq!(options.path, Some("pkg"));
+    }
+
+    #[test]
+    fn action_label_distinguishes_vm_and_aot_run_tiers() {
+        let run = |release| super::DevOptions {
+            action: super::DevAction::Run,
+            lint: false,
+            json: false,
+            release,
+            use_core: true,
+            interfaces: Vec::new(),
+            path: Some("demo.rss"),
+            once: true,
+        };
+        assert_eq!(super::action_label(&run(false)), "run (dev VM)");
+        assert_eq!(super::action_label(&run(true)), "run (release AOT)");
     }
 
     #[test]

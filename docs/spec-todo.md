@@ -11,12 +11,14 @@ else is either already shipped or a recorded non-goal.
 Four committed, design-compatible directions. All are large; each extends the
 model without reversing a review-first tenet. Ordered by readiness/value.
 
-- [ ] **Two-tier execution: dev interpreter + AOT** (§20.1-C, §20.2-4) — _medium._
-  The reg-VM and the Rust-lowering backend already run at parity; commit the fast
-  HIR-level dev loop as a first-class tier (fast edit→run without rustc cost). Both
-  tiers must keep identical semantics + diagnostics (already the parity invariant).
-  Closest to done — mostly surfacing/packaging the existing reg-VM path as the
-  sanctioned dev tier. _Extension points:_ `reg_vm`, the `rss eval`/`rss dev` CLI.
+- [x] **Two-tier execution: dev interpreter + AOT** (§20.1-C, §20.2-4) — _done._
+  `rss dev --run` now routes through the **reg-VM dev tier** by default (fast inner
+  edit→run loop, no rustc) and switches to the **Rust-lowering AOT tier** with
+  `--release`. Both tiers observe identical semantics/diagnostics (the existing
+  VM↔compiled parity invariant), so the fast tier is trustworthy. Single files run
+  through the source VM; package directories through the package VM with native host
+  bindings loaded. Measured: ~54 ms (VM) vs ~14 s (AOT) for the same program.
+  Tested: tier-label unit test + `cli_dev_two_tier.rs` end-to-end.
 
 - [ ] **Scoped views / slices** (zero-copy borrowed regions) (§3.2, §20.1-I, §20.2-1)
   — _large._ Lexically-scoped borrowed views — `with Buffer.view(...) as bytes { … }`
