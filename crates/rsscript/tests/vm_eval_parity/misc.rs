@@ -1410,3 +1410,53 @@ fn main() -> Unit {
         source,
     );
 }
+
+#[test]
+fn parity_capability_dynamic_dispatch() {
+    // Capability objects (spec §20.2-2): `Capability<Protocol>` and the
+    // `capability Protocol` keyword form dispatch a protocol method by the
+    // value's runtime type. The reg-VM must select the same concrete impl as the
+    // compiled backend's closed-world enum dispatch (regression for the VM
+    // CallDynamic path; previously the VM returned Unit).
+    let source = r#"
+features: local
+
+protocol Greeter {
+    fn greet(self: read Self) -> fresh String
+}
+
+struct English { x: Int }
+struct French { x: Int }
+
+fn English.greet(self: read English) -> fresh String {
+    if self.x > 0 { return "hello" }
+    return "hi"
+}
+fn French.greet(self: read French) -> fresh String {
+    if self.x > 0 { return "bonjour" }
+    return "salut"
+}
+
+impl Greeter for English { greet = English.greet }
+impl Greeter for French { greet = French.greet }
+
+fn say(who: read capability Greeter) -> fresh String {
+    return Greeter.greet(self: read who)
+}
+
+fn main() -> Unit {
+    local e = English(x: 1)
+    local f = French(x: 2)
+    local a: Capability<Greeter> = Capability<Greeter>.from(value: take e)
+    local b: Capability<Greeter> = Capability<Greeter>.from(value: take f)
+    Log.write(message: read say(who: read a))
+    Log.write(message: read say(who: read b))
+    return Unit
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-capability-dispatch.rss",
+        "rsscript_parity_capability_dispatch",
+        source,
+    );
+}

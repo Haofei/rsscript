@@ -3642,19 +3642,20 @@ short-circuit `&&`/`||`, which is only conditionally evaluated. Hoisting it woul
 force unconditional evaluation, so such an `await` stays rejected as a non-linear
 await (`RS0411`).
 
-#### Dynamic dispatch (in scope §20.2; not yet implemented)
+#### Dynamic dispatch (explicit capability form implemented §20.2-2)
 
-RSScript v0.7 does not yet implement protocol-typed dynamic dispatch, trait
-objects, or protocol-typed values.
-The only implemented and specified protocol call form is
-static, explicit `Protocol.method(...)` dispatch backed by an explicit generic
-bound or an explicit `impl Protocol for Type` declaration.
+Dynamic dispatch in RSScript is **only** the explicit, review-visible
+`Capability<Protocol>` form (with the `capability Protocol` keyword sugar),
+implemented per §20.2-2: it lowers to a closed-world enum-of-impls with `match`
+dispatch on the compiled backend and dispatches by the receiver's runtime type in
+the reg-VM. RSScript does **not** implement implicit protocol-typed values (a bare
+`x: Protocol` parameter) or Rust-style `dyn Trait` vtable coercion — those stay
+non-goals (§21).
 
-Explicit, review-visible `capability`-bounded dispatch is now a **committed
-roadmap item** (§20.2-2, §20.1-G) — not Rust-style implicit `dyn` coercion, which
-stays a non-goal (§21). Until it is built, it must not be described as
-implemented, settled, or available to package contracts: syntax, checking,
-lowering, review evidence, and package metadata must land together.
+Aside from capability objects, the only protocol call form is static, explicit
+`Protocol.method(...)` dispatch backed by an explicit generic bound or an explicit
+`impl Protocol for Type` declaration. Implicit `dyn` coercion must not be described
+as implemented, settled, or available to package contracts.
 
 Closed sets should still prefer sealed sum types with exhaustive match
 (section 20.1), which are strictly more reviewable. For open sets such as
@@ -5321,10 +5322,13 @@ F. Registry-level review-risk badges
      signals to derive from compiler/package review evidence.
 
 G. Capability objects (explicit dynamic dispatch)
-   - now in scope: committed roadmap (§20.2).
+   - implemented (§20.2-2): `Capability<Protocol>` (and the `capability Protocol`
+     keyword sugar) is an explicit, review-visible dynamic-dispatch boundary. The
+     compiled backend lowers it to a closed-world enum-of-impls with `match`
+     dispatch (no `dyn`); the reg-VM dispatches the same impl by the receiver's
+     runtime type. Construct with `Capability<Protocol>.from(value: take x)`.
    - RSScript does not adopt Rust-style `dyn Trait` with vtable coercion.
-   - if dynamic dispatch is needed, it must use an explicit capability-bounded
-     form that is visible to review:
+   - the explicit capability-bounded form is visible to review:
 
        fn serve(store: read capability Store<Image>) -> Result<Unit, Error>
 

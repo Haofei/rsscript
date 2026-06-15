@@ -70,27 +70,28 @@ fn package_manager_spec_uses_current_http_and_env_facade_shapes() {
 }
 
 #[test]
-fn rss_spec_keeps_protocol_dynamic_dispatch_unimplemented() {
-    // Dynamic dispatch is now a committed in-scope roadmap item (§20.2), but it is
-    // still NOT implemented: the spec must not describe it as implemented, settled,
-    // or available to package contracts until it is actually built.
+fn rss_spec_documents_capability_dispatch_and_rejects_implicit_dyn() {
+    // Dynamic dispatch is implemented ONLY as the explicit `Capability<Protocol>`
+    // form (§20.2-2). The spec must document that, and must still reject implicit
+    // protocol-typed values / Rust-style `dyn` coercion as non-goals.
     let spec = fs::read_to_string(common::language_spec_path())
         .unwrap_or_else(|error| panic!("RSScript spec should read: {error}"));
 
     for forbidden in [
-        "Dynamic dispatch (admitted",
         "RSScript admits protocol-typed dynamic dispatch",
-        "The design decision is settled: dynamic dispatch is supported",
+        "implicit dyn coercion is supported",
         "form is admitted, not excluded",
         "protocol_dynamic_dispatch",
     ] {
         assert!(
             !spec.contains(forbidden),
-            "protocol dynamic dispatch must remain deferred, found `{forbidden}`"
+            "implicit dynamic dispatch must stay a non-goal, found `{forbidden}`"
         );
     }
-    assert!(spec.contains("Dynamic dispatch (in scope §20.2; not yet implemented)"));
-    assert!(spec.contains("does not yet implement protocol-typed dynamic dispatch"));
-    assert!(spec.contains("The only implemented and specified protocol call form is"));
-    assert!(spec.contains("explicit `Protocol.method(...)` dispatch"));
+    assert!(spec.contains("Dynamic dispatch (explicit capability form implemented §20.2-2)"));
+    assert!(
+        spec.contains("`Capability<Protocol>` form (with the `capability Protocol` keyword sugar)")
+    );
+    assert!(spec.contains("Rust-style `dyn Trait` vtable coercion"));
+    assert!(spec.contains("`Protocol.method(...)` dispatch backed by an explicit generic bound"));
 }
