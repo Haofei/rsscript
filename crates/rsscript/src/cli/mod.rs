@@ -12,6 +12,7 @@ mod bench;
 mod check;
 mod dev;
 mod eval;
+mod fix;
 mod fmt;
 mod ide;
 mod lint;
@@ -33,6 +34,7 @@ pub fn run() -> ExitCode {
         "check" => check::run_check(&args[2..]),
         "dev" => dev::run_dev(&args[2..]),
         "eval" => eval::run_eval(&args[2..]),
+        "fix" => fix::run_fix(&args[2..]),
         "ide" => ide::run_ide(&args[2..]),
         "lint" => lint::run_lint(&args[2..]),
         "native" => native::run_native(&args[2..]),
@@ -276,6 +278,9 @@ pub(crate) fn print_usage() {
         "  rss dev [--lint] [--run] [--release] [--json] [--once] [--core|--no-core] [--interface <file.rssi> ...] <file-or-package-directory>"
     );
     eprintln!("  rss eval [--json] <file.rss> [-- <args>...]");
+    eprintln!(
+        "  rss fix [--write] [--json] [--interface <file.rssi> ...] <file.rss>  # apply machine-applicable fixes"
+    );
     eprintln!("  rss fmt <file.rss>  # writes formatted source to stdout");
     eprintln!("  rss new <package-name>");
     eprintln!(

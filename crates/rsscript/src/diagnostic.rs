@@ -160,11 +160,47 @@ pub struct Span {
     pub length: usize,
 }
 
+/// A concrete source edit attached to a fix: replace the `length` characters of
+/// `span` (starting at `span.line`:`span.column`) with `replacement`. A zero-length
+/// span is a pure insertion at that position. This is what makes a fix
+/// machine-applicable by `rss fix` — without an edit a fix is advisory only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FixEdit {
+    pub span: Span,
+    pub replacement: String,
+}
+
+impl FixEdit {
+    /// Insert `text` immediately before the start of `span` (no characters removed).
+    pub fn insert_before(span: &Span, text: impl Into<String>) -> Self {
+        Self {
+            span: Span {
+                file: span.file.clone(),
+                line: span.line,
+                column: span.column,
+                length: 0,
+            },
+            replacement: text.into(),
+        }
+    }
+
+    /// Replace the exact characters covered by `span` with `text`.
+    pub fn replace(span: &Span, text: impl Into<String>) -> Self {
+        Self {
+            span: span.clone(),
+            replacement: text.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Fix {
     pub kind: String,
     pub title: String,
     pub applicability: String,
+    /// Concrete edit for machine-applicable fixes; `None` for advisory fixes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edit: Option<FixEdit>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -235,6 +271,23 @@ impl Diagnostic {
             kind: kind.into(),
             title: title.into(),
             applicability: applicability.into(),
+            edit: None,
+        });
+        self
+    }
+
+    /// Attach a fix that carries a concrete, machine-applicable source edit.
+    pub fn with_fix_edit(
+        mut self,
+        kind: impl Into<String>,
+        title: impl Into<String>,
+        edit: FixEdit,
+    ) -> Self {
+        self.fixes.push(Fix {
+            kind: kind.into(),
+            title: title.into(),
+            applicability: "machine-applicable".to_string(),
+            edit: Some(edit),
         });
         self
     }

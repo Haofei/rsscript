@@ -61,7 +61,9 @@ fn find_versioned_doc(prefix: &str, suffix: &str) -> PathBuf {
     match matches.as_slice() {
         [path] => path.clone(),
         [] => panic!("no docs/ file matched `{prefix}*{suffix}`"),
-        many => panic!("expected exactly one docs/ file matching `{prefix}*{suffix}`, found {many:?}"),
+        many => {
+            panic!("expected exactly one docs/ file matching `{prefix}*{suffix}`, found {many:?}")
+        }
     }
 }
 

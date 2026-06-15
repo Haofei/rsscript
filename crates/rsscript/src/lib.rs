@@ -45,7 +45,7 @@ pub use capability::{
 };
 pub use core_index::core_package_index_json;
 pub use diagnostic::{
-    Diagnostic, DiagnosticExplanation, Severity, Span, explain_diagnostic_code,
+    Diagnostic, DiagnosticExplanation, Fix, FixEdit, Severity, Span, explain_diagnostic_code,
     format_diagnostic_explanation, format_diagnostics_human, format_diagnostics_json,
     format_diagnostics_json_with_source,
 };

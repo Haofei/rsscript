@@ -4,7 +4,7 @@ use crate::text_util::{
 use std::collections::{HashMap, HashSet};
 
 use crate::analyzer::Analyzer;
-use crate::diagnostic::{Diagnostic, Span, code};
+use crate::diagnostic::{Diagnostic, FixEdit, Span, code};
 use crate::hir::{
     CallResolution, FunctionSig, HirBindingKind, HirBlock, HirCallArg, HirExpr, HirStmt, ParamSig,
     ResolvedCalleeKind,
@@ -1269,10 +1269,10 @@ fn check_call_args(
                     "missing data effect",
                 )
                 .with_cause("Non-Copy parameters require an explicit `read`, `mut`, or `take` call-site effect.")
-                .with_fix(
+                .with_fix_edit(
                     "add_data_effect",
                     format!("Write `{name}: {expected} ...` at the call site."),
-                    "machine-applicable",
+                    FixEdit::insert_before(hir_expr_span(&arg.value), format!("{expected} ")),
                 ),
             );
         }

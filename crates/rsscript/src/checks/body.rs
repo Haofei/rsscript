@@ -5,7 +5,7 @@ use crate::text_util::{
 use std::collections::{HashMap, HashSet};
 
 use crate::analyzer::Analyzer;
-use crate::diagnostic::{Diagnostic, Span, code};
+use crate::diagnostic::{Diagnostic, FixEdit, Span, code};
 use crate::hir::{
     CallResolution, FieldInfo, HirBindingKind, HirBlock, HirCallArg, HirExpr, HirMatchArm, HirStmt,
     HirTypeKind, ParamEffect, ResolvedCalleeKind,
@@ -3761,10 +3761,10 @@ fn constructor_field_effect_diagnostic(
             "missing constructor field effect",
         )
         .with_cause(cause)
-        .with_fix(
+        .with_fix_edit(
             "add_constructor_field_effect",
             format!("Write `{field_name}: {expected} ...` in the constructor."),
-            "machine-applicable",
+            FixEdit::insert_before(hir_expr_span(value), format!("{expected} ")),
         ),
     );
 }

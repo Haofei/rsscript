@@ -654,3 +654,35 @@ fn run(items: read List<Int>) -> Unit {
     assert!(lowered.contains("for item in (items).iter().cloned()"));
     assert!(lowered.contains("let copy = item;"));
 }
+
+#[test]
+fn missing_data_effect_fix_carries_machine_applicable_edit() {
+    // The `add_data_effect` fix must now ship a concrete, machine-applicable edit
+    // (an insertion of `read ` before the argument value) so `rss fix` can apply
+    // it. Without the edit payload the fix would be advisory only.
+    let source = concat!(
+        "fn use_it(value: read String) -> Unit {\n",
+        "    return Unit\n",
+        "}\n",
+        "fn main() -> Unit {\n",
+        "    let v = \"x\"\n",
+        "    use_it(value: v)\n",
+        "    return Unit\n",
+        "}\n",
+    );
+    let diagnostics = analyze_source("fix-edit.rss", source);
+    let diagnostic = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "RS0202")
+        .expect("missing-data-effect diagnostic");
+    let fix = diagnostic
+        .fixes
+        .iter()
+        .find(|fix| fix.kind == "add_data_effect")
+        .expect("add_data_effect fix");
+    assert_eq!(fix.applicability, "machine-applicable");
+    let edit = fix.edit.as_ref().expect("fix carries a concrete edit");
+    assert_eq!(edit.replacement, "read ");
+    assert_eq!(edit.span.length, 0, "an insertion has zero-length span");
+    assert_eq!(edit.span.line, 6, "edit points at the call argument line");
+}
