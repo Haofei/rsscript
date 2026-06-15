@@ -806,10 +806,10 @@ This is an ABI contract, not merely a reference-runtime implementation detail:
 native bindings, lowered Rust, and runtime helpers must treat managed handles as
 single-isolate, non-atomic, non-thread-shareable values.
 
-The runtime type surface must be defined before lowering is implemented. A compiler release pins a compatible runtime crate version.
+The runtime type surface must be defined before lowering is implemented. A compiler release pins a compatible runtime crate version (the compiler and the runtime crate it lowers against share a compatibility range):
 
 ```text
-rssc 0.5.x -> rss_rt 0.5.x
+compiler X.Y.* -> runtime crate X.Y.*
 ```
 
 ### 4.5 Managed runtime reference model
@@ -1403,15 +1403,18 @@ fixpoint over the back-edge.
 
 ### 6.1 User-facing type declaration kinds
 
-RSScript has three user-facing type declaration kinds:
+RSScript has four user-facing type declaration kinds:
 
 ```text
 class
 struct
 resource
+sum
 ```
 
-There is no `own struct`.
+There is no `own struct`. A `sum` is a closed tagged union (§6.4A); `class`,
+`struct`, and `sum` are all managed value/identity kinds, while `resource` is the
+deterministic-cleanup kind.
 
 ### 6.2 `class`
 
@@ -1488,6 +1491,39 @@ cannot be returned as ordinary values
 cannot be stored in ordinary class/struct fields
 cannot be captured by managed closures
 ```
+
+### 6.4A `sum`
+
+A `sum` is a closed tagged union: a fixed set of named variants, each with zero
+or more named fields. It is the only user-facing variant-carrying kind besides the
+built-in `Option`/`Result`.
+
+```rust
+sum Shape {
+    Circle(radius: Float)
+    Rect(width: Float, height: Float)
+    Unit
+}
+```
+
+Properties:
+
+```text
+managed value kind (like struct): may be let-bound, local, returned fresh, and
+  stored in managed containers (List<Sum>, Map<K, Sum>, ...)
+has no observable pointer identity
+closed: the variant set is fixed at the declaration; there is no open extension
+variants are constructed by naming their fields (Circle(radius: 1.0)); a
+  field-free variant is written bare (Unit) (§9.1)
+consumed by `match`, which must be exhaustive over the declared variants (§5A)
+```
+
+A `sum` is a `Struct`-category type for the generic bound lattice (§14.5): it
+satisfies the default `Managed` bound, so it may be a generic type argument and a
+container element/key. As a `Hashable` key it must `derives(Eq, Hash)` (§14.6,
+§18.2). Like every user-defined type it is **non-Copy** (§6.8). Variant payload
+fields follow the same inline/handle/weak rules as struct fields (§6.5), and a
+`sum` may not contain `resource` fields outside the resource rules (§6.7).
 
 ### 6.5 Inline, handle, and weak fields
 
@@ -1636,13 +1672,23 @@ filesystem read/write capability.
 
 Everything else is non-Copy: managed handles, weak handles, resources,
 containers (`List`, `Map`, `Set`), `String`, `Bytes`, `Buffer`, generic type
-parameters, and every user-defined `class`, `struct`, or `resource` — including a
-struct all of whose fields are Copy.
+parameters, and every user-defined `class`, `struct`, `sum`, or `resource` —
+including a struct or sum all of whose fields/payloads are Copy.
 
 User-defined types are non-Copy in v0.7 with no implicit derivation; a struct is
 never silently Copy because its fields are. A future explicit `copy struct` or
 `derives(copy)` is deferred, not excluded (Article VI), and would have to be
 explicit per the no-hidden-behavior rule (§2.4).
+
+**Integer overflow.** Integer arithmetic that overflows its type is *defined
+behavior, never undefined*: v0.7 lowers integer operators to native Rust integer
+arithmetic, which **traps** (aborts with a runtime diagnostic) on overflow in
+debug builds and **wraps** two's-complement in release builds. Pinning a single
+cross-build policy — a checked default with explicit `wrapping_*`/`saturating_*`
+APIs for the deliberate cases — is a deferred decision (§20.1); until then code
+must not rely on wraparound as a silent default. Float arithmetic follows
+IEEE-754 (including `inf`/`nan`), consistent with the `Float`-not-`Eq` rule
+(§14.6).
 
 ### 6.9 Constants
 
@@ -1748,6 +1794,18 @@ let (first, _, third) = (1, 2, 3)
 
 Each bound element follows the ordinary `let` rules for its element type; the
 destructuring is a positional projection, not a new binding mode.
+
+**Rebinding, mutation, and shadowing.** A plain `let` binds an immutable name: it
+cannot be reassigned. To accumulate or update, declare a reassignable `let mut`
+binding and use the assignment statement (§5A) — `let mut total = 0` then
+`total = total + 1`; mutation of a place inside a `let mut` local
+(`obj.field = e`, `list[i] = e`) is the other assignment form. Mutation of
+container/managed/resource state stays in explicit `mut` API calls. A name may be
+**shadowed** by a new `let`/`local` binding of the same name: the new binding
+hides the prior one for the rest of its scope, and the checker tracks the
+shadowing binding's own type (an inner binding never exposes the outer binding's
+type). Shadowing introduces a fresh binding; it is distinct from assignment, which
+updates an existing `let mut` place in place.
 
 ### 7.2 `local`
 
@@ -2068,7 +2126,7 @@ native function calls
 struct constructors
 class constructors
 standard enum-like variants such as Ok(...), Err(...), Some(...), None
-future user-defined variant constructors
+user-defined `sum` variant constructors such as Circle(radius: ...), North
 ResourcePool factory calls
 immediate resource lease APIs
 ```
@@ -2234,13 +2292,30 @@ A managed value cannot be passed to `take`. A handle field cannot be taken. A lo
 
 ### 10.5 Copy parameters
 
-Copy parameters do not require data effects.
+A Copy parameter (§6.8) is passed by value, so there is no borrow to mark. The
+canonical spelling has one rule with one exception:
 
-```rust
-fn resize(image: mut Image, width: Int, height: Int) -> Unit
+```text
+- A Copy parameter is written WITHOUT a data effect (`read`/`mut`/`take`).
+- Exception: the receiver (first parameter) of a method exposed for receiver-call
+  shorthand (§14.6.1) declares `read` even when Copy, so the shorthand's mandatory
+  call-site effect (`read x.method(...)`) has a declared effect to match.
 ```
 
-`width` and `height` are Copy.
+This is a single canonical form per role (§2.3), not a stylistic choice — and the
+exception is what explains the two stdlib shapes the surface uses:
+
+```rust
+fn resize(image: mut Image, width: Int, height: Int) -> Unit  // plain Copy params: no effect
+
+pub fn Int.to_string(value: read Int) -> fresh String  // receiver of `n.to_string()`: read
+pub fn String.from_int(value: Int) -> fresh String     // constructor-style, never a receiver: no effect
+```
+
+`width`/`height` are plain Copy parameters, so they carry no effect; a Copy
+argument at the call site is likewise written bare
+(`resize(image: mut img, width: 800, height: 600)`). `Int.to_string`'s `value`
+is `read` only because it is the receiver position for `n.to_string()`.
 
 ### 10.6 Runtime effects and guarantees
 
@@ -2479,8 +2554,10 @@ An expression is fresh if it is one of:
 
 ```text
 struct constructor expression creating a new shell
+sum variant constructor expression creating a new shell
 call to a function returning fresh T
 clean local binding
+literal (string, numeric, or boolean) — it owns no borrowed or aliased resource
 composition of fields that are each valid under the constructor field-effect rules (§9.3) into a fresh shell
 ```
 
@@ -2907,7 +2984,19 @@ Result<T, E>            = managed T on success
 Result<fresh T, E>      = fresh struct shell on success
 Option<T>               = managed T on Some
 Option<fresh T>         = fresh struct shell on Some
+fresh Result<T, E>      = the whole Result is fresh: a fresh Ok payload on success
+                          and a fresh Err payload on failure
+fresh Option<U>         = the whole Option is fresh: a fresh Some payload, or None
 ```
+
+`fresh` may be written on the wrapper (`fresh Result<T, E>`, `fresh Option<U>`) or
+inside it (`Result<fresh T, E>`). The wrapper form means the produced wrapper and
+its payload are newly created and unaliased — the freshness contract (§11) applies
+to whichever value the caller extracts. This is the form the error/option
+composition APIs use (e.g. `Result.map<T, U, E>(...) -> fresh Result<U, E>`,
+§18.2): the combinator returns a brand-new wrapper, so its result is a fresh
+source. `fresh Result<fresh T, E>` is redundant — the wrapper `fresh` already
+covers the payload — and is not written.
 
 For resource returns:
 
@@ -2966,6 +3055,11 @@ async fn main() -> Result<Unit, TimerError> {
 }
 ```
 
+`await` binds tighter than `?`: `await EXPR?` parses as `(await EXPR)?` — the call
+is awaited first, then `?` propagates the resolved `Result`/`Option`. There is no
+form where `?` applies to an un-awaited async value, since an `async fn` result
+must be consumed by `await` before any other operator.
+
 `async` is not an effect and must not be written in `effects(...)`. Internally,
 normalized metadata may record async functions as `function_kind: async` and
 `effects: ["suspends"]` so review tools can reason about suspension uniformly,
@@ -2981,7 +3075,7 @@ inside the group; it is not a public `Future`, is not `Send`, and cannot escape
 as a task value. This is structured async, not unstructured spawning:
 
 ```rust
-async fn load_user_data(id: read Int) -> Result<String, NetworkError> {
+async fn load_user_data(id: Int) -> Result<String, NetworkError> {
     task_group {
         async let user = fetch_user(id: read id)
         async let profile = fetch_profile(id: read id)
@@ -3088,13 +3182,15 @@ named-argument, `read`/`mut`/`take`, callback, freshness, or resource checks.
 The bound lattice:
 
 ```text
-Managed   = managed-capable: Copy primitives, class types, and struct types.
-            This is the default and the broadest bound. Managed-capable values
-            may go in managed bindings and managed containers (List<T>, Map, Set).
-Struct    = struct types only (excludes class and excludes resource). A struct
-            type is also Managed-capable, so T: Struct implies T: Managed.
+Managed   = managed-capable: Copy primitives, class types, struct types, and sum
+            types. This is the default and the broadest bound. Managed-capable
+            values may go in managed bindings and managed containers (List<T>,
+            Map, Set).
+Struct    = struct and sum types (excludes class and excludes resource). A
+            struct/sum type is also Managed-capable, so T: Struct implies
+            T: Managed.
 Resource  = resource types only. Disjoint from Managed and from Struct: a
-            resource is neither managed-capable nor a struct.
+            resource is neither managed-capable nor a struct/sum.
 ```
 
 Consequences:
@@ -3254,6 +3350,17 @@ are **not** `Eq`, `Ord`, or `Hashable` (IEEE-754 equality is not total), so a
 `Float` may not be a `Map`/`Set` key and a `derives(Eq)` over a `Float` field is
 rejected.
 
+The `==` and `!=` operators are defined in terms of `Eq`: `a == b` is structural
+equality (`Eq.equals`), and both operands must have the same known type that is
+`Eq` — a value scalar, or a managed `struct`/`sum` that `derives(Eq)`. There is
+**no pointer/identity equality** in the surface: comparing two managed handles
+with `==` compares their contents, not whether they are the same allocation, and
+a `class` (which has reference identity, §6.2) is not `Eq` and cannot be compared
+with `==`. `Float` follows the IEEE-754 rule above: `==` on `Float` is the partial
+IEEE comparison and is not backed by protocol `Eq` (so a `Float` is still not a
+key). Identity comparison, if ever needed, would be a separate explicit API, never
+the `==` operator.
+
 ```rust
 struct User derives(Eq, Hash, Clone) {
     id: Int
@@ -3312,14 +3419,22 @@ take builder.finish()
 mut writer.write(message: read msg)
 ```
 
-Each is semantically identical to the canonical qualified call:
+Each is semantically identical to the canonical qualified call, with the receiver
+supplied as the method's **first parameter** (by position, under the written
+effect):
 
 ```rust
-User.name(self: read user)
-Cache.put(self: mut cache, key: read key, value: read value)
-StringBuilder.finish(self: take builder)
+User.name(user: read user)
+Cache.put(cache: mut cache, key: read key, value: read value)
+StringBuilder.finish(builder: take builder)
 Writer.write(self: mut writer, message: read msg)
 ```
+
+The receiver fills the first parameter whatever its name: a protocol method names
+it `self` (`Writer.write(self: ...)`, §14.6), while an inherent stdlib function
+uses the type's own first-parameter name (`StringBuilder.finish(builder: ...)`,
+`List.first(list: ...)`). The shorthand does not require the first parameter to be
+named `self`.
 
 ##### Resolution rules
 
@@ -3329,11 +3444,12 @@ All must hold; if any fails the program is rejected:
 ```text
 1. The receiver's static type is known at the call site.
 2. Exactly one visible method named <method> exists for that type, considering:
-   (a) inherent functions declared as Type.method(self: ...) for the concrete type
+   (a) inherent functions declared as Type.method(<first-param>: ...) for the
+       concrete type — the receiver binds the first parameter regardless of its name
    (b) protocol methods from protocols explicitly implemented for the type
        (via `impl Protocol for Type`) or required by a generic bound (T: Protocol)
-3. The method's declared self-effect must equal the effect written at the call site.
-4. All non-self parameters must use named-argument syntax with explicit effects.
+3. The first parameter's declared effect must equal the effect written at the call site.
+4. All remaining (non-receiver) parameters must use named-argument syntax with explicit effects.
 5. No auto-reference, auto-dereference, implicit protocol coercion, extension-method
    lookup, overload ranking, or argument-type-based method search is performed.
 ```
@@ -3617,7 +3733,7 @@ same attribute form as `#deprecated("...")`:
 
 ```rust
 #lower_name("helpers__count")
-fn count(value: read Int) -> Int {
+fn count(value: Int) -> Int {
     return value
 }
 ```
@@ -3646,13 +3762,43 @@ A `use` import does not expand the candidate set for receiver-call resolution;
 only explicit `impl Protocol for Type` declarations and generic bounds contribute
 candidates.
 
+### 14.9 Program entry point
+
+An executable program declares a single top-level `main`. It is the one function
+that stays a global, unqualified backend symbol (it is never module-mangled,
+§14.8, and cannot be pinned with `#lower_name`). Its permitted signatures are:
+
+```text
+fn main() -> Unit
+fn main() -> Result<Unit, E>            // E is any error type
+async fn main() -> Unit                 // requires features: async
+async fn main() -> Result<Unit, E>      // requires features: async
+```
+
+```text
+- `main` takes no parameters. Program arguments are read through the core `Args`
+  API, not through a parameter list.
+- The return type is `Unit` or `Result<Unit, E>` only; a `Result` return lets the
+  body use `?`, and an `Err` return is reported as a non-zero process result.
+- `async fn main` is permitted only under `features: async` and runs on the
+  single-isolate cooperative executor (§14.4).
+- A library (no runnable entry) simply declares no `main`; the generated crate is
+  then a library target without the binary harness (§4.4).
+```
+
 ---
 
 ## 15. Native and Unsafe Boundaries
 
 ### 15.1 File features
 
-A file without a `features:` declaration is managed-only.
+A file without a `features:` declaration is managed-only. When present, the
+`features:` declaration is the first line of the file and lists one or more
+capability gates separated by commas:
+
+```rust
+features: async, native, local
+```
 
 Recognized v0.7 active capability gates:
 
@@ -3698,7 +3844,7 @@ A native function must be declared with `effects(native)` or through a native mo
 ```rust
 features: native
 
-native fn File.open(path: read Path) -> Result<File, IOError>
+native fn File.open(path: read Path) -> Result<File, FileError>
     effects(native)
 ```
 
@@ -3710,8 +3856,8 @@ gets `effects(native)` if the effect is omitted:
 features: native
 
 native module File {
-    fn open(path: read Path) -> Result<File, IOError>
-    fn open_write(path: read Path) -> Result<File, IOError>
+    fn open(path: read Path) -> Result<File, FileError>
+    fn open_write(path: read Path) -> Result<File, FileError>
 }
 ```
 
@@ -4293,7 +4439,7 @@ pub fn List.first<T>(list: read List<T>) -> Option<T>
 
 pub fn List.last<T>(list: read List<T>) -> Option<T>
 
-pub fn List.join<T>(list: read List<T>, separator: read String) -> fresh String
+pub fn List.join(list: read List<String>, separator: read String) -> fresh String
 ```
 
 All List operations use `noescape` closures: captured values cannot be retained,
@@ -4431,9 +4577,16 @@ pub fn Float.is_nan(value: read Float) -> Bool
 pub fn Float.is_finite(value: read Float) -> Bool
 pub fn Float.is_infinite(value: read Float) -> Bool
 
+pub fn String.from_int(value: Int) -> fresh String
 pub fn String.from_float(value: Float) -> fresh String
 pub fn String.parse_float(value: read String) -> Option<Float>
 ```
+
+Here `Int.to_string`/`Float.to_string` declare `value: read …` because they are
+exposed for receiver-call shorthand (`n.to_string()`), whose receiver must carry a
+declared effect (§10.5, §14.6.1); `String.from_int`/`String.from_float` are
+constructor-style calls whose Copy argument is never a receiver, so it omits the
+effect.
 
 The `Math` core surface provides `Int` and `Float` numeric intrinsics. They are
 pure value functions with no capability gate, lowering to ordinary Rust `f64`/`i64`
@@ -4785,7 +4938,7 @@ Package review propagates that binding through the RSScript call graph and emits
 ### 19.1 File write
 
 ```rust
-fn write_text(path: read Path, text: read String) -> Result<Unit, IOError> {
+fn write_text(path: read Path, text: read String) -> Result<Unit, FileError> {
     with File.open_write(path: read path)? as file {
         File.write(file: mut file, data: read text)?
     }
@@ -4885,7 +5038,7 @@ canonical qualified call.
 File write:
 
 ```rust
-fn write_text(path: read Path, text: read String) -> Result<Unit, IOError> {
+fn write_text(path: read Path, text: read String) -> Result<Unit, FileError> {
     with File.open_write(path: read path)? as file {
         mut file.write(data: read text)?
     }
@@ -5002,7 +5155,7 @@ C. Two-tier execution: dev interpreter + Rust-lowering AOT
 
 D. Structured-fix tooling and analysis server
    - an `rss fix` command applying machine-applicable structured fixes
-     (section 17.2 already carries fix applicability).
+     (section 17.1.1 already carries fix applicability).
    - a language/analysis server streaming structured diagnostics and fixes,
      serving both human editors and AI repair agents as first-class consumers.
 
@@ -5271,3 +5424,92 @@ Fast when local.
 Reviewable by design.
 Compiled through Rust.
 ```
+
+---
+
+## Appendix A. Lexical structure and grammar
+
+This appendix is a reference for implementers. The numbered chapters are the
+normative semantics; where this sketch and a chapter disagree, the chapter wins.
+The grammar is illustrative (it does not encode every diagnostic the checker
+adds), but it fixes the surface shape so a parser and the prose agree.
+
+### A.1 Lexical structure
+
+```text
+Tokens         identifier | number | string | keyword | symbol | EOF
+Comment        `// ...` to end of line. There is no block-comment form.
+Whitespace     spaces, tabs, and newlines separate tokens and are otherwise
+               insignificant (the language is not layout-sensitive).
+Identifier     ident-start (letter or `_`) followed by letters, digits, or `_`.
+Number         one or more digits, optionally `.` then one or more digits.
+               A fractional part makes it a Float literal; otherwise an Int
+               literal. (Width/signedness is fixed by context/annotation, §6.8.)
+String         "..."        single-line string
+               $"...{expr}..."  interpolated string; `{{` / `}}` are literal braces
+               """ ... """   multiline string
+Bool/Unit etc. `true`, `false`, `Ok`, `Err`, `Some`, `None`, `Unit` are built-in
+               constants, not user identifiers.
+```
+
+Reserved words are lexed as keywords: `fn let local struct class resource match
+if else for loop while return with async await pub native features manage weak
+handle effects`. Other declaration introducers — `sum const module use protocol
+impl derives noescape spawn task_group select unsafe` — are recognized
+contextually in declaration position. Operators and punctuation are formed from
+the symbol tokens `-> => : , . ( ) { } < > [ ] ? | & ~ + - * / = ! ; #`;
+multi-character operators (`== != <= >= && ||`) are built from adjacent symbol
+tokens at parse time.
+
+### A.2 Grammar sketch (EBNF-style)
+
+```ebnf
+file        = [ features ] { use-or-module } { item } ;
+features    = "features" ":" ident { "," ident } ;
+use-or-module = ( "module" dotted ) | ( "use" dotted [ "as" ident ] ) ;
+dotted      = ident { "." ident } ;
+
+item        = [ "pub" ] ( fn-decl | type-decl | sum-decl | const-decl
+                        | protocol-decl | impl-decl ) ;
+fn-decl     = [ attr ] [ "async" ] [ "native" ] "fn" name "(" [ params ] ")"
+              [ "->" type ] [ "effects" "(" effect-list ")" ] ( block | ) ;
+attr        = "#" ident "(" string ")" ;            (* e.g. #lower_name("...") *)
+params      = param { "," param } ;
+param       = ident ":" [ data-effect ] type [ "=" expr ] ;   (* §10.5, §14.1 *)
+data-effect = "read" | "mut" | "take" ;
+type-decl   = ( "class" | "struct" | "resource" ) name [ derives ] "{" fields
+              [ "drop" block ] "}" ;
+sum-decl    = "sum" name [ derives ] "{" { variant } "}" ;
+variant     = name [ "(" fields ")" ] ;
+derives     = "derives" "(" ident { "," ident } ")" ;
+const-decl  = "const" [ type-ns "." ] NAME ":" type "=" literal ;
+
+block       = "{" { stmt } "}" ;
+stmt        = let | assign | return | if | match | for | loop | while
+            | with | task-group | select | break | continue | expr ;
+let         = ( "let" | "local" ) [ "mut" ] pattern [ ":" type ] "=" expr ;
+assign      = place "=" expr ;                       (* §5A; place not parameter root *)
+return      = "return" [ expr ] ;
+if          = "if" expr block [ "else" ( if | block ) ] ;
+match       = "match" data-effect expr "{" { arm } "}" ;
+arm         = pattern [ "if" expr ] "=>" block ;
+with        = "with" expr "as" ident block ;
+
+expr        = call | receiver-call | match | literal | tuple | collection
+            | ident | field | index | unary | binary | closure
+            | ( data-effect expr ) | ( "manage" expr ) | ( "await" expr )
+            | ( expr "?" ) ;
+call        = ( name | type "." name ) "(" [ args ] ")" ;
+receiver-call = data-effect expr "." name "(" [ args ] ")" ;   (* §14.6.1 *)
+args        = arg { "," arg } ;
+arg         = ident ":" [ data-effect ] expr ;       (* all arguments are named *)
+closure     = "(" [ idents ] ")" block ;             (* noescape/owned per param type *)
+tuple       = "(" expr "," expr { "," expr } ")" ;   (* arity >= 2, §6.10 *)
+pattern     = "_" | ident | literal | variant-pat | struct-pat | tuple-pat
+            | list-pat ;                              (* §5A *)
+```
+
+Precedence notes that the productions above leave implicit: `await` binds tighter
+than `?` (`await e?` = `(await e)?`, §14.4); `?` is postfix and applies to a
+`Result`/`Option` operand (§5A); a bare `match`/`if` used as a value is the
+expression form (§5A). Argument and field lists are always named (§9.2).
