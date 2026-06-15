@@ -3575,229 +3575,39 @@ impl RegLowerer<'_> {
         args: &[HirCallArg],
     ) -> Result<Reg, EvalError> {
         if let Callee::ReceiverCall { method, .. } = callee {
-            let dst = self.temp();
+            // A receiver call `x.method(args)` is sugar for `Type.method(self, args)`.
+            // Rather than maintain a second (perpetually-incomplete) intrinsic table
+            // here, reuse the full qualified-call lowering — stdlib intrinsics, native
+            // functions, user-defined methods, and protocol dispatch — by recursing
+            // with the receiver as the first argument. (The reg VM previously bailed
+            // on any receiver call outside a small hand-written subset, which blocked
+            // running real packages like tinygrad-rss.)
             let Some(receiver) = receiver else {
                 return Err(EvalError::Runtime(format!(
                     "reg VM receiver call `{method}` is missing HIR receiver metadata."
                 )));
             };
-            let namespace = receiver
+            let Some(namespace) = receiver
                 .resolved_namespace
                 .as_deref()
-                .or(receiver.type_name.as_deref());
-            if let Some(namespace) = namespace
-                && self.is_native_function(Some(namespace), method)
-            {
-                let receiver_reg = self.expr(&receiver.value)?;
-                let arg_regs = args
-                    .iter()
-                    .map(|arg| self.expr(&arg.value))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let mut native_args = Vec::with_capacity(arg_regs.len() + 1);
-                native_args.push(receiver_reg);
-                native_args.extend(arg_regs);
-                let mut_args = self.native_mut_arg_positions(Some(namespace), method);
-                self.emit(RegInstr::CallNative {
-                    dst,
-                    key: format!("{}.{}", type_root_name(namespace), type_root_name(method)),
-                    args: native_args,
-                    mut_args,
-                });
-                return Ok(dst);
-            }
-            let Some(namespace) = namespace else {
+                .or(receiver.type_name.as_deref())
+            else {
                 return Err(EvalError::Runtime(format!(
                     "reg VM receiver call `{method}` is missing receiver type metadata."
                 )));
             };
-            let receiver_reg = self.expr(&receiver.value)?;
-            let arg_regs = args
-                .iter()
-                .map(|arg| self.expr(&arg.value))
-                .collect::<Result<Vec<_>, _>>()?;
-            match (type_root_name(namespace), type_root_name(method)) {
-                ("Clone", "clone") => {
-                    self.emit(RegInstr::CallIntrinsic {
-                        dst,
-                        intrinsic: RegIntrinsic::CloneClone,
-                        args: vec![receiver_reg],
-                    });
-                    return Ok(dst);
-                }
-                ("Float", "to_string") => {
-                    self.emit(RegInstr::CallIntrinsic {
-                        dst,
-                        intrinsic: RegIntrinsic::FloatToString,
-                        args: vec![receiver_reg],
-                    });
-                    return Ok(dst);
-                }
-                ("Float", "is_finite") => {
-                    self.emit(RegInstr::CallIntrinsic {
-                        dst,
-                        intrinsic: RegIntrinsic::FloatIsFinite,
-                        args: vec![receiver_reg],
-                    });
-                    return Ok(dst);
-                }
-                ("Float", "is_infinite") => {
-                    self.emit(RegInstr::CallIntrinsic {
-                        dst,
-                        intrinsic: RegIntrinsic::FloatIsInfinite,
-                        args: vec![receiver_reg],
-                    });
-                    return Ok(dst);
-                }
-                ("Float", "is_nan") => {
-                    self.emit(RegInstr::CallIntrinsic {
-                        dst,
-                        intrinsic: RegIntrinsic::FloatIsNan,
-                        args: vec![receiver_reg],
-                    });
-                    return Ok(dst);
-                }
-                ("Int", "to_string") => {
-                    self.emit(RegInstr::CallIntrinsic {
-                        dst,
-                        intrinsic: RegIntrinsic::IntToString,
-                        args: vec![receiver_reg],
-                    });
-                    return Ok(dst);
-                }
-                ("Int", "to_float") => {
-                    self.emit(RegInstr::CallIntrinsic {
-                        dst,
-                        intrinsic: RegIntrinsic::IntToFloat,
-                        args: vec![receiver_reg],
-                    });
-                    return Ok(dst);
-                }
-                ("String", "concat") => {
-                    if arg_regs.len() != 1 {
-                        return Err(EvalError::Runtime(format!(
-                            "reg VM String.concat receiver call expected 1 arg, got {}.",
-                            arg_regs.len()
-                        )));
-                    }
-                    self.emit(RegInstr::StringConcat {
-                        dst,
-                        left: receiver_reg,
-                        right: arg_regs[0],
-                    });
-                    return Ok(dst);
-                }
-                ("String", "env") => {
-                    self.emit(RegInstr::CallIntrinsic {
-                        dst,
-                        intrinsic: RegIntrinsic::EnvGet,
-                        args: vec![receiver_reg],
-                    });
-                    return Ok(dst);
-                }
-                ("String", "env_or") => {
-                    if arg_regs.len() != 1 {
-                        return Err(EvalError::Runtime(format!(
-                            "reg VM String.env_or receiver call expected 1 arg, got {}.",
-                            arg_regs.len()
-                        )));
-                    }
-                    self.emit(RegInstr::CallIntrinsic {
-                        dst,
-                        intrinsic: RegIntrinsic::EnvGetOrDefault,
-                        args: vec![receiver_reg, arg_regs[0]],
-                    });
-                    return Ok(dst);
-                }
-                ("String", "is_empty") => {
-                    self.emit(RegInstr::CallIntrinsic {
-                        dst,
-                        intrinsic: RegIntrinsic::StringIsEmpty,
-                        args: vec![receiver_reg],
-                    });
-                    return Ok(dst);
-                }
-                ("String", "len") => {
-                    self.emit(RegInstr::CallIntrinsic {
-                        dst,
-                        intrinsic: RegIntrinsic::StringLen,
-                        args: vec![receiver_reg],
-                    });
-                    return Ok(dst);
-                }
-                ("String", "safe_relative") => {
-                    self.emit(RegInstr::CallIntrinsic {
-                        dst,
-                        intrinsic: RegIntrinsic::PathSafeRelative,
-                        args: vec![receiver_reg],
-                    });
-                    return Ok(dst);
-                }
-                ("String", "to_path") => {
-                    self.emit(RegInstr::CallIntrinsic {
-                        dst,
-                        intrinsic: RegIntrinsic::PathFromString,
-                        args: vec![receiver_reg],
-                    });
-                    return Ok(dst);
-                }
-                ("String", "to_url") => {
-                    self.emit(RegInstr::CallIntrinsic {
-                        dst,
-                        intrinsic: RegIntrinsic::UrlFromString,
-                        args: vec![receiver_reg],
-                    });
-                    return Ok(dst);
-                }
-                ("List", "first") => {
-                    self.emit(RegInstr::CallIntrinsic {
-                        dst,
-                        intrinsic: RegIntrinsic::ListFirst,
-                        args: vec![receiver_reg],
-                    });
-                    return Ok(dst);
-                }
-                ("List", "get") => {
-                    if arg_regs.len() != 1 {
-                        return Err(EvalError::Runtime(format!(
-                            "reg VM List.get receiver call expected 1 arg, got {}.",
-                            arg_regs.len()
-                        )));
-                    }
-                    self.emit(RegInstr::ListGet {
-                        dst,
-                        list: receiver_reg,
-                        index: arg_regs[0],
-                    });
-                    return Ok(dst);
-                }
-                ("List", "is_empty") => {
-                    self.emit(RegInstr::CallIntrinsic {
-                        dst,
-                        intrinsic: RegIntrinsic::ListIsEmpty,
-                        args: vec![receiver_reg],
-                    });
-                    return Ok(dst);
-                }
-                ("List", "last") => {
-                    self.emit(RegInstr::CallIntrinsic {
-                        dst,
-                        intrinsic: RegIntrinsic::ListLast,
-                        args: vec![receiver_reg],
-                    });
-                    return Ok(dst);
-                }
-                ("List", "len") => {
-                    self.emit(RegInstr::ListLen {
-                        dst,
-                        list: receiver_reg,
-                    });
-                    return Ok(dst);
-                }
-                _ => {}
-            }
-            return Err(EvalError::Runtime(
-                "reg VM v0 does not support receiver calls.".to_string(),
-            ));
+            let synthetic_callee = Callee::Qualified {
+                namespace: namespace.to_string(),
+                name: method.clone(),
+            };
+            let mut synthetic_args = Vec::with_capacity(args.len() + 1);
+            synthetic_args.push(HirCallArg {
+                name: None,
+                value: (*receiver.value).clone(),
+                span: crate::diagnostic::Span::default(),
+            });
+            synthetic_args.extend(args.iter().cloned());
+            return self.call(&synthetic_callee, None, &synthetic_args);
         }
 
         let arg_regs = args
@@ -5177,6 +4987,18 @@ impl RegLowerer<'_> {
                                 function,
                                 args: arg_regs,
                                 mut_args,
+                            });
+                            return Ok(dst);
+                        }
+                        // `.clone()` (a derived `Clone`) deep-copies any value. A
+                        // receiver call resolves its namespace to the concrete type
+                        // (e.g. `Ops.clone`), not `Clone`, so map an otherwise
+                        // unresolved `clone` to the deep-clone intrinsic.
+                        if name_root == "clone" && arg_regs.len() == 1 {
+                            self.emit(RegInstr::CallIntrinsic {
+                                dst,
+                                intrinsic: RegIntrinsic::CloneClone,
+                                args: arg_regs,
                             });
                             return Ok(dst);
                         }
