@@ -28,12 +28,16 @@ actual driver (see "Basis" at the bottom).
   non-linear position, the short-circuit `&&`/`||` RHS, stays rejected (`RS0411`)
   to preserve conditional-evaluation semantics.
 
-- [ ] **Structured-fix tooling + analysis server** (§20.1-D) — _effort: medium–large._
-  `rss fix` applying machine-applicable structured fixes (the `Fix`/applicability
-  infrastructure already exists on diagnostics), and a language/analysis server
-  streaming diagnostics + fixes (build on the existing `lsp` crate). Biggest
-  dev-experience multiplier; helps every user and the port edit→check loop.
-  `rss fix` is the bounded sub-part; the full LSP is the larger half.
+- [ ] **Structured-fix tooling + analysis server** (§20.1-D) — _effort: large._
+  `rss fix` applying machine-applicable structured fixes, and a language/analysis
+  server streaming diagnostics + fixes (build on the existing `lsp` crate).
+  **Prerequisite (found 2026-06-15):** `diagnostic::Fix` today carries only
+  `kind`/`title`/`applicability` — *no concrete edit payload* (no replacement span
+  + text). Before `rss fix` can apply anything, `Fix` needs a structured edit
+  representation and every fix-emitting site must populate it. That retrofit is
+  the bulk of the work; the CLI/LSP plumbing is comparatively small. Not a bounded
+  add — take as its own focused effort. Biggest dev-experience multiplier once
+  landed.
 
 - [ ] **FFI / native-ABI adapter contracts** (§3.2 general FFI, §20.1-N) —
   _effort: medium–large, open-ended._
