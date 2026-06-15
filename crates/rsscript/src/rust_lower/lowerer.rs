@@ -2410,486 +2410,22 @@ impl<'a> RustLowerer<'a> {
                 )
             }
             Expr::Call { callee, args, span } => {
-                if is_json_decode_callee(callee) {
-                    return self.lower_json_decode_call(callee, args, span);
+                // Thin router: each `lower_call_*` helper recognizes one family of
+                // call shapes and returns `Some(rust)` if it applies; the final
+                // `lower_call_dispatch` handles the generic/fallthrough call forms.
+                if let Some(lowered) = self.lower_call_json_codec(callee, args, span) {
+                    return lowered;
                 }
-                if is_json_encode_callee(callee)
-                    && let Some(value_arg) = args
-                        .iter()
-                        .find(|arg| arg.name.as_deref() == Some("value") || arg.name.is_none())
-                {
-                    return self.lower_json_value(&value_arg.value);
+                if let Some(lowered) = self.lower_call_task_cancellation_token(callee) {
+                    return lowered;
                 }
-                // `Task.cancellation_token()` resolves to the enclosing
-                // task_group's token, or a never-cancelled token outside one.
-                if let Callee::Qualified { namespace, name } = callee
-                    && type_root_name(namespace) == "Task"
-                    && type_root_name(name) == "cancellation_token"
-                {
-                    return match &self.current_task_group_token {
-                        Some(guard) => format!("{guard}.token()"),
-                        None => "rsscript_runtime::cancellation_never()".to_string(),
-                    };
+                if let Some(lowered) = self.lower_call_named_constructor(callee, args, span) {
+                    return lowered;
                 }
-                if let Callee::Name(name) = callee {
-                    // A turbofish constructor callee carries its type arguments in the
-                    // raw name (e.g. `Pair<Int>`), but `type_kinds` and the per-type
-                    // field/handle lookups are keyed by the bare root (`Pair`). Root the
-                    // name so the named-field constructor path is taken (and the struct
-                    // literal is emitted as `Pair { .. }`, letting Rust infer the args)
-                    // instead of falling through to a positional tuple-struct call.
-                    let ctor_name = type_root_name(name);
-                    if let Some(type_kind) = self.type_kinds.get(ctor_name).copied() {
-                        let mut fields = Vec::new();
-                        for arg in args {
-                            let field_name = self.constructor_field_arg_name(ctor_name, arg);
-                            let field = field_name
-                                .as_deref()
-                                .map(rust_ident)
-                                .unwrap_or_else(|| "/* unnamed */".to_string());
-                            let is_weak_field =
-                                arg.name.as_deref().or(field_name.as_deref()).is_some_and(
-                                    |field_name| self.is_weak_field(ctor_name, field_name),
-                                );
-                            if is_weak_field {
-                                fields.push(format!(
-                                    "{field}: {}",
-                                    self.lower_explicit_weak_field_value(&arg.value)
-                                ));
-                            } else if field_name.as_deref().is_some_and(|field_name| {
-                                self.is_runtime_handle_field(ctor_name, field_name)
-                            }) {
-                                let field_name = field_name.unwrap_or_default();
-                                fields.push(format!(
-                                    "{field}: {}",
-                                    self.lower_runtime_handle_field_value(
-                                        ctor_name,
-                                        &field_name,
-                                        &arg.value,
-                                        &arg.span
-                                    )
-                                ));
-                            } else {
-                                let value = field_name
-                                    .as_deref()
-                                    .and_then(|field_name| self.field_type(ctor_name, field_name))
-                                    .map(|expected| {
-                                        self.lower_expr_for_expected_type(&arg.value, &expected)
-                                    })
-                                    .unwrap_or_else(|| self.lower_owned_expr(&arg.value));
-                                fields.push(format!("{field}: {value}"));
-                            }
-                        }
-                        // Fill omitted fields that declare a default value
-                        // (`name: T = expr`) so the Rust struct literal is complete.
-                        let provided: std::collections::HashSet<String> = args
-                            .iter()
-                            .filter_map(|arg| self.constructor_field_arg_name(ctor_name, arg))
-                            .collect();
-                        let defaulted: Vec<(String, Expr)> = self
-                            .program
-                            .items
-                            .iter()
-                            .find_map(|item| match item {
-                                Item::Type(decl) if type_root_name(&decl.name) == ctor_name => Some(
-                                    decl.fields
-                                        .iter()
-                                        .filter_map(|f| {
-                                            f.default.clone().map(|d| (f.name.clone(), d))
-                                        })
-                                        .collect::<Vec<_>>(),
-                                ),
-                                _ => None,
-                            })
-                            .unwrap_or_default();
-                        for (field_name, default) in defaulted {
-                            if provided.contains(&field_name) {
-                                continue;
-                            }
-                            let value = self
-                                .field_type(ctor_name, &field_name)
-                                .map(|expected| {
-                                    self.lower_expr_for_expected_type(&default, &expected)
-                                })
-                                .unwrap_or_else(|| self.lower_owned_expr(&default));
-                            fields.push(format!("{}: {value}", rust_ident(&field_name)));
-                        }
-                        let fields = fields.join(", ");
-                        let constructed = format!("{} {{ {fields} }}", rust_ident(ctor_name));
-                        if type_kind == TypeKind::Class {
-                            return format!(
-                                "rsscript_runtime::manage_at({constructed}, {})",
-                                lower_source_span(span)
-                            );
-                        }
-                        return constructed;
-                    }
-
-                    // User sum-type payload-variant construction: emit the qualified, struct-style
-                    // form `Enum::Variant { field: value, ... }` to match the lowered enum (whose
-                    // payload variants use named fields). Nullary variants emit `Enum::Variant`.
-                    if let Some(sum_name) = self.find_sum_type_for_variant(ctor_name) {
-                        // declared (name, type) of each field of this variant
-                        let decl_fields: Vec<(String, TypeRef)> = self
-                            .program
-                            .items
-                            .iter()
-                            .find_map(|item| {
-                                if let Item::SumType(sum) = item {
-                                    sum.variants.iter().find(|v| v.name == ctor_name).map(|v| {
-                                        v.fields
-                                            .iter()
-                                            .map(|f| (f.name.clone(), f.ty.clone()))
-                                            .collect()
-                                    })
-                                } else {
-                                    None
-                                }
-                            })
-                            .unwrap_or_default();
-                        if decl_fields.is_empty() {
-                            return format!("{}::{}", rust_ident(&sum_name), rust_ident(ctor_name));
-                        }
-                        let mut fields = Vec::new();
-                        for (index, arg) in args.iter().enumerate() {
-                            // Resolve the target field by name if given, else positionally. Arity and
-                            // field names are validated in the checker; here we stay bounds-safe and
-                            // lower each value against its declared field type (like struct ctors).
-                            let field = match &arg.name {
-                                Some(name) => decl_fields.iter().find(|(fname, _)| fname == name),
-                                None => decl_fields.get(index),
-                            };
-                            let Some((field_name, field_ty)) = field else {
-                                continue;
-                            };
-                            let value = self.lower_expr_for_expected_type(&arg.value, field_ty);
-                            fields.push(format!("{}: {value}", rust_ident(field_name)));
-                        }
-                        return format!(
-                            "{}::{} {{ {} }}",
-                            rust_ident(&sum_name),
-                            rust_ident(ctor_name),
-                            fields.join(", ")
-                        );
-                    }
-
-                    if is_rust_enum_constructor(name) {
-                        let args = args
-                            .iter()
-                            .map(|arg| self.lower_expr(&arg.value))
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        return format!("{}({args})", rust_ident(name));
-                    }
-
-                    if let Some((target, fields)) = runtime_struct_constructor(name) {
-                        let mut lowered_fields = Vec::new();
-                        for (index, arg) in args.iter().enumerate() {
-                            let Some(field) =
-                                arg.name.as_deref().or_else(|| fields.get(index).copied())
-                            else {
-                                continue;
-                            };
-                            lowered_fields.push(format!(
-                                "{}: {}",
-                                rust_ident(field),
-                                self.lower_owned_expr(&arg.value)
-                            ));
-                        }
-                        return format!("{target} {{ {} }}", lowered_fields.join(", "));
-                    }
+                if let Some(lowered) = self.lower_call_receiver(callee, args) {
+                    return lowered;
                 }
-                // Receiver-call shorthand: resolve receiver type and emit
-                // qualified call with receiver as first arg.
-                if let Callee::ReceiverCall {
-                    receiver,
-                    method,
-                    effect,
-                } = callee
-                {
-                    let receiver_type = self.infer_expr_type(receiver);
-                    let receiver_type_name = receiver_type
-                        .as_ref()
-                        .map(type_ref_display_name)
-                        .unwrap_or_else(|| "Unknown".to_string());
-                    let receiver_type_root = type_root_name(&receiver_type_name).to_string();
-                    if method == "clone"
-                        && (self.type_derives_clone(&receiver_type_root)
-                            || Self::is_builtin_clone_value(&receiver_type_root))
-                    {
-                        // Explicit `.clone()` -> Rust's `Clone`: a user struct/sum that derives
-                        // `Clone`, or a builtin value type that lowers to a `Clone` Rust type but has
-                        // no dedicated clone intrinsic (`List`/`Map`/`Set`/…). Without the builtin
-                        // case these fell through to a dangling `List_clone`-style call (the checker
-                        // accepts `.clone()` via the `Clone` protocol, so it never errored at the
-                        // front end — E0425 at the Rust backend). `.clone()` borrows its receiver, so
-                        // a place behind a `&` (read param / field of one) works without moving. Types
-                        // that don't derive Clone are rejected earlier (RS0206). `String`/`Json` keep
-                        // their own clone intrinsics and are handled below.
-                        return format!("{}.clone()", self.lower_expr(receiver));
-                    }
-                    let receiver_rust_type = receiver_type
-                        .as_ref()
-                        .map(|ty| self.lower_type_ref(ty, ManagedPosition::Bare))
-                        .unwrap_or_else(|| rust_ident(&receiver_type_name));
-                    // Resolve namespace: check generic protocol bounds first,
-                    // then concrete protocol impls, then fall back to the type
-                    // name itself. This mirrors HIR receiver-call resolution for
-                    // the non-ambiguous cases that are allowed to reach lowering.
-                    let namespace = self
-                        .generic_protocol_bounds
-                        .get(&receiver_type_name)
-                        .cloned()
-                        .or_else(|| {
-                            capability_protocol_name(&receiver_type_name).map(str::to_string)
-                        })
-                        .or_else(|| self.protocol_impl_namespace(&receiver_type_root, method))
-                        .or_else(|| {
-                            receiver_facade_namespace(&receiver_type_root, method)
-                                .map(str::to_string)
-                        })
-                        .unwrap_or(receiver_type_root);
-                    let is_protocol = self.protocol_names.contains(&namespace);
-                    let lowered_receiver = match (*effect).unwrap_or(DataEffect::Read) {
-                        DataEffect::Mut
-                            if let Expr::Ident(receiver_name, _) = receiver.as_ref()
-                                && self.param_effects.get(receiver_name)
-                                    == Some(&DataEffect::Mut) =>
-                        {
-                            rust_ident(receiver_name)
-                        }
-                        DataEffect::Mut
-                            if matches!(
-                                receiver.as_ref(),
-                                Expr::Ident(..) | Expr::Field { .. } | Expr::Index { .. }
-                            ) =>
-                        {
-                            format!("&mut {}", self.lower_assignment_target(receiver))
-                        }
-                        DataEffect::Mut => format!("&mut {}", self.lower_expr(receiver)),
-                        DataEffect::Read
-                            if receiver_type.as_ref().is_some_and(is_copy_type_ref) =>
-                        {
-                            self.lower_expr(receiver)
-                        }
-                        DataEffect::Read
-                            if receiver_type.as_ref().is_some_and(|ty| {
-                                (ty.name == "List"
-                                    && matches!(receiver.as_ref(), Expr::ArrayLiteral { .. }))
-                                    || (ty.name == "Map"
-                                        && matches!(receiver.as_ref(), Expr::MapLiteral { .. }))
-                            }) =>
-                        {
-                            let receiver_type = receiver_type.as_ref().expect("checked above");
-                            format!(
-                                "&{}",
-                                self.lower_expr_for_expected_type(receiver, receiver_type)
-                            )
-                        }
-                        DataEffect::Read => format!("&{}", self.lower_expr(receiver)),
-                        DataEffect::Take => self.lower_expr(receiver),
-                    };
-                    // Runtime intrinsics / native fns take their args by reference
-                    // (even `Copy` ones), so for those callees honor the parameter
-                    // effect for named args too. Protocol/user receiver calls are
-                    // not native targets and keep their by-value `Copy` handling.
-                    let native_target_callee = Callee::Qualified {
-                        namespace: namespace.clone(),
-                        name: method.to_string(),
-                    };
-                    let is_native_target = runtime_intrinsic_target(&native_target_callee)
-                        .is_some()
-                        || self
-                            .native_bindings
-                            .contains_key(&native_boundary_function_key(&format!(
-                                "{namespace}.{method}"
-                            )));
-                    let lowered_args = args
-                        .iter()
-                        .enumerate()
-                        .map(|(index, arg)| {
-                            if let Some(expected) = self.receiver_call_expected_arg_type(
-                                &namespace,
-                                method,
-                                receiver_type.as_ref(),
-                                arg.name.as_deref(),
-                                index,
-                            ) {
-                                // Only `Copy` named args to native targets need the
-                                // effect-based `&` (they'd otherwise pass by value to a
-                                // by-reference intrinsic); non-Copy named args keep their
-                                // existing lowering (which handles String/Json cleanly).
-                                if (arg.name.is_none()
-                                    || (is_native_target && is_copy_type_ref(&expected)))
-                                    && let Some(effect) = self.receiver_call_expected_arg_effect(
-                                        &namespace, method, index,
-                                    )
-                                {
-                                    let lowered =
-                                        self.lower_receiver_positional_arg(&arg.value, &expected);
-                                    return match effect {
-                                        DataEffect::Read => format!("&{lowered}"),
-                                        DataEffect::Mut => format!("&mut {lowered}"),
-                                        DataEffect::Take => lowered,
-                                    };
-                                }
-                                if arg.name.is_none() {
-                                    if expected.name == "Fn" {
-                                        return self
-                                            .lower_expr_for_expected_type(&arg.value, &expected);
-                                    }
-                                    let lowered =
-                                        self.lower_receiver_positional_arg(&arg.value, &expected);
-                                    if is_copy_type_ref(&expected) {
-                                        return lowered;
-                                    }
-                                    return format!("&{lowered}");
-                                }
-                                return self
-                                    .lower_call_arg_for_expected_type(&arg.value, &expected);
-                            }
-                            self.lower_expr(&arg.value)
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    let all_args = if lowered_args.is_empty() {
-                        lowered_receiver
-                    } else {
-                        format!("{lowered_receiver}, {lowered_args}")
-                    };
-                    let qualified_key =
-                        native_boundary_function_key(&format!("{namespace}.{method}"));
-                    if let Some(native_target) = self.native_bindings.get(&qualified_key).cloned() {
-                        return format!("{native_target}({all_args})");
-                    }
-                    let callee_str = if is_protocol {
-                        format!(
-                            "<{} as {}>::{}",
-                            receiver_rust_type,
-                            rust_ident(&namespace),
-                            rust_ident(method)
-                        )
-                    } else {
-                        lower_callee(&Callee::Qualified {
-                            namespace: namespace.clone(),
-                            name: method.clone(),
-                        })
-                    };
-                    return format!("{callee_str}({all_args})");
-                }
-                if is_string_concat_callee(callee) {
-                    return lower_string_concat_call(self, args);
-                }
-                if is_weak_from_callee(callee) {
-                    return lower_weak_from_call(self, args);
-                }
-                if is_weak_upgrade_callee(callee) {
-                    return lower_weak_upgrade_call(self, args);
-                }
-                if let Some(native_target) = self
-                    .native_bindings
-                    .get(&native_boundary_callee_key(callee))
-                    .cloned()
-                {
-                    let args = args
-                        .iter()
-                        .map(|arg| self.lower_expr(&arg.value))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    return format!("{native_target}({args})");
-                }
-                if is_resource_pool_new_callee(callee) {
-                    return lower_resource_pool_new_call(self, args, span);
-                }
-                if is_resource_pool_try_new_callee(callee) {
-                    return lower_resource_pool_try_new_call(self, args, span);
-                }
-                if is_resource_pool_lazy_callee(callee) {
-                    return lower_resource_pool_lazy_call(self, args, span);
-                }
-                if is_resource_pool_try_lazy_callee(callee) {
-                    return lower_resource_pool_try_lazy_call(self, args, span);
-                }
-                if let Some(protocol) = capability_from_protocol(callee) {
-                    return self.lower_capability_from_call(protocol, args);
-                }
-                if self.is_protocol_callee(callee) {
-                    let lowered_callee = lower_protocol_callee(callee);
-                    let args = args
-                        .iter()
-                        .enumerate()
-                        .map(|(index, arg)| self.lower_call_arg_for_callee(callee, arg, index))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    return format!("{lowered_callee}({args})");
-                }
-                let is_resource_pool_borrow = is_resource_pool_borrow_callee(callee);
-                let lowered_callee = if is_resource_pool_borrow {
-                    "rsscript_runtime::ResourcePool::borrow_at".to_string()
-                } else if is_resource_pool_try_borrow_callee(callee) {
-                    "rsscript_runtime::ResourcePool::try_borrow".to_string()
-                } else {
-                    lower_callee(callee)
-                };
-                let provided = args.len();
-                let mut args = args
-                    .iter()
-                    .enumerate()
-                    .map(|(index, arg)| self.lower_call_arg_for_callee(callee, arg, index))
-                    .collect::<Vec<_>>();
-                // Fill omitted trailing parameters that declare a default value
-                // (Rust has no default params, so each call site supplies them).
-                // Calls lower positionally, so omitted args are always the trailing
-                // defaulted ones.
-                if let Some(name) = callee_source_name(callee)
-                    && let Some(defaults) = self.function_param_defaults.get(&name).cloned()
-                    && defaults.len() > provided
-                {
-                    let param_types = self.function_param_types.get(&name).cloned();
-                    let param_effects = self
-                        .function_param_effects
-                        .get(&native_boundary_callee_key(callee))
-                        .cloned();
-                    for (index, default) in defaults.iter().enumerate().skip(provided) {
-                        if let Some(default) = default {
-                            let effect = param_effects
-                                .as_ref()
-                                .and_then(|params| params.get(index))
-                                .and_then(|(_, effect)| *effect);
-                            let lowered = if let Some(effect) = effect {
-                                // A non-Copy default is materialized at the call and
-                                // passed under the parameter's declared effect;
-                                // route it through the normal argument path so the
-                                // borrow/managed-handle ABI matches the signature.
-                                let synthetic = CallArg {
-                                    name: param_types
-                                        .as_ref()
-                                        .and_then(|params| params.get(index))
-                                        .map(|(param_name, _)| param_name.clone()),
-                                    value: Expr::Effect {
-                                        effect,
-                                        value: Box::new(default.clone()),
-                                        span: span.clone(),
-                                    },
-                                    malformed: false,
-                                    span: span.clone(),
-                                };
-                                self.lower_call_arg_for_callee(callee, &synthetic, index)
-                            } else {
-                                match param_types.as_ref().and_then(|params| params.get(index)) {
-                                    Some((_, ty)) => self.lower_expr_for_expected_type(default, ty),
-                                    None => self.lower_owned_expr(default),
-                                }
-                            };
-                            args.push(lowered);
-                        }
-                    }
-                }
-                if is_resource_pool_borrow {
-                    args.push(lower_source_span(span));
-                }
-                let args = args.join(", ");
-                format!("{lowered_callee}({args})")
+                self.lower_call_dispatch(callee, args, span)
             }
             Expr::Effect {
                 effect,
@@ -3000,6 +2536,513 @@ impl<'a> RustLowerer<'a> {
             }
             Expr::Unknown(span) => unreachable_lowering("expression", span),
         }
+    }
+
+    /// `json_decode`/`json_encode` codec calls.
+    fn lower_call_json_codec(
+        &mut self,
+        callee: &Callee,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Option<String> {
+        if is_json_decode_callee(callee) {
+            return Some(self.lower_json_decode_call(callee, args, span));
+        }
+        if is_json_encode_callee(callee)
+            && let Some(value_arg) = args
+                .iter()
+                .find(|arg| arg.name.as_deref() == Some("value") || arg.name.is_none())
+        {
+            return Some(self.lower_json_value(&value_arg.value));
+        }
+        None
+    }
+
+    /// `Task.cancellation_token()` resolves to the enclosing task_group's token,
+    /// or a never-cancelled token outside one.
+    fn lower_call_task_cancellation_token(&mut self, callee: &Callee) -> Option<String> {
+        if let Callee::Qualified { namespace, name } = callee
+            && type_root_name(namespace) == "Task"
+            && type_root_name(name) == "cancellation_token"
+        {
+            return Some(match &self.current_task_group_token {
+                Some(guard) => format!("{guard}.token()"),
+                None => "rsscript_runtime::cancellation_never()".to_string(),
+            });
+        }
+        None
+    }
+
+    /// `Callee::Name` constructor forms: user struct/class constructors, user
+    /// sum-type payload-variant construction, Rust enum constructors, and
+    /// runtime struct constructors. Returns `None` if the callee is not a name
+    /// or names no known constructor (so the call falls through to dispatch).
+    fn lower_call_named_constructor(
+        &mut self,
+        callee: &Callee,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Option<String> {
+        let Callee::Name(name) = callee else {
+            return None;
+        };
+        // A turbofish constructor callee carries its type arguments in the
+        // raw name (e.g. `Pair<Int>`), but `type_kinds` and the per-type
+        // field/handle lookups are keyed by the bare root (`Pair`). Root the
+        // name so the named-field constructor path is taken (and the struct
+        // literal is emitted as `Pair { .. }`, letting Rust infer the args)
+        // instead of falling through to a positional tuple-struct call.
+        let ctor_name = type_root_name(name);
+        if let Some(type_kind) = self.type_kinds.get(ctor_name).copied() {
+            let mut fields = Vec::new();
+            for arg in args {
+                let field_name = self.constructor_field_arg_name(ctor_name, arg);
+                let field = field_name
+                    .as_deref()
+                    .map(rust_ident)
+                    .unwrap_or_else(|| "/* unnamed */".to_string());
+                let is_weak_field = arg
+                    .name
+                    .as_deref()
+                    .or(field_name.as_deref())
+                    .is_some_and(|field_name| self.is_weak_field(ctor_name, field_name));
+                if is_weak_field {
+                    fields.push(format!(
+                        "{field}: {}",
+                        self.lower_explicit_weak_field_value(&arg.value)
+                    ));
+                } else if field_name
+                    .as_deref()
+                    .is_some_and(|field_name| self.is_runtime_handle_field(ctor_name, field_name))
+                {
+                    let field_name = field_name.unwrap_or_default();
+                    fields.push(format!(
+                        "{field}: {}",
+                        self.lower_runtime_handle_field_value(
+                            ctor_name,
+                            &field_name,
+                            &arg.value,
+                            &arg.span
+                        )
+                    ));
+                } else {
+                    let value = field_name
+                        .as_deref()
+                        .and_then(|field_name| self.field_type(ctor_name, field_name))
+                        .map(|expected| self.lower_expr_for_expected_type(&arg.value, &expected))
+                        .unwrap_or_else(|| self.lower_owned_expr(&arg.value));
+                    fields.push(format!("{field}: {value}"));
+                }
+            }
+            // Fill omitted fields that declare a default value
+            // (`name: T = expr`) so the Rust struct literal is complete.
+            let provided: std::collections::HashSet<String> = args
+                .iter()
+                .filter_map(|arg| self.constructor_field_arg_name(ctor_name, arg))
+                .collect();
+            let defaulted: Vec<(String, Expr)> = self
+                .program
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Item::Type(decl) if type_root_name(&decl.name) == ctor_name => Some(
+                        decl.fields
+                            .iter()
+                            .filter_map(|f| f.default.clone().map(|d| (f.name.clone(), d)))
+                            .collect::<Vec<_>>(),
+                    ),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            for (field_name, default) in defaulted {
+                if provided.contains(&field_name) {
+                    continue;
+                }
+                let value = self
+                    .field_type(ctor_name, &field_name)
+                    .map(|expected| self.lower_expr_for_expected_type(&default, &expected))
+                    .unwrap_or_else(|| self.lower_owned_expr(&default));
+                fields.push(format!("{}: {value}", rust_ident(&field_name)));
+            }
+            let fields = fields.join(", ");
+            let constructed = format!("{} {{ {fields} }}", rust_ident(ctor_name));
+            if type_kind == TypeKind::Class {
+                return Some(format!(
+                    "rsscript_runtime::manage_at({constructed}, {})",
+                    lower_source_span(span)
+                ));
+            }
+            return Some(constructed);
+        }
+
+        // User sum-type payload-variant construction: emit the qualified, struct-style
+        // form `Enum::Variant { field: value, ... }` to match the lowered enum (whose
+        // payload variants use named fields). Nullary variants emit `Enum::Variant`.
+        if let Some(sum_name) = self.find_sum_type_for_variant(ctor_name) {
+            // declared (name, type) of each field of this variant
+            let decl_fields: Vec<(String, TypeRef)> = self
+                .program
+                .items
+                .iter()
+                .find_map(|item| {
+                    if let Item::SumType(sum) = item {
+                        sum.variants.iter().find(|v| v.name == ctor_name).map(|v| {
+                            v.fields
+                                .iter()
+                                .map(|f| (f.name.clone(), f.ty.clone()))
+                                .collect()
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default();
+            if decl_fields.is_empty() {
+                return Some(format!(
+                    "{}::{}",
+                    rust_ident(&sum_name),
+                    rust_ident(ctor_name)
+                ));
+            }
+            let mut fields = Vec::new();
+            for (index, arg) in args.iter().enumerate() {
+                // Resolve the target field by name if given, else positionally. Arity and
+                // field names are validated in the checker; here we stay bounds-safe and
+                // lower each value against its declared field type (like struct ctors).
+                let field = match &arg.name {
+                    Some(name) => decl_fields.iter().find(|(fname, _)| fname == name),
+                    None => decl_fields.get(index),
+                };
+                let Some((field_name, field_ty)) = field else {
+                    continue;
+                };
+                let value = self.lower_expr_for_expected_type(&arg.value, field_ty);
+                fields.push(format!("{}: {value}", rust_ident(field_name)));
+            }
+            return Some(format!(
+                "{}::{} {{ {} }}",
+                rust_ident(&sum_name),
+                rust_ident(ctor_name),
+                fields.join(", ")
+            ));
+        }
+
+        if is_rust_enum_constructor(name) {
+            let args = args
+                .iter()
+                .map(|arg| self.lower_expr(&arg.value))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Some(format!("{}({args})", rust_ident(name)));
+        }
+
+        if let Some((target, fields)) = runtime_struct_constructor(name) {
+            let mut lowered_fields = Vec::new();
+            for (index, arg) in args.iter().enumerate() {
+                let Some(field) = arg.name.as_deref().or_else(|| fields.get(index).copied()) else {
+                    continue;
+                };
+                lowered_fields.push(format!(
+                    "{}: {}",
+                    rust_ident(field),
+                    self.lower_owned_expr(&arg.value)
+                ));
+            }
+            return Some(format!("{target} {{ {} }}", lowered_fields.join(", ")));
+        }
+
+        None
+    }
+
+    /// Receiver-call shorthand (`receiver.method(..)`): resolve the receiver's
+    /// type, pick the protocol/facade/native namespace, apply the receiver's
+    /// borrow/effect, and emit the qualified call with the receiver as the first
+    /// argument. Returns `None` if the callee is not a receiver call.
+    fn lower_call_receiver(&mut self, callee: &Callee, args: &[CallArg]) -> Option<String> {
+        if let Callee::ReceiverCall {
+            receiver,
+            method,
+            effect,
+        } = callee
+        {
+            let receiver_type = self.infer_expr_type(receiver);
+            let receiver_type_name = receiver_type
+                .as_ref()
+                .map(type_ref_display_name)
+                .unwrap_or_else(|| "Unknown".to_string());
+            let receiver_type_root = type_root_name(&receiver_type_name).to_string();
+            if method == "clone"
+                && (self.type_derives_clone(&receiver_type_root)
+                    || Self::is_builtin_clone_value(&receiver_type_root))
+            {
+                // Explicit `.clone()` -> Rust's `Clone`: a user struct/sum that derives
+                // `Clone`, or a builtin value type that lowers to a `Clone` Rust type but has
+                // no dedicated clone intrinsic (`List`/`Map`/`Set`/…). Without the builtin
+                // case these fell through to a dangling `List_clone`-style call (the checker
+                // accepts `.clone()` via the `Clone` protocol, so it never errored at the
+                // front end — E0425 at the Rust backend). `.clone()` borrows its receiver, so
+                // a place behind a `&` (read param / field of one) works without moving. Types
+                // that don't derive Clone are rejected earlier (RS0206). `String`/`Json` keep
+                // their own clone intrinsics and are handled below.
+                return Some(format!("{}.clone()", self.lower_expr(receiver)));
+            }
+            let receiver_rust_type = receiver_type
+                .as_ref()
+                .map(|ty| self.lower_type_ref(ty, ManagedPosition::Bare))
+                .unwrap_or_else(|| rust_ident(&receiver_type_name));
+            // Resolve namespace: check generic protocol bounds first,
+            // then concrete protocol impls, then fall back to the type
+            // name itself. This mirrors HIR receiver-call resolution for
+            // the non-ambiguous cases that are allowed to reach lowering.
+            let namespace = self
+                .generic_protocol_bounds
+                .get(&receiver_type_name)
+                .cloned()
+                .or_else(|| capability_protocol_name(&receiver_type_name).map(str::to_string))
+                .or_else(|| self.protocol_impl_namespace(&receiver_type_root, method))
+                .or_else(|| {
+                    receiver_facade_namespace(&receiver_type_root, method).map(str::to_string)
+                })
+                .unwrap_or(receiver_type_root);
+            let is_protocol = self.protocol_names.contains(&namespace);
+            let lowered_receiver = match (*effect).unwrap_or(DataEffect::Read) {
+                DataEffect::Mut
+                    if let Expr::Ident(receiver_name, _) = receiver.as_ref()
+                        && self.param_effects.get(receiver_name) == Some(&DataEffect::Mut) =>
+                {
+                    rust_ident(receiver_name)
+                }
+                DataEffect::Mut
+                    if matches!(
+                        receiver.as_ref(),
+                        Expr::Ident(..) | Expr::Field { .. } | Expr::Index { .. }
+                    ) =>
+                {
+                    format!("&mut {}", self.lower_assignment_target(receiver))
+                }
+                DataEffect::Mut => format!("&mut {}", self.lower_expr(receiver)),
+                DataEffect::Read if receiver_type.as_ref().is_some_and(is_copy_type_ref) => {
+                    self.lower_expr(receiver)
+                }
+                DataEffect::Read
+                    if receiver_type.as_ref().is_some_and(|ty| {
+                        (ty.name == "List"
+                            && matches!(receiver.as_ref(), Expr::ArrayLiteral { .. }))
+                            || (ty.name == "Map"
+                                && matches!(receiver.as_ref(), Expr::MapLiteral { .. }))
+                    }) =>
+                {
+                    let receiver_type = receiver_type.as_ref().expect("checked above");
+                    format!(
+                        "&{}",
+                        self.lower_expr_for_expected_type(receiver, receiver_type)
+                    )
+                }
+                DataEffect::Read => format!("&{}", self.lower_expr(receiver)),
+                DataEffect::Take => self.lower_expr(receiver),
+            };
+            // Runtime intrinsics / native fns take their args by reference
+            // (even `Copy` ones), so for those callees honor the parameter
+            // effect for named args too. Protocol/user receiver calls are
+            // not native targets and keep their by-value `Copy` handling.
+            let native_target_callee = Callee::Qualified {
+                namespace: namespace.clone(),
+                name: method.to_string(),
+            };
+            let is_native_target = runtime_intrinsic_target(&native_target_callee).is_some()
+                || self
+                    .native_bindings
+                    .contains_key(&native_boundary_function_key(&format!(
+                        "{namespace}.{method}"
+                    )));
+            let lowered_args = args
+                .iter()
+                .enumerate()
+                .map(|(index, arg)| {
+                    if let Some(expected) = self.receiver_call_expected_arg_type(
+                        &namespace,
+                        method,
+                        receiver_type.as_ref(),
+                        arg.name.as_deref(),
+                        index,
+                    ) {
+                        // Only `Copy` named args to native targets need the
+                        // effect-based `&` (they'd otherwise pass by value to a
+                        // by-reference intrinsic); non-Copy named args keep their
+                        // existing lowering (which handles String/Json cleanly).
+                        if (arg.name.is_none() || (is_native_target && is_copy_type_ref(&expected)))
+                            && let Some(effect) =
+                                self.receiver_call_expected_arg_effect(&namespace, method, index)
+                        {
+                            let lowered = self.lower_receiver_positional_arg(&arg.value, &expected);
+                            return match effect {
+                                DataEffect::Read => format!("&{lowered}"),
+                                DataEffect::Mut => format!("&mut {lowered}"),
+                                DataEffect::Take => lowered,
+                            };
+                        }
+                        if arg.name.is_none() {
+                            if expected.name == "Fn" {
+                                return self.lower_expr_for_expected_type(&arg.value, &expected);
+                            }
+                            let lowered = self.lower_receiver_positional_arg(&arg.value, &expected);
+                            if is_copy_type_ref(&expected) {
+                                return lowered;
+                            }
+                            return format!("&{lowered}");
+                        }
+                        return self.lower_call_arg_for_expected_type(&arg.value, &expected);
+                    }
+                    self.lower_expr(&arg.value)
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let all_args = if lowered_args.is_empty() {
+                lowered_receiver
+            } else {
+                format!("{lowered_receiver}, {lowered_args}")
+            };
+            let qualified_key = native_boundary_function_key(&format!("{namespace}.{method}"));
+            if let Some(native_target) = self.native_bindings.get(&qualified_key).cloned() {
+                return Some(format!("{native_target}({all_args})"));
+            }
+            let callee_str = if is_protocol {
+                format!(
+                    "<{} as {}>::{}",
+                    receiver_rust_type,
+                    rust_ident(&namespace),
+                    rust_ident(method)
+                )
+            } else {
+                lower_callee(&Callee::Qualified {
+                    namespace: namespace.clone(),
+                    name: method.clone(),
+                })
+            };
+            return Some(format!("{callee_str}({all_args})"));
+        }
+
+        None
+    }
+
+    /// Generic / fallthrough call dispatch: string-concat and weak intrinsics,
+    /// native-bound free functions, resource-pool constructors and borrows,
+    /// capability-from-protocol, protocol callees, and the default
+    /// `callee(args...)` form (including trailing defaulted-parameter fill-in).
+    fn lower_call_dispatch(&mut self, callee: &Callee, args: &[CallArg], span: &Span) -> String {
+        if is_string_concat_callee(callee) {
+            return lower_string_concat_call(self, args);
+        }
+        if is_weak_from_callee(callee) {
+            return lower_weak_from_call(self, args);
+        }
+        if is_weak_upgrade_callee(callee) {
+            return lower_weak_upgrade_call(self, args);
+        }
+        if let Some(native_target) = self
+            .native_bindings
+            .get(&native_boundary_callee_key(callee))
+            .cloned()
+        {
+            let args = args
+                .iter()
+                .map(|arg| self.lower_expr(&arg.value))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return format!("{native_target}({args})");
+        }
+        if is_resource_pool_new_callee(callee) {
+            return lower_resource_pool_new_call(self, args, span);
+        }
+        if is_resource_pool_try_new_callee(callee) {
+            return lower_resource_pool_try_new_call(self, args, span);
+        }
+        if is_resource_pool_lazy_callee(callee) {
+            return lower_resource_pool_lazy_call(self, args, span);
+        }
+        if is_resource_pool_try_lazy_callee(callee) {
+            return lower_resource_pool_try_lazy_call(self, args, span);
+        }
+        if let Some(protocol) = capability_from_protocol(callee) {
+            return self.lower_capability_from_call(protocol, args);
+        }
+        if self.is_protocol_callee(callee) {
+            let lowered_callee = lower_protocol_callee(callee);
+            let args = args
+                .iter()
+                .enumerate()
+                .map(|(index, arg)| self.lower_call_arg_for_callee(callee, arg, index))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return format!("{lowered_callee}({args})");
+        }
+        let is_resource_pool_borrow = is_resource_pool_borrow_callee(callee);
+        let lowered_callee = if is_resource_pool_borrow {
+            "rsscript_runtime::ResourcePool::borrow_at".to_string()
+        } else if is_resource_pool_try_borrow_callee(callee) {
+            "rsscript_runtime::ResourcePool::try_borrow".to_string()
+        } else {
+            lower_callee(callee)
+        };
+        let provided = args.len();
+        let mut args = args
+            .iter()
+            .enumerate()
+            .map(|(index, arg)| self.lower_call_arg_for_callee(callee, arg, index))
+            .collect::<Vec<_>>();
+        // Fill omitted trailing parameters that declare a default value
+        // (Rust has no default params, so each call site supplies them).
+        // Calls lower positionally, so omitted args are always the trailing
+        // defaulted ones.
+        if let Some(name) = callee_source_name(callee)
+            && let Some(defaults) = self.function_param_defaults.get(&name).cloned()
+            && defaults.len() > provided
+        {
+            let param_types = self.function_param_types.get(&name).cloned();
+            let param_effects = self
+                .function_param_effects
+                .get(&native_boundary_callee_key(callee))
+                .cloned();
+            for (index, default) in defaults.iter().enumerate().skip(provided) {
+                if let Some(default) = default {
+                    let effect = param_effects
+                        .as_ref()
+                        .and_then(|params| params.get(index))
+                        .and_then(|(_, effect)| *effect);
+                    let lowered = if let Some(effect) = effect {
+                        // A non-Copy default is materialized at the call and
+                        // passed under the parameter's declared effect;
+                        // route it through the normal argument path so the
+                        // borrow/managed-handle ABI matches the signature.
+                        let synthetic = CallArg {
+                            name: param_types
+                                .as_ref()
+                                .and_then(|params| params.get(index))
+                                .map(|(param_name, _)| param_name.clone()),
+                            value: Expr::Effect {
+                                effect,
+                                value: Box::new(default.clone()),
+                                span: span.clone(),
+                            },
+                            malformed: false,
+                            span: span.clone(),
+                        };
+                        self.lower_call_arg_for_callee(callee, &synthetic, index)
+                    } else {
+                        match param_types.as_ref().and_then(|params| params.get(index)) {
+                            Some((_, ty)) => self.lower_expr_for_expected_type(default, ty),
+                            None => self.lower_owned_expr(default),
+                        }
+                    };
+                    args.push(lowered);
+                }
+            }
+        }
+        if is_resource_pool_borrow {
+            args.push(lower_source_span(span));
+        }
+        let args = args.join(", ");
+        format!("{lowered_callee}({args})")
     }
 
     fn lower_binary_operand(&mut self, expr: &Expr, parent: BinaryOp, is_right: bool) -> String {
@@ -3348,6 +3391,17 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
+    /// Apply a `read`/`mut`/`take` effect to a managed-handle argument: `read`
+    /// borrows through the handle's read view, `mut` takes `&mut` of the lowered
+    /// value, and `take` moves the lowered value.
+    fn lower_managed_handle_effect_arg(&mut self, effect: DataEffect, value: &Expr) -> String {
+        match effect {
+            DataEffect::Read => self.lower_managed_read_ref(value),
+            DataEffect::Mut => format!("&mut {}", self.lower_expr(value)),
+            DataEffect::Take => self.lower_expr(value),
+        }
+    }
+
     fn lower_call_arg_for_callee(
         &mut self,
         callee: &Callee,
@@ -3358,22 +3412,14 @@ impl<'a> RustLowerer<'a> {
             && let Expr::Effect { effect, value, .. } = &arg.value
             && self.expr_lowers_to_managed_handle(value)
         {
-            return match effect {
-                DataEffect::Read => self.lower_managed_read_ref(value),
-                DataEffect::Mut => format!("&mut {}", self.lower_expr(value)),
-                DataEffect::Take => self.lower_expr(value),
-            };
+            return self.lower_managed_handle_effect_arg(*effect, value);
         }
         if self.call_arg_is_retained(callee, arg, index)
             && runtime_intrinsic_target(callee).is_none()
             && let Expr::Effect { effect, value, .. } = &arg.value
             && self.expr_lowers_to_managed_handle(value)
         {
-            return match effect {
-                DataEffect::Read => self.lower_managed_read_ref(value),
-                DataEffect::Mut => format!("&mut {}", self.lower_expr(value)),
-                DataEffect::Take => self.lower_expr(value),
-            };
+            return self.lower_managed_handle_effect_arg(*effect, value);
         }
         // A `read`-effect argument passed to a user function's *by-value* `Copy`
         // parameter (declared with no `read`/`mut` effect, so it lowers to e.g.
@@ -5004,7 +5050,10 @@ impl<'a> RustLowerer<'a> {
     ) -> Vec<(String, String)> {
         // Single-payload variants (`Some(x)`, `Ok(x)`, single-field user variant).
         if let Some((bind_name, field_ty)) = self.single_payload_binding(pattern, value_type) {
-            return self.owned_rebinding_for(&bind_name, &field_ty).into_iter().collect();
+            return self
+                .owned_rebinding_for(&bind_name, &field_ty)
+                .into_iter()
+                .collect();
         }
         // Struct / tuple patterns: each bound field of a by-ref scrutinee is `&T`
         // under match ergonomics, but the arm should see an owned `T` — so shadow
@@ -5012,8 +5061,7 @@ impl<'a> RustLowerer<'a> {
         if let MatchPattern::Struct { name, fields, .. } = pattern {
             let declared = self.pattern_declared_field_types(value_type, name);
             let params = self.pattern_type_params(value_type, name);
-            let args: Vec<TypeRef> =
-                value_type.map(|ty| ty.args.clone()).unwrap_or_default();
+            let args: Vec<TypeRef> = value_type.map(|ty| ty.args.clone()).unwrap_or_default();
             let mut rebindings = Vec::new();
             for field in fields {
                 if field.ignored {
@@ -5035,9 +5083,7 @@ impl<'a> RustLowerer<'a> {
                         rebindings.extend(self.owned_rebinding_for(binding, field_ty));
                     }
                 } else if let Some(nested) = &field.pattern {
-                    rebindings.extend(
-                        self.owned_payload_rebindings(nested, declared_ty.as_ref()),
-                    );
+                    rebindings.extend(self.owned_payload_rebindings(nested, declared_ty.as_ref()));
                 }
             }
             return rebindings;
@@ -5089,11 +5135,7 @@ impl<'a> RustLowerer<'a> {
     /// The generic type parameters declared by the type backing `pattern_name`
     /// when matched against `value_type` (struct or sum variant), in declaration
     /// order — so concrete arguments from `value_type` can be substituted in.
-    fn pattern_type_params(
-        &self,
-        value_type: Option<&TypeRef>,
-        pattern_name: &str,
-    ) -> Vec<String> {
+    fn pattern_type_params(&self, value_type: Option<&TypeRef>, pattern_name: &str) -> Vec<String> {
         let Some(root) = value_type.map(|ty| ty.name.as_str()) else {
             return Vec::new();
         };
@@ -5107,8 +5149,7 @@ impl<'a> RustLowerer<'a> {
                         .collect();
                 }
                 Item::SumType(sum)
-                    if sum.name == root
-                        && sum.variants.iter().any(|v| v.name == pattern_name) =>
+                    if sum.name == root && sum.variants.iter().any(|v| v.name == pattern_name) =>
                 {
                     return sum
                         .type_params
@@ -5213,9 +5254,9 @@ impl<'a> RustLowerer<'a> {
                     }
                 }
                 parts.extend(
-                    suffix
-                        .iter()
-                        .map(|pattern| self.lower_match_pattern_typed(pattern, element_type, by_ref)),
+                    suffix.iter().map(|pattern| {
+                        self.lower_match_pattern_typed(pattern, element_type, by_ref)
+                    }),
                 );
                 format!("[{}]", parts.join(", "))
             }
