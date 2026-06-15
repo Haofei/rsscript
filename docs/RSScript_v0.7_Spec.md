@@ -5292,7 +5292,9 @@ B. Cross-isolate message API with zero-copy transfer
    - managed handles never cross isolates; only explicit messages do.
 
 C. Two-tier execution: dev interpreter + Rust-lowering AOT
-   - now in scope: committed roadmap (§20.2).
+   - implemented (§20.2-4): `rss dev --run` runs the inner edit→run loop through the
+     reg-VM dev tier (no rustc cost) and switches to the Rust-lowering AOT tier with
+     `--release`; both run at VM↔compiled parity.
    - a HIR-level interpreter for the managed subset for a fast edit-run loop,
      since rustc compilation cost is poor for inner-loop iteration.
    - the Rust-lowering path remains the production/AOT target.
@@ -5469,10 +5471,13 @@ implicit flow promotion       any record-like form must use named fields
 ### 20.2 In scope: committed implementation roadmap
 
 The following directions — previously deferred (§20.1) or listed as
-review-visible-but-not-executable (§3.2) — are now **committed in-scope work**
-targeted for implementation, tracked as open items in `docs/spec-todo.md`. All
-four are design-compatible: large, but they extend the model without reversing a
-review-first tenet.
+review-visible-but-not-executable (§3.2) — were promoted to **committed in-scope
+work**; all four are design-compatible (they extend the model without reversing a
+review-first tenet). Status (tracked in `docs/spec-todo.md`): items 1 (scoped
+views), 2 (capability objects), and 4 (two-tier execution) are **implemented**;
+item 3 (cross-isolate messages) has its **message-channel core implemented**
+(`Channel.message<T>`, §20.2-3) with the broader payload contract and isolate-spawn
+still to come.
 
 ```text
 1. Scoped views / slices (zero-copy borrowed regions) — §20.1-I, §3.2.
