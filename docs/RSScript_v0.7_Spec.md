@@ -23,8 +23,10 @@ Surface and control flow:
     (§14.6.1); match in expression position (§5A).
   - `?` early-return on both `Result` and `Option`; the two forms do not mix
     (§5A; mismatch `RS0013`).
-  - Default parameter values `name: Type = <expr>`, filled by name at lowering
-    (§9.2, §14.1; `RS0204`/`RS0207`).
+  - Default parameter values `name: Type = <expr>` and struct field defaults,
+    filled by name at lowering (§9.2, §14.1; `RS0204`/`RS0207`).
+  - Named function values: a top-level function passed where a `Fn(...)` is
+    expected desugars to a forwarding closure (§10.9).
   - Top-level and type-associated constants `const [Type.]NAME: T = literal`,
     literal initializers only, inlined at every reference (§6.9; `RS0015`).
   - Tuples: `(T0, T1, ...)` types/literals, `.itemN` access, tuple patterns, and
@@ -34,6 +36,8 @@ Surface and control flow:
     `[..init, last]`, `[a, ..mid, z]`; `..name` binds `List<T>` (§5A).
 
 Types, protocols, and stdlib:
+  - Type aliases, generic and non-generic (`type Pair<T> = ...`), expanded at
+    every comparison site (§6.11).
   - Compiler-owned protocols `Clone`, `Eq`, `Ord`, `Hashable` and a `derives(...)`
     clause on struct/sum (Debug, Clone, Eq, Ord, Hash, JsonEncode, JsonDecode,
     Schema, ReviewSchema); `Map`/`Set` keys are `Hashable`-bound (§14.6).
@@ -48,10 +52,12 @@ Lowering and tooling:
   - Generated-namespace isolation: a `module` declaration namespaces its file's
     top-level symbols so two files may share a source name; module-less files
     lower byte-identically. Same-leaf references are disambiguated by `use … as`
-    aliasing or module-qualified `module.fn()` calls; a colliding bare import is
-    `RS0015` (§14.8).
+    aliasing, qualified access (`module.fn()`, `module.Type`, `module.CONST`,
+    `module.Variant` in value and pattern position), or a `use module.*` glob; a
+    colliding bare import is `RS0015` (§14.8).
   - `#lower_name("...")` escape hatch to pin a function's backend symbol
-    (§14.8; invalid/colliding pin `RS0035`).
+    (§14.8; invalid/colliding pin `RS0035`); `__rss_`/`__rsscript_` names are a
+    reserved generated-symbol namespace (§14.8).
 ```
 
 ---
@@ -1771,6 +1777,25 @@ this spelling is an implementation detail of lowering and is reversed to the
 resolved by substituting the tuple's element types, the same generic
 field/pattern inference that applies to any generic struct.
 
+### 6.11 Type aliases
+
+A `type` declaration names an existing type without creating a new nominal type or
+a value-namespace entry:
+
+```rust
+type Identifier = String
+type Pair<T> = Result<T, String>
+```
+
+An alias may be **generic** (`Pair<T>`) and may reference imported or builtin
+generic types. A reference to an alias is expanded to its target wherever a type
+is compared — parameter, return, field, and binding positions alike — by
+substituting the reference's arguments for the alias's parameters
+(`Pair<Int>` → `Result<Int, String>`). Aliases are transparent: an alias and its
+target are the same type, so a value of the target type satisfies the alias and
+vice versa. A `pub type` is part of the public review surface and appears in the
+symbol inventory as a type-level symbol (it introduces no value binding).
+
 ---
 
 ## 7. Bindings and World Boundaries
@@ -2492,6 +2517,22 @@ A closure passed to this parameter must have the same arity, for example
 `callback: |value| String.from_int(value: value)`. The callback parameter names
 are local to the closure; the contract supplies their positional types. A
 callback with the wrong parameter count is a diagnostic before lowering.
+
+**Named function values.** A bare top-level free function may be passed where a
+`Fn(...)` is expected, instead of an inline closure:
+
+```rust
+fn is_even(x: read Int) -> Bool { return x % 2 == 0 }
+
+List.filter(list: read xs, predicate: is_even)
+```
+
+This is a desugaring: a function name in argument position is rewritten to a
+forwarding closure over the function's own parameters
+(`(x) { return is_even(x: read x) }`), so the checker and every backend see an
+ordinary closure with identical behavior. A name shadowed by a local binding is
+not rewritten (the local wins). There is no first-class function-pointer value;
+the function is reached only through the forwarding closure.
 Calls to a noescape callback must also match the same positional parameter
 contract: inside `fn run(callback: noescape Fn(Int) -> Int)`, `callback("x")`
 is rejected before lowering because the first argument is `String`, not `Int`.
@@ -2972,6 +3013,24 @@ Rules:
 This is a desugaring, not a new runtime mechanism: after defaults are filled the
 checker and every backend see an ordinary complete named-argument list. The
 feature replaces hand-written overload sets with one reviewable signature.
+
+**Struct field defaults (construction helpers).** A `struct` field may declare a
+default the same way (`name: T = <expr>`); a constructor call may then omit it and
+the default is filled at construction:
+
+```rust
+struct Options {
+    name: String = "default"
+    retries: Int = 3
+}
+
+let a = Options(retries: 5)   // name = "default"
+```
+
+The field default is filled by name (like a parameter default) on both backends;
+an omitted required (non-defaulted) field is still `RS0204`, and the default is
+type-checked against the field type. This is the construction-helper analog of
+default parameters and removes hand-written overload/wrapper constructor sets.
 
 ### 14.2 Return modes
 
@@ -3721,7 +3780,36 @@ The qualified form accepts a multi-segment module path (`a.b.count()`) and
 resolves to that module's symbol. It is distinct from receiver-call shorthand
 (§14.6.1): a receiver that names an in-scope local is a value receiver call,
 while a receiver that names a module whose free function is the called method is
-a module-qualified call.
+a module-qualified call. `read`/`mut`/`take` written before a qualified call
+apply to the call result (`read m.f()` is read-of-the-call, identical to
+`read (m.f())`), not to the module.
+
+Qualification extends beyond calls, to every reference position:
+
+```text
+module.fn(args)     call position        -> the module's free function
+module.Type         type position        -> the module's type (e.g. read dtype.DType)
+module.CONST        value position       -> the module's constant
+module.Variant      value AND pattern    -> a sum variant declared in the module
+```
+
+These let a type-, const-, or enum-defining module be used from another file
+without one `use` line per symbol. A module-qualified variant resolves the same
+way as the bare variant in both value position (`return ops.MUL`) and `match`
+patterns (`ops.ADD => ...`).
+
+A **glob import** brings every public symbol of a module into scope at once,
+instead of one `use module.NAME` per symbol:
+
+```rust
+use ops.*
+// Ops, its variants (ADD, MUL, ...), MAX_OPS, and ops' functions are now in scope.
+```
+
+`use module.*` imports the module's functions, constants, types, sums, and type
+aliases; sum variants resolve through their sum type and need no per-name import.
+It does not resolve cross-module same-named-variant collisions — qualification
+(`module.Variant`) is the tool for that.
 
 Without one of these, two `use` declarations that would bind the same local name
 in a file are a frontend diagnostic (`RS0015`) rather than a silent
@@ -3745,6 +3833,13 @@ symbol is required; ordinary code relies on the default lowering and on
 generated-namespace isolation instead. The pin must be a valid Rust identifier
 and must not collide with another declaration's final backend name; either
 violation is reported as `RS0035`. The entry point `main` cannot be pinned.
+
+**Reserved generated-symbol namespace.** Identifiers beginning with `__rss_` or
+`__rsscript_` are reserved for compiler-generated symbols (desugaring temporaries,
+runtime helpers, the synthetic tuple structs). A user declaration whose name
+begins with one of those prefixes is rejected (`RS0015`), so generated helpers can
+never collide with source names. Other double-underscore names — Python-style
+dunders such as `__hash__`, used by ports for 1:1 fidelity — are **not** reserved.
 
 Visibility remains declaration-local and explicit. `pub` marks exported types,
 sum types, type aliases, constants, and functions. Items without `pub` are
