@@ -3054,12 +3054,7 @@ fn dependency_path_evidence(
     reason: Option<String>,
 ) -> Evidence {
     Evidence {
-        kind: EvidenceKind::DependencyPath,
         file: package_tree_evidence_file(node),
-        line: None,
-        column: None,
-        length: None,
-        symbol: None,
         reason,
         json_pointer: Some(format!("/root{}", dependency_path_json_pointer(path))),
         resource: Some(format!(
@@ -3072,15 +3067,8 @@ fn dependency_path_evidence(
         )),
         provider: Some("rsscript".to_owned()),
         value,
-        event_id: None,
-        time: None,
         source: Some(TREE_SOURCE.to_owned()),
-        event_name: None,
-        principal: None,
-        account: None,
-        policy_arn: None,
-        statement_index: None,
-        action: None,
+        ..rsscript_evidence(EvidenceKind::DependencyPath)
     }
 }
 
@@ -3398,26 +3386,14 @@ fn metadata_artifact_evidence(
     json_pointer: Option<&str>,
 ) -> Evidence {
     Evidence {
-        kind: EvidenceKind::PackageMetadata,
         file,
-        line: None,
-        column: None,
-        length: None,
-        symbol: None,
         reason,
         json_pointer: json_pointer.map(str::to_owned),
         resource: Some(format!("{}@{}", input.package.name, input.package.version)),
         provider: Some("rsscript".to_owned()),
         value,
-        event_id: None,
-        time: None,
         source: Some(PACKAGE_METADATA_SOURCE.to_owned()),
-        event_name: None,
-        principal: None,
-        account: None,
-        policy_arn: None,
-        statement_index: None,
-        action: None,
+        ..rsscript_evidence(EvidenceKind::PackageMetadata)
     }
 }
 
@@ -3428,26 +3404,14 @@ fn package_check_evidence(
     json_pointer: Option<&str>,
 ) -> Evidence {
     Evidence {
-        kind: EvidenceKind::PackageMetadata,
         file: package_check_evidence_file(input, json_pointer),
-        line: None,
-        column: None,
-        length: None,
-        symbol: None,
         reason,
         json_pointer: json_pointer.map(str::to_owned),
         resource: Some(format!("{}@{}", input.package.name, input.package.version)),
         provider: Some("rsscript".to_owned()),
         value,
-        event_id: None,
-        time: None,
         source: Some(PACKAGE_CHECK_SOURCE.to_owned()),
-        event_name: None,
-        principal: None,
-        account: None,
-        policy_arn: None,
-        statement_index: None,
-        action: None,
+        ..rsscript_evidence(EvidenceKind::PackageMetadata)
     }
 }
 
@@ -3495,26 +3459,14 @@ fn package_check_lock_evidence(
     json_pointer: &str,
 ) -> Evidence {
     Evidence {
-        kind: EvidenceKind::LockfileEntry,
         file: Some(input.lock.path.clone()),
-        line: None,
-        column: None,
-        length: None,
-        symbol: None,
         reason,
         json_pointer: Some(json_pointer.to_owned()),
         resource: Some(format!("{}@{}", input.package.name, input.package.version)),
         provider: Some("rsscript".to_owned()),
         value,
-        event_id: None,
-        time: None,
         source: Some(PACKAGE_CHECK_SOURCE.to_owned()),
-        event_name: None,
-        principal: None,
-        account: None,
-        policy_arn: None,
-        statement_index: None,
-        action: None,
+        ..rsscript_evidence(EvidenceKind::LockfileEntry)
     }
 }
 
@@ -3547,26 +3499,14 @@ fn vendor_evidence(
     json_pointer: Option<&str>,
 ) -> Evidence {
     Evidence {
-        kind: EvidenceKind::PackageMetadata,
         file: Some(file),
-        line: None,
-        column: None,
-        length: None,
-        symbol: None,
         reason,
         json_pointer: json_pointer.map(str::to_owned),
         resource: Some(format!("{}@{}", input.package.name, input.package.version)),
         provider: Some("rsscript".to_owned()),
         value,
-        event_id: None,
-        time: None,
         source: Some(VENDOR_SOURCE.to_owned()),
-        event_name: None,
-        principal: None,
-        account: None,
-        policy_arn: None,
-        statement_index: None,
-        action: None,
+        ..rsscript_evidence(EvidenceKind::PackageMetadata)
     }
 }
 
@@ -3577,26 +3517,14 @@ fn registry_metadata_evidence(
     json_pointer: &str,
 ) -> Evidence {
     Evidence {
-        kind: EvidenceKind::RegistryMetadata,
         file: publish_registry_evidence_file(input, json_pointer),
-        line: None,
-        column: None,
-        length: None,
-        symbol: None,
         reason,
         json_pointer: Some(json_pointer.to_owned()),
         resource: Some(format!("{}@{}", input.package.name, input.package.version)),
         provider: Some("rsscript".to_owned()),
         value,
-        event_id: None,
-        time: None,
         source: Some(PUBLISH_SOURCE.to_owned()),
-        event_name: None,
-        principal: None,
-        account: None,
-        policy_arn: None,
-        statement_index: None,
-        action: None,
+        ..rsscript_evidence(EvidenceKind::RegistryMetadata)
     }
 }
 
@@ -3809,7 +3737,6 @@ fn binding_manifest_evidence(
     capability: &RsScriptPackageCapability,
 ) -> Evidence {
     Evidence {
-        kind: EvidenceKind::BindingManifest,
         file: capability
             .span
             .as_ref()
@@ -3832,22 +3759,15 @@ fn binding_manifest_evidence(
                 capability.call_chain.join(" -> ")
             }
         )),
-        json_pointer: None,
         resource: capability
             .resource
             .clone()
             .or_else(|| Some(format!("{}@{}", input.package_name, input.version))),
         provider: capability.provider.clone(),
         value: Some(String::from(capability.category.clone())),
-        event_id: None,
-        time: None,
         source: Some(PACKAGE_REVIEW_SOURCE.to_owned()),
-        event_name: None,
-        principal: None,
-        account: None,
-        policy_arn: None,
-        statement_index: None,
         action: capability.action.clone(),
+        ..rsscript_evidence(EvidenceKind::BindingManifest)
     }
 }
 
@@ -4071,26 +3991,13 @@ fn await_site_summary(site: &RsScriptPackageAwaitSite, boundary: &str) -> String
 
 fn await_site_evidence(site: &RsScriptPackageAwaitSite, summary: String) -> Evidence {
     Evidence {
-        kind: EvidenceKind::SourceSpan,
         file: (!site.file.is_empty()).then(|| site.file.clone()),
         line: Some(site.line.max(1)),
         column: Some(site.column.max(1)),
-        length: None,
         symbol: Some(site.function.clone()),
         reason: Some(summary),
-        json_pointer: None,
-        resource: None,
-        provider: None,
-        value: None,
-        event_id: None,
-        time: None,
         source: Some(PACKAGE_REVIEW_SOURCE.to_owned()),
-        event_name: None,
-        principal: None,
-        account: None,
-        policy_arn: None,
-        statement_index: None,
-        action: None,
+        ..rsscript_evidence(EvidenceKind::SourceSpan)
     }
 }
 
@@ -4167,26 +4074,15 @@ fn diagnostic_evidence(
         )
     };
     Evidence {
-        kind: EvidenceKind::SourceSpan,
         file: span.and_then(|span| (!span.file.is_empty()).then(|| span.file.clone())),
         line: span.map(|span| span.line.max(1)),
         column: span.map(|span| span.column.max(1)),
         length: span.map(|span| span.length),
         symbol: Some(diagnostic.code.clone()),
         reason: Some(reason),
-        json_pointer: None,
-        resource: None,
-        provider: None,
         value: Some(diagnostic.severity.clone()),
-        event_id: None,
-        time: None,
         source: Some(PACKAGE_REVIEW_SOURCE.to_owned()),
-        event_name: None,
-        principal: None,
-        account: None,
-        policy_arn: None,
-        statement_index: None,
-        action: None,
+        ..rsscript_evidence(EvidenceKind::SourceSpan)
     }
 }
 
@@ -4633,6 +4529,39 @@ fn confidence(level: ConfidenceLevel, source: &str) -> Confidence {
     }
 }
 
+/// Base [`Evidence`] for RSScript-sourced facts.
+///
+/// RSScript evidence never carries the cloud/runtime correlation fields
+/// (`event_id`, `time`, `event_name`, `principal`, `account`, `policy_arn`,
+/// `statement_index`, `action`), so this helper sets the `kind` and leaves
+/// every other field `None`. Callers fill in the fields they need with struct
+/// update syntax, e.g. `Evidence { file, .. rsscript_evidence(kind) }`, which
+/// produces the same value as spelling out every field by hand.
+fn rsscript_evidence(kind: EvidenceKind) -> Evidence {
+    Evidence {
+        kind,
+        file: None,
+        line: None,
+        column: None,
+        length: None,
+        symbol: None,
+        reason: None,
+        json_pointer: None,
+        resource: None,
+        provider: None,
+        value: None,
+        event_id: None,
+        time: None,
+        source: None,
+        event_name: None,
+        principal: None,
+        account: None,
+        policy_arn: None,
+        statement_index: None,
+        action: None,
+    }
+}
+
 fn source_span(
     file: &str,
     line: usize,
@@ -4641,26 +4570,12 @@ fn source_span(
     source: &str,
 ) -> Evidence {
     Evidence {
-        kind: EvidenceKind::SourceSpan,
         file: Some(file.to_owned()),
         line: Some(line),
-        column: None,
-        length: None,
         symbol: Some(symbol.to_owned()),
         reason,
-        json_pointer: None,
-        resource: None,
-        provider: None,
-        value: None,
-        event_id: None,
-        time: None,
         source: Some(source.to_owned()),
-        event_name: None,
-        principal: None,
-        account: None,
-        policy_arn: None,
-        statement_index: None,
-        action: None,
+        ..rsscript_evidence(EvidenceKind::SourceSpan)
     }
 }
 
@@ -4671,26 +4586,12 @@ fn package_metadata(
     reason: Option<String>,
 ) -> Evidence {
     Evidence {
-        kind: EvidenceKind::PackageMetadata,
-        file: None,
-        line: None,
-        column: None,
-        length: None,
-        symbol: None,
         reason,
-        json_pointer: None,
         resource: Some(format!("{package_name}@{version}")),
         provider: Some("rsscript".to_owned()),
         value,
-        event_id: None,
-        time: None,
         source: Some(PACKAGE_REVIEW_SOURCE.to_owned()),
-        event_name: None,
-        principal: None,
-        account: None,
-        policy_arn: None,
-        statement_index: None,
-        action: None,
+        ..rsscript_evidence(EvidenceKind::PackageMetadata)
     }
 }
 
@@ -4744,26 +4645,14 @@ fn lockfile_entry(
     lockfile_path: &str,
 ) -> Evidence {
     Evidence {
-        kind: EvidenceKind::LockfileEntry,
         file: Some(lockfile_path.to_owned()),
-        line: None,
-        column: None,
-        length: None,
-        symbol: None,
         reason: Some(reason),
         json_pointer: Some(json_pointer),
         resource: Some(format!("{}@{}", package.name, package.version)),
         provider: Some("rsscript".to_owned()),
         value,
-        event_id: None,
-        time: None,
         source: Some(LOCKFILE_SOURCE.to_owned()),
-        event_name: None,
-        principal: None,
-        account: None,
-        policy_arn: None,
-        statement_index: None,
-        action: None,
+        ..rsscript_evidence(EvidenceKind::LockfileEntry)
     }
 }
 
@@ -4879,12 +4768,7 @@ fn lock_diff_evidence(
     json_pointer: &str,
 ) -> Evidence {
     Evidence {
-        kind: EvidenceKind::LockfileEntry,
         file: Some(file),
-        line: None,
-        column: None,
-        length: None,
-        symbol: None,
         reason,
         json_pointer: Some(json_pointer.to_owned()),
         resource: Some(format!(
@@ -4893,15 +4777,8 @@ fn lock_diff_evidence(
         )),
         provider: Some("rsscript".to_owned()),
         value,
-        event_id: None,
-        time: None,
         source: Some(LOCKFILE_SOURCE.to_owned()),
-        event_name: None,
-        principal: None,
-        account: None,
-        policy_arn: None,
-        statement_index: None,
-        action: None,
+        ..rsscript_evidence(EvidenceKind::LockfileEntry)
     }
 }
 
