@@ -5,3 +5,6 @@ benchmarks/**/target/
 benchmarks/**/Cargo.lock
 .DS_Store
 .claude/
+
+# Feature worktrees (in-repo so the Docker bind mount can build them)
+/.worktrees/
