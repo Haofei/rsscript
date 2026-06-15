@@ -70,7 +70,10 @@ fn package_manager_spec_uses_current_http_and_env_facade_shapes() {
 }
 
 #[test]
-fn rss_spec_keeps_protocol_dynamic_dispatch_deferred() {
+fn rss_spec_keeps_protocol_dynamic_dispatch_unimplemented() {
+    // Dynamic dispatch is now a committed in-scope roadmap item (§20.2), but it is
+    // still NOT implemented: the spec must not describe it as implemented, settled,
+    // or available to package contracts until it is actually built.
     let spec = fs::read_to_string(common::language_spec_path())
         .unwrap_or_else(|error| panic!("RSScript spec should read: {error}"));
 
@@ -86,7 +89,8 @@ fn rss_spec_keeps_protocol_dynamic_dispatch_deferred() {
             "protocol dynamic dispatch must remain deferred, found `{forbidden}`"
         );
     }
-    assert!(spec.contains("Dynamic dispatch (deferred, not admitted in v"));
+    assert!(spec.contains("Dynamic dispatch (in scope §20.2; not yet implemented)"));
+    assert!(spec.contains("does not yet implement protocol-typed dynamic dispatch"));
     assert!(spec.contains("The only implemented and specified protocol call form is"));
     assert!(spec.contains("explicit `Protocol.method(...)` dispatch"));
 }

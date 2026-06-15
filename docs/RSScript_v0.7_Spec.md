@@ -660,13 +660,15 @@ REIR adapter for capability-binding evidence
 The following may be parsed and surfaced for review but are not executable lowering targets in v0.7:
 
 ```text
-spawn (unstructured task creation)
 public Future / Waker / task-handle surface
-Rust-style open enum machinery beyond sealed RSScript sum types
 general user FFI
-advanced protocol/dynamic dispatch model (capability objects)
-scoped views / slices
+advanced protocol/dynamic dispatch model (capability objects)  → now in scope (§20.2)
+scoped views / slices                                          → now in scope (§20.2)
 ```
+
+(Unstructured `spawn` and Rust-style open enums were previously listed here; both
+are now firm non-goals, see §21 and §20.2 — `spawn` is still rejected with a
+stable diagnostic.)
 
 `async fn` signatures are review-visible contracts. v0.7 admits an executable async
 MVP: `await` appears inside an `async fn` at a statement boundary, inside an
@@ -3640,17 +3642,19 @@ short-circuit `&&`/`||`, which is only conditionally evaluated. Hoisting it woul
 force unconditional evaluation, so such an `await` stays rejected as a non-linear
 await (`RS0411`).
 
-#### Dynamic dispatch (deferred, not admitted in v0.7)
+#### Dynamic dispatch (in scope §20.2; not yet implemented)
 
-RSScript v0.7 does not admit protocol-typed dynamic dispatch, trait objects, or
-protocol-typed values. The only implemented and specified protocol call form is
+RSScript v0.7 does not yet implement protocol-typed dynamic dispatch, trait
+objects, or protocol-typed values.
+The only implemented and specified protocol call form is
 static, explicit `Protocol.method(...)` dispatch backed by an explicit generic
 bound or an explicit `impl Protocol for Type` declaration.
 
-Future protocol dynamic dispatch is a design target, not a v0.7 promise. It must
-go through feature admission again and must not be described as implemented,
-settled, or available to package contracts until syntax, checking, lowering,
-review evidence, and package metadata exist together.
+Explicit, review-visible `capability`-bounded dispatch is now a **committed
+roadmap item** (§20.2-2, §20.1-G) — not Rust-style implicit `dyn` coercion, which
+stays a non-goal (§21). Until it is built, it must not be described as
+implemented, settled, or available to package contracts: syntax, checking,
+lowering, review evidence, and package metadata must land together.
 
 Closed sets should still prefer sealed sum types with exhaustive match
 (section 20.1), which are strictly more reviewable. For open sets such as
@@ -5271,6 +5275,7 @@ A. Extended async surface beyond the v0.7 MVP
    - must not expose Future / Pin / Poll / Waker to RSScript users (section 14.4).
 
 B. Cross-isolate message API with zero-copy transfer
+   - now in scope: committed roadmap (§20.2).
    - explicit typed send/receive channels between isolates.
    - cross-isolate payloads are owned/Copy data or values moved with take.
    - take-based move across an isolate boundary is the no-shared-alias transfer
@@ -5279,6 +5284,7 @@ B. Cross-isolate message API with zero-copy transfer
    - managed handles never cross isolates; only explicit messages do.
 
 C. Two-tier execution: dev interpreter + Rust-lowering AOT
+   - now in scope: committed roadmap (§20.2).
    - a HIR-level interpreter for the managed subset for a fast edit-run loop,
      since rustc compilation cost is poor for inner-loop iteration.
    - the Rust-lowering path remains the production/AOT target.
@@ -5315,6 +5321,7 @@ F. Registry-level review-risk badges
      signals to derive from compiler/package review evidence.
 
 G. Capability objects (explicit dynamic dispatch)
+   - now in scope: committed roadmap (§20.2).
    - RSScript does not adopt Rust-style `dyn Trait` with vtable coercion.
    - if dynamic dispatch is needed, it must use an explicit capability-bounded
      form that is visible to review:
@@ -5344,6 +5351,7 @@ H. Stream<T> and await-for (async sequences)
      or `Stream` combinators that hide allocation.
 
 I. Scoped views and slices (zero-copy borrowed regions)
+   - now in scope: committed roadmap (§20.2).
    - for high-performance parsing, HTTP buffers, and binary protocols, RSScript
      needs a "borrowed view" that avoids full-copy semantics:
 
@@ -5444,6 +5452,48 @@ positional records /         conflicts with named-everything canonical style;
 implicit flow promotion       any record-like form must use named fields
 ```
 
+### 20.2 In scope: committed implementation roadmap
+
+The following directions — previously deferred (§20.1) or listed as
+review-visible-but-not-executable (§3.2) — are now **committed in-scope work**
+targeted for implementation, tracked as open items in `docs/spec-todo.md`. All
+four are design-compatible: large, but they extend the model without reversing a
+review-first tenet.
+
+```text
+1. Scoped views / slices (zero-copy borrowed regions) — §20.1-I, §3.2.
+   Lexically-scoped borrowed views (`with Buffer.view(...) as bytes { ... }`, or
+   `view bytes = ...`) that cannot be retained, escape their scope, cross an
+   await, or enter managed graphs. No surface lifetimes. Design-compatible; large.
+
+2. Capability objects / explicit dynamic dispatch — §20.1-G, §3.2.
+   Review-visible `capability`-bounded dispatch (`store: read capability Store<T>`),
+   NOT Rust-style implicit `dyn` coercion (which stays a non-goal, §21). The review
+   map must flag every capability boundary. Design-compatible; large.
+
+3. Cross-isolate message API (zero-copy transfer) — §20.1-B.
+   Typed send/receive channels between isolates; payloads are Copy/owned data or
+   values moved with `take`; managed handles never cross. Depends on the isolate
+   model; design-compatible; large.
+
+4. Two-tier execution (dev interpreter + AOT) — §20.1-C.
+   The reg-VM and the Rust-lowering backend already run at parity; this commits to
+   the fast HIR-level dev loop as a first-class tier. Infrastructure, not new
+   surface — both tiers must keep identical semantics and diagnostics.
+```
+
+These four override the corresponding "not adopted" / "not executable in v0.7"
+notes in §3.2 and §20.1 for those features.
+
+**Removed, not deferred.** Unstructured `spawn` / public task handles and
+Rust-style open enums were previously listed as future directions. They are
+*deleted* from the roadmap, not merely deferred, because they contradict core
+RSScript principles: `spawn` breaks the single-isolate, structured-concurrency
+model (`task_group` is the sanctioned form), and open enums break the sealed-sum
+guarantees that make match-exhaustiveness and review-diffs sound. Both are stated
+as firm non-goals (§21); the compiler continues to reject `spawn` with a stable
+diagnostic.
+
 ---
 
 ## 21. Non-goals
@@ -5457,6 +5507,8 @@ LLVM backend
 JIT
 surface Rust lifetimes
 surface & / &mut
+unstructured spawn / public task handles (breaks single-isolate structured concurrency; use task_group)
+Rust-style open enums / open sum extension (breaks sealed-sum exhaustiveness + review diffs)
 Rust-style traits as source semantics
 associated types
 blanket impls
