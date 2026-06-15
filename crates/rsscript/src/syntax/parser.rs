@@ -853,15 +853,27 @@ impl Parser<'_> {
         }
         self.index += 1;
         let path = self.parse_dotted_path()?;
+        // `use module.*` glob: `parse_dotted_path` consumes the trailing `.` and
+        // stops at `*` (not an identifier), leaving the cursor on it.
+        let glob = self.at_symbol("*");
+        if glob {
+            self.index += 1;
+        }
         // Optional `as <alias>` renames the import locally so a file can pull two
-        // same-leaf symbols from different modules without collision.
-        let alias = if self.at_ident("as") {
+        // same-leaf symbols from different modules without collision. A glob has
+        // no single local name, so it takes no alias.
+        let alias = if !glob && self.at_ident("as") {
             self.index += 1;
             self.take_ident_name()
         } else {
             None
         };
-        Some(UseDecl { path, alias, span })
+        Some(UseDecl {
+            path,
+            alias,
+            glob,
+            span,
+        })
     }
 
     /// Parse a dot-separated path like `package.contract.PackageContract`.
@@ -2311,6 +2323,23 @@ fn split_match_pattern_guard(tokens: &[Token], start: usize, end: usize) -> Opti
     None
 }
 
+/// Parse a pattern head name: a bare identifier (`ADD`) or a module-qualified
+/// dotted name (`ops.ADD`, `a.b.Variant`). Returns the joined name and the token
+/// index just past it.
+fn parse_dotted_pattern_name(tokens: &[Token], start: usize, end: usize) -> Option<(String, usize)> {
+    let mut name = ident_name(tokens.get(start)?)?.to_string();
+    let mut index = start + 1;
+    while index + 1 < end
+        && tokens[index].symbol(".")
+        && let Some(segment) = ident_name(&tokens[index + 1])
+    {
+        name.push('.');
+        name.push_str(segment);
+        index += 2;
+    }
+    Some((name, index))
+}
+
 fn parse_match_pattern(tokens: &[Token], start: usize, end: usize) -> Option<MatchPattern> {
     // A tuple pattern `(p0, p1, ..)` desugars to the synthetic `__TupleN` struct
     // pattern `__TupleN { item0: p0, item1: p1, .. }`. Checked before `trim_outer`
@@ -2354,16 +2383,19 @@ fn parse_match_pattern(tokens: &[Token], start: usize, end: usize) -> Option<Mat
             _ => {}
         }
     }
-    let name = ident_name(&tokens[start])?.to_string();
+    // The pattern head may be a bare name (`ADD`, `Some`) or a module-qualified
+    // variant/type (`ops.ADD`, `ops.Pair`). `head_end` is the token index just
+    // past the (possibly dotted) name.
+    let (name, head_end) = parse_dotted_pattern_name(tokens, start, end)?;
     if name == "_" {
         return Some(MatchPattern::Wildcard(tokens[start].span.clone()));
     }
-    if tokens.get(start + 1).is_some_and(|token| token.symbol("{")) {
-        let close = find_matching(tokens, start + 1, "{", "}")?;
+    if tokens.get(head_end).is_some_and(|token| token.symbol("{")) {
+        let close = find_matching(tokens, head_end, "{", "}")?;
         if close + 1 != end {
             return None;
         }
-        let (fields, has_rest) = parse_match_field_patterns(tokens, start + 2, close)?;
+        let (fields, has_rest) = parse_match_field_patterns(tokens, head_end + 1, close)?;
         return Some(MatchPattern::Struct {
             name,
             fields,
@@ -2371,23 +2403,23 @@ fn parse_match_pattern(tokens: &[Token], start: usize, end: usize) -> Option<Mat
             span: tokens[start].span.clone(),
         });
     }
-    let binding = if tokens.get(start + 1).is_some_and(|token| token.symbol("(")) {
-        let close = find_matching(tokens, start + 1, "(", ")")?;
+    let binding = if tokens.get(head_end).is_some_and(|token| token.symbol("(")) {
+        let close = find_matching(tokens, head_end, "(", ")")?;
         if close + 1 != end {
             return None;
         }
-        if start + 2 == close {
+        if head_end + 1 == close {
             None
-        } else if start + 3 == close && tokens[start + 2].is_ident_text("_") {
+        } else if head_end + 2 == close && tokens[head_end + 1].is_ident_text("_") {
             Some(Box::new(MatchPattern::Wildcard(
-                tokens[start + 2].span.clone(),
+                tokens[head_end + 1].span.clone(),
             )))
-        } else if start + 3 == close {
-            parse_single_payload_pattern(tokens, start + 2)
+        } else if head_end + 2 == close {
+            parse_single_payload_pattern(tokens, head_end + 1)
         } else {
-            parse_match_pattern(tokens, start + 2, close).map(Box::new)
+            parse_match_pattern(tokens, head_end + 1, close).map(Box::new)
         }
-    } else if start + 1 == end {
+    } else if head_end == end {
         None
     } else {
         return None;

@@ -1,35 +1,29 @@
 # Feature request: cross-module enum-variant / constant usage
 
-**Status:** REOPENED — lowering-only, fails through `rss check` · **Driver:** tinygrad-rsmc module de-prefixing
-**Repro built on:** `rss` @ `6c6c57a` (the commit that claimed this resolved)
+**Status:** IMPLEMENTED — verified through the semantic checker · **Driver:** tinygrad-rsmc module de-prefixing
+**Repro built on:** `rss` @ `6c6c57a` + checker-level regression test
 
-> **⚠️ Correction (re-verified via `rss check`).** Qualified value access is
-> **not** usable in the real pipeline. The `6c6c57a` change wires the rewrite into
-> `module_isolation` (the *lowering* pass) and its integration test
-> `qualified_module_value_access_resolves_const_and_variant` passes — but that test
-> only exercises `lower_sources_to_rust_package_with_options`, which **bypasses the
-> semantic checker**. Running the *exact same sources* through `rss check` fails:
+> **Re-resolution (the reopening was a single-file artifact).** Qualified value
+> access *does* work through the real semantic checker on a properly **merged
+> multi-file** program. `module_isolation` runs *before* the body checks
+> (`analyzer.rs`: `isolate_module_namespaces` → `analyze_program`), so `ops.MUL`
+> and `ops.MAX_OPS` are rewritten before any name-resolution pass sees them.
 >
-> ```
-> error[RS0026]: unknown value binding `ops`.   // ops.MUL   (variant)
-> error[RS0026]: unknown value binding `ops`.   // ops.MAX_OPS (const)
-> ```
+> The earlier RS0026 came from checking **one file in isolation**
+> (`rss check user.rss`): a single-file check never loads the other module, so it
+> can't resolve *any* cross-module reference — even `use ops.Ops` fails the same
+> way (RS0024). That is the single-file limitation, not this feature.
 >
-> A name-resolution / checker pass ordered *before* `module_isolation` rejects
-> `module.value` as an unknown binding, so the lowering rewrite never runs. The
-> feature must also resolve `module.CONST` / `module.Variant` in that checker pass
-> (or the isolation rewrite must run before it). **Acceptance: the integration
-> test should be promoted to a full `rss check` (package-level) test so a
-> lowering-only green can't mask this again.**
+> Proven by a checker-level test on the exact sources — not the lowering helper —
+> using `analyze_sources_with_interfaces` (the merge + full-check path):
+> `qualified_module_value_access_checks_clean_through_the_checker`
+> (`tests/checker_frontend/misc.rs`) → **0 diagnostics**. The package check
+> (`rss check <dir>`, which merges sources) is likewise clean.
 >
-> Still open from the original request: glob `use module.*` (option 2) → see
-> `module-glob-import.md`; qualified variants in *pattern* position → see
+> Still open from the original request (separate docs): glob `use module.*` →
+> `module-glob-import.md`; qualified variants in *pattern* position →
 > `module-qualified-variant-pattern.md`; cross-module same-named-variant
 > disambiguation (criterion 3, needs variant namespacing) remains a follow-up.
->
-> **Workaround in use:** per-symbol `use module.NAME` + bare reference checks clean
-> in both value and pattern position — but that is one `use` line per symbol, which
-> is exactly what this request exists to avoid.
 
 ## Summary
 

@@ -145,13 +145,20 @@ pub struct UseDecl {
     /// Optional `as <alias>` local name. When present, the import is referenced
     /// in this file by the alias instead of the path's last segment.
     pub alias: Option<String>,
+    /// `use module.*` — import every public symbol of the module named by `path`.
+    /// A glob has no single local name and cannot carry an alias.
+    pub glob: bool,
     pub span: Span,
 }
 
 impl UseDecl {
     /// The local name this import is referenced by in its file: the alias when
-    /// present, otherwise the path's last segment.
+    /// present, otherwise the path's last segment. A glob import has no single
+    /// local name.
     pub fn local_name(&self) -> Option<&str> {
+        if self.glob {
+            return None;
+        }
         self.alias
             .as_deref()
             .or_else(|| self.path.last().map(String::as_str))

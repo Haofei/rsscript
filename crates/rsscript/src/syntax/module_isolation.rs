@@ -100,6 +100,8 @@ impl Resolver {
         let mut module_consts: HashMap<String, HashSet<String>> = HashMap::new();
         let mut module_variants: HashMap<String, HashSet<String>> = HashMap::new();
         let mut file_imports: HashMap<String, HashMap<String, (String, String)>> = HashMap::new();
+        // (file, module prefix) for each `use module.*`, expanded after the loop.
+        let mut glob_imports: Vec<(String, String)> = Vec::new();
 
         for item in &program.items {
             let Some(file) = item_file(item) else {
@@ -168,6 +170,12 @@ impl Resolver {
                         .or_default()
                         .insert(decl.name.clone());
                 }
+                Item::Use(decl) if decl.glob => {
+                    // `use module.*` imports every symbol of `module`. The module's
+                    // symbol table isn't fully populated until the loop finishes,
+                    // so record the glob and expand it in a second pass below.
+                    glob_imports.push((decl.span.file.clone(), module_prefix(&decl.path)));
+                }
                 Item::Use(decl) => {
                     if decl.path.len() >= 2 {
                         let real_name = decl.path[decl.path.len() - 1].clone();
@@ -183,6 +191,23 @@ impl Resolver {
                     }
                 }
                 Item::Module(_) => {}
+            }
+        }
+
+        // Expand `use module.*` globs now that every module's symbol table is
+        // complete: import each of the module's bare-referenceable names (free
+        // functions, constants, types, sums, and aliases — everything in
+        // `module_defs`) under its own name. Sum variants resolve globally through
+        // their sum type and need no import.
+        for (file, prefix) in glob_imports {
+            let Some(names) = module_defs.get(&prefix) else {
+                continue;
+            };
+            let entry = file_imports.entry(file).or_default();
+            for name in names {
+                entry
+                    .entry(name.clone())
+                    .or_insert_with(|| (prefix.clone(), name.clone()));
             }
         }
 
@@ -507,6 +532,18 @@ impl Resolver {
             MatchPattern::Variant { name, binding, .. } => {
                 if let Some(mangled) = self.resolve_bare(file, name) {
                     *name = mangled;
+                } else if let Some((namespace, variant)) = name.rsplit_once('.') {
+                    // `module.Variant` qualified pattern resolves to the bare
+                    // variant (variant names resolve through their sum type),
+                    // mirroring qualified value access in expression position.
+                    let prefix = module_prefix_from_dotted(namespace);
+                    if self
+                        .module_variants
+                        .get(&prefix)
+                        .is_some_and(|variants| variants.contains(variant))
+                    {
+                        *name = variant.to_string();
+                    }
                 }
                 if let Some(binding) = binding {
                     self.rewrite_pattern(binding, file);
@@ -515,6 +552,22 @@ impl Resolver {
             MatchPattern::Struct { name, fields, .. } => {
                 if let Some(mangled) = self.resolve_bare(file, name) {
                     *name = mangled;
+                } else if let Some((namespace, type_name)) = name.rsplit_once('.') {
+                    // `module.Type { .. }` qualified struct/variant-payload pattern.
+                    let prefix = module_prefix_from_dotted(namespace);
+                    if self
+                        .module_types
+                        .get(&prefix)
+                        .is_some_and(|types| types.contains(type_name))
+                    {
+                        *name = format!("{prefix}{MODULE_SEP}{type_name}");
+                    } else if self
+                        .module_variants
+                        .get(&prefix)
+                        .is_some_and(|variants| variants.contains(type_name))
+                    {
+                        *name = type_name.to_string();
+                    }
                 }
                 for field in fields {
                     self.rewrite_field_pattern(field, file);

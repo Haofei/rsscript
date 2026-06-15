@@ -3,6 +3,103 @@
 use super::*;
 
 #[test]
+fn qualified_module_value_access_checks_clean_through_the_checker() {
+    // Regression guard: qualified `module.CONST` / `module.Variant` in value
+    // position must resolve through the *semantic checker* on a merged multi-file
+    // program — not only through the lowering helper. (`module-value-access.md`.)
+    let diagnostics = analyze_sources_with_interfaces(
+        &[
+            (
+                "ops.rss",
+                "module ops\n\nsum Ops { ADD MUL OTHER }\n\nconst MAX_OPS: Int = 64\n",
+            ),
+            (
+                "user.rss",
+                concat!(
+                    "module user\n\n",
+                    "use ops.Ops\n\n",
+                    "fn c() -> fresh Ops { return ops.MUL }\n\n",
+                    "fn e() -> Int { return ops.MAX_OPS }\n",
+                ),
+            ),
+        ],
+        &[],
+    );
+    assert_eq!(
+        diagnostics,
+        Vec::new(),
+        "qualified module value access should check clean: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn qualified_variant_in_match_pattern_checks_clean() {
+    // `ops.ADD` / `ops.MUL` as match patterns resolve through the merged checker
+    // (parser accepts the dotted pattern; isolation rewrites it to the bare
+    // variant). (`module-qualified-variant-pattern.md`.)
+    let diagnostics = analyze_sources_with_interfaces(
+        &[
+            ("ops.rss", "module ops\n\nsum Ops { ADD MUL OTHER }\n"),
+            (
+                "app.rss",
+                concat!(
+                    "module app\n\n",
+                    "use ops.Ops\n\n",
+                    "fn classify(o: read Ops) -> Int {\n",
+                    "    match read o {\n",
+                    "        ops.ADD => { return 1 }\n",
+                    "        ops.MUL => { return 2 }\n",
+                    "        _ => { return 0 }\n",
+                    "    }\n",
+                    "}\n",
+                ),
+            ),
+        ],
+        &[],
+    );
+    assert_eq!(
+        diagnostics,
+        Vec::new(),
+        "qualified variant in match pattern should check clean: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn glob_import_brings_module_symbols_into_scope() {
+    // `use ops.*` imports the module's type, const, and functions; bare variants
+    // resolve globally. The snippet checks clean. (`module-glob-import.md`.)
+    let diagnostics = analyze_sources_with_interfaces(
+        &[
+            (
+                "ops.rss",
+                "module ops\n\nsum Ops { ADD MUL OTHER }\n\nconst MAX_OPS: Int = 64\n\nfn helper() -> Int { return 1 }\n",
+            ),
+            (
+                "app.rss",
+                concat!(
+                    "module app\n\n",
+                    "use ops.*\n\n",
+                    "fn pick() -> fresh Ops { return ADD }\n\n",
+                    "fn lim() -> Int { return MAX_OPS }\n\n",
+                    "fn classify(o: read Ops) -> Int {\n",
+                    "    match read o {\n",
+                    "        ADD => { return 1 }\n",
+                    "        _ => { return helper() }\n",
+                    "    }\n",
+                    "}\n",
+                ),
+            ),
+        ],
+        &[],
+    );
+    assert_eq!(
+        diagnostics,
+        Vec::new(),
+        "glob import should bring module symbols into scope: {diagnostics:?}"
+    );
+}
+
+#[test]
 fn pass_fixtures_have_no_diagnostics() {
     for path in common::fixture_paths("tests/fixtures/pass") {
         let source = common::read_fixture(&path);

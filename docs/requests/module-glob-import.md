@@ -1,7 +1,18 @@
 # Feature request: glob import `use module.*`
 
-**Status:** requested · **Driver:** tinygrad-rsmc module de-prefixing
+**Status:** IMPLEMENTED · **Driver:** tinygrad-rsmc module de-prefixing
 **Repro built on:** `rss` @ `6c6c57a`
+
+> **Resolution.** `use module.*` is supported. The parser accepts the `.*` glob
+> form (no more RS0015), and `module_isolation` imports every bare-referenceable
+> symbol of the module — functions, constants, types, sums, and type aliases —
+> into the file's scope (sum variants resolve globally through their sum type, so
+> they need no import). Verified through the semantic checker on a merged
+> multi-file program: `glob_import_brings_module_symbols_into_scope`
+> (`tests/checker_frontend/misc.rs`) — `Ops`, `MAX_OPS`, a function, and bare
+> variants all resolve in value, type, and pattern position. Cross-module
+> same-named-variant collisions are still out of scope (needs variant
+> namespacing), as noted below.
 
 ## Summary
 

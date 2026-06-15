@@ -124,7 +124,9 @@ impl Formatter {
                 Item::Use(u) => {
                     self.out.push_str("use ");
                     self.out.push_str(&u.path.join("."));
-                    if let Some(alias) = &u.alias {
+                    if u.glob {
+                        self.out.push_str(".*");
+                    } else if let Some(alias) = &u.alias {
                         self.out.push_str(" as ");
                         self.out.push_str(alias);
                     }

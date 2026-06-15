@@ -1,7 +1,17 @@
 # Feature request: qualified sum variant in `match` pattern position
 
-**Status:** requested · **Driver:** tinygrad-rsmc module de-prefixing
+**Status:** IMPLEMENTED · **Driver:** tinygrad-rsmc module de-prefixing
 **Repro built on:** `rss` @ `6c6c57a`
+
+> **Resolution.** A module-qualified variant is accepted as a match pattern. The
+> pattern parser now reads a dotted head (`ops.ADD`, `a.b.Variant`) — no more
+> RS0015 — and `module_isolation` rewrites it to the bare variant (resolved
+> through its sum type), identical to qualified value access in expression
+> position. Exhaustiveness/typeck treat `ops.ADD` as the bare `ADD` it resolves
+> to. Verified through the semantic checker on a merged program:
+> `qualified_variant_in_match_pattern_checks_clean`
+> (`tests/checker_frontend/misc.rs`). Qualified `module.Type { .. }` payload
+> patterns resolve too.
 
 ## Summary
 
