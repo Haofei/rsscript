@@ -178,6 +178,22 @@ fn publish_check(
     }
 }
 
+/// Registry-index review-risk badges, derived from the entry's own authoritative
+/// fields (its aggregate publish `risk` plus the native/unsafe boundary signals),
+/// so the badges never disagree with the rest of the index entry. The richer
+/// capability badge set lives on `PackageReview::badges` (which has the full
+/// review summary).
+fn registry_index_badges(risk: PackageRisk, native: bool, unsafe_boundary: bool) -> Vec<String> {
+    let mut badges = vec![format!("risk:{}", super::package_risk_label(risk))];
+    if native {
+        badges.push("native".to_string());
+    }
+    if unsafe_boundary {
+        badges.push("unsafe".to_string());
+    }
+    badges
+}
+
 fn package_registry_index_entry(
     package: &LoadedPackage,
     lock_entry: &PackageLockPackage,
@@ -193,6 +209,8 @@ fn package_registry_index_entry(
         .as_ref()
         .and_then(|native| native.rust.as_ref())
         .is_some_and(|native| native.enabled);
+    let unsafe_boundary = package_index_unsafe_boundary(&package.manifest, native_check);
+    let badges = registry_index_badges(risk, native, unsafe_boundary);
     PackageRegistryIndexEntry {
         schema: "rss.registry.index.v1".to_string(),
         name: package.manifest.package.name.clone(),
@@ -213,7 +231,8 @@ fn package_registry_index_entry(
                 has_default: virtual_package.has_default,
                 provider: virtual_package.provider.clone(),
             }),
-        unsafe_boundary: package_index_unsafe_boundary(&package.manifest, native_check),
+        unsafe_boundary,
+        badges,
         dependencies: package_index_dependencies(&package.manifest.dependencies),
         features: package_index_features(&package.manifest, root_features),
         footprint_default: package_index_footprint(native, tree_summary),

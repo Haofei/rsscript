@@ -264,6 +264,8 @@ pub(super) fn review_package_dir_with_features(
             .then_with(|| left.name.cmp(&right.name))
     });
 
+    let badges = package_review_badges(risk, &summary);
+
     Ok(PackageReview {
         schema: super::types::PACKAGE_REVIEW_SCHEMA.to_string(),
         producer: super::types::ArtifactProducer::current(),
@@ -271,6 +273,7 @@ pub(super) fn review_package_dir_with_features(
         manifest_path: package.manifest_path.display().to_string(),
         risk,
         reasons,
+        badges,
         features,
         virtual_package,
         implements,
@@ -1857,6 +1860,33 @@ fn package_unknown_api_count(
             })
         })
         .count()
+}
+
+/// Derive the compact review-risk badge set from the classified `risk` and the
+/// capability `summary`. Badges are stable, lowercase, machine-readable labels a
+/// registry can render per package; they restate signals already in the review
+/// (no new analysis), so they never disagree with `risk`/`summary`.
+fn package_review_badges(risk: PackageRisk, summary: &PackageReviewSummary) -> Vec<String> {
+    let mut badges = vec![format!("risk:{}", super::package_risk_label(risk))];
+    if summary.native_apis > 0 {
+        badges.push("native".to_string());
+    }
+    if summary.unsafe_apis > 0 {
+        badges.push("unsafe".to_string());
+    }
+    if summary.async_apis > 0 {
+        badges.push("async".to_string());
+    }
+    if summary.parallel_apis > 0 {
+        badges.push("parallel".to_string());
+    }
+    if summary.unknown_apis > 0 {
+        badges.push("unknown-capability".to_string());
+    }
+    if summary.errors > 0 {
+        badges.push("has-errors".to_string());
+    }
+    badges
 }
 
 fn package_risk(

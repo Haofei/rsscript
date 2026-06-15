@@ -35,6 +35,11 @@ pub struct PackageReview {
     pub manifest_path: String,
     pub risk: PackageRisk,
     pub reasons: Vec<String>,
+    /// Compact, machine-readable review-risk badges derived from `risk` and the
+    /// capability `summary` (e.g. `risk:elevated`, `native`, `unsafe`, `async`,
+    /// `unknown-capability`). A registry surfaces these as per-package badges.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub badges: Vec<String>,
     pub features: Vec<String>,
     pub virtual_package: Option<PackageVirtual>,
     pub implements: Vec<PackageProviderImplementation>,
@@ -209,6 +214,10 @@ pub struct PackageRegistryIndexEntry {
     pub virtual_package: Option<PackageVirtual>,
     #[serde(rename = "unsafe_apis")]
     pub unsafe_boundary: bool,
+    /// Review-risk badges (same set as `PackageReview::badges`) carried into the
+    /// registry index so a registry can render them without re-deriving.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub badges: Vec<String>,
     pub dependencies: BTreeMap<String, String>,
     pub features: BTreeMap<String, Vec<String>>,
     pub footprint_default: PackageRegistryFootprint,

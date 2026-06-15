@@ -5301,15 +5301,18 @@ E. Sum type hardening
      implicit variant coercion.
 
 F. Registry-level review-risk badges
-   - the package registry should surface review-risk signals as first-class
-     quality badges: native, unsafe, unknown, mutating/retaining ratios.
-   - this reuses the package review metadata already produced by package tooling
-     (section 18.3) rather than inventing a separate scoring system.
-   - package-manager registry previews expose these signals through
-     `rss.registry.index.v1` fields such as `review_schema`, `unsafe_apis`,
-     selected feature sets, and default graph footprint. The language spec does
-     not define registry scoring beyond requiring those signals to derive from
-     compiler/package review evidence.
+   - the package registry surfaces review-risk signals as first-class quality
+     badges: a `badges` field on the package review (`rss.review.package.v1`) and
+     the registry index (`rss.registry.index.v1`) carries compact labels —
+     `risk:<level>`, `native`, `unsafe`, `async`, `parallel`,
+     `unknown-capability`, `has-errors` — derived from the classified `risk` and
+     capability `summary` (package-manager §18.3).
+   - badges restate review evidence already produced by package tooling; they
+     invent no separate scoring system and never disagree with `risk`/`summary`.
+   - remaining (registry-side, out of this repo): rendering the badges in a
+     registry UI / preview. The language + package tooling now emit the badge data;
+     the language spec does not define registry scoring beyond requiring those
+     signals to derive from compiler/package review evidence.
 
 G. Capability objects (explicit dynamic dispatch)
    - RSScript does not adopt Rust-style `dyn Trait` with vtable coercion.

@@ -2778,6 +2778,7 @@ Implemented v1 schema shape:
   },
   "risk": "elevated",
   "reasons": ["native Rust wrapper enabled", "returns Result"],
+  "badges": ["risk:elevated", "native"],
   "features": [],
   "implements": [],
   "dependencies": [],
@@ -2848,6 +2849,15 @@ Implemented v1 schema shape:
   "diagnostics": []
 }
 ```
+
+`badges` is a compact, machine-readable set of review-risk badges derived from
+`risk` and the capability `summary` (`risk:<level>`, plus `native`, `unsafe`,
+`async`, `parallel`, `unknown-capability`, `has-errors` as applicable). They
+restate signals already in the review — never new analysis — so a registry can
+render per-package badges without re-deriving them. The registry index entry
+(`rss.registry.index.v1`) carries the subset derivable from its own authoritative
+fields (`risk:<level>`, `native`, `unsafe`), kept consistent with the entry's
+`risk`/`native`/`unsafe_apis`.
 
 `exports` records the normalized public contract surface, not only callable
 functions. Current package review metadata uses `kind` values such as
