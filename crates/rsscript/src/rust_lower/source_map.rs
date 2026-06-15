@@ -43,20 +43,23 @@ pub fn remap_rustc_diagnostic_json(
     {
         let severity = rustc_severity(&rustc.level);
         let summary = format!("backend diagnostic mapped to RSScript: {}", rustc.message);
+        let mut causes = vec![format!("rustc code: {backend_code}")];
+        if let Some(symbol) = &entry.symbol {
+            let lowered = entry.lowered_symbol.as_deref().unwrap_or(symbol);
+            causes.push(format!("RSScript symbol: {symbol} (lowered: {lowered})"));
+        }
+        causes.push(format!(
+            "generated Rust: {}:{}:{}",
+            rustc_span.file_name, rustc_span.line_start, rustc_span.column_start
+        ));
+        causes.push(rustc.message);
         let diagnostic = Diagnostic {
             code: code::RUSTC_DIAGNOSTIC_MAPPED.to_string(),
             severity,
             summary,
             span: entry.source.clone(),
             label: "backend diagnostic maps to this RSScript construct".to_string(),
-            causes: vec![
-                format!("rustc code: {backend_code}"),
-                format!(
-                    "generated Rust: {}:{}:{}",
-                    rustc_span.file_name, rustc_span.line_start, rustc_span.column_start
-                ),
-                rustc.message,
-            ],
+            causes,
             fixes: Vec::new(),
         };
         return Ok(Some(RemappedRustcDiagnostic {
@@ -208,6 +211,7 @@ pub(super) fn push_source_marker(
         kind: kind.to_string(),
         source: span.clone(),
         generated,
+        ..Default::default()
     }
 }
 

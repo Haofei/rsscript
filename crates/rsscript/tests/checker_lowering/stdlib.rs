@@ -1527,6 +1527,18 @@ pub fn make_session(id: Int) -> Session {
             .iter()
             .any(|cause| cause.contains("rustc code: E0308"))
     );
+    // Provenance: the remapped error names the enclosing RSScript source symbol
+    // and its lowered Rust symbol.
+    assert!(
+        remapped
+            .diagnostic
+            .causes
+            .iter()
+            .any(|cause| cause.contains("RSScript symbol: make_session")
+                && cause.contains("lowered: make_session")),
+        "expected source/lowered symbol provenance: {:?}",
+        remapped.diagnostic.causes
+    );
 }
 
 #[test]
@@ -1558,6 +1570,7 @@ fn rustc_diagnostics_do_not_map_to_nearest_previous_source_marker() {
             column: 1,
             length: 2,
         },
+        ..Default::default()
     }];
     let rustc_json = r#"{"message":"cannot find value","code":{"code":"E0425","explanation":null},"level":"error","spans":[{"file_name":"src/lib.rs","line_start":200,"line_end":200,"column_start":1,"column_end":2,"is_primary":true}]}"#;
 

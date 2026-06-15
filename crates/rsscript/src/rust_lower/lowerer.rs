@@ -460,6 +460,7 @@ impl<'a> RustLowerer<'a> {
             kind: "field".to_string(),
             source: field.span.clone(),
             generated: generated_span_at_end(out, "src/lib.rs", "field"),
+            ..Default::default()
         });
         if field.is_weak {
             out.push_str(&format!(
@@ -638,6 +639,7 @@ impl<'a> RustLowerer<'a> {
             && block_needs_async_executor(&function.body))
         .then(|| "__rsscript_async_executor".to_string());
         let generated_start = out.len();
+        let source_map_start = self.source_map.len();
         let marker = self.record_source_marker(out, 0, "function", &function.span);
         let is_public = function.is_public || is_runnable_main(function);
         out.push_str(&format!(
@@ -691,6 +693,14 @@ impl<'a> RustLowerer<'a> {
             &marker.generated,
             generated_line_count(&out[generated_start..]),
         );
+        // Stamp every source-map entry produced while lowering this function with
+        // its source symbol and lowered Rust symbol, so a remapped backend error
+        // can name the declaration (not just the line).
+        let lowered_symbol = rust_function_ident(&function.name);
+        for entry in &mut self.source_map[source_map_start..] {
+            entry.symbol = Some(function.name.clone());
+            entry.lowered_symbol = Some(lowered_symbol.clone());
+        }
         self.param_effects = previous_param_effects;
         self.value_types = previous_value_types;
         self.managed_bindings = previous_managed_bindings;
@@ -1983,6 +1993,7 @@ impl<'a> RustLowerer<'a> {
                     kind: "with".to_string(),
                     source: stmt.span.clone(),
                     generated: generated.clone(),
+                    ..Default::default()
                 });
                 self.record_expr_source_map(&stmt.resource, generated);
                 self.record_block_source_map(&stmt.body, generated);
@@ -2045,6 +2056,7 @@ impl<'a> RustLowerer<'a> {
                 kind: "statement".to_string(),
                 source: stmt_span(statement).clone(),
                 generated: generated.clone(),
+                ..Default::default()
             });
             self.record_statement_source_map(statement, generated);
         }
@@ -2059,6 +2071,7 @@ impl<'a> RustLowerer<'a> {
                     kind: "binary".to_string(),
                     source: span.clone(),
                     generated: generated.clone(),
+                    ..Default::default()
                 });
                 self.record_expr_source_map(left, generated);
                 self.record_expr_source_map(right, generated);
@@ -2068,6 +2081,7 @@ impl<'a> RustLowerer<'a> {
                     kind: "field_path".to_string(),
                     source: span.clone(),
                     generated: generated.clone(),
+                    ..Default::default()
                 });
                 self.record_expr_source_map(base, generated);
             }
@@ -2080,12 +2094,14 @@ impl<'a> RustLowerer<'a> {
                     kind: "call".to_string(),
                     source: span.clone(),
                     generated: generated.clone(),
+                    ..Default::default()
                 });
                 if self.is_native_boundary_call(callee) {
                     self.source_map.push(RustSourceMapEntry {
                         kind: "native_call".to_string(),
                         source: span.clone(),
                         generated: generated.clone(),
+                        ..Default::default()
                     });
                 }
                 for arg in args {
@@ -2093,6 +2109,7 @@ impl<'a> RustLowerer<'a> {
                         kind: "named_arg".to_string(),
                         source: arg.span.clone(),
                         generated: generated.clone(),
+                        ..Default::default()
                     });
                     self.record_expr_source_map(&arg.value, generated);
                 }
@@ -2103,6 +2120,7 @@ impl<'a> RustLowerer<'a> {
                     kind: "manage".to_string(),
                     source: span.clone(),
                     generated: generated.clone(),
+                    ..Default::default()
                 });
                 self.record_expr_source_map(value, generated);
             }
@@ -2111,6 +2129,7 @@ impl<'a> RustLowerer<'a> {
                     kind: "spawn".to_string(),
                     source: span.clone(),
                     generated: generated.clone(),
+                    ..Default::default()
                 });
                 self.record_expr_source_map(value, generated);
             }
@@ -2119,6 +2138,7 @@ impl<'a> RustLowerer<'a> {
                     kind: "await".to_string(),
                     source: span.clone(),
                     generated: generated.clone(),
+                    ..Default::default()
                 });
                 self.record_expr_source_map(value, generated);
             }
@@ -2127,6 +2147,7 @@ impl<'a> RustLowerer<'a> {
                     kind: "try".to_string(),
                     source: span.clone(),
                     generated: generated.clone(),
+                    ..Default::default()
                 });
                 self.record_expr_source_map(value, generated);
             }
@@ -2135,6 +2156,7 @@ impl<'a> RustLowerer<'a> {
                     kind: "closure".to_string(),
                     source: span.clone(),
                     generated: generated.clone(),
+                    ..Default::default()
                 });
                 self.record_block_source_map(body, generated);
             }
@@ -2145,6 +2167,7 @@ impl<'a> RustLowerer<'a> {
                         kind: "match_pattern".to_string(),
                         source: match_pattern_span(&arm.pattern),
                         generated: generated.clone(),
+                        ..Default::default()
                     });
                     self.record_block_source_map(&arm.body, generated);
                 }
@@ -2154,12 +2177,14 @@ impl<'a> RustLowerer<'a> {
                     kind: "object_literal".to_string(),
                     source: span.clone(),
                     generated: generated.clone(),
+                    ..Default::default()
                 });
                 for field in fields {
                     self.source_map.push(RustSourceMapEntry {
                         kind: "object_literal_field".to_string(),
                         source: field.span.clone(),
                         generated: generated.clone(),
+                        ..Default::default()
                     });
                     self.record_expr_source_map(&field.value, generated);
                 }
@@ -2169,12 +2194,14 @@ impl<'a> RustLowerer<'a> {
                     kind: "map_literal".to_string(),
                     source: span.clone(),
                     generated: generated.clone(),
+                    ..Default::default()
                 });
                 for entry in entries {
                     self.source_map.push(RustSourceMapEntry {
                         kind: "map_literal_entry".to_string(),
                         source: entry.span.clone(),
                         generated: generated.clone(),
+                        ..Default::default()
                     });
                     self.record_expr_source_map(&entry.key, generated);
                     self.record_expr_source_map(&entry.value, generated);
@@ -2185,6 +2212,7 @@ impl<'a> RustLowerer<'a> {
                     kind: "array_literal".to_string(),
                     source: span.clone(),
                     generated: generated.clone(),
+                    ..Default::default()
                 });
                 for item in items {
                     self.record_expr_source_map(item, generated);
@@ -2194,17 +2222,20 @@ impl<'a> RustLowerer<'a> {
                 kind: "ident".to_string(),
                 source: span.clone(),
                 generated: generated.clone(),
+                ..Default::default()
             }),
             Expr::Number(_, span) => self.source_map.push(RustSourceMapEntry {
                 kind: "number".to_string(),
                 source: span.clone(),
                 generated: generated.clone(),
+                ..Default::default()
             }),
             Expr::String(_, span) | Expr::MultilineString(_, span) => {
                 self.source_map.push(RustSourceMapEntry {
                     kind: "string".to_string(),
                     source: span.clone(),
                     generated: generated.clone(),
+                    ..Default::default()
                 })
             }
             Expr::Unknown(_) => {}

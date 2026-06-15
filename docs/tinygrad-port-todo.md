@@ -12,7 +12,8 @@ parameters (Copy and non-Copy), type aliases (generic + non-generic, expanded
 at every comparison site), reserved `__rss_`/`__rsscript_` namespaces for
 compiler-generated helpers (Python-style dunders like `__hash__` stay legal), and
 struct field defaults (`name: T = expr`, filled at
-construction on both backends).
+construction on both backends), and diagnostic provenance (remapped backend
+errors name the RSS source symbol and its lowered Rust symbol).
 
 Verified already-met against their written acceptance (closed without new code):
 - **Method/property getters** — modeled as zero-argument methods
@@ -35,11 +36,3 @@ Verified already-met against their written acceptance (closed without new code):
   function's signature and lowered as a function value.
   _Why:_ tinygrad passes named matcher/rewrite functions; without this the port
   wraps each in a closure or struct.
-
-- [ ] **RSS-to-Rust diagnostic provenance: symbol names.** Remapped backend
-  errors already report the RSS file, source span, generated Rust location, and
-  rustc code. Still missing: the enclosing **source symbol** name and the
-  **lowered Rust symbol** name.
-  _Why:_ naming the declaration (not just the line) speeds triage.
-  _Acceptance:_ a remapped Rust backend error names the RSS source symbol and its
-  lowered Rust symbol.
