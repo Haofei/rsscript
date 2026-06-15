@@ -1821,7 +1821,7 @@ fn callee_label(callee: &Callee) -> String {
             effect,
         } => format!(
             "{} {}.{method}",
-            effect.as_str(),
+            (*effect).map(|e| e.as_str()).unwrap_or("read"),
             package_expr_label(receiver)
         ),
     }

@@ -1993,13 +1993,13 @@ fn check_receiver_call_self_effect(
         );
         return;
     };
-    if expected.as_str() != effect.as_str() {
+    if expected.as_str() != (*effect).unwrap_or(DataEffect::Read).as_str() {
         analyzer.diagnostics.push(
             Diagnostic::error(
                 code::MISSING_DATA_EFFECT,
                 format!(
                     "receiver `{receiver_label}` for `{method}` uses `{}` but the method requires `{}`.",
-                    effect.as_str(),
+                    (*effect).unwrap_or(DataEffect::Read).as_str(),
                     expected.as_str()
                 ),
                 call_span.clone(),
@@ -4509,7 +4509,7 @@ fn callee_display(callee: &Callee) -> String {
             receiver,
             method,
             effect,
-        } => format!("{} {}.{method}", effect.as_str(), call_expr_label(receiver)),
+        } => format!("{} {}.{method}", (*effect).unwrap_or(DataEffect::Read).as_str(), call_expr_label(receiver)),
     }
 }
 
@@ -4533,7 +4533,7 @@ fn expr_data_effect(expr: &HirExpr) -> Option<&'static str> {
         HirExpr::Call {
             callee:
                 Callee::ReceiverCall {
-                    effect: DataEffect::Read,
+                    effect: Some(DataEffect::Read) | None,
                     ..
                 },
             ..

@@ -2870,7 +2870,7 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
     }
 
     if let Some(receiver_call) =
-        parse_receiver_call_expr_from_receiver(tokens, start, end, DataEffect::Read)
+        parse_receiver_call_expr_from_receiver(tokens, start, end, None)
     {
         return Some(receiver_call);
     }
@@ -3646,14 +3646,15 @@ fn parse_receiver_call_expr(
     end: usize,
     effect: DataEffect,
 ) -> Option<Expr> {
-    parse_receiver_call_expr_from_receiver(tokens, start + 1, end, effect)
+    // Reached only when an effect keyword was written explicitly.
+    parse_receiver_call_expr_from_receiver(tokens, start + 1, end, Some(effect))
 }
 
 fn parse_receiver_call_expr_from_receiver(
     tokens: &[Token],
     receiver_start: usize,
     end: usize,
-    effect: DataEffect,
+    effect: Option<DataEffect>,
 ) -> Option<Expr> {
     if tokens
         .get(receiver_start)

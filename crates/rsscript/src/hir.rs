@@ -1862,7 +1862,7 @@ fn lower_hir_expr(
                         receiver, effect, ..
                     } => Some(HirCallReceiver {
                         value: Box::new(lower_hir_expr(hir, function_name, receiver, value_types)),
-                        effect: param_effect_from_data_effect(*effect),
+                        effect: param_effect_from_data_effect((*effect).unwrap_or(DataEffect::Read)),
                         type_name: receiver_type,
                         resolved_namespace,
                     }),
@@ -3384,7 +3384,7 @@ fn callee_display(callee: &Callee) -> String {
             effect,
         } => format!(
             "{} {}.{method}",
-            effect.as_str(),
+            (*effect).map(|e| e.as_str()).unwrap_or("read"),
             receiver_call_label(receiver)
         ),
     }

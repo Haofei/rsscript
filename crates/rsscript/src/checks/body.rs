@@ -3355,7 +3355,7 @@ fn body_callee_display(callee: &Callee) -> String {
             receiver,
             method,
             effect,
-        } => format!("{} {}.{method}", effect.as_str(), body_expr_label(receiver)),
+        } => format!("{} {}.{method}", (*effect).unwrap_or(DataEffect::Read).as_str(), body_expr_label(receiver)),
     }
 }
 

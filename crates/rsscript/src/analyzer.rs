@@ -6250,7 +6250,7 @@ fn callee_display(callee: &Callee) -> String {
             effect,
         } => format!(
             "{} {}.{method}",
-            effect.as_str(),
+            (*effect).unwrap_or(DataEffect::Read).as_str(),
             analyzer_expr_label(receiver)
         ),
     }

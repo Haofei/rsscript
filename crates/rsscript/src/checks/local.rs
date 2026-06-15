@@ -1441,7 +1441,7 @@ fn callee_display(callee: &Callee) -> String {
             effect,
         } => format!(
             "{} {}.{method}",
-            effect.as_str(),
+            (*effect).map(|e| e.as_str()).unwrap_or("read"),
             local_expr_label(receiver)
         ),
     }
