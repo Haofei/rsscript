@@ -1,0 +1,14 @@
+// Python-style dunder names are NOT reserved — only the generated `__rss_` /
+// `__rsscript_` namespaces are. The port relies on dunder-named ports
+// (`__hash__`, `__eq__`, `__rfloordiv__`, ...) for 1:1 fidelity with tinygrad.
+fn __hash__(x: Int) -> Int {
+    return x
+}
+
+fn __eq__(a: Int, b: Int) -> Bool {
+    return a == b
+}
+
+fn main() -> Unit {
+    return Unit
+}
