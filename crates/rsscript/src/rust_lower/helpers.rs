@@ -812,7 +812,7 @@ pub(super) fn collect_mutated_bindings_from_expr(expr: &Expr, names: &mut BTreeS
             if let Callee::ReceiverCall {
                 receiver, effect, ..
             } = callee
-                && *effect == DataEffect::Mut
+                && (*effect) == Some(DataEffect::Mut)
                 && let Some(root) = expr_root_name(receiver)
             {
                 names.insert(root.to_string());

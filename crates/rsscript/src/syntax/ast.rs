@@ -732,10 +732,16 @@ pub enum Callee {
     },
     /// Receiver-call shorthand: `<effect> receiver.method(args)`
     /// Desugars to `Type.method(self: <effect> receiver, args)`.
+    /// `effect` is `None` for a bare call (`x.m()`, defaulting to read of the
+    /// receiver) and `Some(..)` when an effect keyword was written explicitly
+    /// (`read x.m()` / `mut x.m()`). The distinction matters for module-qualified
+    /// calls: a bare `m.fn()` is a value call, while `read m.fn()` borrows the
+    /// result. Consumers that just need the receiver borrow use
+    /// `effect.unwrap_or(DataEffect::Read)`.
     ReceiverCall {
         receiver: Box<Expr>,
         method: String,
-        effect: DataEffect,
+        effect: Option<DataEffect>,
     },
 }
 

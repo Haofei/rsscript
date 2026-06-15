@@ -611,18 +611,17 @@ impl Resolver {
                 }
             }
             Expr::Call { callee, args, span } => {
-                // `<effect> module.fn(args)` parses as a receiver call, but when the
-                // receiver names a module it is a module-qualified free call. The
-                // effect was written for the *call*, not the module, so convert it
-                // and re-apply the effect to the whole call: `read m.fn()` becomes
-                // `read (m__fn())`, identical to `read flat()` and `read (m.fn())`.
-                // A receiver call always carries an explicit effect (bare module
-                // calls parse as `Callee::Qualified`, handled below), so this never
-                // affects value-position calls.
+                // `read m.fn(args)` parses as a receiver call carrying an EXPLICIT
+                // effect; for a module free call (no receiver to borrow) the effect
+                // was meant for the call result, so convert and re-apply it:
+                // `read m.fn()` -> `read (m__fn())`. A BARE `m.fn()` has effect
+                // `None` (default read of a non-existent receiver) and must stay a
+                // VALUE call — wrapping it in `Expr::Effect` lowered it to a borrow
+                // `&T` and broke value-position calls like `let v = m.fn()`.
                 if let Callee::ReceiverCall {
                     receiver,
                     method,
-                    effect,
+                    effect: Some(effect),
                 } = callee
                     && let Some(prefix) = module_path_of_receiver(receiver, scope)
                     && self
@@ -648,6 +647,9 @@ impl Resolver {
                     };
                     return;
                 }
+                // Bare module receiver call (effect None) and everything else:
+                // `rewrite_callee` collapses a module receiver call to the plain
+                // mangled free call by value.
                 self.rewrite_callee(callee, file, scope);
                 for arg in args {
                     self.rewrite_expr(&mut arg.value, file, scope);

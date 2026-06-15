@@ -1110,3 +1110,46 @@ native fn parse(text: read String) -> Result<fresh JsonValue, JsonError>
         diagnostic.code == "RS0015" && diagnostic.label == "unsupported top-level item"
     }));
 }
+
+#[test]
+fn value_position_module_call_lowers_by_value_not_borrow() {
+    // Regression: a bare `m.fn()` parses as a receiver call, but a module free
+    // call has no receiver to borrow. It must lower to a VALUE call so the result
+    // can be passed to a by-value parameter. Previously it was wrapped in an
+    // effect and lowered to `&(m__make(..))`, which rustc rejected (E0308,
+    // expected `i64` found `&i64`) only at `rss run` — `rss check` missed it.
+    let sources = vec![
+        (
+            "m.rss".to_string(),
+            "module m\n\nfn make(x: Int) -> Int {\n    return x + 1\n}\n".to_string(),
+        ),
+        (
+            "main.rss".to_string(),
+            concat!(
+                "module app\n\n",
+                "fn consume(y: Int) -> Int {\n    return y * 2\n}\n\n",
+                "fn use_it(a: Int) -> Int {\n",
+                "    let v = m.make(x: a)\n",
+                "    return consume(y: v)\n",
+                "}\n\n",
+                "fn main() -> Unit {\n    return Unit\n}\n",
+            )
+            .to_string(),
+        ),
+    ];
+    let package =
+        lower_sources_to_rust_package_with_options(&sources, "ns-modcall", "/rt", &[], &[])
+            .expect("value-position module call should lower");
+    // The module call collapses to the mangled free call...
+    assert!(
+        package.lib_rs.contains("m__make("),
+        "module call should lower to the mangled free symbol:\n{}",
+        package.lib_rs
+    );
+    // ...by VALUE: it must NOT be wrapped in a borrow.
+    assert!(
+        !package.lib_rs.contains("&(m__make("),
+        "value-position module call must not lower to a borrow `&(m__make(..))`:\n{}",
+        package.lib_rs
+    );
+}

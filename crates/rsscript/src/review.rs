@@ -1451,11 +1451,11 @@ fn collect_review_map_facts_expr(
                             facts.receiver_calls.push(ReviewMapReceiverCall {
                                 line: span.line,
                                 column: span.column,
-                                source: format!("{} {receiver_label}.{method}", effect.as_str()),
+                                source: format!("{} {receiver_label}.{method}", (*effect).map(|e| e.as_str()).unwrap_or("read")),
                                 canonical_callee: namespace
                                     .map(|namespace| format!("{namespace}.{method}"))
                                     .unwrap_or_else(|| format!("<unresolved>.{method}")),
-                                self_effect: effect.as_str().to_string(),
+                                self_effect: (*effect).map(|e| e.as_str()).unwrap_or("read").to_string(),
                                 resolution: receiver_call_resolution_label(&resolution).to_string(),
                             });
                             resolution
@@ -1463,9 +1463,9 @@ fn collect_review_map_facts_expr(
                             facts.receiver_calls.push(ReviewMapReceiverCall {
                                 line: span.line,
                                 column: span.column,
-                                source: format!("{} {receiver_label}.{method}", effect.as_str()),
+                                source: format!("{} {receiver_label}.{method}", (*effect).map(|e| e.as_str()).unwrap_or("read")),
                                 canonical_callee: format!("<unresolved>.{method}"),
-                                self_effect: effect.as_str().to_string(),
+                                self_effect: (*effect).map(|e| e.as_str()).unwrap_or("read").to_string(),
                                 resolution: "unknown".to_string(),
                             });
                             CallResolution::Unknown
@@ -2443,7 +2443,7 @@ fn review_callee_display(callee: &Callee) -> String {
             effect,
         } => format!(
             "{} {}.{method}",
-            effect.as_str(),
+            (*effect).map(|e| e.as_str()).unwrap_or("read"),
             review_expr_label(receiver)
         ),
     }

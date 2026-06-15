@@ -987,8 +987,8 @@ impl Formatter {
                 method,
                 effect,
             } => {
-                if *effect != DataEffect::Read {
-                    self.out.push_str(effect.as_str());
+                if (*effect).unwrap_or(DataEffect::Read) != DataEffect::Read {
+                    self.out.push_str((*effect).unwrap_or(DataEffect::Read).as_str());
                     self.out.push(' ');
                 }
                 self.expr_at(receiver, 0, indent);
@@ -1209,10 +1209,10 @@ fn inline_callee(callee: &Callee) -> Option<String> {
             method,
             effect,
         } => {
-            let prefix = if *effect == DataEffect::Read {
+            let prefix = if (*effect).unwrap_or(DataEffect::Read) == DataEffect::Read {
                 String::new()
             } else {
-                format!("{} ", effect.as_str())
+                format!("{} ", (*effect).unwrap_or(DataEffect::Read).as_str())
             };
             Some(format!("{prefix}{}.{}", inline_expr(receiver)?, method))
         }
@@ -1233,7 +1233,7 @@ fn receiver_call_segments(expr: &Expr) -> Option<ReceiverCallSegments<'_>> {
         ..
     } = current
     {
-        if *effect != DataEffect::Read {
+        if (*effect).unwrap_or(DataEffect::Read) != DataEffect::Read {
             return None;
         }
         segments.push((method.as_str(), args.as_slice()));

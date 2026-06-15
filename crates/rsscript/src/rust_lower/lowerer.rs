@@ -2650,7 +2650,7 @@ impl<'a> RustLowerer<'a> {
                         })
                         .unwrap_or(receiver_type_root);
                     let is_protocol = self.protocol_names.contains(&namespace);
-                    let lowered_receiver = match effect {
+                    let lowered_receiver = match (*effect).unwrap_or(DataEffect::Read) {
                         DataEffect::Mut
                             if let Expr::Ident(receiver_name, _) = receiver.as_ref()
                                 && self.param_effects.get(receiver_name)
@@ -3420,7 +3420,7 @@ impl<'a> RustLowerer<'a> {
             Expr::Call {
                 callee:
                     Callee::ReceiverCall {
-                        effect: DataEffect::Read,
+                        effect: Some(DataEffect::Read) | None,
                         method,
                         ..
                     },
