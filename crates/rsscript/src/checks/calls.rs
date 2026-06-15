@@ -357,8 +357,8 @@ fn check_binding_type(
     if unresolved_generic_type(actual) {
         return;
     }
-    let resolved_expected = analyzer.resolve_type_alias(expected).to_string();
-    let resolved_actual = analyzer.resolve_type_alias(actual).to_string();
+    let resolved_expected = analyzer.expand_type_alias(expected);
+    let resolved_actual = analyzer.expand_type_alias(actual);
     if json_value_accepts_literal(&resolved_expected, value) {
         return;
     }
@@ -723,7 +723,10 @@ fn check_return_expr_type(
     if check_list_literal_type(analyzer, &expected, value, "return value") {
         return;
     }
-    if !argument_type_matches(&expected, actual) {
+    if !argument_type_matches(
+        &analyzer.expand_type_alias(&expected),
+        &analyzer.expand_type_alias(actual),
+    ) {
         return_type_mismatch_diagnostic(analyzer, &function.name, actual, &expected, span);
     }
 }
@@ -1344,7 +1347,10 @@ fn check_call_args(
         if check_list_literal_type(analyzer, &expected_type, &arg.value, "argument") {
             continue;
         }
-        if !argument_type_matches(&expected_type, actual_type) {
+        if !argument_type_matches(
+            &analyzer.expand_type_alias(&expected_type),
+            &analyzer.expand_type_alias(actual_type),
+        ) {
             analyzer.diagnostics.push(
                 Diagnostic::error(
                     code::ARGUMENT_TYPE_MISMATCH,

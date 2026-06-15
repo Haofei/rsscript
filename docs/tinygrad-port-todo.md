@@ -7,16 +7,11 @@ aliasing, qualified `module.fn`/`.Type`/value access, `use module.*` glob,
 qualified variant patterns), pattern matching (variants/options/constants/tuples/
 lists), tuples & destructuring, `#lower_name` escape hatch, source-qualified
 symbol inventory, type-associated constants & static methods, value-semantics
-clone/derives, Option ergonomics (`?`-on-Option + combinators), and default
-parameters (Copy and non-Copy).
+clone/derives, Option ergonomics (`?`-on-Option + combinators), default
+parameters (Copy and non-Copy), and type aliases (generic + non-generic, expanded
+at every comparison site).
 
 ## Must unblock awkward valid ports
-
-- [ ] **Generic type aliases.** Basic `type X = Y` aliases work; add *generic*
-  aliases (`type Pair<T> = ...`) that can reference imported types and appear in
-  the symbol inventory as type-level symbols, without creating value-namespace
-  placeholders.
-  _Why:_ Python `TypeVar`/generic-alias symbols otherwise become dummy constants.
 
 - [ ] **Method/property lowering ergonomics.** Provide a simple way to model
   Python-style getter properties and method-like computed fields.

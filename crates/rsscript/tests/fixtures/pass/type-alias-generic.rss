@@ -1,0 +1,21 @@
+// Generic and non-generic type aliases expand at every type-comparison site —
+// parameter, return, and binding positions — including aliases that reference
+// imported/builtin generic types.
+
+type Pair<T> = Result<T, String>
+type IntList = List<Int>
+
+fn first_ok() -> fresh Pair<Int> {
+    return Ok(1)
+}
+
+fn count(xs: read IntList) -> Int {
+    return List.len(list: read xs)
+}
+
+fn main() -> Unit {
+    let p: Pair<Int> = first_ok()
+    let n: IntList = List.new<Int>()
+    Log.write(message: read String.from_int(value: count(xs: read n)))
+    return Unit
+}

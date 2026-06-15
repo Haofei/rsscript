@@ -178,6 +178,14 @@ fn analyze_program(
         type_aliases.extend(type_aliases_from_program(interface));
     }
     type_aliases.extend(type_aliases_from_program(&syntax_program));
+    let mut type_alias_params = std::collections::BTreeMap::new();
+    for interface in builtin_interface_programs()
+        .iter()
+        .chain(interface_programs.iter())
+    {
+        type_alias_params.extend(type_alias_params_from_program(interface));
+    }
+    type_alias_params.extend(type_alias_params_from_program(&syntax_program));
     let mut analyzer = Analyzer {
         tokens: &tokens,
         syntax_program,
@@ -185,6 +193,7 @@ fn analyze_program(
         hir,
         diagnostics: Vec::new(),
         type_aliases,
+        type_alias_params,
         in_task_group: false,
         async_let_names: Vec::new(),
     };
@@ -207,6 +216,28 @@ fn type_aliases_from_program(
     })
 }
 
+/// The generic parameter names of each type alias (`type Pair<T> = ...` → `T`),
+/// so generic aliases can be expanded by substituting arguments for parameters.
+fn type_alias_params_from_program(
+    program: &crate::syntax::ast::Program,
+) -> impl Iterator<Item = (String, Vec<String>)> + '_ {
+    use crate::syntax::ast::Item;
+    program.items.iter().filter_map(|item| {
+        if let Item::TypeAlias(alias) = item {
+            Some((
+                alias.name.clone(),
+                alias
+                    .type_params
+                    .iter()
+                    .map(|param| param.name.clone())
+                    .collect(),
+            ))
+        } else {
+            None
+        }
+    })
+}
+
 fn analyze_syntax_program(
     tokens: Vec<Token>,
     syntax_program: crate::syntax::ast::Program,
@@ -219,6 +250,7 @@ fn analyze_syntax_program(
         hir,
         diagnostics: Vec::new(),
         type_aliases: Default::default(),
+        type_alias_params: Default::default(),
         in_task_group: false,
         async_let_names: Vec::new(),
     };
@@ -251,6 +283,9 @@ pub(crate) struct Analyzer<'a> {
     pub(crate) hir: Hir,
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) type_aliases: std::collections::BTreeMap<String, String>,
+    /// Type-alias name -> its generic parameter names (empty for non-generic
+    /// aliases), used to expand generic aliases like `Pair<Int>`.
+    pub(crate) type_alias_params: std::collections::BTreeMap<String, Vec<String>>,
     in_task_group: bool,
     pub(crate) async_let_names: Vec<String>,
 }
@@ -1034,6 +1069,40 @@ impl Analyzer<'_> {
             match self.type_aliases.get(current) {
                 Some(resolved) => current = resolved.as_str(),
                 None => break,
+            }
+        }
+        current
+    }
+
+    /// Expand a type-alias reference, including generic aliases, to its target
+    /// type. `IntList` -> `List<Int>`; `Pair<Int>` -> `Result<Int, String>` for
+    /// `type Pair<T> = Result<T, String>`. Non-aliases pass through unchanged.
+    pub(crate) fn expand_type_alias(&self, type_name: &str) -> String {
+        use crate::text_util::{substitute_type_args, type_arg_names, type_root_name};
+        let mut current = type_name.trim().to_string();
+        for _ in 0..16 {
+            let root = type_root_name(&current);
+            let Some(target) = self.type_aliases.get(root) else {
+                break;
+            };
+            let params = self.type_alias_params.get(root).cloned().unwrap_or_default();
+            if params.is_empty() {
+                current = target.clone();
+            } else {
+                // Generic alias: substitute the reference's arguments for the
+                // alias's parameters. On arity mismatch, leave it for the normal
+                // type checks to report.
+                let Some(args) = type_arg_names(&current) else {
+                    break;
+                };
+                if args.len() != params.len() {
+                    break;
+                }
+                let subs: std::collections::HashMap<String, String> = params
+                    .into_iter()
+                    .zip(args.into_iter().map(str::to_string))
+                    .collect();
+                current = substitute_type_args(target, &subs);
             }
         }
         current
