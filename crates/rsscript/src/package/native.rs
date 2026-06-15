@@ -45,6 +45,70 @@ struct CargoMetadataTarget {
 struct NativeBindingsManifest {
     #[serde(default)]
     bindings: BTreeMap<String, String>,
+    /// Compact whole-boundary binding: one `[adapter.<Namespace>]` section binds
+    /// many `Namespace.method` native functions to `<crate>::<method>` without a
+    /// per-function line. Expands into `bindings` at load time, so every
+    /// downstream consumer (lowering, VM shim, conformance checks) sees the same
+    /// flat map — there is no separate adapter code path.
+    #[serde(default)]
+    adapter: BTreeMap<String, AdapterBinding>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdapterBinding {
+    /// The Rust wrapper crate that owns every method in this boundary.
+    #[serde(rename = "crate")]
+    crate_name: String,
+    /// Method names declared under the namespace (the part after the dot). Each
+    /// `m` binds `Namespace.m` to `<crate>::m`.
+    #[serde(default)]
+    functions: Vec<String>,
+    /// Optional per-method Rust name overrides for `m` whose Rust function name
+    /// differs from the RSScript method name (`Namespace.m -> <crate>::<rename[m]>`).
+    #[serde(default)]
+    rename: BTreeMap<String, String>,
+}
+
+/// Flatten a binding manifest into the canonical `symbol -> rust target` map,
+/// expanding any compact `[adapter.*]` sections. Errors on malformed adapters and
+/// on a symbol produced by more than one source (explicit binding or adapter), so
+/// the binding surface stays unambiguous for review.
+fn flatten_native_bindings(
+    manifest: NativeBindingsManifest,
+) -> Result<BTreeMap<String, String>, String> {
+    let mut flat = manifest.bindings;
+    for (namespace, adapter) in manifest.adapter {
+        let crate_name = adapter.crate_name.trim();
+        if crate_name.is_empty() {
+            return Err(format!(
+                "adapter `{namespace}` must set a non-empty `crate`."
+            ));
+        }
+        if adapter.functions.is_empty() {
+            return Err(format!(
+                "adapter `{namespace}` lists no `functions`; add the method names it binds or remove the section."
+            ));
+        }
+        for method in &adapter.functions {
+            let method = method.trim();
+            if method.is_empty() {
+                return Err(format!("adapter `{namespace}` has an empty function name."));
+            }
+            let symbol = format!("{namespace}.{method}");
+            let rust_method = adapter
+                .rename
+                .get(method)
+                .map(String::as_str)
+                .unwrap_or(method);
+            let target = format!("{crate_name}::{rust_method}");
+            if flat.insert(symbol.clone(), target).is_some() {
+                return Err(format!(
+                    "native binding `{symbol}` is defined twice (by `[adapter.{namespace}]` and an explicit `[bindings]` entry, or duplicated)."
+                ));
+            }
+        }
+    }
+    Ok(flat)
 }
 
 pub(super) fn package_native_rust_dependencies(
@@ -190,7 +254,7 @@ pub(super) fn package_native_bindings(
         .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
     let manifest: NativeBindingsManifest = toml::from_str(&source)
         .map_err(|error| format!("failed to parse {}: {error}", path.display()))?;
-    Ok(manifest.bindings)
+    flatten_native_bindings(manifest).map_err(|error| format!("{}: {error}", path.display()))
 }
 
 pub(super) fn native_binding_interface_sources(
@@ -1034,4 +1098,88 @@ pub(super) fn manifest_native_unsafe_boundary(manifest: &Manifest) -> bool {
         .and_then(|native| native.rust.as_ref())
         .and_then(|native| native.effective_unsafe_policy())
         .is_some_and(|policy| policy != "forbid")
+}
+
+#[cfg(test)]
+mod adapter_binding_tests {
+    use super::*;
+
+    fn flatten(toml_src: &str) -> Result<BTreeMap<String, String>, String> {
+        let manifest: NativeBindingsManifest = toml::from_str(toml_src).expect("manifest parses");
+        flatten_native_bindings(manifest)
+    }
+
+    #[test]
+    fn adapter_section_expands_to_per_method_bindings() {
+        let flat = flatten(
+            "[adapter.Rayon]\ncrate = \"rss_rayon_native\"\nfunctions = [\"sum_int\", \"sort_int\"]\n",
+        )
+        .expect("adapter expands");
+        assert_eq!(
+            flat.get("Rayon.sum_int").map(String::as_str),
+            Some("rss_rayon_native::sum_int")
+        );
+        assert_eq!(
+            flat.get("Rayon.sort_int").map(String::as_str),
+            Some("rss_rayon_native::sort_int")
+        );
+        assert_eq!(flat.len(), 2);
+    }
+
+    #[test]
+    fn adapter_form_matches_the_explicit_form() {
+        let compact = flatten(
+            "[adapter.Rayon]\ncrate = \"rss_rayon_native\"\nfunctions = [\"sum_int\", \"sort_int\"]\n",
+        )
+        .unwrap();
+        let explicit = flatten(
+            "[bindings]\n\"Rayon.sum_int\" = \"rss_rayon_native::sum_int\"\n\"Rayon.sort_int\" = \"rss_rayon_native::sort_int\"\n",
+        )
+        .unwrap();
+        assert_eq!(compact, explicit);
+    }
+
+    #[test]
+    fn rename_overrides_the_rust_method_name() {
+        let flat = flatten(
+            "[adapter.File]\ncrate = \"file_native\"\nfunctions = [\"open\"]\n\n[adapter.File.rename]\nopen = \"open_file\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            flat.get("File.open").map(String::as_str),
+            Some("file_native::open_file")
+        );
+    }
+
+    #[test]
+    fn explicit_bindings_and_adapters_compose() {
+        let flat = flatten(
+            "[bindings]\n\"Extra.ping\" = \"extra::ping\"\n\n[adapter.File]\ncrate = \"file_native\"\nfunctions = [\"open\"]\n",
+        )
+        .unwrap();
+        assert_eq!(flat.len(), 2);
+        assert!(flat.contains_key("Extra.ping"));
+        assert!(flat.contains_key("File.open"));
+    }
+
+    #[test]
+    fn duplicate_symbol_across_adapter_and_bindings_errors() {
+        let error = flatten(
+            "[bindings]\n\"File.open\" = \"file_native::open\"\n\n[adapter.File]\ncrate = \"file_native\"\nfunctions = [\"open\"]\n",
+        )
+        .expect_err("duplicate symbol should error");
+        assert!(error.contains("File.open"), "error: {error}");
+    }
+
+    #[test]
+    fn empty_crate_and_empty_functions_error() {
+        assert!(
+            flatten("[adapter.File]\ncrate = \"\"\nfunctions = [\"open\"]\n").is_err(),
+            "empty crate must error"
+        );
+        assert!(
+            flatten("[adapter.File]\ncrate = \"file_native\"\nfunctions = []\n").is_err(),
+            "empty functions must error"
+        );
+    }
 }

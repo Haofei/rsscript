@@ -1877,6 +1877,31 @@ A native wrapper package may provide:
 "Json.JsonError" = "rss_json_native::JsonError"
 ```
 
+A whole boundary that binds many functions of one namespace to a single Rust
+wrapper crate can be declared compactly with an `[adapter.<Namespace>]` section
+instead of one `[bindings]` line per function:
+
+```toml
+# native/bindings.rssbind.toml
+
+[adapter.Json]
+crate = "rss_json_native"
+functions = ["parse", "field_string"]
+
+# Per-method overrides when the Rust name differs from the RSScript method:
+[adapter.Json.rename]
+parse = "json_parse"
+field_string = "json_field_string"
+```
+
+This expands at load time to exactly the `[bindings]` entries above
+(`Json.parse -> rss_json_native::json_parse`, …), so lowering, the VM shim, and
+all binding checks see the identical flat map — there is no separate adapter code
+path. Every bound method is still listed by name, keeping the boundary
+review-visible; only the repeated `Namespace.` prefix and `crate::` path are
+factored out. A symbol defined by both an adapter and an explicit `[bindings]`
+entry (or by two adapters) is rejected as a duplicate.
+
 Package checks must reject:
 
 ```text

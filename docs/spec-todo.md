@@ -44,11 +44,22 @@ actual driver (see "Basis" at the bottom).
   come up; (b) a persistent **LSP-protocol daemon** (stdio) for editors — `rss ide`
   is request/response, not a long-running server. Track as a follow-up.
 
-- [ ] **FFI / native-ABI adapter contracts** (§3.2 general FFI, §20.1-N) —
-  _effort: medium–large, open-ended._
-  `native fn` declares external boundaries today; the gap is binding *whole*
-  runtime/autogen/device boundaries compactly without large wrapper files, plus
-  ABI-adapter conformance facts. Needs a concrete target boundary to scope "done."
+- [x] **FFI / native-ABI adapter contracts** (§3.2 general FFI, §20.1-N) —
+  _compact whole-boundary binding done; deeper adapter protocol remains._
+  The FFI surface was already mature (`native fn`, `native module` grouping,
+  transitive binding inheritance, unbound-call error at lowering, `rss native
+  audit`, review capability classification). Closed the named gap — "binding whole
+  boundaries compactly without large wrapper files" — with an
+  `[adapter.<Namespace>]` section in `native/bindings.rssbind.toml` (package-mgr
+  §9.5): one `crate` + a `functions` list (plus optional `rename`) binds a whole
+  namespace, expanding at load time into the same flat `symbol -> target` map every
+  consumer already uses (lowering, VM shim, conformance checks) — **zero parity
+  risk, single expansion point** (`flatten_native_bindings`). Duplicates across an
+  adapter and explicit `[bindings]` are rejected. Unit-tested for expansion,
+  rename, composition, and equivalence to the explicit form.
+  _Remaining (deferred, §20.1-N):_ deeper structured adapter protocol (Rust adapter
+  crate per dep), broader binding-conformance facts, dependency updates as semantic
+  review events. General FFI / C-header parsing / auto-binding stay non-goals.
 
 ## P2 — real features, not blocking today
 

@@ -5416,10 +5416,12 @@ M. Module visibility and re-export hardening
 
 N. Native boundary and ABI adapter contracts
    - RSScript already declares native functions in .rssi with explicit unsafe and
-     native markers.
-   - future work: structured native adapter protocol (Rust adapter crate per
-     native dependency), tooling checks that bindings exist and match declared
-     contracts, dependency updates as review events with semantic diff.
+     native markers, groups them compactly with `native module`, and binds a whole
+     boundary in one `[adapter.<Namespace>]` manifest section (package-manager
+     §9.5) that expands to per-function bindings without a separate code path.
+   - future work: deeper structured native adapter protocol (Rust adapter crate
+     per native dependency), broader tooling checks that bindings exist and match
+     declared contracts, dependency updates as review events with semantic diff.
    - not adopted: general FFI, C header parsing, automatic binding generation
      without audit, or direct pointer manipulation in RSScript source.
 ```
