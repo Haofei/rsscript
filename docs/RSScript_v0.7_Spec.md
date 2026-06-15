@@ -46,6 +46,12 @@ Types, protocols, and stdlib:
     (`Result.map_error/and_then/map`, `Option.map/and_then/ok_or/...`) (§18.2).
   - Numeric surface: `Math` Int/Float intrinsics and scalar
     conversions/inspection (§18.2).
+  - Capability objects: explicit `Capability<Protocol>` dynamic dispatch (with the
+    `capability Protocol` keyword sugar), closed-world enum dispatch on the backend
+    and receiver-type dispatch in the reg-VM (§14.6, §20.2-2).
+  - Scoped views / slices: `StringView`/`BytesView`/`BufferView` and the
+    `view name = expr` borrowed-region form, scope-bounded with no escape/retain/
+    cross-await/managed-graph (§20.2-1).
 
 Lowering and tooling:
   - Rust source lowering with mandatory source maps; review map / review diff
@@ -662,8 +668,8 @@ The following may be parsed and surfaced for review but are not executable lower
 ```text
 public Future / Waker / task-handle surface
 general user FFI
-advanced protocol/dynamic dispatch model (capability objects)  → now in scope (§20.2)
-scoped views / slices                                          → now in scope (§20.2)
+advanced protocol/dynamic dispatch model (capability objects)  → now implemented (§20.2-2)
+scoped views / slices                                          → now implemented (§20.2-1)
 ```
 
 (Unstructured `spawn` and Rust-style open enums were previously listed here; both
