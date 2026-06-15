@@ -1,7 +1,17 @@
 # Feature request: freshness propagation through a direct `return fresh_call()`
 
-**Status:** requested · **Driver:** tinygrad-rsmc clean `rss check`
+**Status:** ALREADY IMPLEMENTED (verified) · **Driver:** tinygrad-rsmc clean `rss check`
 **Repro built on:** current `rss` (post literal/enum/clean-local freshness fixes)
+
+> **Resolution.** The described feature already works: `classify_return_expr`
+> maps a call to a `fresh`-returning function to `HirReturnProof::FreshCall`, a
+> proven-fresh source. Verified clean across direct, receiver-call, cross-module,
+> and `fresh Option<T>`/`fresh Result<T,E>` wrapper shapes (see the
+> `fresh-direct-call-return.rss` pass fixture). The minimal repro below no longer
+> reproduces. If the port still shows one warning on `tensor_max_pool2d_resolved`,
+> it is a narrower resolution edge on that specific callee (its resolution returns
+> `Unknown`) — share that declaration + call site to pinpoint; it is not the
+> general rule failing.
 
 ## Summary
 

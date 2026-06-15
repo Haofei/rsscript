@@ -1,0 +1,19 @@
+// A direct `return <fresh-returning call>` is fresh (no intermediate local
+// needed) — across plain calls, receiver calls, and the fresh Option/Result
+// wrapper forms. Locks in the freshness classification so it can't regress.
+
+fn make() -> fresh String {
+    return "x"
+}
+
+fn direct() -> fresh String {
+    return make()
+}
+
+fn make_opt() -> fresh Option<String> {
+    return Some("x")
+}
+
+fn direct_opt() -> fresh Option<String> {
+    return make_opt()
+}

@@ -120,6 +120,50 @@ fn module_isolation_resolves_cross_file_associated_constant() {
 }
 
 #[test]
+fn qualified_module_value_access_resolves_const_and_variant() {
+    // `ops.MAX_OPS` (constant) and `ops.MUL` (sum variant) resolve from another
+    // module in value position, without a per-symbol `use`. The const lowers to
+    // its module-mangled SCREAMING_SNAKE symbol; the variant resolves through its
+    // (module-mangled) sum type.
+    let sources = vec![
+        (
+            "ops.rss".to_string(),
+            "module ops\n\nsum Ops {\n    ADD\n    MUL\n}\n\nconst MAX_OPS: Int = 64\n".to_string(),
+        ),
+        (
+            "main.rss".to_string(),
+            concat!(
+                "module app\n\n",
+                "use ops.Ops\n\n",
+                "fn pick() -> fresh Ops {\n",
+                "    return ops.MUL\n",
+                "}\n\n",
+                "fn limit() -> Int {\n",
+                "    return ops.MAX_OPS\n",
+                "}\n\n",
+                "fn main() -> Unit {\n",
+                "    return Unit\n",
+                "}\n",
+            )
+            .to_string(),
+        ),
+    ];
+    let package =
+        lower_sources_to_rust_package_with_options(&sources, "ns-qualval", "/rt", &[], &[])
+            .expect("qualified module value access should lower");
+    assert!(
+        package.lib_rs.contains("OPS__MAX_OPS"),
+        "`ops.MAX_OPS` should lower to the module-mangled const symbol:\n{}",
+        package.lib_rs
+    );
+    assert!(
+        package.lib_rs.contains("ops__Ops") && package.lib_rs.contains("MUL"),
+        "`ops.MUL` should resolve through the module-mangled sum type:\n{}",
+        package.lib_rs
+    );
+}
+
+#[test]
 fn qualified_module_type_in_type_position_resolves() {
     // `dtype.DType` in a parameter type resolves to the module-scoped type symbol
     // without requiring a `use dtype.DType` line in the consuming file.

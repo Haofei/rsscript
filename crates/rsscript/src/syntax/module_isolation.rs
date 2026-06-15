@@ -82,6 +82,11 @@ struct Resolver {
     /// `SCREAMING_SNAKE_CASE`, so their mangled symbol is upper-cased to stay
     /// consistent between declaration and reference.
     module_consts: HashMap<String, HashSet<String>>,
+    /// module prefix -> the sum-variant names declared by its sums. Used to
+    /// resolve qualified value access `module.Variant`; variant names are global
+    /// (resolved through their sum type), so qualification rewrites to the bare
+    /// variant.
+    module_variants: HashMap<String, HashSet<String>>,
     /// file -> (local import name -> (module prefix, real symbol name)). The
     /// local name is the `as` alias when present, otherwise the path's last
     /// segment; the real name is always the path's last segment.
@@ -93,6 +98,7 @@ impl Resolver {
         let mut module_defs: HashMap<String, HashSet<String>> = HashMap::new();
         let mut module_types: HashMap<String, HashSet<String>> = HashMap::new();
         let mut module_consts: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut module_variants: HashMap<String, HashSet<String>> = HashMap::new();
         let mut file_imports: HashMap<String, HashMap<String, (String, String)>> = HashMap::new();
 
         for item in &program.items {
@@ -145,6 +151,12 @@ impl Resolver {
                         .entry(prefix.clone())
                         .or_default()
                         .insert(decl.name.clone());
+                    for variant in &decl.variants {
+                        module_variants
+                            .entry(prefix.clone())
+                            .or_default()
+                            .insert(variant.name.clone());
+                    }
                 }
                 Item::TypeAlias(decl) => {
                     module_defs
@@ -179,6 +191,7 @@ impl Resolver {
             module_defs,
             module_types,
             module_consts,
+            module_variants,
             file_imports,
         }
     }
@@ -558,6 +571,29 @@ impl Resolver {
                         .is_some_and(|names| names.contains(&flat))
                     {
                         *expr = Expr::Ident(self.mangle_value(&type_module, &flat), span.clone());
+                        return;
+                    }
+                }
+                // `module.CONST` / `module.Variant` qualified value access: when
+                // the base is a module path (not a local) that declares the named
+                // constant or sum variant, resolve the whole access. A constant
+                // becomes its module-mangled symbol; a variant becomes the bare
+                // variant (variant names resolve globally through their sum type).
+                if let Some(prefix) = module_path_of_receiver(base, scope) {
+                    if self
+                        .module_consts
+                        .get(&prefix)
+                        .is_some_and(|consts| consts.contains(name))
+                    {
+                        *expr = Expr::Ident(self.mangle_value(&prefix, name), span.clone());
+                        return;
+                    }
+                    if self
+                        .module_variants
+                        .get(&prefix)
+                        .is_some_and(|variants| variants.contains(name))
+                    {
+                        *expr = Expr::Ident(name.clone(), span.clone());
                         return;
                     }
                 }

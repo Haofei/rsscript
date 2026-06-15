@@ -1,7 +1,17 @@
 # Feature request: cross-module enum-variant / constant usage
 
-**Status:** requested · **Driver:** tinygrad-rsmc module de-prefixing
+**Status:** IMPLEMENTED (option 1, qualified value access) · **Driver:** tinygrad-rsmc module de-prefixing
 **Repro built on:** current `rss` (post module-isolation + use-aliasing)
+
+> **Resolution.** Qualified value access is implemented: `module.CONST` resolves
+> to the module-mangled constant and `module.Variant` resolves through the
+> variant's sum type, in value position, with no per-symbol `use`. Acceptance
+> criteria 1 is met. Not done: glob `use module.*` (option 2), and full
+> cross-module same-named-variant disambiguation (criterion 3) — variant names
+> are still global (resolved via their sum type), so two modules declaring the
+> same variant name still collide; that needs variant namespacing and is left as
+> a follow-up. Qualified variants in *pattern* position are also not yet
+> supported (value position only).
 
 ## Summary
 
