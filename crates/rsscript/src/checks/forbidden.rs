@@ -158,26 +158,23 @@ fn as_belongs_to_with(analyzer: &Analyzer<'_>, as_index: usize) -> bool {
         if token.is_ident_text("with") {
             return true;
         }
-        if token.symbol("{")
-            || token.symbol("}")
-            || token.is_ident_text("let")
-            || token.is_ident_text("local")
-            || token.is_ident_text("return")
-            || token.is_ident_text("fn")
-            || token.is_ident_text("class")
-            || token.is_ident_text("struct")
-            || token.is_ident_text("resource")
-            || token.is_ident_text("if")
-            || token.is_ident_text("else")
-            || token.is_ident_text("loop")
-            || token.is_ident_text("while")
-            || token.is_ident_text("break")
-            || token.is_ident_text("continue")
-        {
+        if token.symbol("{") || token.symbol("}") || is_statement_boundary_keyword(token) {
             return false;
         }
     }
     false
+}
+
+/// Keywords that begin or terminate a statement/block. Scanning backwards from an
+/// `as`, hitting one of these before a `with` means the `as` is not part of a
+/// `with` header and is therefore a genuine cast attempt.
+fn is_statement_boundary_keyword(token: &crate::lexer::Token) -> bool {
+    [
+        "let", "local", "return", "fn", "class", "struct", "resource", "if", "else", "loop",
+        "while", "break", "continue",
+    ]
+    .iter()
+    .any(|keyword| token.is_ident_text(keyword))
 }
 
 fn check_operator_overload_attempts(analyzer: &mut Analyzer<'_>) {
@@ -334,6 +331,19 @@ fn check_operator_overload_attempts_in_expr(analyzer: &mut Analyzer<'_>, expr: &
     }
 }
 
+/// Infers the type names of both operands, returning `None` if either operand's
+/// type is unknown. The operand-type checks below only fire when both types are
+/// known, so this consolidates the repeated "bail unless both are known" guard.
+fn inferred_operand_types(
+    analyzer: &Analyzer<'_>,
+    left: &HirExpr,
+    right: &HirExpr,
+) -> Option<(String, String)> {
+    let left_type = inferred_operand_type(analyzer, left).map(str::to_string)?;
+    let right_type = inferred_operand_type(analyzer, right).map(str::to_string)?;
+    Some((left_type, right_type))
+}
+
 fn check_builtin_operator_operand_types(
     analyzer: &mut Analyzer<'_>,
     op: BinaryOp,
@@ -343,10 +353,7 @@ fn check_builtin_operator_operand_types(
 ) {
     match op {
         BinaryOp::Equal | BinaryOp::NotEqual => {
-            let (Some(left_type), Some(right_type)) = (
-                inferred_operand_type(analyzer, left).map(str::to_string),
-                inferred_operand_type(analyzer, right).map(str::to_string),
-            ) else {
+            let Some((left_type, right_type)) = inferred_operand_types(analyzer, left, right) else {
                 return;
             };
             if type_root_name(&left_type) != type_root_name(&right_type) {
@@ -361,10 +368,7 @@ fn check_builtin_operator_operand_types(
             }
         }
         BinaryOp::Less | BinaryOp::LessEqual | BinaryOp::Greater | BinaryOp::GreaterEqual => {
-            let (Some(left_type), Some(right_type)) = (
-                inferred_operand_type(analyzer, left).map(str::to_string),
-                inferred_operand_type(analyzer, right).map(str::to_string),
-            ) else {
+            let Some((left_type, right_type)) = inferred_operand_types(analyzer, left, right) else {
                 return;
             };
             if !is_numeric_type(&left_type) || !is_numeric_type(&right_type) {
@@ -390,10 +394,7 @@ fn check_builtin_operator_operand_types(
             }
         }
         BinaryOp::LogicalAnd | BinaryOp::LogicalOr => {
-            let (Some(left_type), Some(right_type)) = (
-                inferred_operand_type(analyzer, left).map(str::to_string),
-                inferred_operand_type(analyzer, right).map(str::to_string),
-            ) else {
+            let Some((left_type, right_type)) = inferred_operand_types(analyzer, left, right) else {
                 return;
             };
             if type_root_name(&left_type) != "Bool" || type_root_name(&right_type) != "Bool" {
@@ -415,10 +416,7 @@ fn check_builtin_operator_operand_types(
             // Non-numeric operands are already rejected by the operator-overload
             // check; here catch mixed numeric roots (e.g. `Float + Int`), which
             // otherwise pass `check` and then fail the backend with E0277/E0308.
-            let (Some(left_type), Some(right_type)) = (
-                inferred_operand_type(analyzer, left).map(str::to_string),
-                inferred_operand_type(analyzer, right).map(str::to_string),
-            ) else {
+            let Some((left_type, right_type)) = inferred_operand_types(analyzer, left, right) else {
                 return;
             };
             if is_numeric_type(&left_type)
@@ -440,10 +438,7 @@ fn check_builtin_operator_operand_types(
         | BinaryOp::BitXor
         | BinaryOp::ShiftLeft
         | BinaryOp::ShiftRight => {
-            let (Some(left_type), Some(right_type)) = (
-                inferred_operand_type(analyzer, left).map(str::to_string),
-                inferred_operand_type(analyzer, right).map(str::to_string),
-            ) else {
+            let Some((left_type, right_type)) = inferred_operand_types(analyzer, left, right) else {
                 return;
             };
             if type_root_name(&left_type) != "Int" || type_root_name(&right_type) != "Int" {

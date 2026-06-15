@@ -1141,18 +1141,14 @@ fn check_call_args(
     let mut seen_names = HashSet::new();
     let mut seen_positional_params = HashSet::new();
     for (index, arg) in args.iter().enumerate() {
-        let Some(name) = arg
-            .name
-            .as_deref()
-            .or_else(|| {
-                constructor_field_shorthand_name(
-                    allow_constructor_field_shorthand,
-                    arg,
-                    &param_names,
-                )
-            })
-            .or_else(|| positional_param_name(allow_positional_args, &signature_params, index))
-        else {
+        let Some(name) = resolved_arg_param_name(
+            arg,
+            index,
+            allow_constructor_field_shorthand,
+            allow_positional_args,
+            &param_names,
+            &signature_params,
+        ) else {
             continue;
         };
         if arg.name.is_none() && !seen_positional_params.insert(name) {
@@ -1198,16 +1194,14 @@ fn check_call_args(
         .iter()
         .enumerate()
         .filter_map(|(index, arg)| {
-            arg.name
-                .as_deref()
-                .or_else(|| {
-                    constructor_field_shorthand_name(
-                        allow_constructor_field_shorthand,
-                        arg,
-                        &param_names,
-                    )
-                })
-                .or_else(|| positional_param_name(allow_positional_args, &signature_params, index))
+            resolved_arg_param_name(
+                arg,
+                index,
+                allow_constructor_field_shorthand,
+                allow_positional_args,
+                &param_names,
+                &signature_params,
+            )
         })
         .collect();
     for param in &signature_params {
@@ -1236,18 +1230,14 @@ fn check_call_args(
     }
 
     for (index, arg) in args.iter().enumerate() {
-        let Some(name) = arg
-            .name
-            .as_deref()
-            .or_else(|| {
-                constructor_field_shorthand_name(
-                    allow_constructor_field_shorthand,
-                    arg,
-                    &param_names,
-                )
-            })
-            .or_else(|| positional_param_name(allow_positional_args, &signature_params, index))
-        else {
+        let Some(name) = resolved_arg_param_name(
+            arg,
+            index,
+            allow_constructor_field_shorthand,
+            allow_positional_args,
+            &param_names,
+            &signature_params,
+        ) else {
             continue;
         };
         let Some(expected) = param_effects.get(name) else {
@@ -1299,18 +1289,14 @@ fn check_call_args(
     );
 
     for (index, arg) in args.iter().enumerate() {
-        let Some(name) = arg
-            .name
-            .as_deref()
-            .or_else(|| {
-                constructor_field_shorthand_name(
-                    allow_constructor_field_shorthand,
-                    arg,
-                    &param_names,
-                )
-            })
-            .or_else(|| positional_param_name(allow_positional_args, &signature_params, index))
-        else {
+        let Some(name) = resolved_arg_param_name(
+            arg,
+            index,
+            allow_constructor_field_shorthand,
+            allow_positional_args,
+            &param_names,
+            &signature_params,
+        ) else {
             continue;
         };
         let Some(expected_param) = signature.params.iter().find(|param| param.name == name) else {
@@ -1382,18 +1368,15 @@ fn check_call_args(
     }
 
     for (index, arg) in args.iter().enumerate() {
-        let expected_param = arg
-            .name
-            .as_deref()
-            .or_else(|| {
-                constructor_field_shorthand_name(
-                    allow_constructor_field_shorthand,
-                    arg,
-                    &param_names,
-                )
-            })
-            .or_else(|| positional_param_name(allow_positional_args, &signature_params, index))
-            .and_then(|name| signature.params.iter().find(|param| param.name == name));
+        let expected_param = resolved_arg_param_name(
+            arg,
+            index,
+            allow_constructor_field_shorthand,
+            allow_positional_args,
+            &param_names,
+            &signature_params,
+        )
+        .and_then(|name| signature.params.iter().find(|param| param.name == name));
         if expected_param.is_some_and(|param| is_noescape_fn_type(&param.type_name)) {
             continue;
         }
@@ -1412,6 +1395,25 @@ fn check_call_args(
             LocalClosureEscapeContext::Pass { callee: &call_name },
         );
     }
+}
+
+/// Resolves the parameter name an argument targets, considering (in order) an
+/// explicit `name:` label, constructor field shorthand, and positional binding.
+/// Returns `None` when the argument cannot be matched to any parameter name.
+fn resolved_arg_param_name<'a>(
+    arg: &'a HirCallArg,
+    index: usize,
+    allow_constructor_field_shorthand: bool,
+    allow_positional_args: bool,
+    param_names: &'a HashSet<String>,
+    signature_params: &'a [ParamSig],
+) -> Option<&'a str> {
+    arg.name
+        .as_deref()
+        .or_else(|| {
+            constructor_field_shorthand_name(allow_constructor_field_shorthand, arg, param_names)
+        })
+        .or_else(|| positional_param_name(allow_positional_args, signature_params, index))
 }
 
 fn constructor_field_shorthand_name<'a>(
