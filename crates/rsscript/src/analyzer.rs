@@ -203,6 +203,13 @@ fn analyze_program(
     diagnostics
 }
 
+/// `__TupleN` (N digits) is the synthetic tuple struct injected by the tuple
+/// desugar, not a user declaration, so it is exempt from the reserved-name rule.
+fn is_synthetic_tuple_name(name: &str) -> bool {
+    name.strip_prefix("__Tuple")
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
 fn type_aliases_from_program(
     program: &crate::syntax::ast::Program,
 ) -> impl Iterator<Item = (String, String)> + '_ {
@@ -1243,9 +1250,38 @@ impl Analyzer<'_> {
             );
         }
         self.check_module_use_layout();
+        self.check_reserved_declaration_names();
         let items = self.syntax_program.items.clone();
         for item in &items {
             self.check_unsupported_syntax_item(item);
+        }
+    }
+
+    /// Identifiers beginning with `__` are reserved for compiler-generated
+    /// symbols (tuple structs `__TupleN`, desugaring temporaries `__rss_*`,
+    /// runtime helpers `__rsscript_*`). Reject user declarations that claim a
+    /// reserved name so generated helpers can never collide with source symbols.
+    /// The synthetic `__TupleN` structs the tuple desugar injects are exempt.
+    fn check_reserved_declaration_names(&mut self) {
+        use crate::syntax::ast::Item;
+        for item in self.syntax_program.items.clone() {
+            let (name, span) = match &item {
+                Item::Function(decl) => (decl.name.as_str(), &decl.span),
+                Item::Type(decl) => (decl.name.as_str(), &decl.span),
+                Item::SumType(decl) => (decl.name.as_str(), &decl.span),
+                Item::TypeAlias(decl) => (decl.name.as_str(), &decl.span),
+                Item::Const(decl) => (decl.name.as_str(), &decl.span),
+                Item::Module(_) | Item::Use(_) => continue,
+            };
+            // `Type.method` reserves on the member, not the (user) type prefix.
+            let leaf = name.rsplit('.').next().unwrap_or(name);
+            if leaf.starts_with("__") && !is_synthetic_tuple_name(leaf) {
+                self.unsupported_syntax(
+                    span.clone(),
+                    "reserved declaration name",
+                    "Identifiers beginning with `__` are reserved for compiler-generated symbols; rename this declaration.",
+                );
+            }
         }
     }
 

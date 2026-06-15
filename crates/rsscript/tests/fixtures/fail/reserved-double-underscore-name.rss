@@ -1,0 +1,10 @@
+// expect: RS0015
+// Identifiers beginning with `__` are reserved for compiler-generated symbols
+// (tuple structs, desugaring temporaries, runtime helpers).
+fn __helper() -> Int {
+    return 1
+}
+
+fn main() -> Unit {
+    return Unit
+}

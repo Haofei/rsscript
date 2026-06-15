@@ -8,8 +8,9 @@ qualified variant patterns), pattern matching (variants/options/constants/tuples
 lists), tuples & destructuring, `#lower_name` escape hatch, source-qualified
 symbol inventory, type-associated constants & static methods, value-semantics
 clone/derives, Option ergonomics (`?`-on-Option + combinators), default
-parameters (Copy and non-Copy), and type aliases (generic + non-generic, expanded
-at every comparison site).
+parameters (Copy and non-Copy), type aliases (generic + non-generic, expanded
+at every comparison site), and a reserved `__`-prefix namespace for
+compiler-generated helpers.
 
 ## Must unblock awkward valid ports
 
@@ -59,13 +60,6 @@ at every comparison site).
   produced the bad item.
   _Acceptance:_ a Rust backend error reports the RSS file, source span, source
   symbol, and lowered Rust symbol.
-
-- [ ] **Generated/internal helper namespace.** Keep compiler-generated helpers
-  compiler-reserved/mangled so they never collide with user module/type/member
-  names.
-  _Why:_ helper names should never consume source-level names or force a port to
-  avoid otherwise valid identifiers. (Module isolation + `#lower_name` cover
-  user-symbol collisions; this is the generated-helper side.)
 
 - [ ] **External/FFI declaration ergonomics.** Declare copied runtime/autogen and
   device boundaries compactly — `native fn` exists, but make whole boundaries easy
