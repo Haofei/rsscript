@@ -1289,6 +1289,14 @@ fn check_call_args(
         &type_param_substitutions,
         call_span,
     );
+    check_message_channel_payload(
+        analyzer,
+        function,
+        &call_name,
+        &signature,
+        &type_param_substitutions,
+        call_span,
+    );
 
     for (index, arg) in args.iter().enumerate() {
         let Some(name) = arg
@@ -1429,6 +1437,62 @@ fn positional_param_name<'a>(
         return None;
     }
     signature_params.get(index).map(|param| param.name.as_str())
+}
+
+/// Enforce the cross-isolate **message** payload contract on `Channel.message<T>`:
+/// the element type must be cross-isolate-transferable (a self-contained value
+/// with no managed handle), so a message can cross an isolate boundary without
+/// sharing mutable state (spec §20.2-3). Skips a still-generic element (an
+/// enclosing-function type param), which can't be proven here.
+fn check_message_channel_payload(
+    analyzer: &mut Analyzer<'_>,
+    function: &FunctionDecl,
+    call_name: &str,
+    signature: &FunctionSig,
+    substitutions: &HashMap<String, String>,
+    call_span: &Span,
+) {
+    // `call_name` carries explicit type args (e.g. `Channel.message<List<Int>>`);
+    // compare on the root.
+    if call_name.split('<').next() != Some("Channel.message") {
+        return;
+    }
+    let Some(param) = signature.type_params.first() else {
+        return;
+    };
+    let Some(element) = substitutions.get(param) else {
+        return;
+    };
+    // A bare enclosing-function type param can't be checked without a `Sendable`
+    // bound; leave it (a future bound would enforce it at the caller).
+    if function
+        .type_params
+        .iter()
+        .any(|type_param| type_param.name == *element)
+    {
+        return;
+    }
+    if crate::checks::local::is_cross_isolate_transferable(element) {
+        return;
+    }
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::MESSAGE_PAYLOAD_NOT_TRANSFERABLE,
+            format!("message channel payload `{element}` is not cross-isolate-transferable."),
+            call_span.clone(),
+            "non-transferable message payload",
+        )
+        .with_cause(
+            "A message must be self-contained data with no managed handle, so it can cross an isolate boundary without sharing mutable state. v1 allows Copy scalars, `String`, and `Bytes`.",
+        )
+        .with_fix(
+            "use_transferable_message_payload",
+            format!(
+                "Send a transferable value (a Copy scalar, `String`, or `Bytes`) instead of `{element}`, or use `Channel.bounded` for an in-isolate channel."
+            ),
+            "manual",
+        ),
+    );
 }
 
 fn check_generic_call_bounds(
@@ -4509,7 +4573,11 @@ fn callee_display(callee: &Callee) -> String {
             receiver,
             method,
             effect,
-        } => format!("{} {}.{method}", (*effect).unwrap_or(DataEffect::Read).as_str(), call_expr_label(receiver)),
+        } => format!(
+            "{} {}.{method}",
+            (*effect).unwrap_or(DataEffect::Read).as_str(),
+            call_expr_label(receiver)
+        ),
     }
 }
 

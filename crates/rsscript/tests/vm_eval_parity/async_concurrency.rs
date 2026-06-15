@@ -232,3 +232,38 @@ async fn main() -> Result<Unit, String> {
         source,
     );
 }
+
+#[test]
+fn parity_message_channel_roundtrip() {
+    // Cross-isolate message channel (spec §20.2-3): `Channel.message<T>` requires a
+    // cross-isolate-transferable payload and reuses the bounded-channel runtime, so
+    // send/recv must behave identically across backends.
+    let source = r#"
+features: async, native, local
+
+async fn main() -> Result<Unit, ChannelError> {
+    let mut channel: Channel<Int> = Channel.message<Int>(capacity: 1)?
+    let mut sender: Sender<Int> = Channel.sender<Int>(channel: read channel)
+    let receiver: Receiver<Int> = Channel.receiver<Int>(channel: mut channel)?
+    local first = 7
+    await Sender.send<Int>(sender: read sender, value: take first)?
+    Sender.close<Int>(sender: mut sender)
+    match await Receiver.recv<Int>(receiver: read receiver)? {
+        Some(value) => {
+            Log.write(message: read String.from_int(value: value))
+        }
+        None => {
+            Log.write(message: read "recv-none")
+        }
+    }
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend_with_distinct_args_allowing_unused_mut_warning(
+        "parity-message-channel.rss",
+        "rsscript_parity_message_channel",
+        source,
+        &[],
+        &[],
+    );
+}

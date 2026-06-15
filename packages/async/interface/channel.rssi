@@ -11,6 +11,14 @@ struct Receiver<T>
 pub native fn Channel.bounded<T>(capacity: Int) -> Result<fresh Channel<T>, ChannelError>
     effects(native)
 
+// A *message* channel: a bounded channel whose payload `T` is statically verified
+// cross-isolate-safe (a self-contained value with no managed handle), so messages
+// can cross an isolate boundary without sharing mutable state (spec §20.2-3). Same
+// runtime as `Channel.bounded`; the difference is the compile-time payload
+// contract. v1 payloads: Copy scalars, `String`, `Bytes`.
+pub native fn Channel.message<T>(capacity: Int) -> Result<fresh Channel<T>, ChannelError>
+    effects(native)
+
 pub native fn Channel.sender<T>(channel: read Channel<T>) -> fresh Sender<T>
     effects(native)
 

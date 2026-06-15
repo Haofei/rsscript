@@ -4,8 +4,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use crate::diagnostic::Span;
 use crate::hir::{
     CallResolution, HirBinding, HirBindingKind, HirBlock, HirCallArg, HirEffectEvent,
-    HirEffectEventKind, HirExpr, HirFunctionBody, HirReturnProof, HirStmt, HirTypeKind, ParamEffect,
-    ResolvedCalleeKind,
+    HirEffectEventKind, HirExpr, HirFunctionBody, HirReturnProof, HirStmt, HirTypeKind,
+    ParamEffect, ResolvedCalleeKind,
 };
 use crate::syntax::ast::{Callee, Expr};
 
@@ -2608,7 +2608,7 @@ fn collect_select_local_flow(
                 value_handle_field: None,
                 fresh_from_local_source: None,
                 fresh_from_scrutinee: false,
-            fresh_from_fresh_value: false,
+                fresh_from_fresh_value: false,
             };
             let binding_node = push_pattern_binding_flow_step(steps, &arm.span, binding);
             if let Some(body_entry) = arm_flow.entry {
@@ -3238,7 +3238,9 @@ fn hir_expr_is_fresh_value(value: &HirExpr) -> bool {
             CallResolution::Resolved { signature, .. } => signature.returns_fresh,
             _ => false,
         },
-        HirExpr::Try { value, .. } | HirExpr::Effect { value, .. } => hir_expr_is_fresh_value(value),
+        HirExpr::Try { value, .. } | HirExpr::Effect { value, .. } => {
+            hir_expr_is_fresh_value(value)
+        }
         _ => false,
     }
 }
@@ -3563,6 +3565,24 @@ impl BodyState {
             }
         }
     }
+}
+
+/// Whether a value of `type_name` may be sent as a cross-isolate **message**
+/// (spec §20.2-3): a self-contained value carrying no managed (`Rc`) handle, so it
+/// can cross an isolate boundary without sharing mutable state. v1 allows Copy
+/// scalars plus the immutable owned-data types `String` and `Bytes` (value
+/// semantics; safe to transfer/share). Mutable/managed containers (`List`, `Map`,
+/// `Buffer`), structs/sums, handles, closures, and generics are conservatively
+/// rejected for now — broadening to data-only structs/containers is a follow-up.
+pub(crate) fn is_cross_isolate_transferable(type_name: &str) -> bool {
+    let type_name = type_name.trim();
+    if is_copy_type_name(type_name) {
+        return true;
+    }
+    matches!(
+        type_name.strip_prefix("fresh ").unwrap_or(type_name),
+        "String" | "Bytes"
+    )
 }
 
 pub(crate) fn is_copy_type_name(type_name: &str) -> bool {

@@ -3998,6 +3998,9 @@ impl RegLowerer<'_> {
                         RegIntrinsic::CancellationTokenIsCancelled
                     }
                     ("Channel", "bounded") => RegIntrinsic::ChannelBounded,
+                    // A message channel reuses the bounded-channel runtime; the
+                    // cross-isolate payload contract is enforced at check time.
+                    ("Channel", "message") => RegIntrinsic::ChannelBounded,
                     ("Channel", "receiver") => RegIntrinsic::ChannelReceiver,
                     ("Channel", "sender") => RegIntrinsic::ChannelSender,
                     ("ChannelError", "message") => RegIntrinsic::ChannelErrorMessage,
