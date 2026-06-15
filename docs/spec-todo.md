@@ -32,13 +32,18 @@ model without reversing a review-first tenet. Ordered by readiness/value.
   view-of-a-view) and the `scoped-view-escape.rss` fail fixture (`RS0702`). The
   `with Buffer.view(...) as v { … }` form also already works.
 
-- [ ] **Capability objects / explicit dynamic dispatch** (§3.2, §20.1-G, §20.2-2) —
-  _large._ Review-visible `capability`-bounded dispatch
-  (`store: read capability Store<T>`), **not** Rust-style implicit `dyn` coercion
-  (which stays a non-goal, §21). The review map must flag every capability boundary;
-  capability values carry their protocol's effect declarations (no silent widening).
-  _Touches:_ parser/types, protocol resolution, lowering (vtable-free representation),
-  review map / REIR. Must hold parity.
+- [x] **Capability objects / explicit dynamic dispatch** (§3.2, §20.1-G, §20.2-2) —
+  _done._ The compiled backend already lowered `Capability<Protocol>` to a
+  closed-world enum-of-impls with `match` dispatch (no `dyn`); this completes the
+  feature: (1) the spec's `capability Protocol` keyword form now parses as sugar for
+  `Capability<Protocol>` (parser desugar), so `who: read capability Greeter` and
+  `local x: capability Greeter` work; (2) **fixed a real VM parity bug** — the reg-VM
+  had *no* runtime dynamic dispatch, so any `Protocol.method(self: x, …)` call
+  (capability objects *and* generic bounds) returned `Unit` instead of dispatching.
+  Added a `CallDynamic` instruction + `Hir::protocol_method_targets` that selects the
+  concrete impl by the receiver's runtime struct type, mirroring the compiled enum
+  dispatch. Verified at parity (`parity_capability_dynamic_dispatch`, two impls). The
+  review map already flags dynamic dispatch (`has_dynamic_protocol_dispatch`).
 
 - [ ] **Cross-isolate message API (zero-copy transfer)** (§20.1-B, §20.2-3) —
   _large._ Typed send/receive channels between isolates; payloads are Copy/owned data

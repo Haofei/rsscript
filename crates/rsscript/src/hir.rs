@@ -208,7 +208,9 @@ pub struct HirEffectEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HirReturnProof {
     NoValue,
-    Ident { name: String },
+    Ident {
+        name: String,
+    },
     StructConstructor,
     FreshCall,
     /// A literal (string, number, or boolean). A literal owns no borrowed or
@@ -716,6 +718,30 @@ impl Hir {
             self.resource_drop_bodies
                 .insert(type_decl.name.clone(), body);
         }
+    }
+
+    /// Concrete impl targets for a protocol method: `(implementing type name,
+    /// target function name)` for every `impl Protocol for Type` that maps
+    /// `method`. Used by the reg-VM to dynamically dispatch a `Protocol.method`
+    /// call by the receiver's runtime type (capability objects + generic bounds),
+    /// mirroring the compiled backend's closed-world enum dispatch.
+    pub(crate) fn protocol_method_targets(
+        &self,
+        protocol: &str,
+        method: &str,
+    ) -> Vec<(String, String)> {
+        let protocol = type_root_name(protocol);
+        let method = type_root_name(method);
+        self.protocol_impls
+            .iter()
+            .filter(|imp| imp.protocol == protocol)
+            .filter_map(|imp| {
+                imp.mappings
+                    .iter()
+                    .find(|mapping| mapping.method == method)
+                    .map(|mapping| (imp.type_name.clone(), mapping.target.clone()))
+            })
+            .collect()
     }
 
     pub fn resolve_function(&self, namespace: Option<&str>, name: &str) -> Option<&FunctionSig> {
@@ -3228,7 +3254,11 @@ fn collect_struct_pattern_binding_types(
         };
         let field_type_name = substitute_type_params(&field_type.type_name, substitutions);
         if let Some(pattern) = &field.pattern {
-            bindings.extend(match_pattern_binding_types(hir, pattern, Some(&field_type_name)));
+            bindings.extend(match_pattern_binding_types(
+                hir,
+                pattern,
+                Some(&field_type_name),
+            ));
         } else if let Some(binding) = &field.binding {
             bindings.push((binding.clone(), field_type_name));
         }

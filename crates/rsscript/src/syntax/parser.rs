@@ -3988,6 +3988,28 @@ fn parse_type_ref(tokens: &[Token], start: usize, end: usize) -> Option<TypeRef>
     if let Some(tuple) = parse_tuple_type_ref(tokens, start, end) {
         return Some(tuple);
     }
+    // `capability <Protocol>` (spec §20.2-2) is sugar for `Capability<<Protocol>>`:
+    // an explicit, review-visible dynamic-dispatch boundary. It may follow an
+    // effect keyword (`read capability Store<T>`); the effect is handled by the
+    // parameter parser, so skip it here when locating the `capability` marker.
+    if let Some(cap_index) = (start..end).find(|index| {
+        ident_name(&tokens[*index])
+            .is_some_and(|name| name != "read" && name != "mut" && name != "take")
+    }) && ident_name(&tokens[cap_index]).is_some_and(|name| name == "capability")
+    {
+        let inner = parse_type_ref(tokens, cap_index + 1, end)?;
+        return Some(TypeRef {
+            name: "Capability".to_string(),
+            args: vec![inner],
+            malformed_arg_spans: Vec::new(),
+            is_fresh: false,
+            is_noescape: false,
+            is_owned: false,
+            fn_params: Vec::new(),
+            fn_return: None,
+            span: tokens[cap_index].span.clone(),
+        });
+    }
     let is_fresh = tokens
         .get(start)
         .and_then(ident_name)

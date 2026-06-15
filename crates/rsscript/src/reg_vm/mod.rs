@@ -1708,6 +1708,17 @@ enum RegInstr {
         /// `&mut` semantics.
         mut_args: Vec<usize>,
     },
+    /// Dynamic protocol dispatch: a `Protocol.method(self: x, ...)` call whose
+    /// concrete impl is chosen at runtime by `args[0]`'s struct type name. This is
+    /// how capability objects and generic protocol bounds dispatch in the VM,
+    /// mirroring the compiled backend's closed-world enum dispatch. `dispatch`
+    /// maps each implementing struct name to the impl's target function id.
+    CallDynamic {
+        dst: Reg,
+        dispatch: Vec<(String, usize)>,
+        args: Vec<Reg>,
+        mut_args: Vec<usize>,
+    },
     /// `spawn f(args)` / `async let`: start `function` as a new concurrent task
     /// and put a Task handle in `dst` (the spawning task keeps running).
     SpawnTask {
@@ -5125,6 +5136,36 @@ impl RegLowerer<'_> {
                             });
                             return Ok(dst);
                         }
+                        // Dynamic protocol dispatch: `Protocol.method(self: x, ...)`
+                        // where `Protocol` is a protocol with impls. The concrete
+                        // function is selected at runtime by `args[0]`'s struct type
+                        // (capability objects + generic bounds) — the VM equivalent
+                        // of the compiled backend's closed-world enum dispatch.
+                        // Checked before the `function_ids` lookup because a protocol
+                        // method also appears there as a bodyless stub (which would
+                        // wrongly return `Unit`).
+                        let dispatch: Vec<(String, usize)> = self
+                            .hir
+                            .protocol_method_targets(namespace_root, name_root)
+                            .into_iter()
+                            .filter_map(|(type_name, target)| {
+                                self.function_ids
+                                    .get(type_root_name(&target))
+                                    .copied()
+                                    .map(|function| (type_name, function))
+                            })
+                            .collect();
+                        if !dispatch.is_empty() {
+                            let mut_args =
+                                self.native_mut_arg_positions(Some(namespace_root), name_root);
+                            self.emit(RegInstr::CallDynamic {
+                                dst,
+                                dispatch,
+                                args: arg_regs,
+                                mut_args,
+                            });
+                            return Ok(dst);
+                        }
                         if let Some(function) = self.function_ids.get(&qualified_key).copied() {
                             let mut_args =
                                 self.native_mut_arg_positions(Some(namespace_root), name_root);
@@ -5363,9 +5404,7 @@ impl RegLowerer<'_> {
                                 .is_none_or(|pattern| self.is_supported_match_pattern(pattern))
                     })
             }
-            MatchPattern::List {
-                prefix, suffix, ..
-            } => prefix
+            MatchPattern::List { prefix, suffix, .. } => prefix
                 .iter()
                 .chain(suffix)
                 .all(|pattern| self.is_supported_match_pattern(pattern)),
@@ -5422,7 +5461,10 @@ impl RegLowerer<'_> {
         let mut failures = Vec::new();
         let required = (prefix.len() + suffix.len()) as i64;
         let len = self.temp();
-        self.emit(RegInstr::ListLen { dst: len, list: src });
+        self.emit(RegInstr::ListLen {
+            dst: len,
+            list: src,
+        });
         let bound = self.temp();
         self.emit(RegInstr::LoadInt {
             dst: bound,
@@ -7804,6 +7846,51 @@ impl RegVm {
                             // Stackless call: save our resume point, push the callee, and
                             // re-enter the driver loop instead of recursing on the host
                             // stack — so an `await` deep in this chain can later suspend it.
+                            self.frames.last_mut().expect("active frame").ip = ip;
+                            self.frames.push(Frame {
+                                func: callee,
+                                ip: 0,
+                                base: next_base,
+                                ret_dst: base + *dst,
+                                mut_writeback,
+                            });
+                            continue 'frames;
+                        }
+                        RegInstr::CallDynamic {
+                            dst,
+                            dispatch,
+                            args,
+                            mut_args,
+                        } => {
+                            // Select the concrete impl by the runtime struct type of
+                            // the receiver (args[0]), then call it like `CallKnown`.
+                            let receiver = self.reg(base + args[0]).clone();
+                            let type_name = match &receiver {
+                                VmValue::Struct(data) => Some(data.name.clone()),
+                                _ => None,
+                            };
+                            let callee_id = type_name.as_ref().and_then(|name| {
+                                dispatch
+                                    .iter()
+                                    .find(|(struct_name, _)| struct_name.as_str() == &**name)
+                                    .map(|(_, id)| *id)
+                            });
+                            let Some(callee_id) = callee_id else {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM dynamic protocol dispatch found no impl for receiver `{}`.",
+                                    type_name.as_deref().unwrap_or("<non-struct value>")
+                                )));
+                            };
+                            let callee = Rc::clone(&unit.functions[callee_id]);
+                            self.prepare_frame(next_base, callee.regs);
+                            for (index, reg) in args.iter().enumerate() {
+                                let value = self.reg(base + *reg).clone();
+                                self.set_reg(next_base + index, value);
+                            }
+                            let mut_writeback = mut_args
+                                .iter()
+                                .map(|&pos| (base + args[pos], next_base + pos))
+                                .collect();
                             self.frames.last_mut().expect("active frame").ip = ip;
                             self.frames.push(Frame {
                                 func: callee,
