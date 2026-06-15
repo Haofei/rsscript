@@ -5351,7 +5351,10 @@ H. Stream<T> and await-for (async sequences)
      or `Stream` combinators that hide allocation.
 
 I. Scoped views and slices (zero-copy borrowed regions)
-   - now in scope: committed roadmap (§20.2).
+   - implemented (§20.2-1): the borrowed-view types (`StringView`/`BytesView`/
+     `BufferView`, lowered to Rust slices) plus the `view name = expr` form, which
+     desugars to a `with`-lease whose scope ends at the enclosing block, inheriting
+     the no-escape / no-retain / no-cross-await / no-managed-graph rules.
    - for high-performance parsing, HTTP buffers, and binary protocols, RSScript
      needs a "borrowed view" that avoids full-copy semantics:
 

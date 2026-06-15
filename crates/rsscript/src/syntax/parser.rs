@@ -1267,8 +1267,19 @@ fn parse_generic_bound(token: &Token) -> Option<GenericBound> {
 }
 
 fn parse_block(tokens: &[Token], open: usize, close: usize) -> Block {
+    Block {
+        statements: collect_statements(tokens, open + 1, close),
+        span: tokens[open].span.clone(),
+    }
+}
+
+/// Collect statements in `[start, close)`. Handles the scoped-view desugar:
+/// `view name = expr` followed by the rest of the block becomes
+/// `with expr as name { <rest> }`, so a borrowed view's scope ends at the
+/// enclosing block (spec §20.2-1) and it reuses every `with`-lease rule
+/// (no escape / no managed capture) without a separate code path.
+fn collect_statements(tokens: &[Token], mut index: usize, close: usize) -> Vec<Stmt> {
     let mut statements = Vec::new();
-    let mut index = open + 1;
     while index < close {
         if tokens[index].symbol("}") {
             break;
@@ -1281,15 +1292,58 @@ fn parse_block(tokens: &[Token], open: usize, close: usize) -> Block {
             continue;
         }
 
+        if is_view_binding(tokens, index, close) {
+            let span = tokens[index].span.clone();
+            let (binding, resource, after) = parse_view_header(tokens, index, close);
+            // The remaining statements of the block are the view's scope.
+            let body = Block {
+                statements: collect_statements(tokens, after, close),
+                span: span.clone(),
+            };
+            statements.push(Stmt::With(WithStmt {
+                resource: resource.unwrap_or_else(|| Expr::Unknown(span.clone())),
+                binding,
+                body,
+                span,
+            }));
+            break;
+        }
+
         let (statement, next) = parse_stmt(tokens, index, close);
         statements.push(statement);
         index = next.max(index + 1);
     }
+    statements
+}
 
-    Block {
-        statements,
-        span: tokens[open].span.clone(),
-    }
+/// `view <ident> = ...` — a scoped-view binding (distinct from `view` used as an
+/// ordinary identifier, which is never followed by `<ident> =`).
+fn is_view_binding(tokens: &[Token], start: usize, limit: usize) -> bool {
+    tokens[start].is_ident_text("view")
+        && tokens
+            .get(start + 1)
+            .and_then(ident_name)
+            .is_some_and(|name| name != "=")
+        && tokens.get(start + 2).is_some_and(|token| token.symbol("="))
+        && start + 2 < limit
+}
+
+/// Parse the `view <name> = <expr>` header, returning the binding name, the
+/// resource expression, and the index just past the statement.
+fn parse_view_header(
+    tokens: &[Token],
+    start: usize,
+    limit: usize,
+) -> (String, Option<Expr>, usize) {
+    let name = tokens
+        .get(start + 1)
+        .and_then(ident_name)
+        .unwrap_or("")
+        .to_string();
+    let end = statement_end(tokens, start, limit);
+    let equals = (start + 2..end).find(|index| tokens[*index].symbol("="));
+    let resource = equals.and_then(|equals| parse_expr(tokens, equals + 1, end));
+    (name, resource, end)
 }
 
 fn parse_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
@@ -1488,7 +1542,10 @@ fn parse_let_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize)
     // `let (a, b) = expr` destructures a tuple. The element names are recorded on
     // the binding and expanded into a temporary plus per-element `let`s by the
     // tuple desugar.
-    if tokens.get(name_index).is_some_and(|token| token.symbol("(")) {
+    if tokens
+        .get(name_index)
+        .is_some_and(|token| token.symbol("("))
+    {
         return parse_let_tuple_stmt(tokens, start, kind, name_index, limit);
     }
     let parsed_name = tokens.get(name_index).and_then(ident_name);
@@ -2332,7 +2389,11 @@ fn split_match_pattern_guard(tokens: &[Token], start: usize, end: usize) -> Opti
 /// Parse a pattern head name: a bare identifier (`ADD`) or a module-qualified
 /// dotted name (`ops.ADD`, `a.b.Variant`). Returns the joined name and the token
 /// index just past it.
-fn parse_dotted_pattern_name(tokens: &[Token], start: usize, end: usize) -> Option<(String, usize)> {
+fn parse_dotted_pattern_name(
+    tokens: &[Token],
+    start: usize,
+    end: usize,
+) -> Option<(String, usize)> {
     let mut name = ident_name(tokens.get(start)?)?.to_string();
     let mut index = start + 1;
     while index + 1 < end
@@ -2552,14 +2613,11 @@ fn parse_list_pattern(tokens: &[Token], start: usize, end: usize) -> Option<Matc
 /// where `binding` is `None` for an ignored `..` (or `.._`) and `Some(name)`
 /// for `..name`. Returns `None` (the outer option) when the range is an ordinary
 /// element pattern. `..` may tokenise as one `..` token or two `.` tokens.
-fn parse_list_rest_segment(
-    tokens: &[Token],
-    start: usize,
-    end: usize,
-) -> Option<Option<String>> {
+fn parse_list_rest_segment(tokens: &[Token], start: usize, end: usize) -> Option<Option<String>> {
     let dots_end = if tokens.get(start)?.symbol("..") {
         start + 1
-    } else if tokens.get(start)?.symbol(".") && tokens.get(start + 1).is_some_and(|t| t.symbol(".")) {
+    } else if tokens.get(start)?.symbol(".") && tokens.get(start + 1).is_some_and(|t| t.symbol("."))
+    {
         start + 2
     } else {
         return None;

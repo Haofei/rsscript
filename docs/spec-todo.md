@@ -20,13 +20,17 @@ model without reversing a review-first tenet. Ordered by readiness/value.
   bindings loaded. Measured: ~54 ms (VM) vs ~14 s (AOT) for the same program.
   Tested: tier-label unit test + `cli_dev_two_tier.rs` end-to-end.
 
-- [ ] **Scoped views / slices** (zero-copy borrowed regions) (§3.2, §20.1-I, §20.2-1)
-  — _large._ Lexically-scoped borrowed views — `with Buffer.view(...) as bytes { … }`
-  and `view bytes = …` — that cannot be retained, escape scope, cross an `await`, or
-  enter managed graphs. No surface lifetimes (the scope block replaces them). High
-  perf value (parsing, buffers, the tinygrad port; pairs with the parked lazy-`Iter`
-  in `TODO.md`). _Touches:_ parser, the escape/retention checks (`checks/local.rs`),
-  lowering, reg-VM. Must hold VM↔compiled parity.
+- [x] **Scoped views / slices** (zero-copy borrowed regions) (§3.2, §20.1-I, §20.2-1)
+  — _done._ The borrowed-view *types* already existed and ran at parity
+  (`String.view`/`StringView`, `Bytes.view`/`BytesView`, `Buffer.view`/`BufferView`,
+  lowered to Rust slices). Added the spec's dedicated **`view name = expr`** form: a
+  parser-level desugar turns `view v = e; <rest>` into `with e as v { <rest> }`, so
+  the view's scope ends at the enclosing block and it inherits every `with`-lease
+  rule — cannot escape (return), be retained, cross `await`, or enter a managed
+  graph — with **no new borrow analysis and zero changes below the parser** (so
+  VM↔compiled parity is automatic). Verified: `parity_scoped_view_binding` (incl. a
+  view-of-a-view) and the `scoped-view-escape.rss` fail fixture (`RS0702`). The
+  `with Buffer.view(...) as v { … }` form also already works.
 
 - [ ] **Capability objects / explicit dynamic dispatch** (§3.2, §20.1-G, §20.2-2) —
   _large._ Review-visible `capability`-bounded dispatch
