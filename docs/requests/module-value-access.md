@@ -1,17 +1,35 @@
 # Feature request: cross-module enum-variant / constant usage
 
-**Status:** IMPLEMENTED (option 1, qualified value access) · **Driver:** tinygrad-rsmc module de-prefixing
-**Repro built on:** current `rss` (post module-isolation + use-aliasing)
+**Status:** REOPENED — lowering-only, fails through `rss check` · **Driver:** tinygrad-rsmc module de-prefixing
+**Repro built on:** `rss` @ `6c6c57a` (the commit that claimed this resolved)
 
-> **Resolution.** Qualified value access is implemented: `module.CONST` resolves
-> to the module-mangled constant and `module.Variant` resolves through the
-> variant's sum type, in value position, with no per-symbol `use`. Acceptance
-> criteria 1 is met. Not done: glob `use module.*` (option 2), and full
-> cross-module same-named-variant disambiguation (criterion 3) — variant names
-> are still global (resolved via their sum type), so two modules declaring the
-> same variant name still collide; that needs variant namespacing and is left as
-> a follow-up. Qualified variants in *pattern* position are also not yet
-> supported (value position only).
+> **⚠️ Correction (re-verified via `rss check`).** Qualified value access is
+> **not** usable in the real pipeline. The `6c6c57a` change wires the rewrite into
+> `module_isolation` (the *lowering* pass) and its integration test
+> `qualified_module_value_access_resolves_const_and_variant` passes — but that test
+> only exercises `lower_sources_to_rust_package_with_options`, which **bypasses the
+> semantic checker**. Running the *exact same sources* through `rss check` fails:
+>
+> ```
+> error[RS0026]: unknown value binding `ops`.   // ops.MUL   (variant)
+> error[RS0026]: unknown value binding `ops`.   // ops.MAX_OPS (const)
+> ```
+>
+> A name-resolution / checker pass ordered *before* `module_isolation` rejects
+> `module.value` as an unknown binding, so the lowering rewrite never runs. The
+> feature must also resolve `module.CONST` / `module.Variant` in that checker pass
+> (or the isolation rewrite must run before it). **Acceptance: the integration
+> test should be promoted to a full `rss check` (package-level) test so a
+> lowering-only green can't mask this again.**
+>
+> Still open from the original request: glob `use module.*` (option 2) → see
+> `module-glob-import.md`; qualified variants in *pattern* position → see
+> `module-qualified-variant-pattern.md`; cross-module same-named-variant
+> disambiguation (criterion 3, needs variant namespacing) remains a follow-up.
+>
+> **Workaround in use:** per-symbol `use module.NAME` + bare reference checks clean
+> in both value and pattern position — but that is one `use` line per symbol, which
+> is exactly what this request exists to avoid.
 
 ## Summary
 
