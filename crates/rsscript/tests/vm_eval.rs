@@ -800,7 +800,7 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:Buffer.new runtime:Buffer.view runtime:BufferView.is_empty
 // parity: runtime:BufferView.len runtime:BufferView.slice runtime:BufferView.to_bytes
 // parity: runtime:Cache.get runtime:Cache.insert runtime:Cache.lookup runtime:Cache.new
-// parity: runtime:Channel.bounded runtime:Channel.receiver runtime:Channel.sender
+// parity: runtime:Channel.bounded runtime:Channel.message runtime:Channel.receiver runtime:Channel.sender
 // parity: runtime:ChannelError.message
 // parity: runtime:CancellationSource.cancel runtime:CancellationSource.new
 // parity: runtime:CancellationSource.token runtime:CancellationToken.is_cancelled
