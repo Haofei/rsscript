@@ -303,6 +303,25 @@ impl VmValue {
         Self::String(Rc::new(value.into()))
     }
 
+    /// Whether this value has value (not reference) semantics and no in-place
+    /// mutation — so wrapping it in a `Managed` shared cell would be a semantic
+    /// no-op. Used by the `manage` op to avoid leaking an opaque `Managed`
+    /// around immutable scalars (`String`/`Bytes`/`Json` are `Rc`-shared and
+    /// immutable; the rest are `Copy`).
+    pub(crate) fn is_immutable_scalar(&self) -> bool {
+        matches!(
+            self,
+            Self::Unit
+                | Self::Int(_)
+                | Self::Float(_)
+                | Self::Bool(_)
+                | Self::Char(_)
+                | Self::Bytes(_)
+                | Self::String(_)
+                | Self::Json(_)
+        )
+    }
+
     pub(crate) fn display(&self) -> String {
         match self {
             Self::Unit => "Unit".to_string(),

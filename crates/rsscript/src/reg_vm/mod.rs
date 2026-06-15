@@ -6677,7 +6677,18 @@ impl RegVm {
             }
             RegInstr::Manage { dst, src } => {
                 let value = self.reg(base + *src).clone();
-                self.set_reg(base + *dst, VmValue::Managed(Rc::new(RefCell::new(value))));
+                // `manage` wraps a value in a shared mutable cell so it can be
+                // retained (stored in a collection/field) and mutated in place.
+                // Immutable scalars cannot be mutated in place and have value (not
+                // reference) semantics, so wrapping them is a no-op that only leaks
+                // an opaque `Managed` into reads — borrow-returning accessors
+                // (`String`/`Bytes`/`Json`) can't peel it. Store them directly.
+                let managed = if value.is_immutable_scalar() {
+                    value
+                } else {
+                    VmValue::Managed(Rc::new(RefCell::new(value)))
+                };
+                self.set_reg(base + *dst, managed);
             }
             RegInstr::GetField {
                 dst,
@@ -12634,6 +12645,10 @@ fn eval_numeric_compare(
 fn expect_int_ref(value: &VmValue) -> Result<i64, EvalError> {
     match value {
         VmValue::Int(value) => Ok(*value),
+        // `Managed` is transparent (see vm_value: display/native_value/equality
+        // all unwrap it). A value retained into storage via `manage` and read
+        // back arrives wrapped; see through it like the rest of the value model.
+        VmValue::Managed(inner) => expect_int_ref(&inner.borrow()),
         other => Err(EvalError::Runtime(format!(
             "reg VM expected Int, got `{}`.",
             other.display()
@@ -12644,6 +12659,7 @@ fn expect_int_ref(value: &VmValue) -> Result<i64, EvalError> {
 fn expect_float_ref(value: &VmValue) -> Result<f64, EvalError> {
     match value {
         VmValue::Float(value) => Ok(*value),
+        VmValue::Managed(inner) => expect_float_ref(&inner.borrow()),
         other => Err(EvalError::Runtime(format!(
             "reg VM expected Float, got `{}`.",
             other.display()
@@ -12654,6 +12670,7 @@ fn expect_float_ref(value: &VmValue) -> Result<f64, EvalError> {
 fn expect_char_ref(value: &VmValue) -> Result<char, EvalError> {
     match value {
         VmValue::Char(value) => Ok(*value),
+        VmValue::Managed(inner) => expect_char_ref(&inner.borrow()),
         other => Err(EvalError::Runtime(format!(
             "reg VM expected Char, got `{}`.",
             other.display()
@@ -13094,6 +13111,7 @@ fn expect_string_list_ref(value: &VmValue) -> Result<Vec<String>, EvalError> {
 fn expect_bool_ref(value: &VmValue) -> Result<bool, EvalError> {
     match value {
         VmValue::Bool(value) => Ok(*value),
+        VmValue::Managed(inner) => expect_bool_ref(&inner.borrow()),
         other => Err(EvalError::Runtime(format!(
             "reg VM expected Bool, got `{}`.",
             other.display()
@@ -13104,6 +13122,7 @@ fn expect_bool_ref(value: &VmValue) -> Result<bool, EvalError> {
 fn expect_list_ref(value: &VmValue) -> Result<Rc<RefCell<Vec<VmValue>>>, EvalError> {
     match value {
         VmValue::List(value) => Ok(Rc::clone(value)),
+        VmValue::Managed(inner) => expect_list_ref(&inner.borrow()),
         other => Err(EvalError::Runtime(format!(
             "reg VM expected List, got `{}`.",
             other.display()
@@ -13116,6 +13135,7 @@ fn expect_deque_ref(
 ) -> Result<Rc<RefCell<std::collections::VecDeque<VmValue>>>, EvalError> {
     match value {
         VmValue::Deque(value) => Ok(Rc::clone(value)),
+        VmValue::Managed(inner) => expect_deque_ref(&inner.borrow()),
         other => Err(EvalError::Runtime(format!(
             "reg VM expected Deque, got `{}`.",
             other.display()
@@ -13139,6 +13159,7 @@ fn list_item_at(
 fn expect_map_ref(value: &VmValue) -> Result<Rc<RefCell<ValueMap>>, EvalError> {
     match value {
         VmValue::Map(value) => Ok(Rc::clone(value)),
+        VmValue::Managed(inner) => expect_map_ref(&inner.borrow()),
         other => Err(EvalError::Runtime(format!(
             "reg VM expected Map, got `{}`.",
             other.display()
@@ -13159,6 +13180,7 @@ fn expect_json_ref(value: &VmValue) -> Result<&serde_json::Value, EvalError> {
 fn expect_closure_rc(value: &VmValue) -> Result<Rc<VmClosure>, EvalError> {
     match value {
         VmValue::Closure(value) => Ok(Rc::clone(value)),
+        VmValue::Managed(inner) => expect_closure_rc(&inner.borrow()),
         other => Err(EvalError::Runtime(format!(
             "reg VM expected Closure, got `{}`.",
             other.display()
