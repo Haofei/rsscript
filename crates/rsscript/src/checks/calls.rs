@@ -4,6 +4,7 @@ use crate::text_util::{
 use std::collections::{HashMap, HashSet};
 
 use crate::analyzer::Analyzer;
+use crate::checks::diagnostic_helpers::error_cause_manual_fix;
 use crate::diagnostic::{Diagnostic, FixEdit, Span, code};
 use crate::hir::{
     CallResolution, FunctionSig, HirBindingKind, HirBlock, HirCallArg, HirExpr, HirStmt, ParamSig,
@@ -371,20 +372,15 @@ fn check_binding_type(
     if argument_type_matches(&resolved_expected, &resolved_actual) {
         return;
     }
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::ARGUMENT_TYPE_MISMATCH,
-            format!("binding `{name}` has initializer type `{actual}`, expected `{expected}`."),
-            hir_expr_span(value).clone(),
-            "binding type mismatch",
-        )
-        .with_cause("Explicit `let` and `local` type annotations are source-level contracts and must match the initializer before Rust lowering.")
-        .with_fix(
-            "match_binding_type",
-            format!("Initialize `{name}` with a `{expected}` value, or change the binding annotation."),
-            "manual",
-        ),
-    );
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::ARGUMENT_TYPE_MISMATCH,
+        format!("binding `{name}` has initializer type `{actual}`, expected `{expected}`."),
+        hir_expr_span(value).clone(),
+        "binding type mismatch",
+        "Explicit `let` and `local` type annotations are source-level contracts and must match the initializer before Rust lowering.",
+        "match_binding_type",
+        format!("Initialize `{name}` with a `{expected}` value, or change the binding annotation."),
+    ));
 }
 
 fn check_binding_variant_payload_type(
@@ -502,22 +498,17 @@ fn binding_payload_type_mismatch_diagnostic(
     expected: &str,
     span: &Span,
 ) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::ARGUMENT_TYPE_MISMATCH,
-            format!(
-                "binding `{name}` has initializer payload type `{actual}`, expected `{expected}`."
-            ),
-            span.clone(),
-            "binding type mismatch",
-        )
-        .with_cause("Result and Option binding initializers are checked against explicit binding payload types before Rust lowering.")
-        .with_fix(
-            "match_binding_payload_type",
-            format!("Initialize `{name}` with a `{expected}` payload, or change the binding annotation."),
-            "manual",
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::ARGUMENT_TYPE_MISMATCH,
+        format!(
+            "binding `{name}` has initializer payload type `{actual}`, expected `{expected}`."
         ),
-    );
+        span.clone(),
+        "binding type mismatch",
+        "Result and Option binding initializers are checked against explicit binding payload types before Rust lowering.",
+        "match_binding_payload_type",
+        format!("Initialize `{name}` with a `{expected}` payload, or change the binding annotation."),
+    ));
 }
 
 fn check_expr(
@@ -1345,25 +1336,20 @@ fn check_call_args(
             &analyzer.expand_type_alias(&expected_type),
             &analyzer.expand_type_alias(actual_type),
         ) {
-            analyzer.diagnostics.push(
-                Diagnostic::error(
-                    code::ARGUMENT_TYPE_MISMATCH,
-                    format!(
-                        "argument `{name}` for `{call_name}` has type `{actual_type}`, expected `{}`.",
-                        expected_type
-                    ),
-                    hir_expr_span(&arg.value).clone(),
-                    "argument type mismatch",
-                )
-                .with_cause("RSScript call argument types must match the resolved callee signature before Rust lowering.")
-                .with_fix(
-                    "match_argument_type",
-                    format!(
-                        "Pass a value of type `{expected_type}` for `{name}`.",
-                    ),
-                    "manual",
+            analyzer.diagnostics.push(error_cause_manual_fix(
+                code::ARGUMENT_TYPE_MISMATCH,
+                format!(
+                    "argument `{name}` for `{call_name}` has type `{actual_type}`, expected `{}`.",
+                    expected_type
                 ),
-            );
+                hir_expr_span(&arg.value).clone(),
+                "argument type mismatch",
+                "RSScript call argument types must match the resolved callee signature before Rust lowering.",
+                "match_argument_type",
+                format!(
+                    "Pass a value of type `{expected_type}` for `{name}`.",
+                ),
+            ));
         }
     }
 
@@ -3502,24 +3488,17 @@ fn callback_return_type_mismatch_diagnostic(
     expected: &str,
     span: &Span,
 ) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::ARGUMENT_TYPE_MISMATCH,
-            format!(
-                "callback argument `{arg_name}` for `{call_name}` returns `{actual}`, expected `{expected}`."
-            ),
-            span.clone(),
-            "argument type mismatch",
-        )
-        .with_cause(
-            "`noescape Fn() -> T` callback return types are part of the call signature and must be checked before Rust lowering.",
-        )
-        .with_fix(
-            "match_callback_return_type",
-            format!("Return a `{expected}` value from this callback."),
-            "manual",
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::ARGUMENT_TYPE_MISMATCH,
+        format!(
+            "callback argument `{arg_name}` for `{call_name}` returns `{actual}`, expected `{expected}`."
         ),
-    );
+        span.clone(),
+        "argument type mismatch",
+        "`noescape Fn() -> T` callback return types are part of the call signature and must be checked before Rust lowering.",
+        "match_callback_return_type",
+        format!("Return a `{expected}` value from this callback."),
+    ));
 }
 
 fn callback_fresh_return_not_clean_diagnostic(
@@ -3530,22 +3509,17 @@ fn callback_fresh_return_not_clean_diagnostic(
     expected: &str,
     span: &Span,
 ) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::ARGUMENT_TYPE_MISMATCH,
-            format!(
-                "callback argument `{arg_name}` for `{call_name}` returns non-fresh value `{name}`, expected `{expected}`."
-            ),
-            span.clone(),
-            "argument type mismatch",
-        )
-        .with_cause("`noescape Fn() -> fresh T` callback returns are fresh contracts and cannot return captured or managed values.")
-        .with_fix(
-            "return_fresh_callback_value",
-            "Return a struct constructor, fresh call, or local value created inside the callback.",
-            "manual",
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::ARGUMENT_TYPE_MISMATCH,
+        format!(
+            "callback argument `{arg_name}` for `{call_name}` returns non-fresh value `{name}`, expected `{expected}`."
         ),
-    );
+        span.clone(),
+        "argument type mismatch",
+        "`noescape Fn() -> fresh T` callback returns are fresh contracts and cannot return captured or managed values.",
+        "return_fresh_callback_value",
+        "Return a struct constructor, fresh call, or local value created inside the callback.",
+    ));
 }
 
 fn callback_fresh_return_unknown_diagnostic(
@@ -3555,22 +3529,17 @@ fn callback_fresh_return_unknown_diagnostic(
     expected: &str,
     span: &Span,
 ) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::ARGUMENT_TYPE_MISMATCH,
-            format!(
-                "callback argument `{arg_name}` for `{call_name}` returns value whose freshness cannot be proven, expected `{expected}`."
-            ),
-            span.clone(),
-            "argument type mismatch",
-        )
-        .with_cause("`noescape Fn() -> fresh T` callback returns must be proven fresh before Rust lowering.")
-        .with_fix(
-            "return_fresh_callback_value",
-            "Return a struct constructor, fresh call, or local value created inside the callback.",
-            "manual",
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::ARGUMENT_TYPE_MISMATCH,
+        format!(
+            "callback argument `{arg_name}` for `{call_name}` returns value whose freshness cannot be proven, expected `{expected}`."
         ),
-    );
+        span.clone(),
+        "argument type mismatch",
+        "`noescape Fn() -> fresh T` callback returns must be proven fresh before Rust lowering.",
+        "return_fresh_callback_value",
+        "Return a struct constructor, fresh call, or local value created inside the callback.",
+    ));
 }
 
 fn callback_retained_local_diagnostic(
@@ -3580,20 +3549,15 @@ fn callback_retained_local_diagnostic(
     local_name: &str,
     span: Span,
 ) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::LOCAL_VALUE_RETAINED,
-            format!("retaining API `{callee}` cannot retain local value `{local_name}`."),
-            span,
-            "local value retained",
-        )
-        .with_cause(format!("`{callee}` declares `effects(retains({param}))`."))
-        .with_fix(
-            "manage_local",
-            format!("Pass `{param}` through `manage {local_name}` before retaining it."),
-            "manual",
-        ),
-    );
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::LOCAL_VALUE_RETAINED,
+        format!("retaining API `{callee}` cannot retain local value `{local_name}`."),
+        span,
+        "local value retained",
+        format!("`{callee}` declares `effects(retains({param}))`."),
+        "manage_local",
+        format!("Pass `{param}` through `manage {local_name}` before retaining it."),
+    ));
 }
 
 fn callback_arity_mismatch_diagnostic(
@@ -3604,24 +3568,17 @@ fn callback_arity_mismatch_diagnostic(
     expected: usize,
     span: &Span,
 ) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::ARGUMENT_TYPE_MISMATCH,
-            format!(
-                "callback argument `{arg_name}` for `{call_name}` has {actual} parameter(s), expected {expected}."
-            ),
-            span.clone(),
-            "argument type mismatch",
-        )
-        .with_cause(
-            "`noescape Fn(...) -> T` callback parameter counts are part of the call signature and must be checked before Rust lowering.",
-        )
-        .with_fix(
-            "match_callback_parameter_count",
-            format!("Use a callback with {expected} parameter(s)."),
-            "manual",
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::ARGUMENT_TYPE_MISMATCH,
+        format!(
+            "callback argument `{arg_name}` for `{call_name}` has {actual} parameter(s), expected {expected}."
         ),
-    );
+        span.clone(),
+        "argument type mismatch",
+        "`noescape Fn(...) -> T` callback parameter counts are part of the call signature and must be checked before Rust lowering.",
+        "match_callback_parameter_count",
+        format!("Use a callback with {expected} parameter(s)."),
+    ));
 }
 
 fn callback_call_arity_mismatch_diagnostic(
@@ -3631,24 +3588,17 @@ fn callback_call_arity_mismatch_diagnostic(
     expected: usize,
     span: Span,
 ) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::ARGUMENT_TYPE_MISMATCH,
-            format!(
-                "callback `{callback_name}` called with {actual} argument(s), expected {expected}."
-            ),
-            span,
-            "argument type mismatch",
-        )
-        .with_cause(
-            "`noescape Fn(...)` callback calls must match the callback parameter contract before Rust lowering.",
-        )
-        .with_fix(
-            "match_callback_call_arity",
-            format!("Call `{callback_name}` with {expected} argument(s)."),
-            "manual",
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::ARGUMENT_TYPE_MISMATCH,
+        format!(
+            "callback `{callback_name}` called with {actual} argument(s), expected {expected}."
         ),
-    );
+        span,
+        "argument type mismatch",
+        "`noescape Fn(...)` callback calls must match the callback parameter contract before Rust lowering.",
+        "match_callback_call_arity",
+        format!("Call `{callback_name}` with {expected} argument(s)."),
+    ));
 }
 
 fn callback_call_argument_type_mismatch_diagnostic(
@@ -3659,25 +3609,18 @@ fn callback_call_argument_type_mismatch_diagnostic(
     expected: &str,
     span: &Span,
 ) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::ARGUMENT_TYPE_MISMATCH,
-            format!(
-                "argument {} for callback `{callback_name}` has type `{actual}`, expected `{expected}`.",
-                index + 1
-            ),
-            span.clone(),
-            "argument type mismatch",
-        )
-        .with_cause(
-            "`noescape Fn(...)` callback argument types are part of the callback contract and must be checked before Rust lowering.",
-        )
-        .with_fix(
-            "match_callback_call_argument_type",
-            format!("Pass a `{expected}` value for argument {}.", index + 1),
-            "manual",
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::ARGUMENT_TYPE_MISMATCH,
+        format!(
+            "argument {} for callback `{callback_name}` has type `{actual}`, expected `{expected}`.",
+            index + 1
         ),
-    );
+        span.clone(),
+        "argument type mismatch",
+        "`noescape Fn(...)` callback argument types are part of the callback contract and must be checked before Rust lowering.",
+        "match_callback_call_argument_type",
+        format!("Pass a `{expected}` value for argument {}.", index + 1),
+    ));
 }
 
 fn callback_call_site_argument_type_mismatch_diagnostic(
@@ -3688,24 +3631,17 @@ fn callback_call_site_argument_type_mismatch_diagnostic(
     expected: &str,
     span: &Span,
 ) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::ARGUMENT_TYPE_MISMATCH,
-            format!(
-                "argument `{arg_name}` for `{call_name}` has type `{actual}`, expected `{expected}`."
-            ),
-            span.clone(),
-            "argument type mismatch",
-        )
-        .with_cause(
-            "`noescape Fn(...)` callback parameter types apply to ordinary calls inside callback expressions before Rust lowering.",
-        )
-        .with_fix(
-            "match_callback_body_call_argument_type",
-            format!("Pass a `{expected}` value for `{arg_name}`."),
-            "manual",
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::ARGUMENT_TYPE_MISMATCH,
+        format!(
+            "argument `{arg_name}` for `{call_name}` has type `{actual}`, expected `{expected}`."
         ),
-    );
+        span.clone(),
+        "argument type mismatch",
+        "`noescape Fn(...)` callback parameter types apply to ordinary calls inside callback expressions before Rust lowering.",
+        "match_callback_body_call_argument_type",
+        format!("Pass a `{expected}` value for `{arg_name}`."),
+    ));
 }
 
 fn type_pattern_matches(expected: &str, actual: &str, generic_params: &[String]) -> bool {
@@ -3863,22 +3799,17 @@ fn argument_payload_type_mismatch_diagnostic(
     expected: &str,
     span: &Span,
 ) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::ARGUMENT_TYPE_MISMATCH,
-            format!(
-                "argument `{arg_name}` for `{call_name}` has payload type `{actual}`, expected `{expected}`."
-            ),
-            span.clone(),
-            "argument type mismatch",
-        )
-        .with_cause("Result and Option argument constructors are checked against the resolved parameter payload before Rust lowering.")
-        .with_fix(
-            "match_argument_payload_type",
-            format!("Pass a `{expected}` payload for `{arg_name}`."),
-            "manual",
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::ARGUMENT_TYPE_MISMATCH,
+        format!(
+            "argument `{arg_name}` for `{call_name}` has payload type `{actual}`, expected `{expected}`."
         ),
-    );
+        span.clone(),
+        "argument type mismatch",
+        "Result and Option argument constructors are checked against the resolved parameter payload before Rust lowering.",
+        "match_argument_payload_type",
+        format!("Pass a `{expected}` payload for `{arg_name}`."),
+    ));
 }
 
 fn is_closure_binding_call(
@@ -4756,22 +4687,17 @@ fn check_map_literal_entry_expr(
     if unresolved_generic_type(actual) || argument_type_matches(expected, actual) {
         return;
     }
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::ARGUMENT_TYPE_MISMATCH,
-            format!("map literal {role} has type `{actual}`, expected `{expected}`."),
-            hir_expr_span(value).clone(),
-            "map literal entry type mismatch",
-        )
-        .with_cause(format!(
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::ARGUMENT_TYPE_MISMATCH,
+        format!("map literal {role} has type `{actual}`, expected `{expected}`."),
+        hir_expr_span(value).clone(),
+        "map literal entry type mismatch",
+        format!(
             "The {context} is typed as a `Map`, so every map literal {role} must match the corresponding `Map` type argument before Rust lowering."
-        ))
-        .with_fix(
-            "match_map_literal_entry_type",
-            format!("Use a {role} expression of type `{expected}`."),
-            "manual",
         ),
-    );
+        "match_map_literal_entry_type",
+        format!("Use a {role} expression of type `{expected}`."),
+    ));
 }
 
 fn check_list_literal_type(
@@ -4827,22 +4753,17 @@ fn check_list_literal_item_expr(
     if unresolved_generic_type(actual) || argument_type_matches(expected, actual) {
         return;
     }
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::ARGUMENT_TYPE_MISMATCH,
-            format!("list literal item has type `{actual}`, expected `{expected}`."),
-            hir_expr_span(value).clone(),
-            "list literal item type mismatch",
-        )
-        .with_cause(format!(
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::ARGUMENT_TYPE_MISMATCH,
+        format!("list literal item has type `{actual}`, expected `{expected}`."),
+        hir_expr_span(value).clone(),
+        "list literal item type mismatch",
+        format!(
             "The {context} is typed as a `List`, so every array literal item must match the `List` item type before Rust lowering."
-        ))
-        .with_fix(
-            "match_list_literal_item_type",
-            format!("Use a `{expected}` value for this list literal item."),
-            "manual",
         ),
-    );
+        "match_list_literal_item_type",
+        format!("Use a `{expected}` value for this list literal item."),
+    ));
 }
 
 fn is_result_type_name(type_name: &str) -> bool {

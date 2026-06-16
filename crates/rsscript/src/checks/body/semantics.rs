@@ -1,4 +1,5 @@
 use super::*;
+use crate::checks::diagnostic_helpers::error_cause_manual_fix;
 
 pub(super) fn check_stmt_semantics(
     analyzer: &mut Analyzer<'_>,
@@ -366,20 +367,15 @@ pub(super) fn check_integer_literal_range(analyzer: &mut Analyzer<'_>, expr: &Hi
     };
     let is_decimal_integer = !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit());
     if is_decimal_integer && value.parse::<i64>().is_err() {
-        analyzer.diagnostics.push(
-            Diagnostic::error(
-                code::INTEGER_LITERAL_OUT_OF_RANGE,
-                format!("integer literal `{value}` does not fit in `Int` (i64)."),
-                span.clone(),
-                "integer literal out of range",
-            )
-            .with_cause("RSScript `Int` is a 64-bit signed integer; literals must fit in i64.")
-            .with_fix(
-                "use_in_range_literal",
-                "Use a value within i64 range.",
-                "manual",
-            ),
-        );
+        analyzer.diagnostics.push(error_cause_manual_fix(
+            code::INTEGER_LITERAL_OUT_OF_RANGE,
+            format!("integer literal `{value}` does not fit in `Int` (i64)."),
+            span.clone(),
+            "integer literal out of range",
+            "RSScript `Int` is a 64-bit signed integer; literals must fit in i64.",
+            "use_in_range_literal",
+            "Use a value within i64 range.",
+        ));
     }
 }
 
@@ -390,20 +386,15 @@ pub(super) fn check_bool_condition(analyzer: &mut Analyzer<'_>, expr: &HirExpr, 
     if type_name == "Bool" {
         return;
     }
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::CONTROL_FLOW_TYPE_MISMATCH,
-            format!("{construct} condition has type `{type_name}`, expected `Bool`."),
-            hir_expr_span(expr).clone(),
-            "control-flow type mismatch",
-        )
-        .with_cause("RSScript control-flow conditions are explicit `Bool` values; non-empty strings, numbers, and managed handles do not coerce to truthy or falsey values.")
-        .with_fix(
-            "use_bool_condition",
-            "Compare explicitly or call a function that returns `Bool`.",
-            "manual",
-        ),
-    );
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::CONTROL_FLOW_TYPE_MISMATCH,
+        format!("{construct} condition has type `{type_name}`, expected `Bool`."),
+        hir_expr_span(expr).clone(),
+        "control-flow type mismatch",
+        "RSScript control-flow conditions are explicit `Bool` values; non-empty strings, numbers, and managed handles do not coerce to truthy or falsey values.",
+        "use_bool_condition",
+        "Compare explicitly or call a function that returns `Bool`.",
+    ));
 }
 
 pub(super) fn check_for_iterable_type(
@@ -422,28 +413,23 @@ pub(super) fn check_for_iterable_type(
         return;
     }
     let expected = if is_async { "Stream<T>" } else { "List<T>" };
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::CONTROL_FLOW_TYPE_MISMATCH,
-            format!("for iterable has type `{type_name}`, expected `{expected}`."),
-            hir_expr_span(expr).clone(),
-            "control-flow type mismatch",
-        )
-        .with_cause(if is_async {
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::CONTROL_FLOW_TYPE_MISMATCH,
+        format!("for iterable has type `{type_name}`, expected `{expected}`."),
+        hir_expr_span(expr).clone(),
+        "control-flow type mismatch",
+        if is_async {
             "RSScript `await for` iterates `Stream<T>` values by repeatedly awaiting `Stream.next`."
         } else {
             "RSScript v0.6 `for` iteration is limited to `List<T>` so loop ownership and review metadata stay explicit."
-        })
-        .with_fix(
-            if is_async { "iterate_stream" } else { "iterate_list" },
-            if is_async {
-                "Iterate a `Stream<T>` value or convert the input to a Stream before the loop."
-            } else {
-                "Iterate a `List<T>` value or convert the input to a List before the loop."
-            },
-            "manual",
-        ),
-    );
+        },
+        if is_async { "iterate_stream" } else { "iterate_list" },
+        if is_async {
+            "Iterate a `Stream<T>` value or convert the input to a Stream before the loop."
+        } else {
+            "Iterate a `List<T>` value or convert the input to a List before the loop."
+        },
+    ));
 }
 
 pub(super) fn check_match_scrutinee_type(analyzer: &mut Analyzer<'_>, expr: &HirExpr) {
@@ -463,20 +449,15 @@ pub(super) fn check_match_scrutinee_type(analyzer: &mut Analyzer<'_>, expr: &Hir
     ) {
         return;
     }
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::CONTROL_FLOW_TYPE_MISMATCH,
-            format!("match scrutinee has type `{type_name}`, expected `Option<T>`, `Result<T, E>`, `List<T>`, a declared sum/struct/class type, or an `Int`/`String`/`Bool` literal match."),
-            hir_expr_span(expr).clone(),
-            "control-flow type mismatch",
-        )
-        .with_cause("RSScript v0.6 `match` is limited to review-visible `Option`, `Result`, declared sum/struct/class patterns, and simple scalar literal dispatch.")
-        .with_fix(
-            "match_option_or_result",
-            "Match an `Option<T>`, `Result<T, E>`, declared sum value, or scalar literal value; otherwise rewrite this branch as `if`.",
-            "manual",
-        ),
-    );
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::CONTROL_FLOW_TYPE_MISMATCH,
+        format!("match scrutinee has type `{type_name}`, expected `Option<T>`, `Result<T, E>`, `List<T>`, a declared sum/struct/class type, or an `Int`/`String`/`Bool` literal match."),
+        hir_expr_span(expr).clone(),
+        "control-flow type mismatch",
+        "RSScript v0.6 `match` is limited to review-visible `Option`, `Result`, declared sum/struct/class patterns, and simple scalar literal dispatch.",
+        "match_option_or_result",
+        "Match an `Option<T>`, `Result<T, E>`, declared sum value, or scalar literal value; otherwise rewrite this branch as `if`.",
+    ));
 }
 
 pub(super) fn check_match_patterns_match_scrutinee(
@@ -677,24 +658,19 @@ pub(super) fn push_match_variant_type_mismatch(
     allowed: &[String],
     span: &Span,
 ) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::CONTROL_FLOW_TYPE_MISMATCH,
-            format!("match pattern `{name}` cannot match scrutinee type `{type_name}`."),
-            span.clone(),
-            "match variant type mismatch",
-        )
-        .with_cause("RSScript match patterns must belong to the scrutinee's type.")
-        .with_fix(
-            "match_matching_variant_family",
-            format!(
-                "Use variants of `{}`: {}.",
-                type_root_name(type_name),
-                allowed.join(", ")
-            ),
-            "manual",
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::CONTROL_FLOW_TYPE_MISMATCH,
+        format!("match pattern `{name}` cannot match scrutinee type `{type_name}`."),
+        span.clone(),
+        "match variant type mismatch",
+        "RSScript match patterns must belong to the scrutinee's type.",
+        "match_matching_variant_family",
+        format!(
+            "Use variants of `{}`: {}.",
+            type_root_name(type_name),
+            allowed.join(", ")
         ),
-    );
+    ));
 }
 
 pub(super) fn allowed_sum_variant_names(analyzer: &Analyzer<'_>, root: &str) -> Vec<String> {
@@ -763,20 +739,15 @@ pub(super) fn check_match_pattern_effects(
         && !analyzer.syntax_program.has_feature(FileFeature::Local)
         && let Some(first_arm) = arms.first()
     {
-        analyzer.diagnostics.push(
-            Diagnostic::error(
-                code::FEATURE_VIOLATION,
-                "`match take` requires `features: local`.",
-                first_arm.span.clone(),
-                "missing local feature",
-            )
-            .with_cause("Taking fields out of a pattern is a local ownership capability.")
-            .with_fix(
-                "add_local_feature",
-                "Add `features: local` or match the value with `read`.",
-                "manual",
-            ),
-        );
+        analyzer.diagnostics.push(error_cause_manual_fix(
+            code::FEATURE_VIOLATION,
+            "`match take` requires `features: local`.",
+            first_arm.span.clone(),
+            "missing local feature",
+            "Taking fields out of a pattern is a local ownership capability.",
+            "add_local_feature",
+            "Add `features: local` or match the value with `read`.",
+        ));
     }
     for arm in arms {
         if matches!(
@@ -784,20 +755,15 @@ pub(super) fn check_match_pattern_effects(
             MatchPattern::Struct { .. } | MatchPattern::List { .. }
         ) && scrutinee_effect.is_none()
         {
-            analyzer.diagnostics.push(
-                Diagnostic::error(
-                    code::MISSING_DATA_EFFECT,
-                    "structured match patterns require an explicit scrutinee effect.",
-                    arm.span.clone(),
-                    "missing match scrutinee effect",
-                )
-                .with_cause("A structured pattern projects fields from the scrutinee, so the source must spell `match read`, `match mut`, or `match take`.")
-                .with_fix(
-                    "spell_match_effect",
-                    "Add `read`, `mut`, or `take` after `match`.",
-                    "manual",
-                ),
-            );
+            analyzer.diagnostics.push(error_cause_manual_fix(
+                code::MISSING_DATA_EFFECT,
+                "structured match patterns require an explicit scrutinee effect.",
+                arm.span.clone(),
+                "missing match scrutinee effect",
+                "A structured pattern projects fields from the scrutinee, so the source must spell `match read`, `match mut`, or `match take`.",
+                "spell_match_effect",
+                "Add `read`, `mut`, or `take` after `match`.",
+            ));
         }
         check_pattern_field_effects(
             analyzer,
@@ -809,20 +775,15 @@ pub(super) fn check_match_pattern_effects(
         if let Some(guard) = &arm.guard
             && let Some((effect, span)) = first_mutating_effect_expr(guard)
         {
-            analyzer.diagnostics.push(
-                Diagnostic::error(
-                    code::READ_VIEW_MUTATION,
-                    format!("match guard cannot use `{}`.", effect.as_str()),
-                    span.clone(),
-                    "guard mutation is not allowed",
-                )
-                .with_cause("A guard runs before the arm is selected and may only read pattern bindings.")
-                .with_fix(
-                    "make_guard_read_only",
-                    "Move mutation into the selected arm body or rewrite the guard as a read-only predicate.",
-                    "manual",
-                ),
-            );
+            analyzer.diagnostics.push(error_cause_manual_fix(
+                code::READ_VIEW_MUTATION,
+                format!("match guard cannot use `{}`.", effect.as_str()),
+                span.clone(),
+                "guard mutation is not allowed",
+                "A guard runs before the arm is selected and may only read pattern bindings.",
+                "make_guard_read_only",
+                "Move mutation into the selected arm body or rewrite the guard as a read-only predicate.",
+            ));
         }
     }
 }
@@ -857,26 +818,21 @@ pub(super) fn check_pattern_field_effects(
             let conflicts = matches!(previous_effect, DataEffect::Mut | DataEffect::Take)
                 || matches!(effective_effect, DataEffect::Mut | DataEffect::Take);
             if conflicts {
-                analyzer.diagnostics.push(
-                    Diagnostic::error(
-                        code::FIELD_PARTIAL_ACCESS_CONFLICT,
-                        format!(
-                            "pattern field `{}` is bound more than once with mutable or taking access.",
-                            field.name
-                        ),
-                        field.span.clone(),
-                        "pattern field conflict",
-                    )
-                    .with_cause(format!(
+                analyzer.diagnostics.push(error_cause_manual_fix(
+                    code::FIELD_PARTIAL_ACCESS_CONFLICT,
+                    format!(
+                        "pattern field `{}` is bound more than once with mutable or taking access.",
+                        field.name
+                    ),
+                    field.span.clone(),
+                    "pattern field conflict",
+                    format!(
                         "The previous binding for `{}` was at {}:{}.",
                         field.name, previous_span.line, previous_span.column
-                    ))
-                    .with_fix(
-                        "remove_overlapping_pattern_binding",
-                        "Bind each mutable or taking field place at most once in a pattern.",
-                        "manual",
                     ),
-                );
+                    "remove_overlapping_pattern_binding",
+                    "Bind each mutable or taking field place at most once in a pattern.",
+                ));
             }
         }
         if field.ignored {
@@ -884,24 +840,19 @@ pub(super) fn check_pattern_field_effects(
         };
         let effect = effective_effect;
         if managed_class_scrutinee && matches!(effect, DataEffect::Mut | DataEffect::Take) {
-            analyzer.diagnostics.push(
-                Diagnostic::error(
-                    code::READ_VIEW_MUTATION,
-                    format!(
-                        "managed pattern field `{}` cannot request `{}`.",
-                        field.name,
-                        effect.as_str()
-                    ),
-                    field.span.clone(),
-                    "managed pattern field is read-only",
-                )
-                .with_cause("Managed class values are shared runtime objects; structured patterns expose only read views of their fields.")
-                .with_fix(
-                    "use_read_pattern",
-                    "Use a read field binding and perform managed mutation through an explicit method.",
-                    "manual",
+            analyzer.diagnostics.push(error_cause_manual_fix(
+                code::READ_VIEW_MUTATION,
+                format!(
+                    "managed pattern field `{}` cannot request `{}`.",
+                    field.name,
+                    effect.as_str()
                 ),
-            );
+                field.span.clone(),
+                "managed pattern field is read-only",
+                "Managed class values are shared runtime objects; structured patterns expose only read views of their fields.",
+                "use_read_pattern",
+                "Use a read field binding and perform managed mutation through an explicit method.",
+            ));
             continue;
         }
         let allowed = match scrutinee_effect {
@@ -911,24 +862,19 @@ pub(super) fn check_pattern_field_effects(
             None => effect == DataEffect::Read,
         };
         if !allowed {
-            analyzer.diagnostics.push(
-                Diagnostic::error(
-                    code::READ_VIEW_MUTATION,
-                    format!(
-                        "field pattern `{}` requests `{}` from a weaker match scrutinee.",
-                        field.name,
-                        effect.as_str()
-                    ),
-                    field.span.clone(),
-                    "pattern effect is not allowed",
-                )
-                .with_cause("Pattern binding effects are monotonic: a child field cannot request more authority than the scrutinee effect provides.")
-                .with_fix(
-                    "weaken_pattern_effect",
-                    "Use `read` for this field or strengthen the match scrutinee effect when the value is local and mutable.",
-                    "manual",
+            analyzer.diagnostics.push(error_cause_manual_fix(
+                code::READ_VIEW_MUTATION,
+                format!(
+                    "field pattern `{}` requests `{}` from a weaker match scrutinee.",
+                    field.name,
+                    effect.as_str()
                 ),
-            );
+                field.span.clone(),
+                "pattern effect is not allowed",
+                "Pattern binding effects are monotonic: a child field cannot request more authority than the scrutinee effect provides.",
+                "weaken_pattern_effect",
+                "Use `read` for this field or strengthen the match scrutinee effect when the value is local and mutable.",
+            ));
         }
     }
 }
@@ -949,59 +895,44 @@ pub(super) fn check_struct_pattern_fields(
     let mut seen_fields: HashMap<&str, Span> = HashMap::new();
     for field in fields {
         if let Some(previous_span) = seen_fields.insert(field.name.as_str(), field.span.clone()) {
-            analyzer.diagnostics.push(
-                Diagnostic::error(
-                    code::FIELD_PARTIAL_ACCESS_CONFLICT,
-                    format!("pattern field `{}` is listed more than once.", field.name),
-                    field.span.clone(),
-                    "duplicate pattern field",
-                )
-                .with_cause(format!(
+            analyzer.diagnostics.push(error_cause_manual_fix(
+                code::FIELD_PARTIAL_ACCESS_CONFLICT,
+                format!("pattern field `{}` is listed more than once.", field.name),
+                field.span.clone(),
+                "duplicate pattern field",
+                format!(
                     "The previous projection of `{}` was at {}:{}.",
                     field.name, previous_span.line, previous_span.column
-                ))
-                .with_fix(
-                    "remove_duplicate_pattern_field",
-                    "List each field at most once in a structured pattern.",
-                    "manual",
                 ),
-            );
+                "remove_duplicate_pattern_field",
+                "List each field at most once in a structured pattern.",
+            ));
         }
         if !declared_names.contains(field.name.as_str()) {
-            analyzer.diagnostics.push(
-                Diagnostic::error(
-                    code::UNKNOWN_FIELD,
-                    format!("unknown field `{}` on type `{pattern_name}`.", field.name),
-                    field.span.clone(),
-                    "unknown field",
-                )
-                .with_cause("Structured match patterns may only project declared fields.")
-                .with_fix(
-                    "use_declared_pattern_field",
-                    format!("Use a field declared on `{pattern_name}` or update the pattern."),
-                    "manual",
-                ),
-            );
+            analyzer.diagnostics.push(error_cause_manual_fix(
+                code::UNKNOWN_FIELD,
+                format!("unknown field `{}` on type `{pattern_name}`.", field.name),
+                field.span.clone(),
+                "unknown field",
+                "Structured match patterns may only project declared fields.",
+                "use_declared_pattern_field",
+                format!("Use a field declared on `{pattern_name}` or update the pattern."),
+            ));
         }
     }
     if !has_rest && fields.len() < declared_fields.len() {
-        analyzer.diagnostics.push(
-            Diagnostic::error(
-                code::CONTROL_FLOW_TYPE_MISMATCH,
-                format!("pattern `{pattern_name} {{ ... }}` omits fields without `..`."),
-                fields
-                    .last()
-                    .map(|field| field.span.clone())
-                    .unwrap_or_else(|| pattern_span.clone()),
-                "pattern omits fields",
-            )
-            .with_cause("Omitted fields must be visible in review; write `..` when intentionally ignoring the rest.")
-            .with_fix(
-                "add_pattern_rest",
-                format!("Write `{pattern_name} {{ ..., .. }}` when omitting fields."),
-                "manual",
-            ),
-        );
+        analyzer.diagnostics.push(error_cause_manual_fix(
+            code::CONTROL_FLOW_TYPE_MISMATCH,
+            format!("pattern `{pattern_name} {{ ... }}` omits fields without `..`."),
+            fields
+                .last()
+                .map(|field| field.span.clone())
+                .unwrap_or_else(|| pattern_span.clone()),
+            "pattern omits fields",
+            "Omitted fields must be visible in review; write `..` when intentionally ignoring the rest.",
+            "add_pattern_rest",
+            format!("Write `{pattern_name} {{ ..., .. }}` when omitting fields."),
+        ));
     }
 }
 
@@ -1463,22 +1394,17 @@ pub(super) fn check_match_expression_arm_types(
         if arm_type == expected_type {
             continue;
         }
-        analyzer.diagnostics.push(
-            Diagnostic::error(
-                code::CONTROL_FLOW_TYPE_MISMATCH,
-                format!(
-                    "match arm has type `{arm_type}`, expected `{expected_type}` from the first produced arm."
-                ),
-                arm.span.clone(),
-                "match arm type mismatch",
-            )
-            .with_cause("A match expression must produce one compatible value type across every arm.")
-            .with_fix(
-                "align_match_arm_types",
-                "Return the same value type from every match expression arm.",
-                "manual",
+        analyzer.diagnostics.push(error_cause_manual_fix(
+            code::CONTROL_FLOW_TYPE_MISMATCH,
+            format!(
+                "match arm has type `{arm_type}`, expected `{expected_type}` from the first produced arm."
             ),
-        );
+            arm.span.clone(),
+            "match arm type mismatch",
+            "A match expression must produce one compatible value type across every arm.",
+            "align_match_arm_types",
+            "Return the same value type from every match expression arm.",
+        ));
     }
 }
 

@@ -2955,21 +2955,20 @@ impl Analyzer<'_> {
                             "Remove `pure`, or change the parameter to `read` if the function does not mutate it.",
                         ),
                     };
-                    self.diagnostics.push(
-                        Diagnostic::error(
-                            code::INVALID_PURE_EFFECT,
-                            format!(
-                                "`{}` is declared pure but parameter `{}` uses `{}`.",
-                                function.name,
-                                param.name,
-                                param.effect.map_or("unknown", data_effect_name)
-                            ),
-                            param.span.clone(),
-                            label,
-                        )
-                        .with_cause(cause)
-                        .with_fix("remove_pure_or_use_read", fix, "manual"),
-                    );
+                    self.diagnostics.push(checks::diagnostic_helpers::error_cause_manual_fix(
+                        code::INVALID_PURE_EFFECT,
+                        format!(
+                            "`{}` is declared pure but parameter `{}` uses `{}`.",
+                            function.name,
+                            param.name,
+                            param.effect.map_or("unknown", data_effect_name)
+                        ),
+                        param.span.clone(),
+                        label,
+                        cause,
+                        "remove_pure_or_use_read",
+                        fix,
+                    ));
                 }
 
                 for effect in function
@@ -2977,23 +2976,18 @@ impl Analyzer<'_> {
                     .iter()
                     .filter(|effect| matches!(effect, EffectDecl::Retains(_)))
                 {
-                    self.diagnostics.push(
-                        Diagnostic::error(
-                            code::INVALID_PURE_EFFECT,
-                            format!(
-                                "`{}` is declared pure but also retains a parameter.",
-                                function.name
-                            ),
-                            function.span.clone(),
-                            "retention in pure function",
-                        )
-                        .with_cause("A `pure` function must not retain parameters after returning.")
-                        .with_fix(
-                            "remove_pure_or_retains",
-                            format!("Remove `pure` or remove `{}`.", effect_display(effect)),
-                            "manual",
+                    self.diagnostics.push(checks::diagnostic_helpers::error_cause_manual_fix(
+                        code::INVALID_PURE_EFFECT,
+                        format!(
+                            "`{}` is declared pure but also retains a parameter.",
+                            function.name
                         ),
-                    );
+                        function.span.clone(),
+                        "retention in pure function",
+                        "A `pure` function must not retain parameters after returning.",
+                        "remove_pure_or_retains",
+                        format!("Remove `pure` or remove `{}`.", effect_display(effect)),
+                    ));
                 }
             }
         }
@@ -4728,44 +4722,30 @@ impl Analyzer<'_> {
         callee: &Callee,
         span: &crate::diagnostic::Span,
     ) {
-        self.diagnostics.push(
-            Diagnostic::error(
-                code::INVALID_PURE_EFFECT,
-                format!(
-                    "`{function_name}` is declared pure but calls non-pure function `{}`.",
-                    callee_display(callee)
-                ),
-                span.clone(),
-                "non-pure call in pure function",
-            )
-            .with_cause(
-                "A `pure` function may only call constructors, enum variants, or functions also declared `effects(pure)`.",
-            )
-            .with_fix(
-                "remove_pure_or_call_pure",
-                "Remove `pure`, or call only APIs whose signatures are declared `effects(pure)`.",
-                "manual",
+        self.diagnostics.push(checks::diagnostic_helpers::error_cause_manual_fix(
+            code::INVALID_PURE_EFFECT,
+            format!(
+                "`{function_name}` is declared pure but calls non-pure function `{}`.",
+                callee_display(callee)
             ),
-        );
+            span.clone(),
+            "non-pure call in pure function",
+            "A `pure` function may only call constructors, enum variants, or functions also declared `effects(pure)`.",
+            "remove_pure_or_call_pure",
+            "Remove `pure`, or call only APIs whose signatures are declared `effects(pure)`.",
+        ));
     }
 
     fn pure_manage_diagnostic(&mut self, function_name: &str, span: &crate::diagnostic::Span) {
-        self.diagnostics.push(
-            Diagnostic::error(
-                code::INVALID_PURE_EFFECT,
-                format!("`{function_name}` is declared pure but uses `manage`."),
-                span.clone(),
-                "manage in pure function",
-            )
-            .with_cause(
-                "`manage` consumes a local value and changes its ownership boundary; `pure` functions may observe inputs but must not consume local values.",
-            )
-            .with_fix(
-                "remove_manage_or_pure",
-                "Move the `manage` operation outside the pure function, or remove `pure`.",
-                "manual",
-            ),
-        );
+        self.diagnostics.push(checks::diagnostic_helpers::error_cause_manual_fix(
+            code::INVALID_PURE_EFFECT,
+            format!("`{function_name}` is declared pure but uses `manage`."),
+            span.clone(),
+            "manage in pure function",
+            "`manage` consumes a local value and changes its ownership boundary; `pure` functions may observe inputs but must not consume local values.",
+            "remove_manage_or_pure",
+            "Move the `manage` operation outside the pure function, or remove `pure`.",
+        ));
     }
 
     fn pure_with_resource_diagnostic(
@@ -4773,22 +4753,15 @@ impl Analyzer<'_> {
         function_name: &str,
         span: &crate::diagnostic::Span,
     ) {
-        self.diagnostics.push(
-            Diagnostic::error(
-                code::INVALID_PURE_EFFECT,
-                format!("`{function_name}` is declared pure but opens a resource scope."),
-                span.clone(),
-                "resource scope in pure function",
-            )
-            .with_cause(
-                "`with` introduces deterministic resource lifetime behavior; `pure` functions may observe inputs but must not open resource scopes.",
-            )
-            .with_fix(
-                "remove_with_or_pure",
-                "Move resource handling outside the pure function, or remove `pure`.",
-                "manual",
-            ),
-        );
+        self.diagnostics.push(checks::diagnostic_helpers::error_cause_manual_fix(
+            code::INVALID_PURE_EFFECT,
+            format!("`{function_name}` is declared pure but opens a resource scope."),
+            span.clone(),
+            "resource scope in pure function",
+            "`with` introduces deterministic resource lifetime behavior; `pure` functions may observe inputs but must not open resource scopes.",
+            "remove_with_or_pure",
+            "Move resource handling outside the pure function, or remove `pure`.",
+        ));
     }
 
     fn pure_resource_return_diagnostic(
@@ -4797,24 +4770,17 @@ impl Analyzer<'_> {
         span: crate::diagnostic::Span,
         resource_name: &str,
     ) {
-        self.diagnostics.push(
-            Diagnostic::error(
-                code::INVALID_PURE_EFFECT,
-                format!(
-                    "`{function_name}` is declared pure but returns resource `{resource_name}`."
-                ),
-                span,
-                "resource return in pure function",
-            )
-            .with_cause(
-                "Returning a resource creates a lifetime boundary; `pure` functions must not open or return resources.",
-            )
-            .with_fix(
-                "remove_resource_return_or_pure",
-                "Return an ordinary value, or remove `pure` from the resource-producing function.",
-                "manual",
+        self.diagnostics.push(checks::diagnostic_helpers::error_cause_manual_fix(
+            code::INVALID_PURE_EFFECT,
+            format!(
+                "`{function_name}` is declared pure but returns resource `{resource_name}`."
             ),
-        );
+            span,
+            "resource return in pure function",
+            "Returning a resource creates a lifetime boundary; `pure` functions must not open or return resources.",
+            "remove_resource_return_or_pure",
+            "Return an ordinary value, or remove `pure` from the resource-producing function.",
+        ));
     }
 
     fn resource_return_type_name<'a>(&self, ty: &'a TypeRef) -> Option<&'a str> {

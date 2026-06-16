@@ -1,4 +1,5 @@
 use super::*;
+use crate::checks::diagnostic_helpers::{error_cause_fix, error_cause_manual_fix};
 
 pub(super) fn check_resource_pool_bindings(analyzer: &mut Analyzer<'_>, body: &crate::hir::HirFunctionBody) {
     for binding in &body.bindings {
@@ -28,20 +29,15 @@ pub(super) fn check_managed_closure_captures(
         .unwrap_or(&[]);
     for (name, span) in uses {
         if state.is_local(name) {
-            analyzer.diagnostics.push(
-                Diagnostic::error(
-                    code::LOCAL_CAPTURED_BY_MANAGED_CLOSURE,
-                    format!("managed closure captures local value `{name}`."),
-                    span.clone(),
-                    "local captured here",
-                )
-                .with_cause("Closures bound with `let` are managed closures.")
-                .with_fix(
-                    "use_local_closure",
-                    "Bind the closure with `local` or use a noescape callback.",
-                    "manual",
-                ),
-            );
+            analyzer.diagnostics.push(error_cause_manual_fix(
+                code::LOCAL_CAPTURED_BY_MANAGED_CLOSURE,
+                format!("managed closure captures local value `{name}`."),
+                span.clone(),
+                "local captured here",
+                "Closures bound with `let` are managed closures.",
+                "use_local_closure",
+                "Bind the closure with `local` or use a noescape callback.",
+            ));
         }
     }
 }
@@ -210,22 +206,18 @@ pub(super) fn check_result_resource_with_has_try(analyzer: &mut Analyzer<'_>, re
         return;
     };
 
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::RESOURCE_PRODUCER_MISSING_TRY,
-            format!(
-                "`with` over `Result<{resource_type}, E>` must explicitly unwrap the resource producer with `?`."
-            ),
-            hir_expr_span(resource).clone(),
-            "missing resource producer `?`",
-        )
-        .with_cause("Resource-producing `Result` values are transient; the successful resource must enter the `with` scope explicitly.")
-        .with_fix(
-            "add_try_to_resource_producer",
-            "Write `with producer(...)? as resource { ... }`.",
-            "machine-applicable",
+    analyzer.diagnostics.push(error_cause_fix(
+        code::RESOURCE_PRODUCER_MISSING_TRY,
+        format!(
+            "`with` over `Result<{resource_type}, E>` must explicitly unwrap the resource producer with `?`."
         ),
-    );
+        hir_expr_span(resource).clone(),
+        "missing resource producer `?`",
+        "Resource-producing `Result` values are transient; the successful resource must enter the `with` scope explicitly.",
+        "add_try_to_resource_producer",
+        "Write `with producer(...)? as resource { ... }`.",
+        "machine-applicable",
+    ));
 }
 
 pub(super) fn check_resource_producer_children(analyzer: &mut Analyzer<'_>, expr: &HirExpr) {
@@ -1730,40 +1722,30 @@ pub(super) fn resource_producer_escape_diagnostic(
     span: crate::diagnostic::Span,
     type_name: &str,
 ) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::RESOURCE_ESCAPE,
-            format!("resource-producing expression of type `{type_name}` must be consumed by `with`."),
-            span,
-            "resource producer escapes",
-        )
-        .with_cause("Resource-producing calls create transient linear values that cannot be stored, returned, retained, managed, or passed as ordinary values.")
-        .with_fix(
-            "use_with",
-            "Use `with producer(...)? as resource { ... }`, or an approved resource container API.",
-            "manual",
-        ),
-    );
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::RESOURCE_ESCAPE,
+        format!("resource-producing expression of type `{type_name}` must be consumed by `with`."),
+        span,
+        "resource producer escapes",
+        "Resource-producing calls create transient linear values that cannot be stored, returned, retained, managed, or passed as ordinary values.",
+        "use_with",
+        "Use `with producer(...)? as resource { ... }`, or an approved resource container API.",
+    ));
 }
 
 pub(super) fn resource_pool_lease_escape_diagnostic(
     analyzer: &mut Analyzer<'_>,
     span: crate::diagnostic::Span,
 ) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::RESOURCE_ESCAPE,
-            "resource lease from `ResourcePool.borrow` must be scoped by `with`.",
-            span,
-            "resource lease escapes",
-        )
-        .with_cause("Pool leases are resources and must be returned to the pool when the `with` block exits.")
-        .with_fix(
-            "wrap_with",
-            "Use `with ResourcePool.borrow(pool: mut pool) as lease { ... }`.",
-            "manual",
-        ),
-    );
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::RESOURCE_ESCAPE,
+        "resource lease from `ResourcePool.borrow` must be scoped by `with`.",
+        span,
+        "resource lease escapes",
+        "Pool leases are resources and must be returned to the pool when the `with` block exits.",
+        "wrap_with",
+        "Use `with ResourcePool.borrow(pool: mut pool) as lease { ... }`.",
+    ));
 }
 
 pub(super) fn resource_pool_not_local_diagnostic(
@@ -1771,20 +1753,16 @@ pub(super) fn resource_pool_not_local_diagnostic(
     binding: &str,
     span: crate::diagnostic::Span,
 ) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::RESOURCE_POOL_NOT_LOCAL,
-            format!("ResourcePool binding `{binding}` must be local."),
-            span,
-            "ResourcePool must be local",
-        )
-        .with_cause("ResourcePool owns long-lived resources and must not be hidden behind an ordinary managed binding.")
-        .with_fix(
-            "make_resource_pool_local",
-            format!("Declare `{binding}` with `local`, or pass it as a `mut` local-capability parameter."),
-            "machine-applicable",
-        ),
-    );
+    analyzer.diagnostics.push(error_cause_fix(
+        code::RESOURCE_POOL_NOT_LOCAL,
+        format!("ResourcePool binding `{binding}` must be local."),
+        span,
+        "ResourcePool must be local",
+        "ResourcePool owns long-lived resources and must not be hidden behind an ordinary managed binding.",
+        "make_resource_pool_local",
+        format!("Declare `{binding}` with `local`, or pass it as a `mut` local-capability parameter."),
+        "machine-applicable",
+    ));
 }
 
 pub(super) fn resource_pool_fallible_factory_diagnostic(
@@ -1852,44 +1830,32 @@ pub(super) fn resource_pool_lazy_factory_capture_diagnostic(
         ),
         HirBindingKind::LocalLet => ("binding", "it is not a clean owned local"),
     };
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::RESOURCE_POOL_LAZY_FACTORY_CAPTURE,
-            format!("lazy pool factory captures {noun} `{name}`."),
-            span,
-            "non-owned binding captured by stored factory",
-        )
-        .with_cause(format!(
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::RESOURCE_POOL_LAZY_FACTORY_CAPTURE,
+        format!("lazy pool factory captures {noun} `{name}`."),
+        span,
+        "non-owned binding captured by stored factory",
+        format!(
             "A lazy (`owned Fn`) factory is stored in the pool and called on demand, so it must own its captures, but {why}."
-        ))
-        .with_fix(
-            "capture_owned_local",
-            format!("Bind an owned `local` from `{name}` before constructing the pool and capture that local instead."),
-            "manual",
         ),
-    );
+        "capture_owned_local",
+        format!("Bind an owned `local` from `{name}` before constructing the pool and capture that local instead."),
+    ));
 }
 
 pub(super) fn resource_pool_discard_not_lease_diagnostic(
     analyzer: &mut Analyzer<'_>,
     span: crate::diagnostic::Span,
 ) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::RESOURCE_POOL_DISCARD_NOT_LEASE,
-            "`ResourcePool.discard` requires a pool lease binding.",
-            span,
-            "not a pool lease",
-        )
-        .with_cause(
-            "`discard` evicts a checked-out lease, so its argument must be the binding of an enclosing `with ResourcePool.borrow(...) as name` or `with ResourcePool.try_borrow(...)? as name`.",
-        )
-        .with_fix(
-            "discard_lease_binding",
-            "Call `discard` on the `with`-lease binding, e.g. `ResourcePool.discard(lease: mut conn)` inside `with ... as conn`.",
-            "manual",
-        ),
-    );
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::RESOURCE_POOL_DISCARD_NOT_LEASE,
+        "`ResourcePool.discard` requires a pool lease binding.",
+        span,
+        "not a pool lease",
+        "`discard` evicts a checked-out lease, so its argument must be the binding of an enclosing `with ResourcePool.borrow(...) as name` or `with ResourcePool.try_borrow(...)? as name`.",
+        "discard_lease_binding",
+        "Call `discard` on the `with`-lease binding, e.g. `ResourcePool.discard(lease: mut conn)` inside `with ... as conn`.",
+    ));
 }
 
 pub(super) fn resource_pool_active_lease_conflict_diagnostic(
@@ -1947,20 +1913,15 @@ pub(super) fn resource_pool_factory_resource_capture_diagnostic(
     binding: &str,
     span: crate::diagnostic::Span,
 ) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::RESOURCE_ESCAPE,
-            format!("ResourcePool factory cannot capture resource `{binding}`."),
-            span,
-            "resource captured by ResourcePool factory",
-        )
-        .with_cause("ResourcePool factories are eager and noescape in v0.6, but they still must not close over with-bound resources.")
-        .with_fix(
-            "avoid_resource_capture",
-            "Create the pooled resource directly inside the factory, or pass ordinary managed configuration into the factory.",
-            "manual",
-        ),
-    );
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::RESOURCE_ESCAPE,
+        format!("ResourcePool factory cannot capture resource `{binding}`."),
+        span,
+        "resource captured by ResourcePool factory",
+        "ResourcePool factories are eager and noescape in v0.6, but they still must not close over with-bound resources.",
+        "avoid_resource_capture",
+        "Create the pooled resource directly inside the factory, or pass ordinary managed configuration into the factory.",
+    ));
 }
 
 pub(super) fn local_class_binding_diagnostic(
@@ -1968,22 +1929,16 @@ pub(super) fn local_class_binding_diagnostic(
     binding: &str,
     span: crate::diagnostic::Span,
 ) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::LOCAL_CLASS_BINDING,
-            format!("class binding `{binding}` cannot be local."),
-            span,
-            "class bound as local",
-        )
-        .with_cause(
-            "Classes are managed identity objects; their constructors produce managed handles.",
-        )
-        .with_fix(
-            "use_managed_class_binding",
-            format!("Declare `{binding}` with `let` instead of `local`."),
-            "machine-applicable",
-        ),
-    );
+    analyzer.diagnostics.push(error_cause_fix(
+        code::LOCAL_CLASS_BINDING,
+        format!("class binding `{binding}` cannot be local."),
+        span,
+        "class bound as local",
+        "Classes are managed identity objects; their constructors produce managed handles.",
+        "use_managed_class_binding",
+        format!("Declare `{binding}` with `let` instead of `local`."),
+        "machine-applicable",
+    ));
 }
 
 pub(super) fn invalid_manage_operand_diagnostic(
@@ -1991,20 +1946,15 @@ pub(super) fn invalid_manage_operand_diagnostic(
     cause: impl Into<String>,
     span: crate::diagnostic::Span,
 ) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::INVALID_MANAGE_OPERAND,
-            "`manage` requires a local binding.",
-            span,
-            "not a local binding",
-        )
-        .with_cause(cause)
-        .with_fix(
-            "remove_manage_or_create_local",
-            "Remove `manage`, or create the value as `local` at its origin.",
-            "manual",
-        ),
-    );
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::INVALID_MANAGE_OPERAND,
+        "`manage` requires a local binding.",
+        span,
+        "not a local binding",
+        cause,
+        "remove_manage_or_create_local",
+        "Remove `manage`, or create the value as `local` at its origin.",
+    ));
 }
 
 pub(super) fn invalid_take_operand_diagnostic(
@@ -2012,20 +1962,15 @@ pub(super) fn invalid_take_operand_diagnostic(
     cause: impl Into<String>,
     span: crate::diagnostic::Span,
 ) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::INVALID_TAKE_OPERAND,
-            "`take` requires a local value.",
-            span,
-            "not a local value",
-        )
-        .with_cause(cause)
-        .with_fix(
-            "use_local_or_read",
-            "Pass a local value with `take`, or use `read`/`mut` for managed values.",
-            "manual",
-        ),
-    );
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::INVALID_TAKE_OPERAND,
+        "`take` requires a local value.",
+        span,
+        "not a local value",
+        cause,
+        "use_local_or_read",
+        "Pass a local value with `take`, or use `read`/`mut` for managed values.",
+    ));
 }
 
 pub(super) fn resource_capture_diagnostic(
@@ -2050,23 +1995,18 @@ pub(super) fn fresh_return_diagnostic(
     name: &str,
     span: crate::diagnostic::Span,
 ) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::FRESH_RETURN_NOT_CLEAN,
-            format!(
-                "fresh function `{}` returns non-fresh value `{name}`.",
-                function_name
-            ),
-            span,
-            "non-fresh value returned",
-        )
-        .with_cause("A `fresh` return must be newly created or a clean local binding created inside the function.")
-        .with_fix(
-            "return_fresh_value",
-            "Return a struct constructor, fresh call, or clean local binding created inside the function.",
-            "manual",
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::FRESH_RETURN_NOT_CLEAN,
+        format!(
+            "fresh function `{}` returns non-fresh value `{name}`.",
+            function_name
         ),
-    );
+        span,
+        "non-fresh value returned",
+        "A `fresh` return must be newly created or a clean local binding created inside the function.",
+        "return_fresh_value",
+        "Return a struct constructor, fresh call, or clean local binding created inside the function.",
+    ));
 }
 
 pub(super) fn freshness_unknown_diagnostic(
@@ -2092,23 +2032,18 @@ pub(super) fn invalid_fresh_return_type_diagnostic(
     function: &FunctionDecl,
     target: &TypeRef,
 ) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::INVALID_FRESH_RETURN_TYPE,
-            format!(
-                "function `{}` declares `fresh {}` but `{}` is not a struct.",
-                function.name, target.name, target.name
-            ),
-            target.span.clone(),
-            "invalid fresh type",
-        )
-        .with_cause("RSScript `fresh` is a shallow guarantee for newly created struct shells.")
-        .with_fix(
-            "use_struct_fresh_type",
-            "Return a struct type as fresh, or remove `fresh` from this return contract.",
-            "manual",
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::INVALID_FRESH_RETURN_TYPE,
+        format!(
+            "function `{}` declares `fresh {}` but `{}` is not a struct.",
+            function.name, target.name, target.name
         ),
-    );
+        target.span.clone(),
+        "invalid fresh type",
+        "RSScript `fresh` is a shallow guarantee for newly created struct shells.",
+        "use_struct_fresh_type",
+        "Return a struct type as fresh, or remove `fresh` from this return contract.",
+    ));
 }
 
 pub(super) fn trusted_fresh_ident(analyzer: &Analyzer<'_>, name: &str) -> bool {
