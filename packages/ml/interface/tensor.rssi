@@ -1,0 +1,41 @@
+features: native, local
+
+// Native tensor: a packed, row-major `f32` buffer plus a shape, backed by a
+// runtime kernel (slice 1 of the ML-perf work). The VM orchestrates; native code
+// computes. Both backends call the same `rsscript_runtime::tensor_*` functions,
+// so results are bit-identical. Floats are `f64` in RSScript but stored as `f32`
+// in a tensor; values are narrowed on the way in and widened on the way out.
+
+struct TensorError
+struct Tensor
+
+// Build a tensor from a flat row-major `Float` buffer and a shape. Errors if the
+// shape has a negative dimension or its element count != `data.len()`.
+pub native fn Tensor.from_f32_slice(
+    data: read List<Float>,
+    shape: read List<Int>,
+) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+// Read the packed buffer back out (row-major), widened to `Float`.
+pub native fn Tensor.to_f32_slice(tensor: read Tensor) -> Result<fresh List<Float>, TensorError>
+    effects(native)
+
+// The tensor's shape.
+pub native fn Tensor.shape(tensor: read Tensor) -> Result<fresh List<Int>, TensorError>
+    effects(native)
+
+// The number of dimensions.
+pub native fn Tensor.rank(tensor: read Tensor) -> Int
+    effects(native)
+
+// 2-D × 2-D matrix multiply, contracting the inner dims: (m, k) × (k, n) -> (m,
+// n). Errors on non-rank-2 operands or an inner-dimension mismatch.
+pub native fn Tensor.matmul(
+    a: read Tensor,
+    b: read Tensor,
+) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+pub fn TensorError.message(error: read TensorError) -> fresh String
+    effects(pure)

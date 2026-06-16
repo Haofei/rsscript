@@ -2111,6 +2111,7 @@ dependencies = [
  "reir",
  "rss-native-abi",
  "rss-testgen",
+ "rsscript-runtime",
  "serde",
  "serde_json",
  "serde_yaml_ng",

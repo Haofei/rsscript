@@ -27,3 +27,5 @@ mod misc;
 mod net_io;
 #[path = "vm_eval_parity/system.rs"]
 mod system;
+#[path = "vm_eval_parity/tensor.rs"]
+mod tensor;

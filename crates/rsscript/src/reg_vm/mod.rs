@@ -2075,6 +2075,12 @@ enum RegIntrinsic {
     ChannelReceiver,
     ChannelSender,
     ChannelErrorMessage,
+    TensorFromF32Slice,
+    TensorToF32Slice,
+    TensorShape,
+    TensorRank,
+    TensorMatmul,
+    TensorErrorMessage,
     CharCompare,
     CharFromCode,
     CharIsAlphanumeric,
@@ -5308,6 +5314,12 @@ fn qualified_intrinsic(namespace: &str, name: &str) -> Option<RegIntrinsic> {
         ("Channel", "receiver") => Some(RegIntrinsic::ChannelReceiver),
         ("Channel", "sender") => Some(RegIntrinsic::ChannelSender),
         ("ChannelError", "message") => Some(RegIntrinsic::ChannelErrorMessage),
+        ("Tensor", "from_f32_slice") => Some(RegIntrinsic::TensorFromF32Slice),
+        ("Tensor", "to_f32_slice") => Some(RegIntrinsic::TensorToF32Slice),
+        ("Tensor", "shape") => Some(RegIntrinsic::TensorShape),
+        ("Tensor", "rank") => Some(RegIntrinsic::TensorRank),
+        ("Tensor", "matmul") => Some(RegIntrinsic::TensorMatmul),
+        ("TensorError", "message") => Some(RegIntrinsic::TensorErrorMessage),
         ("Char", "compare") => Some(RegIntrinsic::CharCompare),
         ("Char", "from_code") => Some(RegIntrinsic::CharFromCode),
         ("Char", "is_alphanumeric") => Some(RegIntrinsic::CharIsAlphanumeric),
@@ -6155,6 +6167,13 @@ struct RegVm {
     websockets: HashMap<i64, TcpStream>,
     next_pool_id: i64,
     pools: HashMap<i64, VmResourcePool>,
+    // Native tensor handles. The VM stores the real `RssTensor` (the same type
+    // the AOT backend lowers to) keyed by id and carries an opaque
+    // `VmValue::Native { type_name: "Tensor", id }` handle through the program.
+    // The intrinsic handlers call the exact `rsscript_runtime::tensor_*` kernels
+    // the lowered code calls, so VM<->compiled results are bit-identical.
+    next_tensor_id: i64,
+    tensors: HashMap<i64, rsscript_runtime::RssTensor>,
     /// Tier-0 JIT: when set, JIT-eligible functions run via the specializing
     /// executor `run_jit` (which reuses the interpreter's value/register
     /// semantics, so it is gap-free by construction).
@@ -6475,6 +6494,8 @@ impl RegVm {
             websockets: HashMap::new(),
             next_pool_id: 1,
             pools: HashMap::new(),
+            next_tensor_id: 1,
+            tensors: HashMap::new(),
             jit_enabled: false,
             jit_force_all: false,
             #[cfg(feature = "native-jit")]
@@ -8751,6 +8772,40 @@ impl RegVm {
             .ok_or_else(|| EvalError::Runtime(format!("unknown channel id `{id}`.")))
     }
 
+    /// Store a native tensor handle and return the opaque `VmValue::Native`
+    /// carried through the program (mirrors `task_handle_value`).
+    fn store_tensor(&mut self, tensor: rsscript_runtime::RssTensor) -> VmValue {
+        let id = self.next_tensor_id;
+        self.next_tensor_id = self.next_tensor_id.saturating_add(1);
+        self.tensors.insert(id, tensor);
+        VmValue::Native(Rc::new(VmNative {
+            type_name: Rc::from("Tensor"),
+            id,
+        }))
+    }
+
+    /// Resolve a `Tensor` handle to the stored `RssTensor` (cloned — the buffer is
+    /// `Rc`-shared, so this is a cheap pointer bump, not a data copy).
+    fn expect_tensor_ref(
+        &self,
+        value: &VmValue,
+    ) -> Result<rsscript_runtime::RssTensor, EvalError> {
+        let id = match value {
+            VmValue::Native(native) if native.type_name.as_ref() == "Tensor" => native.id,
+            VmValue::Managed(inner) => return self.expect_tensor_ref(&inner.borrow()),
+            other => {
+                return Err(EvalError::Runtime(format!(
+                    "reg VM expected Tensor, got `{}`.",
+                    other.display()
+                )));
+            }
+        };
+        self.tensors
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| EvalError::Runtime(format!("unknown tensor id `{id}`.")))
+    }
+
     fn channel_send(&mut self, sender: VmSender, value: VmValue) -> Result<VmValue, VmValue> {
         if sender.closed {
             return Err(channel_error_value("channel sender closed"));
@@ -9152,8 +9207,59 @@ impl RegVm {
             | RegIntrinsic::HttpErrorMessage
             | RegIntrinsic::PoolErrorMessage
             | RegIntrinsic::TcpErrorMessage
+            | RegIntrinsic::TensorErrorMessage
             | RegIntrinsic::WebSocketErrorMessage => {
                 read_field_ref(intrinsic_arg(&self.stack, base, args, 0)?, "message")
+            }
+            RegIntrinsic::TensorFromF32Slice => {
+                let data = expect_float_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let shape = expect_int_list_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(json_result(
+                    match rsscript_runtime::tensor_from_f32_slice(&data, &shape) {
+                        Ok(tensor) => Ok(self.store_tensor(tensor)),
+                        Err(error) => Err(tensor_error_value(
+                            rsscript_runtime::tensor_error_message(&error),
+                        )),
+                    },
+                ))
+            }
+            RegIntrinsic::TensorToF32Slice => {
+                let tensor = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(json_result(
+                    match rsscript_runtime::tensor_to_f32_slice(&tensor) {
+                        Ok(values) => Ok(VmValue::List(Rc::new(RefCell::new(
+                            values.into_iter().map(VmValue::Float).collect(),
+                        )))),
+                        Err(error) => Err(tensor_error_value(
+                            rsscript_runtime::tensor_error_message(&error),
+                        )),
+                    },
+                ))
+            }
+            RegIntrinsic::TensorShape => {
+                let tensor = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(json_result(match rsscript_runtime::tensor_shape(&tensor) {
+                    Ok(dims) => Ok(VmValue::List(Rc::new(RefCell::new(
+                        dims.into_iter().map(VmValue::Int).collect(),
+                    )))),
+                    Err(error) => Err(tensor_error_value(
+                        rsscript_runtime::tensor_error_message(&error),
+                    )),
+                }))
+            }
+            RegIntrinsic::TensorRank => {
+                let tensor = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Int(rsscript_runtime::tensor_rank(&tensor)))
+            }
+            RegIntrinsic::TensorMatmul => {
+                let a = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let b = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(json_result(match rsscript_runtime::tensor_matmul(&a, &b) {
+                    Ok(tensor) => Ok(self.store_tensor(tensor)),
+                    Err(error) => Err(tensor_error_value(
+                        rsscript_runtime::tensor_error_message(&error),
+                    )),
+                }))
             }
             RegIntrinsic::CharCompare | RegIntrinsic::CharFromCode | RegIntrinsic::CharIsAlphanumeric | RegIntrinsic::CharIsAlpha | RegIntrinsic::CharIsDigit | RegIntrinsic::CharIsLower | RegIntrinsic::CharIsUpper | RegIntrinsic::CharIsWhitespace | RegIntrinsic::CharToCode | RegIntrinsic::CharToLower | RegIntrinsic::CharToString | RegIntrinsic::CharToUpper => self.exec_char_intrinsics(unit, intrinsic, args, base, next_base),
             RegIntrinsic::ClockNow => Ok(instant_value(clock_system_unix_ms())),
@@ -13700,6 +13806,16 @@ fn expect_string_list_ref(value: &VmValue) -> Result<Vec<String>, EvalError> {
         .iter()
         .map(|value| expect_string_ref(value).map(str::to_string))
         .collect()
+}
+
+fn expect_float_list_ref(value: &VmValue) -> Result<Vec<f64>, EvalError> {
+    let list = expect_list_ref(value)?;
+    list.borrow().iter().map(expect_float_ref).collect()
+}
+
+fn expect_int_list_ref(value: &VmValue) -> Result<Vec<i64>, EvalError> {
+    let list = expect_list_ref(value)?;
+    list.borrow().iter().map(expect_int_ref).collect()
 }
 
 fn expect_bool_ref(value: &VmValue) -> Result<bool, EvalError> {
