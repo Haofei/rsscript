@@ -9714,8 +9714,8 @@ impl RegVm {
                     .iter()
                     .map(expect_float_list_ref)
                     .collect::<Result<_, _>>()?;
-                let out_len = expect_int_ref(intrinsic_arg(&self.stack, base, args, 3)?)? as usize;
-                let threads = expect_int_ref(intrinsic_arg(&self.stack, base, args, 4)?)? as usize;
+                let out_len = expect_int_ref(intrinsic_arg(&self.stack, base, args, 3)?)?;
+                let threads = expect_int_ref(intrinsic_arg(&self.stack, base, args, 4)?)?;
                 Ok(json_result(
                     match rsscript_runtime::tensor_gpu_run_msl(
                         &source, &fn_name, &inputs, out_len, threads,

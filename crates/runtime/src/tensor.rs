@@ -290,9 +290,14 @@ pub fn tensor_gpu_run_msl(
     source: &str,
     fn_name: &str,
     inputs: &[Vec<f64>],
-    out_len: usize,
-    threads: usize,
+    out_len: i64,
+    threads: i64,
 ) -> Result<Vec<f64>, TensorError> {
+    // int params are i64 to match the rss runtime-ABI convention (the AOT backend
+    // emits i64 literals for Int args; a `usize` param triggers an E0308 type
+    // mismatch in generated Rust). Narrow to usize at the FFI boundary.
+    let out_len = out_len.max(0) as usize;
+    let threads = threads.max(0) as usize;
     // Narrow each host f64 input buffer to f32 for upload.
     let f32_inputs: Vec<Vec<f32>> = inputs
         .iter()
