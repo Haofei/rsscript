@@ -2137,6 +2137,12 @@ enum RegIntrinsic {
     TensorXor,
     TensorBitcastF32ToI32,
     TensorBitcastI32ToF32,
+    // nn (slice F)
+    TensorIota,
+    TensorOneHot,
+    TensorSoftmax,
+    TensorLogSoftmax,
+    TensorCrossEntropy,
     TensorErrorMessage,
     CharCompare,
     CharFromCode,
@@ -5433,6 +5439,12 @@ fn qualified_intrinsic(namespace: &str, name: &str) -> Option<RegIntrinsic> {
         ("Tensor", "bit_xor") => Some(RegIntrinsic::TensorXor),
         ("Tensor", "bitcast_f32_to_i32") => Some(RegIntrinsic::TensorBitcastF32ToI32),
         ("Tensor", "bitcast_i32_to_f32") => Some(RegIntrinsic::TensorBitcastI32ToF32),
+        // nn (slice F)
+        ("Tensor", "iota") => Some(RegIntrinsic::TensorIota),
+        ("Tensor", "one_hot") => Some(RegIntrinsic::TensorOneHot),
+        ("Tensor", "softmax") => Some(RegIntrinsic::TensorSoftmax),
+        ("Tensor", "log_softmax") => Some(RegIntrinsic::TensorLogSoftmax),
+        ("Tensor", "cross_entropy") => Some(RegIntrinsic::TensorCrossEntropy),
         ("TensorError", "message") => Some(RegIntrinsic::TensorErrorMessage),
         ("Char", "compare") => Some(RegIntrinsic::CharCompare),
         ("Char", "from_code") => Some(RegIntrinsic::CharFromCode),
@@ -9653,6 +9665,55 @@ impl RegVm {
                     _ => rsscript_runtime::tensor_bitcast_i32_to_f32(&t),
                 };
                 Ok(self.store_tensor(result))
+            }
+            // nn (slice F)
+            RegIntrinsic::TensorIota => {
+                let n = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(json_result(match rsscript_runtime::tensor_iota(n) {
+                    Ok(tensor) => Ok(self.store_tensor(tensor)),
+                    Err(error) => Err(tensor_error_value(
+                        rsscript_runtime::tensor_error_message(&error),
+                    )),
+                }))
+            }
+            RegIntrinsic::TensorOneHot => {
+                let indices = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let num_classes = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(json_result(
+                    match rsscript_runtime::tensor_one_hot(&indices, num_classes) {
+                        Ok(tensor) => Ok(self.store_tensor(tensor)),
+                        Err(error) => Err(tensor_error_value(
+                            rsscript_runtime::tensor_error_message(&error),
+                        )),
+                    },
+                ))
+            }
+            RegIntrinsic::TensorSoftmax | RegIntrinsic::TensorLogSoftmax => {
+                let t = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let axis = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let result = match intrinsic {
+                    RegIntrinsic::TensorSoftmax => rsscript_runtime::tensor_softmax(&t, axis),
+                    _ => rsscript_runtime::tensor_log_softmax(&t, axis),
+                };
+                Ok(json_result(match result {
+                    Ok(tensor) => Ok(self.store_tensor(tensor)),
+                    Err(error) => Err(tensor_error_value(
+                        rsscript_runtime::tensor_error_message(&error),
+                    )),
+                }))
+            }
+            RegIntrinsic::TensorCrossEntropy => {
+                let logits = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let targets = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let axis = expect_int_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
+                Ok(json_result(
+                    match rsscript_runtime::tensor_cross_entropy(&logits, &targets, axis) {
+                        Ok(tensor) => Ok(self.store_tensor(tensor)),
+                        Err(error) => Err(tensor_error_value(
+                            rsscript_runtime::tensor_error_message(&error),
+                        )),
+                    },
+                ))
             }
             RegIntrinsic::CharCompare | RegIntrinsic::CharFromCode | RegIntrinsic::CharIsAlphanumeric | RegIntrinsic::CharIsAlpha | RegIntrinsic::CharIsDigit | RegIntrinsic::CharIsLower | RegIntrinsic::CharIsUpper | RegIntrinsic::CharIsWhitespace | RegIntrinsic::CharToCode | RegIntrinsic::CharToLower | RegIntrinsic::CharToString | RegIntrinsic::CharToUpper => self.exec_char_intrinsics(unit, intrinsic, args, base, next_base),
             RegIntrinsic::ClockNow => Ok(instant_value(clock_system_unix_ms())),

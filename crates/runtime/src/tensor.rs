@@ -1463,6 +1463,213 @@ pub fn tensor_bitcast_f32_to_i32(t: &RssTensor) -> RssTensor {
 pub fn tensor_bitcast_i32_to_f32(t: &RssTensor) -> RssTensor {
     tensor_unary_elementwise(t, DType::F32, |x| f32::from_bits((x as i32) as u32))
 }
+
+// ---------------------------------------------------------------------------
+// nn primitives (slice F).
+//
+// Forward-only NN building blocks: `iota`/`one_hot` build index/label tensors,
+// and `softmax`/`log_softmax`/`cross_entropy` are written as DIRECT native loops
+// over the reduced axis (not chains of exp/sum/div intrinsics) for numerical
+// stability and clarity. softmax/log_softmax subtract the per-slice max before
+// exponentiating; log_softmax uses the log-sum-exp form `x - max - log(sum(exp(x
+// - max)))` (no separate exp/divide). cross_entropy is the mean over the batch of
+// the negative log-softmax at each target class index. The math matches what
+// chaining the stable ops would produce; both backends call these exact
+// functions so the reg-VM and AOT results agree bit-for-bit. All output F32.
+// ---------------------------------------------------------------------------
+
+/// 1-D ramp `[0, 1, ..., n-1]`, dtype I32. Errors if `n < 0`.
+pub fn tensor_iota(n: i64) -> Result<RssTensor, TensorError> {
+    if n < 0 {
+        return Err(TensorError::new(format!(
+            "iota length must be non-negative, got {n}"
+        )));
+    }
+    let len = n as usize;
+    let mut out = vec![0.0f32; len];
+    for (i, slot) in out.iter_mut().enumerate() {
+        *slot = i as f32;
+    }
+    Ok(RssTensor {
+        data: Rc::new(out),
+        shape: vec![len],
+        dtype: DType::I32,
+    })
+}
+
+/// One-hot encode an integer-valued tensor: for input shape `S`, the output has
+/// shape `S ++ [num_classes]`, dtype F32, with `1.0` at the class index and `0.0`
+/// elsewhere. Index values are read from the f32 storage and ROUNDED to the
+/// nearest integer. Errors if `num_classes <= 0` or any index falls outside
+/// `[0, num_classes)`.
+pub fn tensor_one_hot(indices: &RssTensor, num_classes: i64) -> Result<RssTensor, TensorError> {
+    if num_classes <= 0 {
+        return Err(TensorError::new(format!(
+            "one_hot num_classes must be positive, got {num_classes}"
+        )));
+    }
+    let classes = num_classes as usize;
+    let n = indices.data.len();
+    let mut out = vec![0.0f32; n * classes];
+    for (pos, &raw) in indices.data.iter().enumerate() {
+        let c = raw.round() as i64;
+        if c < 0 || c >= num_classes {
+            return Err(TensorError::new(format!(
+                "one_hot index {c} (at position {pos}) out of range for num_classes {num_classes}"
+            )));
+        }
+        out[pos * classes + c as usize] = 1.0;
+    }
+    let mut out_shape = indices.shape.clone();
+    out_shape.push(classes);
+    Ok(RssTensor {
+        data: Rc::new(out),
+        shape: out_shape,
+        dtype: DType::F32,
+    })
+}
+
+/// Numerically-stable softmax along `axis`: subtract the per-slice max, exponentiate,
+/// and divide by the per-slice sum. Same shape as the input, dtype F32. Errors on an
+/// out-of-range axis. Written as a direct loop over the contiguous axis layout.
+pub fn tensor_softmax(t: &RssTensor, axis: i64) -> Result<RssTensor, TensorError> {
+    let axis = check_axis(&t.shape, axis, "softmax")?;
+    let axis_len = t.shape[axis];
+    let outer: usize = t.shape[..axis].iter().product();
+    let inner: usize = t.shape[axis + 1..].iter().product();
+    let data = t.data.as_ref();
+    let mut out = vec![0.0f32; data.len()];
+    for o in 0..outer {
+        for i in 0..inner {
+            // One softmax slice walks `axis_len` elements at stride `inner`.
+            let base = o * axis_len * inner + i;
+            let mut max = f32::NEG_INFINITY;
+            for a in 0..axis_len {
+                max = max.max(data[base + a * inner]);
+            }
+            let mut sum = 0.0f32;
+            for a in 0..axis_len {
+                let e = (data[base + a * inner] - max).exp();
+                out[base + a * inner] = e;
+                sum += e;
+            }
+            for a in 0..axis_len {
+                out[base + a * inner] /= sum;
+            }
+        }
+    }
+    Ok(RssTensor {
+        data: Rc::new(out),
+        shape: t.shape.clone(),
+        dtype: DType::F32,
+    })
+}
+
+/// Numerically-stable log-softmax along `axis` in log-sum-exp form:
+/// `x - max - log(sum(exp(x - max)))` (no separate exp/divide). Same shape as the
+/// input, dtype F32. Errors on an out-of-range axis.
+pub fn tensor_log_softmax(t: &RssTensor, axis: i64) -> Result<RssTensor, TensorError> {
+    let axis = check_axis(&t.shape, axis, "log_softmax")?;
+    let axis_len = t.shape[axis];
+    let outer: usize = t.shape[..axis].iter().product();
+    let inner: usize = t.shape[axis + 1..].iter().product();
+    let data = t.data.as_ref();
+    let mut out = vec![0.0f32; data.len()];
+    for o in 0..outer {
+        for i in 0..inner {
+            let base = o * axis_len * inner + i;
+            let mut max = f32::NEG_INFINITY;
+            for a in 0..axis_len {
+                max = max.max(data[base + a * inner]);
+            }
+            let mut sum = 0.0f32;
+            for a in 0..axis_len {
+                sum += (data[base + a * inner] - max).exp();
+            }
+            let log_sum = sum.ln();
+            for a in 0..axis_len {
+                out[base + a * inner] = data[base + a * inner] - max - log_sum;
+            }
+        }
+    }
+    Ok(RssTensor {
+        data: Rc::new(out),
+        shape: t.shape.clone(),
+        dtype: DType::F32,
+    })
+}
+
+/// Cross-entropy loss for a rank-2 `logits` tensor `[N, C]` (where `axis` is the
+/// class axis, normally `1`) against a rank-1 integer `targets` tensor `[N]` of
+/// CLASS INDICES (not one-hot). Computes the MEAN over the `N` rows of
+/// `-log_softmax(logits)[i, targets[i]]`, returning a SCALAR tensor (shape `[]`),
+/// dtype F32. The log-softmax is computed inline in the stable log-sum-exp form.
+/// Errors if `logits` is not rank-2, `axis` is not the class axis (must be `1`, the
+/// trailing axis of a `[N, C]` tensor), `targets` is not rank-1 of length `N`, or
+/// any target index is outside `[0, C)`. An empty batch (`N == 0`) yields `0.0`.
+pub fn tensor_cross_entropy(
+    logits: &RssTensor,
+    targets: &RssTensor,
+    axis: i64,
+) -> Result<RssTensor, TensorError> {
+    if logits.shape.len() != 2 {
+        return Err(TensorError::new(format!(
+            "cross_entropy requires rank-2 logits [N, C], got shape {:?}",
+            logits.shape
+        )));
+    }
+    // The class axis must be the trailing axis (axis 1) of the [N, C] tensor.
+    if axis != 1 {
+        return Err(TensorError::new(format!(
+            "cross_entropy class axis must be 1 for rank-2 logits [N, C], got {axis}"
+        )));
+    }
+    if targets.shape.len() != 1 {
+        return Err(TensorError::new(format!(
+            "cross_entropy requires a rank-1 targets tensor [N], got shape {:?}",
+            targets.shape
+        )));
+    }
+    let n = logits.shape[0];
+    let classes = logits.shape[1];
+    if targets.shape[0] != n {
+        return Err(TensorError::new(format!(
+            "cross_entropy targets length {} does not match logits batch {n}",
+            targets.shape[0]
+        )));
+    }
+    let data = logits.data.as_ref();
+    let tgt = targets.data.as_ref();
+    let mut total = 0.0f32;
+    for (row, &target_raw) in tgt.iter().enumerate().take(n) {
+        let raw = target_raw.round() as i64;
+        if raw < 0 || raw as usize >= classes {
+            return Err(TensorError::new(format!(
+                "cross_entropy target {raw} (at row {row}) out of range for {classes} classes"
+            )));
+        }
+        let base = row * classes;
+        // Stable log-sum-exp over this row, then -log_softmax at the target class.
+        let mut max = f32::NEG_INFINITY;
+        for c in 0..classes {
+            max = max.max(data[base + c]);
+        }
+        let mut sum = 0.0f32;
+        for c in 0..classes {
+            sum += (data[base + c] - max).exp();
+        }
+        let target_logit = data[base + raw as usize];
+        // -log_softmax[target] = -(x_t - max - log(sum)) = (max + log(sum)) - x_t.
+        total += max + sum.ln() - target_logit;
+    }
+    let mean = if n == 0 { 0.0 } else { total / n as f32 };
+    Ok(RssTensor {
+        data: Rc::new(vec![mean]),
+        shape: vec![],
+        dtype: DType::F32,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2281,5 +2488,128 @@ mod tests {
             tensor_to_f32_slice(&back).unwrap(),
             tensor_to_f32_slice(&t).unwrap()
         );
+    }
+
+    // --- nn primitives (slice F) ---
+
+    #[test]
+    fn iota_basic_and_rejects_negative() {
+        let r = tensor_iota(4).unwrap();
+        assert_eq!(tensor_shape(&r).unwrap(), vec![4]);
+        assert_eq!(tensor_dtype_code(&r), 1); // I32
+        assert_eq!(tensor_to_f32_slice(&r).unwrap(), vec![0.0, 1.0, 2.0, 3.0]);
+        assert_eq!(tensor_to_f32_slice(&tensor_iota(0).unwrap()).unwrap(), Vec::<f64>::new());
+        assert!(tensor_error_message(&tensor_iota(-1).unwrap_err()).contains("non-negative"));
+    }
+
+    #[test]
+    fn one_hot_correctness_and_out_of_range() {
+        // indices [1, 0, 2], 3 classes -> 3x3 identity-ish.
+        let idx = tensor_cast_i32(&tensor_from_f32_slice(&[1.0, 0.0, 2.0], &[3]).unwrap());
+        let oh = tensor_one_hot(&idx, 3).unwrap();
+        assert_eq!(tensor_shape(&oh).unwrap(), vec![3, 3]);
+        assert_eq!(tensor_dtype_code(&oh), 0); // F32
+        assert_eq!(
+            tensor_to_f32_slice(&oh).unwrap(),
+            vec![0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+        );
+        // Higher-rank indices: shape [2,2] -> [2,2,2].
+        let idx2 = tensor_cast_i32(&tensor_from_f32_slice(&[0.0, 1.0, 1.0, 0.0], &[2, 2]).unwrap());
+        let oh2 = tensor_one_hot(&idx2, 2).unwrap();
+        assert_eq!(tensor_shape(&oh2).unwrap(), vec![2, 2, 2]);
+        assert_eq!(
+            tensor_to_f32_slice(&oh2).unwrap(),
+            vec![1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0]
+        );
+        // Out-of-range index errors.
+        let bad = tensor_cast_i32(&tensor_from_f32_slice(&[0.0, 3.0], &[2]).unwrap());
+        assert!(tensor_error_message(&tensor_one_hot(&bad, 3).unwrap_err()).contains("out of range"));
+        // num_classes <= 0 errors.
+        assert!(tensor_error_message(&tensor_one_hot(&idx, 0).unwrap_err()).contains("positive"));
+    }
+
+    #[test]
+    fn softmax_sums_to_one() {
+        // [[1,2,3],[1,1,1]] softmax along axis 1.
+        let t = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 1.0, 1.0, 1.0], &[2, 3]).unwrap();
+        let s = tensor_softmax(&t, 1).unwrap();
+        assert_eq!(tensor_shape(&s).unwrap(), vec![2, 3]);
+        assert_eq!(tensor_dtype_code(&s), 0);
+        let got = tensor_to_f32_slice(&s).unwrap();
+        // Each row sums to 1.
+        for row in 0..2 {
+            let sum: f64 = got[row * 3..row * 3 + 3].iter().sum();
+            assert!((sum - 1.0).abs() < 1e-6, "row {row} sum {sum}");
+        }
+        // Uniform row -> all 1/3.
+        for v in &got[3..6] {
+            assert!((v - 1.0 / 3.0).abs() < 1e-6);
+        }
+        // softmax along axis 0 also sums to 1 per column.
+        let s0 = tensor_softmax(&t, 0).unwrap();
+        let g0 = tensor_to_f32_slice(&s0).unwrap();
+        for col in 0..3 {
+            let sum = g0[col] + g0[3 + col];
+            assert!((sum - 1.0).abs() < 1e-6);
+        }
+        assert!(tensor_error_message(&tensor_softmax(&t, 2).unwrap_err()).contains("out of range"));
+    }
+
+    #[test]
+    fn log_softmax_matches_log_of_softmax() {
+        let t = tensor_from_f32_slice(&[0.5, -1.0, 2.0, 3.0, 0.0, -2.0], &[2, 3]).unwrap();
+        let ls = tensor_to_f32_slice(&tensor_log_softmax(&t, 1).unwrap()).unwrap();
+        let sm = tensor_to_f32_slice(&tensor_softmax(&t, 1).unwrap()).unwrap();
+        for (l, s) in ls.iter().zip(sm.iter()) {
+            assert!((l - s.ln()).abs() < 1e-5, "{l} vs ln({s})");
+        }
+    }
+
+    #[test]
+    fn cross_entropy_known_case() {
+        // logits [[1,2,3]], target class 2.
+        // log-sum-exp: max=3, sum=exp(-2)+exp(-1)+exp(0)=0.135335+0.367879+1=1.503214
+        // log(sum)=0.407606 ; loss = max + log(sum) - x_target = 3 + 0.407606 - 3 = 0.407606
+        let logits = tensor_from_f32_slice(&[1.0, 2.0, 3.0], &[1, 3]).unwrap();
+        let targets = tensor_cast_i32(&tensor_from_f32_slice(&[2.0], &[1]).unwrap());
+        let ce = tensor_cross_entropy(&logits, &targets, 1).unwrap();
+        assert_eq!(tensor_shape(&ce).unwrap(), Vec::<i64>::new()); // scalar
+        assert_eq!(tensor_dtype_code(&ce), 0);
+        let v = tensor_to_f32_slice(&ce).unwrap()[0];
+        assert!((v - 0.407606).abs() < 1e-4, "got {v}");
+        // Two rows: mean of the per-row losses.
+        let l2 = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 3.0, 2.0, 1.0], &[2, 3]).unwrap();
+        let t2 = tensor_cast_i32(&tensor_from_f32_slice(&[2.0, 0.0], &[2]).unwrap());
+        let ce2 = tensor_to_f32_slice(&tensor_cross_entropy(&l2, &t2, 1).unwrap()).unwrap()[0];
+        // Both rows symmetric -> each loss 0.407606 -> mean same.
+        assert!((ce2 - 0.407606).abs() < 1e-4, "got {ce2}");
+        // Matches -log_softmax[target] from the log_softmax kernel.
+        let ls = tensor_to_f32_slice(&tensor_log_softmax(&logits, 1).unwrap()).unwrap();
+        assert!((v - (-ls[2])).abs() < 1e-5);
+    }
+
+    #[test]
+    fn cross_entropy_rejects_bad_args() {
+        let logits = tensor_from_f32_slice(&[1.0, 2.0, 3.0], &[1, 3]).unwrap();
+        let t = tensor_cast_i32(&tensor_from_f32_slice(&[0.0], &[1]).unwrap());
+        // wrong axis.
+        assert!(tensor_error_message(&tensor_cross_entropy(&logits, &t, 0).unwrap_err())
+            .contains("class axis must be 1"));
+        // non-rank-2 logits.
+        let v = tensor_from_f32_slice(&[1.0, 2.0, 3.0], &[3]).unwrap();
+        assert!(tensor_error_message(&tensor_cross_entropy(&v, &t, 1).unwrap_err())
+            .contains("rank-2"));
+        // targets length mismatch.
+        let t2 = tensor_cast_i32(&tensor_from_f32_slice(&[0.0, 1.0], &[2]).unwrap());
+        assert!(tensor_error_message(&tensor_cross_entropy(&logits, &t2, 1).unwrap_err())
+            .contains("does not match logits batch"));
+        // out-of-range target.
+        let bad = tensor_cast_i32(&tensor_from_f32_slice(&[5.0], &[1]).unwrap());
+        assert!(tensor_error_message(&tensor_cross_entropy(&logits, &bad, 1).unwrap_err())
+            .contains("out of range"));
+        // rank-2 targets rejected.
+        let t3 = tensor_cast_i32(&tensor_from_f32_slice(&[0.0], &[1, 1]).unwrap());
+        assert!(tensor_error_message(&tensor_cross_entropy(&logits, &t3, 1).unwrap_err())
+            .contains("rank-1"));
     }
 }

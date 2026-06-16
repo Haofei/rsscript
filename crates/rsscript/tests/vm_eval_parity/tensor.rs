@@ -1378,3 +1378,57 @@ fn main() -> Result<Unit, TensorError> {
         source,
     );
 }
+
+// --- nn primitives (slice F) ---
+
+#[test]
+fn parity_tensor_nn_primitives() {
+    let source = r#"
+features: native, local
+
+fn dump(t: read Tensor) -> Result<Unit, TensorError> {
+    Log.write(message: read String.from_int(value: Tensor.dtype_code(t: read t)))
+    let dims = Tensor.shape(tensor: read t)?
+    let mut di = 0
+    while di < List.len(list: read dims) {
+        Log.write(message: read String.from_int(value: List.get(list: read dims, index: di)))
+        di = di + 1
+    }
+    let values = Tensor.to_f32_slice(tensor: read t)?
+    let mut index = 0
+    while index < List.len(list: read values) {
+        Log.write(message: read Float.to_string(value: read List.get(list: read values, index: index)))
+        index = index + 1
+    }
+    return Ok(Unit)
+}
+
+fn main() -> Result<Unit, TensorError> {
+    // iota -> [0,1,2,3], I32.
+    let ramp = Tensor.iota(n: 4)?
+    dump(t: read ramp)?
+    // one_hot of [1,0,2] with 3 classes.
+    let idxf = Tensor.from_f32_slice(data: read [1.0, 0.0, 2.0], shape: read [3])?
+    let idx = Tensor.cast_i32(t: read idxf)
+    let oh = Tensor.one_hot(indices: read idx, num_classes: 3)?
+    dump(t: read oh)?
+    // softmax + log_softmax along axis 1 of a 2x3.
+    let logits = Tensor.from_f32_slice(data: read [1.0, 2.0, 3.0, 0.5, 0.5, 0.5], shape: read [2, 3])?
+    let sm = Tensor.softmax(t: read logits, axis: 1)?
+    dump(t: read sm)?
+    let lsm = Tensor.log_softmax(t: read logits, axis: 1)?
+    dump(t: read lsm)?
+    // cross_entropy: targets [2, 0].
+    let tgtf = Tensor.from_f32_slice(data: read [2.0, 0.0], shape: read [2])?
+    let tgt = Tensor.cast_i32(t: read tgtf)
+    let ce = Tensor.cross_entropy(logits: read logits, targets: read tgt, axis: 1)?
+    dump(t: read ce)?
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-nn-primitives.rss",
+        "rsscript_parity_tensor_nn_primitives",
+        source,
+    );
+}
