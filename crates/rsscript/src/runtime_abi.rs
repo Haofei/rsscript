@@ -460,6 +460,35 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "dtype_code",
         "rsscript_runtime::tensor_dtype_code",
     ),
+    // reductions+math (ops C)
+    runtime_intrinsic(
+        "Tensor",
+        "prod_axis",
+        "rsscript_runtime::tensor_prod_axis",
+    ),
+    runtime_intrinsic("Tensor", "min_axis", "rsscript_runtime::tensor_min_axis"),
+    runtime_intrinsic("Tensor", "sum_axes", "rsscript_runtime::tensor_sum_axes"),
+    runtime_intrinsic(
+        "Tensor",
+        "prod_axes",
+        "rsscript_runtime::tensor_prod_axes",
+    ),
+    runtime_intrinsic("Tensor", "max_axes", "rsscript_runtime::tensor_max_axes"),
+    runtime_intrinsic("Tensor", "min_axes", "rsscript_runtime::tensor_min_axes"),
+    runtime_intrinsic(
+        "Tensor",
+        "mean_axes",
+        "rsscript_runtime::tensor_mean_axes",
+    ),
+    runtime_intrinsic(
+        "Tensor",
+        "reciprocal",
+        "rsscript_runtime::tensor_reciprocal",
+    ),
+    runtime_intrinsic("Tensor", "exp2", "rsscript_runtime::tensor_exp2"),
+    runtime_intrinsic("Tensor", "log2", "rsscript_runtime::tensor_log2"),
+    runtime_intrinsic("Tensor", "rsqrt", "rsscript_runtime::tensor_rsqrt"),
+    runtime_intrinsic("Tensor", "pow", "rsscript_runtime::tensor_pow"),
     runtime_intrinsic(
         "TensorError",
         "message",

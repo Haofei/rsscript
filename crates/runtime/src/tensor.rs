@@ -658,6 +658,189 @@ pub fn tensor_argmax_axis(t: &RssTensor, axis: i64) -> Result<RssTensor, TensorE
     })
 }
 
+// reductions+math (ops C)
+
+/// Product over one `axis`, removing it. Result is rank `rank-1`, dtype F32.
+/// Errors on an out-of-range axis. An empty axis (dim 0) yields the empty
+/// product `1.0`.
+pub fn tensor_prod_axis(t: &RssTensor, axis: i64) -> Result<RssTensor, TensorError> {
+    let axis = check_axis(&t.shape, axis, "prod_axis")?;
+    Ok(tensor_reduce_axis(
+        t,
+        axis,
+        DType::F32,
+        1.0,
+        |acc, x| acc * x,
+        |acc, _| acc,
+    ))
+}
+
+/// Min over one `axis`, removing it. Seeded with `+inf` so any real value wins;
+/// an empty axis (dim 0) yields `+inf`. Output dtype = input dtype. Errors on an
+/// out-of-range axis.
+pub fn tensor_min_axis(t: &RssTensor, axis: i64) -> Result<RssTensor, TensorError> {
+    let axis = check_axis(&t.shape, axis, "min_axis")?;
+    Ok(tensor_reduce_axis(
+        t,
+        axis,
+        t.dtype,
+        f32::INFINITY,
+        |acc, x| acc.min(x),
+        |acc, _| acc,
+    ))
+}
+
+/// Validate a list of reduction `axes` against `shape`: each must be in range and
+/// distinct. Returns the axes as `usize` sorted DESCENDING, so a caller can reduce
+/// the highest axis first (keeping the lower indices valid as the rank shrinks).
+/// An empty `axes` list is allowed and yields an empty vector (identity reduction).
+fn check_axes(shape: &[usize], axes: &[i64], op_name: &str) -> Result<Vec<usize>, TensorError> {
+    let rank = shape.len();
+    let mut seen = vec![false; rank];
+    let mut out = Vec::with_capacity(axes.len());
+    for &axis in axes {
+        if axis < 0 || (axis as usize) >= rank {
+            return Err(TensorError::new(format!(
+                "{op_name} axis {axis} out of range for tensor of rank {rank} (shape {shape:?})"
+            )));
+        }
+        let a = axis as usize;
+        if seen[a] {
+            return Err(TensorError::new(format!(
+                "{op_name} axes {axes:?} must be distinct (duplicate axis {a})"
+            )));
+        }
+        seen[a] = true;
+        out.push(a);
+    }
+    // Reduce highest-index axis first so the remaining indices stay valid.
+    out.sort_unstable_by(|a, b| b.cmp(a));
+    Ok(out)
+}
+
+/// Reduce ALL listed `axes` by repeated single-axis reduction (highest axis
+/// first). Empty `axes` returns a copy (identity). `init`/`combine`/`finalize` are
+/// applied per single-axis pass; `out_dtype` stamps every intermediate result so
+/// the dtype is consistent. Errors on out-of-range or duplicate axes.
+fn tensor_reduce_axes(
+    t: &RssTensor,
+    axes: &[i64],
+    op_name: &str,
+    out_dtype: DType,
+    init: f32,
+    combine: impl Fn(f32, f32) -> f32 + Copy,
+    finalize: impl Fn(f32, usize) -> f32 + Copy,
+) -> Result<RssTensor, TensorError> {
+    let ordered = check_axes(&t.shape, axes, op_name)?;
+    if ordered.is_empty() {
+        // Identity: a copy with the requested output dtype tag.
+        return Ok(RssTensor {
+            data: Rc::clone(&t.data),
+            shape: t.shape.clone(),
+            dtype: out_dtype,
+        });
+    }
+    let mut acc = t.clone();
+    for axis in ordered {
+        acc = tensor_reduce_axis(&acc, axis, out_dtype, init, combine, finalize);
+    }
+    Ok(acc)
+}
+
+/// Sum over all listed `axes`, removing them. Dtype F32. Empty `axes` is identity.
+pub fn tensor_sum_axes(t: &RssTensor, axes: &[i64]) -> Result<RssTensor, TensorError> {
+    tensor_reduce_axes(
+        t,
+        axes,
+        "sum_axes",
+        DType::F32,
+        0.0,
+        |acc, x| acc + x,
+        |acc, _| acc,
+    )
+}
+
+/// Product over all listed `axes`, removing them. Dtype F32. Empty `axes` is identity.
+pub fn tensor_prod_axes(t: &RssTensor, axes: &[i64]) -> Result<RssTensor, TensorError> {
+    tensor_reduce_axes(
+        t,
+        axes,
+        "prod_axes",
+        DType::F32,
+        1.0,
+        |acc, x| acc * x,
+        |acc, _| acc,
+    )
+}
+
+/// Max over all listed `axes`, removing them. Output dtype = input dtype. Empty
+/// `axes` is identity.
+pub fn tensor_max_axes(t: &RssTensor, axes: &[i64]) -> Result<RssTensor, TensorError> {
+    tensor_reduce_axes(
+        t,
+        axes,
+        "max_axes",
+        t.dtype,
+        f32::NEG_INFINITY,
+        |acc, x| acc.max(x),
+        |acc, _| acc,
+    )
+}
+
+/// Min over all listed `axes`, removing them. Output dtype = input dtype. Empty
+/// `axes` is identity.
+pub fn tensor_min_axes(t: &RssTensor, axes: &[i64]) -> Result<RssTensor, TensorError> {
+    tensor_reduce_axes(
+        t,
+        axes,
+        "min_axes",
+        t.dtype,
+        f32::INFINITY,
+        |acc, x| acc.min(x),
+        |acc, _| acc,
+    )
+}
+
+/// Mean over all listed `axes`, removing them (divides by each axis length as it
+/// goes, which equals dividing by the product of the removed dims). Dtype F32.
+/// Empty `axes` is identity.
+pub fn tensor_mean_axes(t: &RssTensor, axes: &[i64]) -> Result<RssTensor, TensorError> {
+    tensor_reduce_axes(
+        t,
+        axes,
+        "mean_axes",
+        DType::F32,
+        0.0,
+        |acc, x| acc + x,
+        |acc, len| if len == 0 { acc } else { acc / len as f32 },
+    )
+}
+
+/// Elementwise reciprocal `1/x`. Output dtype F32.
+pub fn tensor_reciprocal(t: &RssTensor) -> RssTensor {
+    tensor_unary_elementwise(t, DType::F32, |x| 1.0 / x)
+}
+
+/// Elementwise base-2 exponential `2^x`. Output dtype F32.
+pub fn tensor_exp2(t: &RssTensor) -> RssTensor {
+    tensor_unary_elementwise(t, DType::F32, f32::exp2)
+}
+
+/// Elementwise base-2 logarithm `log2(x)`. Output dtype F32.
+pub fn tensor_log2(t: &RssTensor) -> RssTensor {
+    tensor_unary_elementwise(t, DType::F32, f32::log2)
+}
+
+/// Elementwise reciprocal square root `1/sqrt(x)`. Output dtype F32.
+pub fn tensor_rsqrt(t: &RssTensor) -> RssTensor {
+    tensor_unary_elementwise(t, DType::F32, |x| 1.0 / x.sqrt())
+}
+
+/// Elementwise power `a^b` with broadcasting (`f32::powf`). Output dtype F32.
+pub fn tensor_pow(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
+    tensor_broadcast_binary(a, b, "pow", DType::F32, f32::powf)
+}
+
 // ---------------------------------------------------------------------------
 // Movement ops (slice 4).
 //
@@ -1252,5 +1435,175 @@ mod tests {
         let r = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
         assert!(tensor_error_message(&tensor_broadcast_to(&r, &[2]).unwrap_err())
             .contains("cannot reduce rank"));
+    }
+
+    // reductions+math (ops C)
+
+    #[test]
+    fn prod_min_axis_2x3() {
+        // [[1,2,3],[4,5,6]]
+        let t = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]).unwrap();
+        // prod axis 0 -> [4,10,18], dtype F32
+        let p0 = tensor_prod_axis(&t, 0).unwrap();
+        assert_eq!(tensor_shape(&p0).unwrap(), vec![3]);
+        assert_eq!(tensor_to_f32_slice(&p0).unwrap(), vec![4.0, 10.0, 18.0]);
+        assert_eq!(tensor_dtype_code(&p0), 0);
+        // prod axis 1 -> [6,120]
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_prod_axis(&t, 1).unwrap()).unwrap(),
+            vec![6.0, 120.0]
+        );
+        // min axis 0 -> [1,2,3]; min axis 1 -> [1,4]
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_min_axis(&t, 0).unwrap()).unwrap(),
+            vec![1.0, 2.0, 3.0]
+        );
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_min_axis(&t, 1).unwrap()).unwrap(),
+            vec![1.0, 4.0]
+        );
+        // min_axis preserves input dtype.
+        assert_eq!(
+            tensor_dtype_code(&tensor_min_axis(&tensor_cast_i32(&t), 0).unwrap()),
+            1
+        );
+        // out-of-range axis errors.
+        assert!(
+            tensor_error_message(&tensor_prod_axis(&t, 2).unwrap_err()).contains("out of range")
+        );
+        assert!(
+            tensor_error_message(&tensor_min_axis(&t, -1).unwrap_err()).contains("out of range")
+        );
+    }
+
+    #[test]
+    fn multi_axis_reductions() {
+        // shape [2,3], reduce both axes -> scalar shape [].
+        let t = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]).unwrap();
+        let s = tensor_sum_axes(&t, &[0, 1]).unwrap();
+        assert_eq!(tensor_shape(&s).unwrap(), Vec::<i64>::new());
+        assert_eq!(tensor_to_f32_slice(&s).unwrap(), vec![21.0]);
+        // order independence: [1,0] same as [0,1].
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_sum_axes(&t, &[1, 0]).unwrap()).unwrap(),
+            vec![21.0]
+        );
+        // prod over both axes -> 720.
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_prod_axes(&t, &[0, 1]).unwrap()).unwrap(),
+            vec![720.0]
+        );
+        // max/min over both -> 6 / 1.
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_max_axes(&t, &[0, 1]).unwrap()).unwrap(),
+            vec![6.0]
+        );
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_min_axes(&t, &[0, 1]).unwrap()).unwrap(),
+            vec![1.0]
+        );
+        // mean over both -> 3.5.
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_mean_axes(&t, &[0, 1]).unwrap()).unwrap(),
+            vec![3.5]
+        );
+        // rank-3 [2,3,4]: sum over axes [0,2] -> shape [3].
+        let data: Vec<f64> = (0..24).map(|x| x as f64).collect();
+        let r = tensor_from_f32_slice(&data, &[2, 3, 4]).unwrap();
+        let red = tensor_sum_axes(&r, &[0, 2]).unwrap();
+        assert_eq!(tensor_shape(&red).unwrap(), vec![3]);
+        let mut expected = vec![0.0f64; 3];
+        for (a, cell) in expected.iter_mut().enumerate() {
+            for o in 0..2 {
+                for i in 0..4 {
+                    *cell += (o * 12 + a * 4 + i) as f64;
+                }
+            }
+        }
+        assert_eq!(tensor_to_f32_slice(&red).unwrap(), expected);
+        // single-axis via the _axes form matches the dedicated single-axis op.
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_sum_axes(&t, &[1]).unwrap()).unwrap(),
+            tensor_to_f32_slice(&tensor_sum_axis(&t, 1).unwrap()).unwrap()
+        );
+        // dtype: sum/prod/mean -> F32; max/min preserve input dtype.
+        assert_eq!(tensor_dtype_code(&tensor_prod_axes(&t, &[0]).unwrap()), 0);
+        assert_eq!(
+            tensor_dtype_code(&tensor_min_axes(&tensor_cast_i32(&t), &[0]).unwrap()),
+            1
+        );
+    }
+
+    #[test]
+    fn multi_axis_empty_is_identity() {
+        let t = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+        let id = tensor_sum_axes(&t, &[]).unwrap();
+        assert_eq!(tensor_shape(&id).unwrap(), vec![2, 2]);
+        assert_eq!(
+            tensor_to_f32_slice(&id).unwrap(),
+            vec![1.0, 2.0, 3.0, 4.0]
+        );
+        // max_axes identity preserves input dtype.
+        let ii = tensor_cast_i32(&t);
+        assert_eq!(tensor_dtype_code(&tensor_max_axes(&ii, &[]).unwrap()), 1);
+    }
+
+    #[test]
+    fn multi_axis_rejects_bad_axes() {
+        let t = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+        assert!(
+            tensor_error_message(&tensor_sum_axes(&t, &[0, 0]).unwrap_err()).contains("distinct")
+        );
+        assert!(
+            tensor_error_message(&tensor_sum_axes(&t, &[0, 5]).unwrap_err())
+                .contains("out of range")
+        );
+    }
+
+    #[test]
+    fn math_unary_ops() {
+        let t = tensor_from_f32_slice(&[1.0, 2.0, 4.0], &[3]).unwrap();
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_reciprocal(&t)).unwrap(),
+            vec![1.0, 0.5, 0.25]
+        );
+        assert_eq!(tensor_dtype_code(&tensor_reciprocal(&t)), 0);
+        // exp2 / log2 round-trip and exact powers.
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_exp2(&t)).unwrap(),
+            vec![2.0, 4.0, 16.0]
+        );
+        let l = tensor_from_f32_slice(&[1.0, 2.0, 8.0], &[3]).unwrap();
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_log2(&l)).unwrap(),
+            vec![0.0, 1.0, 3.0]
+        );
+        // rsqrt: 1/sqrt(4)=0.5, 1/sqrt(16)=0.25.
+        let s = tensor_from_f32_slice(&[4.0, 16.0], &[2]).unwrap();
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_rsqrt(&s)).unwrap(),
+            vec![0.5, 0.25]
+        );
+    }
+
+    #[test]
+    fn math_pow_broadcast() {
+        let a = tensor_from_f32_slice(&[2.0, 3.0, 4.0], &[3]).unwrap();
+        let b = tensor_from_f32_slice(&[2.0], &[1]).unwrap();
+        // a^2 broadcast.
+        let p = tensor_pow(&a, &b).unwrap();
+        assert_eq!(tensor_shape(&p).unwrap(), vec![3]);
+        assert_eq!(tensor_to_f32_slice(&p).unwrap(), vec![4.0, 9.0, 16.0]);
+        assert_eq!(tensor_dtype_code(&p), 0);
+        // equal-shape powf.
+        let e = tensor_from_f32_slice(&[3.0, 2.0, 0.0], &[3]).unwrap();
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_pow(&a, &e).unwrap()).unwrap(),
+            vec![8.0, 9.0, 1.0]
+        );
+        // incompatible shapes error.
+        let bad = tensor_from_f32_slice(&[1.0, 2.0], &[2]).unwrap();
+        assert!(tensor_error_message(&tensor_pow(&a, &bad).unwrap_err())
+            .contains("not broadcast-compatible"));
     }
 }
