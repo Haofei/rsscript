@@ -5,6 +5,8 @@ use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream};
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use base64::Engine;
 use chrono::{DateTime, Datelike, NaiveDate, SecondsFormat, TimeZone, Timelike, Utc};
@@ -6341,7 +6343,10 @@ struct TaskSlot {
 /// the depth cap is generous (never trips real code, always catches
 /// `fn f(){f()}`), and the step/memory budgets are off unless a caller opts in
 /// (typically only the untrusted/agent-facing entry points).
-#[derive(Debug, Clone, Copy)]
+/// Note: not `Copy` — it carries an optional `Arc<AtomicBool>` cancel flag. All
+/// fields are public and `Clone`/struct-update (`..VmLimits::default()`) keep
+/// callers ergonomic; the scalar budget fields are read by value as before.
+#[derive(Debug, Clone)]
 pub struct VmLimits {
     /// Maximum simultaneous call frames (recursion depth). Default-on and
     /// generous; checked before every frame push. `usize::MAX` effectively
@@ -6356,6 +6361,15 @@ pub struct VmLimits {
     /// stacks + list/map growth). `None` (default) = no accounting (near-zero
     /// overhead). See [`RegVm::live_bytes`] for the accounting approximation.
     pub mem_budget: Option<usize>,
+    /// Host-level preemption hook. `None` (default) = no polling (the off path is
+    /// near-free: `tick()` never touches the atomic). When `Some`, the host can
+    /// set the flag to `true` from anywhere (e.g. a watchdog thread on timeout or
+    /// an abort signal) and the running evaluation is preempted at the next
+    /// throttled step check — even inside a tight `while true {}` loop that never
+    /// awaits or checks the cooperative RSS `CancellationToken`. The eval then
+    /// returns `EvalError::Runtime("evaluation cancelled")`. This stops the *whole*
+    /// eval; see the note in `tick()` on per-task preemption.
+    pub cancel: Option<Arc<AtomicBool>>,
 }
 
 /// Default recursion-depth cap: generous enough never to trip real code (deep
@@ -6363,6 +6377,12 @@ pub struct VmLimits {
 /// unbounded self-recursive program is caught long before it can overflow the
 /// native stack.
 const DEFAULT_MAX_DEPTH: usize = 16_384;
+
+/// How often `tick()` polls the ambient cancel flag (once every this many
+/// instructions). A power of two so the modulo lowers to a mask. Small enough
+/// that a watchdog preempts a tight loop within microseconds, large enough that
+/// the relaxed atomic load is negligible amortized over real work.
+const CANCEL_POLL_INTERVAL: u64 = 1024;
 
 /// Estimated bytes charged per list element for the best-effort memory ceiling.
 /// Each list slot stores one `VmValue` inline (the heap pointed at by `Rc`
@@ -6381,6 +6401,7 @@ impl Default for VmLimits {
             max_depth: DEFAULT_MAX_DEPTH,
             step_budget: None,
             mem_budget: None,
+            cancel: None,
         }
     }
 }
@@ -6804,6 +6825,22 @@ impl RegVm {
     /// is off), and — only when `limits.step_budget` is `Some` — trips once the
     /// count exceeds the limit. This is what stops an infinite loop (`while true
     /// {}`) from hanging the host: it returns a clean error instead.
+    ///
+    /// It is also the host-level *preemption* hook. When `limits.cancel` is
+    /// `Some`, every `CANCEL_POLL_INTERVAL` steps we load the ambient
+    /// `AtomicBool` (`Relaxed` — we only need eventual visibility, not ordering)
+    /// and, if set, abort the eval with `EvalError::Runtime("evaluation
+    /// cancelled")`. The throttle keeps both the off path (no atomic touched at
+    /// all) and the on path (one relaxed load per 1024 instructions) cheap, so a
+    /// tight loop stays fast while still being interruptible by a watchdog.
+    ///
+    /// Limitation: this stops the *entire* evaluation. Preemptively cancelling a
+    /// single *sibling* task stuck in a tight loop — so a `select`/`task_group`
+    /// can reach its winner while one branch spins — would require the scheduler
+    /// to yield mid-instruction-stream (snapshot a `SavedTask` at an arbitrary
+    /// `ip` and reschedule), a deeper redesign that is out of scope here. The RSS
+    /// `CancellationToken` remains the cooperative, per-task mechanism (it only
+    /// preempts at await points); this ambient flag is the blunt host-level kill.
     #[inline]
     fn tick(&mut self) -> Result<(), EvalError> {
         self.steps += 1;
@@ -6813,6 +6850,12 @@ impl RegVm {
             return Err(EvalError::Runtime(format!(
                 "step budget exceeded ({limit} instructions)"
             )));
+        }
+        if self.steps.is_multiple_of(CANCEL_POLL_INTERVAL)
+            && let Some(flag) = self.limits.cancel.as_ref()
+            && flag.load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(EvalError::Runtime("evaluation cancelled".into()));
         }
         Ok(())
     }
@@ -9483,6 +9526,11 @@ impl RegVm {
             }
             RegIntrinsic::CapabilityFrom => Ok(intrinsic_arg(&self.stack, base, args, 0)?.clone()),
             RegIntrinsic::CancellationSourceCancel => {
+                // RSS-level *cooperative* cancellation: flips the program-visible
+                // flag a task must poll (e.g. `token.is_cancelled()`); it preempts
+                // only at await/poll points, not inside a tight compute loop. The
+                // host-level *preemptive* hook for a runaway loop is the ambient
+                // `limits.cancel` atomic polled by `tick()` — see `RegVm::tick`.
                 let id = expect_cancellation_id_ref(
                     intrinsic_arg(&self.stack, base, args, 0)?,
                     "CancellationSource",
