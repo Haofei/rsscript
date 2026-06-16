@@ -4,7 +4,7 @@ use std::path::Path;
 use crate::diagnostic::{Diagnostic, code};
 
 use super::source_set::{
-    Manifest, ManifestReviewFeaturePolicy, PackageSource, load_package_manifest,
+    LoadedPackage, Manifest, ManifestReviewFeaturePolicy, PackageSource, load_package_manifest,
     load_package_with_features, resolve_package_features,
 };
 use super::{PackageReviewFileKind, canonical_path_label, toml_value_label};
@@ -293,6 +293,51 @@ fn package_denied_feature_diagnostic(
     )
 }
 
+/// Resolves a single dependency-map entry to its loaded package for the
+/// `seen`/`visiting` graph walks shared by interface and lowering collection.
+///
+/// Returns `Ok(None)` when the entry should be skipped (no path dependency, no
+/// `rsspkg.toml`, already collected, or currently being visited). On `Ok(Some)`
+/// the returned canonical label has been recorded in both `seen` and `visiting`;
+/// the caller is responsible for the matching `visiting.remove`.
+struct DependencyWalkEntry {
+    dependency_dir: std::path::PathBuf,
+    canonical: String,
+    package: LoadedPackage,
+}
+
+fn resolve_dependency_walk_entry(
+    package_dir: &Path,
+    spec: &PackageDependencySpec,
+    visiting: &mut BTreeSet<String>,
+    seen: &mut BTreeSet<String>,
+) -> Result<Option<DependencyWalkEntry>, String> {
+    let Some(path) = &spec.path else {
+        return Ok(None);
+    };
+    let dependency_dir = package_dir.join(path);
+    if !dependency_dir.join("rsspkg.toml").exists() {
+        return Ok(None);
+    }
+    let canonical = canonical_path_label(&dependency_dir);
+    if seen.contains(&canonical) {
+        return Ok(None);
+    }
+    if !visiting.insert(canonical.clone()) {
+        return Ok(None);
+    }
+    seen.insert(canonical.clone());
+    let dependency_manifest = load_package_manifest(&dependency_dir)?;
+    let selected_features = resolve_package_features(&dependency_manifest, &spec.features);
+    let package =
+        load_package_with_features(&dependency_dir, Some(&selected_features.selected))?;
+    Ok(Some(DependencyWalkEntry {
+        dependency_dir,
+        canonical,
+        package,
+    }))
+}
+
 fn collect_dependency_interface_sources_from_map(
     package_dir: &Path,
     dependencies: &BTreeMap<String, toml::Value>,
@@ -302,25 +347,14 @@ fn collect_dependency_interface_sources_from_map(
 ) -> Result<(), String> {
     for (name, value) in dependencies {
         let spec = package_dependency_spec(name, value);
-        let Some(path) = &spec.path else {
+        let Some(DependencyWalkEntry {
+            dependency_dir,
+            canonical,
+            package: dependency_package,
+        }) = resolve_dependency_walk_entry(package_dir, &spec, visiting, seen)?
+        else {
             continue;
         };
-        let dependency_dir = package_dir.join(path);
-        if !dependency_dir.join("rsspkg.toml").exists() {
-            continue;
-        }
-        let canonical = canonical_path_label(&dependency_dir);
-        if seen.contains(&canonical) {
-            continue;
-        }
-        if !visiting.insert(canonical.clone()) {
-            continue;
-        }
-        seen.insert(canonical.clone());
-        let dependency_manifest = load_package_manifest(&dependency_dir)?;
-        let selected_features = resolve_package_features(&dependency_manifest, &spec.features);
-        let dependency_package =
-            load_package_with_features(&dependency_dir, Some(&selected_features.selected))?;
         sources.extend(
             dependency_package
                 .sources
@@ -352,25 +386,14 @@ fn collect_dependency_lowering_sources_from_map(
         if spec.platform_provided || spec.test_only {
             continue;
         }
-        let Some(path) = &spec.path else {
+        let Some(DependencyWalkEntry {
+            dependency_dir,
+            canonical,
+            package: dependency_package,
+        }) = resolve_dependency_walk_entry(package_dir, &spec, visiting, seen)?
+        else {
             continue;
         };
-        let dependency_dir = package_dir.join(path);
-        if !dependency_dir.join("rsspkg.toml").exists() {
-            continue;
-        }
-        let canonical = canonical_path_label(&dependency_dir);
-        if seen.contains(&canonical) {
-            continue;
-        }
-        if !visiting.insert(canonical.clone()) {
-            continue;
-        }
-        seen.insert(canonical.clone());
-        let dependency_manifest = load_package_manifest(&dependency_dir)?;
-        let selected_features = resolve_package_features(&dependency_manifest, &spec.features);
-        let dependency_package =
-            load_package_with_features(&dependency_dir, Some(&selected_features.selected))?;
         collect_dependency_lowering_sources_from_map(
             &dependency_dir,
             &dependency_package.manifest.dependencies,
