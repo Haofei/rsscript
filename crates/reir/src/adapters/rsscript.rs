@@ -780,57 +780,28 @@ pub fn package_review_to_facts(input: &RsScriptPackageReviewInput) -> Vec<Fact> 
     for dependency in &input.dependencies {
         let dependency_subject = dependency_subject(dependency);
         let dependency_slug = normalized_id(&dependency_subject.id);
-        let value = dependency_risk_value(dependency);
-        let unknown = matches!(value, FactValue::Unknown);
-        facts.push(Fact {
-            schema: FACT_SCHEMA.to_owned(),
-            id: format!("fact.dependency.{}.risk", dependency_slug),
-            kind: FactKind::DependencyRisk,
-            role: None,
-            subject: dependency_subject,
-            capability: None,
-            value,
-            confidence: confidence(dependency_confidence(dependency), PACKAGE_REVIEW_SOURCE),
-            acquisition_mode: AcquisitionMode::PackageMetadata,
-            precision: Precision::Category,
-            evidence: vec![package_metadata(
-                &input.package_name,
-                &input.version,
-                dependency.requirement.clone(),
-                Some(dependency_summary(dependency)),
-            )],
-            unknown_reason: unknown
-                .then(|| "dependency source is unresolved by package review".to_owned()),
-        });
+        facts.push(build_dependency_risk_fact(
+            format!("fact.dependency.{}.risk", dependency_slug),
+            dependency_subject,
+            dependency,
+            &input.package_name,
+            &input.version,
+        ));
     }
 
     for export in &input.exports {
         let export_subject = public_contract_subject(&input.package_name, export);
-        let export_value = public_contract_value(export);
-        let export_unknown = matches!(export_value, FactValue::Unknown);
-        facts.push(Fact {
-            schema: FACT_SCHEMA.to_owned(),
-            id: format!(
+        facts.push(build_public_contract_fact(
+            format!(
                 "fact.public_contract.{}.{}",
                 package_slug,
                 normalized_id(&export_subject.id)
             ),
-            kind: FactKind::PublicContract,
-            role: None,
-            subject: export_subject.clone(),
-            capability: None,
-            value: export_value,
-            confidence: confidence(public_contract_confidence(export), PACKAGE_REVIEW_SOURCE),
-            acquisition_mode: AcquisitionMode::CompilerContract,
-            precision: Precision::Exact,
-            evidence: vec![package_metadata(
-                &input.package_name,
-                &input.version,
-                Some(export.kind.clone()),
-                Some(package_export_summary(export)),
-            )],
-            unknown_reason: export_unknown.then(|| public_contract_unknown_reason(export)),
-        });
+            export_subject.clone(),
+            export,
+            &input.package_name,
+            &input.version,
+        ));
         if let Some(protocol_fact) = protocol_impl_fact(
             export,
             &export_subject,
@@ -878,52 +849,26 @@ pub fn package_review_to_facts(input: &RsScriptPackageReviewInput) -> Vec<Fact> 
 
     for boundary in &input.native_boundaries {
         let boundary_subject = native_boundary_subject(&input.package_name, &boundary.module_name);
-        facts.push(Fact {
-            schema: FACT_SCHEMA.to_owned(),
-            id: format!(
+        facts.push(build_native_boundary_fact(
+            format!(
                 "fact.native_module_declaration.{}",
                 normalized_id(&boundary_subject.id)
             ),
-            kind: FactKind::NativeModuleDeclaration,
-            role: None,
-            subject: boundary_subject.clone(),
-            capability: None,
-            value: FactValue::True,
-            confidence: confidence(ConfidenceLevel::Authoritative, PACKAGE_REVIEW_SOURCE),
-            acquisition_mode: AcquisitionMode::CompilerContract,
-            precision: Precision::Exact,
-            evidence: vec![source_span(
-                &boundary.file,
-                boundary.line,
-                &boundary.module_name,
-                Some(native_module_declaration_reason(boundary)),
-                PACKAGE_REVIEW_SOURCE,
-            )],
-            unknown_reason: None,
-        });
-        facts.push(Fact {
-            schema: FACT_SCHEMA.to_owned(),
-            id: format!(
+            FactKind::NativeModuleDeclaration,
+            boundary_subject.clone(),
+            boundary,
+            native_module_declaration_reason(boundary),
+        ));
+        facts.push(build_native_boundary_fact(
+            format!(
                 "fact.native_boundary.{}",
                 normalized_id(&boundary_subject.id)
             ),
-            kind: FactKind::NativeBoundary,
-            role: None,
-            subject: boundary_subject,
-            capability: None,
-            value: FactValue::True,
-            confidence: confidence(ConfidenceLevel::Authoritative, PACKAGE_REVIEW_SOURCE),
-            acquisition_mode: AcquisitionMode::CompilerContract,
-            precision: Precision::Exact,
-            evidence: vec![source_span(
-                &boundary.file,
-                boundary.line,
-                &boundary.module_name,
-                Some(native_boundary_reason(boundary)),
-                PACKAGE_REVIEW_SOURCE,
-            )],
-            unknown_reason: None,
-        });
+            FactKind::NativeBoundary,
+            boundary_subject,
+            boundary,
+            native_boundary_reason(boundary),
+        ));
     }
 
     facts
@@ -3606,6 +3551,96 @@ fn capability_fact(
             version,
             Some(count.to_string()),
             Some(summary),
+        )],
+        unknown_reason: None,
+    }
+}
+
+fn build_dependency_risk_fact(
+    id: String,
+    subject: Subject,
+    dependency: &RsScriptPackageDependency,
+    package_name: &str,
+    version: &str,
+) -> Fact {
+    let value = dependency_risk_value(dependency);
+    let unknown = matches!(value, FactValue::Unknown);
+    Fact {
+        schema: FACT_SCHEMA.to_owned(),
+        id,
+        kind: FactKind::DependencyRisk,
+        role: None,
+        subject,
+        capability: None,
+        value,
+        confidence: confidence(dependency_confidence(dependency), PACKAGE_REVIEW_SOURCE),
+        acquisition_mode: AcquisitionMode::PackageMetadata,
+        precision: Precision::Category,
+        evidence: vec![package_metadata(
+            package_name,
+            version,
+            dependency.requirement.clone(),
+            Some(dependency_summary(dependency)),
+        )],
+        unknown_reason: unknown
+            .then(|| "dependency source is unresolved by package review".to_owned()),
+    }
+}
+
+fn build_public_contract_fact(
+    id: String,
+    subject: Subject,
+    export: &RsScriptPackageExport,
+    package_name: &str,
+    version: &str,
+) -> Fact {
+    let value = public_contract_value(export);
+    let unknown = matches!(value, FactValue::Unknown);
+    Fact {
+        schema: FACT_SCHEMA.to_owned(),
+        id,
+        kind: FactKind::PublicContract,
+        role: None,
+        subject,
+        capability: None,
+        value,
+        confidence: confidence(public_contract_confidence(export), PACKAGE_REVIEW_SOURCE),
+        acquisition_mode: AcquisitionMode::CompilerContract,
+        precision: Precision::Exact,
+        evidence: vec![package_metadata(
+            package_name,
+            version,
+            Some(export.kind.clone()),
+            Some(package_export_summary(export)),
+        )],
+        unknown_reason: unknown.then(|| public_contract_unknown_reason(export)),
+    }
+}
+
+fn build_native_boundary_fact(
+    id: String,
+    kind: FactKind,
+    subject: Subject,
+    boundary: &RsScriptNativeBoundary,
+    reason: String,
+) -> Fact {
+    Fact {
+        schema: FACT_SCHEMA.to_owned(),
+        id,
+        kind,
+        role: None,
+        subject,
+        capability: None,
+        value: FactValue::True,
+        confidence: confidence(ConfidenceLevel::Authoritative, PACKAGE_REVIEW_SOURCE),
+        acquisition_mode: AcquisitionMode::CompilerContract,
+        precision: Precision::Exact,
+        evidence: vec![source_span(
+            &boundary.file,
+            boundary.line,
+            &boundary.module_name,
+            Some(reason),
+            PACKAGE_REVIEW_SOURCE,
         )],
         unknown_reason: None,
     }
