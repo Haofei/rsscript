@@ -150,6 +150,89 @@ pub fn tensor_matmul(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorEr
     })
 }
 
+/// Apply a binary elementwise op over two same-shape tensors, producing a fresh
+/// tensor with the same shape. Returns a `TensorError` if the shapes differ.
+/// No broadcasting — shapes must match exactly (deferred to a later slice).
+fn tensor_binary_elementwise(
+    a: &RssTensor,
+    b: &RssTensor,
+    op_name: &str,
+    op: impl Fn(f32, f32) -> f32,
+) -> Result<RssTensor, TensorError> {
+    if a.shape != b.shape {
+        return Err(TensorError::new(format!(
+            "{op_name} requires same-shape tensors, got {:?} and {:?}",
+            a.shape, b.shape
+        )));
+    }
+    let lhs = a.data.as_ref();
+    let rhs = b.data.as_ref();
+    let out = lhs
+        .iter()
+        .zip(rhs.iter())
+        .map(|(&x, &y)| op(x, y))
+        .collect::<Vec<f32>>();
+    Ok(RssTensor {
+        data: Rc::new(out),
+        shape: a.shape.clone(),
+    })
+}
+
+/// Apply a unary elementwise op, producing a fresh tensor with the same shape.
+/// Infallible.
+fn tensor_unary_elementwise(t: &RssTensor, op: impl Fn(f32) -> f32) -> RssTensor {
+    let out = t.data.iter().map(|&x| op(x)).collect::<Vec<f32>>();
+    RssTensor {
+        data: Rc::new(out),
+        shape: t.shape.clone(),
+    }
+}
+
+/// Elementwise addition of two same-shape tensors.
+pub fn tensor_add(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
+    tensor_binary_elementwise(a, b, "add", |x, y| x + y)
+}
+
+/// Elementwise subtraction (`a - b`) of two same-shape tensors.
+pub fn tensor_sub(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
+    tensor_binary_elementwise(a, b, "sub", |x, y| x - y)
+}
+
+/// Elementwise multiplication of two same-shape tensors.
+pub fn tensor_mul(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
+    tensor_binary_elementwise(a, b, "mul", |x, y| x * y)
+}
+
+/// Elementwise division (`a / b`) of two same-shape tensors.
+pub fn tensor_div(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
+    tensor_binary_elementwise(a, b, "div", |x, y| x / y)
+}
+
+/// Elementwise negation.
+pub fn tensor_neg(t: &RssTensor) -> RssTensor {
+    tensor_unary_elementwise(t, |x| -x)
+}
+
+/// Elementwise natural exponential.
+pub fn tensor_exp(t: &RssTensor) -> RssTensor {
+    tensor_unary_elementwise(t, f32::exp)
+}
+
+/// Elementwise natural logarithm.
+pub fn tensor_log(t: &RssTensor) -> RssTensor {
+    tensor_unary_elementwise(t, f32::ln)
+}
+
+/// Elementwise square root.
+pub fn tensor_sqrt(t: &RssTensor) -> RssTensor {
+    tensor_unary_elementwise(t, f32::sqrt)
+}
+
+/// Elementwise ReLU: `max(0, x)`.
+pub fn tensor_relu(t: &RssTensor) -> RssTensor {
+    tensor_unary_elementwise(t, |x| x.max(0.0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,5 +275,63 @@ mod tests {
         let b = tensor_from_f32_slice(&[1.0, 2.0, 3.0], &[3]).unwrap();
         let err = tensor_matmul(&a, &b).unwrap_err();
         assert!(tensor_error_message(&err).contains("rank-2"));
+    }
+
+    #[test]
+    fn elementwise_binary_ops() {
+        let a = tensor_from_f32_slice(&[1.0, 2.0, 4.0, 8.0], &[2, 2]).unwrap();
+        let b = tensor_from_f32_slice(&[2.0, 2.0, 2.0, 2.0], &[2, 2]).unwrap();
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_add(&a, &b).unwrap()).unwrap(),
+            vec![3.0, 4.0, 6.0, 10.0]
+        );
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_sub(&a, &b).unwrap()).unwrap(),
+            vec![-1.0, 0.0, 2.0, 6.0]
+        );
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_mul(&a, &b).unwrap()).unwrap(),
+            vec![2.0, 4.0, 8.0, 16.0]
+        );
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_div(&a, &b).unwrap()).unwrap(),
+            vec![0.5, 1.0, 2.0, 4.0]
+        );
+    }
+
+    #[test]
+    fn binary_ops_reject_shape_mismatch() {
+        let a = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+        let b = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]).unwrap();
+        for op in [tensor_add, tensor_sub, tensor_mul, tensor_div] {
+            let err = op(&a, &b).unwrap_err();
+            assert!(tensor_error_message(&err).contains("same-shape"));
+        }
+    }
+
+    #[test]
+    fn elementwise_unary_ops() {
+        let t = tensor_from_f32_slice(&[1.0, -2.0, 4.0, 0.0], &[2, 2]).unwrap();
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_neg(&t)).unwrap(),
+            vec![-1.0, 2.0, -4.0, 0.0]
+        );
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_relu(&t)).unwrap(),
+            vec![1.0, 0.0, 4.0, 0.0]
+        );
+        let s = tensor_from_f32_slice(&[4.0, 9.0], &[2]).unwrap();
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_sqrt(&s)).unwrap(),
+            vec![2.0, 3.0]
+        );
+        // exp/log: round-trip log(exp(x)) ≈ x within f32 tolerance.
+        let v = tensor_from_f32_slice(&[0.5, 1.5, 2.5], &[3]).unwrap();
+        let round = tensor_log(&tensor_exp(&v));
+        let got = tensor_to_f32_slice(&round).unwrap();
+        for (g, e) in got.iter().zip([0.5_f64, 1.5, 2.5]) {
+            assert!((g - e).abs() < 1e-5, "{g} vs {e}");
+        }
+        assert_eq!(tensor_shape(&tensor_neg(&t)).unwrap(), vec![2, 2]);
     }
 }

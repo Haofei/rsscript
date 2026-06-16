@@ -37,5 +37,37 @@ pub native fn Tensor.matmul(
 ) -> Result<fresh Tensor, TensorError>
     effects(native)
 
+// Elementwise binary ops over two same-shape tensors. No broadcasting — the
+// shapes must match exactly (broadcasting is deferred to a later slice). Errors
+// on a shape mismatch.
+pub native fn Tensor.add(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+pub native fn Tensor.sub(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+pub native fn Tensor.mul(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+pub native fn Tensor.div(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+// Elementwise unary ops, same shape out. Infallible (no Result).
+pub native fn Tensor.neg(t: read Tensor) -> fresh Tensor
+    effects(native)
+
+pub native fn Tensor.exp(t: read Tensor) -> fresh Tensor
+    effects(native)
+
+pub native fn Tensor.log(t: read Tensor) -> fresh Tensor
+    effects(native)
+
+pub native fn Tensor.sqrt(t: read Tensor) -> fresh Tensor
+    effects(native)
+
+// ReLU: max(0, x).
+pub native fn Tensor.relu(t: read Tensor) -> fresh Tensor
+    effects(native)
+
 pub fn TensorError.message(error: read TensorError) -> fresh String
     effects(pure)

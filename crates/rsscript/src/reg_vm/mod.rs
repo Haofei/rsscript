@@ -2080,6 +2080,15 @@ enum RegIntrinsic {
     TensorShape,
     TensorRank,
     TensorMatmul,
+    TensorAdd,
+    TensorSub,
+    TensorMul,
+    TensorDiv,
+    TensorNeg,
+    TensorExp,
+    TensorLog,
+    TensorSqrt,
+    TensorRelu,
     TensorErrorMessage,
     CharCompare,
     CharFromCode,
@@ -5319,6 +5328,15 @@ fn qualified_intrinsic(namespace: &str, name: &str) -> Option<RegIntrinsic> {
         ("Tensor", "shape") => Some(RegIntrinsic::TensorShape),
         ("Tensor", "rank") => Some(RegIntrinsic::TensorRank),
         ("Tensor", "matmul") => Some(RegIntrinsic::TensorMatmul),
+        ("Tensor", "add") => Some(RegIntrinsic::TensorAdd),
+        ("Tensor", "sub") => Some(RegIntrinsic::TensorSub),
+        ("Tensor", "mul") => Some(RegIntrinsic::TensorMul),
+        ("Tensor", "div") => Some(RegIntrinsic::TensorDiv),
+        ("Tensor", "neg") => Some(RegIntrinsic::TensorNeg),
+        ("Tensor", "exp") => Some(RegIntrinsic::TensorExp),
+        ("Tensor", "log") => Some(RegIntrinsic::TensorLog),
+        ("Tensor", "sqrt") => Some(RegIntrinsic::TensorSqrt),
+        ("Tensor", "relu") => Some(RegIntrinsic::TensorRelu),
         ("TensorError", "message") => Some(RegIntrinsic::TensorErrorMessage),
         ("Char", "compare") => Some(RegIntrinsic::CharCompare),
         ("Char", "from_code") => Some(RegIntrinsic::CharFromCode),
@@ -9260,6 +9278,40 @@ impl RegVm {
                         rsscript_runtime::tensor_error_message(&error),
                     )),
                 }))
+            }
+            RegIntrinsic::TensorAdd
+            | RegIntrinsic::TensorSub
+            | RegIntrinsic::TensorMul
+            | RegIntrinsic::TensorDiv => {
+                let a = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let b = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let result = match intrinsic {
+                    RegIntrinsic::TensorAdd => rsscript_runtime::tensor_add(&a, &b),
+                    RegIntrinsic::TensorSub => rsscript_runtime::tensor_sub(&a, &b),
+                    RegIntrinsic::TensorMul => rsscript_runtime::tensor_mul(&a, &b),
+                    _ => rsscript_runtime::tensor_div(&a, &b),
+                };
+                Ok(json_result(match result {
+                    Ok(tensor) => Ok(self.store_tensor(tensor)),
+                    Err(error) => Err(tensor_error_value(
+                        rsscript_runtime::tensor_error_message(&error),
+                    )),
+                }))
+            }
+            RegIntrinsic::TensorNeg
+            | RegIntrinsic::TensorExp
+            | RegIntrinsic::TensorLog
+            | RegIntrinsic::TensorSqrt
+            | RegIntrinsic::TensorRelu => {
+                let t = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let result = match intrinsic {
+                    RegIntrinsic::TensorNeg => rsscript_runtime::tensor_neg(&t),
+                    RegIntrinsic::TensorExp => rsscript_runtime::tensor_exp(&t),
+                    RegIntrinsic::TensorLog => rsscript_runtime::tensor_log(&t),
+                    RegIntrinsic::TensorSqrt => rsscript_runtime::tensor_sqrt(&t),
+                    _ => rsscript_runtime::tensor_relu(&t),
+                };
+                Ok(self.store_tensor(result))
             }
             RegIntrinsic::CharCompare | RegIntrinsic::CharFromCode | RegIntrinsic::CharIsAlphanumeric | RegIntrinsic::CharIsAlpha | RegIntrinsic::CharIsDigit | RegIntrinsic::CharIsLower | RegIntrinsic::CharIsUpper | RegIntrinsic::CharIsWhitespace | RegIntrinsic::CharToCode | RegIntrinsic::CharToLower | RegIntrinsic::CharToString | RegIntrinsic::CharToUpper => self.exec_char_intrinsics(unit, intrinsic, args, base, next_base),
             RegIntrinsic::ClockNow => Ok(instant_value(clock_system_unix_ms())),

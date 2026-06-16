@@ -1065,6 +1065,8 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:TempDir.keep runtime:TempDir.new runtime:TempDir.new_in runtime:TempDir.path
 // parity: runtime:Tensor.from_f32_slice runtime:Tensor.to_f32_slice runtime:Tensor.shape
 // parity: runtime:Tensor.rank runtime:Tensor.matmul runtime:TensorError.message
+// parity: runtime:Tensor.add runtime:Tensor.sub runtime:Tensor.mul runtime:Tensor.div
+// parity: runtime:Tensor.neg runtime:Tensor.exp runtime:Tensor.log runtime:Tensor.sqrt runtime:Tensor.relu
 // parity: runtime:Timer.sleep runtime:Timer.sleep_cancellable runtime:Timer.sleep_until
 // parity: runtime:Tcp.connect runtime:TcpError.message
 // parity: runtime:TcpStream.read runtime:TcpStream.shutdown

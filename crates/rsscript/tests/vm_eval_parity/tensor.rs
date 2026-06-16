@@ -221,3 +221,146 @@ fn main() -> Result<Unit, TensorError> {
         source,
     );
 }
+
+#[test]
+fn parity_tensor_elementwise_binary() {
+    let source = r#"
+features: native, local
+
+fn dump(t: read Tensor) -> Result<Unit, TensorError> {
+    let values = Tensor.to_f32_slice(tensor: read t)?
+    let mut index = 0
+    while index < List.len(list: read values) {
+        Log.write(message: read Float.to_string(value: read List.get(list: read values, index: index)))
+        index = index + 1
+    }
+    return Ok(Unit)
+}
+
+fn main() -> Result<Unit, TensorError> {
+    let a = Tensor.from_f32_slice(data: read [1.0, 2.0, 4.0, 8.0], shape: read [2, 2])?
+    let b = Tensor.from_f32_slice(data: read [2.0, 2.0, 2.0, 2.0], shape: read [2, 2])?
+    let sum = Tensor.add(a: read a, b: read b)?
+    let diff = Tensor.sub(a: read a, b: read b)?
+    let prod = Tensor.mul(a: read a, b: read b)?
+    let quot = Tensor.div(a: read a, b: read b)?
+    dump(t: read sum)?
+    dump(t: read diff)?
+    dump(t: read prod)?
+    dump(t: read quot)?
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-elementwise-binary.rss",
+        "rsscript_parity_tensor_elementwise_binary",
+        source,
+    );
+}
+
+#[test]
+fn parity_tensor_elementwise_unary() {
+    let source = r#"
+features: native, local
+
+fn dump(t: read Tensor) -> Result<Unit, TensorError> {
+    let values = Tensor.to_f32_slice(tensor: read t)?
+    let mut index = 0
+    while index < List.len(list: read values) {
+        Log.write(message: read Float.to_string(value: read List.get(list: read values, index: index)))
+        index = index + 1
+    }
+    return Ok(Unit)
+}
+
+fn main() -> Result<Unit, TensorError> {
+    let t = Tensor.from_f32_slice(data: read [1.0, 0.0, 4.0, 9.0], shape: read [2, 2])?
+    let neg_in = Tensor.from_f32_slice(data: read [1.0, 0.0, 0.0, 0.0], shape: read [2, 2])?
+    let neg = Tensor.neg(t: read t)
+    dump(t: read neg)?
+    dump(t: read Tensor.exp(t: read t))?
+    dump(t: read Tensor.log(t: read t))?
+    dump(t: read Tensor.sqrt(t: read t))?
+    // relu over a tensor with negatives.
+    let mixed = Tensor.sub(a: read neg_in, b: read t)?
+    dump(t: read Tensor.relu(t: read mixed))?
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-elementwise-unary.rss",
+        "rsscript_parity_tensor_elementwise_unary",
+        source,
+    );
+}
+
+#[test]
+fn parity_tensor_elementwise_shape_mismatch() {
+    let source = r#"
+features: native, local
+
+fn main() -> Result<Unit, TensorError> {
+    let a = Tensor.from_f32_slice(data: read [1.0, 2.0, 3.0, 4.0], shape: read [2, 2])?
+    let b = Tensor.from_f32_slice(data: read [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], shape: read [2, 3])?
+    local bad = Tensor.add(a: read a, b: read b)
+    match bad {
+        Ok(_) => {
+            Log.write(message: read "ok")
+        }
+        Err(error) => {
+            Log.write(message: read TensorError.message(error: read error))
+        }
+    }
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-elementwise-shape-mismatch.rss",
+        "rsscript_parity_tensor_elementwise_shape_mismatch",
+        source,
+    );
+}
+
+/// A larger (256×256 = 65 536-element) elementwise add+mul to exercise the bulk
+/// path natively on both backends. We print a few sampled elements so output is
+/// compact while the whole buffer is still computed.
+#[test]
+fn parity_tensor_large_elementwise() {
+    let source = r#"
+features: native, local
+
+fn build_ramp(n: Int) -> Result<fresh Tensor, TensorError> {
+    local data = List<Float>.new()
+    let mut k = 0
+    let total = n * n
+    while k < total {
+        List.push<Float>(list: mut data, value: read Int.to_float(value: read k))
+        k = k + 1
+    }
+    return Tensor.from_f32_slice(data: read data, shape: read [n, n])
+}
+
+fn main() -> Result<Unit, TensorError> {
+    let n = 256
+    let a = build_ramp(n: n)?
+    let b = build_ramp(n: n)?
+    let sum = Tensor.add(a: read a, b: read b)?
+    let prod = Tensor.mul(a: read a, b: read b)?
+    let sum_vals = Tensor.to_f32_slice(tensor: read sum)?
+    let prod_vals = Tensor.to_f32_slice(tensor: read prod)?
+    let total = n * n
+    let mut i = 0
+    while i < total {
+        Log.write(message: read Float.to_string(value: read List.get(list: read sum_vals, index: i)))
+        Log.write(message: read Float.to_string(value: read List.get(list: read prod_vals, index: i)))
+        i = i + 12000
+    }
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-large-elementwise.rss",
+        "rsscript_parity_tensor_large_elementwise",
+        source,
+    );
+}
