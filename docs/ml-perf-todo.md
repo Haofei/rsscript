@@ -30,24 +30,27 @@ family of **runtime intrinsics** wired the same way as existing native intrinsic
 and lowered by `rust_lower`). The framework's existing RSScript `Tensor` API is
 re-pointed at these kernels — additive, the surface stays the same.
 
-- [ ] **Slice 1 — `matmul` kernel** (the headline). Native cache-blocked matmul
-  via the `matrixmultiply` crate (pure Rust, no system-BLAS dep; add `rayon` for
-  large sizes). Expose as a runtime intrinsic; route `Tensor.matmul` to it.
-  _Verify:_ VM↔compiled parity + a benchmark showing the VM big-matmul cliff is
-  gone (e.g. 512×512, 1024×1024 before/after).
-- [ ] **Slice 2 — elementwise kernels.** Binary (`add/sub/mul/div`) and unary
-  (`neg/exp/log/sqrt/relu/…`) over the packed buffer, as intrinsics; route the
-  framework's elementwise ops to them. Keep results bit-identical to the current
-  path. _Verify:_ parity + big-tensor benchmark.
-- [ ] **Slice 3 — reductions.** `sum/max/mean` (and argmax) over axes as native
-  kernels. _Verify:_ parity + benchmark.
-- [ ] **Slice 4 — movement ops zero-copy.** `reshape/permute/expand/broadcast`
-  via shape+strides on the shared buffer (no copy) if not already. _Verify:_
-  parity.
-- [ ] **Slice 5 — no per-op marshaling.** Hold tensor data as native buffers
-  (`Rc<Vec<f32>>`) across ops so a chain of ops doesn't convert the whole buffer
-  to/from `VmValue` each call (matters for elementwise on big tensors; matmul is
-  compute-bound so this is secondary there). _Verify:_ parity + benchmark.
+- [x] **Slice 1 — `matmul` kernel** (the headline). DONE: native `RssTensor`
+  (`Rc<Vec<f32>>` + shape) runtime-backed value type mirroring `Channel`, working
+  in both reg-VM and AOT; hand-written `ikj` f32 matmul (no new deps — optimized
+  `matrixmultiply`/`rayon` deferred to P3) + `from/to_f32_slice` + `shape`/`rank`.
+  Both backends call the identical `rsscript_runtime::tensor_*` kernels, so parity
+  is bit-identical. (`packages/ml/interface/tensor.rssi`.)
+- [x] **Slice 2 — elementwise kernels.** DONE: `Tensor.add/sub/mul/div`
+  (same-shape) and `neg/exp/log/sqrt/relu` as native intrinsics, parity-tested
+  (incl. 256×256 bulk). Broadcasting handled via `broadcast_to` (slice 4).
+- [x] **Slice 3 — reductions.** DONE: `sum_all` (global→scalar) +
+  `sum_axis/max_axis/mean_axis/argmax_axis` over an axis, native, parity-tested.
+- [x] **Slice 4 — movement ops.** DONE: `reshape` (true zero-copy via `Rc::clone`)
+  + `transpose/permute/broadcast_to` (materializing, contiguous-preserving).
+  `RssTensor` deliberately stays row-major contiguous (no `strides` field) so the
+  matmul/elementwise/reduce kernels stay simple; true zero-copy strided views are
+  a future optimization. Parity-tested.
+- [x] **Slice 5 — no per-op marshaling.** SATISFIED BY DESIGN (slice 1): tensors
+  flow as `VmValue::Native` handles (an id into the executor's `tensors` map), and
+  buffers are `Rc<Vec<f32>>`. A chain of ops passes handles + `Rc`-clones — the
+  full buffer is only converted to/from `VmValue` at the `from_f32_slice` /
+  `to_f32_slice` boundary, never per-op.
 
 _Why this is the priority:_ it removes the big-matrix VM cliff directly, and it
 demotes the 3-min AOT off the dev hot loop (you iterate on the now-fast VM; AOT
@@ -58,10 +61,10 @@ becomes a ship/verify step).
 Confirmed: the generated `Cargo.toml` has **no profile tuning** (only
 `[profile.release] overflow-checks = true`).
 
-- [ ] **Tuned generated build profile.** Add a "fast-ish" build profile to the
-  generated crate (`opt-level=1/2`, `codegen-units=256`, `lto=off`,
-  `incremental=true`) so ship/verify builds aren't full-fat release every time.
-  Quick win.
+- [x] **Tuned generated build profile.** DONE: generated `Cargo.toml` now sets
+  `[profile.release]` `codegen-units=256, lto=false, incremental=true` (keeping
+  `overflow-checks=true`) and a `[profile.dev]` `opt-level=1, incremental=true,
+  codegen-units=256`. (`crates/rsscript/src/rust_lower/mod.rs`.)
 - [ ] **Per-module split of the generated package.** The port lowers to one huge
   generated `lib.rs`; any edit recompiles the whole crate. Emit one module/file
   per source unit so rustc's incremental units are small → a one-file edit
