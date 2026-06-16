@@ -71,5 +71,15 @@ test = false
 doc = false
 bench = false
 
+# Coverage-guided proof of Invariant 1 (no panic / native crash): seed ->
+# well-typed program -> eval on the reg-VM under finite VmLimits must only ever
+# return Ok or EvalError, never panic. Any panic/abort is recorded as a crash.
+[[bin]]
+name = "no_panic"
+path = "fuzz_targets/no_panic.rs"
+test = false
+doc = false
+bench = false
+
 [profile.release]
 debug = 1

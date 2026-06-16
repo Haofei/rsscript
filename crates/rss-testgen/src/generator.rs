@@ -742,40 +742,49 @@ impl<'a> Generator<'a> {
 
     fn gen_expr(&mut self, ty: &Ty, scope: &Scope, fuel: u32) -> String {
         if fuel == 0 {
-            return self.gen_atom(ty, scope);
+            return self.gen_atom(ty, scope, 0);
         }
         // Occasionally satisfy an `Int` target with a monomorphized generic call.
         if *ty == Ty::Int && !self.generic_fns.is_empty() && fuel > 0 && self.seed.choice(4) == 0 {
             return self.gen_generic_call(scope, fuel);
         }
         match self.seed.weighted(&[3, 2, 4]) {
-            0 => self.gen_atom(ty, scope),
+            0 => self.gen_atom(ty, scope, fuel),
             1 => self
                 .gen_call(ty, scope, fuel)
-                .unwrap_or_else(|| self.gen_atom(ty, scope)),
+                .unwrap_or_else(|| self.gen_atom(ty, scope, fuel)),
             _ => self.gen_compound(ty, scope, fuel),
         }
     }
 
-    /// A leaf: an in-scope variable, or a freshly constructed value.
-    fn gen_atom(&mut self, ty: &Ty, scope: &Scope) -> String {
+    /// A leaf: an in-scope variable, or a freshly constructed value. `fuel` is the
+    /// remaining recursion budget; construction of a compound payload consumes one
+    /// unit, so at `fuel == 0` only nullary literals/atoms are produced — this is
+    /// what guarantees termination even when a function returning `T` takes a
+    /// compound-of-`T` parameter (the `T -> Option<T> -> T -> …` cycle).
+    fn gen_atom(&mut self, ty: &Ty, scope: &Scope, fuel: u32) -> String {
         let vars = scope.bindings_of(ty);
         if !vars.is_empty() && self.seed.bool() {
             return vars[self.seed.choice(vars.len())].name.clone();
         }
-        self.gen_construct(ty, scope)
+        self.gen_construct(ty, scope, fuel)
     }
 
     /// Construct a value of `ty` (literal for scalars; constructor for compounds).
-    fn gen_construct(&mut self, ty: &Ty, scope: &Scope) -> String {
+    /// Compound payloads are generated with strictly-decreasing `fuel` so that
+    /// `Some`/`Ok` nesting cannot reset the recursion budget — at `fuel == 0` the
+    /// payload is a plain `gen_construct` (a literal/atom that never re-enters
+    /// `gen_expr`), which is what bounds generation.
+    fn gen_construct(&mut self, ty: &Ty, scope: &Scope, fuel: u32) -> String {
+        let payload_fuel = fuel.saturating_sub(1);
         match ty {
             Ty::Int | Ty::Bool | Ty::Float | Ty::String => self.gen_literal(ty),
             Ty::Option(inner) => {
-                let value = self.gen_expr(inner, scope, 1);
+                let value = self.gen_expr(inner, scope, payload_fuel);
                 format!("Some({value})")
             }
             Ty::Result(ok, _) => {
-                let value = self.gen_expr(ok, scope, 1);
+                let value = self.gen_expr(ok, scope, payload_fuel);
                 format!("Ok({value})")
             }
             Ty::Struct(name) => {
@@ -921,7 +930,7 @@ impl<'a> Generator<'a> {
             | Ty::List(_)
             | Ty::Map(_, _)
             | Ty::Set(_)
-            | Ty::Deque(_) => self.gen_construct(ty, scope),
+            | Ty::Deque(_) => self.gen_construct(ty, scope, fuel),
         }
     }
 
