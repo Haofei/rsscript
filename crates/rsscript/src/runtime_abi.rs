@@ -413,6 +413,18 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("Tensor", "log", "rsscript_runtime::tensor_log"),
     runtime_intrinsic("Tensor", "sqrt", "rsscript_runtime::tensor_sqrt"),
     runtime_intrinsic("Tensor", "relu", "rsscript_runtime::tensor_relu"),
+    runtime_intrinsic("Tensor", "reshape", "rsscript_runtime::tensor_reshape"),
+    runtime_intrinsic(
+        "Tensor",
+        "transpose",
+        "rsscript_runtime::tensor_transpose",
+    ),
+    runtime_intrinsic("Tensor", "permute", "rsscript_runtime::tensor_permute"),
+    runtime_intrinsic(
+        "Tensor",
+        "broadcast_to",
+        "rsscript_runtime::tensor_broadcast_to",
+    ),
     runtime_intrinsic(
         "TensorError",
         "message",

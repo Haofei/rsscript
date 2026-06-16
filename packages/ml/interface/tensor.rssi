@@ -69,5 +69,39 @@ pub native fn Tensor.sqrt(t: read Tensor) -> fresh Tensor
 pub native fn Tensor.relu(t: read Tensor) -> fresh Tensor
     effects(native)
 
+// Movement ops (slice 4). The tensor stays row-major contiguous: reshape is
+// zero-copy (shares the same buffer, new shape); transpose/permute/broadcast_to
+// materialize a fresh contiguous buffer (true strided views are future work).
+
+// Reshape to a new shape WITHOUT copying — shares the buffer. Errors if the new
+// shape's element count differs from the current one.
+pub native fn Tensor.reshape(
+    t: read Tensor,
+    shape: read List<Int>,
+) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+// 2-D transpose: (r, c) -> (c, r), materializing the transposed buffer. Errors
+// if the tensor is not rank-2.
+pub native fn Tensor.transpose(t: read Tensor) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+// General axis permutation: `axes` must be a permutation of 0..rank. Errors
+// otherwise. Materializes the permuted buffer.
+pub native fn Tensor.permute(
+    t: read Tensor,
+    axes: read List<Int>,
+) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+// NumPy-style broadcast to `shape`, materializing the expanded buffer. Each
+// source dim (right-aligned) must be 1 or equal to the target dim. Errors if not
+// broadcastable.
+pub native fn Tensor.broadcast_to(
+    t: read Tensor,
+    shape: read List<Int>,
+) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
 pub fn TensorError.message(error: read TensorError) -> fresh String
     effects(pure)

@@ -2089,6 +2089,10 @@ enum RegIntrinsic {
     TensorLog,
     TensorSqrt,
     TensorRelu,
+    TensorReshape,
+    TensorTranspose,
+    TensorPermute,
+    TensorBroadcastTo,
     TensorErrorMessage,
     CharCompare,
     CharFromCode,
@@ -5337,6 +5341,10 @@ fn qualified_intrinsic(namespace: &str, name: &str) -> Option<RegIntrinsic> {
         ("Tensor", "log") => Some(RegIntrinsic::TensorLog),
         ("Tensor", "sqrt") => Some(RegIntrinsic::TensorSqrt),
         ("Tensor", "relu") => Some(RegIntrinsic::TensorRelu),
+        ("Tensor", "reshape") => Some(RegIntrinsic::TensorReshape),
+        ("Tensor", "transpose") => Some(RegIntrinsic::TensorTranspose),
+        ("Tensor", "permute") => Some(RegIntrinsic::TensorPermute),
+        ("Tensor", "broadcast_to") => Some(RegIntrinsic::TensorBroadcastTo),
         ("TensorError", "message") => Some(RegIntrinsic::TensorErrorMessage),
         ("Char", "compare") => Some(RegIntrinsic::CharCompare),
         ("Char", "from_code") => Some(RegIntrinsic::CharFromCode),
@@ -9312,6 +9320,51 @@ impl RegVm {
                     _ => rsscript_runtime::tensor_relu(&t),
                 };
                 Ok(self.store_tensor(result))
+            }
+            RegIntrinsic::TensorReshape => {
+                let t = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let shape = expect_int_list_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(json_result(
+                    match rsscript_runtime::tensor_reshape(&t, &shape) {
+                        Ok(tensor) => Ok(self.store_tensor(tensor)),
+                        Err(error) => Err(tensor_error_value(
+                            rsscript_runtime::tensor_error_message(&error),
+                        )),
+                    },
+                ))
+            }
+            RegIntrinsic::TensorTranspose => {
+                let t = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(json_result(match rsscript_runtime::tensor_transpose(&t) {
+                    Ok(tensor) => Ok(self.store_tensor(tensor)),
+                    Err(error) => Err(tensor_error_value(
+                        rsscript_runtime::tensor_error_message(&error),
+                    )),
+                }))
+            }
+            RegIntrinsic::TensorPermute => {
+                let t = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let axes = expect_int_list_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(json_result(
+                    match rsscript_runtime::tensor_permute(&t, &axes) {
+                        Ok(tensor) => Ok(self.store_tensor(tensor)),
+                        Err(error) => Err(tensor_error_value(
+                            rsscript_runtime::tensor_error_message(&error),
+                        )),
+                    },
+                ))
+            }
+            RegIntrinsic::TensorBroadcastTo => {
+                let t = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let shape = expect_int_list_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(json_result(
+                    match rsscript_runtime::tensor_broadcast_to(&t, &shape) {
+                        Ok(tensor) => Ok(self.store_tensor(tensor)),
+                        Err(error) => Err(tensor_error_value(
+                            rsscript_runtime::tensor_error_message(&error),
+                        )),
+                    },
+                ))
             }
             RegIntrinsic::CharCompare | RegIntrinsic::CharFromCode | RegIntrinsic::CharIsAlphanumeric | RegIntrinsic::CharIsAlpha | RegIntrinsic::CharIsDigit | RegIntrinsic::CharIsLower | RegIntrinsic::CharIsUpper | RegIntrinsic::CharIsWhitespace | RegIntrinsic::CharToCode | RegIntrinsic::CharToLower | RegIntrinsic::CharToString | RegIntrinsic::CharToUpper => self.exec_char_intrinsics(unit, intrinsic, args, base, next_base),
             RegIntrinsic::ClockNow => Ok(instant_value(clock_system_unix_ms())),
