@@ -543,6 +543,12 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "avg_pool2d",
         "rsscript_runtime::tensor_avg_pool2d",
     ),
+    // scatter
+    runtime_intrinsic(
+        "Tensor",
+        "scatter_add",
+        "rsscript_runtime::tensor_scatter_add",
+    ),
     runtime_intrinsic(
         "TensorError",
         "message",

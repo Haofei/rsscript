@@ -2151,6 +2151,8 @@ enum RegIntrinsic {
     TensorConv2d,
     TensorMaxPool2d,
     TensorAvgPool2d,
+    // scatter
+    TensorScatterAdd,
     TensorErrorMessage,
     CharCompare,
     CharFromCode,
@@ -5461,6 +5463,8 @@ fn qualified_intrinsic(namespace: &str, name: &str) -> Option<RegIntrinsic> {
         ("Tensor", "conv2d") => Some(RegIntrinsic::TensorConv2d),
         ("Tensor", "max_pool2d") => Some(RegIntrinsic::TensorMaxPool2d),
         ("Tensor", "avg_pool2d") => Some(RegIntrinsic::TensorAvgPool2d),
+        // scatter
+        ("Tensor", "scatter_add") => Some(RegIntrinsic::TensorScatterAdd),
         ("TensorError", "message") => Some(RegIntrinsic::TensorErrorMessage),
         ("Char", "compare") => Some(RegIntrinsic::CharCompare),
         ("Char", "from_code") => Some(RegIntrinsic::CharFromCode),
@@ -9578,6 +9582,21 @@ impl RegVm {
                 let indices = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
                 Ok(json_result(
                     match rsscript_runtime::tensor_gather(&data, axis, &indices) {
+                        Ok(tensor) => Ok(self.store_tensor(tensor)),
+                        Err(error) => Err(tensor_error_value(
+                            rsscript_runtime::tensor_error_message(&error),
+                        )),
+                    },
+                ))
+            }
+            // scatter
+            RegIntrinsic::TensorScatterAdd => {
+                let updates = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let axis = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let indices = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
+                let dim_size = expect_int_ref(intrinsic_arg(&self.stack, base, args, 3)?)?;
+                Ok(json_result(
+                    match rsscript_runtime::tensor_scatter_add(&updates, axis, &indices, dim_size) {
                         Ok(tensor) => Ok(self.store_tensor(tensor)),
                         Err(error) => Err(tensor_error_value(
                             rsscript_runtime::tensor_error_message(&error),

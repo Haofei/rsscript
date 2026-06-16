@@ -399,5 +399,19 @@ pub native fn Tensor.avg_pool2d(
 ) -> Result<fresh Tensor, TensorError>
     effects(native)
 
+// scatter
+// Accumulating inverse of gather (its vjp): scatters the rows of `updates` along
+// `axis` into a zero-initialised output whose `axis` dim is `dim_size`,
+// accumulating on duplicate indices. `indices` is rank-1 with length
+// `updates.shape[axis]`. Output dtype = updates dtype. Errors if indices is not
+// rank-1, its length != updates.shape[axis], axis out of range, dim_size <= 0, or
+// any index is outside [0, dim_size).
+pub native fn Tensor.scatter_add(
+    updates: read Tensor,
+    axis: Int,
+    indices: read Tensor,
+    dim_size: Int,
+) -> Result<fresh Tensor, TensorError>
+
 pub fn TensorError.message(error: read TensorError) -> fresh String
     effects(pure)

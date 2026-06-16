@@ -1079,6 +1079,7 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:Tensor.rand runtime:Tensor.randint runtime:Tensor.randn
 // parity: runtime:Tensor.iota runtime:Tensor.one_hot runtime:Tensor.softmax runtime:Tensor.log_softmax runtime:Tensor.cross_entropy
 // parity: runtime:Tensor.conv2d runtime:Tensor.max_pool2d runtime:Tensor.avg_pool2d
+// parity: runtime:Tensor.scatter_add
 // parity: runtime:Timer.sleep runtime:Timer.sleep_cancellable runtime:Timer.sleep_until
 // parity: runtime:Tcp.connect runtime:TcpError.message
 // parity: runtime:TcpStream.read runtime:TcpStream.shutdown
