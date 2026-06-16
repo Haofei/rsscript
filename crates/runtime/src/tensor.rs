@@ -872,6 +872,179 @@ pub fn tensor_broadcast_to(t: &RssTensor, target_shape: &[i64]) -> Result<RssTen
     })
 }
 
+// ---------------------------------------------------------------------------
+// bmm+int/bit (ops D).
+//
+// Batched matmul broadcasts the leading (batch) dims of two rank>=2 operands and
+// does a rank-2 matmul over the trailing (m,k)x(k,n) matrices.
+//
+// The integer/bit ops below operate on the INTEGER VALUE of I32-dtype tensors.
+// Storage is always `Vec<f32>`; an I32 tensor holds integers exactly only while
+// `|value| <= 2^24`. Each op converts every f32 operand to `i64` (`x as i64`),
+// applies the integer/bit operation, and stores the result back as `f32`
+// (`result as f32`). Therefore EXACTNESS HOLDS ONLY FOR `|value| <= 2^24`; bit
+// ops on larger magnitudes are not guaranteed to round-trip. This is acceptable
+// because the port's heavy RNG runs host-side; these kernels exist for index
+// arithmetic where the magnitudes are small. All binary ops broadcast (reusing
+// `tensor_broadcast_binary`) and output dtype I32. They are TOTAL over any input:
+// divide/modulo by zero is DEFINED to return 0 (rather than trapping), and shift
+// counts are masked to `0..63` to avoid Rust's shift-overflow UB.
+// ---------------------------------------------------------------------------
+
+/// Batched matrix multiply. Both operands must be rank >= 2; the last two dims are
+/// the matrix `(m, k) × (k, n) -> (m, n)` and the leading dims are batch dims that
+/// BROADCAST against each other (NumPy semantics, reusing `broadcast_shapes`). For
+/// each broadcasted batch index the rank-2 matmul kernel is applied to the
+/// corresponding `(m,k)` and `(k,n)` slices. Output dtype is always F32. Errors if
+/// either operand is rank < 2, the inner dims disagree, or the batch dims are not
+/// broadcast-compatible.
+pub fn tensor_bmm(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
+    if a.shape.len() < 2 || b.shape.len() < 2 {
+        return Err(TensorError::new(format!(
+            "bmm requires two tensors of rank >= 2, got shapes {:?} and {:?}",
+            a.shape, b.shape
+        )));
+    }
+    let ar = a.shape.len();
+    let br = b.shape.len();
+    let (m, ka) = (a.shape[ar - 2], a.shape[ar - 1]);
+    let (kb, n) = (b.shape[br - 2], b.shape[br - 1]);
+    if ka != kb {
+        return Err(TensorError::new(format!(
+            "bmm inner dimensions disagree: {:?} × {:?} (contraction {ka} != {kb})",
+            a.shape, b.shape
+        )));
+    }
+    let k = ka;
+    // Broadcast the batch-dim prefixes (everything except the trailing two dims).
+    let a_batch = &a.shape[..ar - 2];
+    let b_batch = &b.shape[..br - 2];
+    let batch_shape = broadcast_shapes(a_batch, b_batch, "bmm")?;
+    let batch_count = RssTensor::shape_len(&batch_shape);
+    // Broadcast strides over the batch prefix only (in units of WHOLE matrices).
+    let a_batch_strides = broadcast_strides(a_batch, &batch_shape);
+    let b_batch_strides = broadcast_strides(b_batch, &batch_shape);
+    let batch_rank = batch_shape.len();
+    let a_data = a.data.as_ref();
+    let b_data = b.data.as_ref();
+    let a_mat = m * k;
+    let b_mat = k * n;
+    let c_mat = m * n;
+    let mut out = vec![0.0f32; batch_count * c_mat];
+    let mut index = vec![0usize; batch_rank];
+    for batch in 0..batch_count {
+        // Map the broadcasted batch multi-index to matrix offsets in each operand.
+        let mut a_b = 0usize;
+        let mut b_b = 0usize;
+        for d in 0..batch_rank {
+            a_b += index[d] * a_batch_strides[d];
+            b_b += index[d] * b_batch_strides[d];
+        }
+        let lhs = &a_data[a_b * a_mat..a_b * a_mat + a_mat];
+        let rhs = &b_data[b_b * b_mat..b_b * b_mat + b_mat];
+        let out_mat = &mut out[batch * c_mat..batch * c_mat + c_mat];
+        // Same ikj kernel as tensor_matmul, applied to this batch slice.
+        for i in 0..m {
+            let lhs_row = &lhs[i * k..i * k + k];
+            let out_row = &mut out_mat[i * n..i * n + n];
+            for p in 0..k {
+                let a_ip = lhs_row[p];
+                if a_ip == 0.0 {
+                    continue;
+                }
+                let rhs_row = &rhs[p * n..p * n + n];
+                for j in 0..n {
+                    out_row[j] += a_ip * rhs_row[j];
+                }
+            }
+        }
+        for d in (0..batch_rank).rev() {
+            index[d] += 1;
+            if index[d] < batch_shape[d] {
+                break;
+            }
+            index[d] = 0;
+        }
+    }
+    let mut out_shape = batch_shape;
+    out_shape.push(m);
+    out_shape.push(n);
+    Ok(RssTensor {
+        data: Rc::new(out),
+        shape: out_shape,
+        dtype: DType::F32,
+    })
+}
+
+/// Apply an integer binary op on the i64 VALUES of two tensors, broadcasting and
+/// stamping the output dtype I32. `op` receives the two operands as `i64` and
+/// returns the i64 result, which is stored back as `f32`. Exact only for
+/// `|value| <= 2^24` (see the section header).
+fn tensor_int_binary(
+    a: &RssTensor,
+    b: &RssTensor,
+    op_name: &str,
+    op: impl Fn(i64, i64) -> i64,
+) -> Result<RssTensor, TensorError> {
+    tensor_broadcast_binary(a, b, op_name, DType::I32, |x, y| {
+        op(x as i64, y as i64) as f32
+    })
+}
+
+/// Truncated integer division toward zero (`a / b` in i64). Divide-by-zero is
+/// DEFINED to return 0 (keeping the op total). Broadcasts; output dtype I32.
+pub fn tensor_idiv(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
+    tensor_int_binary(a, b, "idiv", |x, y| if y == 0 { 0 } else { x / y })
+}
+
+/// Integer remainder (`a % b` in i64, sign follows the dividend). Modulo-by-zero
+/// is DEFINED to return 0. Broadcasts; output dtype I32.
+pub fn tensor_mod(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
+    tensor_int_binary(a, b, "mod", |x, y| if y == 0 { 0 } else { x % y })
+}
+
+/// Left shift `a << b` on i64 values, the shift count masked to `0..63` to avoid
+/// shift-overflow UB. Broadcasts; output dtype I32.
+pub fn tensor_shl(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
+    tensor_int_binary(a, b, "shl", |x, y| x << (y & 63))
+}
+
+/// Right shift `a >> b` (arithmetic, on signed i64) with the shift count masked to
+/// `0..63`. Broadcasts; output dtype I32.
+pub fn tensor_shr(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
+    tensor_int_binary(a, b, "shr", |x, y| x >> (y & 63))
+}
+
+/// Bitwise AND on i64 values. Broadcasts; output dtype I32.
+pub fn tensor_and(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
+    tensor_int_binary(a, b, "and", |x, y| x & y)
+}
+
+/// Bitwise OR on i64 values. Broadcasts; output dtype I32.
+pub fn tensor_or(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
+    tensor_int_binary(a, b, "or", |x, y| x | y)
+}
+
+/// Bitwise XOR on i64 values. Broadcasts; output dtype I32.
+pub fn tensor_xor(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
+    tensor_int_binary(a, b, "xor", |x, y| x ^ y)
+}
+
+/// Reinterpret each f32's BITS as an i32 (`f32::to_bits as i32`), stored back as
+/// f32 with dtype I32. Best-effort/for completeness: the resulting integer is only
+/// exactly representable while `|value| <= 2^24`, so large bit patterns may not
+/// round-trip. Infallible.
+pub fn tensor_bitcast_f32_to_i32(t: &RssTensor) -> RssTensor {
+    tensor_unary_elementwise(t, DType::I32, |x| (x.to_bits() as i32) as f32)
+}
+
+/// Inverse of `tensor_bitcast_f32_to_i32`: take each value's integer (as i32),
+/// reinterpret its bits as an f32 (`f32::from_bits`), dtype F32. Same exactness
+/// caveat (`|value| <= 2^24`). Infallible.
+pub fn tensor_bitcast_i32_to_f32(t: &RssTensor) -> RssTensor {
+    tensor_unary_elementwise(t, DType::F32, |x| f32::from_bits((x as i32) as u32))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1252,5 +1425,149 @@ mod tests {
         let r = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
         assert!(tensor_error_message(&tensor_broadcast_to(&r, &[2]).unwrap_err())
             .contains("cannot reduce rank"));
+    }
+
+    // --- bmm+int/bit (ops D) ---
+
+    #[test]
+    fn bmm_two_batches_match_two_matmuls() {
+        // shape [2,2,2]: two stacked 2x2 matrices.
+        let a = tensor_from_f32_slice(
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            &[2, 2, 2],
+        )
+        .unwrap();
+        let b = tensor_from_f32_slice(
+            &[1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0],
+            &[2, 2, 2],
+        )
+        .unwrap();
+        let c = tensor_bmm(&a, &b).unwrap();
+        assert_eq!(tensor_shape(&c).unwrap(), vec![2, 2, 2]);
+        // Verify each batch equals the rank-2 matmul of its slices.
+        let a0 = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+        let b0 = tensor_from_f32_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2]).unwrap();
+        let a1 = tensor_from_f32_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2]).unwrap();
+        let b1 = tensor_from_f32_slice(&[2.0, 0.0, 0.0, 2.0], &[2, 2]).unwrap();
+        let mut expected = tensor_to_f32_slice(&tensor_matmul(&a0, &b0).unwrap()).unwrap();
+        expected.extend(tensor_to_f32_slice(&tensor_matmul(&a1, &b1).unwrap()).unwrap());
+        assert_eq!(tensor_to_f32_slice(&c).unwrap(), expected);
+        assert_eq!(tensor_dtype_code(&c), 0); // F32
+    }
+
+    #[test]
+    fn bmm_broadcasts_batch_dim() {
+        // a: [2,2,3] (two matrices), b: [1,3,2] (one matrix, broadcast over batch).
+        let a = tensor_from_f32_slice(
+            &(0..12).map(|x| x as f64).collect::<Vec<_>>(),
+            &[2, 2, 3],
+        )
+        .unwrap();
+        let b = tensor_from_f32_slice(
+            &[1.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            &[1, 3, 2],
+        )
+        .unwrap();
+        let c = tensor_bmm(&a, &b).unwrap();
+        assert_eq!(tensor_shape(&c).unwrap(), vec![2, 2, 2]);
+        let bm = tensor_reshape(&b, &[3, 2]).unwrap();
+        let a0 = tensor_reshape(
+            &tensor_from_f32_slice(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0], &[6]).unwrap(),
+            &[2, 3],
+        )
+        .unwrap();
+        let a1 = tensor_reshape(
+            &tensor_from_f32_slice(&[6.0, 7.0, 8.0, 9.0, 10.0, 11.0], &[6]).unwrap(),
+            &[2, 3],
+        )
+        .unwrap();
+        let mut expected = tensor_to_f32_slice(&tensor_matmul(&a0, &bm).unwrap()).unwrap();
+        expected.extend(tensor_to_f32_slice(&tensor_matmul(&a1, &bm).unwrap()).unwrap());
+        assert_eq!(tensor_to_f32_slice(&c).unwrap(), expected);
+    }
+
+    #[test]
+    fn bmm_rejects_bad_shapes() {
+        let v = tensor_from_f32_slice(&[1.0, 2.0], &[2]).unwrap();
+        let m = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+        assert!(tensor_error_message(&tensor_bmm(&v, &m).unwrap_err()).contains("rank >= 2"));
+        let a = tensor_from_f32_slice(&(0..8).map(|x| x as f64).collect::<Vec<_>>(), &[2, 2, 2])
+            .unwrap();
+        let bad = tensor_from_f32_slice(&(0..18).map(|x| x as f64).collect::<Vec<_>>(), &[2, 3, 3])
+            .unwrap();
+        assert!(tensor_error_message(&tensor_bmm(&a, &bad).unwrap_err())
+            .contains("inner dimensions disagree"));
+        // Non-broadcastable batch dims (2 vs 3).
+        let a3 = tensor_from_f32_slice(&(0..12).map(|x| x as f64).collect::<Vec<_>>(), &[3, 2, 2])
+            .unwrap();
+        assert!(tensor_error_message(&tensor_bmm(&a, &a3).unwrap_err())
+            .contains("not broadcast-compatible"));
+    }
+
+    #[test]
+    fn int_ops_on_small_ints() {
+        let a = tensor_cast_i32(&tensor_from_f32_slice(&[7.0, -7.0, 8.0, 5.0], &[4]).unwrap());
+        let b = tensor_cast_i32(&tensor_from_f32_slice(&[2.0, 2.0, 3.0, 0.0], &[4]).unwrap());
+        // idiv: trunc toward zero; div-by-zero -> 0.
+        let q = tensor_idiv(&a, &b).unwrap();
+        assert_eq!(tensor_dtype_code(&q), 1);
+        assert_eq!(tensor_to_f32_slice(&q).unwrap(), vec![3.0, -3.0, 2.0, 0.0]);
+        // mod: remainder; mod-by-zero -> 0.
+        let r = tensor_mod(&a, &b).unwrap();
+        assert_eq!(tensor_to_f32_slice(&r).unwrap(), vec![1.0, -1.0, 2.0, 0.0]);
+    }
+
+    #[test]
+    fn shift_and_bitwise_ops() {
+        let a = tensor_cast_i32(&tensor_from_f32_slice(&[1.0, 6.0, 12.0], &[3]).unwrap());
+        let s = tensor_cast_i32(&tensor_from_f32_slice(&[3.0, 1.0, 2.0], &[3]).unwrap());
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_shl(&a, &s).unwrap()).unwrap(),
+            vec![8.0, 12.0, 48.0]
+        );
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_shr(&a, &s).unwrap()).unwrap(),
+            vec![0.0, 3.0, 3.0]
+        );
+        let x = tensor_cast_i32(&tensor_from_f32_slice(&[6.0, 6.0, 6.0], &[3]).unwrap());
+        let y = tensor_cast_i32(&tensor_from_f32_slice(&[3.0, 3.0, 3.0], &[3]).unwrap());
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_and(&x, &y).unwrap()).unwrap(),
+            vec![2.0, 2.0, 2.0]
+        );
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_or(&x, &y).unwrap()).unwrap(),
+            vec![7.0, 7.0, 7.0]
+        );
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_xor(&x, &y).unwrap()).unwrap(),
+            vec![5.0, 5.0, 5.0]
+        );
+    }
+
+    #[test]
+    fn int_ops_broadcast_and_dtype() {
+        // [2,2] op [2] broadcasts the row; output dtype I32.
+        let a = tensor_cast_i32(
+            &tensor_from_f32_slice(&[10.0, 20.0, 30.0, 40.0], &[2, 2]).unwrap(),
+        );
+        let row = tensor_cast_i32(&tensor_from_f32_slice(&[3.0, 7.0], &[2]).unwrap());
+        let m = tensor_mod(&a, &row).unwrap();
+        assert_eq!(tensor_shape(&m).unwrap(), vec![2, 2]);
+        assert_eq!(tensor_dtype_code(&m), 1);
+        assert_eq!(tensor_to_f32_slice(&m).unwrap(), vec![1.0, 6.0, 0.0, 5.0]);
+    }
+
+    #[test]
+    fn bitcast_round_trips_small_values() {
+        let t = tensor_from_f32_slice(&[1.5, -2.0, 0.0], &[3]).unwrap();
+        let i = tensor_bitcast_f32_to_i32(&t);
+        assert_eq!(tensor_dtype_code(&i), 1);
+        let back = tensor_bitcast_i32_to_f32(&i);
+        assert_eq!(tensor_dtype_code(&back), 0);
+        assert_eq!(
+            tensor_to_f32_slice(&back).unwrap(),
+            tensor_to_f32_slice(&t).unwrap()
+        );
     }
 }
