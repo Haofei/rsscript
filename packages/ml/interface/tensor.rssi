@@ -308,5 +308,40 @@ pub native fn Tensor.bitcast_f32_to_i32(t: read Tensor) -> fresh Tensor
 pub native fn Tensor.bitcast_i32_to_f32(t: read Tensor) -> fresh Tensor
     effects(native)
 
+// conv (slice G). Forward-only NCHW 2-D convolution + pooling, output dtype F32.
+// `conv2d` is the ML convolution = cross-correlation (NO kernel flip): input
+// NCHW [N, Cin, H, W], weight OIHW [Cout, Cin, KH, KW], zero-padded by `padding`
+// on both H/W sides, then cross-correlated with `stride`. Output
+// [N, Cout, Hout, Wout] where Hout = (H + 2*padding - KH)/stride + 1 (floor),
+// similarly Wout. No bias (callers add a broadcast bias); no dilation/groups and
+// rectangular strides/kernels are future work. Errors on rank mismatch, Cin
+// mismatch, or non-positive output dims.
+pub native fn Tensor.conv2d(
+    input: read Tensor,
+    weight: read Tensor,
+    stride: Int,
+    padding: Int,
+) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+// Square max pooling: NCHW in, kernel x kernel window, given stride, NO padding.
+// Output [N, C, (H-kernel)/stride+1, (W-kernel)/stride+1], dtype F32. Errors on
+// non-positive output dims. Rectangular kernels/strides are future work.
+pub native fn Tensor.max_pool2d(
+    input: read Tensor,
+    kernel: Int,
+    stride: Int,
+) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+// Square average pooling: same as max_pool2d but averages over each window
+// (divides by kernel*kernel). Output dtype F32.
+pub native fn Tensor.avg_pool2d(
+    input: read Tensor,
+    kernel: Int,
+    stride: Int,
+) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
 pub fn TensorError.message(error: read TensorError) -> fresh String
     effects(pure)

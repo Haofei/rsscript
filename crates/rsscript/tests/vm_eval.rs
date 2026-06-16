@@ -1076,6 +1076,7 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:Tensor.pad runtime:Tensor.shrink runtime:Tensor.flip runtime:Tensor.gather
 // parity: runtime:Tensor.prod_axis runtime:Tensor.min_axis runtime:Tensor.sum_axes runtime:Tensor.prod_axes runtime:Tensor.max_axes runtime:Tensor.min_axes runtime:Tensor.mean_axes runtime:Tensor.reciprocal runtime:Tensor.exp2 runtime:Tensor.log2 runtime:Tensor.rsqrt runtime:Tensor.pow
 // parity: runtime:Tensor.bmm runtime:Tensor.idiv runtime:Tensor.modulo runtime:Tensor.shl runtime:Tensor.shr runtime:Tensor.bit_and runtime:Tensor.bit_or runtime:Tensor.bit_xor runtime:Tensor.bitcast_f32_to_i32 runtime:Tensor.bitcast_i32_to_f32
+// parity: runtime:Tensor.conv2d runtime:Tensor.max_pool2d runtime:Tensor.avg_pool2d
 // parity: runtime:Timer.sleep runtime:Timer.sleep_cancellable runtime:Timer.sleep_until
 // parity: runtime:Tcp.connect runtime:TcpError.message
 // parity: runtime:TcpStream.read runtime:TcpStream.shutdown

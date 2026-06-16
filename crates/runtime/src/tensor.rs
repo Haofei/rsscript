@@ -1463,6 +1463,265 @@ pub fn tensor_bitcast_f32_to_i32(t: &RssTensor) -> RssTensor {
 pub fn tensor_bitcast_i32_to_f32(t: &RssTensor) -> RssTensor {
     tensor_unary_elementwise(t, DType::F32, |x| f32::from_bits((x as i32) as u32))
 }
+
+// ---------------------------------------------------------------------------
+// conv (slice G).
+//
+// Forward-only NCHW 2-D convolution + pooling, all output dtype F32. These are
+// direct native loops (clear and correct over clever); a fused/blocked/img2col
+// path is future work. `conv2d` is the ML "convolution" — i.e. a
+// cross-correlation with NO kernel flip (each output is the dot product of the
+// weight window with the input window at the same orientation), matching
+// PyTorch/tinygrad `Conv2d`. stride/padding/kernel are scalar `Int` (square);
+// rectangular strides/kernels, dilation, groups and bias are all future work
+// (callers add a broadcast bias separately).
+// ---------------------------------------------------------------------------
+
+/// Compute a conv/pool output dim by the floor formula, erroring if non-positive.
+/// `in_dim` is the (already-padded, for conv) input length, `window` the kernel
+/// extent and `stride` the step. Output = `(in_dim - window) / stride + 1`.
+fn conv_out_dim(
+    in_dim: i64,
+    window: i64,
+    stride: i64,
+    label: &str,
+) -> Result<usize, TensorError> {
+    if stride <= 0 {
+        return Err(TensorError::new(format!(
+            "{label}: stride must be positive, got {stride}"
+        )));
+    }
+    if window <= 0 {
+        return Err(TensorError::new(format!(
+            "{label}: kernel/window size must be positive, got {window}"
+        )));
+    }
+    let out = (in_dim - window) / stride + 1;
+    if out <= 0 {
+        return Err(TensorError::new(format!(
+            "{label}: non-positive output dimension {out} (in={in_dim}, window={window}, stride={stride})"
+        )));
+    }
+    Ok(out as usize)
+}
+
+/// 2-D cross-correlation ("convolution" in the ML sense, NO kernel flip).
+///
+/// `input` is NCHW `[N, Cin, H, W]`, `weight` is OIHW `[Cout, Cin, KH, KW]`. The
+/// input is zero-padded by `padding` on both sides of H and W, then each output
+/// `[n, o, oh, ow]` is the sum over `(c, kh, kw)` of
+/// `input[n, c, oh*stride+kh-pad, ow*stride+kw-pad] * weight[o, c, kh, kw]`
+/// (padded positions read as 0). Output `[N, Cout, Hout, Wout]`, dtype F32, no
+/// bias. Errors on rank mismatch, `Cin` mismatch, or non-positive output dims.
+/// No dilation/groups (future work).
+pub fn tensor_conv2d(
+    input: &RssTensor,
+    weight: &RssTensor,
+    stride: i64,
+    padding: i64,
+) -> Result<RssTensor, TensorError> {
+    if input.shape.len() != 4 {
+        return Err(TensorError::new(format!(
+            "conv2d: input must be rank-4 NCHW [N, Cin, H, W], got shape {:?}",
+            input.shape
+        )));
+    }
+    if weight.shape.len() != 4 {
+        return Err(TensorError::new(format!(
+            "conv2d: weight must be rank-4 OIHW [Cout, Cin, KH, KW], got shape {:?}",
+            weight.shape
+        )));
+    }
+    if padding < 0 {
+        return Err(TensorError::new(format!(
+            "conv2d: padding must be non-negative, got {padding}"
+        )));
+    }
+    let (n, cin, h, w) = (
+        input.shape[0],
+        input.shape[1],
+        input.shape[2],
+        input.shape[3],
+    );
+    let (cout, wcin, kh, kw) = (
+        weight.shape[0],
+        weight.shape[1],
+        weight.shape[2],
+        weight.shape[3],
+    );
+    if wcin != cin {
+        return Err(TensorError::new(format!(
+            "conv2d: input channels {cin} != weight in-channels {wcin} (input {:?}, weight {:?})",
+            input.shape, weight.shape
+        )));
+    }
+    let pad = padding as usize;
+    let padded_h = h as i64 + 2 * padding;
+    let padded_w = w as i64 + 2 * padding;
+    let hout = conv_out_dim(padded_h, kh as i64, stride, "conv2d (H)")?;
+    let wout = conv_out_dim(padded_w, kw as i64, stride, "conv2d (W)")?;
+    let stride = stride as usize;
+
+    let in_data = input.data.as_ref();
+    let wt_data = weight.data.as_ref();
+    // Row-major strides for input [N, Cin, H, W] and weight [Cout, Cin, KH, KW].
+    let in_c_stride = h * w;
+    let in_n_stride = cin * in_c_stride;
+    let wt_kh_stride = kw;
+    let wt_c_stride = kh * kw;
+    let wt_o_stride = cin * wt_c_stride;
+
+    let mut out = vec![0.0f32; n * cout * hout * wout];
+    let mut out_idx = 0usize;
+    for ni in 0..n {
+        let in_n_base = ni * in_n_stride;
+        for oc in 0..cout {
+            let wt_o_base = oc * wt_o_stride;
+            for oh in 0..hout {
+                // Top input row this output row reads from (may be negative → pad).
+                let ih0 = oh * stride;
+                for ow in 0..wout {
+                    let iw0 = ow * stride;
+                    let mut acc = 0.0f32;
+                    for c in 0..cin {
+                        let in_c_base = in_n_base + c * in_c_stride;
+                        let wt_c_base = wt_o_base + c * wt_c_stride;
+                        for r in 0..kh {
+                            // Input row = oh*stride + r - pad; skip if out of bounds.
+                            let ih = ih0 + r;
+                            if ih < pad || ih >= pad + h {
+                                continue;
+                            }
+                            let in_row = in_c_base + (ih - pad) * w;
+                            let wt_row = wt_c_base + r * wt_kh_stride;
+                            for s in 0..kw {
+                                let iw = iw0 + s;
+                                if iw < pad || iw >= pad + w {
+                                    continue;
+                                }
+                                acc += in_data[in_row + (iw - pad)] * wt_data[wt_row + s];
+                            }
+                        }
+                    }
+                    out[out_idx] = acc;
+                    out_idx += 1;
+                }
+            }
+        }
+    }
+    Ok(RssTensor {
+        data: Rc::new(out),
+        shape: vec![n, cout, hout, wout],
+        dtype: DType::F32,
+    })
+}
+
+/// Shared NCHW pooling walk over a square `kernel`×`kernel` window with `stride`
+/// and NO padding. `init` seeds each window and `combine` folds each element;
+/// `finalize(acc, count)` post-processes (identity for max, divide-by-count for
+/// avg). Output `[N, C, (H-kernel)/stride+1, (W-kernel)/stride+1]`, dtype F32.
+fn tensor_pool2d(
+    input: &RssTensor,
+    kernel: i64,
+    stride: i64,
+    label: &str,
+    init: f32,
+    combine: impl Fn(f32, f32) -> f32,
+    finalize: impl Fn(f32, usize) -> f32,
+) -> Result<RssTensor, TensorError> {
+    if input.shape.len() != 4 {
+        return Err(TensorError::new(format!(
+            "{label}: input must be rank-4 NCHW [N, C, H, W], got shape {:?}",
+            input.shape
+        )));
+    }
+    let (n, c, h, w) = (
+        input.shape[0],
+        input.shape[1],
+        input.shape[2],
+        input.shape[3],
+    );
+    let hout = conv_out_dim(h as i64, kernel, stride, label)?;
+    let wout = conv_out_dim(w as i64, kernel, stride, label)?;
+    let k = kernel as usize;
+    let stride = stride as usize;
+    let count = k * k;
+
+    let in_data = input.data.as_ref();
+    let in_c_stride = h * w;
+    let in_n_stride = c * in_c_stride;
+
+    let mut out = vec![0.0f32; n * c * hout * wout];
+    let mut out_idx = 0usize;
+    for ni in 0..n {
+        let in_n_base = ni * in_n_stride;
+        for ci in 0..c {
+            let in_c_base = in_n_base + ci * in_c_stride;
+            for oh in 0..hout {
+                let ih0 = oh * stride;
+                for ow in 0..wout {
+                    let iw0 = ow * stride;
+                    let mut acc = init;
+                    for r in 0..k {
+                        let in_row = in_c_base + (ih0 + r) * w + iw0;
+                        for s in 0..k {
+                            acc = combine(acc, in_data[in_row + s]);
+                        }
+                    }
+                    out[out_idx] = finalize(acc, count);
+                    out_idx += 1;
+                }
+            }
+        }
+    }
+    Ok(RssTensor {
+        data: Rc::new(out),
+        shape: vec![n, c, hout, wout],
+        dtype: DType::F32,
+    })
+}
+
+/// Max pooling over a square `kernel`×`kernel` window with `stride`, NO padding.
+/// NCHW in, output `[N, C, (H-kernel)/stride+1, (W-kernel)/stride+1]`, dtype F32.
+/// Errors on non-rank-4 input or non-positive output dims. Rectangular
+/// kernels/strides are future work.
+pub fn tensor_max_pool2d(
+    input: &RssTensor,
+    kernel: i64,
+    stride: i64,
+) -> Result<RssTensor, TensorError> {
+    tensor_pool2d(
+        input,
+        kernel,
+        stride,
+        "max_pool2d",
+        f32::NEG_INFINITY,
+        |acc, x| acc.max(x),
+        |acc, _| acc,
+    )
+}
+
+/// Average pooling over a square `kernel`×`kernel` window with `stride`, NO
+/// padding (divides by `kernel*kernel`). NCHW in, output
+/// `[N, C, (H-kernel)/stride+1, (W-kernel)/stride+1]`, dtype F32. Errors on
+/// non-rank-4 input or non-positive output dims. Rectangular kernels/strides are
+/// future work.
+pub fn tensor_avg_pool2d(
+    input: &RssTensor,
+    kernel: i64,
+    stride: i64,
+) -> Result<RssTensor, TensorError> {
+    tensor_pool2d(
+        input,
+        kernel,
+        stride,
+        "avg_pool2d",
+        0.0,
+        |acc, x| acc + x,
+        |acc, count| acc / count as f32,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2281,5 +2540,108 @@ mod tests {
             tensor_to_f32_slice(&back).unwrap(),
             tensor_to_f32_slice(&t).unwrap()
         );
+    }
+
+    // conv (slice G)
+
+    #[test]
+    fn conv2d_3x3_2x2_stride1_pad0() {
+        // 1x1x3x3 input, 1x1x2x2 weight, stride 1, pad 0 → 1x1x2x2.
+        let input = tensor_from_f32_slice(
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
+            &[1, 1, 3, 3],
+        )
+        .unwrap();
+        let weight = tensor_from_f32_slice(&[1.0, 0.0, 0.0, 1.0], &[1, 1, 2, 2]).unwrap();
+        let out = tensor_conv2d(&input, &weight, 1, 0).unwrap();
+        assert_eq!(tensor_shape(&out).unwrap(), vec![1, 1, 2, 2]);
+        // out[i,j] = in[i,j]*1 + in[i+1,j+1]*1.
+        // [1+5, 2+6, 4+8, 5+9] = [6, 8, 12, 14].
+        assert_eq!(tensor_to_f32_slice(&out).unwrap(), vec![6.0, 8.0, 12.0, 14.0]);
+        assert_eq!(tensor_dtype_code(&out), 0);
+    }
+
+    #[test]
+    fn conv2d_stride2() {
+        // 1x1x4x4 input, 1x1x2x2 ones weight, stride 2, pad 0 → 1x1x2x2.
+        let input = tensor_from_f32_slice(
+            &[
+                1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0,
+                16.0,
+            ],
+            &[1, 1, 4, 4],
+        )
+        .unwrap();
+        let weight = tensor_from_f32_slice(&[1.0, 1.0, 1.0, 1.0], &[1, 1, 2, 2]).unwrap();
+        let out = tensor_conv2d(&input, &weight, 2, 0).unwrap();
+        assert_eq!(tensor_shape(&out).unwrap(), vec![1, 1, 2, 2]);
+        // Sum of each non-overlapping 2x2 block:
+        // [1+2+5+6, 3+4+7+8, 9+10+13+14, 11+12+15+16] = [14, 22, 46, 54].
+        assert_eq!(tensor_to_f32_slice(&out).unwrap(), vec![14.0, 22.0, 46.0, 54.0]);
+    }
+
+    #[test]
+    fn conv2d_pad1() {
+        // 1x1x2x2 input, 1x1x2x2 ones weight, stride 1, pad 1 → 1x1x3x3.
+        let input = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0], &[1, 1, 2, 2]).unwrap();
+        let weight = tensor_from_f32_slice(&[1.0, 1.0, 1.0, 1.0], &[1, 1, 2, 2]).unwrap();
+        let out = tensor_conv2d(&input, &weight, 1, 1).unwrap();
+        assert_eq!(tensor_shape(&out).unwrap(), vec![1, 1, 3, 3]);
+        // Padded input is a 4x4 with a 1-wide zero border around [[1,2],[3,4]].
+        // Each output is the 2x2 sum of the padded window:
+        // corners 1,2,3,4; edges 1+2,3+4 (top/bottom), 1+3,2+4 (left/right);
+        // center 1+2+3+4.
+        assert_eq!(
+            tensor_to_f32_slice(&out).unwrap(),
+            vec![1.0, 3.0, 2.0, 4.0, 10.0, 6.0, 3.0, 7.0, 4.0]
+        );
+    }
+
+    #[test]
+    fn conv2d_rejects_channel_mismatch() {
+        let input = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0], &[1, 1, 2, 2]).unwrap();
+        let weight = tensor_from_f32_slice(&[1.0; 8], &[1, 2, 2, 2]).unwrap();
+        let err = tensor_conv2d(&input, &weight, 1, 0).unwrap_err();
+        assert!(tensor_error_message(&err).contains("channels"));
+    }
+
+    #[test]
+    fn max_pool2d_4x4_2x2() {
+        // 1x1x4x4 input, kernel 2, stride 2 → 1x1x2x2 of block maxes.
+        let input = tensor_from_f32_slice(
+            &[
+                1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0,
+                16.0,
+            ],
+            &[1, 1, 4, 4],
+        )
+        .unwrap();
+        let out = tensor_max_pool2d(&input, 2, 2).unwrap();
+        assert_eq!(tensor_shape(&out).unwrap(), vec![1, 1, 2, 2]);
+        // Max of each non-overlapping 2x2 block: [6, 8, 14, 16].
+        assert_eq!(tensor_to_f32_slice(&out).unwrap(), vec![6.0, 8.0, 14.0, 16.0]);
+    }
+
+    #[test]
+    fn avg_pool2d_4x4_2x2() {
+        let input = tensor_from_f32_slice(
+            &[
+                1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0,
+                16.0,
+            ],
+            &[1, 1, 4, 4],
+        )
+        .unwrap();
+        let out = tensor_avg_pool2d(&input, 2, 2).unwrap();
+        assert_eq!(tensor_shape(&out).unwrap(), vec![1, 1, 2, 2]);
+        // Mean of each block: [(1+2+5+6)/4, (3+4+7+8)/4, ...] = [3.5, 5.5, 11.5, 13.5].
+        assert_eq!(tensor_to_f32_slice(&out).unwrap(), vec![3.5, 5.5, 11.5, 13.5]);
+    }
+
+    #[test]
+    fn pool2d_rejects_non_positive_output() {
+        let input = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0], &[1, 1, 2, 2]).unwrap();
+        let err = tensor_max_pool2d(&input, 3, 1).unwrap_err();
+        assert!(tensor_error_message(&err).contains("non-positive output"));
     }
 }

@@ -1378,3 +1378,54 @@ fn main() -> Result<Unit, TensorError> {
         source,
     );
 }
+
+#[test]
+fn parity_tensor_conv_pool() {
+    let source = r#"
+features: native, local
+
+fn dump(t: read Tensor) -> Result<Unit, TensorError> {
+    let shape = Tensor.shape(tensor: read t)?
+    let mut si = 0
+    while si < List.len(list: read shape) {
+        Log.write(message: read String.from_int(value: List.get(list: read shape, index: si)))
+        si = si + 1
+    }
+    let values = Tensor.to_f32_slice(tensor: read t)?
+    let mut index = 0
+    while index < List.len(list: read values) {
+        Log.write(message: read Float.to_string(value: read List.get(list: read values, index: index)))
+        index = index + 1
+    }
+    return Ok(Unit)
+}
+
+fn main() -> Result<Unit, TensorError> {
+    // 1x1x4x4 input used for conv (stride 2) and pooling.
+    let input = Tensor.from_f32_slice(data: read [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0], shape: read [1, 1, 4, 4])?
+    // 1x1x2x2 weight: identity-corner kernel.
+    let weight = Tensor.from_f32_slice(data: read [1.0, 0.0, 0.0, 1.0], shape: read [1, 1, 2, 2])?
+    let c0 = Tensor.conv2d(input: read input, weight: read weight, stride: 1, padding: 0)?
+    dump(t: read c0)?
+    let c2 = Tensor.conv2d(input: read input, weight: read weight, stride: 2, padding: 0)?
+    dump(t: read c2)?
+    let cp = Tensor.conv2d(input: read input, weight: read weight, stride: 1, padding: 1)?
+    dump(t: read cp)?
+    // Two-channel input/weight to exercise the channel reduction.
+    let mc_in = Tensor.from_f32_slice(data: read [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], shape: read [1, 2, 2, 2])?
+    let mc_w = Tensor.from_f32_slice(data: read [1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0], shape: read [1, 2, 2, 2])?
+    let mc = Tensor.conv2d(input: read mc_in, weight: read mc_w, stride: 1, padding: 0)?
+    dump(t: read mc)?
+    let mp = Tensor.max_pool2d(input: read input, kernel: 2, stride: 2)?
+    dump(t: read mp)?
+    let ap = Tensor.avg_pool2d(input: read input, kernel: 2, stride: 2)?
+    dump(t: read ap)?
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-conv-pool.rss",
+        "rsscript_parity_tensor_conv_pool",
+        source,
+    );
+}
