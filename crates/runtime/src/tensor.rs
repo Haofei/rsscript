@@ -1463,6 +1463,161 @@ pub fn tensor_bitcast_f32_to_i32(t: &RssTensor) -> RssTensor {
 pub fn tensor_bitcast_i32_to_f32(t: &RssTensor) -> RssTensor {
     tensor_unary_elementwise(t, DType::F32, |x| f32::from_bits((x as i32) as u32))
 }
+
+// ---------------------------------------------------------------------------
+// Native seeded RNG: threefry2x32-20 (Salmon et al., Random123).
+//
+// This is a NATIVE u32 kernel — real wrapping arithmetic and 32-bit rotations.
+// It is deliberately NOT composed from the f32-backed Tensor int/bit ops, which
+// are only exact for |x| <= 2^24 and cannot represent full uint32
+// wraparound/rotation.
+//
+// Algorithm (matches the documented default; no verified port reference was
+// found to replicate, so the standard parameters below are used):
+//   * 2-word state, 20 rounds (4 injections of the key, every 4th round).
+//   * Rotation constants per round (period 8): [13, 15, 26, 6, 17, 29, 16, 24].
+//   * Key schedule parity word: ks[2] = key0 ^ key1 ^ 0x1BD11BDA.
+//   * Counter layout: x0 = counter low 32 bits, x1 = counter high 32 bits.
+//     Key:            k0 = seed   low 32 bits, k1 = seed   high 32 bits.
+//
+// Per-element counter convention: element `i` (row-major flat index) draws from
+// counter base `(counter as u64) + i`. Callers advance deterministically by
+// adding the element count to `counter` between draws. `randn` consumes two
+// uniforms per element, so element `i` uses counter bases `2*i` and `2*i + 1`
+// relative to the supplied base (i.e. it advances the counter at twice the rate).
+//
+// Uniform f32 construction (JAX-style): take the high 24 bits of the first
+// output word and scale into [0, 1): `(bits >> 8) as f32 * (1.0 / 16777216.0)`.
+// 16777216 == 2^24, so the result lies in [0, 1) with 24-bit resolution.
+
+const THREEFRY_ROTATIONS: [u32; 8] = [13, 15, 26, 6, 17, 29, 16, 24];
+const THREEFRY_PARITY: u32 = 0x1BD11BDA;
+
+/// One block of threefry2x32-20. Returns the two output words for the given
+/// 64-bit counter under the 64-bit key. Pure native u32 arithmetic.
+#[inline]
+fn threefry2x32(counter: u64, key: u64) -> (u32, u32) {
+    let mut x0 = counter as u32;
+    let mut x1 = (counter >> 32) as u32;
+    let k0 = key as u32;
+    let k1 = (key >> 32) as u32;
+    let ks = [k0, k1, k0 ^ k1 ^ THREEFRY_PARITY];
+
+    // Initial key injection.
+    x0 = x0.wrapping_add(ks[0]);
+    x1 = x1.wrapping_add(ks[1]);
+
+    // 20 rounds; inject the rotating key schedule after every 4 rounds.
+    for round in 0..20usize {
+        let rot = THREEFRY_ROTATIONS[round % 8];
+        x0 = x0.wrapping_add(x1);
+        x1 = x1.rotate_left(rot) ^ x0;
+
+        if round % 4 == 3 {
+            let inject = round / 4 + 1;
+            x0 = x0.wrapping_add(ks[inject % 3]);
+            x1 = x1.wrapping_add(ks[(inject + 1) % 3]);
+            x1 = x1.wrapping_add(inject as u32);
+        }
+    }
+    (x0, x1)
+}
+
+/// Uniform f32 in [0, 1) from a 32-bit output word (high-24-bit construction).
+#[inline]
+fn threefry_uniform(bits: u32) -> f32 {
+    (bits >> 8) as f32 * (1.0 / 16777216.0)
+}
+
+/// Validate a shape (`i64` dims, non-negative) and return its dims + element
+/// count. Shared by the RNG ops.
+fn rng_shape_dims(shape: &[i64]) -> Result<(Vec<usize>, usize), TensorError> {
+    let mut dims = Vec::with_capacity(shape.len());
+    for &dim in shape {
+        if dim < 0 {
+            return Err(TensorError::new(format!(
+                "tensor shape dimensions must be non-negative, got {dim}"
+            )));
+        }
+        dims.push(dim as usize);
+    }
+    let count = RssTensor::shape_len(&dims);
+    Ok((dims, count))
+}
+
+/// Uniform f32 in [0, 1), dtype F32. Element `i` draws from counter base + i.
+pub fn tensor_rand(shape: &[i64], seed: i64, counter: i64) -> Result<RssTensor, TensorError> {
+    let (dims, count) = rng_shape_dims(shape)?;
+    let key = seed as u64;
+    let base = counter as u64;
+    let mut data = Vec::with_capacity(count);
+    for i in 0..count {
+        let (w0, _) = threefry2x32(base.wrapping_add(i as u64), key);
+        data.push(threefry_uniform(w0));
+    }
+    Ok(RssTensor {
+        data: Rc::new(data),
+        shape: dims,
+        dtype: DType::F32,
+    })
+}
+
+/// Uniform integers in [low, high), dtype I32. Errors if `high <= low`. Values
+/// are exact as long as they fit in 2^24 (the I32 exactness contract).
+pub fn tensor_randint(
+    shape: &[i64],
+    low: i64,
+    high: i64,
+    seed: i64,
+    counter: i64,
+) -> Result<RssTensor, TensorError> {
+    if high <= low {
+        return Err(TensorError::new(format!(
+            "randint requires low < high, got low={low} high={high}"
+        )));
+    }
+    let (dims, count) = rng_shape_dims(shape)?;
+    let span = (high - low) as u64;
+    let key = seed as u64;
+    let base = counter as u64;
+    let mut data = Vec::with_capacity(count);
+    for i in 0..count {
+        let (w0, _) = threefry2x32(base.wrapping_add(i as u64), key);
+        // Map the full 32-bit word into [0, span) then offset by low.
+        let value = (w0 as u64) % span;
+        data.push((low + value as i64) as f32);
+    }
+    Ok(RssTensor {
+        data: Rc::new(data),
+        shape: dims,
+        dtype: DType::I32,
+    })
+}
+
+/// Standard normal f32 via Box–Muller, dtype F32. Element `i` consumes two
+/// uniforms from counter bases `2*i` and `2*i + 1` (relative to `counter`).
+pub fn tensor_randn(shape: &[i64], seed: i64, counter: i64) -> Result<RssTensor, TensorError> {
+    let (dims, count) = rng_shape_dims(shape)?;
+    let key = seed as u64;
+    let base = counter as u64;
+    let mut data = Vec::with_capacity(count);
+    for i in 0..count {
+        let (a0, _) = threefry2x32(base.wrapping_add(2 * i as u64), key);
+        let (a1, _) = threefry2x32(base.wrapping_add(2 * i as u64 + 1), key);
+        // u1 in (0, 1] to keep ln() finite (avoid ln(0)).
+        let u1 = 1.0 - threefry_uniform(a0);
+        let u2 = threefry_uniform(a1);
+        let radius = (-2.0 * u1.ln()).sqrt();
+        let z = radius * (std::f32::consts::TAU * u2).cos();
+        data.push(z);
+    }
+    Ok(RssTensor {
+        data: Rc::new(data),
+        shape: dims,
+        dtype: DType::F32,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2281,5 +2436,70 @@ mod tests {
             tensor_to_f32_slice(&back).unwrap(),
             tensor_to_f32_slice(&t).unwrap()
         );
+    }
+
+    #[test]
+    fn threefry_known_vector_zero() {
+        // threefry2x32-20 with counter=0, key=0 is a published test vector:
+        // (0x6b200159, 0x99ba4efe).
+        let (w0, w1) = threefry2x32(0, 0);
+        assert_eq!(w0, 0x6b200159);
+        assert_eq!(w1, 0x99ba4efe);
+    }
+
+    #[test]
+    fn threefry_known_vector_max() {
+        // counter = 0xffffffffffffffff, key = 0xffffffffffffffff:
+        // (0x1cb996fc, 0xbb002be7).
+        let (w0, w1) = threefry2x32(u64::MAX, u64::MAX);
+        assert_eq!(w0, 0x1cb996fc);
+        assert_eq!(w1, 0xbb002be7);
+    }
+
+    #[test]
+    fn rand_is_deterministic_and_in_range() {
+        let a = tensor_rand(&[2, 3], 42, 0).unwrap();
+        let b = tensor_rand(&[2, 3], 42, 0).unwrap();
+        assert_eq!(tensor_to_f32_slice(&a).unwrap(), tensor_to_f32_slice(&b).unwrap());
+        assert_eq!(tensor_shape(&a).unwrap(), vec![2, 3]);
+        assert_eq!(tensor_dtype_code(&a), 0);
+        for v in tensor_to_f32_slice(&a).unwrap() {
+            assert!((0.0..1.0).contains(&v), "value {v} out of [0,1)");
+        }
+        // A different counter gives different output.
+        let c = tensor_rand(&[2, 3], 42, 1).unwrap();
+        assert_ne!(tensor_to_f32_slice(&a).unwrap(), tensor_to_f32_slice(&c).unwrap());
+    }
+
+    #[test]
+    fn randint_is_deterministic_and_in_range() {
+        let a = tensor_randint(&[100], 5, 10, 7, 0).unwrap();
+        let b = tensor_randint(&[100], 5, 10, 7, 0).unwrap();
+        assert_eq!(tensor_to_f32_slice(&a).unwrap(), tensor_to_f32_slice(&b).unwrap());
+        assert_eq!(tensor_dtype_code(&a), 1);
+        for v in tensor_to_f32_slice(&a).unwrap() {
+            assert!((5.0..10.0).contains(&v), "value {v} out of [5,10)");
+            assert_eq!(v, v.trunc(), "value {v} not integral");
+        }
+    }
+
+    #[test]
+    fn randint_rejects_empty_range() {
+        assert!(tensor_randint(&[4], 5, 5, 1, 0).is_err());
+        assert!(tensor_randint(&[4], 5, 4, 1, 0).is_err());
+    }
+
+    #[test]
+    fn randn_is_deterministic_with_rough_moments() {
+        let a = tensor_randn(&[5000], 123, 0).unwrap();
+        let b = tensor_randn(&[5000], 123, 0).unwrap();
+        assert_eq!(tensor_to_f32_slice(&a).unwrap(), tensor_to_f32_slice(&b).unwrap());
+        assert_eq!(tensor_dtype_code(&a), 0);
+        let data = tensor_to_f32_slice(&a).unwrap();
+        let n = data.len() as f64;
+        let mean = data.iter().sum::<f64>() / n;
+        let var = data.iter().map(|x| (x - mean) * (x - mean)).sum::<f64>() / n;
+        assert!(mean.abs() < 0.1, "mean {mean} not ~0");
+        assert!((var - 1.0).abs() < 0.15, "variance {var} not ~1");
     }
 }

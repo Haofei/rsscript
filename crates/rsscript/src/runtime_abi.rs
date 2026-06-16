@@ -513,6 +513,10 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "bitcast_i32_to_f32",
         "rsscript_runtime::tensor_bitcast_i32_to_f32",
     ),
+    // rng (slice E)
+    runtime_intrinsic("Tensor", "rand", "rsscript_runtime::tensor_rand"),
+    runtime_intrinsic("Tensor", "randint", "rsscript_runtime::tensor_randint"),
+    runtime_intrinsic("Tensor", "randn", "rsscript_runtime::tensor_randn"),
     runtime_intrinsic(
         "TensorError",
         "message",

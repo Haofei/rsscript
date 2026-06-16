@@ -2137,6 +2137,10 @@ enum RegIntrinsic {
     TensorXor,
     TensorBitcastF32ToI32,
     TensorBitcastI32ToF32,
+    // rng (slice E)
+    TensorRand,
+    TensorRandint,
+    TensorRandn,
     TensorErrorMessage,
     CharCompare,
     CharFromCode,
@@ -5433,6 +5437,10 @@ fn qualified_intrinsic(namespace: &str, name: &str) -> Option<RegIntrinsic> {
         ("Tensor", "bit_xor") => Some(RegIntrinsic::TensorXor),
         ("Tensor", "bitcast_f32_to_i32") => Some(RegIntrinsic::TensorBitcastF32ToI32),
         ("Tensor", "bitcast_i32_to_f32") => Some(RegIntrinsic::TensorBitcastI32ToF32),
+        // rng (slice E)
+        ("Tensor", "rand") => Some(RegIntrinsic::TensorRand),
+        ("Tensor", "randint") => Some(RegIntrinsic::TensorRandint),
+        ("Tensor", "randn") => Some(RegIntrinsic::TensorRandn),
         ("TensorError", "message") => Some(RegIntrinsic::TensorErrorMessage),
         ("Char", "compare") => Some(RegIntrinsic::CharCompare),
         ("Char", "from_code") => Some(RegIntrinsic::CharFromCode),
@@ -9653,6 +9661,48 @@ impl RegVm {
                     _ => rsscript_runtime::tensor_bitcast_i32_to_f32(&t),
                 };
                 Ok(self.store_tensor(result))
+            }
+            // rng (slice E)
+            RegIntrinsic::TensorRand => {
+                let shape = expect_int_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let seed = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let counter = expect_int_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
+                Ok(json_result(
+                    match rsscript_runtime::tensor_rand(&shape, seed, counter) {
+                        Ok(tensor) => Ok(self.store_tensor(tensor)),
+                        Err(error) => Err(tensor_error_value(
+                            rsscript_runtime::tensor_error_message(&error),
+                        )),
+                    },
+                ))
+            }
+            RegIntrinsic::TensorRandint => {
+                let shape = expect_int_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let low = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let high = expect_int_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
+                let seed = expect_int_ref(intrinsic_arg(&self.stack, base, args, 3)?)?;
+                let counter = expect_int_ref(intrinsic_arg(&self.stack, base, args, 4)?)?;
+                Ok(json_result(
+                    match rsscript_runtime::tensor_randint(&shape, low, high, seed, counter) {
+                        Ok(tensor) => Ok(self.store_tensor(tensor)),
+                        Err(error) => Err(tensor_error_value(
+                            rsscript_runtime::tensor_error_message(&error),
+                        )),
+                    },
+                ))
+            }
+            RegIntrinsic::TensorRandn => {
+                let shape = expect_int_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let seed = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let counter = expect_int_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
+                Ok(json_result(
+                    match rsscript_runtime::tensor_randn(&shape, seed, counter) {
+                        Ok(tensor) => Ok(self.store_tensor(tensor)),
+                        Err(error) => Err(tensor_error_value(
+                            rsscript_runtime::tensor_error_message(&error),
+                        )),
+                    },
+                ))
             }
             RegIntrinsic::CharCompare | RegIntrinsic::CharFromCode | RegIntrinsic::CharIsAlphanumeric | RegIntrinsic::CharIsAlpha | RegIntrinsic::CharIsDigit | RegIntrinsic::CharIsLower | RegIntrinsic::CharIsUpper | RegIntrinsic::CharIsWhitespace | RegIntrinsic::CharToCode | RegIntrinsic::CharToLower | RegIntrinsic::CharToString | RegIntrinsic::CharToUpper => self.exec_char_intrinsics(unit, intrinsic, args, base, next_base),
             RegIntrinsic::ClockNow => Ok(instant_value(clock_system_unix_ms())),
