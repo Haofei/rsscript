@@ -8,9 +8,19 @@ pub(super) fn check_manage_operand_is_local(
     state: &BodyState,
 ) {
     let Some(name) = hir_ident_name(value) else {
+        // A freshly-produced, owned rvalue (a struct constructor or a
+        // `fresh`-returning call) is sound to `manage` inline: the value has
+        // just been created here and is not an alias of any existing managed,
+        // borrowed, or local binding. This is the same freshness model that
+        // lets a `fresh` value materialize directly. Every other rvalue
+        // (idents, field/index projections, an existing `manage`, etc.) may
+        // alias live state and is still rejected below.
+        if expr_is_fresh_shell(value) {
+            return;
+        }
         invalid_manage_operand_diagnostic(
             analyzer,
-            "`manage` can only move a named local binding.",
+            "`manage` can only move a named local binding or a freshly produced value.",
             span.clone(),
         );
         return;
