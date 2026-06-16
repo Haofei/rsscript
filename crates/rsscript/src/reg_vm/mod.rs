@@ -5450,6 +5450,10 @@ fn qualified_intrinsic(namespace: &str, name: &str) -> Option<RegIntrinsic> {
         ("Tensor", "metal_available") => Some(RegIntrinsic::TensorMetalAvailable),
         ("Tensor", "metal_device_name") => Some(RegIntrinsic::TensorMetalDeviceName),
         ("Tensor", "gpu_run_msl") => Some(RegIntrinsic::TensorGpuRunMsl),
+        // Metal.* aliases (non-colliding namespace; reuse the same exec arms).
+        ("Metal", "available") => Some(RegIntrinsic::TensorMetalAvailable),
+        ("Metal", "device_name") => Some(RegIntrinsic::TensorMetalDeviceName),
+        ("Metal", "gpu_run_msl") => Some(RegIntrinsic::TensorGpuRunMsl),
         ("Tensor", "add") => Some(RegIntrinsic::TensorAdd),
         ("Tensor", "sub") => Some(RegIntrinsic::TensorSub),
         ("Tensor", "mul") => Some(RegIntrinsic::TensorMul),

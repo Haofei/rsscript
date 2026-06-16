@@ -436,6 +436,16 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "gpu_run_msl",
         "rsscript_runtime::tensor_gpu_run_msl",
     ),
+    // `Metal.*` aliases: same native functions under a namespace that does NOT
+    // collide with a host program's own `Tensor` type (the tinygrad port defines
+    // `struct Tensor`, which shadows the native `Tensor.*` methods).
+    runtime_intrinsic("Metal", "available", "rsscript_runtime::tensor_metal_available"),
+    runtime_intrinsic(
+        "Metal",
+        "device_name",
+        "rsscript_runtime::tensor_metal_device_name",
+    ),
+    runtime_intrinsic("Metal", "gpu_run_msl", "rsscript_runtime::tensor_gpu_run_msl"),
     runtime_intrinsic("Tensor", "add", "rsscript_runtime::tensor_add"),
     runtime_intrinsic("Tensor", "sub", "rsscript_runtime::tensor_sub"),
     runtime_intrinsic("Tensor", "mul", "rsscript_runtime::tensor_mul"),

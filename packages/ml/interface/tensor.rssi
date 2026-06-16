@@ -81,6 +81,10 @@ pub native fn Tensor.gpu_run_msl(
 ) -> Result<fresh List<Float>, TensorError>
     effects(native)
 
+// (The `Metal.*` GPU-dispatch surface lives in metal.rssi — a standalone interface
+// with no `struct Tensor`, so a host program that defines its own `Tensor` can
+// depend on Metal without a type collision.)
+
 // Elementwise binary ops over two same-shape tensors. No broadcasting — the
 // shapes must match exactly (broadcasting is deferred to a later slice). Errors
 // on a shape mismatch.

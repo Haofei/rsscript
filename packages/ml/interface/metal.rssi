@@ -1,0 +1,40 @@
+features: native, local
+
+// Metal GPU-dispatch surface, deliberately kept SEPARATE from tensor.rssi so it
+// carries no `struct Tensor`. A host program (e.g. the tinygrad port) that defines
+// its own `Tensor` type can pull in `Metal.*` without a duplicate-type collision.
+//
+// The renderer (port-side renderer/msl.rss) lowers a kernel AST to MSL, then
+// `Metal.gpu_run_msl` compiles + dispatches it on the GPU via the native FFI
+// (crate::metal::gpu_run_1d). Results are NOT bit-exact vs CPU (GPU accumulation
+// reorders); callers validate to f32 tolerance.
+
+// Error carrier for native GPU dispatch (struct shape matches the runtime's
+// `tensor_error_value`: a single `message` field).
+struct TensorError
+
+pub fn TensorError.message(error: read TensorError) -> fresh String
+    effects(pure)
+
+struct Metal
+
+// Whether a Metal GPU is available (false off macOS or when no device is present).
+pub native fn Metal.available() -> Bool
+    effects(native)
+
+// The Metal device name, or an empty string when no GPU is available.
+pub native fn Metal.device_name() -> fresh String
+    effects(native)
+
+// Compile + dispatch an MSL kernel on the GPU. `source` is full MSL, `fn_name` the
+// kernel entry point. Each `inputs[i]` is uploaded to buffer(i); the output is
+// buffer(inputs.len()), sized `out_len` f32s, dispatched over `threads` linear grid
+// threads. Returns the output floats, or a TensorError on no-GPU / compile failure.
+pub native fn Metal.gpu_run_msl(
+    source: read String,
+    fn_name: read String,
+    inputs: read List<List<Float>>,
+    out_len: Int,
+    threads: Int,
+) -> Result<fresh List<Float>, TensorError>
+    effects(native)
