@@ -676,99 +676,112 @@ fn package_protocol_contracts_match(
             })
 }
 
-pub(super) fn collect_package_type_contracts(
+/// Shared driver for the per-`Item` contract collectors.
+///
+/// Iterates the sources matching `kind`, parses each, and for every item runs
+/// `extract`. When `extract` yields `Some((name, contract))`, the entry is
+/// inserted using the same visibility rule every collector shares: interface
+/// files always contribute, source files only when the declaration is public.
+/// The `is_public` flag is supplied by `extract` so each variant decides how to
+/// read it from its own declaration.
+fn collect_package_item_contracts<T>(
     sources: &[PackageSource],
     kind: PackageReviewFileKind,
-) -> BTreeMap<String, PackageTypeContract> {
+    extract: impl Fn(Item) -> Option<(String, bool, T)>,
+) -> BTreeMap<String, T> {
     let mut contracts = BTreeMap::new();
     for source in sources.iter().filter(|source| source.kind == kind) {
         let program = parse_source(&source.path, &source.contents);
         for item in program.items {
-            let Item::Type(type_decl) = item else {
+            let Some((name, is_public, contract)) = extract(item) else {
                 continue;
             };
-            if kind == PackageReviewFileKind::Interface || type_decl.is_public {
-                contracts.insert(type_decl.name.clone(), package_type_contract(&type_decl));
+            if kind == PackageReviewFileKind::Interface || is_public {
+                contracts.insert(name, contract);
             }
         }
     }
     contracts
+}
+
+pub(super) fn collect_package_type_contracts(
+    sources: &[PackageSource],
+    kind: PackageReviewFileKind,
+) -> BTreeMap<String, PackageTypeContract> {
+    collect_package_item_contracts(sources, kind, |item| {
+        let Item::Type(type_decl) = item else {
+            return None;
+        };
+        Some((
+            type_decl.name.clone(),
+            type_decl.is_public,
+            package_type_contract(&type_decl),
+        ))
+    })
 }
 
 pub(super) fn collect_package_function_contracts(
     sources: &[PackageSource],
     kind: PackageReviewFileKind,
 ) -> BTreeMap<String, PackageFunctionContract> {
-    let mut contracts = BTreeMap::new();
-    for source in sources.iter().filter(|source| source.kind == kind) {
-        let program = parse_source(&source.path, &source.contents);
-        for item in program.items {
-            let Item::Function(function) = item else {
-                continue;
-            };
-            if kind == PackageReviewFileKind::Interface || function.is_public {
-                contracts.insert(function.name.clone(), package_function_contract(&function));
-            }
-        }
-    }
-    contracts
+    collect_package_item_contracts(sources, kind, |item| {
+        let Item::Function(function) = item else {
+            return None;
+        };
+        Some((
+            function.name.clone(),
+            function.is_public,
+            package_function_contract(&function),
+        ))
+    })
 }
 
 pub(super) fn collect_package_sum_type_contracts(
     sources: &[PackageSource],
     kind: PackageReviewFileKind,
 ) -> BTreeMap<String, PackageSumTypeContract> {
-    let mut contracts = BTreeMap::new();
-    for source in sources.iter().filter(|source| source.kind == kind) {
-        let program = parse_source(&source.path, &source.contents);
-        for item in program.items {
-            let Item::SumType(sum_type) = item else {
-                continue;
-            };
-            if kind == PackageReviewFileKind::Interface || sum_type.is_public {
-                contracts.insert(sum_type.name.clone(), package_sum_type_contract(&sum_type));
-            }
-        }
-    }
-    contracts
+    collect_package_item_contracts(sources, kind, |item| {
+        let Item::SumType(sum_type) = item else {
+            return None;
+        };
+        Some((
+            sum_type.name.clone(),
+            sum_type.is_public,
+            package_sum_type_contract(&sum_type),
+        ))
+    })
 }
 
 pub(super) fn collect_package_type_alias_contracts(
     sources: &[PackageSource],
     kind: PackageReviewFileKind,
 ) -> BTreeMap<String, PackageTypeAliasContract> {
-    let mut contracts = BTreeMap::new();
-    for source in sources.iter().filter(|source| source.kind == kind) {
-        let program = parse_source(&source.path, &source.contents);
-        for item in program.items {
-            let Item::TypeAlias(alias) = item else {
-                continue;
-            };
-            if kind == PackageReviewFileKind::Interface || alias.is_public {
-                contracts.insert(alias.name.clone(), package_type_alias_contract(&alias));
-            }
-        }
-    }
-    contracts
+    collect_package_item_contracts(sources, kind, |item| {
+        let Item::TypeAlias(alias) = item else {
+            return None;
+        };
+        Some((
+            alias.name.clone(),
+            alias.is_public,
+            package_type_alias_contract(&alias),
+        ))
+    })
 }
 
 pub(super) fn collect_package_const_contracts(
     sources: &[PackageSource],
     kind: PackageReviewFileKind,
 ) -> BTreeMap<String, PackageConstContract> {
-    let mut contracts = BTreeMap::new();
-    for source in sources.iter().filter(|source| source.kind == kind) {
-        let program = parse_source(&source.path, &source.contents);
-        for item in program.items {
-            let Item::Const(const_decl) = item else {
-                continue;
-            };
-            if kind == PackageReviewFileKind::Interface || const_decl.is_public {
-                contracts.insert(const_decl.name.clone(), package_const_contract(&const_decl));
-            }
-        }
-    }
-    contracts
+    collect_package_item_contracts(sources, kind, |item| {
+        let Item::Const(const_decl) = item else {
+            return None;
+        };
+        Some((
+            const_decl.name.clone(),
+            const_decl.is_public,
+            package_const_contract(&const_decl),
+        ))
+    })
 }
 
 pub(super) fn collect_package_protocol_impl_contracts(
