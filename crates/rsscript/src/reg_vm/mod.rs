@@ -8813,6 +8813,38 @@ impl RegVm {
         folder: &VmClosure,
         base: usize,
     ) -> Result<VmValue, EvalError> {
+        // Fast path: a fold whose folder is a recognized simple numeric binary
+        // closure (`|acc, x| acc <op> x`) over a list of scalar `Int`/`Float`
+        // values is the hot shape for sum/product-style reductions. Running it as
+        // a tight loop over the element values — calling the *same*
+        // `eval_numeric_binary` the interpreter uses, in the *same* operand
+        // order, on the *same* values — avoids a full frame setup + bytecode
+        // dispatch per element while producing bit-identical results (identical
+        // f64 ops, order, NaN/inf, and error behavior). Any case that does not
+        // exactly match (wrong shape, non-scalar element, captures present)
+        // falls through to the generic interpreter path below.
+        if let Some(form) = recognize_numeric_binary_closure(unit, folder) {
+            if matches!(state, VmValue::Int(_) | VmValue::Float(_)) {
+                let list = list.borrow();
+                if list
+                    .iter()
+                    .all(|item| matches!(item, VmValue::Int(_) | VmValue::Float(_)))
+                {
+                    for item in list.iter() {
+                        // Preserve the closure's operand order exactly: `state`
+                        // and `item` are placed at the two param registers, so
+                        // whichever param the lhs/rhs reads determines the order.
+                        let (lhs, rhs) = if form.lhs_is_state {
+                            (&state, item)
+                        } else {
+                            (item, &state)
+                        };
+                        state = eval_numeric_binary(form.op, lhs, rhs)?;
+                    }
+                    return Ok(state);
+                }
+            }
+        }
         let len = list.borrow().len();
         for index in 0..len {
             let item = list_item_at(&list, index, "List.fold")?;
@@ -13062,6 +13094,71 @@ fn int_overflow_error(operation: &str, lhs: i64, rhs: i64) -> EvalError {
     EvalError::Runtime(format!(
         "integer {operation} overflow: {lhs} and {rhs} exceed the Int range"
     ))
+}
+
+/// A folder closure recognized as a single numeric binary op over its two
+/// parameters: `op` is the arithmetic operator and `lhs_is_state` says whether
+/// the op's left operand is the accumulator (param 0) — i.e. `acc <op> x` — or
+/// the element (`x <op> acc`). Used to fast-path `List.fold` without losing the
+/// closure's exact operand order.
+struct NumericBinaryClosure {
+    op: BinaryOp,
+    lhs_is_state: bool,
+}
+
+/// Recognize `|state, x| state <op> x` (or `x <op> state`) closures with no
+/// captures whose body is exactly one arithmetic instruction returning its
+/// result. Returns `None` for anything else so the caller falls back to the
+/// generic interpreter (the recognizer is intentionally conservative — a missed
+/// match only forgoes a speedup, never changes results).
+fn recognize_numeric_binary_closure(
+    unit: &RegUnit,
+    closure: &VmClosure,
+) -> Option<NumericBinaryClosure> {
+    // The fast path supplies the two operands by value at the param registers;
+    // captured values would not be supplied, so require a capture-free closure.
+    if !closure.captures.is_empty() {
+        return None;
+    }
+    let function = &unit.functions[closure.function];
+    if function.params != 2 {
+        return None;
+    }
+    // Param registers: captures occupy `0..captures.len()` (none here), then the
+    // two params at registers 0 and 1.
+    let state_reg = 0usize;
+    let item_reg = 1usize;
+    let [instr, RegInstr::Return { src }] = function.code.as_slice() else {
+        return None;
+    };
+    let (op, dst, lhs, rhs) = arithmetic_binop_parts(instr)?;
+    if dst != *src {
+        return None;
+    }
+    // Both operands must be exactly the two distinct param registers (so every
+    // input is a supplied param and nothing else is read).
+    let lhs_is_state = if lhs == state_reg && rhs == item_reg {
+        true
+    } else if lhs == item_reg && rhs == state_reg {
+        false
+    } else {
+        return None;
+    };
+    Some(NumericBinaryClosure { op, lhs_is_state })
+}
+
+/// If `instr` is one of the numeric arithmetic instructions handled by
+/// [`eval_numeric_binary`], return `(op, dst, lhs, rhs)`. Bitwise/shift ops are
+/// excluded: they are `Int`-only and not routed through `eval_numeric_binary`.
+fn arithmetic_binop_parts(instr: &RegInstr) -> Option<(BinaryOp, Reg, Reg, Reg)> {
+    match instr {
+        RegInstr::AddInt { dst, lhs, rhs } => Some((BinaryOp::Add, *dst, *lhs, *rhs)),
+        RegInstr::SubInt { dst, lhs, rhs } => Some((BinaryOp::Subtract, *dst, *lhs, *rhs)),
+        RegInstr::MulInt { dst, lhs, rhs } => Some((BinaryOp::Multiply, *dst, *lhs, *rhs)),
+        RegInstr::DivInt { dst, lhs, rhs } => Some((BinaryOp::Divide, *dst, *lhs, *rhs)),
+        RegInstr::ModInt { dst, lhs, rhs } => Some((BinaryOp::Modulo, *dst, *lhs, *rhs)),
+        _ => None,
+    }
 }
 
 fn eval_numeric_binary(op: BinaryOp, lhs: &VmValue, rhs: &VmValue) -> Result<VmValue, EvalError> {

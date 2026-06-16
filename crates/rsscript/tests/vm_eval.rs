@@ -58,6 +58,99 @@ fn main() -> Int {
     assert_eq!(output.value, "7");
 }
 
+/// Build a program that folds a large `List<Float>` with `folder_body` and
+/// returns the sum formatted as a string. The list values are deterministic so
+/// the fast and slow folders must agree bit-for-bit.
+fn float_fold_program(folder_body: &str) -> String {
+    // Build the list once, then fold it many times so the fold (not the one-time
+    // list construction) dominates the measured time.
+    format!(
+        r#"features: local
+
+fn main() -> Float {{
+    let mut index = 0
+    local values = List<Float>.new()
+    while index < 50000 {{
+        let f = Int.to_float(value: read index)
+        List.push<Float>(list: mut values, value: read (f * 0.5 - 1.0))
+        index = index + 1
+    }}
+    let mut acc = 0.0
+    let mut rep = 0
+    while rep < 50 {{
+        let total = List.fold<Float, Float>(
+            list: read values,
+            initial: read 0.0,
+            folder: {folder_body},
+        )
+        acc = acc + total
+        rep = rep + 1
+    }}
+    return acc
+}}
+"#
+    )
+}
+
+/// The bulk `List<Float>.fold` fast path must be a pure performance change: a
+/// recognized numeric folder (`|acc, x| acc + x`) and an equivalent folder the
+/// recognizer rejects (an extra `let` binding forces the generic interpreter
+/// path) must produce *bit-identical* results, and the fast path should be
+/// materially faster on a large list.
+#[test]
+fn float_fold_fast_path_matches_slow_path_and_is_faster() {
+    use std::time::Instant;
+
+    // Recognized shape: body is exactly `<binop>; Return`.
+    let fast_src = float_fold_program("|acc, x| acc + x");
+    // Rejected shape: identical math, but the extra statement means the body is
+    // not `[binop, Return]`, so the recognizer declines and the generic
+    // per-element closure path runs.
+    let slow_src = float_fold_program("|acc, x| { let y = x\n        return acc + y }");
+
+    // Warm up + correctness: both paths must yield the same f64 string.
+    let fast0 = eval_source_main("float-fold-fast.rss", &fast_src).expect("fast eval");
+    let slow0 = eval_source_main("float-fold-slow.rss", &slow_src).expect("slow eval");
+    assert_eq!(
+        fast0.value, slow0.value,
+        "fast and slow float fold must be bit-identical"
+    );
+    assert_eq!(fast0.native_value, slow0.native_value);
+
+    let reps = 3;
+    let mut fast_ns = u128::MAX;
+    let mut slow_ns = u128::MAX;
+    for _ in 0..reps {
+        let t = Instant::now();
+        let r = eval_source_main("float-fold-fast.rss", &fast_src).expect("fast eval");
+        fast_ns = fast_ns.min(t.elapsed().as_nanos());
+        assert_eq!(r.value, fast0.value);
+
+        let t = Instant::now();
+        let r = eval_source_main("float-fold-slow.rss", &slow_src).expect("slow eval");
+        slow_ns = slow_ns.min(t.elapsed().as_nanos());
+        assert_eq!(r.value, slow0.value);
+    }
+
+    let speedup = slow_ns as f64 / fast_ns as f64;
+    println!(
+        "float fold (50k elems x50 folds): fast={:.2}ms slow={:.2}ms speedup={:.2}x result={}",
+        fast_ns as f64 / 1.0e6,
+        slow_ns as f64 / 1.0e6,
+        speedup,
+        fast0.value,
+    );
+    // The fast path must not regress; on a 200k-element fold it is far faster
+    // than the per-element closure interpreter. Keep the assertion margin modest
+    // to stay robust under CI scheduling noise while still catching a regression
+    // that lost the fast path entirely.
+    assert!(
+        speedup > 2.0,
+        "expected the bulk float-fold fast path to be materially faster, got {speedup:.2}x \
+         (fast={fast_ns}ns slow={slow_ns}ns)"
+    );
+}
+
 #[test]
 fn eval_package_runs_merged_sources_with_args() {
     let package_dir = common::unique_temp_dir("rsscript-eval-package");
