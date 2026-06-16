@@ -203,6 +203,47 @@ pub fn tensor_matmul(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorEr
     })
 }
 
+/// Whether a Metal GPU is available for the native compute path (false off macOS
+/// or when no device is present). Lets the port choose the GPU vs CPU matmul.
+pub fn tensor_metal_available() -> bool {
+    crate::metal::metal_available()
+}
+
+/// The Metal device name (e.g. "Apple M2 Max"), or an empty string when no GPU is
+/// available.
+pub fn tensor_metal_device_name() -> String {
+    crate::metal::metal_device_name()
+}
+
+/// GPU matrix multiply, same contract as [`tensor_matmul`] but dispatched to Metal
+/// via [`crate::metal::gpu_matmul`]. The result is NOT guaranteed bit-identical to
+/// the CPU kernel — GPU reductions accumulate in a different order — so it matches
+/// to f32 tolerance, exactly as tinygrad's own METAL and CPU results differ. Errors
+/// if either operand is not rank-2, the inner dims disagree, or no GPU is available.
+pub fn tensor_matmul_metal(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
+    if a.shape.len() != 2 || b.shape.len() != 2 {
+        return Err(TensorError::new(format!(
+            "matmul_metal requires two rank-2 tensors, got shapes {:?} and {:?}",
+            a.shape, b.shape
+        )));
+    }
+    let (m, ka) = (a.shape[0], a.shape[1]);
+    let (kb, n) = (b.shape[0], b.shape[1]);
+    if ka != kb {
+        return Err(TensorError::new(format!(
+            "matmul_metal inner dimensions disagree: {:?} × {:?} (contraction {ka} != {kb})",
+            a.shape, b.shape
+        )));
+    }
+    let out = crate::metal::gpu_matmul(a.data.as_ref(), b.data.as_ref(), m, ka, n)
+        .map_err(TensorError::new)?;
+    Ok(RssTensor {
+        data: Rc::new(out),
+        shape: vec![m, n],
+        dtype: DType::F32,
+    })
+}
+
 /// Compute the NumPy-broadcast output shape of two shapes: right-aligned, each dim
 /// pair must be equal or one of them `1`; missing leading dims are treated as `1`.
 /// Returns the broadcast shape or a `TensorError` describing the incompatibility.
