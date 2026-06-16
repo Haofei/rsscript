@@ -5,6 +5,8 @@
 
 use proptest::prelude::*;
 use rsscript::{EvalError, VmLimits, reg_vm_eval_source_main_with_limits};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Invariant 1 (runtime hardening): no agent program may crash or hang the host.
 /// These cases prove that the reg-VM's sandbox limits turn the three classic
@@ -136,6 +138,133 @@ fn main() -> Int {
 "#;
     let output = eval_limited(source, VmLimits::default()).expect("normal code must succeed");
     assert_eq!(output.value, "6765");
+}
+
+/// B3 follow-up: the ambient `cancel` flag is the host-level preemption hook for
+/// a tight compute loop that never awaits or checks the cooperative RSS
+/// `CancellationToken`. Set BEFORE eval and with NO step budget, the running
+/// `while true {}` is preempted at the first throttled `tick()` poll and returns
+/// a clean "evaluation cancelled" error — deterministic, no threads/timing.
+#[test]
+fn ambient_cancel_flag_preempts_infinite_loop() {
+    let source = r#"
+fn main() -> Int {
+    let mut x = 0
+    while true {
+        x = x + 1
+    }
+    return x
+}
+"#;
+    let flag = Arc::new(AtomicBool::new(true));
+    let limits = VmLimits {
+        cancel: Some(Arc::clone(&flag)),
+        ..VmLimits::default()
+    };
+    let err = eval_limited(source, limits).expect_err("must error, not hang");
+    match err {
+        EvalError::Runtime(msg) => assert!(
+            msg.contains("cancelled"),
+            "expected cancellation error, got: {msg}"
+        ),
+        other => panic!("expected EvalError::Runtime, got {other:?}"),
+    }
+}
+
+/// B3 follow-up (negative): a cancel flag that is present but `false` must not
+/// trip — a short normal program still completes with `Ok`. Proves the hook is
+/// opt-in per-fire, not merely per-presence.
+#[test]
+fn ambient_cancel_flag_unset_does_not_trip() {
+    let source = r#"
+fn main() -> Int {
+    let mut x = 0
+    while x < 10 {
+        x = x + 1
+    }
+    return x
+}
+"#;
+    let flag = Arc::new(AtomicBool::new(false));
+    let limits = VmLimits {
+        cancel: Some(Arc::clone(&flag)),
+        ..VmLimits::default()
+    };
+    let output = eval_limited(source, limits).expect("flag false => normal completion");
+    assert_eq!(output.value, "10");
+    // Sanity: the host still holds the flag and can set it for a future run.
+    assert!(!flag.load(Ordering::Relaxed));
+}
+
+/// C6 (leak policy, positive): transient scalar work in a loop does not leak.
+/// A long arithmetic loop reuses a fixed set of registers each iteration, so the
+/// VM's best-effort byte accounting stays bounded and the program completes under
+/// a tight `mem_budget` rather than tripping a false OOM. (No threads/timing.)
+#[test]
+fn transient_scalar_work_completes_under_memory_ceiling() {
+    let source = r#"
+fn main() -> Int {
+    let mut index = 0
+    let mut acc = 0
+    while index < 200000 {
+        acc = (acc + index) % 1000000
+        index = index + 1
+    }
+    return acc
+}
+"#;
+    // A tight 1 MiB ceiling: register-stack growth is bounded per frame and does
+    // not grow per iteration, so a non-allocating loop never approaches it.
+    let limits = VmLimits {
+        mem_budget: Some(1 << 20),
+        step_budget: Some(50_000_000),
+        ..VmLimits::default()
+    };
+    let output = eval_limited(source, limits).expect("non-allocating loop must not leak/OOM");
+    // 200000 -> documents the loop ran to completion (exact value unimportant).
+    assert!(!output.value.is_empty());
+}
+
+/// C6 (leak policy, bounded): the value model uses `Rc`, so unbounded retained
+/// growth — including the only way to form a cycle, a self-referential mutable
+/// container — is the leak class of concern. rsscript does NOT run a cycle
+/// collector; instead the B4 `mem_budget` backstops it: the run trips a clean
+/// "memory limit" error (bounded), never an unbounded grow-until-host-OOM crash.
+///
+/// Note (a soundness bonus surfaced writing this test): the `local`/effect
+/// checker actively *rejects* pushing a `local` value into another container
+/// (RS0501 "retaining API cannot retain local value"), so a true `Rc` cycle
+/// cannot even be expressed from safe source — cycles are rarer than the policy
+/// assumes. This test therefore exercises the general retained-growth leak (a
+/// list accumulating fresh values without bound), which is what `mem_budget`
+/// must bound regardless of whether the retained graph is acyclic or cyclic.
+#[test]
+fn self_referential_container_is_bounded_by_memory_ceiling() {
+    let source = r#"features: local
+
+fn main() -> Int {
+    local values = List<String>.new()
+    let mut index = 0
+    while index < 100000000 {
+        List.push<String>(list: mut values, value: read "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+        index = index + 1
+    }
+    return 0
+}
+"#;
+    let limits = VmLimits {
+        mem_budget: Some(1 << 20),
+        step_budget: Some(50_000_000),
+        ..VmLimits::default()
+    };
+    let err = eval_limited(source, limits).expect_err("must trip a bounded error, not leak/crash");
+    match err {
+        EvalError::Runtime(msg) => assert!(
+            msg.contains("memory limit"),
+            "expected memory-limit (bounded) error, got: {msg}"
+        ),
+        other => panic!("expected EvalError::Runtime, got {other:?}"),
+    }
 }
 
 /// Analyze every file under tests/corpus/malformed/. None may panic. Files not

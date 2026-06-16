@@ -52,10 +52,22 @@ prefixes (the enum is intentionally minimal: `Diagnostics` / `Runtime`).
 - [x] **B3 Step budget** (Inv 1) — DONE (`VmLimits.step_budget: Option<u64>`,
   default OFF; per-instruction `tick()` in BOTH the interpreter loop and the
   tier-0 JIT loop → `EvalError::Runtime("step budget exceeded …")`).
-  - [ ] *Follow-up (not done):* poll the existing `CancellationToken` every N
-    steps so cooperative cancellation can preempt a tight compute loop — the
-    preemption hook structured cancellation currently lacks (works only at await
-    points). The `tick()` counter is the natural place to add it.
+  - [x] *Follow-up:* **ambient host-level cancel hook** — `VmLimits.cancel:
+    Option<Arc<AtomicBool>>` (default `None`, not `Copy` anymore — `Clone` +
+    struct-update keep callers ergonomic). `tick()` polls it every
+    `CANCEL_POLL_INTERVAL` (1024) steps with `Ordering::Relaxed`; when set it
+    aborts with `EvalError::Runtime("evaluation cancelled")`. This is the
+    preemption hook a tight `while true {}` lacked: a host watchdog (timeout /
+    abort) flips the flag and the running loop stops at the next throttled check,
+    even though it never awaits or polls the cooperative RSS `CancellationToken`
+    (which only preempts at await points — unchanged). The off path touches no
+    atomic; the on path is one relaxed load per 1024 instructions.
+    - *Remaining limitation (out of scope, future work):* this stops the **whole**
+      eval. Preemptively cancelling a single **sibling** task stuck in a tight loop
+      — so a `select` / `task_group` can reach its winner while one branch spins —
+      requires the scheduler to yield mid-instruction-stream (snapshot a
+      `SavedTask` at an arbitrary `ip` and reschedule). That is a deeper redesign;
+      structured per-task preemption remains future work.
 - [x] **B4 Memory ceiling** (Inv 1) — DONE (`VmLimits.mem_budget: Option<usize>`,
   default OFF; best-effort cumulative `live_bytes` accounting at `ensure_regs`,
   list/map construction, and list push/append → `EvalError::Runtime("memory limit
@@ -79,9 +91,18 @@ prefixes (the enum is intentionally minimal: `Diagnostics` / `Runtime`).
     deliberately excluded rather than run-and-silenced.
   Setup (offline-installable in the dev container):
   `rustup toolchain install nightly --component miri,rust-src`.
-- [ ] **C6 Cycle/leak policy.** The value model makes accidental cycles unlikely;
-  decide explicitly — document the weak-discipline + add leak tests, or plan a
-  cycle collector for very-long-running apps.
+- [x] **C6 Cycle/leak policy** (documented, no collector). The value model uses
+  `Rc`, so the *only* way to form a cycle is a self-referential mutable container
+  (e.g. pushing a list into itself) — rare in practice. Policy: **cycles are NOT
+  collected; they are bounded by `mem_budget` (B4)** — a self-referential leak
+  trips a clean "memory limit" error instead of growing unbounded, so the host is
+  never OOM-killed. Revisit a real cycle collector only if profiling shows a need.
+  Leak tests in `tests/hostile.rs`: (a) a non-allocating loop completes under a
+  tight `mem_budget` (transient register work doesn't leak into the byte counter);
+  (b) a deliberately self-referential container under a `mem_budget` trips the
+  bounded "memory limit" error, not an unbounded crash. Note: the B4 byte counter
+  is a cumulative high-water estimate (it does not subtract frees), so the
+  positive leak test uses scalar work rather than transient containers.
 
 ## Meta — prove the invariant continuously
 

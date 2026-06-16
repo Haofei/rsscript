@@ -39,6 +39,9 @@ fuzz_target!(|data: &[u8]| {
         max_depth: 16_384,
         step_budget: Some(50_000_000),
         mem_budget: Some(512 * 1024 * 1024),
+        // No ambient cancel flag: the fuzzer relies on the step/mem budgets to
+        // bound each run; the host-level preemption hook is not exercised here.
+        cancel: None,
     };
 
     let result = reg_vm_eval_source_main_with_limits(
