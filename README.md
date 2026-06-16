@@ -208,7 +208,7 @@ The product core is the review protocol: `.rssi` semantic contracts, structured 
 
 Before AI, writing code was expensive and reviewing was manageable. That ratio has flipped: generating is cheap, reviewing is the bottleneck. RSScript is designed for the new ratio: AI writes, the compiler checks semantic boundaries, humans focus on the *risk*. What mutates, what gets retained, who owns a resource, where you cross into native or unsafe, what changed in a public API — all of it lives in the signature and in machine-readable diagnostics.
 
-This discipline is binding, not aspirational: the language specification opens with a [Constitution](docs/RSScript_v0.7_Spec.md#constitution) of nine articles that govern every design decision — most importantly that constraint is the product, that review-critical behavior must be explicit in the signature, and that a feature is admitted only if it phrases as a reviewer question and needs no implicit rule to be ergonomic. Restraint is anchored to a measurable property (review cost), which is what keeps it from eroding as the language grows.
+This discipline is binding, not aspirational: the language specification opens with a [Constitution](docs/spec/RSScript_v0.7_Spec.md#constitution) of nine articles that govern every design decision — most importantly that constraint is the product, that review-critical behavior must be explicit in the signature, and that a feature is admitted only if it phrases as a reviewer question and needs no implicit rule to be ergonomic. Restraint is anchored to a measurable property (review cost), which is what keeps it from eroding as the language grows.
 
 ---
 
@@ -404,7 +404,7 @@ RSScript source
 
 RSScript owns the review-facing front end: syntax, semantic checks, effects, managed/local/resource rules, diagnostics, review metadata, source mapping, and core/standard-package signatures. Rust owns everything below: codegen, optimization, platform support, linking, the crate ecosystem.
 
-This makes RSScript a review-first source format with a deliberately borrowed backend. The value is in the semantic protocol; the back end is Rust's strongest territory, and RSScript leans into that strength. Module boundaries are tracked in [ARCHITECTURE.md](docs/ARCHITECTURE.md).
+This makes RSScript a review-first source format with a deliberately borrowed backend. The value is in the semantic protocol; the back end is Rust's strongest territory, and RSScript leans into that strength. Module boundaries are tracked in [ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md).
 
 ---
 
@@ -509,9 +509,9 @@ fn main() -> Unit {
 }
 ```
 
-Development discipline and the full local verification flow live in [DEVELOPMENT.md](docs/DEVELOPMENT.md): spec prerequisites first, self-hosted validation as the main pressure test, no fixture-only shortcuts, and a broad-first testing loop.
+Development discipline and the full local verification flow live in [DEVELOPMENT.md](docs/development/DEVELOPMENT.md): spec prerequisites first, self-hosted validation as the main pressure test, no fixture-only shortcuts, and a broad-first testing loop.
 
-Prefer a containerized toolchain? [DOCKER.md](docs/DOCKER.md) gives an identical, reproducible build/test environment on macOS, Windows, and Linux (and VS Code / Codespaces) with no local Rust install:
+Prefer a containerized toolchain? [DOCKER.md](docs/development/DOCKER.md) gives an identical, reproducible build/test environment on macOS, Windows, and Linux (and VS Code / Codespaces) with no local Rust install:
 
 ```sh
 docker compose build

@@ -1,5 +1,5 @@
 //! Native (Cranelift) baseline JIT for the RSScript register VM's numeric /
-//! boolean / control-flow core — Phase 2 of `docs/jit-roadmap.md`.
+//! boolean / control-flow core — Phase 2 of `docs/architecture/jit-roadmap.md`.
 //!
 //! # What it compiles
 //!

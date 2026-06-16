@@ -5479,7 +5479,7 @@ implicit flow promotion       any record-like form must use named fields
 The following directions — previously deferred (§20.1) or listed as
 review-visible-but-not-executable (§3.2) — were promoted to **committed in-scope
 work**; all four are design-compatible (they extend the model without reversing a
-review-first tenet). Status (tracked in `docs/spec-todo.md`): items 1 (scoped
+review-first tenet). Status (tracked in `docs/planning/spec-todo.md`): items 1 (scoped
 views), 2 (capability objects), and 4 (two-tier execution) are **implemented**;
 item 3 (cross-isolate messages) has its **message-channel core implemented**
 (`Channel.message<T>`, §20.2-3) with the broader payload contract and isolate-spawn
