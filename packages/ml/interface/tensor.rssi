@@ -176,5 +176,47 @@ pub native fn Tensor.cast_bool(t: read Tensor) -> fresh Tensor
 pub native fn Tensor.dtype_code(t: read Tensor) -> Int
     effects(native)
 
+// movement+gather (ops B). pad/shrink/flip materialize a fresh contiguous buffer
+// and preserve the input dtype; gather selects along one axis with a rank-1 index
+// tensor and yields the data tensor's dtype.
+
+// Pad each axis with 0.0. `pads` is flat per-axis [before0, after0, before1,
+// after1, ...] (length == 2*rank). Output dim = before + old + after. Errors if
+// `pads` length != 2*rank or any pad is negative.
+pub native fn Tensor.pad(
+    t: read Tensor,
+    pads: read List<Int>,
+) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+// Slice each axis to the half-open range [start, end). `bounds` is flat per-axis
+// [start0, end0, start1, end1, ...] (length == 2*rank). Output dim = end - start.
+// Errors if `bounds` length != 2*rank or any axis violates 0 <= start <= end <= dim.
+pub native fn Tensor.shrink(
+    t: read Tensor,
+    bounds: read List<Int>,
+) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+// Reverse the tensor along each listed axis (shape unchanged). Errors if any axis
+// is out of range or duplicated.
+pub native fn Tensor.flip(
+    t: read Tensor,
+    axes: read List<Int>,
+) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+// Gather rows along `axis` using a rank-1 integer-valued `indices` tensor: output
+// shape = data.shape with dim `axis` replaced by indices.len(); out[..., j, ...] =
+// data[..., indices[j], ...]. Output dtype = data's dtype. Only a rank-1 index
+// tensor along one axis is supported in this slice. Errors if `axis` is out of
+// range, `indices` is not rank-1, or any index is out of bounds.
+pub native fn Tensor.gather(
+    data: read Tensor,
+    axis: Int,
+    indices: read Tensor,
+) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
 pub fn TensorError.message(error: read TensorError) -> fresh String
     effects(pure)

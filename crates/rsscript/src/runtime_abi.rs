@@ -460,6 +460,11 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "dtype_code",
         "rsscript_runtime::tensor_dtype_code",
     ),
+    // movement+gather (ops B)
+    runtime_intrinsic("Tensor", "pad", "rsscript_runtime::tensor_pad"),
+    runtime_intrinsic("Tensor", "shrink", "rsscript_runtime::tensor_shrink"),
+    runtime_intrinsic("Tensor", "flip", "rsscript_runtime::tensor_flip"),
+    runtime_intrinsic("Tensor", "gather", "rsscript_runtime::tensor_gather"),
     runtime_intrinsic(
         "TensorError",
         "message",

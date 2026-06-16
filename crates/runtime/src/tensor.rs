@@ -872,6 +872,242 @@ pub fn tensor_broadcast_to(t: &RssTensor, target_shape: &[i64]) -> Result<RssTen
     })
 }
 
+// ---------------------------------------------------------------------------
+// movement+gather (ops B).
+//
+// `pad`/`shrink`/`flip` keep the row-major-contiguous model: each materializes a
+// fresh packed buffer in the new logical order, preserving the input dtype.
+// `gather` selects rows along one axis using a rank-1 integer index tensor.
+// ---------------------------------------------------------------------------
+
+/// Row-major strides for a contiguous shape (stride of the last axis is 1).
+fn row_major_strides(shape: &[usize]) -> Vec<usize> {
+    let rank = shape.len();
+    let mut strides = vec![0usize; rank];
+    let mut acc = 1usize;
+    for axis in (0..rank).rev() {
+        strides[axis] = acc;
+        acc *= shape[axis];
+    }
+    strides
+}
+
+/// Pad each axis with `0.0`. `pads` is flat per-axis `[before0, after0, before1,
+/// after1, ...]` (length == 2*rank). Output dim `d` = `before[d] + old[d] +
+/// after[d]`. Errors if `pads` length != 2*rank or any pad is negative.
+pub fn tensor_pad(t: &RssTensor, pads: &[i64]) -> Result<RssTensor, TensorError> {
+    let rank = t.shape.len();
+    if pads.len() != 2 * rank {
+        return Err(TensorError::new(format!(
+            "pad expects {} values (2 per axis) for a rank-{rank} tensor, got {}",
+            2 * rank,
+            pads.len()
+        )));
+    }
+    let mut before = vec![0usize; rank];
+    let mut out_shape = vec![0usize; rank];
+    for axis in 0..rank {
+        let b = pads[2 * axis];
+        let a = pads[2 * axis + 1];
+        if b < 0 || a < 0 {
+            return Err(TensorError::new(format!(
+                "pad amounts must be non-negative, got [{b}, {a}] for axis {axis}"
+            )));
+        }
+        before[axis] = b as usize;
+        out_shape[axis] = b as usize + t.shape[axis] + a as usize;
+    }
+    let total = RssTensor::shape_len(&out_shape);
+    let src = t.data.as_ref();
+    let src_strides = row_major_strides(&t.shape);
+    let mut out = vec![0.0f32; total];
+    // Walk the output in row-major order; a cell maps back to the source iff every
+    // coordinate lands inside the original (un-padded) region.
+    let mut out_index = vec![0usize; rank];
+    for slot in out.iter_mut() {
+        let mut in_bounds = true;
+        let mut src_offset = 0usize;
+        for d in 0..rank {
+            if out_index[d] < before[d] || out_index[d] >= before[d] + t.shape[d] {
+                in_bounds = false;
+                break;
+            }
+            src_offset += (out_index[d] - before[d]) * src_strides[d];
+        }
+        if in_bounds {
+            *slot = src[src_offset];
+        }
+        for d in (0..rank).rev() {
+            out_index[d] += 1;
+            if out_index[d] < out_shape[d] {
+                break;
+            }
+            out_index[d] = 0;
+        }
+    }
+    Ok(RssTensor {
+        data: Rc::new(out),
+        shape: out_shape,
+        dtype: t.dtype,
+    })
+}
+
+/// Slice each axis to the half-open range `[start, end)`. `bounds` is flat per-axis
+/// `[start0, end0, start1, end1, ...]` (length == 2*rank). Output dim `d` =
+/// `end[d] - start[d]`. Errors if `bounds` length != 2*rank or any axis violates
+/// `0 <= start <= end <= dim`.
+pub fn tensor_shrink(t: &RssTensor, bounds: &[i64]) -> Result<RssTensor, TensorError> {
+    let rank = t.shape.len();
+    if bounds.len() != 2 * rank {
+        return Err(TensorError::new(format!(
+            "shrink expects {} values (2 per axis) for a rank-{rank} tensor, got {}",
+            2 * rank,
+            bounds.len()
+        )));
+    }
+    let mut start = vec![0usize; rank];
+    let mut out_shape = vec![0usize; rank];
+    for axis in 0..rank {
+        let s = bounds[2 * axis];
+        let e = bounds[2 * axis + 1];
+        let dim = t.shape[axis] as i64;
+        if s < 0 || s > e || e > dim {
+            return Err(TensorError::new(format!(
+                "shrink bounds [{s}, {e}) out of range for axis {axis} of length {dim} (require 0 <= start <= end <= dim)"
+            )));
+        }
+        start[axis] = s as usize;
+        out_shape[axis] = (e - s) as usize;
+    }
+    let total = RssTensor::shape_len(&out_shape);
+    let src = t.data.as_ref();
+    let src_strides = row_major_strides(&t.shape);
+    let mut out = vec![0.0f32; total];
+    let mut out_index = vec![0usize; rank];
+    for slot in out.iter_mut() {
+        let mut src_offset = 0usize;
+        for d in 0..rank {
+            src_offset += (out_index[d] + start[d]) * src_strides[d];
+        }
+        *slot = src[src_offset];
+        for d in (0..rank).rev() {
+            out_index[d] += 1;
+            if out_index[d] < out_shape[d] {
+                break;
+            }
+            out_index[d] = 0;
+        }
+    }
+    Ok(RssTensor {
+        data: Rc::new(out),
+        shape: out_shape,
+        dtype: t.dtype,
+    })
+}
+
+/// Reverse the tensor along each listed axis, materializing a fresh buffer. The
+/// shape is unchanged. Errors if any axis is out of range or appears twice.
+pub fn tensor_flip(t: &RssTensor, axes: &[i64]) -> Result<RssTensor, TensorError> {
+    let rank = t.shape.len();
+    let mut flip = vec![false; rank];
+    for &axis in axes {
+        if axis < 0 || axis as usize >= rank {
+            return Err(TensorError::new(format!(
+                "flip axis {axis} out of range for tensor of rank {rank}"
+            )));
+        }
+        let a = axis as usize;
+        if flip[a] {
+            return Err(TensorError::new(format!(
+                "flip axes {axes:?} contain duplicate axis {a}"
+            )));
+        }
+        flip[a] = true;
+    }
+    let total = t.data.len();
+    let src = t.data.as_ref();
+    let src_strides = row_major_strides(&t.shape);
+    let mut out = vec![0.0f32; total];
+    let mut out_index = vec![0usize; rank];
+    for slot in out.iter_mut() {
+        let mut src_offset = 0usize;
+        for d in 0..rank {
+            let coord = if flip[d] {
+                t.shape[d] - 1 - out_index[d]
+            } else {
+                out_index[d]
+            };
+            src_offset += coord * src_strides[d];
+        }
+        *slot = src[src_offset];
+        for d in (0..rank).rev() {
+            out_index[d] += 1;
+            if out_index[d] < t.shape[d] {
+                break;
+            }
+            out_index[d] = 0;
+        }
+    }
+    Ok(RssTensor {
+        data: Rc::new(out),
+        shape: t.shape.clone(),
+        dtype: t.dtype,
+    })
+}
+
+/// Gather rows along `axis` using a rank-1 integer-valued `indices` tensor. The
+/// output shape equals `data.shape` with dim `axis` replaced by `indices.len()`:
+/// `out[..., j, ...] = data[..., indices[j], ...]` along `axis`. Output dtype =
+/// `data`'s dtype. Index values are read from `indices.data()` and rounded to the
+/// nearest integer (they are I32-dtype `f32` values). Errors if `axis` is out of
+/// range, `indices` is not rank-1, or any index is out of bounds.
+///
+/// NOTE: only a rank-1 index tensor along a single axis is supported in this slice.
+pub fn tensor_gather(
+    data: &RssTensor,
+    axis: i64,
+    indices: &RssTensor,
+) -> Result<RssTensor, TensorError> {
+    let axis = check_axis(&data.shape, axis, "gather")?;
+    if indices.shape.len() != 1 {
+        return Err(TensorError::new(format!(
+            "gather requires a rank-1 indices tensor, got shape {:?}",
+            indices.shape
+        )));
+    }
+    let axis_len = data.shape[axis];
+    let idx_len = indices.shape[0];
+    // Resolve each index up front (rounding the f32 value) and bounds-check it.
+    let mut resolved = Vec::with_capacity(idx_len);
+    for (j, &raw) in indices.data().iter().enumerate() {
+        let i = raw.round() as i64;
+        if i < 0 || i as usize >= axis_len {
+            return Err(TensorError::new(format!(
+                "gather index {i} (at position {j}) out of range for axis {axis} of length {axis_len}"
+            )));
+        }
+        resolved.push(i as usize);
+    }
+    let mut out_shape = data.shape.clone();
+    out_shape[axis] = idx_len;
+    let outer: usize = data.shape[..axis].iter().product();
+    let inner: usize = data.shape[axis + 1..].iter().product();
+    let src = data.data.as_ref();
+    let mut out = vec![0.0f32; outer * idx_len * inner];
+    for o in 0..outer {
+        for (j, &src_a) in resolved.iter().enumerate() {
+            let src_base = (o * axis_len + src_a) * inner;
+            let dst_base = (o * idx_len + j) * inner;
+            out[dst_base..dst_base + inner].copy_from_slice(&src[src_base..src_base + inner]);
+        }
+    }
+    Ok(RssTensor {
+        data: Rc::new(out),
+        shape: out_shape,
+        dtype: data.dtype,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1252,5 +1488,129 @@ mod tests {
         let r = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
         assert!(tensor_error_message(&tensor_broadcast_to(&r, &[2]).unwrap_err())
             .contains("cannot reduce rank"));
+    }
+
+    #[test]
+    fn pad_2d() {
+        // [[1,2],[3,4]] pad axis0 (before 1, after 0), axis1 (before 0, after 2).
+        let t = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+        let p = tensor_pad(&t, &[1, 0, 0, 2]).unwrap();
+        assert_eq!(tensor_shape(&p).unwrap(), vec![3, 4]);
+        assert_eq!(
+            tensor_to_f32_slice(&p).unwrap(),
+            vec![
+                0.0, 0.0, 0.0, 0.0, // padded leading row
+                1.0, 2.0, 0.0, 0.0, // row 0 + trailing zeros
+                3.0, 4.0, 0.0, 0.0, // row 1 + trailing zeros
+            ]
+        );
+        // dtype preserved.
+        assert_eq!(tensor_dtype_code(&tensor_pad(&tensor_cast_i32(&t), &[0, 0, 0, 0]).unwrap()), 1);
+    }
+
+    #[test]
+    fn pad_rejects_bad_args() {
+        let t = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+        assert!(tensor_error_message(&tensor_pad(&t, &[1, 0]).unwrap_err()).contains("2 per axis"));
+        assert!(
+            tensor_error_message(&tensor_pad(&t, &[1, -1, 0, 0]).unwrap_err())
+                .contains("non-negative")
+        );
+    }
+
+    #[test]
+    fn shrink_2d() {
+        // [[1,2,3],[4,5,6]] shrink axis0 [0,1), axis1 [1,3) -> [[2,3]]
+        let t = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]).unwrap();
+        let s = tensor_shrink(&t, &[0, 1, 1, 3]).unwrap();
+        assert_eq!(tensor_shape(&s).unwrap(), vec![1, 2]);
+        assert_eq!(tensor_to_f32_slice(&s).unwrap(), vec![2.0, 3.0]);
+    }
+
+    #[test]
+    fn shrink_rejects_bad_args() {
+        let t = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+        assert!(
+            tensor_error_message(&tensor_shrink(&t, &[0, 2]).unwrap_err()).contains("2 per axis")
+        );
+        // end > dim.
+        assert!(
+            tensor_error_message(&tensor_shrink(&t, &[0, 3, 0, 2]).unwrap_err())
+                .contains("out of range")
+        );
+        // start > end.
+        assert!(
+            tensor_error_message(&tensor_shrink(&t, &[1, 0, 0, 2]).unwrap_err())
+                .contains("out of range")
+        );
+    }
+
+    #[test]
+    fn flip_2d() {
+        // [[1,2,3],[4,5,6]] flip axis 1 -> [[3,2,1],[6,5,4]]
+        let t = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]).unwrap();
+        let f1 = tensor_flip(&t, &[1]).unwrap();
+        assert_eq!(tensor_shape(&f1).unwrap(), vec![2, 3]);
+        assert_eq!(tensor_to_f32_slice(&f1).unwrap(), vec![3.0, 2.0, 1.0, 6.0, 5.0, 4.0]);
+        // flip both axes -> reverse the whole buffer.
+        let fb = tensor_flip(&t, &[0, 1]).unwrap();
+        assert_eq!(
+            tensor_to_f32_slice(&fb).unwrap(),
+            vec![6.0, 5.0, 4.0, 3.0, 2.0, 1.0]
+        );
+        // empty axes list is a no-op copy.
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_flip(&t, &[]).unwrap()).unwrap(),
+            tensor_to_f32_slice(&t).unwrap()
+        );
+    }
+
+    #[test]
+    fn flip_rejects_bad_axes() {
+        let t = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+        assert!(tensor_error_message(&tensor_flip(&t, &[2]).unwrap_err()).contains("out of range"));
+        assert!(
+            tensor_error_message(&tensor_flip(&t, &[0, 0]).unwrap_err()).contains("duplicate axis")
+        );
+    }
+
+    #[test]
+    fn gather_axis0_and_axis1() {
+        // [[1,2,3],[4,5,6]] gather axis 0 with [1,0,1] -> rows 1,0,1
+        let t = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]).unwrap();
+        let idx = tensor_cast_i32(&tensor_from_f32_slice(&[1.0, 0.0, 1.0], &[3]).unwrap());
+        let g0 = tensor_gather(&t, 0, &idx).unwrap();
+        assert_eq!(tensor_shape(&g0).unwrap(), vec![3, 3]);
+        assert_eq!(
+            tensor_to_f32_slice(&g0).unwrap(),
+            vec![4.0, 5.0, 6.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        );
+        // gather axis 1 with [2,0] -> columns 2,0
+        let idx1 = tensor_cast_i32(&tensor_from_f32_slice(&[2.0, 0.0], &[2]).unwrap());
+        let g1 = tensor_gather(&t, 1, &idx1).unwrap();
+        assert_eq!(tensor_shape(&g1).unwrap(), vec![2, 2]);
+        assert_eq!(tensor_to_f32_slice(&g1).unwrap(), vec![3.0, 1.0, 6.0, 4.0]);
+        // output dtype = data dtype.
+        assert_eq!(tensor_dtype_code(&g0), 0);
+        assert_eq!(tensor_dtype_code(&tensor_gather(&tensor_cast_i32(&t), 0, &idx).unwrap()), 1);
+    }
+
+    #[test]
+    fn gather_rejects_bad_args() {
+        let t = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+        let idx = tensor_cast_i32(&tensor_from_f32_slice(&[0.0], &[1]).unwrap());
+        assert!(
+            tensor_error_message(&tensor_gather(&t, 5, &idx).unwrap_err()).contains("out of range")
+        );
+        // out-of-bounds index.
+        let bad = tensor_cast_i32(&tensor_from_f32_slice(&[5.0], &[1]).unwrap());
+        assert!(
+            tensor_error_message(&tensor_gather(&t, 0, &bad).unwrap_err()).contains("out of range")
+        );
+        // rank-2 index tensor rejected.
+        let idx2 = tensor_cast_i32(&tensor_from_f32_slice(&[0.0, 1.0], &[1, 2]).unwrap());
+        assert!(
+            tensor_error_message(&tensor_gather(&t, 0, &idx2).unwrap_err()).contains("rank-1")
+        );
     }
 }

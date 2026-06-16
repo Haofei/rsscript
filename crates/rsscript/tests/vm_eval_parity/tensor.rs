@@ -859,3 +859,215 @@ fn main() -> Result<Unit, TensorError> {
         source,
     );
 }
+
+// movement+gather (ops B)
+
+#[test]
+fn parity_tensor_pad() {
+    let source = r#"
+features: native, local
+
+fn dump(t: read Tensor) -> Result<Unit, TensorError> {
+    let dims = Tensor.shape(tensor: read t)?
+    let mut d = 0
+    while d < List.len(list: read dims) {
+        Log.write(message: read String.from_int(value: List.get(list: read dims, index: d)))
+        d = d + 1
+    }
+    let values = Tensor.to_f32_slice(tensor: read t)?
+    let mut index = 0
+    while index < List.len(list: read values) {
+        Log.write(message: read Float.to_string(value: read List.get(list: read values, index: index)))
+        index = index + 1
+    }
+    return Ok(Unit)
+}
+
+fn main() -> Result<Unit, TensorError> {
+    let t = Tensor.from_f32_slice(data: read [1.0, 2.0, 3.0, 4.0], shape: read [2, 2])?
+    local pads = List<Int>.new()
+    List.push<Int>(list: mut pads, value: read 1)
+    List.push<Int>(list: mut pads, value: read 0)
+    List.push<Int>(list: mut pads, value: read 0)
+    List.push<Int>(list: mut pads, value: read 2)
+    let p = Tensor.pad(t: read t, pads: read pads)?
+    dump(t: read p)?
+    // wrong-length pads surfaces an error identically.
+    local short = List<Int>.new()
+    List.push<Int>(list: mut short, value: read 1)
+    local bad = Tensor.pad(t: read t, pads: read short)
+    match bad {
+        Ok(_) => {
+            Log.write(message: read "ok")
+        }
+        Err(error) => {
+            Log.write(message: read TensorError.message(error: read error))
+        }
+    }
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-pad.rss",
+        "rsscript_parity_tensor_pad",
+        source,
+    );
+}
+
+#[test]
+fn parity_tensor_shrink() {
+    let source = r#"
+features: native, local
+
+fn dump(t: read Tensor) -> Result<Unit, TensorError> {
+    let dims = Tensor.shape(tensor: read t)?
+    let mut d = 0
+    while d < List.len(list: read dims) {
+        Log.write(message: read String.from_int(value: List.get(list: read dims, index: d)))
+        d = d + 1
+    }
+    let values = Tensor.to_f32_slice(tensor: read t)?
+    let mut index = 0
+    while index < List.len(list: read values) {
+        Log.write(message: read Float.to_string(value: read List.get(list: read values, index: index)))
+        index = index + 1
+    }
+    return Ok(Unit)
+}
+
+fn main() -> Result<Unit, TensorError> {
+    let t = Tensor.from_f32_slice(data: read [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], shape: read [2, 3])?
+    local bounds = List<Int>.new()
+    List.push<Int>(list: mut bounds, value: read 0)
+    List.push<Int>(list: mut bounds, value: read 1)
+    List.push<Int>(list: mut bounds, value: read 1)
+    List.push<Int>(list: mut bounds, value: read 3)
+    let s = Tensor.shrink(t: read t, bounds: read bounds)?
+    dump(t: read s)?
+    // out-of-range bounds surfaces an error identically.
+    local bad_bounds = List<Int>.new()
+    List.push<Int>(list: mut bad_bounds, value: read 0)
+    List.push<Int>(list: mut bad_bounds, value: read 5)
+    List.push<Int>(list: mut bad_bounds, value: read 0)
+    List.push<Int>(list: mut bad_bounds, value: read 3)
+    local bad = Tensor.shrink(t: read t, bounds: read bad_bounds)
+    match bad {
+        Ok(_) => {
+            Log.write(message: read "ok")
+        }
+        Err(error) => {
+            Log.write(message: read TensorError.message(error: read error))
+        }
+    }
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-shrink.rss",
+        "rsscript_parity_tensor_shrink",
+        source,
+    );
+}
+
+#[test]
+fn parity_tensor_flip() {
+    let source = r#"
+features: native, local
+
+fn dump(t: read Tensor) -> Result<Unit, TensorError> {
+    let values = Tensor.to_f32_slice(tensor: read t)?
+    let mut index = 0
+    while index < List.len(list: read values) {
+        Log.write(message: read Float.to_string(value: read List.get(list: read values, index: index)))
+        index = index + 1
+    }
+    return Ok(Unit)
+}
+
+fn main() -> Result<Unit, TensorError> {
+    let t = Tensor.from_f32_slice(data: read [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], shape: read [2, 3])?
+    local axes = List<Int>.new()
+    List.push<Int>(list: mut axes, value: read 1)
+    let f1 = Tensor.flip(t: read t, axes: read axes)?
+    dump(t: read f1)?
+    local both = List<Int>.new()
+    List.push<Int>(list: mut both, value: read 0)
+    List.push<Int>(list: mut both, value: read 1)
+    let fb = Tensor.flip(t: read t, axes: read both)?
+    dump(t: read fb)?
+    // duplicate axis surfaces an error identically.
+    local dup = List<Int>.new()
+    List.push<Int>(list: mut dup, value: read 0)
+    List.push<Int>(list: mut dup, value: read 0)
+    local bad = Tensor.flip(t: read t, axes: read dup)
+    match bad {
+        Ok(_) => {
+            Log.write(message: read "ok")
+        }
+        Err(error) => {
+            Log.write(message: read TensorError.message(error: read error))
+        }
+    }
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-flip.rss",
+        "rsscript_parity_tensor_flip",
+        source,
+    );
+}
+
+#[test]
+fn parity_tensor_gather() {
+    let source = r#"
+features: native, local
+
+fn dump(t: read Tensor) -> Result<Unit, TensorError> {
+    Log.write(message: read String.from_int(value: Tensor.dtype_code(t: read t)))
+    let dims = Tensor.shape(tensor: read t)?
+    let mut d = 0
+    while d < List.len(list: read dims) {
+        Log.write(message: read String.from_int(value: List.get(list: read dims, index: d)))
+        d = d + 1
+    }
+    let values = Tensor.to_f32_slice(tensor: read t)?
+    let mut index = 0
+    while index < List.len(list: read values) {
+        Log.write(message: read Float.to_string(value: read List.get(list: read values, index: index)))
+        index = index + 1
+    }
+    return Ok(Unit)
+}
+
+fn main() -> Result<Unit, TensorError> {
+    let t = Tensor.from_f32_slice(data: read [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], shape: read [2, 3])?
+    let idx_f = Tensor.from_f32_slice(data: read [1.0, 0.0, 1.0], shape: read [3])?
+    let idx = Tensor.cast_i32(t: read idx_f)
+    let g0 = Tensor.gather(data: read t, axis: 0, indices: read idx)?
+    dump(t: read g0)?
+    let cidx_f = Tensor.from_f32_slice(data: read [2.0, 0.0], shape: read [2])?
+    let cidx = Tensor.cast_i32(t: read cidx_f)
+    let g1 = Tensor.gather(data: read t, axis: 1, indices: read cidx)?
+    dump(t: read g1)?
+    // out-of-bounds index surfaces an error identically.
+    let bidx_f = Tensor.from_f32_slice(data: read [9.0], shape: read [1])?
+    let bidx = Tensor.cast_i32(t: read bidx_f)
+    local bad = Tensor.gather(data: read t, axis: 0, indices: read bidx)
+    match bad {
+        Ok(_) => {
+            Log.write(message: read "ok")
+        }
+        Err(error) => {
+            Log.write(message: read TensorError.message(error: read error))
+        }
+    }
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-gather.rss",
+        "rsscript_parity_tensor_gather",
+        source,
+    );
+}
