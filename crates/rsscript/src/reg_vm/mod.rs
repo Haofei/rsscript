@@ -2089,6 +2089,11 @@ enum RegIntrinsic {
     TensorLog,
     TensorSqrt,
     TensorRelu,
+    TensorSumAll,
+    TensorSumAxis,
+    TensorMaxAxis,
+    TensorMeanAxis,
+    TensorArgmaxAxis,
     TensorErrorMessage,
     CharCompare,
     CharFromCode,
@@ -5337,6 +5342,11 @@ fn qualified_intrinsic(namespace: &str, name: &str) -> Option<RegIntrinsic> {
         ("Tensor", "log") => Some(RegIntrinsic::TensorLog),
         ("Tensor", "sqrt") => Some(RegIntrinsic::TensorSqrt),
         ("Tensor", "relu") => Some(RegIntrinsic::TensorRelu),
+        ("Tensor", "sum_all") => Some(RegIntrinsic::TensorSumAll),
+        ("Tensor", "sum_axis") => Some(RegIntrinsic::TensorSumAxis),
+        ("Tensor", "max_axis") => Some(RegIntrinsic::TensorMaxAxis),
+        ("Tensor", "mean_axis") => Some(RegIntrinsic::TensorMeanAxis),
+        ("Tensor", "argmax_axis") => Some(RegIntrinsic::TensorArgmaxAxis),
         ("TensorError", "message") => Some(RegIntrinsic::TensorErrorMessage),
         ("Char", "compare") => Some(RegIntrinsic::CharCompare),
         ("Char", "from_code") => Some(RegIntrinsic::CharFromCode),
@@ -9312,6 +9322,29 @@ impl RegVm {
                     _ => rsscript_runtime::tensor_relu(&t),
                 };
                 Ok(self.store_tensor(result))
+            }
+            RegIntrinsic::TensorSumAll => {
+                let t = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Float(rsscript_runtime::tensor_sum_all(&t)))
+            }
+            RegIntrinsic::TensorSumAxis
+            | RegIntrinsic::TensorMaxAxis
+            | RegIntrinsic::TensorMeanAxis
+            | RegIntrinsic::TensorArgmaxAxis => {
+                let t = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let axis = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let result = match intrinsic {
+                    RegIntrinsic::TensorSumAxis => rsscript_runtime::tensor_sum_axis(&t, axis),
+                    RegIntrinsic::TensorMaxAxis => rsscript_runtime::tensor_max_axis(&t, axis),
+                    RegIntrinsic::TensorMeanAxis => rsscript_runtime::tensor_mean_axis(&t, axis),
+                    _ => rsscript_runtime::tensor_argmax_axis(&t, axis),
+                };
+                Ok(json_result(match result {
+                    Ok(tensor) => Ok(self.store_tensor(tensor)),
+                    Err(error) => Err(tensor_error_value(
+                        rsscript_runtime::tensor_error_message(&error),
+                    )),
+                }))
             }
             RegIntrinsic::CharCompare | RegIntrinsic::CharFromCode | RegIntrinsic::CharIsAlphanumeric | RegIntrinsic::CharIsAlpha | RegIntrinsic::CharIsDigit | RegIntrinsic::CharIsLower | RegIntrinsic::CharIsUpper | RegIntrinsic::CharIsWhitespace | RegIntrinsic::CharToCode | RegIntrinsic::CharToLower | RegIntrinsic::CharToString | RegIntrinsic::CharToUpper => self.exec_char_intrinsics(unit, intrinsic, args, base, next_base),
             RegIntrinsic::ClockNow => Ok(instant_value(clock_system_unix_ms())),

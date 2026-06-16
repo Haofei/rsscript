@@ -233,6 +233,146 @@ pub fn tensor_relu(t: &RssTensor) -> RssTensor {
     tensor_unary_elementwise(t, |x| x.max(0.0))
 }
 
+/// Sum of every element (a global reduction to a scalar `Float`). The accumulation
+/// is done in `f32` and then widened to `f64` at the boundary, matching how the
+/// tensor stores `f32` and the rest of the kernels round; both backends call this
+/// exact function so the reg-VM and AOT results agree bit-for-bit.
+pub fn tensor_sum_all(t: &RssTensor) -> f64 {
+    let mut acc = 0.0f32;
+    for &x in t.data.iter() {
+        acc += x;
+    }
+    acc as f64
+}
+
+/// Validate `axis` against `shape` and return it as a `usize`. Errors if negative
+/// or `>= rank`.
+fn check_axis(shape: &[usize], axis: i64, op_name: &str) -> Result<usize, TensorError> {
+    let rank = shape.len();
+    if axis < 0 || (axis as usize) >= rank {
+        return Err(TensorError::new(format!(
+            "{op_name} axis {axis} out of range for tensor of rank {rank} (shape {shape:?})"
+        )));
+    }
+    Ok(axis as usize)
+}
+
+/// Reduce one `axis` of a row-major contiguous tensor, removing it. The result has
+/// `shape` with index `axis` dropped (rank-1). `init` seeds each output cell and
+/// `combine(acc, x)` folds successive elements along the reduced axis; `finalize`
+/// post-processes each cell (e.g. divide by the axis length for a mean). The walk
+/// uses the contiguous strides: an element at multi-index `i` contributes to the
+/// output cell formed by deleting coordinate `axis` from `i`.
+fn tensor_reduce_axis(
+    t: &RssTensor,
+    axis: usize,
+    init: f32,
+    combine: impl Fn(f32, f32) -> f32,
+    finalize: impl Fn(f32, usize) -> f32,
+) -> RssTensor {
+    let shape = &t.shape;
+    let axis_len = shape[axis];
+    // `outer` = product of dims before `axis`, `inner` = product of dims after it.
+    // Row-major layout makes the buffer a sequence of `outer` blocks, each of
+    // `axis_len` rows of `inner` contiguous elements. The reduced output is the
+    // `outer × inner` grid (the axis collapsed away).
+    let outer: usize = shape[..axis].iter().product();
+    let inner: usize = shape[axis + 1..].iter().product();
+    let out_len = outer * inner;
+    let mut out = vec![init; out_len];
+    let data = t.data.as_ref();
+    for o in 0..outer {
+        for a in 0..axis_len {
+            let row = (o * axis_len + a) * inner;
+            let out_base = o * inner;
+            for i in 0..inner {
+                out[out_base + i] = combine(out[out_base + i], data[row + i]);
+            }
+        }
+    }
+    for cell in out.iter_mut() {
+        *cell = finalize(*cell, axis_len);
+    }
+    let mut out_shape = shape.clone();
+    out_shape.remove(axis);
+    RssTensor {
+        data: Rc::new(out),
+        shape: out_shape,
+    }
+}
+
+/// Sum over one `axis`, removing it. Result is rank `rank-1`. Errors on an
+/// out-of-range axis.
+pub fn tensor_sum_axis(t: &RssTensor, axis: i64) -> Result<RssTensor, TensorError> {
+    let axis = check_axis(&t.shape, axis, "sum_axis")?;
+    Ok(tensor_reduce_axis(t, axis, 0.0, |acc, x| acc + x, |acc, _| acc))
+}
+
+/// Max over one `axis`, removing it. Seeded with `-inf` so any real value wins;
+/// note that an empty axis (dim 0) yields `-inf`. Errors on an out-of-range axis.
+pub fn tensor_max_axis(t: &RssTensor, axis: i64) -> Result<RssTensor, TensorError> {
+    let axis = check_axis(&t.shape, axis, "max_axis")?;
+    Ok(tensor_reduce_axis(
+        t,
+        axis,
+        f32::NEG_INFINITY,
+        |acc, x| acc.max(x),
+        |acc, _| acc,
+    ))
+}
+
+/// Mean over one `axis`, removing it (sum / axis length). Errors on an
+/// out-of-range axis.
+pub fn tensor_mean_axis(t: &RssTensor, axis: i64) -> Result<RssTensor, TensorError> {
+    let axis = check_axis(&t.shape, axis, "mean_axis")?;
+    Ok(tensor_reduce_axis(
+        t,
+        axis,
+        0.0,
+        |acc, x| acc + x,
+        |acc, len| if len == 0 { acc } else { acc / len as f32 },
+    ))
+}
+
+/// Index of the maximum along one `axis`, removing it. The result tensor holds the
+/// integer indices stored as `f32` (so it is a regular `Tensor`; callers read them
+/// back via `to_f32_slice` and round). Ties resolve to the lowest index. Errors on
+/// an out-of-range axis; an empty axis yields index `0`.
+///
+/// This cannot reuse `tensor_reduce_axis` because it tracks two pieces of state
+/// per cell (best value seen + its index), so it has its own walk.
+pub fn tensor_argmax_axis(t: &RssTensor, axis: i64) -> Result<RssTensor, TensorError> {
+    let axis = check_axis(&t.shape, axis, "argmax_axis")?;
+    let shape = &t.shape;
+    let axis_len = shape[axis];
+    let outer: usize = shape[..axis].iter().product();
+    let inner: usize = shape[axis + 1..].iter().product();
+    let out_len = outer * inner;
+    let mut best_val = vec![f32::NEG_INFINITY; out_len];
+    let mut best_idx = vec![0.0f32; out_len];
+    let data = t.data.as_ref();
+    for o in 0..outer {
+        for a in 0..axis_len {
+            let row = (o * axis_len + a) * inner;
+            let out_base = o * inner;
+            for i in 0..inner {
+                let v = data[row + i];
+                let cell = out_base + i;
+                if v > best_val[cell] {
+                    best_val[cell] = v;
+                    best_idx[cell] = a as f32;
+                }
+            }
+        }
+    }
+    let mut out_shape = shape.clone();
+    out_shape.remove(axis);
+    Ok(RssTensor {
+        data: Rc::new(best_idx),
+        shape: out_shape,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,5 +473,84 @@ mod tests {
             assert!((g - e).abs() < 1e-5, "{g} vs {e}");
         }
         assert_eq!(tensor_shape(&tensor_neg(&t)).unwrap(), vec![2, 2]);
+    }
+
+    #[test]
+    fn sum_all_global() {
+        let t = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+        assert_eq!(tensor_sum_all(&t), 10.0);
+    }
+
+    #[test]
+    fn reduce_axis_2x3() {
+        // [[1,2,3],[4,5,6]]
+        let t = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]).unwrap();
+        // sum axis 0 -> [5,7,9], shape [3]
+        let s0 = tensor_sum_axis(&t, 0).unwrap();
+        assert_eq!(tensor_shape(&s0).unwrap(), vec![3]);
+        assert_eq!(tensor_to_f32_slice(&s0).unwrap(), vec![5.0, 7.0, 9.0]);
+        // sum axis 1 -> [6,15], shape [2]
+        let s1 = tensor_sum_axis(&t, 1).unwrap();
+        assert_eq!(tensor_shape(&s1).unwrap(), vec![2]);
+        assert_eq!(tensor_to_f32_slice(&s1).unwrap(), vec![6.0, 15.0]);
+        // max axis 0 -> [4,5,6]
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_max_axis(&t, 0).unwrap()).unwrap(),
+            vec![4.0, 5.0, 6.0]
+        );
+        // mean axis 1 -> [2,5]
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_mean_axis(&t, 1).unwrap()).unwrap(),
+            vec![2.0, 5.0]
+        );
+        // argmax axis 0 -> [1,1,1] (second row holds the maxima)
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_argmax_axis(&t, 0).unwrap()).unwrap(),
+            vec![1.0, 1.0, 1.0]
+        );
+        // argmax axis 1 -> [2,2] (last column holds the maxima)
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_argmax_axis(&t, 1).unwrap()).unwrap(),
+            vec![2.0, 2.0]
+        );
+    }
+
+    #[test]
+    fn reduce_axis_rank3() {
+        // shape [2,3,4], reduce axis 1 -> [2,4]
+        let data: Vec<f64> = (0..24).map(|x| x as f64).collect();
+        let t = tensor_from_f32_slice(&data, &[2, 3, 4]).unwrap();
+        let s = tensor_sum_axis(&t, 1).unwrap();
+        assert_eq!(tensor_shape(&s).unwrap(), vec![2, 4]);
+        // out[o,i] = sum_a data[o,a,i]; data[o,a,i] = o*12 + a*4 + i
+        // = sum_{a=0..2}(o*12 + a*4 + i) = 3*(o*12+i) + 4*(0+1+2) = 36*... let's just compute
+        let mut expected = vec![0.0f64; 8];
+        for o in 0..2 {
+            for a in 0..3 {
+                for i in 0..4 {
+                    expected[o * 4 + i] += (o * 12 + a * 4 + i) as f64;
+                }
+            }
+        }
+        assert_eq!(tensor_to_f32_slice(&s).unwrap(), expected);
+    }
+
+    #[test]
+    fn reduce_axis_rejects_out_of_range() {
+        let t = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+        assert!(tensor_error_message(&tensor_sum_axis(&t, 2).unwrap_err()).contains("out of range"));
+        assert!(
+            tensor_error_message(&tensor_max_axis(&t, -1).unwrap_err()).contains("out of range")
+        );
+    }
+
+    #[test]
+    fn argmax_ties_pick_lowest() {
+        // axis 0: column 0 both 5.0 -> index 0; column 1 -> 2 wins at index 1
+        let t = tensor_from_f32_slice(&[5.0, 1.0, 5.0, 2.0], &[2, 2]).unwrap();
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_argmax_axis(&t, 0).unwrap()).unwrap(),
+            vec![0.0, 1.0]
+        );
     }
 }

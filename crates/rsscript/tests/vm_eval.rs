@@ -1067,6 +1067,8 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:Tensor.rank runtime:Tensor.matmul runtime:TensorError.message
 // parity: runtime:Tensor.add runtime:Tensor.sub runtime:Tensor.mul runtime:Tensor.div
 // parity: runtime:Tensor.neg runtime:Tensor.exp runtime:Tensor.log runtime:Tensor.sqrt runtime:Tensor.relu
+// parity: runtime:Tensor.sum_all runtime:Tensor.sum_axis runtime:Tensor.max_axis
+// parity: runtime:Tensor.mean_axis runtime:Tensor.argmax_axis
 // parity: runtime:Timer.sleep runtime:Timer.sleep_cancellable runtime:Timer.sleep_until
 // parity: runtime:Tcp.connect runtime:TcpError.message
 // parity: runtime:TcpStream.read runtime:TcpStream.shutdown
