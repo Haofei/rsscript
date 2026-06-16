@@ -32,5 +32,10 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 tracing = "0.1"
 imbl = "7.0.0"
 
+# Native Metal GPU compute. The unsafe FFI lives in `rss-metal-compute` (this crate
+# is `#![forbid(unsafe_code)]`); off macOS that crate is a stub reporting no GPU.
+[dependencies.rss-metal-compute]
+path = "../metal-compute"
+
 [dev-dependencies]
 static_assertions = "1"

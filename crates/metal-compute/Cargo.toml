@@ -1,0 +1,15 @@
+[package]
+name = "rss-metal-compute"
+version = "0.1.0"
+edition = "2024"
+description = "Native Metal GPU compute FFI for the RSScript runtime (macOS only)"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "rss_metal_compute"
+
+# Metal is macOS-only. On other targets the crate compiles to a stub that reports
+# the GPU as unavailable, so dependents build everywhere.
+[target.'cfg(target_os = "macos")'.dependencies]
+metal = "0.33"
+objc = "0.2"

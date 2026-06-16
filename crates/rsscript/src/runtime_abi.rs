@@ -404,6 +404,22 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("Tensor", "shape", "rsscript_runtime::tensor_shape"),
     runtime_intrinsic("Tensor", "rank", "rsscript_runtime::tensor_rank"),
     runtime_intrinsic("Tensor", "matmul", "rsscript_runtime::tensor_matmul"),
+    // Metal GPU compute path
+    runtime_intrinsic(
+        "Tensor",
+        "matmul_metal",
+        "rsscript_runtime::tensor_matmul_metal",
+    ),
+    runtime_intrinsic(
+        "Tensor",
+        "metal_available",
+        "rsscript_runtime::tensor_metal_available",
+    ),
+    runtime_intrinsic(
+        "Tensor",
+        "metal_device_name",
+        "rsscript_runtime::tensor_metal_device_name",
+    ),
     runtime_intrinsic("Tensor", "add", "rsscript_runtime::tensor_add"),
     runtime_intrinsic("Tensor", "sub", "rsscript_runtime::tensor_sub"),
     runtime_intrinsic("Tensor", "mul", "rsscript_runtime::tensor_mul"),
