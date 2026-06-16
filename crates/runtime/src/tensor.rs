@@ -1472,26 +1472,43 @@ pub fn tensor_bitcast_i32_to_f32(t: &RssTensor) -> RssTensor {
 // are only exact for |x| <= 2^24 and cannot represent full uint32
 // wraparound/rotation.
 //
-// Algorithm (matches the documented default; no verified port reference was
-// found to replicate, so the standard parameters below are used):
-//   * 2-word state, 20 rounds (4 injections of the key, every 4th round).
+// This is BIT-EXACT with tinygrad's `Tensor.rand` (and the verified host-RNG
+// oracle `tinygrad-rsmc/oracle/rng_parity.py`, maxdiff 0.0 vs tinygrad for
+// seeds 0/42/123/1337). See `tensor_rand_bits` below for the exact scheme.
+//
+//   * 2-word state, 20 rounds (5 key injections, after every 4th round).
 //   * Rotation constants per round (period 8): [13, 15, 26, 6, 17, 29, 16, 24].
 //   * Key schedule parity word: ks[2] = key0 ^ key1 ^ 0x1BD11BDA.
-//   * Counter layout: x0 = counter low 32 bits, x1 = counter high 32 bits.
-//     Key:            k0 = seed   low 32 bits, k1 = seed   high 32 bits.
+//   * `threefry2x32(counter, key)`: x0 = counter low 32, x1 = counter high 32;
+//     k0 = key low 32, k1 = key high 32. (Matches the oracle's
+//     `_threefry2x32(x0, x1, k0, k1)` bit-for-bit; verified by the published
+//     known-answer vectors in the tests below.)
 //
-// Per-element counter convention: element `i` (row-major flat index) draws from
-// counter base `(counter as u64) + i`. Callers advance deterministically by
-// adding the element count to `counter` between draws. `randn` consumes two
-// uniforms per element, so element `i` uses counter bases `2*i` and `2*i + 1`
-// relative to the supplied base (i.e. it advances the counter at twice the rate).
+// tinygrad/oracle composition (`tensor_rand_bits`):
+//   1. Device key:  key0 = 0x14B5F2D9 (= sha256(b"\0\0\0\0") low-32, tinygrad's
+//      CPU device key, decimal 347607321), key1 = seed (low 32 bits).
+//   2. Key derivation from the device counter:
+//        (nk0, nk1) = threefry2x32(counter, key = key0 | (key1 << 32))
+//      where the counter's low 32 bits are x0 and high 32 bits are x1. With
+//      counter = 0 this is threefry2x32(0, ...) i.e. x0 = x1 = 0, reproducing
+//      the oracle exactly.
+//   3. Per-draw element bits: with `half = (n + 1) / 2`, for j in 0..half:
+//        (lo, hi) = threefry2x32(j | ((j + half) << 32), nk0 | (nk1 << 32))
+//      then `bits = lows ++ highs` (all lows, then all highs).
+//   4. Uniform f32: `(bits[k] >> 9) as f32 / 8388608.0` (8388608 == 2^23).
+//      This equals tinygrad's `bitcast((bits>>9)|0x3F800000) - 1` exactly.
 //
-// Uniform f32 construction (JAX-style): take the high 24 bits of the first
-// output word and scale into [0, 1): `(bits >> 8) as f32 * (1.0 / 16777216.0)`.
-// 16777216 == 2^24, so the result lies in [0, 1) with 24-bit resolution.
+// The per-draw element counts always restart at `arange` (the `j` loop), while
+// the device counter only feeds the key derivation. Callers advance `counter`
+// by the number of uniforms consumed per draw so successive draws are distinct
+// and reproduce tinygrad's multi-draw stream. `randint` draws `n` uniforms;
+// `randn` draws `2 * n` uniforms (one `rand` over a doubled leading axis).
 
 const THREEFRY_ROTATIONS: [u32; 8] = [13, 15, 26, 6, 17, 29, 16, 24];
 const THREEFRY_PARITY: u32 = 0x1BD11BDA;
+
+/// tinygrad's CPU device key: low 32 bits of sha256(b"\x00\x00\x00\x00").
+const THREEFRY_DEVICE_KEY0: u32 = 347_607_321;
 
 /// One block of threefry2x32-20. Returns the two output words for the given
 /// 64-bit counter under the 64-bit key. Pure native u32 arithmetic.
@@ -1523,10 +1540,44 @@ fn threefry2x32(counter: u64, key: u64) -> (u32, u32) {
     (x0, x1)
 }
 
-/// Uniform f32 in [0, 1) from a 32-bit output word (high-24-bit construction).
+/// Uniform f32 in [0, 1) from a 32-bit threefry output word, matching
+/// tinygrad/the oracle exactly: `(bits >> 9) / 2^23`.
 #[inline]
 fn threefry_uniform(bits: u32) -> f32 {
-    (bits >> 8) as f32 * (1.0 / 16777216.0)
+    (bits >> 9) as f32 / 8_388_608.0
+}
+
+/// Produce `n` uniform threefry bit-words for one `rand` draw, bit-exact with
+/// tinygrad's `Tensor.rand` (and the verified oracle `port_rand`). The device
+/// counter feeds the key derivation; the per-draw element indices restart at 0.
+fn tensor_rand_bits(n: usize, seed: i64, counter: u64) -> Vec<u32> {
+    // Device key0 | (seed << 32), then derive the per-draw key from the counter.
+    let key1 = seed as u32;
+    let device_key = (THREEFRY_DEVICE_KEY0 as u64) | ((key1 as u64) << 32);
+    let (nk0, nk1) = threefry2x32(counter, device_key);
+    let derived_key = (nk0 as u64) | ((nk1 as u64) << 32);
+
+    let half = n.div_ceil(2);
+    let mut lows = Vec::with_capacity(half);
+    let mut highs = Vec::with_capacity(half);
+    for j in 0..half {
+        let block_counter = (j as u64) | (((j + half) as u64) << 32);
+        let (lo, hi) = threefry2x32(block_counter, derived_key);
+        lows.push(lo);
+        highs.push(hi);
+    }
+    // bits = lows ++ highs, truncated to n.
+    lows.extend(highs);
+    lows.truncate(n);
+    lows
+}
+
+/// `n` uniform f32 values in [0, 1) for one `rand` draw (bit-exact with tinygrad).
+fn tensor_rand_uniforms(n: usize, seed: i64, counter: u64) -> Vec<f32> {
+    tensor_rand_bits(n, seed, counter)
+        .into_iter()
+        .map(threefry_uniform)
+        .collect()
 }
 
 /// Validate a shape (`i64` dims, non-negative) and return its dims + element
@@ -1545,16 +1596,13 @@ fn rng_shape_dims(shape: &[i64]) -> Result<(Vec<usize>, usize), TensorError> {
     Ok((dims, count))
 }
 
-/// Uniform f32 in [0, 1), dtype F32. Element `i` draws from counter base + i.
+/// Uniform f32 in [0, 1), dtype F32. Bit-exact with tinygrad's `Tensor.rand`:
+/// the device counter feeds the key derivation, then `count` element bits are
+/// drawn and converted via `(bits >> 9) / 2^23`. `counter = 0` reproduces the
+/// verified oracle `port_rand(seed, count)` exactly.
 pub fn tensor_rand(shape: &[i64], seed: i64, counter: i64) -> Result<RssTensor, TensorError> {
     let (dims, count) = rng_shape_dims(shape)?;
-    let key = seed as u64;
-    let base = counter as u64;
-    let mut data = Vec::with_capacity(count);
-    for i in 0..count {
-        let (w0, _) = threefry2x32(base.wrapping_add(i as u64), key);
-        data.push(threefry_uniform(w0));
-    }
+    let data = tensor_rand_uniforms(count, seed, counter as u64);
     Ok(RssTensor {
         data: Rc::new(data),
         shape: dims,
@@ -1577,16 +1625,16 @@ pub fn tensor_randint(
         )));
     }
     let (dims, count) = rng_shape_dims(shape)?;
-    let span = (high - low) as u64;
-    let key = seed as u64;
-    let base = counter as u64;
-    let mut data = Vec::with_capacity(count);
-    for i in 0..count {
-        let (w0, _) = threefry2x32(base.wrapping_add(i as u64), key);
-        // Map the full 32-bit word into [0, span) then offset by low.
-        let value = (w0 as u64) % span;
-        data.push((low + value as i64) as f32);
-    }
+    // tinygrad: randint(low, high) == uniform(low, high, int)
+    //         == ((high - low) * rand).cast(int) + low.
+    // The cast to int truncates toward zero; rand is in [0, 1) so the result is
+    // floor(rand * span) and stays within [low, high). Bit-exact with the
+    // corrected `rand` bits.
+    let span = (high - low) as f32;
+    let data = tensor_rand_uniforms(count, seed, counter as u64)
+        .into_iter()
+        .map(|u| ((span * u).trunc() as i64 + low) as f32)
+        .collect();
     Ok(RssTensor {
         data: Rc::new(data),
         shape: dims,
@@ -1594,21 +1642,25 @@ pub fn tensor_randint(
     })
 }
 
-/// Standard normal f32 via Box–Muller, dtype F32. Element `i` consumes two
-/// uniforms from counter bases `2*i` and `2*i + 1` (relative to `counter`).
+/// Standard normal f32 via the Box–Muller transform, dtype F32, bit-exact with
+/// tinygrad's `Tensor.randn`.
+///
+/// tinygrad's `randn_like` does `src = stack(self).rand_like()`, i.e. a SINGLE
+/// `rand` draw over the shape `(2, *shape)` (2 * count uniforms). It then forms
+///   `z = cos(2*pi * src[0]) * sqrt(-2 * log(1 - src[1]))`,
+/// where `src[0]` is the first `count` uniforms and `src[1]` the next `count`.
+/// We replicate exactly that single doubled draw and formula. Because it is a
+/// single `rand` over `2*count` elements, the device counter feeds one key
+/// derivation and the element-bit loop covers all `2*count` values (so callers
+/// advance the counter by `2 * count`).
 pub fn tensor_randn(shape: &[i64], seed: i64, counter: i64) -> Result<RssTensor, TensorError> {
     let (dims, count) = rng_shape_dims(shape)?;
-    let key = seed as u64;
-    let base = counter as u64;
+    let uniforms = tensor_rand_uniforms(2 * count, seed, counter as u64);
     let mut data = Vec::with_capacity(count);
     for i in 0..count {
-        let (a0, _) = threefry2x32(base.wrapping_add(2 * i as u64), key);
-        let (a1, _) = threefry2x32(base.wrapping_add(2 * i as u64 + 1), key);
-        // u1 in (0, 1] to keep ln() finite (avoid ln(0)).
-        let u1 = 1.0 - threefry_uniform(a0);
-        let u2 = threefry_uniform(a1);
-        let radius = (-2.0 * u1.ln()).sqrt();
-        let z = radius * (std::f32::consts::TAU * u2).cos();
+        let u0 = uniforms[i]; // src[0][i]
+        let u1 = uniforms[count + i]; // src[1][i]
+        let z = (std::f32::consts::TAU * u0).cos() * (-2.0 * (1.0 - u1).ln()).sqrt();
         data.push(z);
     }
     Ok(RssTensor {
@@ -2918,6 +2970,80 @@ mod tests {
         let (w0, w1) = threefry2x32(u64::MAX, u64::MAX);
         assert_eq!(w0, 0x1cb996fc);
         assert_eq!(w1, 0xbb002be7);
+    }
+
+    #[test]
+    #[allow(clippy::excessive_precision)] // golden values copied verbatim from the oracle
+    fn rand_matches_tinygrad_golden() {
+        // Golden values from the verified oracle `port_rand(seed, 8)`
+        // (tinygrad-rsmc/oracle/rng_parity.py, maxdiff 0.0 vs tinygrad's
+        // Tensor.rand for seeds 0/42/123/1337). counter = 0 must reproduce them
+        // bit-for-bit (to f32 precision). This proves bit-exactness against the
+        // verified reference WITHOUT importing tinygrad.
+        let golden: [(i64, [f32; 8]); 4] = [
+            (
+                0,
+                [
+                    0.141_474_96,
+                    0.299_082_28,
+                    0.712_325_45,
+                    0.913_471_34,
+                    0.523_076_3,
+                    0.329_058_53,
+                    0.210_222_48,
+                    0.245_554_21,
+                ],
+            ),
+            (
+                42,
+                [
+                    0.191_925_88,
+                    0.822_174_2,
+                    0.146_426_92,
+                    0.196_875_33,
+                    0.781_715_5,
+                    0.072_996_974,
+                    0.608_558_77,
+                    0.354_853_87,
+                ],
+            ),
+            (
+                123,
+                [
+                    0.642_869_83,
+                    0.493_291_74,
+                    0.910_367_97,
+                    0.854_320_64,
+                    0.217_574_36,
+                    0.943_871_4,
+                    0.061_119_795,
+                    0.274_717_33,
+                ],
+            ),
+            (
+                1337,
+                [
+                    0.488_659_86,
+                    0.347_988_0,
+                    0.659_324_53,
+                    0.636_474_5,
+                    0.471_165_3,
+                    0.141_468_76,
+                    0.278_090_83,
+                    0.049_955_13,
+                ],
+            ),
+        ];
+        for (seed, expected) in golden {
+            let t = tensor_rand(&[8], seed, 0).unwrap();
+            let got = tensor_to_f32_slice(&t).unwrap();
+            for (k, (&g, e)) in got.iter().zip(expected).enumerate() {
+                assert!(
+                    (g as f32 - e).abs() < 1e-6,
+                    "seed={seed} idx={k}: got {g} expected {e}"
+                );
+            }
+        }
     }
 
     #[test]
