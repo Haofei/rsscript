@@ -38,28 +38,29 @@ prefixes (the enum is intentionally minimal: `Diagnostics` / `Runtime`).
 
 ## Tier A — stop the crashes (highest probability for agent code)
 
-- [ ] **A1 Recursion depth limit** (Inv 1). `self.frames.push()` is unbounded
+- [x] **A1 Recursion depth limit** (Inv 1) — DONE (`VmLimits.max_depth`, default 16 384, enforced at all frame-push sites → `EvalError::Runtime("recursion depth limit exceeded …")`). `self.frames.push()` was unbounded
   (`reg_vm/mod.rs:7523` "bounded only by memory"; pushes at 7538/7974/8019) → a
   self-recursive program overflows the native stack = uncatchable SIGSEGV. Add a
   configurable `max_depth` (default-on, generous) checked at every frame push →
   `EvalError::Runtime("recursion depth limit exceeded …")`. The #1 crash; trivial.
-- [ ] **A2 `panic = "abort"`** (Inv 2). Add to workspace `[profile.release]`. One
-  line. `hostile.rs` uses `catch_unwind` but runs in the dev profile (unwind), so
-  normal `cargo test` is unaffected; verify fuzz targets still build.
+- [x] **A2 `panic = "abort"`** (Inv 2) — DONE (workspace `[profile.release]`).
+  `hostile.rs`'s `catch_unwind` runs in the dev profile (unwind); the fuzz crate
+  is workspace-detached, so `cargo +nightly fuzz build` is unaffected. Verified.
 
 ## Tier B — stop the hangs
 
-- [ ] **B3 Step budget** (Inv 1). The interpreter loop (`reg_vm/mod.rs:~7927`,
-  `while let Some(instr) = func.code.get(ip)`) has no fuel; `while true {}` hangs
-  forever. Add a per-instruction counter + configurable `step_budget: Option<u64>`
-  → `EvalError::Runtime("step budget exceeded …")`. Follow-up (not required this
-  pass): also poll the existing `CancellationToken` every N steps so cooperative
-  cancellation can preempt a tight compute loop — the preemption hook structured
-  cancellation is currently missing (it only works at await points).
-- [ ] **B4 Memory ceiling** (Inv 1). Configurable `mem_budget: Option<usize>`;
-  account live allocation through `ensure_regs` and list/map growth →
-  `EvalError::Runtime("memory limit exceeded …")`. Harder (≈169 alloc/growth
-  sites); lands after A/B3. Best-effort byte accounting is fine.
+- [x] **B3 Step budget** (Inv 1) — DONE (`VmLimits.step_budget: Option<u64>`,
+  default OFF; per-instruction `tick()` in BOTH the interpreter loop and the
+  tier-0 JIT loop → `EvalError::Runtime("step budget exceeded …")`).
+  - [ ] *Follow-up (not done):* poll the existing `CancellationToken` every N
+    steps so cooperative cancellation can preempt a tight compute loop — the
+    preemption hook structured cancellation currently lacks (works only at await
+    points). The `tick()` counter is the natural place to add it.
+- [x] **B4 Memory ceiling** (Inv 1) — DONE (`VmLimits.mem_budget: Option<usize>`,
+  default OFF; best-effort cumulative `live_bytes` accounting at `ensure_regs`,
+  list/map construction, and list push/append → `EvalError::Runtime("memory limit
+  exceeded …")`). Under-counts deeply nested `Rc` containers — documented; goal is
+  to trip before host OOM, not exact accounting.
 
 ## Tier C — longevity (lower urgency)
 
