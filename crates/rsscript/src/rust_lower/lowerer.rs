@@ -4673,6 +4673,8 @@ impl<'a> RustLowerer<'a> {
                 self.lower_type_ref(&ty.args[1], ManagedPosition::Nested)
             ),
             "ChannelError" => "rsscript_runtime::ChannelError".to_string(),
+            "Tensor" => "rsscript_runtime::RssTensor".to_string(),
+            "TensorError" => "rsscript_runtime::TensorError".to_string(),
             "TcpStream" => "rsscript_runtime::RssTcpStream".to_string(),
             "TcpError" => "rsscript_runtime::TcpError".to_string(),
             "WebSocket" => "rsscript_runtime::RssWebSocket".to_string(),

@@ -1063,6 +1063,8 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:Stream.collect_list runtime:Stream.from_list runtime:Stream.next
 // parity: runtime:GlobalConfig.new runtime:GlobalConfig.replace runtime:GlobalConfig.rule_count
 // parity: runtime:TempDir.keep runtime:TempDir.new runtime:TempDir.new_in runtime:TempDir.path
+// parity: runtime:Tensor.from_f32_slice runtime:Tensor.to_f32_slice runtime:Tensor.shape
+// parity: runtime:Tensor.rank runtime:Tensor.matmul runtime:TensorError.message
 // parity: runtime:Timer.sleep runtime:Timer.sleep_cancellable runtime:Timer.sleep_until
 // parity: runtime:Tcp.connect runtime:TcpError.message
 // parity: runtime:TcpStream.read runtime:TcpStream.shutdown

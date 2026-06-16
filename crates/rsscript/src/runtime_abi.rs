@@ -391,6 +391,24 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "message",
         "rsscript_runtime::channel_error_message",
     ),
+    runtime_intrinsic(
+        "Tensor",
+        "from_f32_slice",
+        "rsscript_runtime::tensor_from_f32_slice",
+    ),
+    runtime_intrinsic(
+        "Tensor",
+        "to_f32_slice",
+        "rsscript_runtime::tensor_to_f32_slice",
+    ),
+    runtime_intrinsic("Tensor", "shape", "rsscript_runtime::tensor_shape"),
+    runtime_intrinsic("Tensor", "rank", "rsscript_runtime::tensor_rank"),
+    runtime_intrinsic("Tensor", "matmul", "rsscript_runtime::tensor_matmul"),
+    runtime_intrinsic(
+        "TensorError",
+        "message",
+        "rsscript_runtime::tensor_error_message",
+    ),
     runtime_intrinsic("ResourcePool", "stats", "rsscript_runtime::pool_stats"),
     runtime_intrinsic(
         "ResourcePool",

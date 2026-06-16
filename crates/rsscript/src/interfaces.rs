@@ -50,6 +50,10 @@ pub(crate) const STANDARD_PACKAGE_INTERFACES: &[(&str, &str)] = &[
         "packages/async/interface/websocket.rssi",
         include_str!("../../../packages/async/interface/websocket.rssi"),
     ),
+    (
+        "packages/ml/interface/tensor.rssi",
+        include_str!("../../../packages/ml/interface/tensor.rssi"),
+    ),
 ];
 
 pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
