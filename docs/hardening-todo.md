@@ -63,19 +63,43 @@ prefixes (the enum is intentionally minimal: `Diagnostics` / `Runtime`).
 
 ## Tier C — longevity (lower urgency)
 
-- [ ] **C5 Miri in CI** over a small test subset (we have none today) — also
-  double-checks the `unsafe` in `vm-jit`. Add a `cargo miri test` target/job;
-  if Miri flags `vm-jit`, document/fix.
+- [x] **C5 Miri in CI** over a small test subset (we had none) — landed as the
+  `make miri` target: `cargo +nightly miri test -p rss-testgen --lib`. That is
+  the largest subset Miri can *soundly* interpret here — the `rss-testgen` seed
+  decoder is pure arithmetic/control-flow with no I/O or FFI, so Miri can check
+  it for UB (it reports clean). **What Miri cannot cover, by construction:**
+  - the **vm-jit** tier executes generated *native machine code*; Miri is a MIR
+    interpreter and cannot run native code at all, so the JIT execute path is
+    permanently out of Miri's scope (this is why Invariant 2's `panic = "abort"`
+    carries the safety burden at the JIT/FFI seams instead);
+  - the **FFI / syscall** seams (`rsscript-runtime`'s tokio/reqwest/process/fs,
+    `reir`'s filesystem adapters, native plugin cdylibs) abort under Miri's
+    isolation — that is *unsupported I/O*, not detected UB, so those crates are
+    deliberately excluded rather than run-and-silenced.
+  Setup (offline-installable in the dev container):
+  `rustup toolchain install nightly --component miri,rust-src`.
 - [ ] **C6 Cycle/leak policy.** The value model makes accidental cycles unlikely;
   decide explicitly — document the weak-discipline + add leak tests, or plan a
   cycle collector for very-long-running apps.
 
 ## Meta — prove the invariant continuously
 
-- [ ] **M Invariant-1 fuzz target.** New `fuzz/fuzz_targets/no_panic.rs`: feed
-  random valid programs, assert the runtime only ever returns `Ok`/`EvalError`,
-  never panics. Converts "we hardened it" into "CI keeps it hardened" — the
-  natural extension of the existing `fail_closed`/`hostile.rs` ethos.
+- [x] **M Invariant-1 fuzz target.** Landed `fuzz/fuzz_targets/no_panic.rs`: a
+  seed decodes (via `rss-testgen`) to a well-typed program which, if the checker
+  accepts it, is evaluated on the reg-VM through
+  `reg_vm_eval_source_main_with_limits` under generous-but-finite `VmLimits`
+  (`max_depth: 16_384`, `step_budget: 50_000_000`, `mem_budget: 512 MiB`). The
+  result must be `Ok`/`EvalError`; any panic/abort is recorded by libFuzzer as a
+  crash. Converts "we hardened it" into "CI keeps it hardened" — the natural
+  extension of the `fail_closed`/`hostile.rs` ethos. Run it via
+  `make fuzz-no-panic` (or `cargo +nightly fuzz run no_panic`).
+  - *Bug it already caught:* the first smoke run surfaced a native stack
+    overflow — not in the runtime, but in the `rss-testgen` **generator** itself:
+    `gen_construct` reset the recursion `fuel` to a constant `1` for `Some`/`Ok`
+    payloads, so a generated `fn f(x: Result<Float,String>) -> Float` produced an
+    unbounded `Float → Result<Float> → Float → …` construction. Fixed by
+    threading strictly-decreasing fuel through `gen_atom`/`gen_construct` (this
+    bug latently affected the existing `differential`/`fail_closed` targets too).
 
 ## Verification discipline
 
