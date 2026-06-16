@@ -2098,6 +2098,16 @@ enum RegIntrinsic {
     TensorTranspose,
     TensorPermute,
     TensorBroadcastTo,
+    TensorCmplt,
+    TensorCmpne,
+    TensorCmpeq,
+    TensorSelect,
+    TensorMaximum,
+    TensorMinimum,
+    TensorCastF32,
+    TensorCastI32,
+    TensorCastBool,
+    TensorDtypeCode,
     TensorErrorMessage,
     CharCompare,
     CharFromCode,
@@ -5355,6 +5365,16 @@ fn qualified_intrinsic(namespace: &str, name: &str) -> Option<RegIntrinsic> {
         ("Tensor", "transpose") => Some(RegIntrinsic::TensorTranspose),
         ("Tensor", "permute") => Some(RegIntrinsic::TensorPermute),
         ("Tensor", "broadcast_to") => Some(RegIntrinsic::TensorBroadcastTo),
+        ("Tensor", "cmplt") => Some(RegIntrinsic::TensorCmplt),
+        ("Tensor", "cmpne") => Some(RegIntrinsic::TensorCmpne),
+        ("Tensor", "cmpeq") => Some(RegIntrinsic::TensorCmpeq),
+        ("Tensor", "select") => Some(RegIntrinsic::TensorSelect),
+        ("Tensor", "maximum") => Some(RegIntrinsic::TensorMaximum),
+        ("Tensor", "minimum") => Some(RegIntrinsic::TensorMinimum),
+        ("Tensor", "cast_f32") => Some(RegIntrinsic::TensorCastF32),
+        ("Tensor", "cast_i32") => Some(RegIntrinsic::TensorCastI32),
+        ("Tensor", "cast_bool") => Some(RegIntrinsic::TensorCastBool),
+        ("Tensor", "dtype_code") => Some(RegIntrinsic::TensorDtypeCode),
         ("TensorError", "message") => Some(RegIntrinsic::TensorErrorMessage),
         ("Char", "compare") => Some(RegIntrinsic::CharCompare),
         ("Char", "from_code") => Some(RegIntrinsic::CharFromCode),
@@ -9398,6 +9418,55 @@ impl RegVm {
                         )),
                     },
                 ))
+            }
+            RegIntrinsic::TensorCmplt
+            | RegIntrinsic::TensorCmpne
+            | RegIntrinsic::TensorCmpeq
+            | RegIntrinsic::TensorMaximum
+            | RegIntrinsic::TensorMinimum => {
+                let a = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let b = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let result = match intrinsic {
+                    RegIntrinsic::TensorCmplt => rsscript_runtime::tensor_cmplt(&a, &b),
+                    RegIntrinsic::TensorCmpne => rsscript_runtime::tensor_cmpne(&a, &b),
+                    RegIntrinsic::TensorCmpeq => rsscript_runtime::tensor_cmpeq(&a, &b),
+                    RegIntrinsic::TensorMaximum => rsscript_runtime::tensor_maximum(&a, &b),
+                    _ => rsscript_runtime::tensor_minimum(&a, &b),
+                };
+                Ok(json_result(match result {
+                    Ok(tensor) => Ok(self.store_tensor(tensor)),
+                    Err(error) => Err(tensor_error_value(
+                        rsscript_runtime::tensor_error_message(&error),
+                    )),
+                }))
+            }
+            RegIntrinsic::TensorSelect => {
+                let cond = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let a = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let b = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
+                Ok(json_result(
+                    match rsscript_runtime::tensor_select(&cond, &a, &b) {
+                        Ok(tensor) => Ok(self.store_tensor(tensor)),
+                        Err(error) => Err(tensor_error_value(
+                            rsscript_runtime::tensor_error_message(&error),
+                        )),
+                    },
+                ))
+            }
+            RegIntrinsic::TensorCastF32
+            | RegIntrinsic::TensorCastI32
+            | RegIntrinsic::TensorCastBool => {
+                let t = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let result = match intrinsic {
+                    RegIntrinsic::TensorCastF32 => rsscript_runtime::tensor_cast_f32(&t),
+                    RegIntrinsic::TensorCastI32 => rsscript_runtime::tensor_cast_i32(&t),
+                    _ => rsscript_runtime::tensor_cast_bool(&t),
+                };
+                Ok(self.store_tensor(result))
+            }
+            RegIntrinsic::TensorDtypeCode => {
+                let t = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Int(rsscript_runtime::tensor_dtype_code(&t)))
             }
             RegIntrinsic::CharCompare | RegIntrinsic::CharFromCode | RegIntrinsic::CharIsAlphanumeric | RegIntrinsic::CharIsAlpha | RegIntrinsic::CharIsDigit | RegIntrinsic::CharIsLower | RegIntrinsic::CharIsUpper | RegIntrinsic::CharIsWhitespace | RegIntrinsic::CharToCode | RegIntrinsic::CharToLower | RegIntrinsic::CharToString | RegIntrinsic::CharToUpper => self.exec_char_intrinsics(unit, intrinsic, args, base, next_base),
             RegIntrinsic::ClockNow => Ok(instant_value(clock_system_unix_ms())),
