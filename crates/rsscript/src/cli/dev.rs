@@ -7,13 +7,14 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rsscript::{
     EvalError, EvalOutput, NativeValue, eval_package_main_with_args_and_native_bindings,
-    format_diagnostics_human, format_diagnostics_json, load_package_native_bindings,
-    reg_vm_eval_source_main_with_args,
+    eval_package_main_with_args_and_native_bindings_streaming_stdout,
+    eval_source_main_with_args_streaming_stdout, format_diagnostics_human, format_diagnostics_json,
+    load_package_native_bindings, reg_vm_eval_source_main_with_args,
 };
 
 use super::check::run_check;
 use super::lint::run_lint;
-use super::run_cmd::run_generated_rust;
+use super::run_cmd::{run_generated_rust, run_generated_rust_streaming};
 use super::{is_package_directory, print_usage};
 
 /// Action `rss dev` re-runs on every change. The default is the pure frontend
@@ -175,6 +176,11 @@ fn run_once(options: &DevOptions<'_>, path: &str) -> ExitCode {
         // reg-VM interpreter tier (no rustc cost); `--release` switches to the
         // Rust-lowering AOT tier. Both observe identical semantics + diagnostics
         // (the VM↔compiled parity invariant), so the fast tier is trustworthy.
+        // Stream the compiled program's stdio live in human mode; JSON mode keeps
+        // the captured path so its structured diagnostics stay intact.
+        DevAction::Run if options.release && !options.json => {
+            run_generated_rust_streaming(&run_args(options, path))
+        }
         DevAction::Run if options.release => run_generated_rust(&run_args(options, path)),
         DevAction::Run => run_via_vm(options, path),
     };
@@ -195,12 +201,24 @@ fn run_once(options: &DevOptions<'_>, path: &str) -> ExitCode {
 /// runs through the package VM with its native host bindings loaded; a single
 /// file runs through the source VM, mirroring `rss eval`.
 fn run_via_vm(options: &DevOptions<'_>, path: &str) -> ExitCode {
+    // Stream program stdout live in human mode so a slow/looping run shows output
+    // as it happens instead of buffering until exit. JSON mode keeps capturing so
+    // the diagnostics JSON is the only thing on stdout.
+    let stream = !options.json;
     let result = if is_package_directory(path) {
-        run_package_via_vm(path)
+        run_package_via_vm(path, stream)
     } else {
         match fs::read_to_string(path) {
             Ok(source) => {
-                reg_vm_eval_source_main_with_args(path, &source, std::iter::empty::<&str>())
+                if stream {
+                    eval_source_main_with_args_streaming_stdout(
+                        path,
+                        &source,
+                        std::iter::empty::<&str>(),
+                    )
+                } else {
+                    reg_vm_eval_source_main_with_args(path, &source, std::iter::empty::<&str>())
+                }
             }
             Err(error) => {
                 eprintln!("failed to read {path}: {error}");
@@ -208,26 +226,42 @@ fn run_via_vm(options: &DevOptions<'_>, path: &str) -> ExitCode {
             }
         }
     };
-    finish_vm_run(options, result)
+    finish_vm_run(options, result, stream)
 }
 
-fn run_package_via_vm(path: &str) -> Result<EvalOutput, EvalError> {
+fn run_package_via_vm(path: &str, stream: bool) -> Result<EvalOutput, EvalError> {
     let package_dir = Path::new(path);
     let bindings = load_package_native_bindings(package_dir).map_err(EvalError::Runtime)?;
-    eval_package_main_with_args_and_native_bindings(
-        package_dir,
-        std::iter::empty::<&str>(),
-        bindings,
-    )
+    if stream {
+        eval_package_main_with_args_and_native_bindings_streaming_stdout(
+            package_dir,
+            std::iter::empty::<&str>(),
+            bindings,
+        )
+    } else {
+        eval_package_main_with_args_and_native_bindings(
+            package_dir,
+            std::iter::empty::<&str>(),
+            bindings,
+        )
+    }
 }
 
 /// Render a VM run result the same way `rss eval` does: program stdout/stderr,
 /// then the `main` return value, with an `Err` return reported as a failed run
 /// (matching the AOT backend's exit behavior).
-fn finish_vm_run(options: &DevOptions<'_>, result: Result<EvalOutput, EvalError>) -> ExitCode {
+fn finish_vm_run(
+    options: &DevOptions<'_>,
+    result: Result<EvalOutput, EvalError>,
+    streamed: bool,
+) -> ExitCode {
     match result {
         Ok(output) => {
-            print!("{}", output.stdout);
+            // When the run streamed stdout live, the program output is already on
+            // the terminal — printing `output.stdout` again would duplicate it.
+            if !streamed {
+                print!("{}", output.stdout);
+            }
             eprint!("{}", output.stderr);
             if let Some(NativeValue::Variant { name, .. }) = &output.native_value
                 && name == "Err"
