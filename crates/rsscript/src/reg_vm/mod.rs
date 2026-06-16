@@ -9112,21 +9112,11 @@ impl RegVm {
                     deadline.saturating_sub(clock_system_unix_ms()).max(0),
                 ))
             }
-            RegIntrinsic::DequeIsEmpty => {
-                let deque = expect_deque_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Bool(deque.borrow().is_empty()))
-            }
-            RegIntrinsic::DequeLen => {
-                let deque = expect_deque_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Int(deque.borrow().len() as i64))
-            }
-            RegIntrinsic::DequeNew => Ok(VmValue::Deque(Rc::new(RefCell::new(
-                std::collections::VecDeque::new(),
-            )))),
-            RegIntrinsic::DequeToList => {
-                let deque = expect_deque_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let list = deque.borrow().iter().cloned().collect::<Vec<_>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(list))))
+            RegIntrinsic::DequeIsEmpty
+            | RegIntrinsic::DequeLen
+            | RegIntrinsic::DequeNew
+            | RegIntrinsic::DequeToList => {
+                self.exec_deque_intrinsics(unit, intrinsic, args, base, next_base)
             }
             RegIntrinsic::DiffUnified => {
                 let old = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -9671,21 +9661,10 @@ impl RegVm {
                         .map_err(|error| decode_error_value(error.to_string())),
                 ))
             }
-            RegIntrinsic::HexDecode => {
-                let text = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(json_result(
-                    hex::decode(text)
-                        .map(|bytes| VmValue::Bytes(Rc::new(bytes)))
-                        .map_err(|error| decode_error_value(error.to_string())),
-                ))
-            }
-            RegIntrinsic::HexEncode => {
-                let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::string(hex::encode(value)))
-            }
-            RegIntrinsic::HexEncodeString => {
-                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::string(hex::encode(value.as_bytes())))
+            RegIntrinsic::HexDecode
+            | RegIntrinsic::HexEncode
+            | RegIntrinsic::HexEncodeString => {
+                self.exec_hex_intrinsics(unit, intrinsic, args, base, next_base)
             }
             RegIntrinsic::HttpGet => {
                 let url = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -9882,55 +9861,20 @@ impl RegVm {
                     clock_system_unix_ms().saturating_sub(start).max(0),
                 ))
             }
-            RegIntrinsic::IntBitAnd => {
-                let left = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let right = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(VmValue::Int(left & right))
+            RegIntrinsic::IntBitAnd
+            | RegIntrinsic::IntBitNot
+            | RegIntrinsic::IntBitOr
+            | RegIntrinsic::IntBitXor
+            | RegIntrinsic::IntShiftLeft
+            | RegIntrinsic::IntShiftRight
+            | RegIntrinsic::IntToString
+            | RegIntrinsic::IntToFloat
+            | RegIntrinsic::FloatToString
+            | RegIntrinsic::FloatIsFinite
+            | RegIntrinsic::FloatIsInfinite
+            | RegIntrinsic::FloatIsNan => {
+                self.exec_scalar_intrinsics(unit, intrinsic, args, base, next_base)
             }
-            RegIntrinsic::IntBitNot => {
-                let value = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Int(!value))
-            }
-            RegIntrinsic::IntBitOr => {
-                let left = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let right = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(VmValue::Int(left | right))
-            }
-            RegIntrinsic::IntBitXor => {
-                let left = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let right = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(VmValue::Int(left ^ right))
-            }
-            RegIntrinsic::IntShiftLeft => {
-                let value = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let bits = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(VmValue::Int(value.wrapping_shl(bits.max(0) as u32)))
-            }
-            RegIntrinsic::IntShiftRight => {
-                let value = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let bits = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(VmValue::Int(value.wrapping_shr(bits.max(0) as u32)))
-            }
-            RegIntrinsic::IntToString => Ok(VmValue::string(
-                expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_string(),
-            )),
-            RegIntrinsic::IntToFloat => {
-                Ok(VmValue::Float(
-                    expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)? as f64,
-                ))
-            }
-            RegIntrinsic::FloatToString => Ok(VmValue::string(
-                expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_string(),
-            )),
-            RegIntrinsic::FloatIsFinite => Ok(VmValue::Bool(
-                expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.is_finite(),
-            )),
-            RegIntrinsic::FloatIsInfinite => Ok(VmValue::Bool(
-                expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.is_infinite(),
-            )),
-            RegIntrinsic::FloatIsNan => Ok(VmValue::Bool(
-                expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.is_nan(),
-            )),
             RegIntrinsic::MathAbs | RegIntrinsic::MathAbsFloat | RegIntrinsic::MathCeil | RegIntrinsic::MathClamp | RegIntrinsic::MathClampFloat | RegIntrinsic::MathCos | RegIntrinsic::MathExp | RegIntrinsic::MathExp2 | RegIntrinsic::MathFloor | RegIntrinsic::MathLog | RegIntrinsic::MathLog2 | RegIntrinsic::MathMax | RegIntrinsic::MathMaxFloat | RegIntrinsic::MathMin | RegIntrinsic::MathMinFloat | RegIntrinsic::MathPow | RegIntrinsic::MathPowFloat | RegIntrinsic::MathRound | RegIntrinsic::MathSin | RegIntrinsic::MathSqrt | RegIntrinsic::MathTanh | RegIntrinsic::MathTruncFloat => self.exec_math_intrinsics(unit, intrinsic, args, base, next_base),
             RegIntrinsic::JsonArray | RegIntrinsic::JsonArrayBools | RegIntrinsic::JsonArrayContainsPrefix | RegIntrinsic::JsonArrayContainsString | RegIntrinsic::JsonArrayContainsSubstring | RegIntrinsic::JsonArrayCountWhere | RegIntrinsic::JsonArrayFold | RegIntrinsic::JsonArrayGet | RegIntrinsic::JsonArrayInts | RegIntrinsic::JsonArrayLen | RegIntrinsic::JsonArrayStrings | RegIntrinsic::JsonAt | RegIntrinsic::JsonAtBool | RegIntrinsic::JsonAtBoolOr | RegIntrinsic::JsonAtInt | RegIntrinsic::JsonAtIntOr | RegIntrinsic::JsonAtOptional | RegIntrinsic::JsonAtOptionalBool | RegIntrinsic::JsonAtOptionalInt | RegIntrinsic::JsonAtOptionalString | RegIntrinsic::JsonAtOr | RegIntrinsic::JsonAtString | RegIntrinsic::JsonAtStringOr | RegIntrinsic::JsonAtToString | RegIntrinsic::JsonAtToStringOr | RegIntrinsic::JsonAsBool | RegIntrinsic::JsonAsInt | RegIntrinsic::JsonAsString | RegIntrinsic::JsonBoolAt | RegIntrinsic::JsonBoolAtOr | RegIntrinsic::JsonBoolField | RegIntrinsic::JsonClone | RegIntrinsic::JsonDecode | RegIntrinsic::JsonDecodeText | RegIntrinsic::JsonEncode | RegIntrinsic::JsonErrorMessage | RegIntrinsic::JsonField | RegIntrinsic::JsonFieldBool | RegIntrinsic::JsonFieldInt | RegIntrinsic::JsonFieldOptional | RegIntrinsic::JsonFieldOptionalBool | RegIntrinsic::JsonFieldOptionalInt | RegIntrinsic::JsonFieldOptionalString | RegIntrinsic::JsonFieldString | RegIntrinsic::JsonIntAt | RegIntrinsic::JsonIntAtOr | RegIntrinsic::JsonIsArray | RegIntrinsic::JsonIsNull | RegIntrinsic::JsonIsObject | RegIntrinsic::JsonIntField | RegIntrinsic::JsonKind | RegIntrinsic::JsonObject | RegIntrinsic::JsonObjectKeys | RegIntrinsic::JsonObjectLen | RegIntrinsic::JsonParse | RegIntrinsic::JsonParseFile | RegIntrinsic::JsonQuoteString | RegIntrinsic::JsonRawField | RegIntrinsic::JsonStringAt | RegIntrinsic::JsonStringAtOr | RegIntrinsic::JsonStringArray | RegIntrinsic::JsonStringField | RegIntrinsic::JsonStrings | RegIntrinsic::JsonToStringAt | RegIntrinsic::JsonToStringAtOr | RegIntrinsic::JsonToString | RegIntrinsic::JsonValue | RegIntrinsic::JsonValues => self.exec_json_intrinsics(unit, intrinsic, args, base, next_base),
             RegIntrinsic::ListAll | RegIntrinsic::ListAny | RegIntrinsic::ListContains | RegIntrinsic::ListContainsValue | RegIntrinsic::ListCountWhere | RegIntrinsic::ListConsume | RegIntrinsic::ListFind | RegIntrinsic::ListFirst | RegIntrinsic::ListFlatMap | RegIntrinsic::ListFlatten | RegIntrinsic::ListGroupBy | RegIntrinsic::ListIsEmpty | RegIntrinsic::ListJoin | RegIntrinsic::ListLast | RegIntrinsic::ListDedup | RegIntrinsic::ListEnumerate | RegIntrinsic::ListMax | RegIntrinsic::ListMin | RegIntrinsic::ListNew | RegIntrinsic::ListPartition | RegIntrinsic::ListReverse | RegIntrinsic::ListSkip | RegIntrinsic::ListSlice | RegIntrinsic::ListSum | RegIntrinsic::ListZip | RegIntrinsic::ListTryFold | RegIntrinsic::ListTake | RegIntrinsic::ListToJsonStrings | RegIntrinsic::ListToJsonValues => self.exec_list_intrinsics(unit, intrinsic, args, base, next_base),
@@ -10001,113 +9945,16 @@ impl RegVm {
                 Ok(VmValue::Unit)
             }
             RegIntrinsic::MapContainsKey | RegIntrinsic::MapFilter | RegIntrinsic::MapFold | RegIntrinsic::MapForEach | RegIntrinsic::MapGetOrDefault | RegIntrinsic::MapIsEmpty | RegIntrinsic::MapKeys | RegIntrinsic::MapLen | RegIntrinsic::MapMapValues | RegIntrinsic::MapMerge | RegIntrinsic::MapNew | RegIntrinsic::MapTryFold | RegIntrinsic::MapValues => self.exec_map_intrinsics(unit, intrinsic, args, base, next_base),
-            RegIntrinsic::OptionAndThen => {
-                let option = intrinsic_arg(&self.stack, base, args, 0)?;
-                let mapper = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                match option {
-                    VmValue::OptionSome(value) => ensure_option_value(self.call_closure_one(
-                        unit,
-                        &mapper,
-                        (**value).clone(),
-                        next_base,
-                    )?),
-                    VmValue::OptionNone => Ok(VmValue::OptionNone),
-                    other => Err(EvalError::Runtime(format!(
-                        "reg VM Option.and_then expected Option, got `{}`.",
-                        other.display()
-                    ))),
-                }
-            }
-            RegIntrinsic::OptionFilter => {
-                let option = intrinsic_arg(&self.stack, base, args, 0)?;
-                let predicate = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                match option {
-                    VmValue::OptionSome(value) => {
-                        let value = (**value).clone();
-                        let keep =
-                            self.call_closure_one(unit, &predicate, value.clone(), next_base)?;
-                        if expect_bool_ref(&keep)? {
-                            Ok(VmValue::OptionSome(Box::new(value)))
-                        } else {
-                            Ok(VmValue::OptionNone)
-                        }
-                    }
-                    VmValue::OptionNone => Ok(VmValue::OptionNone),
-                    other => Err(EvalError::Runtime(format!(
-                        "reg VM Option.filter expected Option, got `{}`.",
-                        other.display()
-                    ))),
-                }
-            }
-            RegIntrinsic::OptionIsNone => Ok(VmValue::Bool(matches!(
-                intrinsic_arg(&self.stack, base, args, 0)?,
-                VmValue::OptionNone
-            ))),
-            RegIntrinsic::OptionIsSome => Ok(VmValue::Bool(matches!(
-                intrinsic_arg(&self.stack, base, args, 0)?,
-                VmValue::OptionSome(_)
-            ))),
-            RegIntrinsic::OptionMap => {
-                let option = intrinsic_arg(&self.stack, base, args, 0)?;
-                let mapper = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                match option {
-                    VmValue::OptionSome(value) => Ok(VmValue::OptionSome(Box::new(
-                        self.call_closure_one(unit, &mapper, (**value).clone(), next_base)?,
-                    ))),
-                    VmValue::OptionNone => Ok(VmValue::OptionNone),
-                    other => Err(EvalError::Runtime(format!(
-                        "reg VM Option.map expected Option, got `{}`.",
-                        other.display()
-                    ))),
-                }
-            }
-            RegIntrinsic::OptionOkOr => {
-                let option = intrinsic_arg(&self.stack, base, args, 0)?;
-                let error = intrinsic_arg(&self.stack, base, args, 1)?.clone();
-                match option {
-                    VmValue::OptionSome(value) => Ok(value_ok((**value).clone())),
-                    VmValue::OptionNone => Ok(value_err(error)),
-                    other => Err(EvalError::Runtime(format!(
-                        "reg VM Option.ok_or expected Option, got `{}`.",
-                        other.display()
-                    ))),
-                }
-            }
-            RegIntrinsic::OptionOr => {
-                let option = intrinsic_arg(&self.stack, base, args, 0)?;
-                let fallback = intrinsic_arg(&self.stack, base, args, 1)?.clone();
-                match option {
-                    VmValue::OptionSome(_) => Ok(option.clone()),
-                    VmValue::OptionNone => Ok(fallback),
-                    other => Err(EvalError::Runtime(format!(
-                        "reg VM Option.or expected Option, got `{}`.",
-                        other.display()
-                    ))),
-                }
-            }
-            RegIntrinsic::OptionUnwrapOr => {
-                let option = intrinsic_arg(&self.stack, base, args, 0)?;
-                let default = intrinsic_arg(&self.stack, base, args, 1)?.clone();
-                match option {
-                    VmValue::OptionSome(value) => Ok((**value).clone()),
-                    VmValue::OptionNone => Ok(default),
-                    other => Err(EvalError::Runtime(format!(
-                        "reg VM Option.unwrap_or expected Option, got `{}`.",
-                        other.display()
-                    ))),
-                }
-            }
-            RegIntrinsic::OptionUnwrapOrElse => {
-                let option = intrinsic_arg(&self.stack, base, args, 0)?;
-                let fallback = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                match option {
-                    VmValue::OptionSome(value) => Ok((**value).clone()),
-                    VmValue::OptionNone => self.call_closure_zero(unit, &fallback, next_base),
-                    other => Err(EvalError::Runtime(format!(
-                        "reg VM Option.unwrap_or_else expected Option, got `{}`.",
-                        other.display()
-                    ))),
-                }
+            RegIntrinsic::OptionAndThen
+            | RegIntrinsic::OptionFilter
+            | RegIntrinsic::OptionIsNone
+            | RegIntrinsic::OptionIsSome
+            | RegIntrinsic::OptionMap
+            | RegIntrinsic::OptionOkOr
+            | RegIntrinsic::OptionOr
+            | RegIntrinsic::OptionUnwrapOr
+            | RegIntrinsic::OptionUnwrapOrElse => {
+                self.exec_option_intrinsics(unit, intrinsic, args, base, next_base)
             }
             RegIntrinsic::CloneClone => {
                 let value = intrinsic_arg(&self.stack, base, args, 0)?;
@@ -10224,124 +10071,28 @@ impl RegVm {
                     stream_value(events)
                 })))
             }
-            RegIntrinsic::SetContains => {
-                let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let value = intrinsic_arg(&self.stack, base, args, 1)?;
-                Ok(VmValue::Bool(set.borrow().iter().any(|item| item == value)))
-            }
-            RegIntrinsic::SetDifference => {
-                let left = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let right = expect_list_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let right = right.borrow().clone();
-                let values = left
-                    .borrow()
-                    .iter()
-                    .filter(|value| !right.iter().any(|item| item == *value))
-                    .cloned()
-                    .collect::<Vec<_>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(values))))
-            }
-            RegIntrinsic::SetIntersection => {
-                let left = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let right = expect_list_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let right = right.borrow().clone();
-                let values = left
-                    .borrow()
-                    .iter()
-                    .filter(|value| right.iter().any(|item| item == *value))
-                    .cloned()
-                    .collect::<Vec<_>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(values))))
-            }
-            RegIntrinsic::SetIsEmpty => {
-                let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Bool(set.borrow().is_empty()))
-            }
-            RegIntrinsic::SetIsSubset => {
-                let left = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let right = expect_list_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let right = right.borrow().clone();
-                Ok(VmValue::Bool(
-                    left.borrow()
-                        .iter()
-                        .all(|value| right.iter().any(|item| item == value)),
-                ))
-            }
-            RegIntrinsic::SetLen => {
-                let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Int(set.borrow().len() as i64))
-            }
-            RegIntrinsic::SetNew => Ok(VmValue::List(Rc::new(RefCell::new(Vec::new())))),
-            RegIntrinsic::SetToList => {
-                let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::List(Rc::new(RefCell::new(set.borrow().clone()))))
-            }
-            RegIntrinsic::SetUnion => {
-                let left = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let right = expect_list_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let mut values = left.borrow().clone();
-                for value in right.borrow().iter().cloned() {
-                    set_insert_vm(&mut values, value);
-                }
-                Ok(VmValue::List(Rc::new(RefCell::new(values))))
-            }
-            RegIntrinsic::SortedSetContains => {
-                let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let value = intrinsic_arg(&self.stack, base, args, 1)?;
-                Ok(VmValue::Bool(sorted_contains_vm(&set.borrow(), value)?))
-            }
-            RegIntrinsic::SortedSetIsEmpty => {
-                let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Bool(set.borrow().is_empty()))
-            }
-            RegIntrinsic::SortedSetLen => {
-                let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Int(set.borrow().len() as i64))
-            }
-            RegIntrinsic::SortedSetNew => Ok(VmValue::List(Rc::new(RefCell::new(Vec::new())))),
-            RegIntrinsic::SortedSetToList => {
-                let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::List(Rc::new(RefCell::new(set.borrow().clone()))))
-            }
-            RegIntrinsic::SortedMapContainsKey => {
-                let map = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let key = intrinsic_arg(&self.stack, base, args, 1)?;
-                Ok(VmValue::Bool(
-                    sorted_map_get_in_place(&map.borrow(), key)?.is_some(),
-                ))
-            }
-            RegIntrinsic::SortedMapGet => {
-                let map = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let key = intrinsic_arg(&self.stack, base, args, 1)?;
-                Ok(sorted_map_get_in_place(&map.borrow(), key)?
-                    .map(|value| VmValue::OptionSome(Box::new(value)))
-                    .unwrap_or(VmValue::OptionNone))
-            }
-            RegIntrinsic::SortedMapIsEmpty => {
-                let entries =
-                    expect_sorted_map_entries(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Bool(entries.is_empty()))
-            }
-            RegIntrinsic::SortedMapKeys => {
-                let entries =
-                    expect_sorted_map_entries(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let keys = entries.into_iter().map(|(key, _)| key).collect::<Vec<_>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(keys))))
-            }
-            RegIntrinsic::SortedMapLen => {
-                let entries =
-                    expect_sorted_map_entries(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Int(entries.len() as i64))
-            }
-            RegIntrinsic::SortedMapNew => Ok(sorted_map_value(Vec::new())),
-            RegIntrinsic::SortedMapValues => {
-                let entries =
-                    expect_sorted_map_entries(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let values = entries
-                    .into_iter()
-                    .map(|(_, value)| value)
-                    .collect::<Vec<_>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(values))))
+            RegIntrinsic::SetContains
+            | RegIntrinsic::SetDifference
+            | RegIntrinsic::SetIntersection
+            | RegIntrinsic::SetIsEmpty
+            | RegIntrinsic::SetIsSubset
+            | RegIntrinsic::SetLen
+            | RegIntrinsic::SetNew
+            | RegIntrinsic::SetToList
+            | RegIntrinsic::SetUnion
+            | RegIntrinsic::SortedSetContains
+            | RegIntrinsic::SortedSetIsEmpty
+            | RegIntrinsic::SortedSetLen
+            | RegIntrinsic::SortedSetNew
+            | RegIntrinsic::SortedSetToList
+            | RegIntrinsic::SortedMapContainsKey
+            | RegIntrinsic::SortedMapGet
+            | RegIntrinsic::SortedMapIsEmpty
+            | RegIntrinsic::SortedMapKeys
+            | RegIntrinsic::SortedMapLen
+            | RegIntrinsic::SortedMapNew
+            | RegIntrinsic::SortedMapValues => {
+                self.exec_set_intrinsics(unit, intrinsic, args, base, next_base)
             }
             RegIntrinsic::PathExists | RegIntrinsic::PathExtension | RegIntrinsic::PathFileName | RegIntrinsic::PathFromString | RegIntrinsic::PathToString | RegIntrinsic::PathIsAbsolute | RegIntrinsic::PathIsDir | RegIntrinsic::PathIsFile | RegIntrinsic::PathJoin | RegIntrinsic::PathListFiles | RegIntrinsic::PathListPaths | RegIntrinsic::PathNormalize | RegIntrinsic::PathParent | RegIntrinsic::PathReadString | RegIntrinsic::PathResolveRelative | RegIntrinsic::PathSafeRelative | RegIntrinsic::PathStartsWith | RegIntrinsic::PathWithExtension | RegIntrinsic::PathWriteString => self.exec_path_intrinsics(unit, intrinsic, args, base, next_base),
             RegIntrinsic::PersistentMapClear => Ok(sorted_map_value(Vec::new())),
@@ -10474,58 +10225,14 @@ impl RegVm {
                     .collect::<String>();
                 Ok(VmValue::string(value))
             }
-            RegIntrinsic::RegexCaptures => {
-                let regex = expect_regex_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let captures = regex
-                    .captures(value)
-                    .map(|captures| {
-                        captures
-                            .iter()
-                            .filter_map(|matched| {
-                                matched.map(|matched| VmValue::string(matched.as_str()))
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
-                Ok(VmValue::List(Rc::new(RefCell::new(captures))))
-            }
-            RegIntrinsic::RegexCompile => {
-                let pattern = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(match regex::Regex::new(pattern) {
-                    Ok(_) => value_ok(regex_value(pattern)),
-                    Err(error) => value_err(regex_error_value(error.to_string())),
-                })
-            }
-            RegIntrinsic::RegexErrorMessage => {
-                read_field_ref(intrinsic_arg(&self.stack, base, args, 0)?, "message")
-            }
-            RegIntrinsic::RegexFind => {
-                let regex = expect_regex_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(regex
-                    .find(value)
-                    .map(|matched| VmValue::OptionSome(Box::new(VmValue::string(matched.as_str()))))
-                    .unwrap_or(VmValue::OptionNone))
-            }
-            RegIntrinsic::RegexIsMatch => {
-                let regex = expect_regex_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(VmValue::Bool(regex.is_match(value)))
-            }
-            RegIntrinsic::RegexReplaceAll => {
-                let regex = expect_regex_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let replacement = expect_string_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
-                Ok(VmValue::string(
-                    regex.replace_all(value, replacement).to_string(),
-                ))
-            }
-            RegIntrinsic::RegexSplit => {
-                let regex = expect_regex_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let parts = regex.split(value).map(VmValue::string).collect::<Vec<_>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(parts))))
+            RegIntrinsic::RegexCaptures
+            | RegIntrinsic::RegexCompile
+            | RegIntrinsic::RegexErrorMessage
+            | RegIntrinsic::RegexFind
+            | RegIntrinsic::RegexIsMatch
+            | RegIntrinsic::RegexReplaceAll
+            | RegIntrinsic::RegexSplit => {
+                self.exec_regex_intrinsics(unit, intrinsic, args, base, next_base)
             }
             RegIntrinsic::RequestNew => {
                 let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -10615,82 +10322,17 @@ impl RegVm {
                     index,
                 )))
             }
-            RegIntrinsic::ResultErr => {
-                let result = result_variant_payload(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(match result {
-                    Ok(_) => VmValue::OptionNone,
-                    Err(error) => VmValue::OptionSome(Box::new(error)),
-                })
-            }
-            RegIntrinsic::ResultErrMessage => {
-                let result = result_variant_payload(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(match result {
-                    Ok(_) => VmValue::OptionNone,
-                    Err(error) => VmValue::OptionSome(Box::new(VmValue::string(error.display()))),
-                })
-            }
-            RegIntrinsic::ResultIsErr => {
-                let result = result_variant_payload(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Bool(result.is_err()))
-            }
-            RegIntrinsic::ResultIsOk => {
-                let result = result_variant_payload(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Bool(result.is_ok()))
-            }
-            RegIntrinsic::ResultOk => {
-                let result = result_variant_payload(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(match result {
-                    Ok(value) => VmValue::OptionSome(Box::new(value)),
-                    Err(_) => VmValue::OptionNone,
-                })
-            }
-            RegIntrinsic::ResultAndThen => {
-                let result = result_variant_payload(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let mapper = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                match result {
-                    Ok(value) => {
-                        let mapped = self.call_closure_one(unit, &mapper, value, next_base)?;
-                        let _ = result_variant_payload(&mapped)?;
-                        Ok(mapped)
-                    }
-                    Err(error) => Ok(value_err(error)),
-                }
-            }
-            RegIntrinsic::ResultMap => {
-                let result = result_variant_payload(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let mapper = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                match result {
-                    Ok(value) => Ok(value_ok(
-                        self.call_closure_one(unit, &mapper, value, next_base)?,
-                    )),
-                    Err(error) => Ok(value_err(error)),
-                }
-            }
-            RegIntrinsic::ResultMapError => {
-                let result = result_variant_payload(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let mapper = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                match result {
-                    Ok(value) => Ok(value_ok(value)),
-                    Err(error) => Ok(value_err(
-                        self.call_closure_one(unit, &mapper, error, next_base)?,
-                    )),
-                }
-            }
-            RegIntrinsic::ResultUnwrapOr => {
-                let result = result_variant_payload(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let default = intrinsic_arg(&self.stack, base, args, 1)?.clone();
-                Ok(match result {
-                    Ok(value) => value,
-                    Err(_) => default,
-                })
-            }
-            RegIntrinsic::ResultUnwrapOrElse => {
-                let result = result_variant_payload(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let fallback = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                match result {
-                    Ok(value) => Ok(value),
-                    Err(error) => self.call_closure_one(unit, &fallback, error, next_base),
-                }
+            RegIntrinsic::ResultErr
+            | RegIntrinsic::ResultErrMessage
+            | RegIntrinsic::ResultIsErr
+            | RegIntrinsic::ResultIsOk
+            | RegIntrinsic::ResultOk
+            | RegIntrinsic::ResultAndThen
+            | RegIntrinsic::ResultMap
+            | RegIntrinsic::ResultMapError
+            | RegIntrinsic::ResultUnwrapOr
+            | RegIntrinsic::ResultUnwrapOrElse => {
+                self.exec_result_intrinsics(unit, intrinsic, args, base, next_base)
             }
             RegIntrinsic::RuleLoaderLoadRules => {
                 let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -10855,24 +10497,11 @@ impl RegVm {
                 let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(json_result(toml_parse_file_value(path)))
             }
-            RegIntrinsic::UrlDecodeComponent => {
-                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(json_result(
-                    percent_decode_str(value)
-                        .decode_utf8()
-                        .map(|value| VmValue::string(value.to_string()))
-                        .map_err(|error| decode_error_value(error.to_string())),
-                ))
-            }
-            RegIntrinsic::UrlEncodeComponent => {
-                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::string(
-                    utf8_percent_encode(value, URL_COMPONENT_SET).to_string(),
-                ))
-            }
-            RegIntrinsic::UrlFromString | RegIntrinsic::UrlToString => {
-                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::string(value))
+            RegIntrinsic::UrlDecodeComponent
+            | RegIntrinsic::UrlEncodeComponent
+            | RegIntrinsic::UrlFromString
+            | RegIntrinsic::UrlToString => {
+                self.exec_url_intrinsics(unit, intrinsic, args, base, next_base)
             }
             RegIntrinsic::UuidNewV4 => Ok(VmValue::string(uuid::Uuid::new_v4().to_string())),
             RegIntrinsic::WebSocketConnect => {
@@ -12703,6 +12332,595 @@ impl RegVm {
             }
             other => unreachable!(
                 "exec_path_intrinsics called with non-path intrinsic: {other:?}"
+            ),
+        }
+    }
+
+    fn exec_option_intrinsics(
+        &mut self,
+        unit: &RegUnit,
+        intrinsic: RegIntrinsic,
+        args: &[Reg],
+        base: usize,
+        next_base: usize,
+    ) -> Result<VmValue, EvalError> {
+        match intrinsic {
+            RegIntrinsic::OptionAndThen => {
+                let option = intrinsic_arg(&self.stack, base, args, 0)?;
+                let mapper = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                match option {
+                    VmValue::OptionSome(value) => ensure_option_value(self.call_closure_one(
+                        unit,
+                        &mapper,
+                        (**value).clone(),
+                        next_base,
+                    )?),
+                    VmValue::OptionNone => Ok(VmValue::OptionNone),
+                    other => Err(EvalError::Runtime(format!(
+                        "reg VM Option.and_then expected Option, got `{}`.",
+                        other.display()
+                    ))),
+                }
+            }
+            RegIntrinsic::OptionFilter => {
+                let option = intrinsic_arg(&self.stack, base, args, 0)?;
+                let predicate = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                match option {
+                    VmValue::OptionSome(value) => {
+                        let value = (**value).clone();
+                        let keep =
+                            self.call_closure_one(unit, &predicate, value.clone(), next_base)?;
+                        if expect_bool_ref(&keep)? {
+                            Ok(VmValue::OptionSome(Box::new(value)))
+                        } else {
+                            Ok(VmValue::OptionNone)
+                        }
+                    }
+                    VmValue::OptionNone => Ok(VmValue::OptionNone),
+                    other => Err(EvalError::Runtime(format!(
+                        "reg VM Option.filter expected Option, got `{}`.",
+                        other.display()
+                    ))),
+                }
+            }
+            RegIntrinsic::OptionIsNone => Ok(VmValue::Bool(matches!(
+                intrinsic_arg(&self.stack, base, args, 0)?,
+                VmValue::OptionNone
+            ))),
+            RegIntrinsic::OptionIsSome => Ok(VmValue::Bool(matches!(
+                intrinsic_arg(&self.stack, base, args, 0)?,
+                VmValue::OptionSome(_)
+            ))),
+            RegIntrinsic::OptionMap => {
+                let option = intrinsic_arg(&self.stack, base, args, 0)?;
+                let mapper = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                match option {
+                    VmValue::OptionSome(value) => Ok(VmValue::OptionSome(Box::new(
+                        self.call_closure_one(unit, &mapper, (**value).clone(), next_base)?,
+                    ))),
+                    VmValue::OptionNone => Ok(VmValue::OptionNone),
+                    other => Err(EvalError::Runtime(format!(
+                        "reg VM Option.map expected Option, got `{}`.",
+                        other.display()
+                    ))),
+                }
+            }
+            RegIntrinsic::OptionOkOr => {
+                let option = intrinsic_arg(&self.stack, base, args, 0)?;
+                let error = intrinsic_arg(&self.stack, base, args, 1)?.clone();
+                match option {
+                    VmValue::OptionSome(value) => Ok(value_ok((**value).clone())),
+                    VmValue::OptionNone => Ok(value_err(error)),
+                    other => Err(EvalError::Runtime(format!(
+                        "reg VM Option.ok_or expected Option, got `{}`.",
+                        other.display()
+                    ))),
+                }
+            }
+            RegIntrinsic::OptionOr => {
+                let option = intrinsic_arg(&self.stack, base, args, 0)?;
+                let fallback = intrinsic_arg(&self.stack, base, args, 1)?.clone();
+                match option {
+                    VmValue::OptionSome(_) => Ok(option.clone()),
+                    VmValue::OptionNone => Ok(fallback),
+                    other => Err(EvalError::Runtime(format!(
+                        "reg VM Option.or expected Option, got `{}`.",
+                        other.display()
+                    ))),
+                }
+            }
+            RegIntrinsic::OptionUnwrapOr => {
+                let option = intrinsic_arg(&self.stack, base, args, 0)?;
+                let default = intrinsic_arg(&self.stack, base, args, 1)?.clone();
+                match option {
+                    VmValue::OptionSome(value) => Ok((**value).clone()),
+                    VmValue::OptionNone => Ok(default),
+                    other => Err(EvalError::Runtime(format!(
+                        "reg VM Option.unwrap_or expected Option, got `{}`.",
+                        other.display()
+                    ))),
+                }
+            }
+            RegIntrinsic::OptionUnwrapOrElse => {
+                let option = intrinsic_arg(&self.stack, base, args, 0)?;
+                let fallback = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                match option {
+                    VmValue::OptionSome(value) => Ok((**value).clone()),
+                    VmValue::OptionNone => self.call_closure_zero(unit, &fallback, next_base),
+                    other => Err(EvalError::Runtime(format!(
+                        "reg VM Option.unwrap_or_else expected Option, got `{}`.",
+                        other.display()
+                    ))),
+                }
+            }
+            other => unreachable!(
+                "exec_option_intrinsics called with non-option intrinsic: {other:?}"
+            ),
+        }
+    }
+
+    fn exec_result_intrinsics(
+        &mut self,
+        unit: &RegUnit,
+        intrinsic: RegIntrinsic,
+        args: &[Reg],
+        base: usize,
+        next_base: usize,
+    ) -> Result<VmValue, EvalError> {
+        match intrinsic {
+            RegIntrinsic::ResultErr => {
+                let result = result_variant_payload(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(match result {
+                    Ok(_) => VmValue::OptionNone,
+                    Err(error) => VmValue::OptionSome(Box::new(error)),
+                })
+            }
+            RegIntrinsic::ResultErrMessage => {
+                let result = result_variant_payload(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(match result {
+                    Ok(_) => VmValue::OptionNone,
+                    Err(error) => VmValue::OptionSome(Box::new(VmValue::string(error.display()))),
+                })
+            }
+            RegIntrinsic::ResultIsErr => {
+                let result = result_variant_payload(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Bool(result.is_err()))
+            }
+            RegIntrinsic::ResultIsOk => {
+                let result = result_variant_payload(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Bool(result.is_ok()))
+            }
+            RegIntrinsic::ResultOk => {
+                let result = result_variant_payload(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(match result {
+                    Ok(value) => VmValue::OptionSome(Box::new(value)),
+                    Err(_) => VmValue::OptionNone,
+                })
+            }
+            RegIntrinsic::ResultAndThen => {
+                let result = result_variant_payload(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let mapper = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                match result {
+                    Ok(value) => {
+                        let mapped = self.call_closure_one(unit, &mapper, value, next_base)?;
+                        let _ = result_variant_payload(&mapped)?;
+                        Ok(mapped)
+                    }
+                    Err(error) => Ok(value_err(error)),
+                }
+            }
+            RegIntrinsic::ResultMap => {
+                let result = result_variant_payload(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let mapper = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                match result {
+                    Ok(value) => Ok(value_ok(
+                        self.call_closure_one(unit, &mapper, value, next_base)?,
+                    )),
+                    Err(error) => Ok(value_err(error)),
+                }
+            }
+            RegIntrinsic::ResultMapError => {
+                let result = result_variant_payload(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let mapper = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                match result {
+                    Ok(value) => Ok(value_ok(value)),
+                    Err(error) => Ok(value_err(
+                        self.call_closure_one(unit, &mapper, error, next_base)?,
+                    )),
+                }
+            }
+            RegIntrinsic::ResultUnwrapOr => {
+                let result = result_variant_payload(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let default = intrinsic_arg(&self.stack, base, args, 1)?.clone();
+                Ok(match result {
+                    Ok(value) => value,
+                    Err(_) => default,
+                })
+            }
+            RegIntrinsic::ResultUnwrapOrElse => {
+                let result = result_variant_payload(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let fallback = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                match result {
+                    Ok(value) => Ok(value),
+                    Err(error) => self.call_closure_one(unit, &fallback, error, next_base),
+                }
+            }
+            other => unreachable!(
+                "exec_result_intrinsics called with non-result intrinsic: {other:?}"
+            ),
+        }
+    }
+
+    fn exec_set_intrinsics(
+        &mut self,
+        unit: &RegUnit,
+        intrinsic: RegIntrinsic,
+        args: &[Reg],
+        base: usize,
+        next_base: usize,
+    ) -> Result<VmValue, EvalError> {
+        let _ = unit;
+        let _ = next_base;
+        match intrinsic {
+            RegIntrinsic::SetContains => {
+                let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let value = intrinsic_arg(&self.stack, base, args, 1)?;
+                Ok(VmValue::Bool(set.borrow().iter().any(|item| item == value)))
+            }
+            RegIntrinsic::SetDifference => {
+                let left = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let right = expect_list_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let right = right.borrow().clone();
+                let values = left
+                    .borrow()
+                    .iter()
+                    .filter(|value| !right.iter().any(|item| item == *value))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                Ok(VmValue::List(Rc::new(RefCell::new(values))))
+            }
+            RegIntrinsic::SetIntersection => {
+                let left = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let right = expect_list_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let right = right.borrow().clone();
+                let values = left
+                    .borrow()
+                    .iter()
+                    .filter(|value| right.iter().any(|item| item == *value))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                Ok(VmValue::List(Rc::new(RefCell::new(values))))
+            }
+            RegIntrinsic::SetIsEmpty => {
+                let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Bool(set.borrow().is_empty()))
+            }
+            RegIntrinsic::SetIsSubset => {
+                let left = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let right = expect_list_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let right = right.borrow().clone();
+                Ok(VmValue::Bool(
+                    left.borrow()
+                        .iter()
+                        .all(|value| right.iter().any(|item| item == value)),
+                ))
+            }
+            RegIntrinsic::SetLen => {
+                let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Int(set.borrow().len() as i64))
+            }
+            RegIntrinsic::SetNew => Ok(VmValue::List(Rc::new(RefCell::new(Vec::new())))),
+            RegIntrinsic::SetToList => {
+                let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::List(Rc::new(RefCell::new(set.borrow().clone()))))
+            }
+            RegIntrinsic::SetUnion => {
+                let left = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let right = expect_list_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let mut values = left.borrow().clone();
+                for value in right.borrow().iter().cloned() {
+                    set_insert_vm(&mut values, value);
+                }
+                Ok(VmValue::List(Rc::new(RefCell::new(values))))
+            }
+            RegIntrinsic::SortedSetContains => {
+                let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let value = intrinsic_arg(&self.stack, base, args, 1)?;
+                Ok(VmValue::Bool(sorted_contains_vm(&set.borrow(), value)?))
+            }
+            RegIntrinsic::SortedSetIsEmpty => {
+                let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Bool(set.borrow().is_empty()))
+            }
+            RegIntrinsic::SortedSetLen => {
+                let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Int(set.borrow().len() as i64))
+            }
+            RegIntrinsic::SortedSetNew => Ok(VmValue::List(Rc::new(RefCell::new(Vec::new())))),
+            RegIntrinsic::SortedSetToList => {
+                let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::List(Rc::new(RefCell::new(set.borrow().clone()))))
+            }
+            RegIntrinsic::SortedMapContainsKey => {
+                let map = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let key = intrinsic_arg(&self.stack, base, args, 1)?;
+                Ok(VmValue::Bool(
+                    sorted_map_get_in_place(&map.borrow(), key)?.is_some(),
+                ))
+            }
+            RegIntrinsic::SortedMapGet => {
+                let map = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let key = intrinsic_arg(&self.stack, base, args, 1)?;
+                Ok(sorted_map_get_in_place(&map.borrow(), key)?
+                    .map(|value| VmValue::OptionSome(Box::new(value)))
+                    .unwrap_or(VmValue::OptionNone))
+            }
+            RegIntrinsic::SortedMapIsEmpty => {
+                let entries =
+                    expect_sorted_map_entries(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Bool(entries.is_empty()))
+            }
+            RegIntrinsic::SortedMapKeys => {
+                let entries =
+                    expect_sorted_map_entries(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let keys = entries.into_iter().map(|(key, _)| key).collect::<Vec<_>>();
+                Ok(VmValue::List(Rc::new(RefCell::new(keys))))
+            }
+            RegIntrinsic::SortedMapLen => {
+                let entries =
+                    expect_sorted_map_entries(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Int(entries.len() as i64))
+            }
+            RegIntrinsic::SortedMapNew => Ok(sorted_map_value(Vec::new())),
+            RegIntrinsic::SortedMapValues => {
+                let entries =
+                    expect_sorted_map_entries(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let values = entries
+                    .into_iter()
+                    .map(|(_, value)| value)
+                    .collect::<Vec<_>>();
+                Ok(VmValue::List(Rc::new(RefCell::new(values))))
+            }
+            other => unreachable!(
+                "exec_set_intrinsics called with non-set intrinsic: {other:?}"
+            ),
+        }
+    }
+
+    fn exec_deque_intrinsics(
+        &mut self,
+        unit: &RegUnit,
+        intrinsic: RegIntrinsic,
+        args: &[Reg],
+        base: usize,
+        next_base: usize,
+    ) -> Result<VmValue, EvalError> {
+        let _ = unit;
+        let _ = next_base;
+        match intrinsic {
+            RegIntrinsic::DequeIsEmpty => {
+                let deque = expect_deque_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Bool(deque.borrow().is_empty()))
+            }
+            RegIntrinsic::DequeLen => {
+                let deque = expect_deque_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Int(deque.borrow().len() as i64))
+            }
+            RegIntrinsic::DequeNew => Ok(VmValue::Deque(Rc::new(RefCell::new(
+                std::collections::VecDeque::new(),
+            )))),
+            RegIntrinsic::DequeToList => {
+                let deque = expect_deque_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let list = deque.borrow().iter().cloned().collect::<Vec<_>>();
+                Ok(VmValue::List(Rc::new(RefCell::new(list))))
+            }
+            other => unreachable!(
+                "exec_deque_intrinsics called with non-deque intrinsic: {other:?}"
+            ),
+        }
+    }
+
+    fn exec_regex_intrinsics(
+        &mut self,
+        unit: &RegUnit,
+        intrinsic: RegIntrinsic,
+        args: &[Reg],
+        base: usize,
+        next_base: usize,
+    ) -> Result<VmValue, EvalError> {
+        let _ = unit;
+        let _ = next_base;
+        match intrinsic {
+            RegIntrinsic::RegexCaptures => {
+                let regex = expect_regex_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let captures = regex
+                    .captures(value)
+                    .map(|captures| {
+                        captures
+                            .iter()
+                            .filter_map(|matched| {
+                                matched.map(|matched| VmValue::string(matched.as_str()))
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                Ok(VmValue::List(Rc::new(RefCell::new(captures))))
+            }
+            RegIntrinsic::RegexCompile => {
+                let pattern = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(match regex::Regex::new(pattern) {
+                    Ok(_) => value_ok(regex_value(pattern)),
+                    Err(error) => value_err(regex_error_value(error.to_string())),
+                })
+            }
+            RegIntrinsic::RegexErrorMessage => {
+                read_field_ref(intrinsic_arg(&self.stack, base, args, 0)?, "message")
+            }
+            RegIntrinsic::RegexFind => {
+                let regex = expect_regex_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(regex
+                    .find(value)
+                    .map(|matched| VmValue::OptionSome(Box::new(VmValue::string(matched.as_str()))))
+                    .unwrap_or(VmValue::OptionNone))
+            }
+            RegIntrinsic::RegexIsMatch => {
+                let regex = expect_regex_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::Bool(regex.is_match(value)))
+            }
+            RegIntrinsic::RegexReplaceAll => {
+                let regex = expect_regex_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let replacement = expect_string_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
+                Ok(VmValue::string(
+                    regex.replace_all(value, replacement).to_string(),
+                ))
+            }
+            RegIntrinsic::RegexSplit => {
+                let regex = expect_regex_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let parts = regex.split(value).map(VmValue::string).collect::<Vec<_>>();
+                Ok(VmValue::List(Rc::new(RefCell::new(parts))))
+            }
+            other => unreachable!(
+                "exec_regex_intrinsics called with non-regex intrinsic: {other:?}"
+            ),
+        }
+    }
+
+    fn exec_hex_intrinsics(
+        &mut self,
+        unit: &RegUnit,
+        intrinsic: RegIntrinsic,
+        args: &[Reg],
+        base: usize,
+        next_base: usize,
+    ) -> Result<VmValue, EvalError> {
+        let _ = unit;
+        let _ = next_base;
+        match intrinsic {
+            RegIntrinsic::HexDecode => {
+                let text = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(json_result(
+                    hex::decode(text)
+                        .map(|bytes| VmValue::Bytes(Rc::new(bytes)))
+                        .map_err(|error| decode_error_value(error.to_string())),
+                ))
+            }
+            RegIntrinsic::HexEncode => {
+                let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::string(hex::encode(value)))
+            }
+            RegIntrinsic::HexEncodeString => {
+                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::string(hex::encode(value.as_bytes())))
+            }
+            other => unreachable!(
+                "exec_hex_intrinsics called with non-hex intrinsic: {other:?}"
+            ),
+        }
+    }
+
+    fn exec_url_intrinsics(
+        &mut self,
+        unit: &RegUnit,
+        intrinsic: RegIntrinsic,
+        args: &[Reg],
+        base: usize,
+        next_base: usize,
+    ) -> Result<VmValue, EvalError> {
+        let _ = unit;
+        let _ = next_base;
+        match intrinsic {
+            RegIntrinsic::UrlDecodeComponent => {
+                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(json_result(
+                    percent_decode_str(value)
+                        .decode_utf8()
+                        .map(|value| VmValue::string(value.to_string()))
+                        .map_err(|error| decode_error_value(error.to_string())),
+                ))
+            }
+            RegIntrinsic::UrlEncodeComponent => {
+                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::string(
+                    utf8_percent_encode(value, URL_COMPONENT_SET).to_string(),
+                ))
+            }
+            RegIntrinsic::UrlFromString | RegIntrinsic::UrlToString => {
+                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::string(value))
+            }
+            other => unreachable!(
+                "exec_url_intrinsics called with non-url intrinsic: {other:?}"
+            ),
+        }
+    }
+
+    fn exec_scalar_intrinsics(
+        &mut self,
+        unit: &RegUnit,
+        intrinsic: RegIntrinsic,
+        args: &[Reg],
+        base: usize,
+        next_base: usize,
+    ) -> Result<VmValue, EvalError> {
+        let _ = unit;
+        let _ = next_base;
+        match intrinsic {
+            RegIntrinsic::IntBitAnd => {
+                let left = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let right = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::Int(left & right))
+            }
+            RegIntrinsic::IntBitNot => {
+                let value = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Int(!value))
+            }
+            RegIntrinsic::IntBitOr => {
+                let left = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let right = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::Int(left | right))
+            }
+            RegIntrinsic::IntBitXor => {
+                let left = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let right = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::Int(left ^ right))
+            }
+            RegIntrinsic::IntShiftLeft => {
+                let value = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let bits = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::Int(value.wrapping_shl(bits.max(0) as u32)))
+            }
+            RegIntrinsic::IntShiftRight => {
+                let value = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let bits = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::Int(value.wrapping_shr(bits.max(0) as u32)))
+            }
+            RegIntrinsic::IntToString => Ok(VmValue::string(
+                expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_string(),
+            )),
+            RegIntrinsic::IntToFloat => {
+                Ok(VmValue::Float(
+                    expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)? as f64,
+                ))
+            }
+            RegIntrinsic::FloatToString => Ok(VmValue::string(
+                expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_string(),
+            )),
+            RegIntrinsic::FloatIsFinite => Ok(VmValue::Bool(
+                expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.is_finite(),
+            )),
+            RegIntrinsic::FloatIsInfinite => Ok(VmValue::Bool(
+                expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.is_infinite(),
+            )),
+            RegIntrinsic::FloatIsNan => Ok(VmValue::Bool(
+                expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.is_nan(),
+            )),
+            other => unreachable!(
+                "exec_scalar_intrinsics called with non-scalar intrinsic: {other:?}"
             ),
         }
     }
