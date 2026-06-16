@@ -1,4 +1,5 @@
 use super::*;
+use crate::checks::diagnostic_helpers::error_cause_manual_fix;
 
 pub(super) fn check_call_place_conflicts(
     analyzer: &mut Analyzer<'_>,
@@ -442,26 +443,19 @@ pub(super) fn managed_field_split_conflict_diagnostic(
     left: &CallPlaceAccess,
     right: &CallPlaceAccess,
 ) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::MANAGED_FIELD_SPLIT_CONFLICT,
-            format!(
-                "managed object fields `{}` and `{}` cannot be split in one call.",
-                place_path_display(&left.path),
-                place_path_display(&right.path)
-            ),
-            right.span.clone(),
-            "managed field split conflict",
-        )
-        .with_cause(
-            "Field splitting into disjoint inline paths is a local-only capability. A managed object is a single runtime value behind one write guard, so two mutable accesses to its inline fields conflict; the conflict root is the managed object base.",
-        )
-        .with_fix(
-            "split_managed_field_accesses",
-            "Split the accesses into separate statements, or move the fields behind explicit `handle` fields so they become distinct managed objects.",
-            "manual",
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::MANAGED_FIELD_SPLIT_CONFLICT,
+        format!(
+            "managed object fields `{}` and `{}` cannot be split in one call.",
+            place_path_display(&left.path),
+            place_path_display(&right.path)
         ),
-    );
+        right.span.clone(),
+        "managed field split conflict",
+        "Field splitting into disjoint inline paths is a local-only capability. A managed object is a single runtime value behind one write guard, so two mutable accesses to its inline fields conflict; the conflict root is the managed object base.",
+        "split_managed_field_accesses",
+        "Split the accesses into separate statements, or move the fields behind explicit `handle` fields so they become distinct managed objects.",
+    ));
 }
 
 pub(super) fn move_base_field_conflict(left: &CallPlaceAccess, right: &CallPlaceAccess) -> bool {
@@ -524,24 +518,19 @@ pub(super) fn field_partial_access_conflict_diagnostic(
     left: &CallPlaceAccess,
     right: &CallPlaceAccess,
 ) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::FIELD_PARTIAL_ACCESS_CONFLICT,
-            format!(
-                "call mixes whole local access `{}` with field access `{}`.",
-                place_path_display(&left.path),
-                place_path_display(&right.path)
-            ),
-            right.span.clone(),
-            "whole-base field conflict",
-        )
-        .with_cause("A whole local base or prefix conflicts with a mutable or taking subpath in the same call.")
-        .with_fix(
-            "split_call",
-            "Split the whole-base read and field mutation into separate statements or pass disjoint fields explicitly.",
-            "manual",
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::FIELD_PARTIAL_ACCESS_CONFLICT,
+        format!(
+            "call mixes whole local access `{}` with field access `{}`.",
+            place_path_display(&left.path),
+            place_path_display(&right.path)
         ),
-    );
+        right.span.clone(),
+        "whole-base field conflict",
+        "A whole local base or prefix conflicts with a mutable or taking subpath in the same call.",
+        "split_call",
+        "Split the whole-base read and field mutation into separate statements or pass disjoint fields explicitly.",
+    ));
 }
 
 pub(super) fn field_prefix_conflict_diagnostic(
@@ -550,24 +539,19 @@ pub(super) fn field_prefix_conflict_diagnostic(
     right: &CallPlaceAccess,
     cause: &str,
 ) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::FIELD_PREFIX_CONFLICT,
-            format!(
-                "local field paths `{}` and `{}` are not disjoint.",
-                place_path_display(&left.path),
-                place_path_display(&right.path)
-            ),
-            right.span.clone(),
-            "field path conflict",
-        )
-        .with_cause(cause)
-        .with_fix(
-            "split_or_refactor_paths",
-            "Split the accesses into separate calls or refactor through explicit split APIs.",
-            "manual",
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::FIELD_PREFIX_CONFLICT,
+        format!(
+            "local field paths `{}` and `{}` are not disjoint.",
+            place_path_display(&left.path),
+            place_path_display(&right.path)
         ),
-    );
+        right.span.clone(),
+        "field path conflict",
+        cause,
+        "split_or_refactor_paths",
+        "Split the accesses into separate calls or refactor through explicit split APIs.",
+    ));
 }
 
 pub(super) fn indexed_place_conflict_diagnostic(
@@ -575,24 +559,19 @@ pub(super) fn indexed_place_conflict_diagnostic(
     left: &CallPlaceAccess,
     right: &CallPlaceAccess,
 ) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::INDEXED_PARTIAL_ACCESS_CONFLICT,
-            format!(
-                "indexed local paths `{}` and `{}` cannot be proven disjoint.",
-                place_path_display(&left.path),
-                place_path_display(&right.path)
-            ),
-            right.span.clone(),
-            "indexed local access conflict",
-        )
-        .with_cause("RSScript v0.6 treats indexed access as access to the whole local container for alias checking.")
-        .with_fix(
-            "use_split_api",
-            "Use an explicit container split API that proves or checks disjoint element access.",
-            "manual",
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::INDEXED_PARTIAL_ACCESS_CONFLICT,
+        format!(
+            "indexed local paths `{}` and `{}` cannot be proven disjoint.",
+            place_path_display(&left.path),
+            place_path_display(&right.path)
         ),
-    );
+        right.span.clone(),
+        "indexed local access conflict",
+        "RSScript v0.6 treats indexed access as access to the whole local container for alias checking.",
+        "use_split_api",
+        "Use an explicit container split API that proves or checks disjoint element access.",
+    ));
 }
 
 pub(super) fn move_base_field_conflict_diagnostic(
@@ -605,23 +584,18 @@ pub(super) fn move_base_field_conflict_diagnostic(
     } else {
         (right, left)
     };
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::MOVE_BASE_FIELD_CONFLICT,
-            format!(
-                "call moves local path `{}` while also accessing `{}`.",
-                place_path_display(&moved.path),
-                place_path_display(&accessed.path)
-            ),
-            moved.span.clone(),
-            "move-base field conflict",
-        )
-        .with_cause("A local base cannot be `manage`d or `take`n in the same expression where one of its fields is accessed.")
-        .with_fix(
-            "split_move_from_field_access",
-            "Split the field access and `manage`/`take` into separate statements.",
-            "manual",
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::MOVE_BASE_FIELD_CONFLICT,
+        format!(
+            "call moves local path `{}` while also accessing `{}`.",
+            place_path_display(&moved.path),
+            place_path_display(&accessed.path)
         ),
-    );
+        moved.span.clone(),
+        "move-base field conflict",
+        "A local base cannot be `manage`d or `take`n in the same expression where one of its fields is accessed.",
+        "split_move_from_field_access",
+        "Split the field access and `manage`/`take` into separate statements.",
+    ));
 }
 

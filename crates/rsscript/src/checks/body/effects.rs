@@ -1,4 +1,5 @@
 use super::*;
+use crate::checks::diagnostic_helpers::error_cause_manual_fix;
 
 pub(super) fn check_manage_operand_is_local(
     analyzer: &mut Analyzer<'_>,
@@ -28,20 +29,15 @@ pub(super) fn check_manage_operand_is_local(
 }
 
 pub(super) fn read_view_mutation_diagnostic(analyzer: &mut Analyzer<'_>, name: &str, span: Span) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::READ_VIEW_MUTATION,
-            format!("`{name}` is a read view from a `for` loop and cannot be used as an exclusive value."),
-            span,
-            "read view mutation",
-        )
-        .with_cause("RSScript `for` iterates `List<T>` by read view for non-Copy struct elements, so the loop variable does not own the element.")
-        .with_fix(
-            "copy_before_mutating",
-            "Create a fresh local copy before mutation, or use an explicit partitioning API that grants exclusive element ownership.",
-            "manual",
-        ),
-    );
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::READ_VIEW_MUTATION,
+        format!("`{name}` is a read view from a `for` loop and cannot be used as an exclusive value."),
+        span,
+        "read view mutation",
+        "RSScript `for` iterates `List<T>` by read view for non-Copy struct elements, so the loop variable does not own the element.",
+        "copy_before_mutating",
+        "Create a fresh local copy before mutation, or use an explicit partitioning API that grants exclusive element ownership.",
+    ));
 }
 
 pub(super) fn check_take_operand_is_local(
@@ -278,26 +274,21 @@ pub(super) fn fresh_return_target_type(return_ty: &TypeRef) -> &TypeRef {
 }
 
 pub(super) fn managed_to_local_diagnostic(analyzer: &mut Analyzer<'_>, managed_to_local: ManagedToLocalUse) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::MANAGED_TO_LOCAL,
-            format!(
-                "managed value cannot be converted to local binding `{}`.",
-                managed_to_local.local_name
-            ),
-            managed_to_local.span,
-            "managed value used as local",
-        )
-        .with_cause(format!(
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::MANAGED_TO_LOCAL,
+        format!(
+            "managed value cannot be converted to local binding `{}`.",
+            managed_to_local.local_name
+        ),
+        managed_to_local.span,
+        "managed value used as local",
+        format!(
             "`{}` is already managed; RSScript has no managed -> local conversion.",
             managed_to_local.managed_name
-        ))
-        .with_fix(
-            "create_local",
-            "Create the value as `local` at its creation point.",
-            "manual",
         ),
-    );
+        "create_local",
+        "Create the value as `local` at its creation point.",
+    ));
 }
 
 pub(super) fn take_handle_field_diagnostic(analyzer: &mut Analyzer<'_>, field: &TakeHandleField) {
@@ -315,29 +306,24 @@ pub(super) fn take_handle_field_diagnostic(analyzer: &mut Analyzer<'_>, field: &
 }
 
 pub(super) fn retained_local_diagnostic(analyzer: &mut Analyzer<'_>, retained: RetainedLocalUse) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::LOCAL_VALUE_RETAINED,
-            format!(
-                "retaining API `{}` cannot retain local value `{}`.",
-                retained.callee, retained.name
-            ),
-            retained.span,
-            "local value retained",
-        )
-        .with_cause(format!(
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::LOCAL_VALUE_RETAINED,
+        format!(
+            "retaining API `{}` cannot retain local value `{}`.",
+            retained.callee, retained.name
+        ),
+        retained.span,
+        "local value retained",
+        format!(
             "`{}` declares `effects(retains({}))`.",
             retained.callee, retained.param
-        ))
-        .with_fix(
-            "manage_local",
-            format!(
-                "Pass `{}` through `manage {}` before retaining it.",
-                retained.param, retained.name
-            ),
-            "manual",
         ),
-    );
+        "manage_local",
+        format!(
+            "Pass `{}` through `manage {}` before retaining it.",
+            retained.param, retained.name
+        ),
+    ));
 }
 
 pub(super) fn retained_closure_capture_diagnostic(
@@ -485,25 +471,20 @@ pub(super) fn try_error_type_mismatch_diagnostic(
 }
 
 pub(super) fn moved_use_diagnostic(analyzer: &mut Analyzer<'_>, moved_use: MovedUse) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::USE_AFTER_MANAGE,
-            format!(
-                "`{}` was moved into the managed runtime by `manage {}`.",
-                moved_use.name, moved_use.name
-            ),
-            moved_use.use_span,
-            "used after manage",
-        )
-        .with_cause(format!(
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::USE_AFTER_MANAGE,
+        format!(
+            "`{}` was moved into the managed runtime by `manage {}`.",
+            moved_use.name, moved_use.name
+        ),
+        moved_use.use_span,
+        "used after manage",
+        format!(
             "The move happened at {}:{}.",
             moved_use.move_span.line, moved_use.move_span.column
-        ))
-        .with_fix(
-            "move_use_before_manage",
-            format!("Move this use before `manage {}`.", moved_use.name),
-            "manual",
         ),
-    );
+        "move_use_before_manage",
+        format!("Move this use before `manage {}`.", moved_use.name),
+    ));
 }
 

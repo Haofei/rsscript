@@ -1,4 +1,5 @@
 use super::*;
+use crate::checks::diagnostic_helpers::error_cause_manual_fix;
 
 pub(super) fn expr_is_fresh_shell(expr: &HirExpr) -> bool {
     match expr {
@@ -39,23 +40,18 @@ pub(super) fn fresh_requires_local_binding_diagnostic(
     value: &HirExpr,
     span: &Span,
 ) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::FRESH_REQUIRES_LOCAL_BINDING,
-            "`fresh` expression must be bound locally before `mut` or `take` use.",
-            span.clone(),
-            "fresh value requires local binding",
-        )
-        .with_cause("Direct fresh expressions can materialize as managed temporaries for `read`; `mut` and `take` require an explicit local owner.")
-        .with_fix(
-            "bind_fresh_local",
-            format!(
-                "Bind the value first, for example `local value = {}`.",
-                hir_expr_hint(value)
-            ),
-            "manual",
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::FRESH_REQUIRES_LOCAL_BINDING,
+        "`fresh` expression must be bound locally before `mut` or `take` use.",
+        span.clone(),
+        "fresh value requires local binding",
+        "Direct fresh expressions can materialize as managed temporaries for `read`; `mut` and `take` require an explicit local owner.",
+        "bind_fresh_local",
+        format!(
+            "Bind the value first, for example `local value = {}`.",
+            hir_expr_hint(value)
         ),
-    );
+    ));
 }
 
 pub(super) fn check_read_view_not_exclusive(
@@ -286,24 +282,17 @@ pub(super) fn check_constructor_field_initializers(
         };
         let actual_effect = expr_data_effect(&arg.value);
         if field.is_weak && !is_weak_handle_producing_expr(&arg.value) {
-            analyzer.diagnostics.push(
-                Diagnostic::error(
-                    code::WEAK_FIELD_REQUIRES_WEAK_HANDLE,
-                    format!(
-                        "weak field `{name}` for `{constructor_name}` must be initialized from an explicit weak handle."
-                    ),
-                    hir_expr_span(&arg.value).clone(),
-                    "weak field requires weak handle",
-                )
-                .with_cause(
-                    "Weak fields are non-owning handles. Initializing them must be syntax-visible.",
-                )
-                .with_fix(
-                    "wrap_with_weak_from",
-                    format!("Write `{name}: Weak.from(value: read target)` in the constructor."),
-                    "manual",
+            analyzer.diagnostics.push(error_cause_manual_fix(
+                code::WEAK_FIELD_REQUIRES_WEAK_HANDLE,
+                format!(
+                    "weak field `{name}` for `{constructor_name}` must be initialized from an explicit weak handle."
                 ),
-            );
+                hir_expr_span(&arg.value).clone(),
+                "weak field requires weak handle",
+                "Weak fields are non-owning handles. Initializing them must be syntax-visible.",
+                "wrap_with_weak_from",
+                format!("Write `{name}: Weak.from(value: read target)` in the constructor."),
+            ));
         } else if field.is_handle && actual_effect != Some("read") {
             constructor_field_effect_diagnostic(
                 analyzer,
@@ -511,24 +500,17 @@ pub(super) fn managed_inline_constructor_field_diagnostic(
     field_name: &str,
     value: &HirExpr,
 ) {
-    analyzer.diagnostics.push(
-        Diagnostic::error(
-            code::MISSING_DATA_EFFECT,
-            format!(
-                "field `{field_name}` for `{constructor_name}` cannot be initialized from a managed value."
-            ),
-            hir_expr_span(value).clone(),
-            "managed value used for inline field",
-        )
-        .with_cause(
-            "Inline non-Copy fields own their stored value. RSScript has no implicit clone from managed values into inline fields.",
-        )
-        .with_fix(
-            "make_field_handle_or_bind_local",
-            "Use a `handle` field, construct a fresh inline value, or bind the value as `local` and pass it with `take`.",
-            "manual",
+    analyzer.diagnostics.push(error_cause_manual_fix(
+        code::MISSING_DATA_EFFECT,
+        format!(
+            "field `{field_name}` for `{constructor_name}` cannot be initialized from a managed value."
         ),
-    );
+        hir_expr_span(value).clone(),
+        "managed value used for inline field",
+        "Inline non-Copy fields own their stored value. RSScript has no implicit clone from managed values into inline fields.",
+        "make_field_handle_or_bind_local",
+        "Use a `handle` field, construct a fresh inline value, or bind the value as `local` and pass it with `take`.",
+    ));
 }
 
 pub(super) fn check_spawn_captures(analyzer: &mut Analyzer<'_>, value: &HirExpr, state: &BodyState) {
@@ -536,20 +518,15 @@ pub(super) fn check_spawn_captures(analyzer: &mut Analyzer<'_>, value: &HirExpr,
     collect_spawn_capture_idents(value, &mut captures);
     for (name, span) in captures {
         if state.is_local(&name) {
-            analyzer.diagnostics.push(
-                Diagnostic::error(
-                    code::LOCAL_VALUE_RETAINED,
-                    format!("spawn cannot capture local value `{name}`."),
-                    span,
-                    "local captured by spawn",
-                )
-                .with_cause("`spawn` may retain captured values until task completion.")
-                .with_fix(
-                    "manage_before_spawn",
-                    format!("Convert `{name}` through `manage` before spawning the task."),
-                    "manual",
-                ),
-            );
+            analyzer.diagnostics.push(error_cause_manual_fix(
+                code::LOCAL_VALUE_RETAINED,
+                format!("spawn cannot capture local value `{name}`."),
+                span,
+                "local captured by spawn",
+                "`spawn` may retain captured values until task completion.",
+                "manage_before_spawn",
+                format!("Convert `{name}` through `manage` before spawning the task."),
+            ));
         } else if state.is_resource(&name) {
             resource_escape_diagnostic(analyzer, &name, span);
         }
