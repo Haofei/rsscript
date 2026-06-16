@@ -1518,3 +1518,63 @@ fn main() -> Result<Unit, TensorError> {
         source,
     );
 }
+
+// scatter
+
+#[test]
+fn parity_tensor_scatter_add() {
+    let source = r#"
+features: native, local
+
+fn dump(t: read Tensor) -> Result<Unit, TensorError> {
+    Log.write(message: read String.from_int(value: Tensor.dtype_code(t: read t)))
+    let dims = Tensor.shape(tensor: read t)?
+    let mut d = 0
+    while d < List.len(list: read dims) {
+        Log.write(message: read String.from_int(value: List.get(list: read dims, index: d)))
+        d = d + 1
+    }
+    let values = Tensor.to_f32_slice(tensor: read t)?
+    let mut index = 0
+    while index < List.len(list: read values) {
+        Log.write(message: read Float.to_string(value: read List.get(list: read values, index: index)))
+        index = index + 1
+    }
+    return Ok(Unit)
+}
+
+fn main() -> Result<Unit, TensorError> {
+    let t = Tensor.from_f32_slice(data: read [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], shape: read [2, 3])?
+    let idx_f = Tensor.from_f32_slice(data: read [1.0, 0.0, 1.0], shape: read [3])?
+    let idx = Tensor.cast_i32(t: read idx_f)
+    // scatter_add of gathered values along axis 1 (duplicate index 1 accumulates).
+    let g1 = Tensor.gather(data: read t, axis: 1, indices: read idx)?
+    let s1 = Tensor.scatter_add(updates: read g1, axis: 1, indices: read idx, dim_size: 3)?
+    dump(t: read s1)?
+    // scatter_add along axis 0, all into row 0 -> accumulation.
+    let upd = Tensor.from_f32_slice(data: read [1.0, 2.0, 3.0, 4.0], shape: read [2, 2])?
+    let zidx_f = Tensor.from_f32_slice(data: read [0.0, 0.0], shape: read [2])?
+    let zidx = Tensor.cast_i32(t: read zidx_f)
+    let s0 = Tensor.scatter_add(updates: read upd, axis: 0, indices: read zidx, dim_size: 3)?
+    dump(t: read s0)?
+    // out-of-bounds index surfaces an error identically across backends.
+    let bidx_f = Tensor.from_f32_slice(data: read [9.0, 0.0], shape: read [2])?
+    let bidx = Tensor.cast_i32(t: read bidx_f)
+    local bad = Tensor.scatter_add(updates: read upd, axis: 0, indices: read bidx, dim_size: 3)
+    match bad {
+        Ok(_) => {
+            Log.write(message: read "ok")
+        }
+        Err(error) => {
+            Log.write(message: read TensorError.message(error: read error))
+        }
+    }
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-scatter-add.rss",
+        "rsscript_parity_tensor_scatter_add",
+        source,
+    );
+}

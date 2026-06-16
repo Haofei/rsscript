@@ -1291,6 +1291,75 @@ pub fn tensor_gather(
     })
 }
 
+/// Accumulating inverse of `tensor_gather` (its vector-Jacobian product). Scatters
+/// the rows of `updates` along `axis` into a zero-initialised output whose `axis`
+/// dim is `dim_size`, ACCUMULATING on duplicate indices:
+/// `out[.., indices[k], ..] += updates[.., k, ..]`.
+///
+/// `indices` is a rank-1 integer-valued tensor with `indices.len() ==
+/// updates.shape[axis]`. The output shape equals `updates.shape` with `axis`
+/// replaced by `dim_size`, and the output dtype equals `updates`' dtype. Errors if
+/// `indices` is not rank-1, its length differs from `updates.shape[axis]`, `axis`
+/// is out of range, `dim_size <= 0`, or any index falls outside `[0, dim_size)`.
+pub fn tensor_scatter_add(
+    updates: &RssTensor,
+    axis: i64,
+    indices: &RssTensor,
+    dim_size: i64,
+) -> Result<RssTensor, TensorError> {
+    let axis = check_axis(&updates.shape, axis, "scatter_add")?;
+    if indices.shape.len() != 1 {
+        return Err(TensorError::new(format!(
+            "scatter_add requires a rank-1 indices tensor, got shape {:?}",
+            indices.shape
+        )));
+    }
+    if dim_size <= 0 {
+        return Err(TensorError::new(format!(
+            "scatter_add dim_size must be positive, got {dim_size}"
+        )));
+    }
+    let out_axis = dim_size as usize;
+    let upd_axis = updates.shape[axis];
+    let idx_len = indices.shape[0];
+    if idx_len != upd_axis {
+        return Err(TensorError::new(format!(
+            "scatter_add indices length {idx_len} must equal updates.shape[{axis}] = {upd_axis}"
+        )));
+    }
+    // Resolve and bounds-check each index against the OUTPUT axis length.
+    let mut resolved = Vec::with_capacity(idx_len);
+    for (j, &raw) in indices.data().iter().enumerate() {
+        let i = raw.round() as i64;
+        if i < 0 || i >= dim_size {
+            return Err(TensorError::new(format!(
+                "scatter_add index {i} (at position {j}) out of range for axis {axis} of length {dim_size}"
+            )));
+        }
+        resolved.push(i as usize);
+    }
+    let mut out_shape = updates.shape.clone();
+    out_shape[axis] = out_axis;
+    let outer: usize = updates.shape[..axis].iter().product();
+    let inner: usize = updates.shape[axis + 1..].iter().product();
+    let src = updates.data.as_ref();
+    let mut out = vec![0.0f32; outer * out_axis * inner];
+    for o in 0..outer {
+        for (j, &dst_a) in resolved.iter().enumerate() {
+            let src_base = (o * upd_axis + j) * inner;
+            let dst_base = (o * out_axis + dst_a) * inner;
+            for i in 0..inner {
+                out[dst_base + i] += src[src_base + i];
+            }
+        }
+    }
+    Ok(RssTensor {
+        data: Rc::new(out),
+        shape: out_shape,
+        dtype: updates.dtype,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // bmm+int/bit (ops D).
 //
@@ -2640,6 +2709,73 @@ mod tests {
         );
     }
 
+    #[test]
+    fn scatter_add_roundtrips_gather_counts() {
+        // For gather(data, axis, idx), scatter_add(ones_like(gathered), axis, idx,
+        // data.shape[axis]) yields the per-element gather count along axis.
+        let t = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]).unwrap();
+        let idx = tensor_cast_i32(&tensor_from_f32_slice(&[1.0, 0.0, 1.0], &[3]).unwrap());
+        let gathered = tensor_gather(&t, 1, &idx).unwrap(); // shape [2,3]
+        let ones = tensor_unary_elementwise(&gathered, gathered.dtype, |_| 1.0);
+        let counts = tensor_scatter_add(&ones, 1, &idx, 3).unwrap();
+        // axis-1 length 3 restored; column 1 used twice, column 0 once, column 2 zero.
+        assert_eq!(tensor_shape(&counts).unwrap(), vec![2, 3]);
+        assert_eq!(
+            tensor_to_f32_slice(&counts).unwrap(),
+            vec![1.0, 2.0, 0.0, 1.0, 2.0, 0.0]
+        );
+        // Output dtype = updates dtype.
+        assert_eq!(tensor_dtype_code(&counts), tensor_dtype_code(&ones));
+
+        // Scatter-add of the gathered VALUES accumulates per destination index.
+        // gathered = [[2,1,2],[5,4,5]] (cols [1,0,1] of t). idx=[1,0,1]:
+        //   out col0 <- gathered pos j=1 (idx 0): values (1,4)
+        //   out col1 <- gathered pos j=0,2 (idx 1): (2+2, 5+5) = (4,10)
+        let scattered = tensor_scatter_add(&gathered, 1, &idx, 3).unwrap();
+        assert_eq!(
+            tensor_to_f32_slice(&scattered).unwrap(),
+            vec![1.0, 4.0, 0.0, 4.0, 10.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn scatter_add_axis0_and_duplicate_accumulation() {
+        // axis 0, all updates target the same row -> they accumulate.
+        let upd = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+        let idx = tensor_cast_i32(&tensor_from_f32_slice(&[0.0, 0.0], &[2]).unwrap());
+        let out = tensor_scatter_add(&upd, 0, &idx, 3).unwrap();
+        assert_eq!(tensor_shape(&out).unwrap(), vec![3, 2]);
+        // row0 = [1+3, 2+4] = [4,6]; rows 1,2 zero.
+        assert_eq!(
+            tensor_to_f32_slice(&out).unwrap(),
+            vec![4.0, 6.0, 0.0, 0.0, 0.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn scatter_add_rejects_bad_args() {
+        let upd = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+        let idx = tensor_cast_i32(&tensor_from_f32_slice(&[0.0, 1.0], &[2]).unwrap());
+        // axis out of range.
+        assert!(tensor_error_message(&tensor_scatter_add(&upd, 5, &idx, 3).unwrap_err())
+            .contains("out of range"));
+        // dim_size non-positive.
+        assert!(tensor_error_message(&tensor_scatter_add(&upd, 0, &idx, 0).unwrap_err())
+            .contains("positive"));
+        // index out of [0, dim_size).
+        let big = tensor_cast_i32(&tensor_from_f32_slice(&[0.0, 5.0], &[2]).unwrap());
+        assert!(tensor_error_message(&tensor_scatter_add(&upd, 0, &big, 3).unwrap_err())
+            .contains("out of range"));
+        // wrong indices length (updates.shape[axis] == 2, give 3).
+        let wrong = tensor_cast_i32(&tensor_from_f32_slice(&[0.0, 1.0, 0.0], &[3]).unwrap());
+        assert!(tensor_error_message(&tensor_scatter_add(&upd, 0, &wrong, 3).unwrap_err())
+            .contains("must equal"));
+        // rank-2 indices rejected.
+        let idx2 = tensor_cast_i32(&tensor_from_f32_slice(&[0.0, 1.0], &[1, 2]).unwrap());
+        assert!(tensor_error_message(&tensor_scatter_add(&upd, 0, &idx2, 3).unwrap_err())
+            .contains("rank-1"));
+    }
+
     // reductions+math (ops C)
 
     #[test]
@@ -3091,6 +3227,76 @@ mod tests {
         let var = data.iter().map(|x| (x - mean) * (x - mean)).sum::<f64>() / n;
         assert!(mean.abs() < 0.1, "mean {mean} not ~0");
         assert!((var - 1.0).abs() < 0.15, "variance {var} not ~1");
+    }
+
+    #[test]
+    fn randn_matches_tinygrad_golden() {
+        // Golden values from the verified oracle `port_randn(seed, 8)`
+        // (tinygrad-rsmc/oracle/randn_parity.py, maxdiff 0.0 vs tinygrad's
+        // Tensor.randn(8) for seeds 0/42/123/1337). counter = 0 reproduces them.
+        // randn = single rand over (2,8), Box-Muller: cos(2*pi*src[0]) *
+        // sqrt(-2*log(1 - src[1])). Self-contained (no tinygrad import).
+        let golden: [(i64, [f32; 8]); 4] = [
+            (
+                0,
+                [
+                    0.584_557, 0.177_917, 0.379_769, -1.321_681, 1.691_838, 0.381_049,
+                    -0.403_509, 1.159_926,
+                ],
+            ),
+            (
+                42,
+                [
+                    0.991_906, 1.591_51, 0.879_765, 0.444_388, 1.455_374, -1.535_073,
+                    0.489_513, 0.618_576,
+                ],
+            ),
+            (
+                123,
+                [
+                    -1.200_55, 2.083_955, -0.281_694, -0.272_154, 0.439_678, -0.784_856,
+                    1.007_717, -1.064_269,
+                ],
+            ),
+            (
+                1337,
+                [
+                    -1.395_279, 0.317_524, -0.684_533, 0.516_59, -1.281_658, 0.168_111,
+                    -1.159_221, -0.858_989,
+                ],
+            ),
+        ];
+        for (seed, expected) in golden {
+            let t = tensor_randn(&[8], seed, 0).unwrap();
+            let got = tensor_to_f32_slice(&t).unwrap();
+            for (k, (&g, e)) in got.iter().zip(expected).enumerate() {
+                assert!(
+                    (g as f32 - e).abs() < 1e-5,
+                    "seed={seed} idx={k}: got {g} expected {e}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn randint_matches_tinygrad_golden() {
+        // Golden values from the verified oracle `port_randint(seed, 8, 0, 10)`
+        // (tinygrad-rsmc/oracle/randint_parity.py, maxdiff 0 vs tinygrad's
+        // Tensor.randint(8, low=0, high=10) for seeds 0/42/123/1337). counter = 0.
+        // randint = ((high-low)*rand).trunc() + low. Exact match. Self-contained.
+        let golden: [(i64, [f32; 8]); 4] = [
+            (0, [1.0, 2.0, 7.0, 9.0, 5.0, 3.0, 2.0, 2.0]),
+            (42, [1.0, 8.0, 1.0, 1.0, 7.0, 0.0, 6.0, 3.0]),
+            (123, [6.0, 4.0, 9.0, 8.0, 2.0, 9.0, 0.0, 2.0]),
+            (1337, [4.0, 3.0, 6.0, 6.0, 4.0, 1.0, 2.0, 0.0]),
+        ];
+        for (seed, expected) in golden {
+            let t = tensor_randint(&[8], 0, 10, seed, 0).unwrap();
+            let got = tensor_to_f32_slice(&t).unwrap();
+            for (k, (&g, e)) in got.iter().zip(expected).enumerate() {
+                assert_eq!(g as f32, e, "seed={seed} idx={k}: got {g} expected {e}");
+            }
+        }
     }
 
     // --- nn primitives (slice F) ---
