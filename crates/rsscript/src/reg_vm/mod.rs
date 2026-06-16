@@ -2127,6 +2127,7 @@ enum RegIntrinsic {
     TensorMatmulMetal,
     TensorMetalAvailable,
     TensorMetalDeviceName,
+    TensorGpuRunMsl,
     TensorAdd,
     TensorSub,
     TensorMul,
@@ -5448,6 +5449,7 @@ fn qualified_intrinsic(namespace: &str, name: &str) -> Option<RegIntrinsic> {
         ("Tensor", "matmul_metal") => Some(RegIntrinsic::TensorMatmulMetal),
         ("Tensor", "metal_available") => Some(RegIntrinsic::TensorMetalAvailable),
         ("Tensor", "metal_device_name") => Some(RegIntrinsic::TensorMetalDeviceName),
+        ("Tensor", "gpu_run_msl") => Some(RegIntrinsic::TensorGpuRunMsl),
         ("Tensor", "add") => Some(RegIntrinsic::TensorAdd),
         ("Tensor", "sub") => Some(RegIntrinsic::TensorSub),
         ("Tensor", "mul") => Some(RegIntrinsic::TensorMul),
@@ -9696,6 +9698,33 @@ impl RegVm {
             RegIntrinsic::TensorMetalDeviceName => Ok(VmValue::String(Rc::new(
                 rsscript_runtime::tensor_metal_device_name(),
             ))),
+            RegIntrinsic::TensorGpuRunMsl => {
+                let source =
+                    expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_string();
+                let fn_name =
+                    expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?.to_string();
+                // inputs: List<List<Float>> -> Vec<Vec<f64>>, one device buffer each.
+                let inputs_list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
+                let inputs: Vec<Vec<f64>> = inputs_list
+                    .borrow()
+                    .iter()
+                    .map(expect_float_list_ref)
+                    .collect::<Result<_, _>>()?;
+                let out_len = expect_int_ref(intrinsic_arg(&self.stack, base, args, 3)?)? as usize;
+                let threads = expect_int_ref(intrinsic_arg(&self.stack, base, args, 4)?)? as usize;
+                Ok(json_result(
+                    match rsscript_runtime::tensor_gpu_run_msl(
+                        &source, &fn_name, &inputs, out_len, threads,
+                    ) {
+                        Ok(values) => Ok(VmValue::List(Rc::new(RefCell::new(
+                            values.into_iter().map(VmValue::Float).collect(),
+                        )))),
+                        Err(error) => Err(tensor_error_value(
+                            rsscript_runtime::tensor_error_message(&error),
+                        )),
+                    },
+                ))
+            }
             RegIntrinsic::TensorAdd
             | RegIntrinsic::TensorSub
             | RegIntrinsic::TensorMul

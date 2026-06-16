@@ -431,6 +431,11 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "metal_device_name",
         "rsscript_runtime::tensor_metal_device_name",
     ),
+    runtime_intrinsic(
+        "Tensor",
+        "gpu_run_msl",
+        "rsscript_runtime::tensor_gpu_run_msl",
+    ),
     runtime_intrinsic("Tensor", "add", "rsscript_runtime::tensor_add"),
     runtime_intrinsic("Tensor", "sub", "rsscript_runtime::tensor_sub"),
     runtime_intrinsic("Tensor", "mul", "rsscript_runtime::tensor_mul"),
