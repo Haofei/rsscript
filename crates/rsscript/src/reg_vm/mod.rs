@@ -2120,6 +2120,9 @@ enum RegIntrinsic {
     TensorShape,
     TensorRank,
     TensorMatmul,
+    TensorMatmulMetal,
+    TensorMetalAvailable,
+    TensorMetalDeviceName,
     TensorAdd,
     TensorSub,
     TensorMul,
@@ -2165,11 +2168,15 @@ enum RegIntrinsic {
     TensorExp2,
     TensorLog2,
     TensorRsqrt,
+    TensorSin,
+    TensorTrunc,
     TensorPow,
     // bmm+int/bit (ops D)
     TensorBmm,
     TensorIdiv,
     TensorMod,
+    TensorFloordiv,
+    TensorFloormod,
     TensorShl,
     TensorShr,
     TensorAnd,
@@ -5432,6 +5439,9 @@ fn qualified_intrinsic(namespace: &str, name: &str) -> Option<RegIntrinsic> {
         ("Tensor", "shape") => Some(RegIntrinsic::TensorShape),
         ("Tensor", "rank") => Some(RegIntrinsic::TensorRank),
         ("Tensor", "matmul") => Some(RegIntrinsic::TensorMatmul),
+        ("Tensor", "matmul_metal") => Some(RegIntrinsic::TensorMatmulMetal),
+        ("Tensor", "metal_available") => Some(RegIntrinsic::TensorMetalAvailable),
+        ("Tensor", "metal_device_name") => Some(RegIntrinsic::TensorMetalDeviceName),
         ("Tensor", "add") => Some(RegIntrinsic::TensorAdd),
         ("Tensor", "sub") => Some(RegIntrinsic::TensorSub),
         ("Tensor", "mul") => Some(RegIntrinsic::TensorMul),
@@ -5477,11 +5487,15 @@ fn qualified_intrinsic(namespace: &str, name: &str) -> Option<RegIntrinsic> {
         ("Tensor", "exp2") => Some(RegIntrinsic::TensorExp2),
         ("Tensor", "log2") => Some(RegIntrinsic::TensorLog2),
         ("Tensor", "rsqrt") => Some(RegIntrinsic::TensorRsqrt),
+        ("Tensor", "sin") => Some(RegIntrinsic::TensorSin),
+        ("Tensor", "trunc") => Some(RegIntrinsic::TensorTrunc),
         ("Tensor", "pow") => Some(RegIntrinsic::TensorPow),
         // bmm+int/bit (ops D)
         ("Tensor", "bmm") => Some(RegIntrinsic::TensorBmm),
         ("Tensor", "idiv") => Some(RegIntrinsic::TensorIdiv),
         ("Tensor", "modulo") => Some(RegIntrinsic::TensorMod),
+        ("Tensor", "floordiv") => Some(RegIntrinsic::TensorFloordiv),
+        ("Tensor", "floormod") => Some(RegIntrinsic::TensorFloormod),
         ("Tensor", "shl") => Some(RegIntrinsic::TensorShl),
         ("Tensor", "shr") => Some(RegIntrinsic::TensorShr),
         ("Tensor", "bit_and") => Some(RegIntrinsic::TensorAnd),
@@ -9594,6 +9608,22 @@ impl RegVm {
                     )),
                 }))
             }
+            RegIntrinsic::TensorMatmulMetal => {
+                let a = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let b = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(json_result(match rsscript_runtime::tensor_matmul_metal(&a, &b) {
+                    Ok(tensor) => Ok(self.store_tensor(tensor)),
+                    Err(error) => Err(tensor_error_value(
+                        rsscript_runtime::tensor_error_message(&error),
+                    )),
+                }))
+            }
+            RegIntrinsic::TensorMetalAvailable => {
+                Ok(VmValue::Bool(rsscript_runtime::tensor_metal_available()))
+            }
+            RegIntrinsic::TensorMetalDeviceName => Ok(VmValue::String(Rc::new(
+                rsscript_runtime::tensor_metal_device_name(),
+            ))),
             RegIntrinsic::TensorAdd
             | RegIntrinsic::TensorSub
             | RegIntrinsic::TensorMul
@@ -9830,13 +9860,17 @@ impl RegVm {
             RegIntrinsic::TensorReciprocal
             | RegIntrinsic::TensorExp2
             | RegIntrinsic::TensorLog2
-            | RegIntrinsic::TensorRsqrt => {
+            | RegIntrinsic::TensorRsqrt
+            | RegIntrinsic::TensorSin
+            | RegIntrinsic::TensorTrunc => {
                 let t = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let result = match intrinsic {
                     RegIntrinsic::TensorReciprocal => rsscript_runtime::tensor_reciprocal(&t),
                     RegIntrinsic::TensorExp2 => rsscript_runtime::tensor_exp2(&t),
                     RegIntrinsic::TensorLog2 => rsscript_runtime::tensor_log2(&t),
-                    _ => rsscript_runtime::tensor_rsqrt(&t),
+                    RegIntrinsic::TensorRsqrt => rsscript_runtime::tensor_rsqrt(&t),
+                    RegIntrinsic::TensorSin => rsscript_runtime::tensor_sin(&t),
+                    _ => rsscript_runtime::tensor_trunc(&t),
                 };
                 Ok(self.store_tensor(result))
             }
@@ -9854,6 +9888,8 @@ impl RegVm {
             RegIntrinsic::TensorBmm
             | RegIntrinsic::TensorIdiv
             | RegIntrinsic::TensorMod
+            | RegIntrinsic::TensorFloordiv
+            | RegIntrinsic::TensorFloormod
             | RegIntrinsic::TensorShl
             | RegIntrinsic::TensorShr
             | RegIntrinsic::TensorAnd
@@ -9865,6 +9901,8 @@ impl RegVm {
                     RegIntrinsic::TensorBmm => rsscript_runtime::tensor_bmm(&a, &b),
                     RegIntrinsic::TensorIdiv => rsscript_runtime::tensor_idiv(&a, &b),
                     RegIntrinsic::TensorMod => rsscript_runtime::tensor_mod(&a, &b),
+                    RegIntrinsic::TensorFloordiv => rsscript_runtime::tensor_floordiv(&a, &b),
+                    RegIntrinsic::TensorFloormod => rsscript_runtime::tensor_floormod(&a, &b),
                     RegIntrinsic::TensorShl => rsscript_runtime::tensor_shl(&a, &b),
                     RegIntrinsic::TensorShr => rsscript_runtime::tensor_shr(&a, &b),
                     RegIntrinsic::TensorAnd => rsscript_runtime::tensor_and(&a, &b),
