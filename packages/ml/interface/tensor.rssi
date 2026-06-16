@@ -37,6 +37,25 @@ pub native fn Tensor.matmul(
 ) -> Result<fresh Tensor, TensorError>
     effects(native)
 
+// Whether a Metal GPU is available for the native compute path (false off macOS or
+// when no device is present).
+pub native fn Tensor.metal_available() -> Bool
+    effects(native)
+
+// The Metal device name (e.g. "Apple M2 Max"), or an empty string when no GPU is
+// available.
+pub native fn Tensor.metal_device_name() -> fresh String
+    effects(native)
+
+// GPU matrix multiply: same contract as `matmul`, dispatched to Metal. NOT bit-
+// identical to the CPU kernel (GPU reductions reorder), so it matches to f32
+// tolerance. Errors on non-rank-2 operands, an inner-dim mismatch, or no GPU.
+pub native fn Tensor.matmul_metal(
+    a: read Tensor,
+    b: read Tensor,
+) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
 // Elementwise binary ops over two same-shape tensors. No broadcasting — the
 // shapes must match exactly (broadcasting is deferred to a later slice). Errors
 // on a shape mismatch.
@@ -257,6 +276,15 @@ pub native fn Tensor.log2(t: read Tensor) -> fresh Tensor
 pub native fn Tensor.rsqrt(t: read Tensor) -> fresh Tensor
     effects(native)
 
+// Elementwise sine (radians). Output dtype F32.
+pub native fn Tensor.sin(t: read Tensor) -> fresh Tensor
+    effects(native)
+
+// Elementwise truncation toward zero (drops the fractional part, keeps the sign);
+// a float-result op that preserves dtype, unlike cast_i32 which retags to I32.
+pub native fn Tensor.trunc(t: read Tensor) -> fresh Tensor
+    effects(native)
+
 // Elementwise power a^b with broadcasting. Output dtype F32. Error if not
 // broadcast-compatible.
 pub native fn Tensor.pow(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
@@ -281,6 +309,17 @@ pub native fn Tensor.idiv(a: read Tensor, b: read Tensor) -> Result<fresh Tensor
 
 // Integer remainder (sign follows the dividend; mod-by-zero -> 0).
 pub native fn Tensor.modulo(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+// Floor division (Python //): rounds toward negative infinity, so the quotient
+// sign follows the divisor (distinct from idiv's truncate-toward-zero). Div-by-zero
+// -> 0. Broadcasts; output dtype I32.
+pub native fn Tensor.floordiv(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+// Floor modulo (Python %): the remainder sign follows the DIVISOR (distinct from
+// modulo, whose sign follows the dividend). Mod-by-zero -> 0. Broadcasts; dtype I32.
+pub native fn Tensor.floormod(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
     effects(native)
 
 // Left / right shift on i64 values, shift count masked to 0..63.
