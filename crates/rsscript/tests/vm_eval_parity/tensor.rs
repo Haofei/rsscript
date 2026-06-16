@@ -1378,3 +1378,38 @@ fn main() -> Result<Unit, TensorError> {
         source,
     );
 }
+
+#[test]
+fn parity_tensor_rng() {
+    let source = r#"
+features: native, local
+
+fn dump(t: read Tensor) -> Result<Unit, TensorError> {
+    Log.write(message: read String.from_int(value: Tensor.dtype_code(t: read t)))
+    let values = Tensor.to_f32_slice(tensor: read t)?
+    let mut index = 0
+    while index < List.len(list: read values) {
+        Log.write(message: read Float.to_string(value: read List.get(list: read values, index: index)))
+        index = index + 1
+    }
+    return Ok(Unit)
+}
+
+fn main() -> Result<Unit, TensorError> {
+    let u = Tensor.rand(shape: read [2, 3], seed: 42, counter: 0)?
+    dump(t: read u)?
+    let u2 = Tensor.rand(shape: read [2, 3], seed: 42, counter: 6)?
+    dump(t: read u2)?
+    let ri = Tensor.randint(shape: read [5], low: 3, high: 9, seed: 7, counter: 0)?
+    dump(t: read ri)?
+    let n = Tensor.randn(shape: read [4], seed: 123, counter: 0)?
+    dump(t: read n)?
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-rng.rss",
+        "rsscript_parity_tensor_rng",
+        source,
+    );
+}

@@ -308,5 +308,34 @@ pub native fn Tensor.bitcast_f32_to_i32(t: read Tensor) -> fresh Tensor
 pub native fn Tensor.bitcast_i32_to_f32(t: read Tensor) -> fresh Tensor
     effects(native)
 
+// rng (slice E)
+// Native seeded RNG (threefry2x32-20). Pure and explicit-counter: same
+// (shape, seed, counter) always yields identical output in every backend.
+// Element `i` (row-major flat index) draws from counter base + i; advance
+// `counter` by the element count between draws. `randn` advances at 2x (two
+// uniforms per element).
+pub native fn Tensor.rand(
+    shape: read List<Int>,
+    seed: Int,
+    counter: Int,
+) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+pub native fn Tensor.randint(
+    shape: read List<Int>,
+    low: Int,
+    high: Int,
+    seed: Int,
+    counter: Int,
+) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+pub native fn Tensor.randn(
+    shape: read List<Int>,
+    seed: Int,
+    counter: Int,
+) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
 pub fn TensorError.message(error: read TensorError) -> fresh String
     effects(pure)
