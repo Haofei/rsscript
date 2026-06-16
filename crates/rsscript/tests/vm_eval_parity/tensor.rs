@@ -1071,3 +1071,217 @@ fn main() -> Result<Unit, TensorError> {
         source,
     );
 }
+
+// reductions+math (ops C)
+
+#[test]
+fn parity_tensor_prod_min_axis() {
+    let source = r#"
+features: native, local
+
+fn dump(t: read Tensor) -> Result<Unit, TensorError> {
+    Log.write(message: read String.from_int(value: Tensor.dtype_code(t: read t)))
+    let dims = Tensor.shape(tensor: read t)?
+    let mut d = 0
+    while d < List.len(list: read dims) {
+        Log.write(message: read String.from_int(value: List.get(list: read dims, index: d)))
+        d = d + 1
+    }
+    let values = Tensor.to_f32_slice(tensor: read t)?
+    let mut index = 0
+    while index < List.len(list: read values) {
+        Log.write(message: read Float.to_string(value: read List.get(list: read values, index: index)))
+        index = index + 1
+    }
+    return Ok(Unit)
+}
+
+fn main() -> Result<Unit, TensorError> {
+    // [[1,2,3],[4,5,6]]
+    let t = Tensor.from_f32_slice(
+        data: read [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        shape: read [2, 3],
+    )?
+    let p0 = Tensor.prod_axis(t: read t, axis: 0)?
+    dump(t: read p0)?
+    let p1 = Tensor.prod_axis(t: read t, axis: 1)?
+    dump(t: read p1)?
+    let n0 = Tensor.min_axis(t: read t, axis: 0)?
+    dump(t: read n0)?
+    let n1 = Tensor.min_axis(t: read t, axis: 1)?
+    dump(t: read n1)?
+    // min preserves input dtype: cast to I32 first.
+    let ti = Tensor.cast_i32(t: read t)
+    let ni = Tensor.min_axis(t: read ti, axis: 0)?
+    dump(t: read ni)?
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-prod-min-axis.rss",
+        "rsscript_parity_tensor_prod_min_axis",
+        source,
+    );
+}
+
+#[test]
+fn parity_tensor_multi_axis() {
+    let source = r#"
+features: native, local
+
+fn dump(t: read Tensor) -> Result<Unit, TensorError> {
+    Log.write(message: read String.from_int(value: Tensor.dtype_code(t: read t)))
+    let dims = Tensor.shape(tensor: read t)?
+    let mut d = 0
+    while d < List.len(list: read dims) {
+        Log.write(message: read String.from_int(value: List.get(list: read dims, index: d)))
+        d = d + 1
+    }
+    let values = Tensor.to_f32_slice(tensor: read t)?
+    let mut index = 0
+    while index < List.len(list: read values) {
+        Log.write(message: read Float.to_string(value: read List.get(list: read values, index: index)))
+        index = index + 1
+    }
+    return Ok(Unit)
+}
+
+fn main() -> Result<Unit, TensorError> {
+    // shape [2,3,4], values 0..24
+    local data = List<Float>.new()
+    let total = 2 * 3 * 4
+    let mut k = 0
+    while k < total {
+        List.push<Float>(list: mut data, value: read Int.to_float(value: read k))
+        k = k + 1
+    }
+    let t = Tensor.from_f32_slice(data: read data, shape: read [2, 3, 4])?
+    local axes = List<Int>.new()
+    List.push<Int>(list: mut axes, value: read 0)
+    List.push<Int>(list: mut axes, value: read 2)
+    let s = Tensor.sum_axes(t: read t, axes: read axes)?
+    dump(t: read s)?
+    let p = Tensor.prod_axes(t: read t, axes: read axes)?
+    dump(t: read p)?
+    let mx = Tensor.max_axes(t: read t, axes: read axes)?
+    dump(t: read mx)?
+    let mn = Tensor.min_axes(t: read t, axes: read axes)?
+    dump(t: read mn)?
+    let me = Tensor.mean_axes(t: read t, axes: read axes)?
+    dump(t: read me)?
+    // empty axes -> identity (copy).
+    local none = List<Int>.new()
+    let id = Tensor.sum_axes(t: read t, axes: read none)?
+    dump(t: read id)?
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-multi-axis.rss",
+        "rsscript_parity_tensor_multi_axis",
+        source,
+    );
+}
+
+#[test]
+fn parity_tensor_multi_axis_error() {
+    let source = r#"
+features: native, local
+
+fn main() -> Result<Unit, TensorError> {
+    let t = Tensor.from_f32_slice(data: read [1.0, 2.0, 3.0, 4.0], shape: read [2, 2])?
+    local axes = List<Int>.new()
+    List.push<Int>(list: mut axes, value: read 0)
+    List.push<Int>(list: mut axes, value: read 0)
+    local bad = Tensor.sum_axes(t: read t, axes: read axes)
+    match bad {
+        Ok(_) => {
+            Log.write(message: read "ok")
+        }
+        Err(error) => {
+            Log.write(message: read TensorError.message(error: read error))
+        }
+    }
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-multi-axis-error.rss",
+        "rsscript_parity_tensor_multi_axis_error",
+        source,
+    );
+}
+
+#[test]
+fn parity_tensor_math_unary() {
+    let source = r#"
+features: native, local
+
+fn dump(t: read Tensor) -> Result<Unit, TensorError> {
+    Log.write(message: read String.from_int(value: Tensor.dtype_code(t: read t)))
+    let values = Tensor.to_f32_slice(tensor: read t)?
+    let mut index = 0
+    while index < List.len(list: read values) {
+        Log.write(message: read Float.to_string(value: read List.get(list: read values, index: index)))
+        index = index + 1
+    }
+    return Ok(Unit)
+}
+
+fn main() -> Result<Unit, TensorError> {
+    let t = Tensor.from_f32_slice(data: read [1.0, 2.0, 4.0, 8.0], shape: read [2, 2])?
+    dump(t: read Tensor.reciprocal(t: read t))?
+    dump(t: read Tensor.exp2(t: read t))?
+    dump(t: read Tensor.log2(t: read t))?
+    dump(t: read Tensor.rsqrt(t: read t))?
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-math-unary.rss",
+        "rsscript_parity_tensor_math_unary",
+        source,
+    );
+}
+
+#[test]
+fn parity_tensor_pow() {
+    let source = r#"
+features: native, local
+
+fn dump(t: read Tensor) -> Result<Unit, TensorError> {
+    Log.write(message: read String.from_int(value: Tensor.dtype_code(t: read t)))
+    let dims = Tensor.shape(tensor: read t)?
+    let mut d = 0
+    while d < List.len(list: read dims) {
+        Log.write(message: read String.from_int(value: List.get(list: read dims, index: d)))
+        d = d + 1
+    }
+    let values = Tensor.to_f32_slice(tensor: read t)?
+    let mut index = 0
+    while index < List.len(list: read values) {
+        Log.write(message: read Float.to_string(value: read List.get(list: read values, index: index)))
+        index = index + 1
+    }
+    return Ok(Unit)
+}
+
+fn main() -> Result<Unit, TensorError> {
+    let a = Tensor.from_f32_slice(data: read [2.0, 3.0, 4.0, 5.0], shape: read [2, 2])?
+    // broadcast a^2 (scalar exponent shape [1]).
+    let two = Tensor.from_f32_slice(data: read [2.0], shape: read [1])?
+    let sq = Tensor.pow(a: read a, b: read two)?
+    dump(t: read sq)?
+    // equal-shape elementwise power.
+    let e = Tensor.from_f32_slice(data: read [3.0, 2.0, 0.0, 1.0], shape: read [2, 2])?
+    let p = Tensor.pow(a: read a, b: read e)?
+    dump(t: read p)?
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-pow.rss",
+        "rsscript_parity_tensor_pow",
+        source,
+    );
+}

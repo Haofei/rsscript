@@ -216,6 +216,50 @@ pub native fn Tensor.gather(
     axis: Int,
     indices: read Tensor,
 ) -> Result<fresh Tensor, TensorError>
+// reductions+math (ops C)
+// Product / min over one axis, removing it. prod -> F32; min -> input dtype.
+// Error on an out-of-range axis.
+pub native fn Tensor.prod_axis(t: read Tensor, axis: Int) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+pub native fn Tensor.min_axis(t: read Tensor, axis: Int) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+// Multi-axis reductions: remove ALL listed axes (must be distinct & in range).
+// sum/prod/mean -> F32; max/min -> input dtype. An empty axes list is identity
+// (returns a copy). Error on a duplicate or out-of-range axis.
+pub native fn Tensor.sum_axes(t: read Tensor, axes: read List<Int>) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+pub native fn Tensor.prod_axes(t: read Tensor, axes: read List<Int>) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+pub native fn Tensor.max_axes(t: read Tensor, axes: read List<Int>) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+pub native fn Tensor.min_axes(t: read Tensor, axes: read List<Int>) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+pub native fn Tensor.mean_axes(t: read Tensor, axes: read List<Int>) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+// Math unary ops, same shape out, all -> F32. Infallible (no Result).
+// reciprocal: 1/x. exp2: 2^x. log2: log2(x). rsqrt: 1/sqrt(x).
+pub native fn Tensor.reciprocal(t: read Tensor) -> fresh Tensor
+    effects(native)
+
+pub native fn Tensor.exp2(t: read Tensor) -> fresh Tensor
+    effects(native)
+
+pub native fn Tensor.log2(t: read Tensor) -> fresh Tensor
+    effects(native)
+
+pub native fn Tensor.rsqrt(t: read Tensor) -> fresh Tensor
+    effects(native)
+
+// Elementwise power a^b with broadcasting. Output dtype F32. Error if not
+// broadcast-compatible.
+pub native fn Tensor.pow(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
     effects(native)
 
 pub fn TensorError.message(error: read TensorError) -> fresh String
