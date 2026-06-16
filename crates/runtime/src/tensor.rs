@@ -2366,6 +2366,9 @@ mod tests {
     }
 
     #[test]
+    // Literal π/2 and π test inputs for the sin kernel; the lint wants the
+    // `consts::PI` constant, but these are deliberate fixed sample points.
+    #[allow(clippy::approx_constant)]
     fn sin_matches_libm() {
         let t = tensor_from_f32_slice(&[0.0, 1.5707964, 3.1415927], &[3]).unwrap();
         let out = tensor_to_f32_slice(&tensor_sin(&t)).unwrap();

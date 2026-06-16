@@ -64,6 +64,18 @@ pub fn reg_vm_eval_source_main(file: &str, source: &str) -> Result<EvalOutput, E
     reg_vm_eval_source_main_with_args(file, source, args)
 }
 
+/// Compile `source` and run `main` under explicit sandbox resource limits.
+/// Convenience wrapper around [`RegVmExecutable::eval_main_with_limits`] for the
+/// untrusted/agent-facing path (and for the hostile-input tests).
+pub fn reg_vm_eval_source_main_with_limits(
+    file: &str,
+    source: &str,
+    args: impl IntoIterator<Item = impl Into<String>>,
+    limits: VmLimits,
+) -> Result<EvalOutput, EvalError> {
+    reg_vm_compile_source(file, source)?.eval_main_with_limits(args, limits)
+}
+
 /// Tier-0 JIT entry point.
 ///
 /// Compiles the source, runs the per-function JIT-eligibility analysis (the seam
@@ -1445,6 +1457,34 @@ impl RegVmExecutable {
             vm.stream_flushed = vm.stdout.len();
         }
         let value = result?;
+        let display_value = value.display();
+        let native_value = value.native_value();
+        Ok(EvalOutput {
+            value: display_value.clone(),
+            display_value,
+            native_value,
+            stdout: vm.stdout,
+            stderr: vm.stderr,
+        })
+    }
+
+    /// Run `main` under explicit sandbox resource limits ([`VmLimits`]). This is
+    /// the agent-facing entry point: untrusted callers tighten the depth cap and
+    /// turn on the step/memory budgets so a hostile program returns a clean
+    /// `EvalError::Runtime` instead of crashing or hanging the host. Output is
+    /// otherwise identical to [`Self::eval_main_with_args`].
+    pub fn eval_main_with_limits(
+        &self,
+        args: impl IntoIterator<Item = impl Into<String>>,
+        limits: VmLimits,
+    ) -> Result<EvalOutput, EvalError> {
+        let mut vm = RegVm::new(
+            Rc::clone(&self.unit),
+            args.into_iter().map(Into::into).collect(),
+            std::iter::empty::<(String, NativeInterpreterFn)>().collect(),
+        );
+        vm.set_limits(limits);
+        let value = vm.run_program("main")?;
         let display_value = value.display();
         let native_value = value.native_value();
         Ok(EvalOutput {
@@ -6278,6 +6318,59 @@ struct TaskSlot {
     resume_dst: usize,
 }
 
+/// Sandbox resource limits for the reg-VM. rsscript runs untrusted,
+/// agent-generated code, so the VM must never crash or hang the host: deep
+/// recursion, infinite loops, and runaway allocation all become recoverable
+/// `EvalError::Runtime` errors instead of a SIGSEGV / hang / OOM-kill.
+///
+/// Defaults are tuned so trusted long-running ML training loops are unaffected:
+/// the depth cap is generous (never trips real code, always catches
+/// `fn f(){f()}`), and the step/memory budgets are off unless a caller opts in
+/// (typically only the untrusted/agent-facing entry points).
+#[derive(Debug, Clone, Copy)]
+pub struct VmLimits {
+    /// Maximum simultaneous call frames (recursion depth). Default-on and
+    /// generous; checked before every frame push. `usize::MAX` effectively
+    /// disables the cap.
+    pub max_depth: usize,
+    /// Maximum number of executed instructions over the whole run. `None`
+    /// (default) = unlimited. When `Some(limit)`, a run that executes more than
+    /// `limit` instructions fails with a "step budget exceeded" error — this is
+    /// what stops `while true {}`.
+    pub step_budget: Option<u64>,
+    /// Best-effort ceiling on bytes held in VM-managed containers (register
+    /// stacks + list/map growth). `None` (default) = no accounting (near-zero
+    /// overhead). See [`RegVm::live_bytes`] for the accounting approximation.
+    pub mem_budget: Option<usize>,
+}
+
+/// Default recursion-depth cap: generous enough never to trip real code (deep
+/// but finite recursion, the ML framework's call chains) yet finite, so an
+/// unbounded self-recursive program is caught long before it can overflow the
+/// native stack.
+const DEFAULT_MAX_DEPTH: usize = 16_384;
+
+/// Estimated bytes charged per list element for the best-effort memory ceiling.
+/// Each list slot stores one `VmValue` inline (the heap pointed at by `Rc`
+/// containers is counted again when *those* grow, so this under-counts deeply
+/// nested structures — acceptable for a best-effort ceiling whose only job is to
+/// catch runaway growth before the host OOMs).
+const LIST_ELEM_BYTES: usize = std::mem::size_of::<VmValue>();
+
+/// Estimated bytes charged per map entry: a key plus a `VmValue`, with hashmap
+/// bookkeeping folded into the key term as a rough fudge factor.
+const MAP_ENTRY_BYTES: usize = std::mem::size_of::<VmValue>() * 2;
+
+impl Default for VmLimits {
+    fn default() -> Self {
+        Self {
+            max_depth: DEFAULT_MAX_DEPTH,
+            step_budget: None,
+            mem_budget: None,
+        }
+    }
+}
+
 struct RegVm {
     unit: Rc<RegUnit>,
     args: Vec<String>,
@@ -6327,6 +6420,22 @@ struct RegVm {
     /// JIT every supported function, ignoring the has-loop heuristic (used by the
     /// differential tests so the whole covered instruction subset is verified).
     jit_force_all: bool,
+    /// Sandbox resource limits (recursion depth / step budget / memory ceiling).
+    /// Defaults leave trusted runs unaffected; agent-facing callers tighten them.
+    limits: VmLimits,
+    /// Instructions executed so far in this run (the step budget's fuel gauge).
+    /// Only consulted when `limits.step_budget` is `Some`; the unconditional
+    /// increment is the entire overhead when the budget is off.
+    steps: u64,
+    /// Best-effort running estimate of bytes held in VM-managed containers.
+    /// Approximation: we add the estimated size of *growth* (register-stack
+    /// resizes and list/map element/entry additions) and do NOT subtract frees,
+    /// so this is a cumulative high-water-ish figure, not a precise live-set. It
+    /// exists only to trip `limits.mem_budget`; when that is `None` we skip all
+    /// accounting so the overhead is zero. Accounted sites: `ensure_regs`,
+    /// `MakeList`/`MakeMap` literal construction, and the `ListPush`/`ListAppend`
+    /// growth handlers (the dominant allocators for adversarial blow-ups).
+    live_bytes: usize,
     /// Native (Cranelift) JIT state, `Some` when the native tier is enabled. The
     /// native tier compiles the integer/control core to machine code and is tried
     /// before the tier-0 executor; anything it can't compile (or bails on) falls
@@ -6644,9 +6753,71 @@ impl RegVm {
             tensors: HashMap::new(),
             jit_enabled: false,
             jit_force_all: false,
+            limits: VmLimits::default(),
+            steps: 0,
+            live_bytes: 0,
             #[cfg(feature = "native-jit")]
             native: None,
         }
+    }
+
+    /// Apply sandbox resource limits to this VM before it runs. Replaces the
+    /// defaults wholesale (default construction already uses [`VmLimits::default`]
+    /// — depth cap on, step/memory budgets off — so existing callers are
+    /// unaffected and only agent-facing entry points need call this).
+    fn set_limits(&mut self, limits: VmLimits) {
+        self.limits = limits;
+    }
+
+    /// Push a call frame, enforcing the recursion-depth cap first. `frames.len()`
+    /// is the current depth; a successful push would make it `len + 1`, so we
+    /// reject when that would exceed `limits.max_depth`. Centralizes the check so
+    /// every frame-push site (sync `run_frame`, `CallKnown`, `CallDynamic`) is
+    /// covered identically. Returns the depth error as a value, never panics.
+    fn push_frame(&mut self, frame: Frame) -> Result<(), EvalError> {
+        if self.frames.len() + 1 > self.limits.max_depth {
+            let max_depth = self.limits.max_depth;
+            return Err(EvalError::Runtime(format!(
+                "recursion depth limit exceeded ({max_depth} frames)"
+            )));
+        }
+        self.frames.push(frame);
+        Ok(())
+    }
+
+    /// Charge one instruction against the step budget. Always increments the
+    /// fuel gauge (the single unconditional add is the whole cost when the budget
+    /// is off), and — only when `limits.step_budget` is `Some` — trips once the
+    /// count exceeds the limit. This is what stops an infinite loop (`while true
+    /// {}`) from hanging the host: it returns a clean error instead.
+    #[inline]
+    fn tick(&mut self) -> Result<(), EvalError> {
+        self.steps += 1;
+        if let Some(limit) = self.limits.step_budget
+            && self.steps > limit
+        {
+            return Err(EvalError::Runtime(format!(
+                "step budget exceeded ({limit} instructions)"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Account `bytes` of container growth against the memory ceiling. A no-op
+    /// (no add, no check) when `limits.mem_budget` is `None`, so the off path is
+    /// near-free. When a budget is set and the cumulative estimate exceeds it,
+    /// returns the memory-limit error. Best-effort: see [`RegVm::live_bytes`].
+    #[inline]
+    fn account_bytes(&mut self, bytes: usize) -> Result<(), EvalError> {
+        if let Some(limit) = self.limits.mem_budget {
+            self.live_bytes = self.live_bytes.saturating_add(bytes);
+            if self.live_bytes > limit {
+                return Err(EvalError::Runtime(format!(
+                    "memory limit exceeded ({limit} bytes)"
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Append program output to the captured `stdout` buffer, and — when live
@@ -6889,6 +7060,7 @@ impl RegVm {
     ) -> Result<VmValue, EvalError> {
         let mut ip = 0usize;
         while let Some(instr) = func.code.get(ip) {
+            self.tick()?;
             ip += 1;
             // Cross-function call: eligibility proved the callee cannot suspend and
             // the call graph is acyclic, so drive it to completion on a fresh frame
@@ -6902,7 +7074,7 @@ impl RegVm {
             {
                 let callee = Rc::clone(&unit.functions[*callee_id]);
                 let next_base = base + func.regs;
-                self.prepare_frame(next_base, callee.regs);
+                self.prepare_frame(next_base, callee.regs)?;
                 for (index, reg) in args.iter().enumerate() {
                     let value = self.reg(base + *reg).clone();
                     self.set_reg(next_base + index, value);
@@ -7050,6 +7222,7 @@ impl RegVm {
                 );
             }
             RegInstr::MakeList { dst, items } => {
+                self.account_bytes(items.len() * LIST_ELEM_BYTES)?;
                 let mut list = Vec::with_capacity(items.len());
                 for reg in items {
                     list.push(self.reg(base + *reg).clone());
@@ -7068,6 +7241,7 @@ impl RegVm {
                 );
             }
             RegInstr::MakeMap { dst, entries } => {
+                self.account_bytes(entries.len() * MAP_ENTRY_BYTES)?;
                 let mut map = ValueMap::with_capacity_and_hasher(entries.len(), Default::default());
                 for (key, value) in entries {
                     let key = map_key_from_value(self.reg(base + *key))?;
@@ -7339,6 +7513,10 @@ impl RegVm {
                 self.set_reg(base + *dst, VmValue::Int(len as i64));
             }
             RegInstr::ListPush { dst, list, value } => {
+                // Account one element of growth before the push: this is the
+                // dominant adversarial blow-up (`while true { list.push(x) }`),
+                // so the memory ceiling trips here.
+                self.account_bytes(LIST_ELEM_BYTES)?;
                 let list = expect_list_ref(self.reg(base + *list))?;
                 let value = self.reg(base + *value).clone();
                 list.borrow_mut().push(value);
@@ -7349,6 +7527,7 @@ impl RegVm {
                 // source first (handles append-to-self), then extend the
                 // receiver's existing buffer so a `mut` param propagates.
                 let append_values = expect_list_ref(self.reg(base + *values))?.borrow().clone();
+                self.account_bytes(append_values.len() * LIST_ELEM_BYTES)?;
                 expect_list_ref(self.reg(base + *list))?
                     .borrow_mut()
                     .extend(append_values);
@@ -7464,18 +7643,25 @@ impl RegVm {
 
     /// Grow the shared register stack so that `stack[..upto]` is addressable.
     /// The stack only ever grows; frames are reused in place.
-    fn ensure_regs(&mut self, upto: usize) {
+    fn ensure_regs(&mut self, upto: usize) -> Result<(), EvalError> {
         if self.stack.len() < upto {
+            let grew = upto - self.stack.len();
             self.stack.resize(upto, VmValue::Unit);
             self.written.resize(upto, false);
+            // Account the shared register stack's growth: one `VmValue` slot plus
+            // the `written` bool per new register. Deep recursion that slips under
+            // the depth cap (huge per-frame register windows) is still bounded.
+            self.account_bytes(grew * (std::mem::size_of::<VmValue>() + 1))?;
         }
+        Ok(())
     }
 
-    fn prepare_frame(&mut self, base: usize, regs: usize) {
-        self.ensure_regs(base + regs);
+    fn prepare_frame(&mut self, base: usize, regs: usize) -> Result<(), EvalError> {
+        self.ensure_regs(base + regs)?;
         for written in &mut self.written[base..base + regs] {
             *written = false;
         }
+        Ok(())
     }
 
     #[inline(always)]
@@ -7533,15 +7719,15 @@ impl RegVm {
         function: Rc<RegFunction>,
         base: usize,
     ) -> Result<VmValue, EvalError> {
-        self.ensure_regs(base + function.regs);
+        self.ensure_regs(base + function.regs)?;
         let floor = self.frames.len();
-        self.frames.push(Frame {
+        self.push_frame(Frame {
             func: function,
             ip: 0,
             base,
             ret_dst: usize::MAX,
             mut_writeback: Vec::new(),
-        });
+        })?;
         match self.drive(unit, floor)? {
             Outcome::Completed(value) => Ok(value),
             Outcome::Suspended => Err(EvalError::Runtime(
@@ -7926,6 +8112,7 @@ impl RegVm {
             }
 
             while let Some(instr) = func.code.get(ip) {
+                self.tick()?;
                 ip += 1;
                 // Pure instructions (loads, arithmetic, jumps, matches, heap
                 // construction, …) run through the shared `try_exec_pure`, the one
@@ -7955,7 +8142,7 @@ impl RegVm {
                             mut_args,
                         } => {
                             let callee = Rc::clone(&unit.functions[*callee_id]);
-                            self.prepare_frame(next_base, callee.regs);
+                            self.prepare_frame(next_base, callee.regs)?;
                             for (index, reg) in args.iter().enumerate() {
                                 let value = self.reg(base + *reg).clone();
                                 self.set_reg(next_base + index, value);
@@ -7971,13 +8158,13 @@ impl RegVm {
                             // re-enter the driver loop instead of recursing on the host
                             // stack — so an `await` deep in this chain can later suspend it.
                             self.frames.last_mut().expect("active frame").ip = ip;
-                            self.frames.push(Frame {
+                            self.push_frame(Frame {
                                 func: callee,
                                 ip: 0,
                                 base: next_base,
                                 ret_dst: base + *dst,
                                 mut_writeback,
-                            });
+                            })?;
                             continue 'frames;
                         }
                         RegInstr::CallDynamic {
@@ -8006,7 +8193,7 @@ impl RegVm {
                                 )));
                             };
                             let callee = Rc::clone(&unit.functions[callee_id]);
-                            self.prepare_frame(next_base, callee.regs);
+                            self.prepare_frame(next_base, callee.regs)?;
                             for (index, reg) in args.iter().enumerate() {
                                 let value = self.reg(base + *reg).clone();
                                 self.set_reg(next_base + index, value);
@@ -8016,13 +8203,13 @@ impl RegVm {
                                 .map(|&pos| (base + args[pos], next_base + pos))
                                 .collect();
                             self.frames.last_mut().expect("active frame").ip = ip;
-                            self.frames.push(Frame {
+                            self.push_frame(Frame {
                                 func: callee,
                                 ip: 0,
                                 base: next_base,
                                 ret_dst: base + *dst,
                                 mut_writeback,
-                            });
+                            })?;
                             continue 'frames;
                         }
                         RegInstr::SpawnTask {
@@ -8453,7 +8640,7 @@ impl RegVm {
             return Ok(());
         };
         let callee = Rc::clone(&unit.functions[function_id]);
-        self.prepare_frame(base, callee.regs);
+        self.prepare_frame(base, callee.regs)?;
         for (field, value) in data.iter() {
             if let Some(reg) = callee.local_regs.get(field.as_ref()) {
                 self.set_reg(base + *reg, value.clone());
@@ -8830,7 +9017,7 @@ impl RegVm {
         base: usize,
     ) -> Result<VmValue, EvalError> {
         let callee = Rc::clone(&unit.functions[closure.function]);
-        self.prepare_frame(base, callee.regs);
+        self.prepare_frame(base, callee.regs)?;
         for (index, capture) in closure.captures.iter().enumerate() {
             self.set_reg(base + index, capture.clone());
         }
@@ -8850,7 +9037,7 @@ impl RegVm {
         base: usize,
     ) -> Result<VmValue, EvalError> {
         let callee = Rc::clone(&unit.functions[closure.function]);
-        self.prepare_frame(base, callee.regs);
+        self.prepare_frame(base, callee.regs)?;
         for (index, capture) in closure.captures.iter().enumerate() {
             self.set_reg(base + index, capture.clone());
         }
@@ -8867,7 +9054,7 @@ impl RegVm {
         base: usize,
     ) -> Result<VmValue, EvalError> {
         let callee = Rc::clone(&unit.functions[closure.function]);
-        self.prepare_frame(base, callee.regs);
+        self.prepare_frame(base, callee.regs)?;
         for (index, capture) in closure.captures.iter().enumerate() {
             self.set_reg(base + index, capture.clone());
         }
@@ -8887,7 +9074,7 @@ impl RegVm {
         base: usize,
     ) -> Result<VmValue, EvalError> {
         let callee = Rc::clone(&unit.functions[closure.function]);
-        self.prepare_frame(base, callee.regs);
+        self.prepare_frame(base, callee.regs)?;
         for (index, capture) in closure.captures.iter().enumerate() {
             self.set_reg(base + index, capture.clone());
         }
@@ -8905,7 +9092,7 @@ impl RegVm {
         base: usize,
     ) -> Result<VmValue, EvalError> {
         let callee = Rc::clone(&unit.functions[closure.function]);
-        self.prepare_frame(base, callee.regs);
+        self.prepare_frame(base, callee.regs)?;
         for (index, capture) in closure.captures.iter().enumerate() {
             self.set_reg(base + index, capture.clone());
         }
