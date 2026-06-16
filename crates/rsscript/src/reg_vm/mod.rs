@@ -2108,6 +2108,11 @@ enum RegIntrinsic {
     TensorCastI32,
     TensorCastBool,
     TensorDtypeCode,
+    // movement+gather (ops B)
+    TensorPad,
+    TensorShrink,
+    TensorFlip,
+    TensorGather,
     TensorErrorMessage,
     CharCompare,
     CharFromCode,
@@ -5375,6 +5380,11 @@ fn qualified_intrinsic(namespace: &str, name: &str) -> Option<RegIntrinsic> {
         ("Tensor", "cast_i32") => Some(RegIntrinsic::TensorCastI32),
         ("Tensor", "cast_bool") => Some(RegIntrinsic::TensorCastBool),
         ("Tensor", "dtype_code") => Some(RegIntrinsic::TensorDtypeCode),
+        // movement+gather (ops B)
+        ("Tensor", "pad") => Some(RegIntrinsic::TensorPad),
+        ("Tensor", "shrink") => Some(RegIntrinsic::TensorShrink),
+        ("Tensor", "flip") => Some(RegIntrinsic::TensorFlip),
+        ("Tensor", "gather") => Some(RegIntrinsic::TensorGather),
         ("TensorError", "message") => Some(RegIntrinsic::TensorErrorMessage),
         ("Char", "compare") => Some(RegIntrinsic::CharCompare),
         ("Char", "from_code") => Some(RegIntrinsic::CharFromCode),
@@ -9467,6 +9477,37 @@ impl RegVm {
             RegIntrinsic::TensorDtypeCode => {
                 let t = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::Int(rsscript_runtime::tensor_dtype_code(&t)))
+            }
+            // movement+gather (ops B)
+            RegIntrinsic::TensorPad
+            | RegIntrinsic::TensorShrink
+            | RegIntrinsic::TensorFlip => {
+                let t = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let amounts = expect_int_list_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let result = match intrinsic {
+                    RegIntrinsic::TensorPad => rsscript_runtime::tensor_pad(&t, &amounts),
+                    RegIntrinsic::TensorShrink => rsscript_runtime::tensor_shrink(&t, &amounts),
+                    _ => rsscript_runtime::tensor_flip(&t, &amounts),
+                };
+                Ok(json_result(match result {
+                    Ok(tensor) => Ok(self.store_tensor(tensor)),
+                    Err(error) => Err(tensor_error_value(
+                        rsscript_runtime::tensor_error_message(&error),
+                    )),
+                }))
+            }
+            RegIntrinsic::TensorGather => {
+                let data = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let axis = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let indices = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
+                Ok(json_result(
+                    match rsscript_runtime::tensor_gather(&data, axis, &indices) {
+                        Ok(tensor) => Ok(self.store_tensor(tensor)),
+                        Err(error) => Err(tensor_error_value(
+                            rsscript_runtime::tensor_error_message(&error),
+                        )),
+                    },
+                ))
             }
             RegIntrinsic::CharCompare | RegIntrinsic::CharFromCode | RegIntrinsic::CharIsAlphanumeric | RegIntrinsic::CharIsAlpha | RegIntrinsic::CharIsDigit | RegIntrinsic::CharIsLower | RegIntrinsic::CharIsUpper | RegIntrinsic::CharIsWhitespace | RegIntrinsic::CharToCode | RegIntrinsic::CharToLower | RegIntrinsic::CharToString | RegIntrinsic::CharToUpper => self.exec_char_intrinsics(unit, intrinsic, args, base, next_base),
             RegIntrinsic::ClockNow => Ok(instant_value(clock_system_unix_ms())),
