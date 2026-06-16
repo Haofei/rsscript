@@ -1453,7 +1453,7 @@ build_execution_default = "sometimes"
 #[test]
 fn reir_spec_keeps_os_close_as_descriptor_cleanup_not_external_capability() {
     let root = common::workspace_root();
-    let spec = fs::read_to_string(root.join("docs/Review_Evidence_IR_Spec_v0.2.md"))
+    let spec = fs::read_to_string(root.join("docs/spec/Review_Evidence_IR_Spec_v0.2.md"))
         .expect("REIR spec should be readable");
 
     assert!(spec.contains("`OS.close`"));

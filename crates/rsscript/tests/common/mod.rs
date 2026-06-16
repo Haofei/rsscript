@@ -47,7 +47,7 @@ pub fn package_manager_spec_path() -> PathBuf {
 /// Find exactly one file in `docs/` whose name starts with `prefix` and ends
 /// with `suffix` (the span between them is the version and is not constrained).
 fn find_versioned_doc(prefix: &str, suffix: &str) -> PathBuf {
-    let docs = workspace_root().join("docs");
+    let docs = workspace_root().join("docs").join("spec");
     let mut matches: Vec<PathBuf> = fs::read_dir(&docs)
         .unwrap_or_else(|error| panic!("docs/ should be readable: {error}"))
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))

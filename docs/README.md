@@ -2,27 +2,46 @@
 
 Normative specifications and design drafts for RSScript. The project root keeps
 only `README.md` (overview) and `AGENT.md` (the prompt-sized language guide for
-LLMs); everything else lives here.
+LLMs); everything else lives here, grouped into categorized subfolders.
 
-## Normative specs
+## Spec
 
 | Doc | What it governs |
 |-----|-----------------|
-| [RSScript_v0.7_Spec.md](RSScript_v0.7_Spec.md) | The language. Opens with a binding **Constitution** (Articles I–IX) that overrides every chapter. |
-| [RSScript_Package_Manager_Design_v0.6.md](RSScript_Package_Manager_Design_v0.6.md) | The package manager (`rss pkg`): `.rssi` contracts, `rsspkg.toml`/`.lock`, semantic dependency review. |
-| [Review_Evidence_IR_Spec_v0.2.md](Review_Evidence_IR_Spec_v0.2.md) | REIR — the review-evidence IR consumed by `--reir` tooling and CI gates. |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Module boundaries of the checker/lowering implementation. |
-| [DEVELOPMENT.md](DEVELOPMENT.md) | Local verification flow and development discipline. |
-| [DOCKER.md](DOCKER.md) | Containerized, cross-platform dev environment (Docker / VS Code / Codespaces). |
-| [spec-todo.md](spec-todo.md) | Prioritized list of unimplemented spec surface (the §3.2 / §20.1 superset). |
-| [cross-isolate-design.md](cross-isolate-design.md) | Feasibility + smallest-sound-slice plan for the cross-isolate message API (§20.2-3): message-channel core landed, multi-heap isolates still future. |
-| [ml-perf-todo.md](ml-perf-todo.md) | ML-framework perf plan: native tensor kernels (fix VM big-matrix cliff) + AOT build-time levers. |
+| [RSScript_v0.7_Spec.md](spec/RSScript_v0.7_Spec.md) | The language. Opens with a binding **Constitution** (Articles I–IX) that overrides every chapter. |
+| [RSScript_Package_Manager_Design_v0.6.md](spec/RSScript_Package_Manager_Design_v0.6.md) | The package manager (`rss pkg`): `.rssi` contracts, `rsspkg.toml`/`.lock`, semantic dependency review. |
+| [Review_Evidence_IR_Spec_v0.2.md](spec/Review_Evidence_IR_Spec_v0.2.md) | REIR — the review-evidence IR consumed by `--reir` tooling and CI gates. |
 
-## Implementation-planning specs (not yet normative)
+## Architecture
+
+| Doc | What it governs |
+|-----|-----------------|
+| [ARCHITECTURE.md](architecture/ARCHITECTURE.md) | Module boundaries of the checker/lowering implementation. |
+| [vm-architecture.md](architecture/vm-architecture.md) | Register VM design: bytecode, dispatch, and runtime layout. |
+| [jit-roadmap.md](architecture/jit-roadmap.md) | Phased plan for the native (Cranelift) baseline JIT. |
+
+## Ledgers
+
+| Doc | What it governs |
+|-----|-----------------|
+| [jit-semantics-ledger.md](ledgers/jit-semantics-ledger.md) | Per-op record of JIT/VM semantic parity decisions. |
+| [rss-selfhost-ledger.md](ledgers/rss-selfhost-ledger.md) | Self-hosting progress ledger for the RSScript-in-RSScript toolchain. |
+
+## Development
+
+| Doc | What it governs |
+|-----|-----------------|
+| [DEVELOPMENT.md](development/DEVELOPMENT.md) | Local verification flow and development discipline. |
+| [DOCKER.md](development/DOCKER.md) | Containerized, cross-platform dev environment (Docker / VS Code / Codespaces). |
+
+## Planning
 
 | Doc | Idea |
 |-----|------|
-| [RSScript_AI_Generation_Feedback_v0.1.md](RSScript_AI_Generation_Feedback_v0.1.md) | Agent-facing generation oracle plus fast interpreter feedback loop for AI-generated RSScript. |
+| [spec-todo.md](planning/spec-todo.md) | Prioritized list of unimplemented spec surface (the §3.2 / §20.1 superset). |
+| [ml-perf-todo.md](planning/ml-perf-todo.md) | ML-framework perf plan: native tensor kernels (fix VM big-matrix cliff) + AOT build-time levers. |
+| [cross-isolate-design.md](planning/cross-isolate-design.md) | Feasibility + smallest-sound-slice plan for the cross-isolate message API (§20.2-3): message-channel core landed, multi-heap isolates still future. |
+| [RSScript_AI_Generation_Feedback_v0.1.md](planning/RSScript_AI_Generation_Feedback_v0.1.md) | Agent-facing generation oracle plus fast interpreter feedback loop for AI-generated RSScript. |
 
 ## Conventions
 
