@@ -506,48 +506,62 @@ fn collect_all_async_let_spans(block: &Block, async_lets: &mut Vec<crate::diagno
     }
 }
 
-fn collect_all_async_let_spans_expr(expr: &Expr, async_lets: &mut Vec<crate::diagnostic::Span>) {
+/// A directly-nested child of an expression: either another expression
+/// (including the operand of `Await`/`Effect`/`Spawn`/etc.) or a block (closure
+/// bodies and match-arm bodies).
+enum AsyncExprChild<'a> {
+    Expr(&'a Expr),
+    Block(&'a Block),
+}
+
+/// Shared structural descent over an expression's children, in the canonical
+/// order used by every async-let collector. `visit` is invoked once per direct
+/// child and is responsible for its own recursion.
+fn walk_async_expr_children<F>(expr: &Expr, mut visit: F)
+where
+    F: FnMut(AsyncExprChild<'_>),
+{
     match expr {
         Expr::Binary { left, right, .. } => {
-            collect_all_async_let_spans_expr(left, async_lets);
-            collect_all_async_let_spans_expr(right, async_lets);
+            visit(AsyncExprChild::Expr(left));
+            visit(AsyncExprChild::Expr(right));
         }
-        Expr::Field { base, .. } => collect_all_async_let_spans_expr(base, async_lets),
+        Expr::Field { base, .. } => visit(AsyncExprChild::Expr(base)),
         Expr::Index { base, index, .. } => {
-            collect_all_async_let_spans_expr(base, async_lets);
-            collect_all_async_let_spans_expr(index, async_lets);
+            visit(AsyncExprChild::Expr(base));
+            visit(AsyncExprChild::Expr(index));
         }
         Expr::Call { args, .. } => {
             for arg in args {
-                collect_all_async_let_spans_expr(&arg.value, async_lets);
+                visit(AsyncExprChild::Expr(&arg.value));
             }
         }
         Expr::Effect { value, .. }
         | Expr::Manage { value, .. }
         | Expr::Spawn { value, .. }
         | Expr::Await { value, .. }
-        | Expr::Try { value, .. } => collect_all_async_let_spans_expr(value, async_lets),
-        Expr::Closure { body, .. } => collect_all_async_let_spans(body, async_lets),
+        | Expr::Try { value, .. } => visit(AsyncExprChild::Expr(value)),
+        Expr::Closure { body, .. } => visit(AsyncExprChild::Block(body)),
         Expr::Match { value, arms, .. } => {
-            collect_all_async_let_spans_expr(value, async_lets);
+            visit(AsyncExprChild::Expr(value));
             for arm in arms {
-                collect_all_async_let_spans(&arm.body, async_lets);
+                visit(AsyncExprChild::Block(&arm.body));
             }
         }
         Expr::ObjectLiteral { fields, .. } => {
             for field in fields {
-                collect_all_async_let_spans_expr(&field.value, async_lets);
+                visit(AsyncExprChild::Expr(&field.value));
             }
         }
         Expr::MapLiteral { entries, .. } => {
             for entry in entries {
-                collect_all_async_let_spans_expr(&entry.key, async_lets);
-                collect_all_async_let_spans_expr(&entry.value, async_lets);
+                visit(AsyncExprChild::Expr(&entry.key));
+                visit(AsyncExprChild::Expr(&entry.value));
             }
         }
         Expr::ArrayLiteral { items, .. } => {
             for item in items {
-                collect_all_async_let_spans_expr(item, async_lets);
+                visit(AsyncExprChild::Expr(item));
             }
         }
         Expr::Ident(_, _)
@@ -558,59 +572,21 @@ fn collect_all_async_let_spans_expr(expr: &Expr, async_lets: &mut Vec<crate::dia
     }
 }
 
+fn collect_all_async_let_spans_expr(expr: &Expr, async_lets: &mut Vec<crate::diagnostic::Span>) {
+    walk_async_expr_children(expr, |child| match child {
+        AsyncExprChild::Expr(child) => collect_all_async_let_spans_expr(child, async_lets),
+        AsyncExprChild::Block(block) => collect_all_async_let_spans(block, async_lets),
+    });
+}
+
 fn collect_task_group_async_lets_expr(
     expr: &Expr,
     async_lets: &mut Vec<(String, crate::diagnostic::Span)>,
 ) {
-    match expr {
-        Expr::Binary { left, right, .. } => {
-            collect_task_group_async_lets_expr(left, async_lets);
-            collect_task_group_async_lets_expr(right, async_lets);
-        }
-        Expr::Field { base, .. } => collect_task_group_async_lets_expr(base, async_lets),
-        Expr::Index { base, index, .. } => {
-            collect_task_group_async_lets_expr(base, async_lets);
-            collect_task_group_async_lets_expr(index, async_lets);
-        }
-        Expr::Call { args, .. } => {
-            for arg in args {
-                collect_task_group_async_lets_expr(&arg.value, async_lets);
-            }
-        }
-        Expr::Effect { value, .. }
-        | Expr::Manage { value, .. }
-        | Expr::Spawn { value, .. }
-        | Expr::Await { value, .. }
-        | Expr::Try { value, .. } => collect_task_group_async_lets_expr(value, async_lets),
-        Expr::Closure { body, .. } => collect_task_group_async_lets(body, async_lets),
-        Expr::Match { value, arms, .. } => {
-            collect_task_group_async_lets_expr(value, async_lets);
-            for arm in arms {
-                collect_task_group_async_lets(&arm.body, async_lets);
-            }
-        }
-        Expr::ObjectLiteral { fields, .. } => {
-            for field in fields {
-                collect_task_group_async_lets_expr(&field.value, async_lets);
-            }
-        }
-        Expr::MapLiteral { entries, .. } => {
-            for entry in entries {
-                collect_task_group_async_lets_expr(&entry.key, async_lets);
-                collect_task_group_async_lets_expr(&entry.value, async_lets);
-            }
-        }
-        Expr::ArrayLiteral { items, .. } => {
-            for item in items {
-                collect_task_group_async_lets_expr(item, async_lets);
-            }
-        }
-        Expr::Ident(_, _)
-        | Expr::Number(_, _)
-        | Expr::String(_, _)
-        | Expr::MultilineString(_, _)
-        | Expr::Unknown(_) => {}
-    }
+    walk_async_expr_children(expr, |child| match child {
+        AsyncExprChild::Expr(child) => collect_task_group_async_lets_expr(child, async_lets),
+        AsyncExprChild::Block(block) => collect_task_group_async_lets(block, async_lets),
+    });
 }
 
 fn collect_task_group_awaited_handles(block: &Block, awaited: &mut HashSet<String>) {
@@ -985,60 +961,17 @@ fn find_nested_task_group_await_span_expr<'a>(
 }
 
 fn collect_task_group_awaited_handles_expr(expr: &Expr, awaited: &mut HashSet<String>) {
-    match expr {
-        Expr::Await { value, .. } => {
-            if let Some(name) = await_handle_name(value) {
-                awaited.insert(name.to_string());
-            }
-            collect_task_group_awaited_handles_expr(value, awaited);
-        }
-        Expr::Binary { left, right, .. } => {
-            collect_task_group_awaited_handles_expr(left, awaited);
-            collect_task_group_awaited_handles_expr(right, awaited);
-        }
-        Expr::Field { base, .. } => collect_task_group_awaited_handles_expr(base, awaited),
-        Expr::Index { base, index, .. } => {
-            collect_task_group_awaited_handles_expr(base, awaited);
-            collect_task_group_awaited_handles_expr(index, awaited);
-        }
-        Expr::Call { args, .. } => {
-            for arg in args {
-                collect_task_group_awaited_handles_expr(&arg.value, awaited);
-            }
-        }
-        Expr::Effect { value, .. }
-        | Expr::Manage { value, .. }
-        | Expr::Spawn { value, .. }
-        | Expr::Try { value, .. } => collect_task_group_awaited_handles_expr(value, awaited),
-        Expr::Closure { body, .. } => collect_task_group_awaited_handles(body, awaited),
-        Expr::Match { value, arms, .. } => {
-            collect_task_group_awaited_handles_expr(value, awaited);
-            for arm in arms {
-                collect_task_group_awaited_handles(&arm.body, awaited);
-            }
-        }
-        Expr::ObjectLiteral { fields, .. } => {
-            for field in fields {
-                collect_task_group_awaited_handles_expr(&field.value, awaited);
-            }
-        }
-        Expr::MapLiteral { entries, .. } => {
-            for entry in entries {
-                collect_task_group_awaited_handles_expr(&entry.key, awaited);
-                collect_task_group_awaited_handles_expr(&entry.value, awaited);
-            }
-        }
-        Expr::ArrayLiteral { items, .. } => {
-            for item in items {
-                collect_task_group_awaited_handles_expr(item, awaited);
-            }
-        }
-        Expr::Ident(_, _)
-        | Expr::Number(_, _)
-        | Expr::String(_, _)
-        | Expr::MultilineString(_, _)
-        | Expr::Unknown(_) => {}
+    // Record the awaited handle name before descending into the operand; the
+    // structural descent itself (including into the `Await` operand) is shared.
+    if let Expr::Await { value, .. } = expr
+        && let Some(name) = await_handle_name(value)
+    {
+        awaited.insert(name.to_string());
     }
+    walk_async_expr_children(expr, |child| match child {
+        AsyncExprChild::Expr(child) => collect_task_group_awaited_handles_expr(child, awaited),
+        AsyncExprChild::Block(block) => collect_task_group_awaited_handles(block, awaited),
+    });
 }
 
 fn await_handle_name(expr: &Expr) -> Option<&str> {
@@ -2622,374 +2555,412 @@ impl Analyzer<'_> {
             let Item::Function(function) = item else {
                 continue;
             };
-            if function.return_ty.is_none() {
-                self.diagnostics.push(
-                    Diagnostic::error(
-                        code::MISSING_RETURN_TYPE,
-                        format!("function `{}` must declare an explicit return type.", function.name),
-                        function.span.clone(),
-                        "missing return type",
-                    )
-                    .with_cause("Public APIs must not rely on inference; this checker applies the canonical rule to all functions.")
-                    .with_fix("add_return_type", "Add `-> Unit` or another explicit return type.", "manual"),
-                );
-            }
-
             let is_qualified_method = function.name.contains('.');
             let is_protocol_method = function
                 .name
                 .split_once('.')
                 .is_some_and(|(namespace, _)| protocol_names.contains(namespace));
-            for (index, param) in function.params.iter().enumerate() {
-                if param.name == "self" && (!is_qualified_method || index != 0) {
-                    self.invalid_self_parameter_diagnostic(
-                        function,
-                        param,
-                        "`self` may only be the first parameter of a qualified method signature.",
-                    );
-                }
-                if param.ty.name.is_empty() {
-                    self.diagnostics.push(
-                        Diagnostic::error(
-                            code::MISSING_PARAMETER_TYPE,
-                            format!(
-                                "parameter `{}` in `{}` must declare an explicit type.",
-                                param.name, function.name
-                            ),
-                            param.span.clone(),
-                            "missing parameter type",
-                        )
-                        .with_fix(
-                            "add_parameter_type",
-                            "Add an explicit parameter type.",
-                            "manual",
-                        ),
-                    );
-                }
-                if param.effect.is_none() && param.ty.name == "share" {
-                    self.diagnostics.push(
-                        Diagnostic::error(
-                            code::REMOVED_SHARE_EFFECT,
-                            format!(
-                                "parameter `{}` in `{}` uses removed `share` data effect.",
-                                param.name, function.name
-                            ),
-                            param.ty.span.clone(),
-                            "removed share data effect",
-                        )
-                        .with_cause("RSScript v0.6 has exactly three data effects: `read`, `mut`, and `take`.")
-                        .with_fix(
-                            "replace_share_effect",
-                            format!(
-                                "Use `{}: read T` and add `effects(retains({}))` if the function retains it.",
-                                param.name, param.name
-                            ),
-                            "manual",
-                        ),
-                    );
-                }
-                if param.effect.is_none()
-                    && !param.ty.name.is_empty()
-                    && param.ty.name != "share"
-                    && !type_ref_is_noescape(&param.ty)
-                    && !type_ref_is_owned(&param.ty)
-                    && !type_ref_is_closure_effect_exempt(&param.ty)
-                    && !type_ref_has_surface_reference(&param.ty, self.tokens)
-                    && !type_ref_contains_name(&param.ty, "Fd")
-                    && !is_copy_type(&param.ty)
-                    && !self.is_payloadless_sum_type(&param.ty)
-                {
-                    self.diagnostics.push(
-                        Diagnostic::error(
-                            code::MISSING_PARAMETER_EFFECT,
-                            format!(
-                                "parameter `{}` in `{}` must declare `read`, `mut`, or `take`.",
-                                param.name, function.name
-                            ),
-                            param.span.clone(),
-                            "missing parameter effect",
-                        )
-                        .with_cause("Non-Copy parameters must expose their data effect in the function signature.")
-                        .with_fix(
-                            "add_parameter_effect",
-                            format!("Write `{}: read {}` or another explicit effect.", param.name, type_ref_name(&param.ty)),
-                            "manual",
-                        ),
-                    );
-                }
-            }
 
-            if is_protocol_method {
-                match function.params.first() {
-                    Some(param)
-                        if param.name == "self"
-                            && param.ty.name == "Self"
-                            && param.effect.is_some() => {}
-                    Some(param) => self.invalid_self_parameter_diagnostic(
-                        function,
-                        param,
-                        "Protocol methods must declare `self: read|mut|take Self` as their first parameter.",
-                    ),
-                    None => self.diagnostics.push(
-                        Diagnostic::error(
-                            code::INVALID_SELF_PARAMETER,
-                            format!(
-                                "protocol method `{}` must declare an explicit `self` parameter.",
-                                function.name
-                            ),
-                            function.span.clone(),
-                            "missing protocol self parameter",
-                        )
-                        .with_cause("Protocol calls are explicit capability calls, so the receiver must be review-visible as `self: read|mut|take Self`.")
-                        .with_fix(
-                            "add_protocol_self",
-                            "Add `self: read Self`, `self: mut Self`, or `self: take Self` as the first parameter.",
-                            "manual",
-                        ),
-                    ),
-                }
-            }
+            self.check_return_type_explicit(function);
+            self.check_params(function, is_qualified_method);
+            self.check_protocol_self_parameter(function, is_protocol_method);
+            self.check_function_effects(function);
+            self.check_native_effect(function);
+            self.check_retains_parameters(function);
+            self.check_pure_function_constraints(function);
+        }
+    }
 
-            for effect in &function.effects {
-                let effect_name = effect_name(effect);
-                if effect_name == "fresh" {
-                    self.diagnostics.push(
-                        Diagnostic::error(
-                            code::UNKNOWN_EFFECT,
-                            format!(
-                                "`fresh` is not a valid `effects(...)` item in `{}`.",
-                                function.name
-                            ),
-                            function.span.clone(),
-                            "fresh is a return marker",
-                        )
-                        .with_cause(
-                            "`fresh` is a return contract, not a side effect or runtime guarantee.",
-                        )
-                        .with_fix(
-                            "move_fresh_to_return_type",
-                            "Write `-> fresh T` or `-> Result<fresh T, E>` instead.",
-                            "manual",
-                        ),
-                    );
-                    continue;
-                }
-                if let Some(replacement) = removed_runtime_effect_replacement(effect_name) {
-                    self.diagnostics.push(
-                        Diagnostic::error(
-                            code::REMOVED_RUNTIME_EFFECT,
-                            format!(
-                                "`{effect_name}` is not a valid RSScript v0.6 effect in `{}`.",
-                                function.name
-                            ),
-                            function.span.clone(),
-                            "removed runtime effect",
-                        )
-                        .with_cause("v0.6 uses reductive guarantees such as `no_panic`, `noalloc`, `no_block`, and `pure`.")
-                        .with_fix(
-                            "replace_removed_effect",
-                            replacement,
-                            "manual",
-                        ),
-                    );
-                    continue;
-                }
-                let valid = effect_name == "no_panic"
-                    || effect_name == "noalloc"
-                    || effect_name == "no_block"
-                    || effect_name == "pure"
-                    || effect_name == "unsafe"
-                    || effect_name == "native"
-                    || effect_name == "parallel"
-                    || matches!(effect, EffectDecl::Retains(_));
-                if !valid {
-                    self.diagnostics.push(
-                        Diagnostic::error(
-                            code::UNKNOWN_EFFECT,
-                            format!("unknown effect `{effect_name}` in `{}`.", function.name),
-                            function.span.clone(),
-                            "unknown effect",
-                        )
-                        .with_cause("Effects are review-visible semantic contracts; unknown effect names cannot be interpreted safely.")
-                        .with_fix(
-                            "fix_unknown_effect",
-                            "Use a recognized effect such as `pure`, `no_panic`, `noalloc`, `no_block`, `native`, `unsafe`, `parallel`, or `retains(param)`.",
-                            "manual",
-                        ),
-                    );
-                }
-            }
+    /// Functions must declare an explicit return type (no inference at API
+    /// boundaries).
+    fn check_return_type_explicit(&mut self, function: &FunctionDecl) {
+        if function.return_ty.is_none() {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::MISSING_RETURN_TYPE,
+                    format!("function `{}` must declare an explicit return type.", function.name),
+                    function.span.clone(),
+                    "missing return type",
+                )
+                .with_cause("Public APIs must not rely on inference; this checker applies the canonical rule to all functions.")
+                .with_fix("add_return_type", "Add `-> Unit` or another explicit return type.", "manual"),
+            );
+        }
+    }
 
-            if function.is_native && !function_has_effect(function, "native") {
+    /// Per-parameter checks: misplaced `self`, explicit parameter type, removed
+    /// `share` effect, and required data-effect declarations.
+    fn check_params(&mut self, function: &FunctionDecl, is_qualified_method: bool) {
+        for (index, param) in function.params.iter().enumerate() {
+            if param.name == "self" && (!is_qualified_method || index != 0) {
+                self.invalid_self_parameter_diagnostic(
+                    function,
+                    param,
+                    "`self` may only be the first parameter of a qualified method signature.",
+                );
+            }
+            if param.ty.name.is_empty() {
                 self.diagnostics.push(
                     Diagnostic::error(
-                        code::FEATURE_VIOLATION,
+                        code::MISSING_PARAMETER_TYPE,
                         format!(
-                            "`native fn {}` must declare `effects(native)`.",
-                            function.name
+                            "parameter `{}` in `{}` must declare an explicit type.",
+                            param.name, function.name
                         ),
-                        function.span.clone(),
-                        "native boundary missing effect",
-                    )
-                    .with_cause(
-                        "`native fn` is an implementation boundary, and v0.6 requires that boundary to appear in the effect list for review maps and semantic diffs.",
+                        param.span.clone(),
+                        "missing parameter type",
                     )
                     .with_fix(
-                        "add_native_effect",
-                        "Add `effects(native)` to the native function declaration.",
+                        "add_parameter_type",
+                        "Add an explicit parameter type.",
                         "manual",
                     ),
                 );
             }
-
-            let param_names: HashSet<&str> = function
-                .params
-                .iter()
-                .map(|param| param.name.as_str())
-                .collect();
-            for effect in &function.effects {
-                let EffectDecl::Retains(param) = effect else {
-                    continue;
-                };
-                if !param_names.contains(param.as_str()) {
-                    self.diagnostics.push(
-                        Diagnostic::error(
-                            code::UNKNOWN_RETAINED_PARAMETER,
-                            format!(
-                                "`{}` declares `effects(retains({param}))`, but `{param}` is not a parameter.",
-                                function.name
-                            ),
-                            function.span.clone(),
-                            "unknown retained parameter",
-                        )
-                        .with_cause("Retention effects must name a parameter from the same function signature.")
-                        .with_fix(
-                            "fix_retains_parameter",
-                            "Rename the retained parameter or remove this retention effect.",
-                            "manual",
-                        ),
-                    );
-                    continue;
-                }
-                if let Some(function_param) = function
-                    .params
-                    .iter()
-                    .find(|function_param| function_param.name == *param)
-                    && type_ref_is_copy(&function_param.ty)
-                {
-                    self.diagnostics.push(
-                        Diagnostic::error(
-                            code::UNKNOWN_RETAINED_PARAMETER,
-                            format!(
-                                "`{}` declares `effects(retains({param}))`, but `{param}` is Copy.",
-                                function.name
-                            ),
-                            function_param.span.clone(),
-                            "Copy parameter cannot be retained",
-                        )
-                        .with_cause(
-                            "`retains(x)` marks a managed retention boundary. Copy values have no managed handle to retain.",
-                        )
-                        .with_fix(
-                            "remove_copy_retains",
-                            format!("Remove `effects(retains({param}))`."),
-                            "manual",
-                        ),
-                    );
-                    continue;
-                }
-                if function.params.iter().any(|function_param| {
-                    function_param.name == *param && type_ref_is_noescape(&function_param.ty)
-                }) {
-                    self.diagnostics.push(
-                        Diagnostic::error(
-                            code::NOESCAPE_CALLBACK_ESCAPE,
-                            format!(
-                                "`{}` cannot retain noescape callback parameter `{param}`.",
-                                function.name
-                            ),
-                            function.span.clone(),
-                            "noescape callback escapes",
-                        )
-                        .with_cause(
-                            "`noescape Fn()` parameters may be called or forwarded to another noescape parameter, but they cannot be retained after return.",
-                        )
-                        .with_fix(
-                            "remove_noescape_retention",
-                            format!("Remove `effects(retains({param}))`, or use an ordinary managed callback type."),
-                            "manual",
-                        ),
-                    );
-                }
-            }
-
-            if function
-                .effects
-                .iter()
-                .any(|effect| matches!(effect, EffectDecl::Name(name) if name == "pure"))
-            {
-                if let Some(return_ty) = &function.return_ty
-                    && let Some(resource_name) = self
-                        .resource_return_type_name(return_ty)
-                        .map(str::to_string)
-                {
-                    self.pure_resource_return_diagnostic(
-                        &function.name,
-                        return_ty.span.clone(),
-                        &resource_name,
-                    );
-                }
-
-                for param in function.params.iter().filter(|param| {
-                    matches!(param.effect, Some(DataEffect::Mut | DataEffect::Take))
-                }) {
-                    let (label, cause, fix) = match param.effect {
-                        Some(DataEffect::Take) => (
-                            "taking parameter in pure function",
-                            "A `pure` function must not consume values or change ownership boundaries.",
-                            "Remove `pure`, or change the parameter to `read` if the function only observes it.",
-                        ),
-                        _ => (
-                            "mutable parameter in pure function",
-                            "A `pure` function must not mutate reachable managed state.",
-                            "Remove `pure`, or change the parameter to `read` if the function does not mutate it.",
-                        ),
-                    };
-                    self.diagnostics.push(checks::diagnostic_helpers::error_cause_manual_fix(
-                        code::INVALID_PURE_EFFECT,
+            if param.effect.is_none() && param.ty.name == "share" {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::REMOVED_SHARE_EFFECT,
                         format!(
-                            "`{}` is declared pure but parameter `{}` uses `{}`.",
-                            function.name,
-                            param.name,
-                            param.effect.map_or("unknown", data_effect_name)
+                            "parameter `{}` in `{}` uses removed `share` data effect.",
+                            param.name, function.name
+                        ),
+                        param.ty.span.clone(),
+                        "removed share data effect",
+                    )
+                    .with_cause("RSScript v0.6 has exactly three data effects: `read`, `mut`, and `take`.")
+                    .with_fix(
+                        "replace_share_effect",
+                        format!(
+                            "Use `{}: read T` and add `effects(retains({}))` if the function retains it.",
+                            param.name, param.name
+                        ),
+                        "manual",
+                    ),
+                );
+            }
+            if param.effect.is_none()
+                && !param.ty.name.is_empty()
+                && param.ty.name != "share"
+                && !type_ref_is_noescape(&param.ty)
+                && !type_ref_is_owned(&param.ty)
+                && !type_ref_is_closure_effect_exempt(&param.ty)
+                && !type_ref_has_surface_reference(&param.ty, self.tokens)
+                && !type_ref_contains_name(&param.ty, "Fd")
+                && !is_copy_type(&param.ty)
+                && !self.is_payloadless_sum_type(&param.ty)
+            {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::MISSING_PARAMETER_EFFECT,
+                        format!(
+                            "parameter `{}` in `{}` must declare `read`, `mut`, or `take`.",
+                            param.name, function.name
                         ),
                         param.span.clone(),
-                        label,
-                        cause,
-                        "remove_pure_or_use_read",
-                        fix,
-                    ));
-                }
+                        "missing parameter effect",
+                    )
+                    .with_cause("Non-Copy parameters must expose their data effect in the function signature.")
+                    .with_fix(
+                        "add_parameter_effect",
+                        format!("Write `{}: read {}` or another explicit effect.", param.name, type_ref_name(&param.ty)),
+                        "manual",
+                    ),
+                );
+            }
+        }
+    }
 
-                for effect in function
-                    .effects
-                    .iter()
-                    .filter(|effect| matches!(effect, EffectDecl::Retains(_)))
-                {
-                    self.diagnostics.push(checks::diagnostic_helpers::error_cause_manual_fix(
-                        code::INVALID_PURE_EFFECT,
+    /// Protocol methods must declare `self: read|mut|take Self` first.
+    fn check_protocol_self_parameter(&mut self, function: &FunctionDecl, is_protocol_method: bool) {
+        if !is_protocol_method {
+            return;
+        }
+        match function.params.first() {
+            Some(param)
+                if param.name == "self"
+                    && param.ty.name == "Self"
+                    && param.effect.is_some() => {}
+            Some(param) => self.invalid_self_parameter_diagnostic(
+                function,
+                param,
+                "Protocol methods must declare `self: read|mut|take Self` as their first parameter.",
+            ),
+            None => self.diagnostics.push(
+                Diagnostic::error(
+                    code::INVALID_SELF_PARAMETER,
+                    format!(
+                        "protocol method `{}` must declare an explicit `self` parameter.",
+                        function.name
+                    ),
+                    function.span.clone(),
+                    "missing protocol self parameter",
+                )
+                .with_cause("Protocol calls are explicit capability calls, so the receiver must be review-visible as `self: read|mut|take Self`.")
+                .with_fix(
+                    "add_protocol_self",
+                    "Add `self: read Self`, `self: mut Self`, or `self: take Self` as the first parameter.",
+                    "manual",
+                ),
+            ),
+        }
+    }
+
+    /// Validate each declared `effects(...)` item: rejected `fresh`, removed
+    /// runtime effects, and otherwise-unknown effect names.
+    fn check_function_effects(&mut self, function: &FunctionDecl) {
+        for effect in &function.effects {
+            let effect_name = effect_name(effect);
+            if effect_name == "fresh" {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::UNKNOWN_EFFECT,
                         format!(
-                            "`{}` is declared pure but also retains a parameter.",
+                            "`fresh` is not a valid `effects(...)` item in `{}`.",
                             function.name
                         ),
                         function.span.clone(),
-                        "retention in pure function",
-                        "A `pure` function must not retain parameters after returning.",
-                        "remove_pure_or_retains",
-                        format!("Remove `pure` or remove `{}`.", effect_display(effect)),
-                    ));
-                }
+                        "fresh is a return marker",
+                    )
+                    .with_cause(
+                        "`fresh` is a return contract, not a side effect or runtime guarantee.",
+                    )
+                    .with_fix(
+                        "move_fresh_to_return_type",
+                        "Write `-> fresh T` or `-> Result<fresh T, E>` instead.",
+                        "manual",
+                    ),
+                );
+                continue;
             }
+            if let Some(replacement) = removed_runtime_effect_replacement(effect_name) {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::REMOVED_RUNTIME_EFFECT,
+                        format!(
+                            "`{effect_name}` is not a valid RSScript v0.6 effect in `{}`.",
+                            function.name
+                        ),
+                        function.span.clone(),
+                        "removed runtime effect",
+                    )
+                    .with_cause("v0.6 uses reductive guarantees such as `no_panic`, `noalloc`, `no_block`, and `pure`.")
+                    .with_fix(
+                        "replace_removed_effect",
+                        replacement,
+                        "manual",
+                    ),
+                );
+                continue;
+            }
+            let valid = effect_name == "no_panic"
+                || effect_name == "noalloc"
+                || effect_name == "no_block"
+                || effect_name == "pure"
+                || effect_name == "unsafe"
+                || effect_name == "native"
+                || effect_name == "parallel"
+                || matches!(effect, EffectDecl::Retains(_));
+            if !valid {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::UNKNOWN_EFFECT,
+                        format!("unknown effect `{effect_name}` in `{}`.", function.name),
+                        function.span.clone(),
+                        "unknown effect",
+                    )
+                    .with_cause("Effects are review-visible semantic contracts; unknown effect names cannot be interpreted safely.")
+                    .with_fix(
+                        "fix_unknown_effect",
+                        "Use a recognized effect such as `pure`, `no_panic`, `noalloc`, `no_block`, `native`, `unsafe`, `parallel`, or `retains(param)`.",
+                        "manual",
+                    ),
+                );
+            }
+        }
+    }
+
+    /// `native fn` declarations must surface `effects(native)`.
+    fn check_native_effect(&mut self, function: &FunctionDecl) {
+        if function.is_native && !function_has_effect(function, "native") {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::FEATURE_VIOLATION,
+                    format!(
+                        "`native fn {}` must declare `effects(native)`.",
+                        function.name
+                    ),
+                    function.span.clone(),
+                    "native boundary missing effect",
+                )
+                .with_cause(
+                    "`native fn` is an implementation boundary, and v0.6 requires that boundary to appear in the effect list for review maps and semantic diffs.",
+                )
+                .with_fix(
+                    "add_native_effect",
+                    "Add `effects(native)` to the native function declaration.",
+                    "manual",
+                ),
+            );
+        }
+    }
+
+    /// `effects(retains(p))` items: `p` must be a parameter, non-Copy, and not a
+    /// noescape callback.
+    fn check_retains_parameters(&mut self, function: &FunctionDecl) {
+        let param_names: HashSet<&str> = function
+            .params
+            .iter()
+            .map(|param| param.name.as_str())
+            .collect();
+        for effect in &function.effects {
+            let EffectDecl::Retains(param) = effect else {
+                continue;
+            };
+            if !param_names.contains(param.as_str()) {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::UNKNOWN_RETAINED_PARAMETER,
+                        format!(
+                            "`{}` declares `effects(retains({param}))`, but `{param}` is not a parameter.",
+                            function.name
+                        ),
+                        function.span.clone(),
+                        "unknown retained parameter",
+                    )
+                    .with_cause("Retention effects must name a parameter from the same function signature.")
+                    .with_fix(
+                        "fix_retains_parameter",
+                        "Rename the retained parameter or remove this retention effect.",
+                        "manual",
+                    ),
+                );
+                continue;
+            }
+            if let Some(function_param) = function
+                .params
+                .iter()
+                .find(|function_param| function_param.name == *param)
+                && type_ref_is_copy(&function_param.ty)
+            {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::UNKNOWN_RETAINED_PARAMETER,
+                        format!(
+                            "`{}` declares `effects(retains({param}))`, but `{param}` is Copy.",
+                            function.name
+                        ),
+                        function_param.span.clone(),
+                        "Copy parameter cannot be retained",
+                    )
+                    .with_cause(
+                        "`retains(x)` marks a managed retention boundary. Copy values have no managed handle to retain.",
+                    )
+                    .with_fix(
+                        "remove_copy_retains",
+                        format!("Remove `effects(retains({param}))`."),
+                        "manual",
+                    ),
+                );
+                continue;
+            }
+            if function.params.iter().any(|function_param| {
+                function_param.name == *param && type_ref_is_noescape(&function_param.ty)
+            }) {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::NOESCAPE_CALLBACK_ESCAPE,
+                        format!(
+                            "`{}` cannot retain noescape callback parameter `{param}`.",
+                            function.name
+                        ),
+                        function.span.clone(),
+                        "noescape callback escapes",
+                    )
+                    .with_cause(
+                        "`noescape Fn()` parameters may be called or forwarded to another noescape parameter, but they cannot be retained after return.",
+                    )
+                    .with_fix(
+                        "remove_noescape_retention",
+                        format!("Remove `effects(retains({param}))`, or use an ordinary managed callback type."),
+                        "manual",
+                    ),
+                );
+            }
+        }
+    }
+
+    /// Constraints on `pure` functions: no resource return, no mut/take params,
+    /// no retention.
+    fn check_pure_function_constraints(&mut self, function: &FunctionDecl) {
+        if !function
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, EffectDecl::Name(name) if name == "pure"))
+        {
+            return;
+        }
+
+        if let Some(return_ty) = &function.return_ty
+            && let Some(resource_name) = self
+                .resource_return_type_name(return_ty)
+                .map(str::to_string)
+        {
+            self.pure_resource_return_diagnostic(
+                &function.name,
+                return_ty.span.clone(),
+                &resource_name,
+            );
+        }
+
+        for param in function.params.iter().filter(|param| {
+            matches!(param.effect, Some(DataEffect::Mut | DataEffect::Take))
+        }) {
+            let (label, cause, fix) = match param.effect {
+                Some(DataEffect::Take) => (
+                    "taking parameter in pure function",
+                    "A `pure` function must not consume values or change ownership boundaries.",
+                    "Remove `pure`, or change the parameter to `read` if the function only observes it.",
+                ),
+                _ => (
+                    "mutable parameter in pure function",
+                    "A `pure` function must not mutate reachable managed state.",
+                    "Remove `pure`, or change the parameter to `read` if the function does not mutate it.",
+                ),
+            };
+            self.diagnostics.push(checks::diagnostic_helpers::error_cause_manual_fix(
+                code::INVALID_PURE_EFFECT,
+                format!(
+                    "`{}` is declared pure but parameter `{}` uses `{}`.",
+                    function.name,
+                    param.name,
+                    param.effect.map_or("unknown", data_effect_name)
+                ),
+                param.span.clone(),
+                label,
+                cause,
+                "remove_pure_or_use_read",
+                fix,
+            ));
+        }
+
+        for effect in function
+            .effects
+            .iter()
+            .filter(|effect| matches!(effect, EffectDecl::Retains(_)))
+        {
+            self.diagnostics.push(checks::diagnostic_helpers::error_cause_manual_fix(
+                code::INVALID_PURE_EFFECT,
+                format!(
+                    "`{}` is declared pure but also retains a parameter.",
+                    function.name
+                ),
+                function.span.clone(),
+                "retention in pure function",
+                "A `pure` function must not retain parameters after returning.",
+                "remove_pure_or_retains",
+                format!("Remove `pure` or remove `{}`.", effect_display(effect)),
+            ));
         }
     }
 
