@@ -2,9 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::diagnostic::Span;
 use crate::syntax::ast::{
-    BinaryOp, Block, CallArg, Callee, ConstDecl, DataEffect, EffectDecl, Expr, FieldDecl,
-    ForStmt, FunctionDecl, GenericBound, Item, LetStmt, MatchPattern, MatchStmt, Param, Program,
-    Stmt, SumTypeDecl, TypeAliasDecl, TypeDecl, TypeKind, TypeRef,
+    BinaryOp, Block, CallArg, Callee, ConstDecl, DataEffect, EffectDecl, Expr, FieldDecl, ForStmt,
+    FunctionDecl, GenericBound, Item, LetStmt, MatchPattern, MatchStmt, Param, Program, Stmt,
+    SumTypeDecl, TypeAliasDecl, TypeDecl, TypeKind, TypeRef,
 };
 
 use super::helpers::*;
@@ -140,7 +140,7 @@ impl<'a> RustLowerer<'a> {
         // Module-isolated symbols carry a lowercase module prefix (`device__Device`,
         // `helpers__count`), so the camel/snake/upper-case lints don't apply.
         out.push_str(
-            "#![allow(dead_code, non_snake_case, non_camel_case_types, non_upper_case_globals)]\n",
+            "#![allow(dead_code, non_snake_case, non_camel_case_types, non_upper_case_globals, unused_parens)]\n",
         );
         let feature_names = lowered_feature_names(&self.program.features);
         if feature_names.is_empty() {
@@ -1886,8 +1886,7 @@ impl<'a> RustLowerer<'a> {
 
     fn lower_match_stmt(&mut self, stmt: &MatchStmt, out: &mut String, pad: &str, indent: usize) {
         let scrutinee_type = self.infer_expr_type(&stmt.value);
-        let mut scrutinee =
-            self.lower_match_scrutinee_expr(&stmt.value, scrutinee_type.as_ref());
+        let mut scrutinee = self.lower_match_scrutinee_expr(&stmt.value, scrutinee_type.as_ref());
         let by_ref = self.match_scrutinee_by_ref(&stmt.value);
         // Native Rust slice patterns match a `[T]`, not a `Vec<T>`; view the
         // list scrutinee as a slice so `[a, b]` / `[first, rest @ ..]` apply.
@@ -1896,11 +1895,8 @@ impl<'a> RustLowerer<'a> {
         }
         out.push_str(&format!("{pad}match {scrutinee} {{\n"));
         for arm in &stmt.arms {
-            let pattern = self.lower_match_pattern_typed(
-                &arm.pattern,
-                scrutinee_type.as_ref(),
-                by_ref,
-            );
+            let pattern =
+                self.lower_match_pattern_typed(&arm.pattern, scrutinee_type.as_ref(), by_ref);
             let guard = arm
                 .guard
                 .as_ref()
@@ -1912,8 +1908,7 @@ impl<'a> RustLowerer<'a> {
                 pattern,
                 guard
             ));
-            let scoped_binding =
-                match_binding_type_ref(&arm.pattern, scrutinee_type.as_ref());
+            let scoped_binding = match_binding_type_ref(&arm.pattern, scrutinee_type.as_ref());
             let previous_value_type = scoped_binding
                 .as_ref()
                 .and_then(|(binding, _)| self.value_types.get(binding).cloned());
@@ -2308,6 +2303,48 @@ impl<'a> RustLowerer<'a> {
                 op, left, right, ..
             } => {
                 let binary_op = *op;
+                // Flatten a deep `&&`/`||` chain into a *balanced* tree so the
+                // generated Rust nests O(log n) deep instead of O(n): a left-linear
+                // chain of hundreds of `&&` overflows rustc's recursive parser/
+                // type-checker (the `RUST_MIN_STACK=2g` workaround). `&&`/`||` are
+                // associative for both value AND short-circuit/evaluation order, so
+                // balanced regrouping is behavior-identical. The chain is collected
+                // iteratively (its left spine is the deep part) so this lowerer pass
+                // does not itself recurse n-deep.
+                if matches!(binary_op, BinaryOp::LogicalAnd | BinaryOp::LogicalOr) {
+                    let mut rev: Vec<&Expr> = vec![right.as_ref()];
+                    let mut node: &Expr = left.as_ref();
+                    loop {
+                        match node {
+                            Expr::Binary {
+                                op: inner,
+                                left: inner_left,
+                                right: inner_right,
+                                ..
+                            } if *inner == binary_op => {
+                                rev.push(inner_right.as_ref());
+                                node = inner_left.as_ref();
+                            }
+                            other => {
+                                rev.push(other);
+                                break;
+                            }
+                        }
+                    }
+                    if rev.len() >= 8 {
+                        rev.reverse();
+                        let op_str = if binary_op == BinaryOp::LogicalAnd {
+                            "&&"
+                        } else {
+                            "||"
+                        };
+                        let leaves: Vec<String> = rev
+                            .iter()
+                            .map(|operand| self.lower_binary_operand(operand, binary_op, false))
+                            .collect();
+                        return balanced_logical_join(&leaves, op_str);
+                    }
+                }
                 if matches!(op, BinaryOp::ShiftLeft | BinaryOp::ShiftRight) {
                     let method = if *op == BinaryOp::ShiftLeft {
                         "wrapping_shl"
@@ -3816,9 +3853,7 @@ impl<'a> RustLowerer<'a> {
             Expr::Ident(name, span) if name == "true" || name == "false" => {
                 Some(simple_type_ref("Bool", span))
             }
-            Expr::Ident(name, span) if name == "null" => {
-                Some(simple_type_ref("JsonLiteral", span))
-            }
+            Expr::Ident(name, span) if name == "null" => Some(simple_type_ref("JsonLiteral", span)),
             Expr::Ident(name, span) => self.value_types.get(name).cloned().or_else(|| {
                 self.find_sum_type_for_variant(name)
                     .map(|sum_name| simple_type_ref(&sum_name, span))
@@ -5568,6 +5603,26 @@ fn expr_contains_try(expr: &Expr) -> bool {
         | Expr::String(..)
         | Expr::MultilineString(..)
         | Expr::Unknown(_) => false,
+    }
+}
+
+/// Join already-lowered operands with a short-circuit operator (`&&`/`||`) as a
+/// *balanced* tree, so the resulting Rust expression nests O(log n) deep rather
+/// than O(n). `&&`/`||` are associative for both value and evaluation order, so
+/// any grouping evaluates the operands left-to-right with identical short-circuit
+/// behavior. Recursion depth here is O(log n), so this helper is itself safe.
+fn balanced_logical_join(leaves: &[String], op: &str) -> String {
+    match leaves.len() {
+        0 => String::new(),
+        1 => leaves[0].clone(),
+        n => {
+            let mid = n / 2;
+            format!(
+                "({} {op} {})",
+                balanced_logical_join(&leaves[..mid], op),
+                balanced_logical_join(&leaves[mid..], op)
+            )
+        }
     }
 }
 
