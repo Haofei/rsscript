@@ -17,7 +17,6 @@ LLMs); everything else lives here.
 | [spec-todo.md](spec-todo.md) | Prioritized list of unimplemented spec surface (the §3.2 / §20.1 superset). |
 | [cross-isolate-design.md](cross-isolate-design.md) | Feasibility + smallest-sound-slice plan for the cross-isolate message API (§20.2-3): message-channel core landed, multi-heap isolates still future. |
 | [ml-perf-todo.md](ml-perf-todo.md) | ML-framework perf plan: native tensor kernels (fix VM big-matrix cliff) + AOT build-time levers. |
-| [hardening-todo.md](hardening-todo.md) | Sandbox hardening of the reg-VM: two invariants (no agent-caused panic; runtime bugs abort) + recursion/step/memory limits, panic=abort, Invariant-1 fuzzer. |
 
 ## Implementation-planning specs (not yet normative)
 
