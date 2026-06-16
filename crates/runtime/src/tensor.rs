@@ -203,6 +203,40 @@ pub fn tensor_matmul(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorEr
     })
 }
 
+/// Serialize f32 values (narrowed from the f64 host inputs) to little-endian bytes,
+/// 4 per value, returned as `i64` in `0..=255`. This is the exact byte layout a
+/// CPU/GPU device buffer expects — used by the fused-backend realize path to
+/// populate exec-context buffers from host float data (the native bitcast can't be
+/// used: its f64 widening loses bits above 2^24). Infallible.
+pub fn tensor_f32_to_le_bytes(data: &[f64]) -> Vec<i64> {
+    let mut out = Vec::with_capacity(data.len() * 4);
+    for &value in data {
+        for byte in (value as f32).to_le_bytes() {
+            out.push(byte as i64);
+        }
+    }
+    out
+}
+
+/// Inverse of [`tensor_f32_to_le_bytes`]: decode little-endian f32 bytes (length a
+/// multiple of 4; each `i64` is taken modulo 256) back to f64 values. Used to read
+/// a realized output device buffer back into host floats. Errors if the byte count
+/// is not a multiple of 4.
+pub fn tensor_f32_from_le_bytes(bytes: &[i64]) -> Result<Vec<f64>, TensorError> {
+    if bytes.len() % 4 != 0 {
+        return Err(TensorError::new(format!(
+            "f32_from_le_bytes: byte length {} is not a multiple of 4",
+            bytes.len()
+        )));
+    }
+    let mut out = Vec::with_capacity(bytes.len() / 4);
+    for chunk in bytes.chunks_exact(4) {
+        let raw = [chunk[0] as u8, chunk[1] as u8, chunk[2] as u8, chunk[3] as u8];
+        out.push(f32::from_le_bytes(raw) as f64);
+    }
+    Ok(out)
+}
+
 /// Whether a Metal GPU is available for the native compute path (false off macOS
 /// or when no device is present). Lets the port choose the GPU vs CPU matmul.
 pub fn tensor_metal_available() -> bool {
@@ -2363,6 +2397,26 @@ mod tests {
             tensor_to_f32_slice(&tensor_div(&a, &b).unwrap()).unwrap(),
             vec![0.5, 1.0, 2.0, 4.0]
         );
+    }
+
+    #[test]
+    fn f32_le_bytes_round_trip() {
+        // 1.0 -> [0,0,128,63]; round-trips exactly, including a value above 2^24
+        // where the native i32 bitcast would lose precision.
+        let data = [1.0, 2.0, 3.0, 16_777_217.0, -0.5];
+        let bytes = tensor_f32_to_le_bytes(&data);
+        assert_eq!(bytes.len(), data.len() * 4);
+        assert_eq!(&bytes[0..4], &[0, 0, 128, 63]); // 1.0f little-endian
+        let back = tensor_f32_from_le_bytes(&bytes).unwrap();
+        for (g, e) in back.iter().zip(data.iter()) {
+            assert_eq!(*g as f32, *e as f32);
+        }
+    }
+
+    #[test]
+    fn f32_from_le_bytes_rejects_bad_length() {
+        let err = tensor_f32_from_le_bytes(&[0, 0, 128]).unwrap_err();
+        assert!(tensor_error_message(&err).contains("multiple of 4"));
     }
 
     #[test]

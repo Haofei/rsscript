@@ -403,6 +403,17 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     ),
     runtime_intrinsic("Tensor", "shape", "rsscript_runtime::tensor_shape"),
     runtime_intrinsic("Tensor", "rank", "rsscript_runtime::tensor_rank"),
+    // f32 <-> little-endian device-buffer bytes (fused-backend buffer plumbing)
+    runtime_intrinsic(
+        "Tensor",
+        "f32_to_le_bytes",
+        "rsscript_runtime::tensor_f32_to_le_bytes",
+    ),
+    runtime_intrinsic(
+        "Tensor",
+        "f32_from_le_bytes",
+        "rsscript_runtime::tensor_f32_from_le_bytes",
+    ),
     runtime_intrinsic("Tensor", "matmul", "rsscript_runtime::tensor_matmul"),
     // Metal GPU compute path
     runtime_intrinsic(

@@ -29,6 +29,15 @@ pub native fn Tensor.shape(tensor: read Tensor) -> Result<fresh List<Int>, Tenso
 pub native fn Tensor.rank(tensor: read Tensor) -> Int
     effects(native)
 
+// Serialize f32 values to little-endian device-buffer bytes (4 per value, each in
+// 0..=255). Used by the fused-backend realize path to fill exec-context buffers.
+pub native fn Tensor.f32_to_le_bytes(data: read List<Float>) -> fresh List<Int>
+    effects(native)
+
+// Inverse: decode little-endian f32 bytes (length a multiple of 4) to floats.
+pub native fn Tensor.f32_from_le_bytes(bytes: read List<Int>) -> Result<fresh List<Float>, TensorError>
+    effects(native)
+
 // 2-D × 2-D matrix multiply, contracting the inner dims: (m, k) × (k, n) -> (m,
 // n). Errors on non-rank-2 operands or an inner-dimension mismatch.
 pub native fn Tensor.matmul(

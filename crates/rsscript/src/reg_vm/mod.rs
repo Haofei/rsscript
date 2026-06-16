@@ -2121,6 +2121,8 @@ enum RegIntrinsic {
     TensorToF32Slice,
     TensorShape,
     TensorRank,
+    TensorF32ToLeBytes,
+    TensorF32FromLeBytes,
     TensorMatmul,
     TensorMatmulMetal,
     TensorMetalAvailable,
@@ -5440,6 +5442,8 @@ fn qualified_intrinsic(namespace: &str, name: &str) -> Option<RegIntrinsic> {
         ("Tensor", "to_f32_slice") => Some(RegIntrinsic::TensorToF32Slice),
         ("Tensor", "shape") => Some(RegIntrinsic::TensorShape),
         ("Tensor", "rank") => Some(RegIntrinsic::TensorRank),
+        ("Tensor", "f32_to_le_bytes") => Some(RegIntrinsic::TensorF32ToLeBytes),
+        ("Tensor", "f32_from_le_bytes") => Some(RegIntrinsic::TensorF32FromLeBytes),
         ("Tensor", "matmul") => Some(RegIntrinsic::TensorMatmul),
         ("Tensor", "matmul_metal") => Some(RegIntrinsic::TensorMatmulMetal),
         ("Tensor", "metal_available") => Some(RegIntrinsic::TensorMetalAvailable),
@@ -9645,6 +9649,26 @@ impl RegVm {
             RegIntrinsic::TensorRank => {
                 let tensor = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::Int(rsscript_runtime::tensor_rank(&tensor)))
+            }
+            RegIntrinsic::TensorF32ToLeBytes => {
+                let data = expect_float_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let bytes = rsscript_runtime::tensor_f32_to_le_bytes(&data);
+                Ok(VmValue::List(Rc::new(RefCell::new(
+                    bytes.into_iter().map(VmValue::Int).collect(),
+                ))))
+            }
+            RegIntrinsic::TensorF32FromLeBytes => {
+                let bytes = expect_int_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(json_result(
+                    match rsscript_runtime::tensor_f32_from_le_bytes(&bytes) {
+                        Ok(values) => Ok(VmValue::List(Rc::new(RefCell::new(
+                            values.into_iter().map(VmValue::Float).collect(),
+                        )))),
+                        Err(error) => Err(tensor_error_value(
+                            rsscript_runtime::tensor_error_message(&error),
+                        )),
+                    },
+                ))
             }
             RegIntrinsic::TensorMatmul => {
                 let a = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
