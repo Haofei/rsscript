@@ -373,6 +373,216 @@ pub fn tensor_argmax_axis(t: &RssTensor, axis: i64) -> Result<RssTensor, TensorE
     })
 }
 
+// ---------------------------------------------------------------------------
+// Movement ops (slice 4).
+//
+// DESIGN: `RssTensor` is kept ROW-MAJOR CONTIGUOUS — there is deliberately no
+// `strides` field, because matmul/elementwise/reduce all assume packed data.
+// So `reshape` is genuinely zero-copy (it shares the same `Rc<Vec<f32>>` buffer
+// and only swaps the shape), while `transpose`/`permute`/`broadcast_to`
+// MATERIALIZE a fresh contiguous buffer in the new logical order. True
+// zero-copy strided views (sharing storage for transpose/broadcast) are a
+// future optimization and intentionally out of scope here.
+// ---------------------------------------------------------------------------
+
+/// Reshape to `new_shape` WITHOUT copying: the returned tensor aliases the same
+/// `Rc<Vec<f32>>` buffer (cheap `Rc::clone`), only the shape changes. Errors if
+/// any new dim is negative or the new element count differs from the current
+/// one (reshape must preserve the total number of elements).
+pub fn tensor_reshape(t: &RssTensor, new_shape: &[i64]) -> Result<RssTensor, TensorError> {
+    let mut dims = Vec::with_capacity(new_shape.len());
+    for &dim in new_shape {
+        if dim < 0 {
+            return Err(TensorError::new(format!(
+                "reshape dimensions must be non-negative, got {dim}"
+            )));
+        }
+        dims.push(dim as usize);
+    }
+    let expected = RssTensor::shape_len(&dims);
+    let current = t.data.len();
+    if expected != current {
+        return Err(TensorError::new(format!(
+            "reshape element count mismatch: tensor has {current} elements but shape {dims:?} implies {expected}"
+        )));
+    }
+    Ok(RssTensor {
+        // Zero-copy: share the existing buffer, only the shape differs.
+        data: Rc::clone(&t.data),
+        shape: dims,
+    })
+}
+
+/// 2-D transpose: `(r, c) -> (c, r)`, materializing a fresh contiguous buffer in
+/// transposed order. Errors if the tensor is not rank-2.
+pub fn tensor_transpose(t: &RssTensor) -> Result<RssTensor, TensorError> {
+    if t.shape.len() != 2 {
+        return Err(TensorError::new(format!(
+            "transpose requires a rank-2 tensor, got shape {:?}",
+            t.shape
+        )));
+    }
+    let (rows, cols) = (t.shape[0], t.shape[1]);
+    let src = t.data.as_ref();
+    let mut out = vec![0.0f32; rows * cols];
+    for i in 0..rows {
+        for j in 0..cols {
+            // out[j, i] = src[i, j]
+            out[j * rows + i] = src[i * cols + j];
+        }
+    }
+    Ok(RssTensor {
+        data: Rc::new(out),
+        shape: vec![cols, rows],
+    })
+}
+
+/// General axis permutation: `axes` must be a permutation of `0..rank`. The
+/// output dim `d` is the source dim `axes[d]`. Materializes a fresh contiguous
+/// buffer in the permuted order. Errors if `axes` is not a valid permutation.
+pub fn tensor_permute(t: &RssTensor, axes: &[i64]) -> Result<RssTensor, TensorError> {
+    let rank = t.shape.len();
+    if axes.len() != rank {
+        return Err(TensorError::new(format!(
+            "permute axes length {} does not match tensor rank {rank}",
+            axes.len()
+        )));
+    }
+    let mut perm = Vec::with_capacity(rank);
+    let mut seen = vec![false; rank];
+    for &axis in axes {
+        if axis < 0 || axis as usize >= rank {
+            return Err(TensorError::new(format!(
+                "permute axis {axis} out of range for rank {rank}"
+            )));
+        }
+        let a = axis as usize;
+        if seen[a] {
+            return Err(TensorError::new(format!(
+                "permute axes {axes:?} must be a permutation of 0..{rank} (duplicate axis {a})"
+            )));
+        }
+        seen[a] = true;
+        perm.push(a);
+    }
+
+    // Output shape: out_shape[d] = src_shape[perm[d]].
+    let out_shape: Vec<usize> = perm.iter().map(|&a| t.shape[a]).collect();
+    let total = RssTensor::shape_len(&out_shape);
+    let src = t.data.as_ref();
+
+    // Row-major strides for the source, so a multi-index maps to a flat offset.
+    let mut src_strides = vec![0usize; rank];
+    let mut acc = 1usize;
+    for axis in (0..rank).rev() {
+        src_strides[axis] = acc;
+        acc *= t.shape[axis];
+    }
+
+    let mut out = vec![0.0f32; total];
+    // Walk the output in row-major order, decoding each flat index into the
+    // output multi-index, then mapping back to the source offset via perm.
+    let mut out_index = vec![0usize; rank];
+    for slot in out.iter_mut() {
+        let mut src_offset = 0usize;
+        for d in 0..rank {
+            // out dim d corresponds to source axis perm[d].
+            src_offset += out_index[d] * src_strides[perm[d]];
+        }
+        *slot = src[src_offset];
+        // Increment the mixed-radix output index (last axis fastest).
+        for d in (0..rank).rev() {
+            out_index[d] += 1;
+            if out_index[d] < out_shape[d] {
+                break;
+            }
+            out_index[d] = 0;
+        }
+    }
+    Ok(RssTensor {
+        data: Rc::new(out),
+        shape: out_shape,
+    })
+}
+
+/// NumPy-style broadcast to `target_shape`, materializing the expanded buffer.
+/// The source shape is right-aligned against the target; each source dim must be
+/// either 1 (stretched) or equal to the target dim. The target rank must be at
+/// least the source rank. Errors if the shapes are not broadcast-compatible.
+pub fn tensor_broadcast_to(t: &RssTensor, target_shape: &[i64]) -> Result<RssTensor, TensorError> {
+    let mut target = Vec::with_capacity(target_shape.len());
+    for &dim in target_shape {
+        if dim < 0 {
+            return Err(TensorError::new(format!(
+                "broadcast_to dimensions must be non-negative, got {dim}"
+            )));
+        }
+        target.push(dim as usize);
+    }
+    let src_rank = t.shape.len();
+    let tgt_rank = target.len();
+    if tgt_rank < src_rank {
+        return Err(TensorError::new(format!(
+            "broadcast_to cannot reduce rank: source shape {:?} into {target:?}",
+            t.shape
+        )));
+    }
+
+    // Right-align the source shape against the target; missing leading dims are
+    // treated as 1. `src_strides[d]` is the source stride for target axis d (0
+    // for a broadcast/stretched axis).
+    let offset = tgt_rank - src_rank;
+    let mut row_strides = vec![0usize; src_rank];
+    let mut acc = 1usize;
+    for axis in (0..src_rank).rev() {
+        row_strides[axis] = acc;
+        acc *= t.shape[axis];
+    }
+    let mut src_strides = vec![0usize; tgt_rank];
+    for d in 0..tgt_rank {
+        if d < offset {
+            // Leading target axis with no source dim: implicitly size 1, stride 0.
+            src_strides[d] = 0;
+        } else {
+            let s = t.shape[d - offset];
+            if s == target[d] {
+                src_strides[d] = row_strides[d - offset];
+            } else if s == 1 {
+                // Stretched axis: stride 0 so the single source element repeats.
+                src_strides[d] = 0;
+            } else {
+                return Err(TensorError::new(format!(
+                    "broadcast_to: source shape {:?} is not broadcastable to {target:?} (dim {d}: {s} vs {})",
+                    t.shape, target[d]
+                )));
+            }
+        }
+    }
+
+    let total = RssTensor::shape_len(&target);
+    let src = t.data.as_ref();
+    let mut out = vec![0.0f32; total];
+    let mut out_index = vec![0usize; tgt_rank];
+    for slot in out.iter_mut() {
+        let mut src_offset = 0usize;
+        for d in 0..tgt_rank {
+            src_offset += out_index[d] * src_strides[d];
+        }
+        *slot = src[src_offset];
+        for d in (0..tgt_rank).rev() {
+            out_index[d] += 1;
+            if out_index[d] < target[d] {
+                break;
+            }
+            out_index[d] = 0;
+        }
+    }
+    Ok(RssTensor {
+        data: Rc::new(out),
+        shape: target,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -552,5 +762,112 @@ mod tests {
             tensor_to_f32_slice(&tensor_argmax_axis(&t, 0).unwrap()).unwrap(),
             vec![0.0, 1.0]
         );
+    }
+
+    #[test]
+    fn reshape_is_zero_copy() {
+        let t = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]).unwrap();
+        let r = tensor_reshape(&t, &[3, 2]).unwrap();
+        assert_eq!(tensor_shape(&r).unwrap(), vec![3, 2]);
+        assert_eq!(
+            tensor_to_f32_slice(&r).unwrap(),
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        );
+        // Same backing buffer (zero-copy): the Rc points at the same allocation.
+        assert!(Rc::ptr_eq(&t.data, &r.data));
+    }
+
+    #[test]
+    fn reshape_rejects_count_mismatch() {
+        let t = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+        let err = tensor_reshape(&t, &[3, 2]).unwrap_err();
+        assert!(tensor_error_message(&err).contains("element count mismatch"));
+    }
+
+    #[test]
+    fn transpose_2d() {
+        let t = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]).unwrap();
+        let tr = tensor_transpose(&t).unwrap();
+        assert_eq!(tensor_shape(&tr).unwrap(), vec![3, 2]);
+        // [[1,2,3],[4,5,6]]^T = [[1,4],[2,5],[3,6]]
+        assert_eq!(
+            tensor_to_f32_slice(&tr).unwrap(),
+            vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]
+        );
+    }
+
+    #[test]
+    fn transpose_rejects_non_rank2() {
+        let t = tensor_from_f32_slice(&[1.0, 2.0, 3.0], &[3]).unwrap();
+        let err = tensor_transpose(&t).unwrap_err();
+        assert!(tensor_error_message(&err).contains("rank-2"));
+    }
+
+    #[test]
+    fn permute_matches_transpose_for_2d() {
+        let t = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]).unwrap();
+        let p = tensor_permute(&t, &[1, 0]).unwrap();
+        let tr = tensor_transpose(&t).unwrap();
+        assert_eq!(tensor_shape(&p).unwrap(), tensor_shape(&tr).unwrap());
+        assert_eq!(
+            tensor_to_f32_slice(&p).unwrap(),
+            tensor_to_f32_slice(&tr).unwrap()
+        );
+    }
+
+    #[test]
+    fn permute_3d() {
+        // shape [2,1,3], values 0..6 row-major.
+        let t =
+            tensor_from_f32_slice(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0], &[2, 1, 3]).unwrap();
+        // permute axes [2,0,1] -> shape [3,2,1].
+        let p = tensor_permute(&t, &[2, 0, 1]).unwrap();
+        assert_eq!(tensor_shape(&p).unwrap(), vec![3, 2, 1]);
+        // src[i,0,k] at flat i*3+k. out[k,i,0] = src[i,0,k].
+        // out row-major over (k,i): k=0:(i0,i1)->src0,src3; k=1->src1,src4; k=2->src2,src5
+        assert_eq!(
+            tensor_to_f32_slice(&p).unwrap(),
+            vec![0.0, 3.0, 1.0, 4.0, 2.0, 5.0]
+        );
+    }
+
+    #[test]
+    fn permute_rejects_bad_axes() {
+        let t = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+        assert!(tensor_error_message(&tensor_permute(&t, &[0, 0]).unwrap_err())
+            .contains("permutation"));
+        assert!(tensor_error_message(&tensor_permute(&t, &[0]).unwrap_err())
+            .contains("does not match tensor rank"));
+        assert!(tensor_error_message(&tensor_permute(&t, &[0, 5]).unwrap_err())
+            .contains("out of range"));
+    }
+
+    #[test]
+    fn broadcast_to_expands() {
+        // [3] -> [2,3]: each row is the source.
+        let t = tensor_from_f32_slice(&[1.0, 2.0, 3.0], &[3]).unwrap();
+        let b = tensor_broadcast_to(&t, &[2, 3]).unwrap();
+        assert_eq!(tensor_shape(&b).unwrap(), vec![2, 3]);
+        assert_eq!(
+            tensor_to_f32_slice(&b).unwrap(),
+            vec![1.0, 2.0, 3.0, 1.0, 2.0, 3.0]
+        );
+        // [2,1] -> [2,3]: stretch the inner axis.
+        let c = tensor_from_f32_slice(&[10.0, 20.0], &[2, 1]).unwrap();
+        let bc = tensor_broadcast_to(&c, &[2, 3]).unwrap();
+        assert_eq!(
+            tensor_to_f32_slice(&bc).unwrap(),
+            vec![10.0, 10.0, 10.0, 20.0, 20.0, 20.0]
+        );
+    }
+
+    #[test]
+    fn broadcast_to_rejects_incompatible() {
+        let t = tensor_from_f32_slice(&[1.0, 2.0, 3.0], &[3]).unwrap();
+        assert!(tensor_error_message(&tensor_broadcast_to(&t, &[2, 4]).unwrap_err())
+            .contains("not broadcastable"));
+        let r = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+        assert!(tensor_error_message(&tensor_broadcast_to(&r, &[2]).unwrap_err())
+            .contains("cannot reduce rank"));
     }
 }

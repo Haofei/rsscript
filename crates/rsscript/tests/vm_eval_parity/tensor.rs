@@ -506,3 +506,164 @@ fn main() -> Result<Unit, TensorError> {
         source,
     );
 }
+
+#[test]
+fn parity_tensor_reshape() {
+    let source = r#"
+features: native, local
+
+fn main() -> Result<Unit, TensorError> {
+    let t = Tensor.from_f32_slice(
+        data: read [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        shape: read [2, 3],
+    )?
+    let r = Tensor.reshape(t: read t, shape: read [3, 2])?
+    let dims = Tensor.shape(tensor: read r)?
+    Log.write(message: read String.from_int(value: List.get(list: read dims, index: 0)))
+    Log.write(message: read String.from_int(value: List.get(list: read dims, index: 1)))
+    let values = Tensor.to_f32_slice(tensor: read r)?
+    let mut index = 0
+    while index < List.len(list: read values) {
+        Log.write(message: read Float.to_string(value: read List.get(list: read values, index: index)))
+        index = index + 1
+    }
+    // reshape with a wrong element count surfaces an error identically.
+    local bad = Tensor.reshape(t: read t, shape: read [4, 2])
+    match bad {
+        Ok(_) => {
+            Log.write(message: read "ok")
+        }
+        Err(error) => {
+            Log.write(message: read TensorError.message(error: read error))
+        }
+    }
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-reshape.rss",
+        "rsscript_parity_tensor_reshape",
+        source,
+    );
+}
+
+#[test]
+fn parity_tensor_transpose() {
+    let source = r#"
+features: native, local
+
+fn main() -> Result<Unit, TensorError> {
+    let t = Tensor.from_f32_slice(
+        data: read [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        shape: read [2, 3],
+    )?
+    let tr = Tensor.transpose(t: read t)?
+    let dims = Tensor.shape(tensor: read tr)?
+    Log.write(message: read String.from_int(value: List.get(list: read dims, index: 0)))
+    Log.write(message: read String.from_int(value: List.get(list: read dims, index: 1)))
+    let values = Tensor.to_f32_slice(tensor: read tr)?
+    let mut index = 0
+    while index < List.len(list: read values) {
+        Log.write(message: read Float.to_string(value: read List.get(list: read values, index: index)))
+        index = index + 1
+    }
+    // transpose of a rank-1 tensor errors identically.
+    let v = Tensor.from_f32_slice(data: read [1.0, 2.0, 3.0], shape: read [3])?
+    local bad = Tensor.transpose(t: read v)
+    match bad {
+        Ok(_) => {
+            Log.write(message: read "ok")
+        }
+        Err(error) => {
+            Log.write(message: read TensorError.message(error: read error))
+        }
+    }
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-transpose.rss",
+        "rsscript_parity_tensor_transpose",
+        source,
+    );
+}
+
+#[test]
+fn parity_tensor_permute() {
+    let source = r#"
+features: native, local
+
+fn main() -> Result<Unit, TensorError> {
+    let t = Tensor.from_f32_slice(
+        data: read [0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+        shape: read [2, 1, 3],
+    )?
+    let p = Tensor.permute(t: read t, axes: read [2, 0, 1])?
+    let dims = Tensor.shape(tensor: read p)?
+    let mut d = 0
+    while d < List.len(list: read dims) {
+        Log.write(message: read String.from_int(value: List.get(list: read dims, index: d)))
+        d = d + 1
+    }
+    let values = Tensor.to_f32_slice(tensor: read p)?
+    let mut index = 0
+    while index < List.len(list: read values) {
+        Log.write(message: read Float.to_string(value: read List.get(list: read values, index: index)))
+        index = index + 1
+    }
+    // a non-permutation surfaces an error identically.
+    local bad = Tensor.permute(t: read t, axes: read [0, 0, 1])
+    match bad {
+        Ok(_) => {
+            Log.write(message: read "ok")
+        }
+        Err(error) => {
+            Log.write(message: read TensorError.message(error: read error))
+        }
+    }
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-permute.rss",
+        "rsscript_parity_tensor_permute",
+        source,
+    );
+}
+
+#[test]
+fn parity_tensor_broadcast_to() {
+    let source = r#"
+features: native, local
+
+fn main() -> Result<Unit, TensorError> {
+    let row = Tensor.from_f32_slice(data: read [1.0, 2.0, 3.0], shape: read [3])?
+    let b = Tensor.broadcast_to(t: read row, shape: read [2, 3])?
+    let dims = Tensor.shape(tensor: read b)?
+    Log.write(message: read String.from_int(value: List.get(list: read dims, index: 0)))
+    Log.write(message: read String.from_int(value: List.get(list: read dims, index: 1)))
+    let values = Tensor.to_f32_slice(tensor: read b)?
+    let mut index = 0
+    while index < List.len(list: read values) {
+        Log.write(message: read Float.to_string(value: read List.get(list: read values, index: index)))
+        index = index + 1
+    }
+    // a non-broadcastable target surfaces an error identically.
+    local bad = Tensor.broadcast_to(t: read row, shape: read [2, 4])
+    match bad {
+        Ok(_) => {
+            Log.write(message: read "ok")
+        }
+        Err(error) => {
+            Log.write(message: read TensorError.message(error: read error))
+        }
+    }
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-broadcast-to.rss",
+        "rsscript_parity_tensor_broadcast_to",
+        source,
+    );
+}
