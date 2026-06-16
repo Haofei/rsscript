@@ -1814,92 +1814,7 @@ fn lower_hir_expr(
             span: span.clone(),
         },
         Expr::Call { callee, args, span } => {
-            let receiver_type = match callee {
-                Callee::ReceiverCall { receiver, .. } => {
-                    infer_hir_expr_type(hir, receiver, value_types)
-                }
-                _ => None,
-            };
-            let (resolution, resolved_namespace) = match callee {
-                Callee::ReceiverCall { method, .. } => {
-                    if let Some(receiver_type) = receiver_type.as_deref() {
-                        hir.resolve_receiver_call(receiver_type, method, value_types)
-                    } else {
-                        (CallResolution::Unknown, None)
-                    }
-                }
-                _ => (hir.resolve_call(callee), None),
-            };
-            let events = retain_events_for_call(
-                function_name,
-                callee,
-                args,
-                span,
-                &resolution,
-                hir,
-                value_types,
-            );
-            let type_name = infer_hir_expr_type(hir, expr, value_types);
-            let mut hir_args: Vec<HirCallArg> = args
-                .iter()
-                .map(|arg| HirCallArg {
-                    name: arg.name.clone(),
-                    value: lower_hir_expr(hir, function_name, &arg.value, value_types),
-                    span: arg.span.clone(),
-                })
-                .collect();
-            // Fill omitted parameters that declare a default value, so every
-            // backend sees a complete call (defaults are desugared once, here).
-            if let CallResolution::Resolved { signature, .. } = &resolution {
-                let provided: std::collections::HashSet<&str> =
-                    args.iter().filter_map(|arg| arg.name.as_deref()).collect();
-                for param in &signature.params {
-                    if let Some(default) = &param.default
-                        && !provided.contains(param.name.as_str())
-                    {
-                        let mut value = lower_hir_expr(hir, function_name, default, value_types);
-                        // A non-Copy default is materialized at the call site and
-                        // bound under the parameter's declared effect. Carry that
-                        // effect on the synthesized argument so the call-site
-                        // effect check is satisfied — the effect is reviewed at the
-                        // declaration (`axes: read List<Int> = ...`), not at the
-                        // omitted call where the argument is implicit.
-                        if let Some(effect) = param.effect {
-                            value = HirExpr::Effect {
-                                effect,
-                                value: Box::new(value),
-                                events: Vec::new(),
-                                type_name: Some(param.type_name.clone()),
-                                span: span.clone(),
-                            };
-                        }
-                        hir_args.push(HirCallArg {
-                            name: Some(param.name.clone()),
-                            value,
-                            span: span.clone(),
-                        });
-                    }
-                }
-            }
-            HirExpr::Call {
-                callee: callee.clone(),
-                receiver: match callee {
-                    Callee::ReceiverCall {
-                        receiver, effect, ..
-                    } => Some(HirCallReceiver {
-                        value: Box::new(lower_hir_expr(hir, function_name, receiver, value_types)),
-                        effect: param_effect_from_data_effect((*effect).unwrap_or(DataEffect::Read)),
-                        type_name: receiver_type,
-                        resolved_namespace,
-                    }),
-                    _ => None,
-                },
-                args: hir_args,
-                type_name,
-                resolution,
-                events,
-                span: span.clone(),
-            }
+            lower_hir_call_expr(hir, function_name, expr, callee, args, span, value_types)
         }
         Expr::Effect {
             effect,
@@ -1999,6 +1914,104 @@ fn lower_hir_expr(
             }
         }
         Expr::Unknown(span) => HirExpr::Unknown(span.clone()),
+    }
+}
+
+/// Lowers an `Expr::Call`: receiver type inference, call resolution, retain
+/// events, and default-parameter synthesis. Extracted from `lower_hir_expr`;
+/// `expr` is the original `Expr::Call` node (needed for type inference).
+fn lower_hir_call_expr(
+    hir: &Hir,
+    function_name: &str,
+    expr: &Expr,
+    callee: &Callee,
+    args: &[CallArg],
+    span: &Span,
+    value_types: &HashMap<String, String>,
+) -> HirExpr {
+    let receiver_type = match callee {
+        Callee::ReceiverCall { receiver, .. } => infer_hir_expr_type(hir, receiver, value_types),
+        _ => None,
+    };
+    let (resolution, resolved_namespace) = match callee {
+        Callee::ReceiverCall { method, .. } => {
+            if let Some(receiver_type) = receiver_type.as_deref() {
+                hir.resolve_receiver_call(receiver_type, method, value_types)
+            } else {
+                (CallResolution::Unknown, None)
+            }
+        }
+        _ => (hir.resolve_call(callee), None),
+    };
+    let events = retain_events_for_call(
+        function_name,
+        callee,
+        args,
+        span,
+        &resolution,
+        hir,
+        value_types,
+    );
+    let type_name = infer_hir_expr_type(hir, expr, value_types);
+    let mut hir_args: Vec<HirCallArg> = args
+        .iter()
+        .map(|arg| HirCallArg {
+            name: arg.name.clone(),
+            value: lower_hir_expr(hir, function_name, &arg.value, value_types),
+            span: arg.span.clone(),
+        })
+        .collect();
+    // Fill omitted parameters that declare a default value, so every
+    // backend sees a complete call (defaults are desugared once, here).
+    if let CallResolution::Resolved { signature, .. } = &resolution {
+        let provided: std::collections::HashSet<&str> =
+            args.iter().filter_map(|arg| arg.name.as_deref()).collect();
+        for param in &signature.params {
+            if let Some(default) = &param.default
+                && !provided.contains(param.name.as_str())
+            {
+                let mut value = lower_hir_expr(hir, function_name, default, value_types);
+                // A non-Copy default is materialized at the call site and
+                // bound under the parameter's declared effect. Carry that
+                // effect on the synthesized argument so the call-site
+                // effect check is satisfied — the effect is reviewed at the
+                // declaration (`axes: read List<Int> = ...`), not at the
+                // omitted call where the argument is implicit.
+                if let Some(effect) = param.effect {
+                    value = HirExpr::Effect {
+                        effect,
+                        value: Box::new(value),
+                        events: Vec::new(),
+                        type_name: Some(param.type_name.clone()),
+                        span: span.clone(),
+                    };
+                }
+                hir_args.push(HirCallArg {
+                    name: Some(param.name.clone()),
+                    value,
+                    span: span.clone(),
+                });
+            }
+        }
+    }
+    HirExpr::Call {
+        callee: callee.clone(),
+        receiver: match callee {
+            Callee::ReceiverCall {
+                receiver, effect, ..
+            } => Some(HirCallReceiver {
+                value: Box::new(lower_hir_expr(hir, function_name, receiver, value_types)),
+                effect: param_effect_from_data_effect((*effect).unwrap_or(DataEffect::Read)),
+                type_name: receiver_type,
+                resolved_namespace,
+            }),
+            _ => None,
+        },
+        args: hir_args,
+        type_name,
+        resolution,
+        events,
+        span: span.clone(),
     }
 }
 
