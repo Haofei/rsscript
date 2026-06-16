@@ -517,6 +517,20 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("Tensor", "rand", "rsscript_runtime::tensor_rand"),
     runtime_intrinsic("Tensor", "randint", "rsscript_runtime::tensor_randint"),
     runtime_intrinsic("Tensor", "randn", "rsscript_runtime::tensor_randn"),
+    // nn (slice F)
+    runtime_intrinsic("Tensor", "iota", "rsscript_runtime::tensor_iota"),
+    runtime_intrinsic("Tensor", "one_hot", "rsscript_runtime::tensor_one_hot"),
+    runtime_intrinsic("Tensor", "softmax", "rsscript_runtime::tensor_softmax"),
+    runtime_intrinsic(
+        "Tensor",
+        "log_softmax",
+        "rsscript_runtime::tensor_log_softmax",
+    ),
+    runtime_intrinsic(
+        "Tensor",
+        "cross_entropy",
+        "rsscript_runtime::tensor_cross_entropy",
+    ),
     runtime_intrinsic(
         "TensorError",
         "message",

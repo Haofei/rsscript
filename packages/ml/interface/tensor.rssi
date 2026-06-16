@@ -337,5 +337,32 @@ pub native fn Tensor.randn(
 ) -> Result<fresh Tensor, TensorError>
     effects(native)
 
+// nn (slice F). Forward-only NN primitives. iota/one_hot build index/label
+// tensors; softmax/log_softmax are numerically stable (max-subtract /
+// log-sum-exp); cross_entropy is the MEAN over the batch of -log_softmax at each
+// target CLASS INDEX (targets are class indices, not one-hot) and returns a
+// SCALAR tensor (shape []). All produce F32 (iota is I32).
+pub native fn Tensor.iota(n: Int) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+pub native fn Tensor.one_hot(
+    indices: read Tensor,
+    num_classes: Int,
+) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+pub native fn Tensor.softmax(t: read Tensor, axis: Int) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+pub native fn Tensor.log_softmax(t: read Tensor, axis: Int) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+pub native fn Tensor.cross_entropy(
+    logits: read Tensor,
+    targets: read Tensor,
+    axis: Int,
+) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
 pub fn TensorError.message(error: read TensorError) -> fresh String
     effects(pure)
