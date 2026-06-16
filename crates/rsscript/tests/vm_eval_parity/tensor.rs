@@ -667,3 +667,195 @@ fn main() -> Result<Unit, TensorError> {
         source,
     );
 }
+
+#[test]
+fn parity_tensor_broadcast_binary() {
+    // [2,3] + [3] (broadcast) and [2,3] + [2,3] (equal-shape parity preserved).
+    let source = r#"
+features: native, local
+
+fn dump(t: read Tensor) -> Result<Unit, TensorError> {
+    let dims = Tensor.shape(tensor: read t)?
+    let mut d = 0
+    while d < List.len(list: read dims) {
+        Log.write(message: read String.from_int(value: List.get(list: read dims, index: d)))
+        d = d + 1
+    }
+    let values = Tensor.to_f32_slice(tensor: read t)?
+    let mut index = 0
+    while index < List.len(list: read values) {
+        Log.write(message: read Float.to_string(value: read List.get(list: read values, index: index)))
+        index = index + 1
+    }
+    return Ok(Unit)
+}
+
+fn main() -> Result<Unit, TensorError> {
+    let a = Tensor.from_f32_slice(data: read [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], shape: read [2, 3])?
+    let row = Tensor.from_f32_slice(data: read [10.0, 20.0, 30.0], shape: read [3])?
+    let bcast = Tensor.add(a: read a, b: read row)?
+    dump(t: read bcast)?
+    // equal-shape add still matches (parity with the old path).
+    let b = Tensor.from_f32_slice(data: read [6.0, 5.0, 4.0, 3.0, 2.0, 1.0], shape: read [2, 3])?
+    let eq = Tensor.add(a: read a, b: read b)?
+    dump(t: read eq)?
+    // an incompatible pair surfaces an error identically.
+    let bad = Tensor.from_f32_slice(data: read [1.0, 2.0], shape: read [2])?
+    local fail = Tensor.add(a: read a, b: read bad)
+    match fail {
+        Ok(_) => {
+            Log.write(message: read "ok")
+        }
+        Err(error) => {
+            Log.write(message: read TensorError.message(error: read error))
+        }
+    }
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-broadcast-binary.rss",
+        "rsscript_parity_tensor_broadcast_binary",
+        source,
+    );
+}
+
+#[test]
+fn parity_tensor_comparisons() {
+    let source = r#"
+features: native, local
+
+fn dump(t: read Tensor) -> Result<Unit, TensorError> {
+    Log.write(message: read String.from_int(value: Tensor.dtype_code(t: read t)))
+    let values = Tensor.to_f32_slice(tensor: read t)?
+    let mut index = 0
+    while index < List.len(list: read values) {
+        Log.write(message: read Float.to_string(value: read List.get(list: read values, index: index)))
+        index = index + 1
+    }
+    return Ok(Unit)
+}
+
+fn main() -> Result<Unit, TensorError> {
+    let a = Tensor.from_f32_slice(data: read [1.0, 5.0, 3.0, 2.0], shape: read [4])?
+    let b = Tensor.from_f32_slice(data: read [2.0, 5.0, 1.0, 2.0], shape: read [4])?
+    let lt = Tensor.cmplt(a: read a, b: read b)?
+    dump(t: read lt)?
+    let ne = Tensor.cmpne(a: read a, b: read b)?
+    dump(t: read ne)?
+    let eq = Tensor.cmpeq(a: read a, b: read b)?
+    dump(t: read eq)?
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-comparisons.rss",
+        "rsscript_parity_tensor_comparisons",
+        source,
+    );
+}
+
+#[test]
+fn parity_tensor_select() {
+    let source = r#"
+features: native, local
+
+fn dump(t: read Tensor) -> Result<Unit, TensorError> {
+    Log.write(message: read String.from_int(value: Tensor.dtype_code(t: read t)))
+    let values = Tensor.to_f32_slice(tensor: read t)?
+    let mut index = 0
+    while index < List.len(list: read values) {
+        Log.write(message: read Float.to_string(value: read List.get(list: read values, index: index)))
+        index = index + 1
+    }
+    return Ok(Unit)
+}
+
+fn main() -> Result<Unit, TensorError> {
+    let a = Tensor.from_f32_slice(data: read [1.0, 5.0, 3.0], shape: read [3])?
+    let b = Tensor.from_f32_slice(data: read [2.0, 5.0, 1.0], shape: read [3])?
+    let cond = Tensor.cmplt(a: read a, b: read b)?
+    let sel = Tensor.select(cond: read cond, a: read a, b: read b)?
+    dump(t: read sel)?
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-select.rss",
+        "rsscript_parity_tensor_select",
+        source,
+    );
+}
+
+#[test]
+fn parity_tensor_maximum_minimum() {
+    let source = r#"
+features: native, local
+
+fn dump(t: read Tensor) -> Result<Unit, TensorError> {
+    let values = Tensor.to_f32_slice(tensor: read t)?
+    let mut index = 0
+    while index < List.len(list: read values) {
+        Log.write(message: read Float.to_string(value: read List.get(list: read values, index: index)))
+        index = index + 1
+    }
+    return Ok(Unit)
+}
+
+fn main() -> Result<Unit, TensorError> {
+    let a = Tensor.from_f32_slice(data: read [1.0, 5.0, 3.0, 2.0], shape: read [2, 2])?
+    let b = Tensor.from_f32_slice(data: read [2.0, 5.0, 1.0, 9.0], shape: read [2, 2])?
+    let mx = Tensor.maximum(a: read a, b: read b)?
+    dump(t: read mx)?
+    let mn = Tensor.minimum(a: read a, b: read b)?
+    dump(t: read mn)?
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-maximum-minimum.rss",
+        "rsscript_parity_tensor_maximum_minimum",
+        source,
+    );
+}
+
+#[test]
+fn parity_tensor_casts() {
+    let source = r#"
+features: native, local
+
+fn dump(t: read Tensor) -> Result<Unit, TensorError> {
+    Log.write(message: read String.from_int(value: Tensor.dtype_code(t: read t)))
+    let values = Tensor.to_f32_slice(tensor: read t)?
+    let mut index = 0
+    while index < List.len(list: read values) {
+        Log.write(message: read Float.to_string(value: read List.get(list: read values, index: index)))
+        index = index + 1
+    }
+    return Ok(Unit)
+}
+
+fn main() -> Result<Unit, TensorError> {
+    let t = Tensor.from_f32_slice(data: read [1.7, 0.0, 0.0, 2.9], shape: read [2, 2])?
+    let neg = Tensor.from_f32_slice(data: read [0.0, 0.0, 0.0, 0.0], shape: read [2, 2])?
+    let mixed = Tensor.sub(a: read neg, b: read t)?
+    // dtype_code of a fresh F32 tensor.
+    Log.write(message: read String.from_int(value: Tensor.dtype_code(t: read t)))
+    let as_i = Tensor.cast_i32(t: read mixed)
+    dump(t: read as_i)?
+    let as_b = Tensor.cast_bool(t: read t)
+    dump(t: read as_b)?
+    let back_f = Tensor.cast_f32(t: read as_i)
+    dump(t: read back_f)?
+    // I32 + I32 -> I32 (dtype promotion check).
+    let sum_i = Tensor.add(a: read as_i, b: read as_i)?
+    Log.write(message: read String.from_int(value: Tensor.dtype_code(t: read sum_i)))
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-casts.rss",
+        "rsscript_parity_tensor_casts",
+        source,
+    );
+}

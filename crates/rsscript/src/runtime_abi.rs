@@ -434,6 +434,32 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "broadcast_to",
         "rsscript_runtime::tensor_broadcast_to",
     ),
+    runtime_intrinsic("Tensor", "cmplt", "rsscript_runtime::tensor_cmplt"),
+    runtime_intrinsic("Tensor", "cmpne", "rsscript_runtime::tensor_cmpne"),
+    runtime_intrinsic("Tensor", "cmpeq", "rsscript_runtime::tensor_cmpeq"),
+    runtime_intrinsic("Tensor", "select", "rsscript_runtime::tensor_select"),
+    runtime_intrinsic("Tensor", "maximum", "rsscript_runtime::tensor_maximum"),
+    runtime_intrinsic("Tensor", "minimum", "rsscript_runtime::tensor_minimum"),
+    runtime_intrinsic(
+        "Tensor",
+        "cast_f32",
+        "rsscript_runtime::tensor_cast_f32",
+    ),
+    runtime_intrinsic(
+        "Tensor",
+        "cast_i32",
+        "rsscript_runtime::tensor_cast_i32",
+    ),
+    runtime_intrinsic(
+        "Tensor",
+        "cast_bool",
+        "rsscript_runtime::tensor_cast_bool",
+    ),
+    runtime_intrinsic(
+        "Tensor",
+        "dtype_code",
+        "rsscript_runtime::tensor_dtype_code",
+    ),
     runtime_intrinsic(
         "TensorError",
         "message",

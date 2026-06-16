@@ -130,5 +130,51 @@ pub native fn Tensor.broadcast_to(
 ) -> Result<fresh Tensor, TensorError>
     effects(native)
 
+// Comparisons (slice: dtype + broadcasting foundation). All broadcast their two
+// operands (NumPy right-aligned) and return a Bool tensor (1.0 / 0.0). Error if the
+// shapes are not broadcast-compatible.
+pub native fn Tensor.cmplt(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+pub native fn Tensor.cmpne(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+pub native fn Tensor.cmpeq(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+// Select (tinygrad's `where`): pick `a` where `cond` is nonzero, else `b`. All
+// three broadcast together. Output dtype = F32 if either a/b is F32 else I32. Error
+// if the three shapes are not mutually broadcast-compatible.
+pub native fn Tensor.select(
+    cond: read Tensor,
+    a: read Tensor,
+    b: read Tensor,
+) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+// Elementwise maximum / minimum with broadcasting. Output dtype = F32 if either
+// operand is F32 else I32. Error if not broadcast-compatible.
+pub native fn Tensor.maximum(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+pub native fn Tensor.minimum(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+// Casts: reinterpret the dtype tag (with numeric coercion). Infallible.
+// cast_f32: values unchanged. cast_i32: each value truncated toward zero.
+// cast_bool: 1.0 where x != 0.0, else 0.0.
+pub native fn Tensor.cast_f32(t: read Tensor) -> fresh Tensor
+    effects(native)
+
+pub native fn Tensor.cast_i32(t: read Tensor) -> fresh Tensor
+    effects(native)
+
+pub native fn Tensor.cast_bool(t: read Tensor) -> fresh Tensor
+    effects(native)
+
+// The tensor's dtype as a numeric code: F32=0, I32=1, Bool=2. Infallible.
+pub native fn Tensor.dtype_code(t: read Tensor) -> Int
+    effects(native)
+
 pub fn TensorError.message(error: read TensorError) -> fresh String
     effects(pure)

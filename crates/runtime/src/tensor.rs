@@ -33,13 +33,55 @@ pub fn tensor_error_message(error: &TensorError) -> String {
     error.message.clone()
 }
 
+/// The element dtype of a tensor. The storage is ALWAYS `Vec<f32>` regardless of
+/// dtype; the tag only records how the values should be interpreted by callers and
+/// drives output-dtype promotion in the kernels:
+/// - `F32`: ordinary floats.
+/// - `I32`: integer values held exactly in `f32` (the caller guarantees
+///   `|x| <= 2^24`, where every integer is representable exactly).
+/// - `Bool`: exactly `0.0` or `1.0`.
+///
+/// This is the f32-backed + dtype-tag model: no separate integer/bool buffers, so
+/// every existing kernel keeps operating on `f32` and just stamps the right output
+/// tag. The numeric code (F32=0, I32=1, Bool=2) is exposed to RSScript via
+/// `tensor_dtype_code` for tests/introspection.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DType {
+    F32,
+    I32,
+    Bool,
+}
+
+impl DType {
+    fn code(self) -> i64 {
+        match self {
+            DType::F32 => 0,
+            DType::I32 => 1,
+            DType::Bool => 2,
+        }
+    }
+
+    /// Arithmetic promotion for binary elementwise ops (add/sub/mul/div, min/max,
+    /// select): the result is `F32` if either operand is `F32`, otherwise `I32`
+    /// (Bool is treated as an integer for arithmetic).
+    fn promote_arith(a: DType, b: DType) -> DType {
+        if a == DType::F32 || b == DType::F32 {
+            DType::F32
+        } else {
+            DType::I32
+        }
+    }
+}
+
 /// A packed, row-major tensor: `data.len() == shape.iter().product()`. The buffer
 /// is `Rc`-shared so handles clone cheaply and later slices can alias storage.
-/// Single-isolate (no `Send`/`Sync` bound), matching `RssChannel`.
+/// Single-isolate (no `Send`/`Sync` bound), matching `RssChannel`. `dtype` is a
+/// tag over the same `f32` storage (see `DType`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct RssTensor {
     data: Rc<Vec<f32>>,
     shape: Vec<usize>,
+    dtype: DType,
 }
 
 impl RssTensor {
@@ -56,6 +98,15 @@ impl RssTensor {
     pub fn shape(&self) -> &[usize] {
         &self.shape
     }
+
+    pub fn dtype(&self) -> DType {
+        self.dtype
+    }
+}
+
+/// The tensor's dtype as a numeric code: F32=0, I32=1, Bool=2. Infallible.
+pub fn tensor_dtype_code(t: &RssTensor) -> i64 {
+    t.dtype.code()
 }
 
 /// Build a tensor from an `f64` slice (narrowing to `f32`) and a shape given as
@@ -83,6 +134,7 @@ pub fn tensor_from_f32_slice(data: &[f64], shape: &[i64]) -> Result<RssTensor, T
     Ok(RssTensor {
         data: Rc::new(packed),
         shape: dims,
+        dtype: DType::F32,
     })
 }
 
@@ -147,90 +199,310 @@ pub fn tensor_matmul(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorEr
     Ok(RssTensor {
         data: Rc::new(out),
         shape: vec![m, n],
+        dtype: DType::F32,
     })
 }
 
-/// Apply a binary elementwise op over two same-shape tensors, producing a fresh
-/// tensor with the same shape. Returns a `TensorError` if the shapes differ.
-/// No broadcasting — shapes must match exactly (deferred to a later slice).
-fn tensor_binary_elementwise(
+/// Compute the NumPy-broadcast output shape of two shapes: right-aligned, each dim
+/// pair must be equal or one of them `1`; missing leading dims are treated as `1`.
+/// Returns the broadcast shape or a `TensorError` describing the incompatibility.
+fn broadcast_shapes(a: &[usize], b: &[usize], op_name: &str) -> Result<Vec<usize>, TensorError> {
+    let rank = a.len().max(b.len());
+    let mut out = vec![0usize; rank];
+    for i in 0..rank {
+        // Right-aligned: index from the back; absent leading dims are size 1.
+        let da = if i < a.len() { a[a.len() - 1 - i] } else { 1 };
+        let db = if i < b.len() { b[b.len() - 1 - i] } else { 1 };
+        let dim = if da == db {
+            da
+        } else if da == 1 {
+            db
+        } else if db == 1 {
+            da
+        } else {
+            return Err(TensorError::new(format!(
+                "{op_name}: shapes {a:?} and {b:?} are not broadcast-compatible (dim {da} vs {db})"
+            )));
+        };
+        out[rank - 1 - i] = dim;
+    }
+    Ok(out)
+}
+
+/// Broadcast strides for `src_shape` against `target`: right-aligned, stride 0 on
+/// any stretched (size-1) or absent leading dim. The caller guarantees `src_shape`
+/// is broadcast-compatible with `target` (validated by `broadcast_shapes`), so this
+/// never fails. Mirrors the stride logic in `tensor_broadcast_to`.
+fn broadcast_strides(src_shape: &[usize], target: &[usize]) -> Vec<usize> {
+    let src_rank = src_shape.len();
+    let tgt_rank = target.len();
+    let offset = tgt_rank - src_rank;
+    // Row-major strides of the (contiguous) source.
+    let mut row_strides = vec![0usize; src_rank];
+    let mut acc = 1usize;
+    for axis in (0..src_rank).rev() {
+        row_strides[axis] = acc;
+        acc *= src_shape[axis];
+    }
+    let mut strides = vec![0usize; tgt_rank];
+    for (d, slot) in strides.iter_mut().enumerate() {
+        if d < offset {
+            *slot = 0; // absent leading dim: size 1, stride 0.
+        } else {
+            let s = src_shape[d - offset];
+            *slot = if s == 1 { 0 } else { row_strides[d - offset] };
+        }
+    }
+    strides
+}
+
+/// Apply a binary elementwise op with NumPy broadcasting, producing a fresh tensor
+/// whose shape is the broadcast of `a.shape` and `b.shape` and whose dtype is
+/// `out_dtype`. For the equal-shape case this is a straight zipped map (bit-for-bit
+/// identical to the old non-broadcasting path); otherwise each operand is read via
+/// broadcast strides (stride 0 on stretched/absent dims). Errors if the shapes are
+/// not broadcast-compatible.
+fn tensor_broadcast_binary(
     a: &RssTensor,
     b: &RssTensor,
     op_name: &str,
+    out_dtype: DType,
     op: impl Fn(f32, f32) -> f32,
 ) -> Result<RssTensor, TensorError> {
-    if a.shape != b.shape {
-        return Err(TensorError::new(format!(
-            "{op_name} requires same-shape tensors, got {:?} and {:?}",
-            a.shape, b.shape
-        )));
+    // Fast path: identical shapes need no stride arithmetic and stay bit-identical
+    // to the original equal-shape kernel.
+    if a.shape == b.shape {
+        let out = a
+            .data
+            .iter()
+            .zip(b.data.iter())
+            .map(|(&x, &y)| op(x, y))
+            .collect::<Vec<f32>>();
+        return Ok(RssTensor {
+            data: Rc::new(out),
+            shape: a.shape.clone(),
+            dtype: out_dtype,
+        });
     }
-    let lhs = a.data.as_ref();
-    let rhs = b.data.as_ref();
-    let out = lhs
-        .iter()
-        .zip(rhs.iter())
-        .map(|(&x, &y)| op(x, y))
-        .collect::<Vec<f32>>();
+
+    let target = broadcast_shapes(&a.shape, &b.shape, op_name)?;
+    let rank = target.len();
+    let a_strides = broadcast_strides(&a.shape, &target);
+    let b_strides = broadcast_strides(&b.shape, &target);
+    let total = RssTensor::shape_len(&target);
+    let a_data = a.data.as_ref();
+    let b_data = b.data.as_ref();
+    let mut out = vec![0.0f32; total];
+    let mut index = vec![0usize; rank];
+    for slot in out.iter_mut() {
+        let mut a_off = 0usize;
+        let mut b_off = 0usize;
+        for d in 0..rank {
+            a_off += index[d] * a_strides[d];
+            b_off += index[d] * b_strides[d];
+        }
+        *slot = op(a_data[a_off], b_data[b_off]);
+        for d in (0..rank).rev() {
+            index[d] += 1;
+            if index[d] < target[d] {
+                break;
+            }
+            index[d] = 0;
+        }
+    }
     Ok(RssTensor {
         data: Rc::new(out),
-        shape: a.shape.clone(),
+        shape: target,
+        dtype: out_dtype,
     })
 }
 
-/// Apply a unary elementwise op, producing a fresh tensor with the same shape.
-/// Infallible.
-fn tensor_unary_elementwise(t: &RssTensor, op: impl Fn(f32) -> f32) -> RssTensor {
+/// Apply a unary elementwise op, producing a fresh tensor with the same shape and
+/// the given output dtype. Infallible.
+fn tensor_unary_elementwise(t: &RssTensor, out_dtype: DType, op: impl Fn(f32) -> f32) -> RssTensor {
     let out = t.data.iter().map(|&x| op(x)).collect::<Vec<f32>>();
     RssTensor {
         data: Rc::new(out),
         shape: t.shape.clone(),
+        dtype: out_dtype,
     }
 }
 
-/// Elementwise addition of two same-shape tensors.
+/// Elementwise addition with broadcasting. Output dtype: F32 if either operand is
+/// F32, else I32 (Bool treated as int).
 pub fn tensor_add(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
-    tensor_binary_elementwise(a, b, "add", |x, y| x + y)
+    tensor_broadcast_binary(a, b, "add", DType::promote_arith(a.dtype, b.dtype), |x, y| {
+        x + y
+    })
 }
 
-/// Elementwise subtraction (`a - b`) of two same-shape tensors.
+/// Elementwise subtraction (`a - b`) with broadcasting. Output dtype per arith
+/// promotion.
 pub fn tensor_sub(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
-    tensor_binary_elementwise(a, b, "sub", |x, y| x - y)
+    tensor_broadcast_binary(a, b, "sub", DType::promote_arith(a.dtype, b.dtype), |x, y| {
+        x - y
+    })
 }
 
-/// Elementwise multiplication of two same-shape tensors.
+/// Elementwise multiplication with broadcasting. Output dtype per arith promotion.
 pub fn tensor_mul(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
-    tensor_binary_elementwise(a, b, "mul", |x, y| x * y)
+    tensor_broadcast_binary(a, b, "mul", DType::promote_arith(a.dtype, b.dtype), |x, y| {
+        x * y
+    })
 }
 
-/// Elementwise division (`a / b`) of two same-shape tensors.
+/// Elementwise division (`a / b`) with broadcasting. Output dtype per arith
+/// promotion.
 pub fn tensor_div(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
-    tensor_binary_elementwise(a, b, "div", |x, y| x / y)
+    tensor_broadcast_binary(a, b, "div", DType::promote_arith(a.dtype, b.dtype), |x, y| {
+        x / y
+    })
 }
 
-/// Elementwise negation.
+/// Elementwise maximum with broadcasting. Output dtype per arith promotion.
+pub fn tensor_maximum(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
+    tensor_broadcast_binary(
+        a,
+        b,
+        "maximum",
+        DType::promote_arith(a.dtype, b.dtype),
+        |x, y| x.max(y),
+    )
+}
+
+/// Elementwise minimum with broadcasting. Output dtype per arith promotion.
+pub fn tensor_minimum(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
+    tensor_broadcast_binary(
+        a,
+        b,
+        "minimum",
+        DType::promote_arith(a.dtype, b.dtype),
+        |x, y| x.min(y),
+    )
+}
+
+/// Elementwise `a < b` with broadcasting; output dtype Bool (1.0/0.0).
+pub fn tensor_cmplt(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
+    tensor_broadcast_binary(a, b, "cmplt", DType::Bool, |x, y| {
+        if x < y {
+            1.0
+        } else {
+            0.0
+        }
+    })
+}
+
+/// Elementwise `a != b` with broadcasting; output dtype Bool (1.0/0.0).
+pub fn tensor_cmpne(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
+    tensor_broadcast_binary(a, b, "cmpne", DType::Bool, |x, y| {
+        if x != y {
+            1.0
+        } else {
+            0.0
+        }
+    })
+}
+
+/// Elementwise `a == b` with broadcasting; output dtype Bool (1.0/0.0).
+pub fn tensor_cmpeq(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
+    tensor_broadcast_binary(a, b, "cmpeq", DType::Bool, |x, y| {
+        if x == y {
+            1.0
+        } else {
+            0.0
+        }
+    })
+}
+
+/// Elementwise select (tinygrad's `where`): pick `a` where `cond` is nonzero, else
+/// `b`. All three broadcast together. Output dtype: F32 if either `a` or `b` is
+/// F32, else I32. Named `select` (not `where`) for RSScript naming clarity. Errors
+/// if the three shapes are not mutually broadcast-compatible.
+pub fn tensor_select(
+    cond: &RssTensor,
+    a: &RssTensor,
+    b: &RssTensor,
+) -> Result<RssTensor, TensorError> {
+    // Mutually broadcast all three: first cond+a, then that result against b.
+    let ca = broadcast_shapes(&cond.shape, &a.shape, "select")?;
+    let target = broadcast_shapes(&ca, &b.shape, "select")?;
+    let rank = target.len();
+    let cond_strides = broadcast_strides(&cond.shape, &target);
+    let a_strides = broadcast_strides(&a.shape, &target);
+    let b_strides = broadcast_strides(&b.shape, &target);
+    let total = RssTensor::shape_len(&target);
+    let cond_data = cond.data.as_ref();
+    let a_data = a.data.as_ref();
+    let b_data = b.data.as_ref();
+    let mut out = vec![0.0f32; total];
+    let mut index = vec![0usize; rank];
+    for slot in out.iter_mut() {
+        let mut c_off = 0usize;
+        let mut a_off = 0usize;
+        let mut b_off = 0usize;
+        for d in 0..rank {
+            c_off += index[d] * cond_strides[d];
+            a_off += index[d] * a_strides[d];
+            b_off += index[d] * b_strides[d];
+        }
+        *slot = if cond_data[c_off] != 0.0 {
+            a_data[a_off]
+        } else {
+            b_data[b_off]
+        };
+        for d in (0..rank).rev() {
+            index[d] += 1;
+            if index[d] < target[d] {
+                break;
+            }
+            index[d] = 0;
+        }
+    }
+    Ok(RssTensor {
+        data: Rc::new(out),
+        shape: target,
+        dtype: DType::promote_arith(a.dtype, b.dtype),
+    })
+}
+
+/// Cast to F32: values unchanged, only the dtype tag changes.
+pub fn tensor_cast_f32(t: &RssTensor) -> RssTensor {
+    tensor_unary_elementwise(t, DType::F32, |x| x)
+}
+
+/// Cast to I32: each value truncated toward zero (`x.trunc()`), dtype I32.
+pub fn tensor_cast_i32(t: &RssTensor) -> RssTensor {
+    tensor_unary_elementwise(t, DType::I32, |x| x.trunc())
+}
+
+/// Cast to Bool: value `1.0` where `x != 0.0` else `0.0`, dtype Bool.
+pub fn tensor_cast_bool(t: &RssTensor) -> RssTensor {
+    tensor_unary_elementwise(t, DType::Bool, |x| if x != 0.0 { 1.0 } else { 0.0 })
+}
+
+/// Elementwise negation. Preserves the input dtype.
 pub fn tensor_neg(t: &RssTensor) -> RssTensor {
-    tensor_unary_elementwise(t, |x| -x)
+    tensor_unary_elementwise(t, t.dtype, |x| -x)
 }
 
-/// Elementwise natural exponential.
+/// Elementwise natural exponential. Output dtype F32.
 pub fn tensor_exp(t: &RssTensor) -> RssTensor {
-    tensor_unary_elementwise(t, f32::exp)
+    tensor_unary_elementwise(t, DType::F32, f32::exp)
 }
 
-/// Elementwise natural logarithm.
+/// Elementwise natural logarithm. Output dtype F32.
 pub fn tensor_log(t: &RssTensor) -> RssTensor {
-    tensor_unary_elementwise(t, f32::ln)
+    tensor_unary_elementwise(t, DType::F32, f32::ln)
 }
 
-/// Elementwise square root.
+/// Elementwise square root. Output dtype F32.
 pub fn tensor_sqrt(t: &RssTensor) -> RssTensor {
-    tensor_unary_elementwise(t, f32::sqrt)
+    tensor_unary_elementwise(t, DType::F32, f32::sqrt)
 }
 
-/// Elementwise ReLU: `max(0, x)`.
+/// Elementwise ReLU: `max(0, x)`. Output dtype F32.
 pub fn tensor_relu(t: &RssTensor) -> RssTensor {
-    tensor_unary_elementwise(t, |x| x.max(0.0))
+    tensor_unary_elementwise(t, DType::F32, |x| x.max(0.0))
 }
 
 /// Sum of every element (a global reduction to a scalar `Float`). The accumulation
@@ -266,6 +538,7 @@ fn check_axis(shape: &[usize], axis: i64, op_name: &str) -> Result<usize, Tensor
 fn tensor_reduce_axis(
     t: &RssTensor,
     axis: usize,
+    out_dtype: DType,
     init: f32,
     combine: impl Fn(f32, f32) -> f32,
     finalize: impl Fn(f32, usize) -> f32,
@@ -298,36 +571,47 @@ fn tensor_reduce_axis(
     RssTensor {
         data: Rc::new(out),
         shape: out_shape,
+        dtype: out_dtype,
     }
 }
 
-/// Sum over one `axis`, removing it. Result is rank `rank-1`. Errors on an
-/// out-of-range axis.
+/// Sum over one `axis`, removing it. Result is rank `rank-1`, dtype F32. Errors on
+/// an out-of-range axis.
 pub fn tensor_sum_axis(t: &RssTensor, axis: i64) -> Result<RssTensor, TensorError> {
     let axis = check_axis(&t.shape, axis, "sum_axis")?;
-    Ok(tensor_reduce_axis(t, axis, 0.0, |acc, x| acc + x, |acc, _| acc))
+    Ok(tensor_reduce_axis(
+        t,
+        axis,
+        DType::F32,
+        0.0,
+        |acc, x| acc + x,
+        |acc, _| acc,
+    ))
 }
 
 /// Max over one `axis`, removing it. Seeded with `-inf` so any real value wins;
-/// note that an empty axis (dim 0) yields `-inf`. Errors on an out-of-range axis.
+/// note that an empty axis (dim 0) yields `-inf`. Output dtype = input dtype.
+/// Errors on an out-of-range axis.
 pub fn tensor_max_axis(t: &RssTensor, axis: i64) -> Result<RssTensor, TensorError> {
     let axis = check_axis(&t.shape, axis, "max_axis")?;
     Ok(tensor_reduce_axis(
         t,
         axis,
+        t.dtype,
         f32::NEG_INFINITY,
         |acc, x| acc.max(x),
         |acc, _| acc,
     ))
 }
 
-/// Mean over one `axis`, removing it (sum / axis length). Errors on an
+/// Mean over one `axis`, removing it (sum / axis length), dtype F32. Errors on an
 /// out-of-range axis.
 pub fn tensor_mean_axis(t: &RssTensor, axis: i64) -> Result<RssTensor, TensorError> {
     let axis = check_axis(&t.shape, axis, "mean_axis")?;
     Ok(tensor_reduce_axis(
         t,
         axis,
+        DType::F32,
         0.0,
         |acc, x| acc + x,
         |acc, len| if len == 0 { acc } else { acc / len as f32 },
@@ -370,6 +654,7 @@ pub fn tensor_argmax_axis(t: &RssTensor, axis: i64) -> Result<RssTensor, TensorE
     Ok(RssTensor {
         data: Rc::new(best_idx),
         shape: out_shape,
+        dtype: DType::I32,
     })
 }
 
@@ -410,6 +695,7 @@ pub fn tensor_reshape(t: &RssTensor, new_shape: &[i64]) -> Result<RssTensor, Ten
         // Zero-copy: share the existing buffer, only the shape differs.
         data: Rc::clone(&t.data),
         shape: dims,
+        dtype: t.dtype,
     })
 }
 
@@ -434,6 +720,7 @@ pub fn tensor_transpose(t: &RssTensor) -> Result<RssTensor, TensorError> {
     Ok(RssTensor {
         data: Rc::new(out),
         shape: vec![cols, rows],
+        dtype: t.dtype,
     })
 }
 
@@ -502,6 +789,7 @@ pub fn tensor_permute(t: &RssTensor, axes: &[i64]) -> Result<RssTensor, TensorEr
     Ok(RssTensor {
         data: Rc::new(out),
         shape: out_shape,
+        dtype: t.dtype,
     })
 }
 
@@ -580,6 +868,7 @@ pub fn tensor_broadcast_to(t: &RssTensor, target_shape: &[i64]) -> Result<RssTen
     Ok(RssTensor {
         data: Rc::new(out),
         shape: target,
+        dtype: t.dtype,
     })
 }
 
@@ -655,8 +944,102 @@ mod tests {
         let b = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]).unwrap();
         for op in [tensor_add, tensor_sub, tensor_mul, tensor_div] {
             let err = op(&a, &b).unwrap_err();
-            assert!(tensor_error_message(&err).contains("same-shape"));
+            assert!(tensor_error_message(&err).contains("not broadcast-compatible"));
         }
+    }
+
+    #[test]
+    fn binary_ops_broadcast() {
+        // [2,3] + [3] -> broadcast the row.
+        let a = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]).unwrap();
+        let row = tensor_from_f32_slice(&[10.0, 20.0, 30.0], &[3]).unwrap();
+        let sum = tensor_add(&a, &row).unwrap();
+        assert_eq!(tensor_shape(&sum).unwrap(), vec![2, 3]);
+        assert_eq!(
+            tensor_to_f32_slice(&sum).unwrap(),
+            vec![11.0, 22.0, 33.0, 14.0, 25.0, 36.0]
+        );
+        // [2,3] + [1,3] same result.
+        let row2 = tensor_from_f32_slice(&[10.0, 20.0, 30.0], &[1, 3]).unwrap();
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_add(&a, &row2).unwrap()).unwrap(),
+            tensor_to_f32_slice(&sum).unwrap()
+        );
+        // [2,1] * [2,3] stretches the column operand.
+        let col = tensor_from_f32_slice(&[2.0, 3.0], &[2, 1]).unwrap();
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_mul(&col, &a).unwrap()).unwrap(),
+            vec![2.0, 4.0, 6.0, 12.0, 15.0, 18.0]
+        );
+    }
+
+    #[test]
+    fn dtype_tags_and_promotion() {
+        let f = tensor_from_f32_slice(&[1.0, 2.0], &[2]).unwrap();
+        assert_eq!(tensor_dtype_code(&f), 0); // F32
+        let i = tensor_cast_i32(&tensor_from_f32_slice(&[1.7, -2.9], &[2]).unwrap());
+        assert_eq!(tensor_dtype_code(&i), 1); // I32
+        assert_eq!(tensor_to_f32_slice(&i).unwrap(), vec![1.0, -2.0]); // trunc toward zero
+        let bo = tensor_cast_bool(&tensor_from_f32_slice(&[0.0, 3.0], &[2]).unwrap());
+        assert_eq!(tensor_dtype_code(&bo), 2); // Bool
+        assert_eq!(tensor_to_f32_slice(&bo).unwrap(), vec![0.0, 1.0]);
+        // I32 + I32 -> I32; I32 + F32 -> F32.
+        let i2 = tensor_cast_i32(&f);
+        assert_eq!(tensor_dtype_code(&tensor_add(&i, &i2).unwrap()), 1);
+        assert_eq!(tensor_dtype_code(&tensor_add(&i, &f).unwrap()), 0);
+        // Bool treated as int: Bool + Bool -> I32.
+        assert_eq!(tensor_dtype_code(&tensor_add(&bo, &bo).unwrap()), 1);
+        // neg preserves dtype; exp promotes to F32; argmax -> I32; cast_f32 -> F32.
+        assert_eq!(tensor_dtype_code(&tensor_neg(&i)), 1);
+        assert_eq!(tensor_dtype_code(&tensor_exp(&i)), 0);
+        assert_eq!(tensor_dtype_code(&tensor_cast_f32(&i)), 0);
+        let m = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+        assert_eq!(tensor_dtype_code(&tensor_argmax_axis(&m, 0).unwrap()), 1);
+        assert_eq!(tensor_dtype_code(&tensor_sum_axis(&m, 0).unwrap()), 0);
+        // max_axis preserves input dtype.
+        assert_eq!(
+            tensor_dtype_code(&tensor_max_axis(&tensor_cast_i32(&m), 0).unwrap()),
+            1
+        );
+    }
+
+    #[test]
+    fn comparisons_and_select() {
+        let a = tensor_from_f32_slice(&[1.0, 5.0, 3.0], &[3]).unwrap();
+        let b = tensor_from_f32_slice(&[2.0, 5.0, 1.0], &[3]).unwrap();
+        let lt = tensor_cmplt(&a, &b).unwrap();
+        assert_eq!(tensor_dtype_code(&lt), 2);
+        assert_eq!(tensor_to_f32_slice(&lt).unwrap(), vec![1.0, 0.0, 0.0]);
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_cmpeq(&a, &b).unwrap()).unwrap(),
+            vec![0.0, 1.0, 0.0]
+        );
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_cmpne(&a, &b).unwrap()).unwrap(),
+            vec![1.0, 0.0, 1.0]
+        );
+        // select picks a where cond nonzero. cond = a<b.
+        let sel = tensor_select(&lt, &a, &b).unwrap();
+        assert_eq!(tensor_to_f32_slice(&sel).unwrap(), vec![1.0, 5.0, 1.0]);
+        // maximum/minimum.
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_maximum(&a, &b).unwrap()).unwrap(),
+            vec![2.0, 5.0, 3.0]
+        );
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_minimum(&a, &b).unwrap()).unwrap(),
+            vec![1.0, 5.0, 1.0]
+        );
+        // select broadcasts all three: scalar-ish cond [1] over [3].
+        let cond1 = tensor_cast_bool(&tensor_from_f32_slice(&[1.0], &[1]).unwrap());
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_select(&cond1, &a, &b).unwrap()).unwrap(),
+            vec![1.0, 5.0, 3.0]
+        );
+        // incompatible select shapes error.
+        let bad = tensor_from_f32_slice(&[1.0, 2.0], &[2]).unwrap();
+        assert!(tensor_error_message(&tensor_select(&lt, &a, &bad).unwrap_err())
+            .contains("not broadcast-compatible"));
     }
 
     #[test]
