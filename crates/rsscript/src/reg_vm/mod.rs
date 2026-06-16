@@ -2147,6 +2147,10 @@ enum RegIntrinsic {
     TensorSoftmax,
     TensorLogSoftmax,
     TensorCrossEntropy,
+    // conv (slice G)
+    TensorConv2d,
+    TensorMaxPool2d,
+    TensorAvgPool2d,
     TensorErrorMessage,
     CharCompare,
     CharFromCode,
@@ -5453,6 +5457,10 @@ fn qualified_intrinsic(namespace: &str, name: &str) -> Option<RegIntrinsic> {
         ("Tensor", "softmax") => Some(RegIntrinsic::TensorSoftmax),
         ("Tensor", "log_softmax") => Some(RegIntrinsic::TensorLogSoftmax),
         ("Tensor", "cross_entropy") => Some(RegIntrinsic::TensorCrossEntropy),
+        // conv (slice G)
+        ("Tensor", "conv2d") => Some(RegIntrinsic::TensorConv2d),
+        ("Tensor", "max_pool2d") => Some(RegIntrinsic::TensorMaxPool2d),
+        ("Tensor", "avg_pool2d") => Some(RegIntrinsic::TensorAvgPool2d),
         ("TensorError", "message") => Some(RegIntrinsic::TensorErrorMessage),
         ("Char", "compare") => Some(RegIntrinsic::CharCompare),
         ("Char", "from_code") => Some(RegIntrinsic::CharFromCode),
@@ -9764,6 +9772,38 @@ impl RegVm {
                         )),
                     },
                 ))
+            }
+            // conv (slice G)
+            RegIntrinsic::TensorConv2d => {
+                let input = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let weight = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let stride = expect_int_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
+                let padding = expect_int_ref(intrinsic_arg(&self.stack, base, args, 3)?)?;
+                Ok(json_result(
+                    match rsscript_runtime::tensor_conv2d(&input, &weight, stride, padding) {
+                        Ok(tensor) => Ok(self.store_tensor(tensor)),
+                        Err(error) => Err(tensor_error_value(
+                            rsscript_runtime::tensor_error_message(&error),
+                        )),
+                    },
+                ))
+            }
+            RegIntrinsic::TensorMaxPool2d | RegIntrinsic::TensorAvgPool2d => {
+                let input = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let kernel = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let stride = expect_int_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
+                let result = match intrinsic {
+                    RegIntrinsic::TensorMaxPool2d => {
+                        rsscript_runtime::tensor_max_pool2d(&input, kernel, stride)
+                    }
+                    _ => rsscript_runtime::tensor_avg_pool2d(&input, kernel, stride),
+                };
+                Ok(json_result(match result {
+                    Ok(tensor) => Ok(self.store_tensor(tensor)),
+                    Err(error) => Err(tensor_error_value(
+                        rsscript_runtime::tensor_error_message(&error),
+                    )),
+                }))
             }
             RegIntrinsic::CharCompare | RegIntrinsic::CharFromCode | RegIntrinsic::CharIsAlphanumeric | RegIntrinsic::CharIsAlpha | RegIntrinsic::CharIsDigit | RegIntrinsic::CharIsLower | RegIntrinsic::CharIsUpper | RegIntrinsic::CharIsWhitespace | RegIntrinsic::CharToCode | RegIntrinsic::CharToLower | RegIntrinsic::CharToString | RegIntrinsic::CharToUpper => self.exec_char_intrinsics(unit, intrinsic, args, base, next_base),
             RegIntrinsic::ClockNow => Ok(instant_value(clock_system_unix_ms())),

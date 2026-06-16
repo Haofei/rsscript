@@ -531,6 +531,18 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "cross_entropy",
         "rsscript_runtime::tensor_cross_entropy",
     ),
+    // conv (slice G)
+    runtime_intrinsic("Tensor", "conv2d", "rsscript_runtime::tensor_conv2d"),
+    runtime_intrinsic(
+        "Tensor",
+        "max_pool2d",
+        "rsscript_runtime::tensor_max_pool2d",
+    ),
+    runtime_intrinsic(
+        "Tensor",
+        "avg_pool2d",
+        "rsscript_runtime::tensor_avg_pool2d",
+    ),
     runtime_intrinsic(
         "TensorError",
         "message",
