@@ -16,6 +16,7 @@ LLMs); everything else lives here.
 | [DOCKER.md](DOCKER.md) | Containerized, cross-platform dev environment (Docker / VS Code / Codespaces). |
 | [spec-todo.md](spec-todo.md) | Prioritized list of unimplemented spec surface (the §3.2 / §20.1 superset). |
 | [cross-isolate-design.md](cross-isolate-design.md) | Feasibility + smallest-sound-slice plan for the cross-isolate message API (§20.2-3): message-channel core landed, multi-heap isolates still future. |
+| [ml-perf-todo.md](ml-perf-todo.md) | ML-framework perf plan: native tensor kernels (fix VM big-matrix cliff) + AOT build-time levers. |
 
 ## Implementation-planning specs (not yet normative)
 
