@@ -34,17 +34,17 @@ mod tests {
 
         super::execute(
             &path,
-            &"create table item(name text); insert into item values ('a'), ('b');".to_string(),
+            "create table item(name text); insert into item values ('a'), ('b');",
         )
         .expect("sqlite setup should work");
 
         assert_eq!(
-            super::query_strings(&path, &"select name from item order by name".to_string())
+            super::query_strings(&path, "select name from item order by name")
                 .expect("query should work"),
             vec!["a".to_string(), "b".to_string()]
         );
         assert_eq!(
-            super::query_one_string(&path, &"select name from item order by name".to_string())
+            super::query_one_string(&path, "select name from item order by name")
                 .expect("query should work"),
             Some("a".to_string())
         );

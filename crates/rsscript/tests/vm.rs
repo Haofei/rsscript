@@ -185,7 +185,7 @@ fn run_compiled_backend(
             .collect::<String>()
             .trim_matches('_')
     );
-    let package = lower_source_to_rust_package(file, source, &package_name, &runtime_path)
+    let package = lower_source_to_rust_package(file, source, &package_name, runtime_path)
         .expect("source should lower to Rust package");
     let package_dir = common::unique_temp_dir("rsscript-reg-vm-compiled-parity");
     write_generated_rust_package(&package_dir, &package).expect("generated package should write");
@@ -228,7 +228,7 @@ fn run_compiled_backend_with_return_harness(
             .collect::<String>()
             .trim_matches('_')
     );
-    let mut package = lower_source_to_rust_package(file, source, &package_name, &runtime_path)
+    let mut package = lower_source_to_rust_package(file, source, &package_name, runtime_path)
         .expect("source should lower to Rust package");
     let crate_name = package.package_name.replace('-', "_");
     if !package.lib_rs.contains("pub fn main(") {

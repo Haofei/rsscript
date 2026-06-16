@@ -1058,17 +1058,17 @@ mod tests {
         let start = std::time::Instant::now();
         loop {
             let mut progress = false;
-            if result_a.is_none() {
-                if let AsyncPoll::Ready(value) = executor.poll_once(&mut a) {
-                    result_a = Some(value);
-                    progress = true;
-                }
+            if result_a.is_none()
+                && let AsyncPoll::Ready(value) = executor.poll_once(&mut a)
+            {
+                result_a = Some(value);
+                progress = true;
             }
-            if result_b.is_none() {
-                if let AsyncPoll::Ready(value) = executor.poll_once(&mut b) {
-                    result_b = Some(value);
-                    progress = true;
-                }
+            if result_b.is_none()
+                && let AsyncPoll::Ready(value) = executor.poll_once(&mut b)
+            {
+                result_b = Some(value);
+                progress = true;
             }
             if result_a.is_some() && result_b.is_some() {
                 break;

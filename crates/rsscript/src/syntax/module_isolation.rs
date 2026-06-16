@@ -901,6 +901,56 @@ fn item_decl_name(item: &Item) -> Option<&str> {
     }
 }
 
+/// The flattened symbol for an associated constant `Type.MEMBER`, matching the
+/// `desugar::associated_consts` flattening (`.` -> `_`, upper-cased) so isolation
+/// resolves to the same constant the per-file desugar produced.
+fn flatten_associated_const(type_name: &str, member: &str) -> String {
+    format!("{type_name}_{member}").to_uppercase()
+}
+
+/// If `receiver` is a chain of plain identifiers (`a` or `a.b.c`) whose root is
+/// not shadowed by a local binding, return the candidate module prefix (encoded
+/// with the same injective scheme as declarations). Anything else (a method call,
+/// an indexed value, a literal, or a root that names an in-scope local) is a
+/// value receiver, not a module path.
+fn module_path_of_receiver(receiver: &Expr, scope: &HashSet<String>) -> Option<String> {
+    fn collect(expr: &Expr, segments: &mut Vec<String>) -> bool {
+        match expr {
+            Expr::Ident(name, _) => {
+                segments.push(name.clone());
+                true
+            }
+            Expr::Field { base, name, .. } => {
+                collect(base, segments) && {
+                    segments.push(name.clone());
+                    true
+                }
+            }
+            _ => false,
+        }
+    }
+    let mut segments = Vec::new();
+    if !collect(receiver, &mut segments) || segments.is_empty() {
+        return None;
+    }
+    if scope.contains(&segments[0]) {
+        return None;
+    }
+    Some(module_prefix(&segments))
+}
+
+fn item_file(item: &Item) -> Option<&str> {
+    Some(match item {
+        Item::Function(function) => function.span.file.as_str(),
+        Item::Const(decl) => decl.span.file.as_str(),
+        Item::Type(decl) => decl.span.file.as_str(),
+        Item::SumType(decl) => decl.span.file.as_str(),
+        Item::TypeAlias(decl) => decl.span.file.as_str(),
+        Item::Module(decl) => decl.span.file.as_str(),
+        Item::Use(decl) => decl.span.file.as_str(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1064,54 +1114,4 @@ mod tests {
             "multi-segment qualified call should resolve to a_b__count: {body}"
         );
     }
-}
-
-/// The flattened symbol for an associated constant `Type.MEMBER`, matching the
-/// `desugar::associated_consts` flattening (`.` -> `_`, upper-cased) so isolation
-/// resolves to the same constant the per-file desugar produced.
-fn flatten_associated_const(type_name: &str, member: &str) -> String {
-    format!("{type_name}_{member}").to_uppercase()
-}
-
-/// If `receiver` is a chain of plain identifiers (`a` or `a.b.c`) whose root is
-/// not shadowed by a local binding, return the candidate module prefix (encoded
-/// with the same injective scheme as declarations). Anything else (a method call,
-/// an indexed value, a literal, or a root that names an in-scope local) is a
-/// value receiver, not a module path.
-fn module_path_of_receiver(receiver: &Expr, scope: &HashSet<String>) -> Option<String> {
-    fn collect(expr: &Expr, segments: &mut Vec<String>) -> bool {
-        match expr {
-            Expr::Ident(name, _) => {
-                segments.push(name.clone());
-                true
-            }
-            Expr::Field { base, name, .. } => {
-                collect(base, segments) && {
-                    segments.push(name.clone());
-                    true
-                }
-            }
-            _ => false,
-        }
-    }
-    let mut segments = Vec::new();
-    if !collect(receiver, &mut segments) || segments.is_empty() {
-        return None;
-    }
-    if scope.contains(&segments[0]) {
-        return None;
-    }
-    Some(module_prefix(&segments))
-}
-
-fn item_file(item: &Item) -> Option<&str> {
-    Some(match item {
-        Item::Function(function) => function.span.file.as_str(),
-        Item::Const(decl) => decl.span.file.as_str(),
-        Item::Type(decl) => decl.span.file.as_str(),
-        Item::SumType(decl) => decl.span.file.as_str(),
-        Item::TypeAlias(decl) => decl.span.file.as_str(),
-        Item::Module(decl) => decl.span.file.as_str(),
-        Item::Use(decl) => decl.span.file.as_str(),
-    })
 }

@@ -194,7 +194,7 @@ fn enum_variants(source: &str, enum_name: &str) -> Vec<String> {
             continue;
         }
         let variant = trimmed
-            .split(|ch: char| ch == ' ' || ch == '{' || ch == '(' || ch == ',')
+            .split([' ', '{', '(', ','])
             .next()
             .expect("variant token should exist");
         variants.push(variant.to_string());

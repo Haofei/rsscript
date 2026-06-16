@@ -408,12 +408,12 @@ mod tests {
                         }
                     }
                 }
-                if let Some(pending) = &mut current_send {
-                    if let AsyncPoll::Ready(result) = executor.poll_once(pending) {
-                        result.unwrap();
-                        current_send = None;
-                        progress = true;
-                    }
+                if let Some(pending) = &mut current_send
+                    && let AsyncPoll::Ready(result) = executor.poll_once(pending)
+                {
+                    result.unwrap();
+                    current_send = None;
+                    progress = true;
                 }
             }
 

@@ -99,26 +99,24 @@ fn run_generated_rust_inner(args: &[String], stream_stdio: bool) -> ExitCode {
     // cargo's own up-to-date check make the rebuild a near no-op (often a direct
     // run of the cached binary). Correctness: the fingerprint covers every input
     // that affects generated output, so any change forces the full path below.
-    if !options.dry_run && options.out_dir.is_none() {
-        if let Some(package_name) = cli_input_package_name(path) {
-            let cache_dir = run_cache_dir(path, &package_name);
-            let cached_package_present = cache_dir.join("Cargo.toml").is_file()
-                && cache_dir.join("src/main.rs").is_file();
-            if cached_package_present {
-                if let Some(fingerprint) =
-                    run_input_fingerprint(path, &runtime_path, options.release)
-                {
-                    if read_cached_fingerprint(&cache_dir).as_deref() == Some(fingerprint.as_str()) {
-                        return run_cached_package(
-                            &cache_dir,
-                            options.release,
-                            &options.program_args,
-                            options.json,
-                            stream_stdio,
-                        );
-                    }
-                }
-            }
+    if !options.dry_run
+        && options.out_dir.is_none()
+        && let Some(package_name) = cli_input_package_name(path)
+    {
+        let cache_dir = run_cache_dir(path, &package_name);
+        let cached_package_present = cache_dir.join("Cargo.toml").is_file()
+            && cache_dir.join("src/main.rs").is_file();
+        if cached_package_present
+            && let Some(fingerprint) = run_input_fingerprint(path, &runtime_path, options.release)
+            && read_cached_fingerprint(&cache_dir).as_deref() == Some(fingerprint.as_str())
+        {
+            return run_cached_package(
+                &cache_dir,
+                options.release,
+                &options.program_args,
+                options.json,
+                stream_stdio,
+            );
         }
     }
 
@@ -169,10 +167,10 @@ fn run_generated_rust_inner(args: &[String], stream_stdio: bool) -> ExitCode {
     // fast path above. Only for the default cache dir; a user-chosen `--out-dir`
     // is left untouched. Written after the package files so a partial write never
     // leaves a fingerprint claiming a stale package is current.
-    if is_default_cache {
-        if let Some(fingerprint) = run_input_fingerprint(path, &runtime_path, options.release) {
-            write_cached_fingerprint(&package_dir, &fingerprint);
-        }
+    if is_default_cache
+        && let Some(fingerprint) = run_input_fingerprint(path, &runtime_path, options.release)
+    {
+        write_cached_fingerprint(&package_dir, &fingerprint);
     }
     build_and_run_package(
         &package_dir,

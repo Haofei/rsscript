@@ -35,16 +35,10 @@ mod tests {
     #[test]
     fn hashes_and_compares() {
         assert_eq!(
-            super::sha256_hex_string(&"abc".to_string()),
+            super::sha256_hex_string("abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
-        assert!(super::constant_time_equal(
-            &"same".to_string(),
-            &"same".to_string()
-        ));
-        assert!(!super::constant_time_equal(
-            &"same".to_string(),
-            &"different".to_string()
-        ));
+        assert!(super::constant_time_equal("same", "same"));
+        assert!(!super::constant_time_equal("same", "different"));
     }
 }
