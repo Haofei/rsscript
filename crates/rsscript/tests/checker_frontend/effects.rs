@@ -211,6 +211,82 @@ fn bad(buffers: read List<Buffer>) -> Unit {
 }
 
 #[test]
+fn checker_accepts_inline_manage_of_fresh_rvalue() {
+    // A struct constructor and a `fresh`-returning call are freshly produced,
+    // owned rvalues: inline `manage` of them is sound and must be accepted.
+    let source = r#"
+features: local
+
+struct Frame {
+    pixels: Int
+}
+
+fn make_frame() -> fresh Frame
+
+fn ok() -> Unit {
+    let shared = manage Frame(pixels: 0)
+    let from_call = manage make_frame()
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("inline-manage-fresh.rss", source);
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "RS0307"),
+        "inline manage of a fresh rvalue must not be rejected: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_rejects_inline_manage_of_unsound_rvalue() {
+    // Non-fresh rvalues may alias live state and must still be rejected with
+    // RS0307: a class constructor (managed identity, not fresh) and a plain
+    // (non-fresh) function call result.
+    let class_diags = analyze_source(
+        "inline-manage-class.rss",
+        r#"
+features: local
+
+class Session {
+    id: Int
+}
+
+fn bad_class() -> Unit {
+    let s = manage Session(id: 1)
+    return Unit
+}
+"#,
+    );
+    assert!(
+        class_diags.iter().any(|d| d.code == "RS0307"),
+        "inline manage of a class constructor must be rejected: {class_diags:?}"
+    );
+
+    let plain_diags = analyze_source(
+        "inline-manage-plain.rss",
+        r#"
+features: local
+
+struct Frame {
+    pixels: Int
+}
+
+fn plain_frame() -> Frame
+
+fn bad_plain_call() -> Unit {
+    let v = manage plain_frame()
+    return Unit
+}
+"#,
+    );
+    assert!(
+        plain_diags.iter().any(|d| d.code == "RS0307"),
+        "inline manage of a non-fresh call result must be rejected: {plain_diags:?}"
+    );
+}
+
+#[test]
 fn checker_accepts_closure_parameter_without_treating_closure_as_data_effect_param() {
     let source = r#"
 fn Scheduler.run(callback: Closure) -> Unit

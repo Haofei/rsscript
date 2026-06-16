@@ -93,6 +93,31 @@ fn main() -> Unit {
 }
 
 #[test]
+fn parity_inline_manage_of_fresh_rvalue() {
+    // Inline `manage` of a freshly produced struct constructor (no named local
+    // binding). The VM and compiled backend must agree on the managed value's
+    // observable field.
+    let source = r#"
+features: local
+
+struct Tally {
+    value: Int
+}
+
+fn main() -> Unit {
+    let shared = manage Tally(value: 7)
+    Log.write(message: read String.from_int(value: shared.value))
+    return Unit
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-inline-manage.rss",
+        "rsscript_parity_inline_manage",
+        source,
+    );
+}
+
+#[test]
 fn parity_option_and_result_match() {
     let source = r#"
 fn lookup(found: Bool) -> Option<Int> {
