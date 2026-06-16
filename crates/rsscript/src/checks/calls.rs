@@ -349,7 +349,7 @@ fn check_binding_type(
     if unresolved_generic_type(expected) {
         return;
     }
-    if check_binding_variant_payload_type(analyzer, name, expected, value) {
+    if check_variant_payload_type(analyzer, &PayloadCheckSite::Binding { name }, expected, value) {
         return;
     }
     let Some(actual) = actual.as_deref() else {
@@ -383,9 +383,81 @@ fn check_binding_type(
     ));
 }
 
-fn check_binding_variant_payload_type(
+/// Identifies which call site is performing the Result/Option variant
+/// payload-type check, so the shared logic can emit site-specific diagnostics
+/// and literal-context labels while keeping identical structure.
+enum PayloadCheckSite<'a> {
+    Binding {
+        name: &'a str,
+    },
+    Argument {
+        call_name: &'a str,
+        arg_name: &'a str,
+    },
+}
+
+impl PayloadCheckSite<'_> {
+    fn map_literal_label(&self) -> &'static str {
+        match self {
+            PayloadCheckSite::Binding { .. } => "binding payload",
+            PayloadCheckSite::Argument { .. } => "argument payload",
+        }
+    }
+
+    fn list_literal_label(&self) -> &'static str {
+        self.map_literal_label()
+    }
+
+    fn push_mismatch(
+        &self,
+        analyzer: &mut Analyzer<'_>,
+        actual: &str,
+        expected: &str,
+        span: &Span,
+    ) {
+        match self {
+            PayloadCheckSite::Binding { name } => {
+                analyzer.diagnostics.push(error_cause_manual_fix(
+                    code::ARGUMENT_TYPE_MISMATCH,
+                    format!(
+                        "binding `{name}` has initializer payload type `{actual}`, expected `{expected}`."
+                    ),
+                    span.clone(),
+                    "binding type mismatch",
+                    "Result and Option binding initializers are checked against explicit binding payload types before Rust lowering.",
+                    "match_binding_payload_type",
+                    format!("Initialize `{name}` with a `{expected}` payload, or change the binding annotation."),
+                ));
+            }
+            PayloadCheckSite::Argument {
+                call_name,
+                arg_name,
+            } => {
+                analyzer.diagnostics.push(error_cause_manual_fix(
+                    code::ARGUMENT_TYPE_MISMATCH,
+                    format!(
+                        "argument `{arg_name}` for `{call_name}` has payload type `{actual}`, expected `{expected}`."
+                    ),
+                    span.clone(),
+                    "argument type mismatch",
+                    "Result and Option argument constructors are checked against the resolved parameter payload before Rust lowering.",
+                    "match_argument_payload_type",
+                    format!("Pass a `{expected}` payload for `{arg_name}`."),
+                ));
+            }
+        }
+    }
+}
+
+/// Shared dispatcher for the Result/Option variant payload-type check used by
+/// both binding initializers and call arguments. Returns `true` when `value` is
+/// a Result/Option variant constructor whose payload was checked (so the caller
+/// should skip its ordinary type check), `false` otherwise. Behavior is
+/// identical across sites; only the emitted diagnostics differ (see
+/// `PayloadCheckSite`).
+fn check_variant_payload_type(
     analyzer: &mut Analyzer<'_>,
-    name: &str,
+    site: &PayloadCheckSite<'_>,
     expected_type: &str,
     value: &HirExpr,
 ) -> bool {
@@ -401,15 +473,9 @@ fn check_binding_variant_payload_type(
                 return false;
             };
             if let Some(payload) = payload {
-                check_binding_payload_type(analyzer, name, payload, &expected);
+                check_payload_type(analyzer, site, payload, &expected);
             } else if expected != "Unit" {
-                binding_payload_type_mismatch_diagnostic(
-                    analyzer,
-                    name,
-                    "Unit",
-                    &expected,
-                    hir_expr_span(value),
-                );
+                site.push_mismatch(analyzer, "Unit", &expected, hir_expr_span(value));
             }
             true
         }
@@ -427,15 +493,9 @@ fn check_binding_variant_payload_type(
             };
             let expected = expected.trim();
             if let Some(payload) = payload {
-                check_binding_payload_type(analyzer, name, payload, expected);
+                check_payload_type(analyzer, site, payload, expected);
             } else if expected != "Unit" {
-                binding_payload_type_mismatch_diagnostic(
-                    analyzer,
-                    name,
-                    "Unit",
-                    expected,
-                    hir_expr_span(value),
-                );
+                site.push_mismatch(analyzer, "Unit", expected, hir_expr_span(value));
             }
             true
         }
@@ -443,9 +503,12 @@ fn check_binding_variant_payload_type(
     }
 }
 
-fn check_binding_payload_type(
+/// Shared recursive payload-type check for the binding and argument sites:
+/// unwraps nested Result/Option constructors, accepts literals, and otherwise
+/// compares the payload type against `expected`.
+fn check_payload_type(
     analyzer: &mut Analyzer<'_>,
-    name: &str,
+    site: &PayloadCheckSite<'_>,
     payload: &HirExpr,
     expected: &str,
 ) {
@@ -453,25 +516,19 @@ fn check_binding_payload_type(
         && let Some(expected_payload) = expected_variant_payload_type(expected, variant)
     {
         if let Some(nested_payload) = nested_payload {
-            check_binding_payload_type(analyzer, name, nested_payload, &expected_payload);
+            check_payload_type(analyzer, site, nested_payload, &expected_payload);
         } else if expected_payload != "Unit" {
-            binding_payload_type_mismatch_diagnostic(
-                analyzer,
-                name,
-                "Unit",
-                &expected_payload,
-                hir_expr_span(payload),
-            );
+            site.push_mismatch(analyzer, "Unit", &expected_payload, hir_expr_span(payload));
         }
         return;
     }
     if json_value_accepts_literal(expected, payload) {
         return;
     }
-    if check_map_literal_type(analyzer, expected, payload, "binding payload") {
+    if check_map_literal_type(analyzer, expected, payload, site.map_literal_label()) {
         return;
     }
-    if check_list_literal_type(analyzer, expected, payload, "binding payload") {
+    if check_list_literal_type(analyzer, expected, payload, site.list_literal_label()) {
         return;
     }
     let Some(actual) = hir_expr_type_name(payload) else {
@@ -481,34 +538,8 @@ fn check_binding_payload_type(
         return;
     }
     if !argument_type_matches(expected, actual) {
-        binding_payload_type_mismatch_diagnostic(
-            analyzer,
-            name,
-            actual,
-            expected,
-            hir_expr_span(payload),
-        );
+        site.push_mismatch(analyzer, actual, expected, hir_expr_span(payload));
     }
-}
-
-fn binding_payload_type_mismatch_diagnostic(
-    analyzer: &mut Analyzer<'_>,
-    name: &str,
-    actual: &str,
-    expected: &str,
-    span: &Span,
-) {
-    analyzer.diagnostics.push(error_cause_manual_fix(
-        code::ARGUMENT_TYPE_MISMATCH,
-        format!(
-            "binding `{name}` has initializer payload type `{actual}`, expected `{expected}`."
-        ),
-        span.clone(),
-        "binding type mismatch",
-        "Result and Option binding initializers are checked against explicit binding payload types before Rust lowering.",
-        "match_binding_payload_type",
-        format!("Initialize `{name}` with a `{expected}` payload, or change the binding annotation."),
-    ));
 }
 
 fn check_expr(
@@ -1380,8 +1411,15 @@ fn check_argument_types(
         if type_contains_unresolved_generic(&expected_type, &signature.type_params) {
             continue;
         }
-        if check_argument_variant_payload_type(analyzer, call_name, name, &expected_type, &arg.value)
-        {
+        if check_variant_payload_type(
+            analyzer,
+            &PayloadCheckSite::Argument {
+                call_name,
+                arg_name: name,
+            },
+            &expected_type,
+            &arg.value,
+        ) {
             continue;
         }
         let Some(actual_type) = hir_expr_type_name(&arg.value) else {
@@ -3741,147 +3779,6 @@ fn type_pattern_matches(expected: &str, actual: &str, generic_params: &[String])
             .all(|(expected, actual)| {
                 type_pattern_matches(expected.trim(), actual.trim(), generic_params)
             })
-}
-
-fn check_argument_variant_payload_type(
-    analyzer: &mut Analyzer<'_>,
-    call_name: &str,
-    arg_name: &str,
-    expected_type: &str,
-    value: &HirExpr,
-) -> bool {
-    let Some((variant, payload)) = enum_variant_payload(value) else {
-        return false;
-    };
-    match (type_root_name(expected_type), variant) {
-        ("Option", "None") => true,
-        ("Option", "Some") => {
-            let Some(expected) = type_arg_names(expected_type)
-                .and_then(|args| args.first().map(|arg| arg.trim().to_string()))
-            else {
-                return false;
-            };
-            if let Some(payload) = payload {
-                check_argument_payload_type(analyzer, call_name, arg_name, payload, &expected);
-            } else if expected != "Unit" {
-                argument_payload_type_mismatch_diagnostic(
-                    analyzer,
-                    call_name,
-                    arg_name,
-                    "Unit",
-                    &expected,
-                    hir_expr_span(value),
-                );
-            }
-            true
-        }
-        ("Result", "Ok" | "Err") => {
-            let Some(args) = type_arg_names(expected_type) else {
-                return false;
-            };
-            let expected = match variant {
-                "Ok" => args.first().copied(),
-                "Err" => args.get(1).copied(),
-                _ => None,
-            };
-            let Some(expected) = expected else {
-                return false;
-            };
-            let expected = expected.trim();
-            if let Some(payload) = payload {
-                check_argument_payload_type(analyzer, call_name, arg_name, payload, expected);
-            } else if expected != "Unit" {
-                argument_payload_type_mismatch_diagnostic(
-                    analyzer,
-                    call_name,
-                    arg_name,
-                    "Unit",
-                    expected,
-                    hir_expr_span(value),
-                );
-            }
-            true
-        }
-        _ => false,
-    }
-}
-
-fn check_argument_payload_type(
-    analyzer: &mut Analyzer<'_>,
-    call_name: &str,
-    arg_name: &str,
-    payload: &HirExpr,
-    expected: &str,
-) {
-    if let Some((variant, nested_payload)) = enum_variant_payload(payload)
-        && let Some(expected_payload) = expected_variant_payload_type(expected, variant)
-    {
-        if let Some(nested_payload) = nested_payload {
-            check_argument_payload_type(
-                analyzer,
-                call_name,
-                arg_name,
-                nested_payload,
-                &expected_payload,
-            );
-        } else if expected_payload != "Unit" {
-            argument_payload_type_mismatch_diagnostic(
-                analyzer,
-                call_name,
-                arg_name,
-                "Unit",
-                &expected_payload,
-                hir_expr_span(payload),
-            );
-        }
-        return;
-    }
-    if json_value_accepts_literal(expected, payload) {
-        return;
-    }
-    if check_map_literal_type(analyzer, expected, payload, "argument payload") {
-        return;
-    }
-    if check_list_literal_type(analyzer, expected, payload, "argument payload") {
-        return;
-    }
-    let Some(actual) = hir_expr_type_name(payload) else {
-        return;
-    };
-    if unresolved_generic_type(actual) {
-        return;
-    }
-    if !argument_type_matches(expected, actual) {
-        argument_payload_type_mismatch_diagnostic(
-            analyzer,
-            call_name,
-            arg_name,
-            actual,
-            expected,
-            hir_expr_span(payload),
-        );
-    }
-}
-
-fn argument_payload_type_mismatch_diagnostic(
-    analyzer: &mut Analyzer<'_>,
-    call_name: &str,
-    arg_name: &str,
-    actual: &str,
-    expected: &str,
-    span: &Span,
-) {
-    analyzer.diagnostics.push(error_cause_manual_fix(
-        code::ARGUMENT_TYPE_MISMATCH,
-        format!(
-            "argument `{arg_name}` for `{call_name}` has payload type `{actual}`, expected `{expected}`."
-        ),
-        span.clone(),
-        "argument type mismatch",
-        "Result and Option argument constructors are checked against the resolved parameter payload before Rust lowering.",
-        "match_argument_payload_type",
-        format!("Pass a `{expected}` payload for `{arg_name}`."),
-    ));
 }
 
 fn is_closure_binding_call(
