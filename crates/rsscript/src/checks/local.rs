@@ -854,19 +854,7 @@ fn collect_ordered_moved_uses_from_expr(
             collect_ordered_moved_uses_from_expr(right, state, moved_uses);
         }
         HirExpr::Field { base, .. } => {
-            if let Some((path, span)) = hir_expr_path(expr) {
-                if let Some(root) = path_root(&path)
-                    && let Some(move_span) = state.move_span(root)
-                {
-                    push_moved_use(moved_uses, root.to_string(), span, move_span.clone());
-                    return;
-                }
-                if let Some((moved_path, move_span)) = state.moved_path_span(&path) {
-                    push_moved_use(moved_uses, moved_path, span, move_span.clone());
-                }
-            } else {
-                collect_ordered_moved_uses_from_expr(base, state, moved_uses);
-            }
+            collect_field_move_use(expr, base, state, moved_uses);
         }
         HirExpr::Index { base, index, .. } => {
             collect_ordered_moved_uses_from_expr(base, state, moved_uses);
@@ -922,6 +910,30 @@ fn collect_ordered_moved_uses_from_expr(
                 );
             }
         }
+    }
+}
+
+/// Handle the `HirExpr::Field` branch of move-use collection: resolve the field
+/// access to a path, recording a moved-use against the moved root or the moved
+/// path, falling back to recursing into the base when no path resolves.
+fn collect_field_move_use(
+    expr: &HirExpr,
+    base: &HirExpr,
+    state: &mut BodyState,
+    moved_uses: &mut Vec<MovedUse>,
+) {
+    if let Some((path, span)) = hir_expr_path(expr) {
+        if let Some(root) = path_root(&path)
+            && let Some(move_span) = state.move_span(root)
+        {
+            push_moved_use(moved_uses, root.to_string(), span, move_span.clone());
+            return;
+        }
+        if let Some((moved_path, move_span)) = state.moved_path_span(&path) {
+            push_moved_use(moved_uses, moved_path, span, move_span.clone());
+        }
+    } else {
+        collect_ordered_moved_uses_from_expr(base, state, moved_uses);
     }
 }
 
