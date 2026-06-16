@@ -65,6 +65,22 @@ pub native fn Tensor.matmul_metal(
 ) -> Result<fresh Tensor, TensorError>
     effects(native)
 
+// Compile and dispatch an arbitrary MSL kernel on the GPU. `source` is full MSL,
+// `fn_name` the kernel entry point. Each inner list of `inputs` is uploaded to
+// buffer(i); the output is buffer(inputs.len()), sized `out_len` f32s, dispatched
+// over `threads` linear grid threads. Returns the output floats. NOT bit-exact vs
+// CPU (GPU accumulation reorders); validate to f32 tolerance. The generic GPU
+// escape hatch the Metal renderer lowers kernel ASTs into. Errors on no GPU or an
+// MSL compile/dispatch failure.
+pub native fn Tensor.gpu_run_msl(
+    source: read String,
+    fn_name: read String,
+    inputs: read List<List<Float>>,
+    out_len: Int,
+    threads: Int,
+) -> Result<fresh List<Float>, TensorError>
+    effects(native)
+
 // Elementwise binary ops over two same-shape tensors. No broadcasting — the
 // shapes must match exactly (broadcasting is deferred to a later slice). Errors
 // on a shape mismatch.

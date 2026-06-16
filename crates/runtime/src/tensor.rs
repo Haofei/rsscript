@@ -278,6 +278,32 @@ pub fn tensor_matmul_metal(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, Te
     })
 }
 
+/// Compile and dispatch an arbitrary MSL kernel on the GPU. `source` is full MSL,
+/// `fn_name` the kernel entry point. Each `inputs[i]` (host f64s, narrowed to f32)
+/// is uploaded to `buffer(i)`; the output is `buffer(inputs.len())`, sized `out_len`
+/// f32s, dispatched over `threads` linear grid threads. Returns the output as f64s.
+/// This is the generic GPU-dispatch escape hatch the Metal renderer lowers kernel
+/// ASTs into — the analogue of the CPU clang-exec path, but on-device. NOT bit-exact
+/// vs CPU (GPU accumulation reorders); validate to f32 tolerance. Errors if no GPU is
+/// available or MSL compilation/dispatch fails.
+pub fn tensor_gpu_run_msl(
+    source: &str,
+    fn_name: &str,
+    inputs: &[Vec<f64>],
+    out_len: usize,
+    threads: usize,
+) -> Result<Vec<f64>, TensorError> {
+    // Narrow each host f64 input buffer to f32 for upload.
+    let f32_inputs: Vec<Vec<f32>> = inputs
+        .iter()
+        .map(|buf| buf.iter().map(|&v| v as f32).collect())
+        .collect();
+    let input_refs: Vec<&[f32]> = f32_inputs.iter().map(|b| b.as_slice()).collect();
+    let out = crate::metal::gpu_run_1d(source, fn_name, &input_refs, out_len, threads)
+        .map_err(TensorError::new)?;
+    Ok(out.into_iter().map(|v| v as f64).collect())
+}
+
 /// Compute the NumPy-broadcast output shape of two shapes: right-aligned, each dim
 /// pair must be equal or one of them `1`; missing leading dims are treated as `1`.
 /// Returns the broadcast shape or a `TensorError` describing the incompatibility.
@@ -2349,6 +2375,27 @@ mod tests {
     fn from_rejects_shape_mismatch() {
         let err = tensor_from_f32_slice(&[1.0, 2.0, 3.0], &[2, 2]).unwrap_err();
         assert!(tensor_error_message(&err).contains("does not match shape"));
+    }
+
+    #[test]
+    fn gpu_run_msl_elementwise_add() {
+        if !tensor_metal_available() {
+            return;
+        }
+        let src = r#"
+#include <metal_stdlib>
+using namespace metal;
+kernel void add(device const float* a [[buffer(0)]],
+                device const float* b [[buffer(1)]],
+                device float* c [[buffer(2)]],
+                uint i [[thread_position_in_grid]]) {
+    c[i] = a[i] + b[i];
+}
+"#;
+        let a = vec![1.0, 2.0, 3.0, 4.0];
+        let b = vec![10.0, 20.0, 30.0, 40.0];
+        let out = tensor_gpu_run_msl(src, "add", &[a, b], 4, 4).unwrap();
+        assert_eq!(out, vec![11.0, 22.0, 33.0, 44.0]);
     }
 
     #[test]
