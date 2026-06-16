@@ -186,12 +186,95 @@ pub(crate) fn select_runtime_path(
     ))
 }
 
+/// Resolves the generated package name for `input_path` without performing a
+/// full lowering, so the run cache directory can be located before deciding
+/// whether re-lowering is needed. Returns `None` for a package directory whose
+/// manifest can't be read (the caller then falls back to lowering).
+pub(crate) fn cli_input_package_name(input_path: &str) -> Option<String> {
+    if is_package_directory(input_path) {
+        package_lowering_input(Path::new(input_path))
+            .ok()
+            .map(|input| input.package.name)
+    } else {
+        Some(generated_package_name(input_path))
+    }
+}
+
 pub(crate) fn generated_package_name(path: &str) -> String {
     Path::new(path)
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or("rsscript-generated")
         .to_string()
+}
+
+/// Computes a content fingerprint of everything that affects the generated Rust
+/// package for `input_path`, so an unchanged run can reuse the cached package and
+/// skip re-lowering. Covers the raw source(s)/interfaces, the runtime path, the
+/// release flag, and a compiler-version marker (so a rebuilt `rss` invalidates
+/// stale generated output). Returns `None` if any input can't be read, which
+/// forces the cautious full lower+write path.
+pub(crate) fn run_input_fingerprint(
+    input_path: &str,
+    runtime_path: &Path,
+    release: bool,
+) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    // Compiler-version marker: a recompiled `rss` may lower differently.
+    parts.push(format!("rss-version:{}", env!("CARGO_PKG_VERSION")));
+    parts.push(format!("runtime:{}", runtime_path.display()));
+    parts.push(format!("release:{release}"));
+
+    if is_package_directory(input_path) {
+        let input = package_lowering_input(Path::new(input_path)).ok()?;
+        parts.push(format!("package:{}", input.package.name));
+        // Sources/interfaces already carry their contents; include the native
+        // dependency identity (path + features + bindings) since it changes the
+        // generated Cargo.toml and lowering.
+        let mut sources = input.sources.clone();
+        sources.sort();
+        for (path, contents) in &sources {
+            parts.push(format!("src:{path}\n{contents}"));
+        }
+        let mut interfaces = input.interfaces.clone();
+        interfaces.sort();
+        for (path, contents) in &interfaces {
+            parts.push(format!("iface:{path}\n{contents}"));
+        }
+        for dependency in &input.native_dependencies {
+            parts.push(format!(
+                "native:{}|{}|{}|{}",
+                dependency.crate_name,
+                dependency.path,
+                dependency.cargo_features.join(","),
+                dependency
+                    .bindings
+                    .iter()
+                    .map(|(key, value)| format!("{key}={value}"))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ));
+        }
+    } else {
+        let source = fs::read_to_string(input_path).ok()?;
+        parts.push(format!("file:{input_path}\n{source}"));
+    }
+
+    Some(stable_hash_hex(&parts.join("\u{1e}")))
+}
+
+/// Reads the fingerprint stored alongside a cached generated package.
+pub(crate) fn read_cached_fingerprint(cache_dir: &Path) -> Option<String> {
+    fs::read_to_string(cache_dir.join(".rss-cache-hash"))
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// Stores the fingerprint alongside the cached generated package.
+pub(crate) fn write_cached_fingerprint(cache_dir: &Path, fingerprint: &str) {
+    let _ = fs::create_dir_all(cache_dir);
+    let _ = fs::write(cache_dir.join(".rss-cache-hash"), fingerprint);
 }
 
 pub(crate) fn run_cache_dir(input_path: &str, package_name: &str) -> PathBuf {

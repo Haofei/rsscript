@@ -6,9 +6,9 @@ use rsscript::{
 };
 
 use super::{
-    cleanup_temp_dir, default_runtime_path, generated_target_dir_from_env,
-    lower_cli_input_to_rust_package, print_diagnostics, print_usage, required_flag_value,
-    run_cache_dir,
+    cleanup_temp_dir, cli_input_package_name, default_runtime_path, generated_target_dir_from_env,
+    lower_cli_input_to_rust_package, print_diagnostics, print_usage, read_cached_fingerprint,
+    required_flag_value, run_cache_dir, run_input_fingerprint, write_cached_fingerprint,
 };
 
 #[derive(Debug)]
@@ -93,6 +93,35 @@ fn run_generated_rust_inner(args: &[String], stream_stdio: bool) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // Fast path: for a default-cache run (no `--out-dir`, not a dry run), reuse a
+    // previously lowered + compiled package when the source, runtime, and release
+    // flag are byte-for-byte unchanged. This skips re-lowering entirely and lets
+    // cargo's own up-to-date check make the rebuild a near no-op (often a direct
+    // run of the cached binary). Correctness: the fingerprint covers every input
+    // that affects generated output, so any change forces the full path below.
+    if !options.dry_run && options.out_dir.is_none() {
+        if let Some(package_name) = cli_input_package_name(path) {
+            let cache_dir = run_cache_dir(path, &package_name);
+            let cached_package_present = cache_dir.join("Cargo.toml").is_file()
+                && cache_dir.join("src/main.rs").is_file();
+            if cached_package_present {
+                if let Some(fingerprint) =
+                    run_input_fingerprint(path, &runtime_path, options.release)
+                {
+                    if read_cached_fingerprint(&cache_dir).as_deref() == Some(fingerprint.as_str()) {
+                        return run_cached_package(
+                            &cache_dir,
+                            options.release,
+                            &options.program_args,
+                            options.json,
+                            stream_stdio,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     let package = match lower_cli_input_to_rust_package(path, &runtime_path, options.json) {
         Ok(package) => package,
         Err(exit_code) => return exit_code,
@@ -123,6 +152,7 @@ fn run_generated_rust_inner(args: &[String], stream_stdio: bool) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
+    let is_default_cache = options.out_dir.is_none();
     let package_dir = options
         .out_dir
         .map(PathBuf::from)
@@ -135,8 +165,50 @@ fn run_generated_rust_inner(args: &[String], stream_stdio: bool) -> ExitCode {
         }
         return ExitCode::from(2);
     }
+    // Record the input fingerprint so the next run of unchanged source hits the
+    // fast path above. Only for the default cache dir; a user-chosen `--out-dir`
+    // is left untouched. Written after the package files so a partial write never
+    // leaves a fingerprint claiming a stale package is current.
+    if is_default_cache {
+        if let Some(fingerprint) = run_input_fingerprint(path, &runtime_path, options.release) {
+            write_cached_fingerprint(&package_dir, &fingerprint);
+        }
+    }
+    build_and_run_package(
+        &package_dir,
+        options.release,
+        &options.program_args,
+        options.json,
+        stream_stdio,
+    )
+}
+
+/// Runs the fast-path cache hit: the generated package in `cache_dir` is already
+/// up to date for the current source, so cargo's incremental check makes this a
+/// near no-op build (or a direct run of the cached binary).
+fn run_cached_package(
+    cache_dir: &Path,
+    release: bool,
+    program_args: &[&str],
+    json: bool,
+    stream_stdio: bool,
+) -> ExitCode {
+    build_and_run_package(cache_dir, release, program_args, json, stream_stdio)
+}
+
+/// Invokes `cargo run` for the generated package in `package_dir` and translates
+/// its result into an [`ExitCode`], remapping backend diagnostics for the
+/// captured (non-streaming) path. Shared by the full lower+write path and the
+/// cached fast path so both behave identically.
+fn build_and_run_package(
+    package_dir: &Path,
+    release: bool,
+    program_args: &[&str],
+    json: bool,
+    stream_stdio: bool,
+) -> ExitCode {
     let mut cargo = Command::new("cargo");
-    for arg in cargo_run_args(&package_dir, options.release, &options.program_args) {
+    for arg in cargo_run_args(package_dir, release, program_args) {
         cargo.arg(arg);
     }
     if let Some(target_dir) = generated_target_dir_from_env() {
@@ -154,15 +226,9 @@ fn run_generated_rust_inner(args: &[String], stream_stdio: bool) -> ExitCode {
             Ok(status) => status,
             Err(error) => {
                 eprintln!("failed to run cargo: {error}");
-                if cleanup_package_dir {
-                    cleanup_temp_dir(&package_dir);
-                }
                 return ExitCode::from(2);
             }
         };
-        if cleanup_package_dir {
-            cleanup_temp_dir(&package_dir);
-        }
         return if status.success() {
             ExitCode::SUCCESS
         } else {
@@ -176,9 +242,6 @@ fn run_generated_rust_inner(args: &[String], stream_stdio: bool) -> ExitCode {
         Ok(output) => output,
         Err(error) => {
             eprintln!("failed to run cargo: {error}");
-            if cleanup_package_dir {
-                cleanup_temp_dir(&package_dir);
-            }
             return ExitCode::from(2);
         }
     };
@@ -187,27 +250,18 @@ fn run_generated_rust_inner(args: &[String], stream_stdio: bool) -> ExitCode {
         print!("{stdout}");
     }
     if output.status.success() {
-        if cleanup_package_dir {
-            cleanup_temp_dir(&package_dir);
-        }
         return ExitCode::SUCCESS;
     }
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     let diagnostics = parse_runtime_diagnostics(&stderr);
     if !diagnostics.is_empty() {
-        if cleanup_package_dir {
-            cleanup_temp_dir(&package_dir);
-        }
-        print_diagnostics(options.json, &diagnostics);
+        print_diagnostics(json, &diagnostics);
         return ExitCode::from(1);
     }
-    match check_generated_rust_package(&package_dir) {
+    match check_generated_rust_package(package_dir) {
         Ok(result) if !result.diagnostics.is_empty() => {
-            if cleanup_package_dir {
-                cleanup_temp_dir(&package_dir);
-            }
-            print_diagnostics(options.json, &result.diagnostics);
+            print_diagnostics(json, &result.diagnostics);
             return if result
                 .diagnostics
                 .iter()
@@ -222,9 +276,6 @@ fn run_generated_rust_inner(args: &[String], stream_stdio: bool) -> ExitCode {
         Err(error) => {
             eprintln!("{error}");
         }
-    }
-    if cleanup_package_dir {
-        cleanup_temp_dir(&package_dir);
     }
     if !stderr.trim().is_empty() {
         eprintln!("{}", stderr.trim());
