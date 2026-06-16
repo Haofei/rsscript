@@ -836,6 +836,22 @@ pub fn tensor_rsqrt(t: &RssTensor) -> RssTensor {
     tensor_unary_elementwise(t, DType::F32, |x| 1.0 / x.sqrt())
 }
 
+/// Elementwise sine (radians, `f32::sin`). Output dtype F32. This is tinygrad's
+/// `Ops.SIN` primitive — the last unary in the ALU set the PYTHON-backend
+/// evaluator (`eval_tensor`) handles, so adding it lets the native forward path
+/// cover every elementwise unary op.
+pub fn tensor_sin(t: &RssTensor) -> RssTensor {
+    tensor_unary_elementwise(t, DType::F32, f32::sin)
+}
+
+/// Elementwise truncation toward zero (`f32::trunc`): drops the fractional part,
+/// keeping the sign (`2.7 -> 2.0`, `-2.7 -> -2.0`). This is tinygrad's `Ops.TRUNC`
+/// (a float-result op, distinct from `cast_i32` which retags to I32) — the dtype is
+/// preserved so a truncated F32 stays F32.
+pub fn tensor_trunc(t: &RssTensor) -> RssTensor {
+    tensor_unary_elementwise(t, t.dtype, f32::trunc)
+}
+
 /// Elementwise power `a^b` with broadcasting (`f32::powf`). Output dtype F32.
 pub fn tensor_pow(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
     tensor_broadcast_binary(a, b, "pow", DType::F32, f32::powf)
@@ -1489,6 +1505,45 @@ pub fn tensor_idiv(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorErro
 /// is DEFINED to return 0. Broadcasts; output dtype I32.
 pub fn tensor_mod(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
     tensor_int_binary(a, b, "mod", |x, y| if y == 0 { 0 } else { x % y })
+}
+
+/// Floor of `x as i64 / y` (Python `//`): rounds toward NEGATIVE infinity, so the
+/// quotient sign follows the divisor (`-7 // 2 == -4`, not `-3`). This is distinct
+/// from `idiv` (truncate toward zero == tinygrad `Ops.CDIV`); this is tinygrad
+/// `Ops.FLOORDIV`. Division-by-zero is DEFINED to return 0. Broadcasts; dtype I32.
+pub fn tensor_floordiv(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
+    tensor_int_binary(a, b, "floordiv", |x, y| {
+        if y == 0 {
+            return 0;
+        }
+        let q = x / y;
+        let r = x % y;
+        // Truncated division rounds toward zero; nudge down by one when the exact
+        // result is negative and there is a remainder, recovering floor semantics.
+        if r != 0 && ((r < 0) != (y < 0)) {
+            q - 1
+        } else {
+            q
+        }
+    })
+}
+
+/// Floor modulo `x - floordiv(x, y) * y` (Python `%`): the remainder takes the sign
+/// of the DIVISOR (`-7 % 2 == 1`), unlike `mod`/`Ops.CMOD` whose sign follows the
+/// dividend. This is tinygrad `Ops.FLOORMOD`. Modulo-by-zero is DEFINED to return 0.
+/// Broadcasts; dtype I32.
+pub fn tensor_floormod(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
+    tensor_int_binary(a, b, "floormod", |x, y| {
+        if y == 0 {
+            return 0;
+        }
+        let r = x % y;
+        if r != 0 && ((r < 0) != (y < 0)) {
+            r + y
+        } else {
+            r
+        }
+    })
 }
 
 /// Left shift `a << b` on i64 values, the shift count masked to `0..63` to avoid
@@ -2266,6 +2321,74 @@ mod tests {
         assert_eq!(
             tensor_to_f32_slice(&tensor_div(&a, &b).unwrap()).unwrap(),
             vec![0.5, 1.0, 2.0, 4.0]
+        );
+    }
+
+    #[test]
+    fn sin_matches_libm() {
+        let t = tensor_from_f32_slice(&[0.0, 1.5707964, 3.1415927], &[3]).unwrap();
+        let out = tensor_to_f32_slice(&tensor_sin(&t)).unwrap();
+        assert!((out[0] - 0.0).abs() < 1e-6);
+        assert!((out[1] - 1.0).abs() < 1e-6);
+        assert!(out[2].abs() < 1e-6);
+        assert_eq!(tensor_sin(&t).dtype(), DType::F32);
+    }
+
+    #[test]
+    fn trunc_drops_fraction_toward_zero() {
+        let t = tensor_from_f32_slice(&[2.7, -2.7, 2.2, -2.2, 5.0], &[5]).unwrap();
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_trunc(&t)).unwrap(),
+            vec![2.0, -2.0, 2.0, -2.0, 5.0]
+        );
+        // TRUNC preserves dtype (unlike cast_i32 which retags to I32).
+        assert_eq!(tensor_trunc(&t).dtype(), DType::F32);
+    }
+
+    #[test]
+    fn floordiv_rounds_toward_negative_infinity() {
+        let a = tensor_from_f32_slice(&[7.0, -7.0, 7.0, -7.0, 6.0], &[5]).unwrap();
+        let b = tensor_from_f32_slice(&[2.0, 2.0, -2.0, -2.0, 3.0], &[5]).unwrap();
+        // floor: 7//2=3, -7//2=-4, 7//-2=-4, -7//-2=3, 6//3=2.
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_floordiv(&a, &b).unwrap()).unwrap(),
+            vec![3.0, -4.0, -4.0, 3.0, 2.0]
+        );
+        // Contrast with idiv (truncate toward zero): -7/2 == -3.
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_idiv(&a, &b).unwrap()).unwrap(),
+            vec![3.0, -3.0, -3.0, 3.0, 2.0]
+        );
+        assert_eq!(tensor_floordiv(&a, &b).unwrap().dtype(), DType::I32);
+    }
+
+    #[test]
+    fn floormod_sign_follows_divisor() {
+        let a = tensor_from_f32_slice(&[7.0, -7.0, 7.0, -7.0], &[4]).unwrap();
+        let b = tensor_from_f32_slice(&[2.0, 2.0, -2.0, -2.0], &[4]).unwrap();
+        // floormod: 7%2=1, -7%2=1, 7%-2=-1, -7%-2=-1 (sign of divisor).
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_floormod(&a, &b).unwrap()).unwrap(),
+            vec![1.0, 1.0, -1.0, -1.0]
+        );
+        // Contrast with mod (sign of dividend): -7%2 == -1.
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_mod(&a, &b).unwrap()).unwrap(),
+            vec![1.0, -1.0, 1.0, -1.0]
+        );
+    }
+
+    #[test]
+    fn floordiv_floormod_divide_by_zero_is_zero() {
+        let a = tensor_from_f32_slice(&[5.0, -5.0], &[2]).unwrap();
+        let z = tensor_from_f32_slice(&[0.0, 0.0], &[2]).unwrap();
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_floordiv(&a, &z).unwrap()).unwrap(),
+            vec![0.0, 0.0]
+        );
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_floormod(&a, &z).unwrap()).unwrap(),
+            vec![0.0, 0.0]
         );
     }
 
