@@ -1,0 +1,4 @@
+kind = "execution"
+backends = ["vm", "compiled"]
+stdout = "3\n"
+tags = ["arithmetic"]

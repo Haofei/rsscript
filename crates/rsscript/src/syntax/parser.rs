@@ -4198,6 +4198,12 @@ fn statement_end(tokens: &[Token], start: usize, limit: usize) -> usize {
     let mut angle_depth = 0usize;
     let mut postfix_continuation_line = None;
     for (index, token) in tokens.iter().enumerate().take(limit).skip(start + 1) {
+        // A top-level `;` explicitly terminates the statement, letting several
+        // statements share a line (`a; b; c`). `collect_statements` skips the
+        // `;` itself on the next iteration since it is a trivia boundary.
+        if depth == 0 && angle_depth == 0 && token.symbol(";") {
+            return index;
+        }
         if depth == 0 && angle_depth == 0 && token.span.line > line {
             if postfix_continuation_line == Some(token.span.line) {
                 // Keep scanning the receiver-call segment that began with a
