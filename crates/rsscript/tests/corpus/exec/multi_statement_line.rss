@@ -1,0 +1,6 @@
+fn main() -> Unit {
+    let a = 1; let b = 2; let c = a + b;
+    Log.write(message: read String.from_int(value: c))
+    ;;
+    return Unit
+}
