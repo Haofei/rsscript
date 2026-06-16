@@ -364,3 +364,145 @@ fn main() -> Result<Unit, TensorError> {
         source,
     );
 }
+
+#[test]
+fn parity_tensor_sum_all() {
+    let source = r#"
+features: native, local
+
+fn main() -> Result<Unit, TensorError> {
+    let t = Tensor.from_f32_slice(
+        data: read [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        shape: read [2, 3],
+    )?
+    let total = Tensor.sum_all(t: read t)
+    Log.write(message: read Float.to_string(value: read total))
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-sum-all.rss",
+        "rsscript_parity_tensor_sum_all",
+        source,
+    );
+}
+
+#[test]
+fn parity_tensor_reduce_axis() {
+    let source = r#"
+features: native, local
+
+fn dump(t: read Tensor) -> Result<Unit, TensorError> {
+    let dims = Tensor.shape(tensor: read t)?
+    let mut d = 0
+    while d < List.len(list: read dims) {
+        Log.write(message: read String.from_int(value: List.get(list: read dims, index: d)))
+        d = d + 1
+    }
+    let values = Tensor.to_f32_slice(tensor: read t)?
+    let mut index = 0
+    while index < List.len(list: read values) {
+        Log.write(message: read Float.to_string(value: read List.get(list: read values, index: index)))
+        index = index + 1
+    }
+    return Ok(Unit)
+}
+
+fn main() -> Result<Unit, TensorError> {
+    // [[1,2,3],[4,5,6]]
+    let t = Tensor.from_f32_slice(
+        data: read [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        shape: read [2, 3],
+    )?
+    let s0 = Tensor.sum_axis(t: read t, axis: 0)?
+    dump(t: read s0)?
+    let s1 = Tensor.sum_axis(t: read t, axis: 1)?
+    dump(t: read s1)?
+    let mx = Tensor.max_axis(t: read t, axis: 0)?
+    dump(t: read mx)?
+    let mn = Tensor.mean_axis(t: read t, axis: 1)?
+    dump(t: read mn)?
+    let am0 = Tensor.argmax_axis(t: read t, axis: 0)?
+    dump(t: read am0)?
+    let am1 = Tensor.argmax_axis(t: read t, axis: 1)?
+    dump(t: read am1)?
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-reduce-axis.rss",
+        "rsscript_parity_tensor_reduce_axis",
+        source,
+    );
+}
+
+#[test]
+fn parity_tensor_reduce_axis_error() {
+    let source = r#"
+features: native, local
+
+fn main() -> Result<Unit, TensorError> {
+    let t = Tensor.from_f32_slice(data: read [1.0, 2.0, 3.0, 4.0], shape: read [2, 2])?
+    local bad = Tensor.sum_axis(t: read t, axis: 5)
+    match bad {
+        Ok(_) => {
+            Log.write(message: read "ok")
+        }
+        Err(error) => {
+            Log.write(message: read TensorError.message(error: read error))
+        }
+    }
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-reduce-axis-error.rss",
+        "rsscript_parity_tensor_reduce_axis_error",
+        source,
+    );
+}
+
+/// A larger rank-3 reduction (shape [8,16,32]) reduced over the middle axis,
+/// exercising the strided contiguous walk natively on both backends. Prints a few
+/// sampled cells so output stays compact while the whole buffer is computed.
+#[test]
+fn parity_tensor_large_reduce() {
+    let source = r#"
+features: native, local
+
+fn main() -> Result<Unit, TensorError> {
+    local data = List<Float>.new()
+    let total = 8 * 16 * 32
+    let mut k = 0
+    while k < total {
+        List.push<Float>(list: mut data, value: read Int.to_float(value: read k))
+        k = k + 1
+    }
+    let t = Tensor.from_f32_slice(data: read data, shape: read [8, 16, 32])?
+    // reduce middle axis -> shape [8, 32]
+    let summed = Tensor.sum_axis(t: read t, axis: 1)?
+    let dims = Tensor.shape(tensor: read summed)?
+    Log.write(message: read String.from_int(value: List.get(list: read dims, index: 0)))
+    Log.write(message: read String.from_int(value: List.get(list: read dims, index: 1)))
+    let values = Tensor.to_f32_slice(tensor: read summed)?
+    let mut i = 0
+    while i < List.len(list: read values) {
+        Log.write(message: read Float.to_string(value: read List.get(list: read values, index: i)))
+        i = i + 37
+    }
+    let means = Tensor.mean_axis(t: read t, axis: 2)?
+    let mvals = Tensor.to_f32_slice(tensor: read means)?
+    let mut j = 0
+    while j < List.len(list: read mvals) {
+        Log.write(message: read Float.to_string(value: read List.get(list: read mvals, index: j)))
+        j = j + 17
+    }
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-large-reduce.rss",
+        "rsscript_parity_tensor_large_reduce",
+        source,
+    );
+}

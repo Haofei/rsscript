@@ -69,5 +69,32 @@ pub native fn Tensor.sqrt(t: read Tensor) -> fresh Tensor
 pub native fn Tensor.relu(t: read Tensor) -> fresh Tensor
     effects(native)
 
+// Reductions (slice 3). `sum_all` is a global reduction to a scalar `Float`
+// (infallible). The per-axis reductions remove the given axis, producing a tensor
+// of rank `rank-1` (e.g. shape [2,3,4] reduce axis 1 -> [2,4]); they error if the
+// axis is out of range.
+
+// Sum of every element.
+pub native fn Tensor.sum_all(t: read Tensor) -> Float
+    effects(native)
+
+// Sum over one axis, removing it.
+pub native fn Tensor.sum_axis(t: read Tensor, axis: Int) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+// Max over one axis, removing it.
+pub native fn Tensor.max_axis(t: read Tensor, axis: Int) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+// Mean (sum / axis length) over one axis, removing it.
+pub native fn Tensor.mean_axis(t: read Tensor, axis: Int) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+// Index of the max over one axis, removing it. The result tensor holds the
+// integer indices stored as `f32` (read them back via `to_f32_slice` and round).
+// Ties resolve to the lowest index.
+pub native fn Tensor.argmax_axis(t: read Tensor, axis: Int) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
 pub fn TensorError.message(error: read TensorError) -> fresh String
     effects(pure)

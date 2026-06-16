@@ -413,6 +413,15 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("Tensor", "log", "rsscript_runtime::tensor_log"),
     runtime_intrinsic("Tensor", "sqrt", "rsscript_runtime::tensor_sqrt"),
     runtime_intrinsic("Tensor", "relu", "rsscript_runtime::tensor_relu"),
+    runtime_intrinsic("Tensor", "sum_all", "rsscript_runtime::tensor_sum_all"),
+    runtime_intrinsic("Tensor", "sum_axis", "rsscript_runtime::tensor_sum_axis"),
+    runtime_intrinsic("Tensor", "max_axis", "rsscript_runtime::tensor_max_axis"),
+    runtime_intrinsic("Tensor", "mean_axis", "rsscript_runtime::tensor_mean_axis"),
+    runtime_intrinsic(
+        "Tensor",
+        "argmax_axis",
+        "rsscript_runtime::tensor_argmax_axis",
+    ),
     runtime_intrinsic(
         "TensorError",
         "message",
