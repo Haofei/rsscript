@@ -693,3 +693,35 @@ impl Writer for BufferWriter {
             && diagnostic.label == "protocol implementation signature mismatch"
     }));
 }
+
+#[test]
+fn deep_logical_chain_lowers_to_balanced_shallow_tree() {
+    // A long `&&` chain must lower to a *balanced* Rust expression (O(log n) paren
+    // nesting) rather than a left-linear nest, so rustc doesn't overflow compiling
+    // the generated crate (replacing the `RUST_MIN_STACK=2g` workaround). `&&`/`||`
+    // are associative for value AND short-circuit order, so regrouping is sound.
+    // 40 operands: enough to trigger balanced lowering (threshold 8) and to
+    // distinguish balanced (~log2(40) ≈ 6 deep) from left-linear (~40 deep). Kept
+    // modest so the recursive parse/HIR passes don't overflow the small cargo-test
+    // thread stack (the `rss` binary handles far deeper on its main-thread stack).
+    let conds = (0..40)
+        .map(|i| format!("x > {i}"))
+        .collect::<Vec<_>>()
+        .join(" && ");
+    let source = format!("fn deep(x: Int) -> Bool {{\n    return {conds}\n}}\n");
+    let rust =
+        lower_source_to_rust("deep-bool-chain.rss", &source).expect("deep && chain should lower");
+
+    // Left-linear lowering of 40 operands would produce ~40 consecutive `(`;
+    // a balanced tree's deepest path is far shallower.
+    assert!(
+        !rust.contains(&"(".repeat(20)),
+        "deep `&&` chain must lower to a balanced (shallow) tree, not a left-linear nest"
+    );
+    // Generated code over-parenthesizes for structural correctness; the crate
+    // header allows the resulting (benign) unused_parens lint.
+    assert!(
+        rust.contains("unused_parens"),
+        "generated crate should allow(unused_parens) for the balanced regrouping"
+    );
+}
