@@ -1102,15 +1102,109 @@ fn check_call_args(
         .map(|param| param.name.clone())
         .collect();
 
+    // Resolve each argument's target parameter name exactly once and reuse it
+    // across every per-arg validation phase below. The resolution depends only on
+    // the argument, its position, and these fixed inputs, so it is identical in
+    // each phase — sharing it does not change which diagnostics fire or in what
+    // order.
+    let resolved_names: Vec<Option<&str>> = args
+        .iter()
+        .enumerate()
+        .map(|(index, arg)| {
+            resolved_arg_param_name(
+                arg,
+                index,
+                allow_constructor_field_shorthand,
+                allow_positional_args,
+                &param_names,
+                &signature_params,
+            )
+        })
+        .collect();
+
+    check_argument_naming(
+        analyzer,
+        args,
+        &call_name,
+        allow_positional_args,
+        allow_constructor_field_shorthand,
+        &param_names,
+        &signature_params,
+        &resolved_names,
+    );
+    check_argument_completeness(
+        analyzer,
+        &call_name,
+        call_span,
+        &signature_params,
+        &resolved_names,
+    );
+    check_argument_effects(
+        analyzer,
+        args,
+        &call_name,
+        allow_positional_args,
+        &param_effects,
+        &resolved_names,
+    );
+
+    let type_param_substitutions =
+        call_type_param_substitutions(analyzer, Some(function), callee, args, signature);
+    check_generic_call_bounds(
+        analyzer,
+        function,
+        callee,
+        &call_name,
+        &signature,
+        &type_param_substitutions,
+        call_span,
+    );
+    check_message_channel_payload(
+        analyzer,
+        function,
+        &call_name,
+        &signature,
+        &type_param_substitutions,
+        call_span,
+    );
+
+    check_argument_types(
+        analyzer,
+        args,
+        &call_name,
+        signature,
+        &type_param_substitutions,
+        &resolved_names,
+    );
+    check_argument_escaping(
+        analyzer,
+        args,
+        &call_name,
+        signature,
+        noescape_bindings,
+        local_closure_bindings,
+        &resolved_names,
+    );
+}
+
+/// Phase 1: enforce argument naming rules — unnamed arguments where they are not
+/// allowed, duplicate arguments, and unknown argument names.
+#[allow(clippy::too_many_arguments)]
+fn check_argument_naming(
+    analyzer: &mut Analyzer<'_>,
+    args: &[HirCallArg],
+    call_name: &str,
+    allow_positional_args: bool,
+    allow_constructor_field_shorthand: bool,
+    param_names: &HashSet<String>,
+    signature_params: &[ParamSig],
+    resolved_names: &[Option<&str>],
+) {
     for arg in args {
         if arg.name.is_none()
             && !allow_positional_args
-            && constructor_field_shorthand_name(
-                allow_constructor_field_shorthand,
-                arg,
-                &param_names,
-            )
-            .is_none()
+            && constructor_field_shorthand_name(allow_constructor_field_shorthand, arg, param_names)
+                .is_none()
         {
             analyzer.diagnostics.push(
                 Diagnostic::error(
@@ -1131,15 +1225,8 @@ fn check_call_args(
 
     let mut seen_names = HashSet::new();
     let mut seen_positional_params = HashSet::new();
-    for (index, arg) in args.iter().enumerate() {
-        let Some(name) = resolved_arg_param_name(
-            arg,
-            index,
-            allow_constructor_field_shorthand,
-            allow_positional_args,
-            &param_names,
-            &signature_params,
-        ) else {
+    for (arg, resolved) in args.iter().zip(resolved_names) {
+        let Some(name) = *resolved else {
             continue;
         };
         if arg.name.is_none() && !seen_positional_params.insert(name) {
@@ -1174,28 +1261,25 @@ fn check_call_args(
                 ))
                 .with_fix(
                     "rename_argument",
-                    format!("Use one of: {}.", join_param_names(&signature_params)),
+                    format!("Use one of: {}.", join_param_names(signature_params)),
                     "manual",
                 ),
             );
         }
     }
+}
 
-    let provided_names: HashSet<&str> = args
-        .iter()
-        .enumerate()
-        .filter_map(|(index, arg)| {
-            resolved_arg_param_name(
-                arg,
-                index,
-                allow_constructor_field_shorthand,
-                allow_positional_args,
-                &param_names,
-                &signature_params,
-            )
-        })
-        .collect();
-    for param in &signature_params {
+/// Phase 2: enforce argument completeness — every required parameter must be
+/// provided.
+fn check_argument_completeness(
+    analyzer: &mut Analyzer<'_>,
+    call_name: &str,
+    call_span: &Span,
+    signature_params: &[ParamSig],
+    resolved_names: &[Option<&str>],
+) {
+    let provided_names: HashSet<&str> = resolved_names.iter().filter_map(|name| *name).collect();
+    for param in signature_params {
         if !provided_names.contains(param.name.as_str()) {
             analyzer.diagnostics.push(
                 Diagnostic::error(
@@ -1219,16 +1303,20 @@ fn check_call_args(
             );
         }
     }
+}
 
-    for (index, arg) in args.iter().enumerate() {
-        let Some(name) = resolved_arg_param_name(
-            arg,
-            index,
-            allow_constructor_field_shorthand,
-            allow_positional_args,
-            &param_names,
-            &signature_params,
-        ) else {
+/// Phase 3: enforce call-site data effects (`read`/`mut`/`take`) for parameters
+/// that declare one.
+fn check_argument_effects(
+    analyzer: &mut Analyzer<'_>,
+    args: &[HirCallArg],
+    call_name: &str,
+    allow_positional_args: bool,
+    param_effects: &HashMap<String, &'static str>,
+    resolved_names: &[Option<&str>],
+) {
+    for (arg, resolved) in args.iter().zip(resolved_names) {
+        let Some(name) = *resolved else {
             continue;
         };
         let Some(expected) = param_effects.get(name) else {
@@ -1258,46 +1346,30 @@ fn check_call_args(
             );
         }
     }
+}
 
-    let type_param_substitutions =
-        call_type_param_substitutions(analyzer, Some(function), callee, args, signature);
-    check_generic_call_bounds(
-        analyzer,
-        function,
-        callee,
-        &call_name,
-        &signature,
-        &type_param_substitutions,
-        call_span,
-    );
-    check_message_channel_payload(
-        analyzer,
-        function,
-        &call_name,
-        &signature,
-        &type_param_substitutions,
-        call_span,
-    );
-
-    for (index, arg) in args.iter().enumerate() {
-        let Some(name) = resolved_arg_param_name(
-            arg,
-            index,
-            allow_constructor_field_shorthand,
-            allow_positional_args,
-            &param_names,
-            &signature_params,
-        ) else {
+/// Phase 4: check each argument's type against the resolved signature parameter
+/// (after type-parameter substitution).
+fn check_argument_types(
+    analyzer: &mut Analyzer<'_>,
+    args: &[HirCallArg],
+    call_name: &str,
+    signature: &FunctionSig,
+    type_param_substitutions: &HashMap<String, String>,
+    resolved_names: &[Option<&str>],
+) {
+    for (arg, resolved) in args.iter().zip(resolved_names) {
+        let Some(name) = *resolved else {
             continue;
         };
         let Some(expected_param) = signature.params.iter().find(|param| param.name == name) else {
             continue;
         };
         let expected_type =
-            substitute_type_params(&expected_param.type_name, &type_param_substitutions);
+            substitute_type_params(&expected_param.type_name, type_param_substitutions);
         if check_fn_closure_contract(
             analyzer,
-            &call_name,
+            call_name,
             name,
             &expected_type,
             &signature.type_params,
@@ -1308,13 +1380,8 @@ fn check_call_args(
         if type_contains_unresolved_generic(&expected_type, &signature.type_params) {
             continue;
         }
-        if check_argument_variant_payload_type(
-            analyzer,
-            &call_name,
-            name,
-            &expected_type,
-            &arg.value,
-        ) {
+        if check_argument_variant_payload_type(analyzer, call_name, name, &expected_type, &arg.value)
+        {
             continue;
         }
         let Some(actual_type) = hir_expr_type_name(&arg.value) else {
@@ -1352,17 +1419,22 @@ fn check_call_args(
             ));
         }
     }
+}
 
-    for (index, arg) in args.iter().enumerate() {
-        let expected_param = resolved_arg_param_name(
-            arg,
-            index,
-            allow_constructor_field_shorthand,
-            allow_positional_args,
-            &param_names,
-            &signature_params,
-        )
-        .and_then(|name| signature.params.iter().find(|param| param.name == name));
+/// Phase 5: enforce noescape and local-closure escape rules for each argument,
+/// skipping parameters typed as `noescape` function types.
+fn check_argument_escaping(
+    analyzer: &mut Analyzer<'_>,
+    args: &[HirCallArg],
+    call_name: &str,
+    signature: &FunctionSig,
+    noescape_bindings: &HashMap<String, CallbackBinding>,
+    local_closure_bindings: &HashMap<String, Span>,
+    resolved_names: &[Option<&str>],
+) {
+    for (arg, resolved) in args.iter().zip(resolved_names) {
+        let expected_param =
+            resolved.and_then(|name| signature.params.iter().find(|param| param.name == name));
         if expected_param.is_some_and(|param| is_noescape_fn_type(&param.type_name)) {
             continue;
         }
@@ -1371,14 +1443,14 @@ fn check_call_args(
             &arg.value,
             &arg.span,
             noescape_bindings,
-            NoescapeEscapeContext::Pass { callee: &call_name },
+            NoescapeEscapeContext::Pass { callee: call_name },
         );
         check_local_closure_escape(
             analyzer,
             &arg.value,
             &arg.span,
             local_closure_bindings,
-            LocalClosureEscapeContext::Pass { callee: &call_name },
+            LocalClosureEscapeContext::Pass { callee: call_name },
         );
     }
 }
