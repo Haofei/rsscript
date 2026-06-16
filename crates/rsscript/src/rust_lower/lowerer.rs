@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::diagnostic::Span;
 use crate::syntax::ast::{
     BinaryOp, Block, CallArg, Callee, ConstDecl, DataEffect, EffectDecl, Expr, FieldDecl,
-    FunctionDecl, GenericBound, Item, MatchPattern, Param, Program, Stmt, SumTypeDecl,
-    TypeAliasDecl, TypeDecl, TypeKind, TypeRef,
+    ForStmt, FunctionDecl, GenericBound, Item, LetStmt, MatchPattern, MatchStmt, Param, Program,
+    Stmt, SumTypeDecl, TypeAliasDecl, TypeDecl, TypeKind, TypeRef,
 };
 
 use super::helpers::*;
@@ -1621,61 +1621,7 @@ impl<'a> RustLowerer<'a> {
         let marker = self.record_source_marker(out, indent, "statement", stmt_span(statement));
         self.record_statement_source_map(statement, &marker.generated);
         match statement {
-            Stmt::Let(stmt) => {
-                let mutable = if self.mutated_bindings.contains(&stmt.name)
-                    || stmt
-                        .value
-                        .as_ref()
-                        .is_some_and(closure_value_mutates_capture)
-                {
-                    "mut "
-                } else {
-                    ""
-                };
-                if let Some(value) = &stmt.value {
-                    let lowered = if let Some(expected) = &stmt.type_annotation {
-                        self.lower_expr_for_expected_type(value, expected)
-                    } else {
-                        self.lower_expr(value)
-                    };
-                    // `let x = <read-param>` of a managed (non-Copy) type: the
-                    // read-PARAM lowers to `&T`, so binding it directly makes `x: &T`.
-                    // That borrow then breaks owned uses of `x` — a later `x = <owned T>`
-                    // reassignment (for `let mut`), a `return x`, or an alias chain
-                    // (`let chosen = a; let mut s = chosen`). Clone the borrow into an
-                    // owned `T` so the local owns its value. Gated tightly by
-                    // `let_init_is_clonable_read_param_ref`: the initializer must be a
-                    // `read`-param ident lowering to a plain `&T` (managed, non-Copy).
-                    let lowered = if self.let_init_is_clonable_read_param_ref(value) {
-                        format!("{lowered}.clone()")
-                    } else {
-                        lowered
-                    };
-                    let inferred_ty = self.infer_expr_type(value);
-                    let annotation = stmt
-                        .type_annotation
-                        .as_ref()
-                        .and_then(|ty| self.lower_let_annotation(ty))
-                        .map(|ty| format!(": {ty}"))
-                        .unwrap_or_default();
-                    out.push_str(&format!(
-                        "{pad}let {mutable}{}{annotation} = {};\n",
-                        rust_ident(&stmt.name),
-                        lowered
-                    ));
-                    if let Some(ty) = stmt.type_annotation.clone().or(inferred_ty) {
-                        self.value_types.insert(stmt.name.clone(), ty);
-                    }
-                    if self.expr_lowers_to_managed_handle(value) {
-                        self.managed_bindings.insert(stmt.name.clone());
-                    } else {
-                        self.managed_bindings.remove(&stmt.name);
-                    }
-                } else {
-                    out.push_str(&format!("{pad}let {mutable}{};\n", rust_ident(&stmt.name)));
-                    self.managed_bindings.remove(&stmt.name);
-                }
-            }
+            Stmt::Let(stmt) => self.lower_let_stmt(stmt, out, &pad),
             Stmt::Return(stmt) => {
                 if let Some(value) = &stmt.value {
                     let lowered = self.lower_return_expr(value);
@@ -1725,90 +1671,7 @@ impl<'a> RustLowerer<'a> {
                 self.lower_block(&stmt.body, out, indent + 1);
                 out.push_str(&format!("{pad}}}\n"));
             }
-            Stmt::For(stmt) => {
-                let iterable = self.lower_expr(&stmt.iterable);
-                let previous_type = self.value_types.get(&stmt.binding).cloned();
-                let previous_managed = self.managed_bindings.contains(&stmt.binding);
-                let previous_read_view = self.read_view_bindings.contains(&stmt.binding);
-                let item_type = self
-                    .infer_expr_type(&stmt.iterable)
-                    .as_ref()
-                    .and_then(|ty| {
-                        if stmt.is_async {
-                            stream_item_type_ref(ty)
-                        } else {
-                            list_element_type_ref(ty)
-                        }
-                    });
-                if let Some(item_type) = item_type.clone() {
-                    if self.is_class_type(&item_type) {
-                        self.managed_bindings.insert(stmt.binding.clone());
-                    } else {
-                        self.managed_bindings.remove(&stmt.binding);
-                    }
-                    self.value_types.insert(stmt.binding.clone(), item_type);
-                }
-                if stmt.is_async {
-                    self.read_view_bindings.remove(&stmt.binding);
-                    let executor = self
-                        .current_async_executor
-                        .clone()
-                        .unwrap_or_else(|| "__rsscript_async_executor".to_string());
-                    let prefix = format!(
-                        "__rsscript_await_for_{}_{}",
-                        stmt.span.line, stmt.span.column
-                    );
-                    out.push_str(&format!("{pad}loop {{\n"));
-                    out.push_str(&format!(
-                        "{pad}    let mut {prefix}_pending = rsscript_runtime::stream_next(&{iterable});\n"
-                    ));
-                    out.push_str(&format!(
-                        "{pad}    let {prefix}_next = {executor}.run_pending(&mut {prefix}_pending)?;\n"
-                    ));
-                    out.push_str(&format!("{pad}    match {prefix}_next {{\n"));
-                    out.push_str(&format!(
-                        "{pad}        Some({}) => {{\n",
-                        rust_ident(&stmt.binding)
-                    ));
-                    self.lower_block(&stmt.body, out, indent + 3);
-                    out.push_str(&format!("{pad}        }}\n"));
-                    out.push_str(&format!("{pad}        None => break,\n"));
-                    out.push_str(&format!("{pad}    }}\n"));
-                    out.push_str(&format!("{pad}}}\n"));
-                } else {
-                    let iterator = if item_type.as_ref().is_some_and(is_copy_type_ref) {
-                        self.read_view_bindings.remove(&stmt.binding);
-                        format!("({iterable}).iter().cloned()")
-                    } else {
-                        self.read_view_bindings.insert(stmt.binding.clone());
-                        format!("({iterable}).iter()")
-                    };
-                    out.push_str(&format!(
-                        "{pad}for {} in {iterator} {{\n",
-                        rust_ident(&stmt.binding)
-                    ));
-                    self.lower_block(&stmt.body, out, indent + 1);
-                    out.push_str(&format!("{pad}}}\n"));
-                }
-                match previous_type {
-                    Some(ty) => {
-                        self.value_types.insert(stmt.binding.clone(), ty);
-                    }
-                    None => {
-                        self.value_types.remove(&stmt.binding);
-                    }
-                }
-                if previous_managed {
-                    self.managed_bindings.insert(stmt.binding.clone());
-                } else {
-                    self.managed_bindings.remove(&stmt.binding);
-                }
-                if previous_read_view {
-                    self.read_view_bindings.insert(stmt.binding.clone());
-                } else {
-                    self.read_view_bindings.remove(&stmt.binding);
-                }
-            }
+            Stmt::For(stmt) => self.lower_for_stmt(stmt, out, &pad, indent),
             Stmt::TaskGroup(stmt) => {
                 // Structured concurrency scope
                 out.push_str(&format!(
@@ -1824,80 +1687,7 @@ impl<'a> RustLowerer<'a> {
                 ));
                 self.lower_select_stmt(stmt, out, indent);
             }
-            Stmt::Match(stmt) => {
-                let scrutinee_type = self.infer_expr_type(&stmt.value);
-                let mut scrutinee =
-                    self.lower_match_scrutinee_expr(&stmt.value, scrutinee_type.as_ref());
-                let by_ref = self.match_scrutinee_by_ref(&stmt.value);
-                // Native Rust slice patterns match a `[T]`, not a `Vec<T>`; view the
-                // list scrutinee as a slice so `[a, b]` / `[first, rest @ ..]` apply.
-                if arms_have_list_pattern(&stmt.arms) {
-                    scrutinee = format!("({scrutinee}).as_slice()");
-                }
-                out.push_str(&format!("{pad}match {scrutinee} {{\n"));
-                for arm in &stmt.arms {
-                    let pattern = self.lower_match_pattern_typed(
-                        &arm.pattern,
-                        scrutinee_type.as_ref(),
-                        by_ref,
-                    );
-                    let guard = arm
-                        .guard
-                        .as_ref()
-                        .map(|guard| format!(" if {}", self.lower_expr(guard)))
-                        .unwrap_or_default();
-                    out.push_str(&format!(
-                        "{}{}{} => {{\n",
-                        "    ".repeat(indent + 1),
-                        pattern,
-                        guard
-                    ));
-                    let scoped_binding =
-                        match_binding_type_ref(&arm.pattern, scrutinee_type.as_ref());
-                    let previous_value_type = scoped_binding
-                        .as_ref()
-                        .and_then(|(binding, _)| self.value_types.get(binding).cloned());
-                    let previous_managed = scoped_binding
-                        .as_ref()
-                        .is_some_and(|(binding, _)| self.managed_bindings.contains(binding));
-                    if let Some((binding, binding_type)) = &scoped_binding {
-                        self.value_types
-                            .insert(binding.clone(), binding_type.clone());
-                        if self.is_class_type(binding_type) {
-                            self.managed_bindings.insert(binding.clone());
-                        } else {
-                            self.managed_bindings.remove(binding);
-                        }
-                    }
-                    // List arms always bind through a slice, so they need owned
-                    // rebindings even when the scrutinee itself is owned (not by_ref).
-                    if by_ref || matches!(arm.pattern, MatchPattern::List { .. }) {
-                        for (name, rhs) in
-                            self.owned_payload_rebindings(&arm.pattern, scrutinee_type.as_ref())
-                        {
-                            out.push_str(&format!(
-                                "{}let {name} = {rhs};\n",
-                                "    ".repeat(indent + 2)
-                            ));
-                        }
-                    }
-                    self.lower_block(&arm.body, out, indent + 2);
-                    if let Some((binding, _)) = scoped_binding {
-                        if let Some(previous) = previous_value_type {
-                            self.value_types.insert(binding.clone(), previous);
-                        } else {
-                            self.value_types.remove(&binding);
-                        }
-                        if previous_managed {
-                            self.managed_bindings.insert(binding);
-                        } else {
-                            self.managed_bindings.remove(&binding);
-                        }
-                    }
-                    out.push_str(&format!("{}}},\n", "    ".repeat(indent + 1)));
-                }
-                out.push_str(&format!("{pad}}}\n"));
-            }
+            Stmt::Match(stmt) => self.lower_match_stmt(stmt, out, &pad, indent),
             Stmt::LetElse(stmt) => {
                 let pattern = lower_match_pattern(&stmt.pattern);
                 let value = self.lower_expr(&stmt.value);
@@ -1951,6 +1741,222 @@ impl<'a> RustLowerer<'a> {
             &marker.generated,
             generated_line_count(&out[generated_start..]),
         );
+    }
+
+    fn lower_let_stmt(&mut self, stmt: &LetStmt, out: &mut String, pad: &str) {
+        let mutable = if self.mutated_bindings.contains(&stmt.name)
+            || stmt
+                .value
+                .as_ref()
+                .is_some_and(closure_value_mutates_capture)
+        {
+            "mut "
+        } else {
+            ""
+        };
+        if let Some(value) = &stmt.value {
+            let lowered = if let Some(expected) = &stmt.type_annotation {
+                self.lower_expr_for_expected_type(value, expected)
+            } else {
+                self.lower_expr(value)
+            };
+            // `let x = <read-param>` of a managed (non-Copy) type: the
+            // read-PARAM lowers to `&T`, so binding it directly makes `x: &T`.
+            // That borrow then breaks owned uses of `x` — a later `x = <owned T>`
+            // reassignment (for `let mut`), a `return x`, or an alias chain
+            // (`let chosen = a; let mut s = chosen`). Clone the borrow into an
+            // owned `T` so the local owns its value. Gated tightly by
+            // `let_init_is_clonable_read_param_ref`: the initializer must be a
+            // `read`-param ident lowering to a plain `&T` (managed, non-Copy).
+            let lowered = if self.let_init_is_clonable_read_param_ref(value) {
+                format!("{lowered}.clone()")
+            } else {
+                lowered
+            };
+            let inferred_ty = self.infer_expr_type(value);
+            let annotation = stmt
+                .type_annotation
+                .as_ref()
+                .and_then(|ty| self.lower_let_annotation(ty))
+                .map(|ty| format!(": {ty}"))
+                .unwrap_or_default();
+            out.push_str(&format!(
+                "{pad}let {mutable}{}{annotation} = {};\n",
+                rust_ident(&stmt.name),
+                lowered
+            ));
+            if let Some(ty) = stmt.type_annotation.clone().or(inferred_ty) {
+                self.value_types.insert(stmt.name.clone(), ty);
+            }
+            if self.expr_lowers_to_managed_handle(value) {
+                self.managed_bindings.insert(stmt.name.clone());
+            } else {
+                self.managed_bindings.remove(&stmt.name);
+            }
+        } else {
+            out.push_str(&format!("{pad}let {mutable}{};\n", rust_ident(&stmt.name)));
+            self.managed_bindings.remove(&stmt.name);
+        }
+    }
+
+    fn lower_for_stmt(&mut self, stmt: &ForStmt, out: &mut String, pad: &str, indent: usize) {
+        let iterable = self.lower_expr(&stmt.iterable);
+        let previous_type = self.value_types.get(&stmt.binding).cloned();
+        let previous_managed = self.managed_bindings.contains(&stmt.binding);
+        let previous_read_view = self.read_view_bindings.contains(&stmt.binding);
+        let item_type = self
+            .infer_expr_type(&stmt.iterable)
+            .as_ref()
+            .and_then(|ty| {
+                if stmt.is_async {
+                    stream_item_type_ref(ty)
+                } else {
+                    list_element_type_ref(ty)
+                }
+            });
+        if let Some(item_type) = item_type.clone() {
+            if self.is_class_type(&item_type) {
+                self.managed_bindings.insert(stmt.binding.clone());
+            } else {
+                self.managed_bindings.remove(&stmt.binding);
+            }
+            self.value_types.insert(stmt.binding.clone(), item_type);
+        }
+        if stmt.is_async {
+            self.read_view_bindings.remove(&stmt.binding);
+            let executor = self
+                .current_async_executor
+                .clone()
+                .unwrap_or_else(|| "__rsscript_async_executor".to_string());
+            let prefix = format!(
+                "__rsscript_await_for_{}_{}",
+                stmt.span.line, stmt.span.column
+            );
+            out.push_str(&format!("{pad}loop {{\n"));
+            out.push_str(&format!(
+                "{pad}    let mut {prefix}_pending = rsscript_runtime::stream_next(&{iterable});\n"
+            ));
+            out.push_str(&format!(
+                "{pad}    let {prefix}_next = {executor}.run_pending(&mut {prefix}_pending)?;\n"
+            ));
+            out.push_str(&format!("{pad}    match {prefix}_next {{\n"));
+            out.push_str(&format!(
+                "{pad}        Some({}) => {{\n",
+                rust_ident(&stmt.binding)
+            ));
+            self.lower_block(&stmt.body, out, indent + 3);
+            out.push_str(&format!("{pad}        }}\n"));
+            out.push_str(&format!("{pad}        None => break,\n"));
+            out.push_str(&format!("{pad}    }}\n"));
+            out.push_str(&format!("{pad}}}\n"));
+        } else {
+            let iterator = if item_type.as_ref().is_some_and(is_copy_type_ref) {
+                self.read_view_bindings.remove(&stmt.binding);
+                format!("({iterable}).iter().cloned()")
+            } else {
+                self.read_view_bindings.insert(stmt.binding.clone());
+                format!("({iterable}).iter()")
+            };
+            out.push_str(&format!(
+                "{pad}for {} in {iterator} {{\n",
+                rust_ident(&stmt.binding)
+            ));
+            self.lower_block(&stmt.body, out, indent + 1);
+            out.push_str(&format!("{pad}}}\n"));
+        }
+        match previous_type {
+            Some(ty) => {
+                self.value_types.insert(stmt.binding.clone(), ty);
+            }
+            None => {
+                self.value_types.remove(&stmt.binding);
+            }
+        }
+        if previous_managed {
+            self.managed_bindings.insert(stmt.binding.clone());
+        } else {
+            self.managed_bindings.remove(&stmt.binding);
+        }
+        if previous_read_view {
+            self.read_view_bindings.insert(stmt.binding.clone());
+        } else {
+            self.read_view_bindings.remove(&stmt.binding);
+        }
+    }
+
+    fn lower_match_stmt(&mut self, stmt: &MatchStmt, out: &mut String, pad: &str, indent: usize) {
+        let scrutinee_type = self.infer_expr_type(&stmt.value);
+        let mut scrutinee =
+            self.lower_match_scrutinee_expr(&stmt.value, scrutinee_type.as_ref());
+        let by_ref = self.match_scrutinee_by_ref(&stmt.value);
+        // Native Rust slice patterns match a `[T]`, not a `Vec<T>`; view the
+        // list scrutinee as a slice so `[a, b]` / `[first, rest @ ..]` apply.
+        if arms_have_list_pattern(&stmt.arms) {
+            scrutinee = format!("({scrutinee}).as_slice()");
+        }
+        out.push_str(&format!("{pad}match {scrutinee} {{\n"));
+        for arm in &stmt.arms {
+            let pattern = self.lower_match_pattern_typed(
+                &arm.pattern,
+                scrutinee_type.as_ref(),
+                by_ref,
+            );
+            let guard = arm
+                .guard
+                .as_ref()
+                .map(|guard| format!(" if {}", self.lower_expr(guard)))
+                .unwrap_or_default();
+            out.push_str(&format!(
+                "{}{}{} => {{\n",
+                "    ".repeat(indent + 1),
+                pattern,
+                guard
+            ));
+            let scoped_binding =
+                match_binding_type_ref(&arm.pattern, scrutinee_type.as_ref());
+            let previous_value_type = scoped_binding
+                .as_ref()
+                .and_then(|(binding, _)| self.value_types.get(binding).cloned());
+            let previous_managed = scoped_binding
+                .as_ref()
+                .is_some_and(|(binding, _)| self.managed_bindings.contains(binding));
+            if let Some((binding, binding_type)) = &scoped_binding {
+                self.value_types
+                    .insert(binding.clone(), binding_type.clone());
+                if self.is_class_type(binding_type) {
+                    self.managed_bindings.insert(binding.clone());
+                } else {
+                    self.managed_bindings.remove(binding);
+                }
+            }
+            // List arms always bind through a slice, so they need owned
+            // rebindings even when the scrutinee itself is owned (not by_ref).
+            if by_ref || matches!(arm.pattern, MatchPattern::List { .. }) {
+                for (name, rhs) in
+                    self.owned_payload_rebindings(&arm.pattern, scrutinee_type.as_ref())
+                {
+                    out.push_str(&format!(
+                        "{}let {name} = {rhs};\n",
+                        "    ".repeat(indent + 2)
+                    ));
+                }
+            }
+            self.lower_block(&arm.body, out, indent + 2);
+            if let Some((binding, _)) = scoped_binding {
+                if let Some(previous) = previous_value_type {
+                    self.value_types.insert(binding.clone(), previous);
+                } else {
+                    self.value_types.remove(&binding);
+                }
+                if previous_managed {
+                    self.managed_bindings.insert(binding);
+                } else {
+                    self.managed_bindings.remove(&binding);
+                }
+            }
+            out.push_str(&format!("{}}},\n", "    ".repeat(indent + 1)));
+        }
+        out.push_str(&format!("{pad}}}\n"));
     }
 
     fn record_source_marker(
@@ -3807,66 +3813,23 @@ impl<'a> RustLowerer<'a> {
 
     fn infer_expr_type(&self, expr: &Expr) -> Option<TypeRef> {
         match expr {
-            Expr::Ident(name, span) if name == "true" || name == "false" => Some(TypeRef {
-                name: "Bool".to_string(),
-                args: Vec::new(),
-                malformed_arg_spans: Vec::new(),
-                is_fresh: false,
-                is_noescape: false,
-                is_owned: false,
-                fn_params: Vec::new(),
-                fn_return: None,
-                span: span.clone(),
-            }),
-            Expr::Ident(name, span) if name == "null" => Some(TypeRef {
-                name: "JsonLiteral".to_string(),
-                args: Vec::new(),
-                malformed_arg_spans: Vec::new(),
-                is_fresh: false,
-                is_noescape: false,
-                is_owned: false,
-                fn_params: Vec::new(),
-                fn_return: None,
-                span: span.clone(),
-            }),
+            Expr::Ident(name, span) if name == "true" || name == "false" => {
+                Some(simple_type_ref("Bool", span))
+            }
+            Expr::Ident(name, span) if name == "null" => {
+                Some(simple_type_ref("JsonLiteral", span))
+            }
             Expr::Ident(name, span) => self.value_types.get(name).cloned().or_else(|| {
                 self.find_sum_type_for_variant(name)
-                    .map(|sum_name| TypeRef {
-                        name: sum_name,
-                        args: Vec::new(),
-                        malformed_arg_spans: Vec::new(),
-                        is_fresh: false,
-                        is_noescape: false,
-                        is_owned: false,
-                        fn_params: Vec::new(),
-                        fn_return: None,
-                        span: span.clone(),
-                    })
+                    .map(|sum_name| simple_type_ref(&sum_name, span))
             }),
-            Expr::Number(value, span) => Some(TypeRef {
-                name: crate::hir::number_literal_type_name(value).to_string(),
-                args: Vec::new(),
-                malformed_arg_spans: Vec::new(),
-                is_fresh: false,
-                is_noescape: false,
-                is_owned: false,
-                fn_params: Vec::new(),
-                fn_return: None,
-                span: span.clone(),
-            }),
-            Expr::String(_, span) => Some(TypeRef {
-                name: "String".to_string(),
-                args: Vec::new(),
-                malformed_arg_spans: Vec::new(),
-                is_fresh: false,
-                is_noescape: false,
-                is_owned: false,
-                fn_params: Vec::new(),
-                fn_return: None,
-                span: span.clone(),
-            }),
-            Expr::Binary { op, span, .. } => Some(TypeRef {
-                name: match op {
+            Expr::Number(value, span) => Some(simple_type_ref(
+                crate::hir::number_literal_type_name(value),
+                span,
+            )),
+            Expr::String(_, span) => Some(simple_type_ref("String", span)),
+            Expr::Binary { op, span, .. } => {
+                let name = match op {
                     BinaryOp::Add
                     | BinaryOp::Subtract
                     | BinaryOp::Multiply
@@ -3885,17 +3848,9 @@ impl<'a> RustLowerer<'a> {
                     | BinaryOp::GreaterEqual
                     | BinaryOp::LogicalAnd
                     | BinaryOp::LogicalOr => "Bool",
-                }
-                .to_string(),
-                args: Vec::new(),
-                malformed_arg_spans: Vec::new(),
-                is_fresh: false,
-                is_noescape: false,
-                is_owned: false,
-                fn_params: Vec::new(),
-                fn_return: None,
-                span: span.clone(),
-            }),
+                };
+                Some(simple_type_ref(name, span))
+            }
             Expr::Field { base, name, span } => {
                 let base_ty = self.infer_expr_type(base)?;
                 self.field_type(&base_ty.name, name).map(|ty| TypeRef {
@@ -3907,17 +3862,7 @@ impl<'a> RustLowerer<'a> {
                 callee: Callee::Name(name),
                 span,
                 ..
-            } if self.type_kinds.contains_key(name) => Some(TypeRef {
-                name: name.clone(),
-                args: Vec::new(),
-                malformed_arg_spans: Vec::new(),
-                is_fresh: false,
-                is_noescape: false,
-                is_owned: false,
-                fn_params: Vec::new(),
-                fn_return: None,
-                span: span.clone(),
-            }),
+            } if self.type_kinds.contains_key(name) => Some(simple_type_ref(name, span)),
             Expr::Call {
                 callee: Callee::Qualified { namespace, name },
                 span,
@@ -3928,25 +3873,8 @@ impl<'a> RustLowerer<'a> {
             Expr::Call { callee, span, .. } if capability_from_protocol(callee).is_some() => {
                 let protocol = capability_from_protocol(callee)?;
                 Some(TypeRef {
-                    name: "Capability".to_string(),
-                    args: vec![TypeRef {
-                        name: protocol.to_string(),
-                        args: Vec::new(),
-                        malformed_arg_spans: Vec::new(),
-                        is_fresh: false,
-                        is_noescape: false,
-                        is_owned: false,
-                        fn_params: Vec::new(),
-                        fn_return: None,
-                        span: span.clone(),
-                    }],
-                    malformed_arg_spans: Vec::new(),
-                    is_fresh: false,
-                    is_noescape: false,
-                    is_owned: false,
-                    fn_params: Vec::new(),
-                    fn_return: None,
-                    span: span.clone(),
+                    args: vec![simple_type_ref(protocol, span)],
+                    ..simple_type_ref("Capability", span)
                 })
             }
             Expr::Call {
@@ -3978,40 +3906,13 @@ impl<'a> RustLowerer<'a> {
                 )
             }
             Expr::Call { callee, args, span } => self.infer_call_return_type(callee, args, span),
-            Expr::ObjectLiteral { span, .. } => Some(TypeRef {
-                name: "JsonLiteral".to_string(),
-                args: Vec::new(),
-                malformed_arg_spans: Vec::new(),
-                is_fresh: false,
-                is_noescape: false,
-                is_owned: false,
-                fn_params: Vec::new(),
-                fn_return: None,
-                span: span.clone(),
-            }),
-            Expr::MapLiteral { span, .. } => Some(TypeRef {
-                name: "MapLiteral".to_string(),
-                args: Vec::new(),
-                malformed_arg_spans: Vec::new(),
-                is_fresh: false,
-                is_noescape: false,
-                is_owned: false,
-                fn_params: Vec::new(),
-                fn_return: None,
-                span: span.clone(),
-            }),
+            Expr::ObjectLiteral { span, .. } => Some(simple_type_ref("JsonLiteral", span)),
+            Expr::MapLiteral { span, .. } => Some(simple_type_ref("MapLiteral", span)),
             Expr::ArrayLiteral { items, span } => {
                 let item_ty = items.first().and_then(|item| self.infer_expr_type(item));
                 Some(TypeRef {
-                    name: "List".to_string(),
                     args: item_ty.into_iter().collect(),
-                    malformed_arg_spans: Vec::new(),
-                    is_fresh: false,
-                    is_noescape: false,
-                    is_owned: false,
-                    fn_params: Vec::new(),
-                    fn_return: None,
-                    span: span.clone(),
+                    ..simple_type_ref("List", span)
                 })
             }
             Expr::Effect { value, .. } => self.infer_expr_type(value),
