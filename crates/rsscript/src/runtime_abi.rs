@@ -494,6 +494,25 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("Tensor", "log2", "rsscript_runtime::tensor_log2"),
     runtime_intrinsic("Tensor", "rsqrt", "rsscript_runtime::tensor_rsqrt"),
     runtime_intrinsic("Tensor", "pow", "rsscript_runtime::tensor_pow"),
+    // bmm+int/bit (ops D)
+    runtime_intrinsic("Tensor", "bmm", "rsscript_runtime::tensor_bmm"),
+    runtime_intrinsic("Tensor", "idiv", "rsscript_runtime::tensor_idiv"),
+    runtime_intrinsic("Tensor", "modulo", "rsscript_runtime::tensor_mod"),
+    runtime_intrinsic("Tensor", "shl", "rsscript_runtime::tensor_shl"),
+    runtime_intrinsic("Tensor", "shr", "rsscript_runtime::tensor_shr"),
+    runtime_intrinsic("Tensor", "bit_and", "rsscript_runtime::tensor_and"),
+    runtime_intrinsic("Tensor", "bit_or", "rsscript_runtime::tensor_or"),
+    runtime_intrinsic("Tensor", "bit_xor", "rsscript_runtime::tensor_xor"),
+    runtime_intrinsic(
+        "Tensor",
+        "bitcast_f32_to_i32",
+        "rsscript_runtime::tensor_bitcast_f32_to_i32",
+    ),
+    runtime_intrinsic(
+        "Tensor",
+        "bitcast_i32_to_f32",
+        "rsscript_runtime::tensor_bitcast_i32_to_f32",
+    ),
     runtime_intrinsic(
         "TensorError",
         "message",

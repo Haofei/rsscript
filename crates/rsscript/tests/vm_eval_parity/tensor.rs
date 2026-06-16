@@ -1285,3 +1285,96 @@ fn main() -> Result<Unit, TensorError> {
         source,
     );
 }
+
+// bmm+int/bit (ops D)
+
+#[test]
+fn parity_tensor_bmm() {
+    let source = r#"
+features: native, local
+
+fn dump(t: read Tensor) -> Result<Unit, TensorError> {
+    let shape = Tensor.shape(tensor: read t)?
+    let mut si = 0
+    while si < List.len(list: read shape) {
+        Log.write(message: read String.from_int(value: List.get(list: read shape, index: si)))
+        si = si + 1
+    }
+    let values = Tensor.to_f32_slice(tensor: read t)?
+    let mut index = 0
+    while index < List.len(list: read values) {
+        Log.write(message: read Float.to_string(value: read List.get(list: read values, index: index)))
+        index = index + 1
+    }
+    return Ok(Unit)
+}
+
+fn main() -> Result<Unit, TensorError> {
+    let a = Tensor.from_f32_slice(data: read [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], shape: read [2, 2, 2])?
+    let b = Tensor.from_f32_slice(data: read [1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0], shape: read [2, 2, 2])?
+    let c = Tensor.bmm(a: read a, b: read b)?
+    dump(t: read c)?
+    // Broadcast a single matrix over the batch dim.
+    let big = Tensor.from_f32_slice(data: read [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0], shape: read [2, 2, 3])?
+    let w = Tensor.from_f32_slice(data: read [1.0, 0.0, 0.0, 1.0, 1.0, 1.0], shape: read [1, 3, 2])?
+    let bc = Tensor.bmm(a: read big, b: read w)?
+    dump(t: read bc)?
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-bmm.rss",
+        "rsscript_parity_tensor_bmm",
+        source,
+    );
+}
+
+#[test]
+fn parity_tensor_int_bit_ops() {
+    let source = r#"
+features: native, local
+
+fn dump(t: read Tensor) -> Result<Unit, TensorError> {
+    Log.write(message: read String.from_int(value: Tensor.dtype_code(t: read t)))
+    let values = Tensor.to_f32_slice(tensor: read t)?
+    let mut index = 0
+    while index < List.len(list: read values) {
+        Log.write(message: read Float.to_string(value: read List.get(list: read values, index: index)))
+        index = index + 1
+    }
+    return Ok(Unit)
+}
+
+fn main() -> Result<Unit, TensorError> {
+    let af = Tensor.from_f32_slice(data: read [7.0, -7.0, 12.0, 6.0], shape: read [4])?
+    let bf = Tensor.from_f32_slice(data: read [2.0, 2.0, 3.0, 0.0], shape: read [4])?
+    let a = Tensor.cast_i32(t: read af)
+    let b = Tensor.cast_i32(t: read bf)
+    let q = Tensor.idiv(a: read a, b: read b)?
+    dump(t: read q)?
+    let r = Tensor.modulo(a: read a, b: read b)?
+    dump(t: read r)?
+    let shf = Tensor.from_f32_slice(data: read [1.0, 2.0, 1.0, 2.0], shape: read [4])?
+    let sh = Tensor.cast_i32(t: read shf)
+    let l = Tensor.shl(a: read a, b: read sh)?
+    dump(t: read l)?
+    let rs = Tensor.shr(a: read a, b: read sh)?
+    dump(t: read rs)?
+    let aa = Tensor.bit_and(a: read a, b: read b)?
+    dump(t: read aa)?
+    let oo = Tensor.bit_or(a: read a, b: read b)?
+    dump(t: read oo)?
+    let xx = Tensor.bit_xor(a: read a, b: read b)?
+    dump(t: read xx)?
+    let bits = Tensor.bitcast_f32_to_i32(t: read af)
+    let back = Tensor.bitcast_i32_to_f32(t: read bits)
+    dump(t: read back)?
+    return Ok(Unit)
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-tensor-int-bit-ops.rss",
+        "rsscript_parity_tensor_int_bit_ops",
+        source,
+    );
+}

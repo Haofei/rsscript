@@ -260,6 +260,52 @@ pub native fn Tensor.rsqrt(t: read Tensor) -> fresh Tensor
 // Elementwise power a^b with broadcasting. Output dtype F32. Error if not
 // broadcast-compatible.
 pub native fn Tensor.pow(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+// bmm+int/bit (ops D)
+// Batched matmul: both operands rank >= 2. The last two dims are the matrix
+// (m,k) x (k,n) -> (m,n); the leading (batch) dims BROADCAST against each other
+// (NumPy semantics). Output dtype F32. Errors on rank < 2, an inner-dim
+// mismatch, or non-broadcastable batch dims.
+pub native fn Tensor.bmm(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+// Integer / bitwise ops over the INTEGER VALUES of (I32-dtype) tensors. The f32
+// storage holds integers exactly only while |value| <= 2^24; bit ops on larger
+// magnitudes are not guaranteed. Each op converts operands to i64, applies the
+// operation, and stores the result back as f32 with dtype I32. All binary ops
+// broadcast (NumPy right-aligned) and are TOTAL: idiv/modulo by zero return 0 and
+// shift counts are masked to 0..63.
+
+// Truncated integer division toward zero (div-by-zero -> 0).
+pub native fn Tensor.idiv(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+// Integer remainder (sign follows the dividend; mod-by-zero -> 0).
+pub native fn Tensor.modulo(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+// Left / right shift on i64 values, shift count masked to 0..63.
+pub native fn Tensor.shl(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+pub native fn Tensor.shr(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+// Bitwise AND / OR / XOR on i64 values.
+pub native fn Tensor.bit_and(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+pub native fn Tensor.bit_or(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+pub native fn Tensor.bit_xor(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+    effects(native)
+
+// Bit-reinterpretation casts (for completeness/index arithmetic). Same 2^24
+// exactness caveat. Infallible.
+pub native fn Tensor.bitcast_f32_to_i32(t: read Tensor) -> fresh Tensor
+    effects(native)
+
+pub native fn Tensor.bitcast_i32_to_f32(t: read Tensor) -> fresh Tensor
     effects(native)
 
 pub fn TensorError.message(error: read TensorError) -> fresh String

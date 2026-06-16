@@ -2126,6 +2126,17 @@ enum RegIntrinsic {
     TensorLog2,
     TensorRsqrt,
     TensorPow,
+    // bmm+int/bit (ops D)
+    TensorBmm,
+    TensorIdiv,
+    TensorMod,
+    TensorShl,
+    TensorShr,
+    TensorAnd,
+    TensorOr,
+    TensorXor,
+    TensorBitcastF32ToI32,
+    TensorBitcastI32ToF32,
     TensorErrorMessage,
     CharCompare,
     CharFromCode,
@@ -5411,6 +5422,17 @@ fn qualified_intrinsic(namespace: &str, name: &str) -> Option<RegIntrinsic> {
         ("Tensor", "log2") => Some(RegIntrinsic::TensorLog2),
         ("Tensor", "rsqrt") => Some(RegIntrinsic::TensorRsqrt),
         ("Tensor", "pow") => Some(RegIntrinsic::TensorPow),
+        // bmm+int/bit (ops D)
+        ("Tensor", "bmm") => Some(RegIntrinsic::TensorBmm),
+        ("Tensor", "idiv") => Some(RegIntrinsic::TensorIdiv),
+        ("Tensor", "modulo") => Some(RegIntrinsic::TensorMod),
+        ("Tensor", "shl") => Some(RegIntrinsic::TensorShl),
+        ("Tensor", "shr") => Some(RegIntrinsic::TensorShr),
+        ("Tensor", "bit_and") => Some(RegIntrinsic::TensorAnd),
+        ("Tensor", "bit_or") => Some(RegIntrinsic::TensorOr),
+        ("Tensor", "bit_xor") => Some(RegIntrinsic::TensorXor),
+        ("Tensor", "bitcast_f32_to_i32") => Some(RegIntrinsic::TensorBitcastF32ToI32),
+        ("Tensor", "bitcast_i32_to_f32") => Some(RegIntrinsic::TensorBitcastI32ToF32),
         ("TensorError", "message") => Some(RegIntrinsic::TensorErrorMessage),
         ("Char", "compare") => Some(RegIntrinsic::CharCompare),
         ("Char", "from_code") => Some(RegIntrinsic::CharFromCode),
@@ -9593,6 +9615,44 @@ impl RegVm {
                         rsscript_runtime::tensor_error_message(&error),
                     )),
                 }))
+            }
+            // bmm+int/bit (ops D)
+            RegIntrinsic::TensorBmm
+            | RegIntrinsic::TensorIdiv
+            | RegIntrinsic::TensorMod
+            | RegIntrinsic::TensorShl
+            | RegIntrinsic::TensorShr
+            | RegIntrinsic::TensorAnd
+            | RegIntrinsic::TensorOr
+            | RegIntrinsic::TensorXor => {
+                let a = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let b = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let result = match intrinsic {
+                    RegIntrinsic::TensorBmm => rsscript_runtime::tensor_bmm(&a, &b),
+                    RegIntrinsic::TensorIdiv => rsscript_runtime::tensor_idiv(&a, &b),
+                    RegIntrinsic::TensorMod => rsscript_runtime::tensor_mod(&a, &b),
+                    RegIntrinsic::TensorShl => rsscript_runtime::tensor_shl(&a, &b),
+                    RegIntrinsic::TensorShr => rsscript_runtime::tensor_shr(&a, &b),
+                    RegIntrinsic::TensorAnd => rsscript_runtime::tensor_and(&a, &b),
+                    RegIntrinsic::TensorOr => rsscript_runtime::tensor_or(&a, &b),
+                    _ => rsscript_runtime::tensor_xor(&a, &b),
+                };
+                Ok(json_result(match result {
+                    Ok(tensor) => Ok(self.store_tensor(tensor)),
+                    Err(error) => Err(tensor_error_value(
+                        rsscript_runtime::tensor_error_message(&error),
+                    )),
+                }))
+            }
+            RegIntrinsic::TensorBitcastF32ToI32 | RegIntrinsic::TensorBitcastI32ToF32 => {
+                let t = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let result = match intrinsic {
+                    RegIntrinsic::TensorBitcastF32ToI32 => {
+                        rsscript_runtime::tensor_bitcast_f32_to_i32(&t)
+                    }
+                    _ => rsscript_runtime::tensor_bitcast_i32_to_f32(&t),
+                };
+                Ok(self.store_tensor(result))
             }
             RegIntrinsic::CharCompare | RegIntrinsic::CharFromCode | RegIntrinsic::CharIsAlphanumeric | RegIntrinsic::CharIsAlpha | RegIntrinsic::CharIsDigit | RegIntrinsic::CharIsLower | RegIntrinsic::CharIsUpper | RegIntrinsic::CharIsWhitespace | RegIntrinsic::CharToCode | RegIntrinsic::CharToLower | RegIntrinsic::CharToString | RegIntrinsic::CharToUpper => self.exec_char_intrinsics(unit, intrinsic, args, base, next_base),
             RegIntrinsic::ClockNow => Ok(instant_value(clock_system_unix_ms())),
