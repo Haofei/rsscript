@@ -63,6 +63,18 @@ fn parse_run_args(args: &[String]) -> Result<RunOptions<'_>, String> {
     })
 }
 pub(crate) fn run_generated_rust(args: &[String]) -> ExitCode {
+    run_generated_rust_inner(args, false)
+}
+
+/// Like [`run_generated_rust`] but inherits the child's stdio so the compiled
+/// program's output streams live instead of being captured and printed at exit.
+/// Used by `rss dev --run --release` so a slow/looping run shows progress. `rss
+/// run` keeps capturing (so its runtime-diagnostic parsing is unchanged).
+pub(crate) fn run_generated_rust_streaming(args: &[String]) -> ExitCode {
+    run_generated_rust_inner(args, true)
+}
+
+fn run_generated_rust_inner(args: &[String], stream_stdio: bool) -> ExitCode {
     let options = match parse_run_args(args) {
         Ok(options) => options,
         Err(error) => {
@@ -132,6 +144,33 @@ pub(crate) fn run_generated_rust(args: &[String]) -> ExitCode {
     }
     if let Ok(current_dir) = std::env::current_dir() {
         cargo.env("RSS_RUN_WORKSPACE_ROOT", current_dir);
+    }
+    if stream_stdio {
+        // Inherit stdio so cargo's build progress and the program's stdout stream
+        // live to the terminal (no buffering until exit). The captured-output
+        // diagnostic post-processing is intentionally skipped here; it only runs
+        // for the captured `rss run` path.
+        let status = match cargo.status() {
+            Ok(status) => status,
+            Err(error) => {
+                eprintln!("failed to run cargo: {error}");
+                if cleanup_package_dir {
+                    cleanup_temp_dir(&package_dir);
+                }
+                return ExitCode::from(2);
+            }
+        };
+        if cleanup_package_dir {
+            cleanup_temp_dir(&package_dir);
+        }
+        return if status.success() {
+            ExitCode::SUCCESS
+        } else {
+            status
+                .code()
+                .map(|code| ExitCode::from(code as u8))
+                .unwrap_or_else(|| ExitCode::from(1))
+        };
     }
     let output = match cargo.output() {
         Ok(output) => output,

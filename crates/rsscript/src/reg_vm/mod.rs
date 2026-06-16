@@ -1114,6 +1114,34 @@ pub fn reg_vm_eval_source_main_with_args_and_native_bindings(
         .eval_main_with_args_and_native_bindings(args, native_bindings)
 }
 
+/// Streaming-stdout source entry point for `rss dev --run`: evaluates `main` and
+/// writes `Log.write` output live (line-flushed) to the real process stdout as it
+/// runs. The captured stdout in the returned `EvalOutput` is unchanged, so it must
+/// not be re-printed by the caller. Other callers and the tests keep using the
+/// non-streaming `reg_vm_eval_source_main_with_args`, whose behavior is untouched.
+pub fn reg_vm_eval_source_main_with_args_streaming_stdout(
+    file: &str,
+    source: &str,
+    args: impl IntoIterator<Item = impl Into<String>>,
+) -> Result<EvalOutput, EvalError> {
+    reg_vm_compile_source(file, source)?
+        .eval_main_with_args_and_native_bindings_streaming_stdout(
+            args,
+            std::iter::empty::<(String, NativeInterpreterFn)>(),
+        )
+}
+
+/// Streaming-stdout package entry point for `rss dev --run`. See
+/// [`reg_vm_eval_source_main_with_args_streaming_stdout`].
+pub fn reg_vm_eval_package_main_with_args_and_native_bindings_streaming_stdout(
+    package_dir: &Path,
+    args: impl IntoIterator<Item = impl Into<String>>,
+    native_bindings: impl IntoIterator<Item = (impl Into<String>, NativeInterpreterFn)>,
+) -> Result<EvalOutput, EvalError> {
+    reg_vm_compile_package(package_dir)?
+        .eval_main_with_args_and_native_bindings_streaming_stdout(args, native_bindings)
+}
+
 pub fn reg_vm_eval_package_main_with_args(
     package_dir: &Path,
     args: impl IntoIterator<Item = impl Into<String>>,
@@ -1376,6 +1404,47 @@ impl RegVmExecutable {
         vm.jit_enabled = true;
         vm.jit_force_all = force_all;
         let value = vm.run_program("main")?;
+        let display_value = value.display();
+        let native_value = value.native_value();
+        Ok(EvalOutput {
+            value: display_value.clone(),
+            display_value,
+            native_value,
+            stdout: vm.stdout,
+            stderr: vm.stderr,
+        })
+    }
+
+    /// Like [`Self::eval_main_with_args_and_native_bindings`] but streams program
+    /// stdout (`Log.write` output) live to the real process stdout, line-flushed,
+    /// as the program runs. Used ONLY by `rss dev --run` so a slow/looping program
+    /// shows output immediately instead of buffering until exit. The returned
+    /// `EvalOutput.stdout` is still the full captured buffer (identical to the
+    /// non-streaming call), so the program output has already been written to the
+    /// terminal — the caller must NOT print it a second time.
+    pub fn eval_main_with_args_and_native_bindings_streaming_stdout(
+        &self,
+        args: impl IntoIterator<Item = impl Into<String>>,
+        native_bindings: impl IntoIterator<Item = (impl Into<String>, NativeInterpreterFn)>,
+    ) -> Result<EvalOutput, EvalError> {
+        let mut vm = RegVm::new(
+            Rc::clone(&self.unit),
+            args.into_iter().map(Into::into).collect(),
+            native_bindings
+                .into_iter()
+                .map(|(key, function)| (key.into(), function))
+                .collect(),
+        );
+        vm.stream_stdout = true;
+        let result = vm.run_program("main");
+        // Flush any final line that lacks a trailing newline so no output is lost.
+        if vm.stream_flushed < vm.stdout.len() {
+            let mut out = std::io::stdout();
+            let _ = out.write_all(vm.stdout[vm.stream_flushed..].as_bytes());
+            let _ = out.flush();
+            vm.stream_flushed = vm.stdout.len();
+        }
+        let value = result?;
         let display_value = value.display();
         let native_value = value.native_value();
         Ok(EvalOutput {
@@ -6056,6 +6125,15 @@ struct RegVm {
     args: Vec<String>,
     native_bindings: HashMap<String, NativeInterpreterFn>,
     stdout: String,
+    /// When set, complete lines appended to `stdout` are also written live to the
+    /// real process stdout (line-flushed). Used ONLY by `rss dev --run` so a slow
+    /// or looping program shows output as it runs instead of buffering until exit.
+    /// `stream_flushed` tracks how many bytes of `stdout` have been streamed so a
+    /// partial trailing line is not emitted twice. The captured `stdout` String is
+    /// built identically whether or not streaming is on, so every other caller
+    /// (and the parity/differential tests) is unaffected.
+    stream_stdout: bool,
+    stream_flushed: usize,
     stderr: String,
     stack: Vec<VmValue>,
     written: Vec<bool>,
@@ -6376,6 +6454,8 @@ impl RegVm {
             args,
             native_bindings,
             stdout: String::new(),
+            stream_stdout: false,
+            stream_flushed: 0,
             stderr: String::new(),
             stack: Vec::new(),
             written: Vec::new(),
@@ -6399,6 +6479,32 @@ impl RegVm {
             jit_force_all: false,
             #[cfg(feature = "native-jit")]
             native: None,
+        }
+    }
+
+    /// Append program output to the captured `stdout` buffer, and — when live
+    /// streaming is enabled (`rss dev --run`) — flush newly completed lines to the
+    /// real process stdout immediately. The captured buffer is appended to exactly
+    /// the same way regardless, so callers that read `EvalOutput.stdout` see no
+    /// difference.
+    fn push_stdout(&mut self, text: &str) {
+        self.stdout.push_str(text);
+        if self.stream_stdout {
+            self.flush_stdout_stream();
+        }
+    }
+
+    /// Write every complete (newline-terminated) line appended since the last
+    /// flush to the real process stdout, then advance the streamed cursor. A
+    /// partial trailing line is left buffered until its newline arrives.
+    fn flush_stdout_stream(&mut self) {
+        if let Some(offset) = self.stdout[self.stream_flushed..].rfind('\n') {
+            let end = self.stream_flushed + offset + 1;
+            let chunk = &self.stdout[self.stream_flushed..end];
+            let mut out = std::io::stdout();
+            let _ = out.write_all(chunk.as_bytes());
+            let _ = out.flush();
+            self.stream_flushed = end;
         }
     }
 
@@ -9227,8 +9333,7 @@ impl RegVm {
                 Ok(json_result(if sql.trim().is_empty() {
                     Err(db_error_value("SQL query is empty"))
                 } else {
-                    self.stdout
-                        .push_str(&format!("db query on {}: {sql}\n", conn.url));
+                    self.push_stdout(&format!("db query on {}: {sql}\n", conn.url));
                     conn.queries.push(sql);
                     self.set_reg(base + conn_reg, conn.to_value());
                     Ok(VmValue::Unit)
@@ -9803,8 +9908,9 @@ impl RegVm {
             }
             RegIntrinsic::ImageInspect => {
                 let image = expect_image_state(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                self.stdout.push_str(&image.inspect_line());
-                self.stdout.push('\n');
+                let line = image.inspect_line();
+                self.push_stdout(&line);
+                self.push_stdout("\n");
                 Ok(VmValue::Unit)
             }
             RegIntrinsic::ImageLoad => {
@@ -9924,24 +10030,20 @@ impl RegVm {
                     expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_string();
                 let message =
                     expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?.to_string();
-                self.stdout.push_str("trace ");
-                self.stdout.push_str(&event);
-                self.stdout.push_str(": ");
-                self.stdout.push_str(&message);
-                self.stdout.push('\n');
+                self.push_stdout(&format!("trace {event}: {message}\n"));
                 Ok(VmValue::Unit)
             }
             RegIntrinsic::LogWrite => {
                 let line =
                     expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_string();
-                self.stdout.push_str(&line);
-                self.stdout.push('\n');
+                self.push_stdout(&line);
+                self.push_stdout("\n");
                 Ok(VmValue::Unit)
             }
             RegIntrinsic::LogWriteJson => {
                 let value = expect_json_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                self.stdout.push_str(&value.to_string());
-                self.stdout.push('\n');
+                self.push_stdout(&value.to_string());
+                self.push_stdout("\n");
                 Ok(VmValue::Unit)
             }
             RegIntrinsic::MapContainsKey | RegIntrinsic::MapFilter | RegIntrinsic::MapFold | RegIntrinsic::MapForEach | RegIntrinsic::MapGetOrDefault | RegIntrinsic::MapIsEmpty | RegIntrinsic::MapKeys | RegIntrinsic::MapLen | RegIntrinsic::MapMapValues | RegIntrinsic::MapMerge | RegIntrinsic::MapNew | RegIntrinsic::MapTryFold | RegIntrinsic::MapValues => self.exec_map_intrinsics(unit, intrinsic, args, base, next_base),
