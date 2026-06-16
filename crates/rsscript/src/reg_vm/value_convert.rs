@@ -694,6 +694,9 @@ mod tests {
     }
 
     #[test]
+    // `VmMapKey` wraps `VmValue`, whose collection variants use interior
+    // mutability; that is the key type by design, so the lint does not apply.
+    #[allow(clippy::mutable_key_type)]
     fn vm_to_native_collections() {
         let list = VmValue::List(Rc::new(RefCell::new(vec![
             VmValue::Int(1),

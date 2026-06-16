@@ -12,6 +12,9 @@ use crate::diagnostic::{Diagnostic, Span};
 /// Reproduces the single-cause / single-fix error shape that recurs across the
 /// body and call checks. Callers still push the result themselves so push order
 /// and the surrounding control flow are unchanged.
+// This intentionally forwards every diagnostic component verbatim; grouping them
+// into a struct would only relocate the same argument count to call sites.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn error_cause_fix(
     code: &str,
     summary: impl Into<String>,

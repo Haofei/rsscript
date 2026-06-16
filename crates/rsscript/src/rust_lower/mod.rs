@@ -428,54 +428,6 @@ pub fn lower_program_to_rust(program: &Program) -> String {
     lower_program_to_rust_with_map(program).rust_source
 }
 
-#[cfg(test)]
-mod tests {
-    use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    use super::{GeneratedRustPackage, write_generated_rust_package};
-
-    #[test]
-    fn generated_package_write_skips_unchanged_files() {
-        let out_dir = unique_temp_dir("rsscript-write-generated");
-        let package = GeneratedRustPackage {
-            package_name: "rsscript_test".to_string(),
-            cargo_toml: "[package]\nname = \"rsscript_test\"\n".to_string(),
-            lib_rs: "pub fn value() -> i64 { 1 }\n".to_string(),
-            main_rs: Some("fn main() {}\n".to_string()),
-            source_map_json: "[]\n".to_string(),
-        };
-
-        write_generated_rust_package(&out_dir, &package).expect("initial write should succeed");
-        let lib_rs = out_dir.join("src/lib.rs");
-        let mut permissions = fs::metadata(&lib_rs)
-            .expect("lib.rs metadata should exist")
-            .permissions();
-        permissions.set_readonly(true);
-        fs::set_permissions(&lib_rs, permissions).expect("lib.rs should become readonly");
-
-        write_generated_rust_package(&out_dir, &package)
-            .expect("unchanged readonly lib.rs should not be rewritten");
-
-        let mut permissions = fs::metadata(&lib_rs)
-            .expect("lib.rs metadata should exist")
-            .permissions();
-        permissions.set_readonly(false);
-        fs::set_permissions(&lib_rs, permissions).expect("lib.rs should become writable");
-        fs::remove_dir_all(out_dir).expect("temp generated package should clean up");
-    }
-
-    fn unique_temp_dir(name: &str) -> std::path::PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time should be after epoch")
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("{name}-{}-{nanos}", std::process::id()));
-        fs::create_dir_all(&path).expect("temp directory should create");
-        path
-    }
-}
-
 pub fn lower_program_to_rust_with_map(program: &Program) -> LoweredRust {
     let interface_programs = default_interfaces()
         .map(|(file, source)| parse_source(file, source))
@@ -508,4 +460,55 @@ fn lower_program_to_rust_with_map_with_interfaces(
         BTreeMap::new(),
         interface_programs,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::{GeneratedRustPackage, write_generated_rust_package};
+
+    #[test]
+    fn generated_package_write_skips_unchanged_files() {
+        let out_dir = unique_temp_dir("rsscript-write-generated");
+        let package = GeneratedRustPackage {
+            package_name: "rsscript_test".to_string(),
+            cargo_toml: "[package]\nname = \"rsscript_test\"\n".to_string(),
+            lib_rs: "pub fn value() -> i64 { 1 }\n".to_string(),
+            main_rs: Some("fn main() {}\n".to_string()),
+            source_map_json: "[]\n".to_string(),
+        };
+
+        write_generated_rust_package(&out_dir, &package).expect("initial write should succeed");
+        let lib_rs = out_dir.join("src/lib.rs");
+        let mut permissions = fs::metadata(&lib_rs)
+            .expect("lib.rs metadata should exist")
+            .permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&lib_rs, permissions).expect("lib.rs should become readonly");
+
+        write_generated_rust_package(&out_dir, &package)
+            .expect("unchanged readonly lib.rs should not be rewritten");
+
+        let mut permissions = fs::metadata(&lib_rs)
+            .expect("lib.rs metadata should exist")
+            .permissions();
+        // Restore writability only so the temp dir can be removed; the broad
+        // permissions clippy warns about are irrelevant for a throwaway file.
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(false);
+        fs::set_permissions(&lib_rs, permissions).expect("lib.rs should become writable");
+        fs::remove_dir_all(out_dir).expect("temp generated package should clean up");
+    }
+
+    fn unique_temp_dir(name: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("{name}-{}-{nanos}", std::process::id()));
+        fs::create_dir_all(&path).expect("temp directory should create");
+        path
+    }
 }

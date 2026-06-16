@@ -5,11 +5,11 @@
 //! the file and `cargo test --test corpus -- <substring>` filters them.
 //!
 //! Two fixture kinds:
-//!   * `execution`  -- run the program and check output. By default it runs on
-//!                     the register VM; listing `compiled` in `backends` also
-//!                     lowers + builds + runs it and asserts the two backends
-//!                     agree (differential / parity by default).
-//!   * `diagnostics`-- assert the checker reports exactly the listed error codes.
+//! * `execution` -- run the program and check output. By default it runs on
+//!   the register VM; listing `compiled` in `backends` also lowers + builds +
+//!   runs it and asserts the two backends agree (differential / parity by
+//!   default).
+//! * `diagnostics` -- assert the checker reports exactly the listed error codes.
 //!
 //! Sidecar schema (`<name>.toml`):
 //!   kind     = "execution" | "diagnostics"

@@ -1440,7 +1440,7 @@ impl RegVmExecutable {
         // Flush any final line that lacks a trailing newline so no output is lost.
         if vm.stream_flushed < vm.stdout.len() {
             let mut out = std::io::stdout();
-            let _ = out.write_all(vm.stdout[vm.stream_flushed..].as_bytes());
+            let _ = out.write_all(&vm.stdout.as_bytes()[vm.stream_flushed..]);
             let _ = out.flush();
             vm.stream_flushed = vm.stdout.len();
         }
@@ -11364,6 +11364,7 @@ impl RegVm {
         next_base: usize,
     ) -> Result<VmValue, EvalError> {
         let _ = next_base;
+        let _ = unit;
         match intrinsic {
             RegIntrinsic::StringAfter => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -12061,6 +12062,7 @@ impl RegVm {
         next_base: usize,
     ) -> Result<VmValue, EvalError> {
         let _ = next_base;
+        let _ = unit;
         match intrinsic {
             RegIntrinsic::BytesConcat => {
                 let left = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -12139,6 +12141,7 @@ impl RegVm {
         next_base: usize,
     ) -> Result<VmValue, EvalError> {
         let _ = next_base;
+        let _ = unit;
         match intrinsic {
             RegIntrinsic::DateAddDays => {
                 let unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -12248,6 +12251,7 @@ impl RegVm {
         next_base: usize,
     ) -> Result<VmValue, EvalError> {
         let _ = next_base;
+        let _ = unit;
         match intrinsic {
             RegIntrinsic::MathAbs => Ok(VmValue::Int(
                 expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.abs(),
@@ -12366,6 +12370,7 @@ impl RegVm {
         next_base: usize,
     ) -> Result<VmValue, EvalError> {
         let _ = next_base;
+        let _ = unit;
         match intrinsic {
             RegIntrinsic::CharCompare => {
                 let left = expect_char_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -12442,6 +12447,7 @@ impl RegVm {
         next_base: usize,
     ) -> Result<VmValue, EvalError> {
         let _ = next_base;
+        let _ = unit;
         match intrinsic {
             RegIntrinsic::PathExists => {
                 let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;

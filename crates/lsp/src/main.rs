@@ -1766,6 +1766,14 @@ fn position_in_range(position: Position, range: &Range) -> bool {
     after_start && before_end
 }
 
+#[tokio::main]
+async fn main() {
+    let stdin = tokio::io::stdin();
+    let stdout = tokio::io::stdout();
+    let (service, socket) = LspService::new(Backend::new);
+    Server::new(stdin, stdout, socket).serve(service).await;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2404,12 +2412,4 @@ mod tests {
         assert_eq!(data["fixes"][0]["applicability"], "manual");
         assert_eq!(data["explanation"]["code"], "RS0026");
     }
-}
-
-#[tokio::main]
-async fn main() {
-    let stdin = tokio::io::stdin();
-    let stdout = tokio::io::stdout();
-    let (service, socket) = LspService::new(Backend::new);
-    Server::new(stdin, stdout, socket).serve(service).await;
 }

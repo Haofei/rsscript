@@ -1969,19 +1969,13 @@ mod tests {
         }"#;
         let value = json_parse(text).expect("JSON should parse");
         let literal = json_value(r#"{"ready":true,"count":2}"#);
-        assert_eq!(
-            json_bool_at_or(
-                text,
-                "choices[0].message.tool_calls[0].function.name",
-                false
-            ),
+        assert!(!json_bool_at_or(
+            text,
+            "choices[0].message.tool_calls[0].function.name",
             false
-        );
+        ));
         assert_eq!(json_int_at_or(&json_to_string(&literal), "count", 0), 2);
-        assert_eq!(
-            json_bool_at_or(&json_to_string(&literal), "ready", false),
-            true
-        );
+        assert!(json_bool_at_or(&json_to_string(&literal), "ready", false));
         assert_eq!(
             json_string_array(&["a".to_string(), "b".to_string()]),
             r#"["a","b"]"#

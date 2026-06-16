@@ -71,13 +71,13 @@ mod tests {
             "fast".to_string(),
         ];
 
-        assert!(super::flag(&args, &"verbose".to_string()));
+        assert!(super::flag(&args, "verbose"));
         assert_eq!(
-            super::option(&args, &"out".to_string()),
+            super::option(&args, "out"),
             Some("target.txt".to_string())
         );
         assert_eq!(
-            super::option(&args, &"mode".to_string()),
+            super::option(&args, "mode"),
             Some("fast".to_string())
         );
         assert_eq!(super::positionals(&args), vec!["input.txt".to_string()]);
