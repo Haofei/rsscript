@@ -3845,11 +3845,31 @@ fn parse_named_callee_segment(tokens: &[Token], start: usize, end: usize) -> Opt
     if close + 1 != end {
         return None;
     }
-    let args = tokens_to_source(tokens, start + 2, close);
-    if args.trim().is_empty() {
+    if start + 2 >= close {
         return None;
     }
-    Some(format!("{name}<{}>", args.trim()))
+    // Canonicalize each generic type argument through `type_ref_name` so the
+    // spelling matches declared types elsewhere (e.g. a struct field typed
+    // `owned Fn(Int) -> Int` and `List.new<owned Fn(Int) -> Int>` must produce
+    // the SAME `type_name` string for the checker's type comparison; raw token
+    // concatenation would collapse spacing to `ownedFn(Int)->Int`).
+    let mut canonical_args = Vec::new();
+    for range in split_param_ranges(tokens, start + 2, close) {
+        if range.empty_span.is_some() {
+            return None;
+        }
+        match parse_type_ref(tokens, range.start, range.end) {
+            Some(ty) => canonical_args.push(type_ref_name(&ty)),
+            None => {
+                let raw = tokens_to_source(tokens, range.start, range.end);
+                canonical_args.push(raw.trim().to_string());
+            }
+        }
+    }
+    if canonical_args.is_empty() {
+        return None;
+    }
+    Some(format!("{name}<{}>", canonical_args.join(", ")))
 }
 
 fn find_top_level_dot(tokens: &[Token], start: usize, end: usize) -> Option<usize> {

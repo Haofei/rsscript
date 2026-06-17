@@ -169,7 +169,14 @@ pub(super) fn check_one_explicit_closure_capture_contract(
 
     for (name, effect) in &actual {
         match declared.get(name) {
-            Some((declared_effect, span)) if declared_effect != effect => {
+            // The declared capture must GRANT at least the access the body uses,
+            // but it may grant more. In particular a `take` (move/ownership)
+            // capture — required to soundly store a non-`Copy` value in an
+            // escaping `owned Fn` — backs a body that only `read`s the value (a
+            // repeatedly-called stored closure owns its capture and reads it
+            // each call). Only flag when the body needs STRONGER access than the
+            // declared capture provides.
+            Some((declared_effect, span)) if capture_effect_rank(*effect) > capture_effect_rank(*declared_effect) => {
                 explicit_closure_capture_contract_diagnostic(
                     analyzer,
                     name,
@@ -206,17 +213,29 @@ pub(super) fn explicit_closure_actual_captures(
     for param in params {
         uses.remove(param);
     }
+    // A name the closure itself binds (`let rhs = ...` inside the body) is a
+    // closure-local, not a capture — even though the flat function-wide
+    // `binding_names` set contains it. Subtract the closure's own bindings so a
+    // body-local does not get mistaken for a missing/extra capture.
+    let mut closure_local_bindings = HashSet::new();
+    collect_hir_block_bindings(body, &mut closure_local_bindings);
+    for name in &closure_local_bindings {
+        uses.remove(name);
+    }
     let mut actual = uses
         .into_iter()
         .filter(|name| binding_names.contains(name))
         .map(|name| (name, ParamEffect::Read))
         .collect::<HashMap<_, _>>();
 
-    let bound = params.clone();
+    let mut bound = params.clone();
+    bound.extend(closure_local_bindings.iter().cloned());
     let mut accesses = Vec::new();
     collect_closure_effect_accesses_block(body, &bound, &mut accesses);
     for access in accesses {
-        if binding_names.contains(&access.path.base) {
+        if binding_names.contains(&access.path.base)
+            && !closure_local_bindings.contains(&access.path.base)
+        {
             let current = actual
                 .get(&access.path.base)
                 .copied()
@@ -226,6 +245,78 @@ pub(super) fn explicit_closure_actual_captures(
         }
     }
     actual
+}
+
+/// Names bound by statements directly within `block` (and its nested control-
+/// flow blocks): `let`/`local` names, `with`/`for` loop bindings, and match-arm
+/// pattern bindings. Used to exclude a closure's own body-local bindings from
+/// its capture set. Nested closure expressions introduce their own scope and
+/// are intentionally not descended into here.
+fn collect_hir_block_bindings(block: &HirBlock, names: &mut HashSet<String>) {
+    for statement in &block.statements {
+        match statement {
+            HirStmt::Let { name, .. } => {
+                names.insert(name.clone());
+            }
+            HirStmt::With { binding, body, .. } => {
+                names.insert(binding.clone());
+                collect_hir_block_bindings(body, names);
+            }
+            HirStmt::For { binding, body, .. } => {
+                names.insert(binding.clone());
+                collect_hir_block_bindings(body, names);
+            }
+            HirStmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_hir_block_bindings(then_body, names);
+                if let Some(else_body) = else_body {
+                    collect_hir_block_bindings(else_body, names);
+                }
+            }
+            HirStmt::Loop { body, .. } => collect_hir_block_bindings(body, names),
+            HirStmt::Match { arms, .. } => {
+                for arm in arms {
+                    for binding in arm.pattern.binding_names() {
+                        names.insert(binding.to_string());
+                    }
+                    collect_hir_block_bindings(&arm.body, names);
+                }
+            }
+            HirStmt::Select { arms, .. } => {
+                for arm in arms {
+                    collect_hir_block_bindings(&arm.body, names);
+                }
+            }
+            HirStmt::Assign { .. }
+            | HirStmt::Return { .. }
+            | HirStmt::Expr(_)
+            | HirStmt::Break(_)
+            | HirStmt::Continue(_)
+            | HirStmt::Unknown(_) => {}
+        }
+    }
+}
+
+/// Access-strength rank: `read` < `mut` < `take`. A declared capture is valid
+/// when its rank is >= the body's actual-usage rank (it grants enough access).
+fn capture_effect_rank(effect: ParamEffect) -> u8 {
+    match effect {
+        ParamEffect::Read => 0,
+        ParamEffect::Mut => 1,
+        ParamEffect::Take => 2,
+    }
+}
+
+/// `read` < `mut` < `take` for the syntax-level `DataEffect` capture check.
+fn data_effect_rank(effect: crate::syntax::ast::DataEffect) -> u8 {
+    match effect {
+        crate::syntax::ast::DataEffect::Read => 0,
+        crate::syntax::ast::DataEffect::Mut => 1,
+        crate::syntax::ast::DataEffect::Take => 2,
+    }
 }
 
 pub(super) fn strongest_capture_effect(left: ParamEffect, right: ParamEffect) -> ParamEffect {
@@ -559,8 +650,14 @@ pub(super) fn check_explicit_closure_capture_effects_syntax_expr(
             if *explicit {
                 let actual = syntax_closure_actual_capture_effects(body, binding_names);
                 for capture in captures {
+                    // The declared capture must GRANT at least the access the
+                    // body uses, but may grant more — a `take` (move/ownership)
+                    // capture soundly backs a `read`-only body (the canonical
+                    // way to store a non-`Copy` value in an escaping `owned Fn`
+                    // that is called repeatedly). Only flag when the body needs
+                    // STRONGER access than the declared capture provides.
                     if let Some(actual_effect) = actual.get(&capture.name)
-                        && capture.effect != *actual_effect
+                        && data_effect_rank(*actual_effect) > data_effect_rank(capture.effect)
                     {
                         explicit_closure_capture_contract_diagnostic(
                             analyzer,

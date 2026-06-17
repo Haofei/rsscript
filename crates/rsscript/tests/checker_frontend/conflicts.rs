@@ -682,3 +682,91 @@ fn greet(name: read Alias) -> Alias {
         "should resolve type alias chain: {diagnostics:?}"
     );
 }
+
+// ---- First-class `owned Fn` values: acceptance + soundness boundary ----
+
+#[test]
+fn checker_accepts_owned_fn_as_first_class_storable_value() {
+    // `owned Fn` is storable: a generic argument, a struct field, a binding, and
+    // a function return; a closure literal fills it and is called as a value.
+    let source = r#"
+features: local
+
+struct Adder derives(Clone) {
+    fxn: owned Fn(Int) -> Int
+}
+
+fn make() -> fresh List<owned Fn(Int) -> Int> {
+    local fns = List.new<owned Fn(Int) -> Int>()
+    let k = 10
+    let g = fn(x) captures(read k) effects(pure) { return x + k }
+    List.push(list: mut fns, value: read g)
+    return take fns
+}
+
+fn run() -> Int {
+    local adders = List.new<Adder>()
+    let base = 5
+    let a = Adder(fxn: fn(x) captures(read base) effects(pure) { return x * base })
+    List.push(list: mut adders, value: read a)
+    let r = List.get(list: read adders, index: 0)
+    let f = r.fxn
+    return f(3)
+}
+"#;
+    let diagnostics = analyze_source("owned-fn-first-class.rss", source);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
+#[test]
+fn checker_rejects_noescape_fn_in_storable_position() {
+    // SOUNDNESS BOUNDARY: `noescape Fn` is parameter-only. Storing it in a struct
+    // field (or any non-parameter position) must still be rejected — a noescape
+    // callback may borrow-capture, so storing it would let a borrow escape.
+    let source = r#"
+features: local
+
+struct Holder {
+    fxn: noescape Fn(Int) -> Int
+}
+
+fn run() -> Unit {
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("noescape-stored.rss", source);
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.code == "RS0015" && d.label == "unsupported noescape position"),
+        "noescape Fn must stay parameter-only: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_rejects_owned_closure_capturing_non_copy_value_by_read() {
+    // SOUNDNESS BOUNDARY: an escaping/stored `owned` closure may capture only
+    // owned (move/`take`) or `Copy` values. A non-`Copy` `read` capture would be
+    // a borrow that dangles once the closure escapes, so it is rejected: a
+    // non-`Copy` `String` captured with `read` while the body needs ownership
+    // (consumes/returns it) fails the capture contract.
+    let source = r#"
+features: local
+
+struct Holder derives(Clone) {
+    fxn: owned Fn() -> fresh String
+}
+
+fn run() -> fresh String {
+    let s = "captured"
+    let h = Holder(fxn: fn() captures(read s) effects(pure) { return take s })
+    let f = h.fxn
+    return f()
+}
+"#;
+    let diagnostics = analyze_source("owned-read-noncopy.rss", source);
+    assert!(
+        diagnostics.iter().any(|d| d.code == "RS0805"),
+        "a non-Copy `read` capture used as `take` must be rejected: {diagnostics:?}"
+    );
+}

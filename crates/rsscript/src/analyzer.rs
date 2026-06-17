@@ -1326,7 +1326,9 @@ impl Analyzer<'_> {
                     self.check_unsupported_syntax_type_ref(&param.ty, true, true);
                 }
                 if let Some(return_ty) = &function.return_ty {
-                    self.check_unsupported_syntax_type_ref(return_ty, false, false);
+                    // Return type is a storable position: `owned Fn(...)` may be
+                    // returned (first-class), but `noescape` may not escape.
+                    self.check_unsupported_syntax_type_ref(return_ty, false, true);
                 }
                 self.check_unsupported_syntax_block(&function.body);
             }
@@ -1364,7 +1366,9 @@ impl Analyzer<'_> {
                     );
                 }
                 for field in &type_decl.fields {
-                    self.check_unsupported_syntax_type_ref(&field.ty, false, false);
+                    // Struct/class fields are storable positions: an `owned Fn`
+                    // field is first-class; `noescape` fields are rejected.
+                    self.check_unsupported_syntax_type_ref(&field.ty, false, true);
                 }
                 if type_decl.kind != TypeKind::Resource
                     && let Some(drop_body) = &type_decl.drop_body
@@ -1622,24 +1626,41 @@ impl Analyzer<'_> {
         map
     }
 
+    /// Validate `owned`/`noescape` Fn placement.
+    ///
+    /// Soundness boundary (RSS principle):
+    /// - `owned Fn(...)` is a FIRST-CLASS value: allowed as a direct parameter
+    ///   AND in storable positions (generic argument, struct field, `let`/
+    ///   `local` binding type, function return type). A stored/escaping owned
+    ///   closure may only capture owned (move) or `Copy` values, so it cannot
+    ///   dangle — the capture-soundness checks elsewhere enforce that.
+    /// - `noescape Fn(...)` stays PARAMETER-ONLY. A noescape callback may
+    ///   borrow-capture, so letting it be stored/returned would let a borrow
+    ///   escape. It is rejected anywhere except a direct function parameter.
+    ///
+    /// `allow_noescape` is true only at a direct parameter position and never
+    /// propagates into nested type positions. `allow_owned` is true at a
+    /// parameter position and at every storable position, and propagates into
+    /// nested positions (a `List<owned Fn(...)>`, an `owned Fn` field, an
+    /// `owned Fn` return, or an `owned Fn` returning/taking another `owned Fn`).
     fn check_unsupported_syntax_type_ref(
         &mut self,
         ty: &TypeRef,
-        allow_noescape_param: bool,
-        allow_owned_param: bool,
+        allow_noescape: bool,
+        allow_owned: bool,
     ) {
-        if ty.is_noescape && (!allow_noescape_param || ty.name != "Fn") {
+        if ty.is_noescape && (!allow_noescape || ty.name != "Fn") {
             self.unsupported_syntax(
                 ty.span.clone(),
                 "unsupported noescape position",
                 "`noescape Fn(...)` is only supported as a direct function parameter type.",
             );
         }
-        if ty.is_owned && (!allow_owned_param || ty.name != "Fn") {
+        if ty.is_owned && (!allow_owned || ty.name != "Fn") {
             self.unsupported_syntax(
                 ty.span.clone(),
                 "unsupported owned position",
-                "`owned Fn(...)` is only supported as a direct function parameter type.",
+                "`owned Fn(...)` is supported as a function parameter and in storable positions (generic argument, struct field, binding, or return type).",
             );
         }
         for span in &ty.malformed_arg_spans {
@@ -1649,8 +1670,16 @@ impl Analyzer<'_> {
                 "Type arguments must be valid type references; empty or unsupported type argument slots are not allowed.",
             );
         }
+        // `owned` Fn stays first-class through nested positions; `noescape`
+        // never does (it is strictly a direct-parameter capability).
         for arg in &ty.args {
-            self.check_unsupported_syntax_type_ref(arg, false, false);
+            self.check_unsupported_syntax_type_ref(arg, false, allow_owned);
+        }
+        for param in &ty.fn_params {
+            self.check_unsupported_syntax_type_ref(param, false, allow_owned);
+        }
+        if let Some(ret) = &ty.fn_return {
+            self.check_unsupported_syntax_type_ref(ret, false, allow_owned);
         }
     }
 
@@ -4834,6 +4863,71 @@ fn generic_namespace_args(namespace: &str) -> Option<(&str, Vec<&str>)> {
     Some((root, split_top_level_type_args(args)))
 }
 
+/// The top-level parameter slices of a `Fn(...)` type string, e.g.
+/// `owned Fn(read UOp, mut Ctx) -> Option<UOp>` → `["read UOp", "mut Ctx"]`.
+/// Returns `None` when the string is not a `Fn` type.
+fn fn_type_params(type_name: &str) -> Option<Vec<&str>> {
+    let trimmed = type_name.trim();
+    let after_prefix = trimmed
+        .strip_prefix("fresh ")
+        .unwrap_or(trimmed)
+        .trim_start();
+    let after_prefix = after_prefix
+        .strip_prefix("owned ")
+        .or_else(|| after_prefix.strip_prefix("noescape "))
+        .unwrap_or(after_prefix)
+        .trim_start();
+    let inner = after_prefix.strip_prefix("Fn(")?;
+    // Find the matching close paren of the parameter list.
+    let mut depth = 1usize;
+    let mut end = None;
+    for (index, ch) in inner.char_indices() {
+        match ch {
+            '(' | '<' => depth += 1,
+            ')' | '>' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(index);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let params = &inner[..end?];
+    if params.trim().is_empty() {
+        return Some(Vec::new());
+    }
+    Some(split_top_level_type_args(params))
+}
+
+/// The declared effect of each parameter in a `Fn(...)` type string, in order.
+fn fn_type_param_effects(type_name: &str) -> Vec<Option<DataEffect>> {
+    fn_type_params(type_name)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|param| match param.split_whitespace().next() {
+            Some("read") => Some(DataEffect::Read),
+            Some("mut") => Some(DataEffect::Mut),
+            Some("take") => Some(DataEffect::Take),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The bare type name of the `index`-th parameter of a `Fn(...)` type string,
+/// with any leading effect keyword stripped (`mut Ctx` → `Ctx`).
+fn fn_type_param_type_name(type_name: &str, index: usize) -> Option<String> {
+    let params = fn_type_params(type_name)?;
+    let param = params.get(index)?.trim();
+    let bare = param
+        .strip_prefix("read ")
+        .or_else(|| param.strip_prefix("mut "))
+        .or_else(|| param.strip_prefix("take "))
+        .unwrap_or(param);
+    Some(bare.trim().to_string())
+}
+
 fn effect_name(effect: &EffectDecl) -> &str {
     match effect {
         EffectDecl::Name(name) | EffectDecl::Retains(name) => name,
@@ -5354,12 +5448,7 @@ impl<'a> AssignChecker<'a> {
     fn expr(&mut self, expr: &Expr) {
         match expr {
             Expr::Closure { params, body, .. } => {
-                self.push_scope();
-                for param in params {
-                    self.insert(param.clone(), AssignBinding::ImmutableLocal, None);
-                }
-                self.block(body);
-                self.pop_scope();
+                self.closure(params, body, None);
             }
             Expr::Match { value, arms, .. } => {
                 self.expr(value);
@@ -5374,9 +5463,21 @@ impl<'a> AssignChecker<'a> {
                 self.expr(base);
                 self.expr(index);
             }
-            Expr::Call { args, .. } => {
-                for arg in args {
-                    self.expr(&arg.value);
+            Expr::Call { callee, args, .. } => {
+                for (index, arg) in args.iter().enumerate() {
+                    // A closure passed where an `owned Fn(.., mut T, ..)` is
+                    // expected (struct/sum field or function parameter) binds
+                    // that closure parameter as a `mut` parameter, so the body
+                    // may update its fields/elements — mirroring how a `mut`
+                    // function parameter behaves. The effects come from the
+                    // expected Fn type's declared parameter effects.
+                    if let Expr::Closure { params, body, .. } = &arg.value {
+                        let expected_fn =
+                            self.expected_fn_type_for_call_arg(callee, arg.name.as_deref(), index);
+                        self.closure(params, body, expected_fn.as_deref());
+                    } else {
+                        self.expr(&arg.value);
+                    }
                 }
             }
             Expr::Effect { value, .. }
@@ -5398,6 +5499,75 @@ impl<'a> AssignChecker<'a> {
             | Expr::MultilineString(..)
             | Expr::Unknown(_) => {}
         }
+    }
+
+    /// Validate a closure body in its own scope. Each closure parameter is an
+    /// immutable local by default; when the closure fills a slot typed
+    /// `... Fn(.., mut T, ..) -> ..`, the corresponding parameter is bound as a
+    /// `mut` parameter so the body may update its fields/elements (e.g. a stored
+    /// rule's `mut Ctx` parameter). The parameter binding itself stays
+    /// non-rebindable, exactly like a `mut` function parameter.
+    fn closure(&mut self, params: &[String], body: &Block, expected_fn_type: Option<&str>) {
+        let param_effects = expected_fn_type.map(fn_type_param_effects).unwrap_or_default();
+        self.push_scope();
+        for (index, param) in params.iter().enumerate() {
+            let binding = if matches!(param_effects.get(index), Some(Some(DataEffect::Mut))) {
+                AssignBinding::MutParam
+            } else {
+                AssignBinding::ImmutableLocal
+            };
+            let type_name = param_effects
+                .get(index)
+                .and_then(|_| fn_type_param_type_name(expected_fn_type?, index));
+            self.insert(param.clone(), binding, type_name);
+        }
+        self.block(body);
+        self.pop_scope();
+    }
+
+    /// The declared type of a call argument's target parameter/field, when the
+    /// callee is a known struct/sum constructor or a resolved function. Used to
+    /// thread the expected `Fn` type (and its parameter effects) into a closure
+    /// argument's scope.
+    fn expected_fn_type_for_call_arg(
+        &self,
+        callee: &Callee,
+        arg_name: Option<&str>,
+        index: usize,
+    ) -> Option<String> {
+        // Constructor field types (`RwRule(fxn: <closure>)`).
+        if let Callee::Name(name) = callee {
+            let root = type_root_name(name);
+            if let Some(type_info) = self.hir.type_info(root) {
+                let field = match arg_name {
+                    Some(field_name) => type_info.fields.get(field_name),
+                    None => type_info.fields_ordered.get(index),
+                };
+                if let Some(field) = field {
+                    return Some(field.type_name.clone());
+                }
+            }
+            if let Some(fields) = self.hir.sum_variant_fields(root) {
+                let field = match arg_name {
+                    Some(field_name) => fields.iter().find(|f| f.name == field_name),
+                    None => fields.get(index),
+                };
+                if let Some(field) = field {
+                    return Some(field.type_name.clone());
+                }
+            }
+        }
+        // Resolved function/method parameter types.
+        if let CallResolution::Resolved { signature, .. } = self.hir.resolve_call(callee) {
+            let param = match arg_name {
+                Some(param_name) => signature.params.iter().find(|p| p.name == param_name),
+                None => signature.params.get(index),
+            };
+            if let Some(param) = param {
+                return Some(param.type_name.clone());
+            }
+        }
+        None
     }
 
     fn match_arms(&mut self, arms: &[crate::syntax::ast::MatchArm]) {
