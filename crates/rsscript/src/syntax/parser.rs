@@ -1087,6 +1087,7 @@ fn parse_params(tokens: &[Token], start: usize, end: usize) -> ParsedParams {
                     is_noescape: false,
                     is_owned: false,
                     fn_params: Vec::new(),
+                    fn_param_effects: Vec::new(),
                     fn_return: None,
                     span: tokens[start].span.clone(),
                 },
@@ -1112,6 +1113,7 @@ fn parse_params(tokens: &[Token], start: usize, end: usize) -> ParsedParams {
             is_noescape: false,
             is_owned: false,
             fn_params: Vec::new(),
+            fn_param_effects: Vec::new(),
             fn_return: None,
             span: tokens[start].span.clone(),
         });
@@ -3999,6 +4001,7 @@ fn parse_tuple_type_ref(tokens: &[Token], start: usize, end: usize) -> Option<Ty
         is_noescape: false,
         is_owned: false,
         fn_params: Vec::new(),
+        fn_param_effects: Vec::new(),
         fn_return: None,
         span: tokens[start].span.clone(),
     })
@@ -4026,6 +4029,7 @@ fn parse_type_ref(tokens: &[Token], start: usize, end: usize) -> Option<TypeRef>
             is_noescape: false,
             is_owned: false,
             fn_params: Vec::new(),
+            fn_param_effects: Vec::new(),
             fn_return: None,
             span: tokens[cap_index].span.clone(),
         });
@@ -4075,6 +4079,7 @@ fn parse_type_ref(tokens: &[Token], start: usize, end: usize) -> Option<TypeRef>
         }
     }
     let mut fn_params = Vec::new();
+    let mut fn_param_effects = Vec::new();
     if name == "Fn"
         && tokens.get(cursor).is_some_and(|token| token.symbol("("))
         && let Some(close) = find_matching(tokens, cursor, "(", ")")
@@ -4084,6 +4089,19 @@ fn parse_type_ref(tokens: &[Token], start: usize, end: usize) -> Option<TypeRef>
                 malformed_arg_spans.push(span);
                 continue;
             }
+            // A `Fn(...)` parameter may carry a leading data effect
+            // (`read`/`mut`/`take`), exactly like a regular function parameter.
+            // Capture it positionally (parallel to `fn_params`) so the checker,
+            // VM and AOT lowerer can honor it; `parse_type_ref` strips the
+            // keyword while parsing the bare parameter type.
+            let effect = tokens.get(range.start).and_then(ident_name).and_then(|n| {
+                match n {
+                    "read" => Some(DataEffect::Read),
+                    "mut" => Some(DataEffect::Mut),
+                    "take" => Some(DataEffect::Take),
+                    _ => None,
+                }
+            });
             let Some(param) = parse_type_ref(tokens, range.start, range.end) else {
                 if let Some(token) = tokens.get(range.start) {
                     malformed_arg_spans.push(token.span.clone());
@@ -4091,6 +4109,7 @@ fn parse_type_ref(tokens: &[Token], start: usize, end: usize) -> Option<TypeRef>
                 continue;
             };
             fn_params.push(param);
+            fn_param_effects.push(effect);
         }
         cursor = close + 1;
     }
@@ -4107,6 +4126,7 @@ fn parse_type_ref(tokens: &[Token], start: usize, end: usize) -> Option<TypeRef>
         is_noescape,
         is_owned,
         fn_params,
+        fn_param_effects,
         fn_return,
         span: tokens[name_index].span.clone(),
     })

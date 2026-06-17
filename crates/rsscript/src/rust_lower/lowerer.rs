@@ -3292,25 +3292,50 @@ impl<'a> RustLowerer<'a> {
         expected: &TypeRef,
     ) -> String {
         let previous_value_types = self.value_types.clone();
+        let previous_param_effects = self.param_effects.clone();
         for (param, ty) in params.iter().zip(expected.fn_params.iter()) {
             self.value_types.insert(param.clone(), ty.clone());
         }
+        // Register each closure parameter's data effect so the body lowers
+        // exactly like a regular function with the same parameter effects: a
+        // `read T` parameter is a borrowed `&T` (reads `.clone()` out of it where
+        // needed), a `mut T` parameter is an exclusive `&mut T` whose field
+        // assignments propagate to the caller, and a `take`/defaulted parameter is
+        // owned by value. This is what lets a stored `mut Ctx` rule mutate `ctx`.
+        for (index, param) in params.iter().enumerate() {
+            if let Some(effect) = expected.fn_param_effects.get(index).copied().flatten() {
+                self.param_effects.insert(param.clone(), effect);
+            }
+        }
+        // The closure's parameter list must match the stored
+        // `Rc<dyn Fn(&UOp, &mut Ctx) -> ..>` signature: annotate each parameter
+        // with the same ref it would carry as a regular function parameter
+        // (`read T` -> `&T`, `mut T` -> `&mut T`, owned otherwise), mirroring
+        // `lower_param`'s effect-to-ref mapping.
         let lowered_params = params
             .iter()
             .enumerate()
             .map(|(index, param)| {
                 let name = rust_ident(param);
-                expected
+                let Some(ty) = expected
                     .fn_params
                     .get(index)
                     .filter(|ty| self.type_ref_is_concrete_for_annotation(ty))
-                    .map(|ty| {
-                        format!(
-                            "{name}: {}",
-                            self.lower_type_ref(ty, ManagedPosition::Param)
-                        )
-                    })
-                    .unwrap_or(name)
+                else {
+                    return name;
+                };
+                let bare = self.lower_type_ref(ty, ManagedPosition::Param);
+                let effect = expected.fn_param_effects.get(index).copied().flatten();
+                // Match the stored `Rc<dyn Fn(..)>` parameter ABI exactly (see
+                // `lower_type_ref` for `Fn`): `read T` -> `&T`, `mut T` -> `&mut T`,
+                // owned otherwise. Kept uniform (no by-value-`Copy` shortcut) so
+                // the closure literal, its stored type, and every call site agree.
+                let rust_ty = match effect {
+                    Some(DataEffect::Read) => format!("&{bare}"),
+                    Some(DataEffect::Mut) => format!("&mut {bare}"),
+                    Some(DataEffect::Take) | None => bare,
+                };
+                format!("{name}: {rust_ty}")
             })
             .collect::<Vec<_>>()
             .join(", ");
@@ -3323,6 +3348,7 @@ impl<'a> RustLowerer<'a> {
             );
             self.current_return_type = previous_return_type;
             self.value_types = previous_value_types;
+            self.param_effects = previous_param_effects;
             return lowered;
         }
         let mut out = String::new();
@@ -3331,6 +3357,7 @@ impl<'a> RustLowerer<'a> {
         out.push('}');
         self.current_return_type = previous_return_type;
         self.value_types = previous_value_types;
+        self.param_effects = previous_param_effects;
         out
     }
 
@@ -3523,19 +3550,61 @@ impl<'a> RustLowerer<'a> {
             .is_some_and(|ty| ty.name == "Fn" && ty.is_owned)
     }
 
+    /// The declared data effect of the `index`-th parameter of a first-class
+    /// closure value's stored `Fn` type, so a call site can pass the argument
+    /// with the matching Rust ABI (`read` -> `&`, `mut` -> `&mut`).
+    fn closure_value_param_effect(&self, callee: &Callee, index: usize) -> Option<DataEffect> {
+        let Callee::Name(name) = callee else {
+            return None;
+        };
+        let ty = self.value_types.get(name)?;
+        if ty.name != "Fn" {
+            return None;
+        }
+        ty.fn_param_effects.get(index).copied().flatten()
+    }
+
     fn lower_call_arg_for_callee(
         &mut self,
         callee: &Callee,
         arg: &CallArg,
         index: usize,
     ) -> String {
-        // Calling a first-class closure value (`let f = r.fxn; f(read u)`): the
-        // callee is `Rc<dyn Fn(P0, P1, ..) -> R>` whose parameters lower BY
-        // VALUE. So each argument is passed by value (a `read` of a non-`Copy`
-        // value becomes an owned `.clone()`), not borrowed — `f(&u)` would not
-        // match `Fn(UOp)`.
+        // Calling a first-class closure value (`let f = r.fxn; f(read u, mut ctx)`):
+        // the callee is `Rc<dyn Fn(P0, P1, ..) -> R>` whose parameters carry the
+        // stored `Fn` type's per-parameter data effects. Pass each argument to
+        // match that effect's Rust ABI: `read T` -> `&T` (by value for `Copy`),
+        // `mut T` -> `&mut T` (the closure may mutate it; the borrow is exclusive
+        // for the call), and a `take`/defaulted parameter by value (a `read` of a
+        // non-`Copy` value becomes an owned `.clone()`). This mirrors `lower_param`
+        // and the stored `Rc<dyn Fn(&UOp, &mut Ctx)>` signature.
         if self.callee_is_closure_value(callee) {
-            return self.lower_owned_expr(&arg.value);
+            let effect = self.closure_value_param_effect(callee, index);
+            let inner = match &arg.value {
+                Expr::Effect { value, .. } => value.as_ref(),
+                other => other,
+            };
+            return match effect {
+                Some(DataEffect::Read) => format!("&{}", self.lower_expr(inner)),
+                Some(DataEffect::Mut) => {
+                    // When the argument is itself a `mut` parameter it is already
+                    // a `&mut T`; reborrow it as the closure's `&mut T` argument by
+                    // passing the binding directly (`f(read u, mut ctx)` where
+                    // `ctx: &mut Ctx`), exactly like a `mut`-arg to a regular
+                    // function. Otherwise take `&mut` of the lowered place.
+                    if let Expr::Ident(name, _) = inner
+                        && self.param_effects.get(name) == Some(&DataEffect::Mut)
+                    {
+                        rust_value_ident(name)
+                    } else {
+                        format!("&mut {}", self.lower_expr(inner))
+                    }
+                }
+                // A defaulted/`take` parameter is passed by value; a `read`
+                // call-site marker without a declared effect (older value-model
+                // `Fn` types) still lowers by value via `lower_owned_expr`.
+                _ => self.lower_owned_expr(&arg.value),
+            };
         }
         if runtime_intrinsic_wants_managed_handle_arg(callee, arg.name.as_deref())
             && let Expr::Effect { effect, value, .. } = &arg.value
@@ -4101,6 +4170,7 @@ impl<'a> RustLowerer<'a> {
                     is_noescape: false,
                     is_owned: false,
                     fn_params: Vec::new(),
+                    fn_param_effects: Vec::new(),
                     fn_return: None,
                     span: receiver_type.span.clone(),
                 }),
@@ -4149,6 +4219,7 @@ impl<'a> RustLowerer<'a> {
                         is_noescape: false,
                         is_owned: false,
                         fn_params: Vec::new(),
+                        fn_param_effects: Vec::new(),
                         fn_return: None,
                         span: receiver_type.span.clone(),
                     }),
@@ -4665,10 +4736,24 @@ impl<'a> RustLowerer<'a> {
 
     fn lower_type_ref(&self, ty: &TypeRef, position: ManagedPosition) -> String {
         if ty.name == "Fn" {
+            // A `Fn`-type parameter's data effect determines how the parameter is
+            // PASSED at the Rust call boundary: `read T` -> `&T` (shared borrow),
+            // `mut T` -> `&mut T` (exclusive borrow, mutation propagates back),
+            // and an omitted effect keeps the value-model default (by value). This
+            // mirrors how regular fn params lower and is what makes a stored
+            // `Rc<dyn Fn(&UOp, &mut Ctx) -> ..>` rule able to mutate `mut Ctx`.
             let params = ty
                 .fn_params
                 .iter()
-                .map(|param| self.lower_type_ref(param, ManagedPosition::Param))
+                .enumerate()
+                .map(|(index, param)| {
+                    let lowered = self.lower_type_ref(param, ManagedPosition::Param);
+                    match ty.fn_param_effects.get(index).copied().flatten() {
+                        Some(DataEffect::Read) => format!("&{lowered}"),
+                        Some(DataEffect::Mut) => format!("&mut {lowered}"),
+                        Some(DataEffect::Take) | None => lowered,
+                    }
+                })
                 .collect::<Vec<_>>()
                 .join(", ");
             let return_ty = ty.fn_return.as_ref().map(|return_ty| {
@@ -5786,6 +5871,7 @@ fn type_ref_from_display(name: &str, span: &Span) -> TypeRef {
         is_noescape: false,
         is_owned: false,
         fn_params: Vec::new(),
+        fn_param_effects: Vec::new(),
         fn_return: None,
         span: span.clone(),
     }
@@ -5800,6 +5886,7 @@ fn simple_type_ref(name: &str, span: &Span) -> TypeRef {
         is_noescape: false,
         is_owned: false,
         fn_params: Vec::new(),
+        fn_param_effects: Vec::new(),
         fn_return: None,
         span: span.clone(),
     }
@@ -5898,6 +5985,7 @@ fn fn_type_ref(params: Vec<TypeRef>, return_ty: Option<TypeRef>, span: &Span) ->
         is_fresh: false,
         is_noescape: true,
         is_owned: false,
+        fn_param_effects: vec![None; params.len()],
         fn_params: params,
         fn_return: return_ty.map(Box::new),
         span: span.clone(),

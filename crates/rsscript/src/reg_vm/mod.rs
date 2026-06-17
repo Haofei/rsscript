@@ -1103,6 +1103,29 @@ fn require(condition: bool) -> Option<()> {
     condition.then_some(())
 }
 
+/// Argument positions of a closure call site that carry a `mut` effect marker
+/// (`f(read u, mut ctx)`), so a `CallClosure` can write the mutated values back
+/// to the caller after the closure body runs. The call-site effect is the
+/// `HirExpr::Effect { ParamEffect::Mut, .. }` wrapper the checker already
+/// type-checked against the stored `Fn`'s declared `mut` parameter — the same
+/// information `CallKnown`/`CallNative` recover from the callee signature, but
+/// for a first-class closure value the effect lives on the call-site argument.
+fn call_arg_mut_positions(args: &[HirCallArg]) -> Vec<usize> {
+    args.iter()
+        .enumerate()
+        .filter(|(_, arg)| {
+            matches!(
+                &arg.value,
+                HirExpr::Effect {
+                    effect: ParamEffect::Mut,
+                    ..
+                }
+            )
+        })
+        .map(|(index, _)| index)
+        .collect()
+}
+
 /// Outcome of executing a single "pure" instruction via the shared
 /// [`RegVm::try_exec_pure`] dispatcher. Pure instructions push no frames, never
 /// suspend, and never call other functions, so both the interpreter (`drive`)
@@ -1861,11 +1884,17 @@ enum RegInstr {
         /// registers, so native in-place mutation propagates to the caller.
         mut_args: Vec<usize>,
     },
-    #[allow(dead_code)]
     CallClosure {
         dst: Reg,
         closure: Reg,
         args: Vec<Reg>,
+        /// Argument positions passed with `mut` (the stored `Fn`'s `mut`
+        /// parameters). After the closure returns, each such argument's
+        /// (possibly mutated) value is written back to the caller's argument
+        /// register, so a `mut Ctx` closure parameter's field mutations
+        /// propagate to the caller — identical to `CallKnown`'s `mut_args` and to
+        /// AOT's `&mut` argument semantics.
+        mut_args: Vec<usize>,
     },
     ListFilter {
         dst: Reg,
@@ -3825,10 +3854,20 @@ impl RegLowerer<'_> {
                 if self.function_ids.get(type_root_name(name)).is_none()
                     && let Some(&closure) = self.function.local_regs.get(name)
                 {
+                    // A `mut`-annotated argument at a closure call site
+                    // (`f(read u, mut ctx)`) is an exclusive borrow for the
+                    // call: the closure's matching `mut` parameter may mutate it,
+                    // and the result is written back to the caller's binding. The
+                    // call-site effect is the `HirExpr::Effect { Mut, .. }`
+                    // wrapper (already type-checked against the stored `Fn`'s
+                    // declared `mut` parameter), so mirror `CallKnown`'s
+                    // `mut_args` from it.
+                    let mut_args = call_arg_mut_positions(args);
                     self.emit(RegInstr::CallClosure {
                         dst,
                         closure,
                         args: arg_regs,
+                        mut_args,
                     });
                     return Ok(dst);
                 }
@@ -8382,7 +8421,12 @@ impl RegVm {
                             let result = self.call_native_key(key, args, mut_args, base)?;
                             self.set_reg(base + *dst, result);
                         }
-                        RegInstr::CallClosure { dst, closure, args } => {
+                        RegInstr::CallClosure {
+                            dst,
+                            closure,
+                            args,
+                            mut_args,
+                        } => {
                             let closure = match self.reg(base + *closure) {
                                 VmValue::Closure(closure) => Rc::clone(closure),
                                 other => {
@@ -8392,8 +8436,9 @@ impl RegVm {
                                     )));
                                 }
                             };
-                            let result =
-                                self.call_closure_from_regs(unit, &closure, args, base, next_base)?;
+                            let result = self.call_closure_from_regs(
+                                unit, &closure, args, mut_args, base, next_base,
+                            )?;
                             self.set_reg(base + *dst, result);
                         }
                         RegInstr::ListFilter {
@@ -9095,6 +9140,7 @@ impl RegVm {
         unit: &RegUnit,
         closure: &VmClosure,
         arg_regs: &[Reg],
+        mut_args: &[usize],
         caller_base: usize,
         base: usize,
     ) -> Result<VmValue, EvalError> {
@@ -9108,7 +9154,19 @@ impl RegVm {
             let value = self.reg(caller_base + *reg).clone();
             self.set_reg(base + offset + index, value);
         }
-        self.run_frame(unit, callee, base)
+        let result = self.run_frame(unit, callee, base)?;
+        // `mut` closure arguments are an exclusive borrow for the call: after the
+        // closure body runs, write each `mut` parameter's final value back to the
+        // caller's argument register, so a `mut Ctx` parameter's field mutations
+        // propagate to the caller — identical to `CallKnown`'s `mut_writeback` and
+        // to AOT's `&mut` argument semantics. The closure body runs synchronously
+        // via `run_frame`, so the parameter registers still hold their final
+        // values at `base + offset + pos` here.
+        for &pos in mut_args {
+            let value = self.reg(base + offset + pos).clone();
+            self.set_reg(caller_base + arg_regs[pos], value);
+        }
+        Ok(result)
     }
 
     fn call_closure_one(
