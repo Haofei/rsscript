@@ -41,20 +41,41 @@ target parameter is `noescape Fn()`"). This is a deliberate review-first
 restriction (an escaping closure that captures is a retention/aliasing concern).
 
 So the precise need is **owned, escaping closures storable in a collection**
-(`List<Fn(UOp) -> UOp>` of rules). The VM already represents them (a `Closure` is
-an `Rc`, trivially storable); the gap is the **checker's escape rule** plus a
-**storable `Fn` value type** in signatures. Relaxing this is the one real language
-decision — and it must clear RSScript's admission bar: an escaping+capturing
-closure has to *phrase as a reviewer question* (what it captured, whether it can
-retain), e.g. via an explicit `own`/move capture annotation and the `Fn` type
-surfacing in the signature, so nothing is implicit.
+(`List<owned Fn(UOp) -> UOp>` of rules).
+
+**Probe result (confirmed empirically).** RSScript already has `owned Fn(...)`
+(escaping, move-captures owned values, lowers to `Box<dyn FnMut>`), but it is
+gated: a `List<owned Fn(Int)->Int>` field / generic arg is rejected with
+`RS0015` — *"`owned Fn(...)` is only supported as a direct function parameter
+type" / "unsupported owned position"* — and consequently a closure literal in a
+value position is an "unsupported expression", a struct can't hold one, and a
+list-fetched closure `f(x)` "does not resolve". So closures are usable **only
+inline at the call site of a function with an `Fn` parameter** — not as
+first-class values. The gap is a **frontend restriction (parser + checker)**, NOT
+a missing capability: the runtime (`VmClosure`/`MakeClosure`/`CallClosure`) and
+the lowering (`Box<dyn FnMut>`, `move` capture) substrate already exist.
+
+So L1 is "lift a deliberate gate", not "build closures." The sound rule:
+**storable ⇒ `owned` ⇒ move-captures owned values ⇒ no aliasing**, with the
+`owned Fn` type visible wherever it's stored. That preserves review-first by the
+same argument that already makes `owned` parameters sound (ownership moved in, no
+shared mutable state). `noescape`/`read Fn` stay parameter-only (storing a
+borrow-capturing closure would let a borrow escape — unsound), so the relaxation
+is narrow and one-directional.
 
 ## Layered plan (priority order)
 
-1. **L1 — language (keystone): owned/escaping storable closures.** Allow a
-   closure that captures owned values to escape into a value of a first-class
-   `Fn(args) -> ret` type and be stored in containers. Make the capture + escape
-   explicit in the signature (review-first). Everything else rides on this.
+1. **L1 — language (keystone): make `owned Fn` a first-class value.** Lift the
+   "parameter-position-only" gate so `owned Fn(args) -> ret` is allowed as a
+   generic type argument (`List<owned Fn ...>`), a struct field, and a
+   `let`/`local` binding; accept a closure literal as a value expression; and
+   resolve a call on a closure-typed binding (`f(x)`). Keep `noescape`/`read Fn`
+   parameter-only. Work is **parser + checker** (type a closure literal as
+   `owned Fn`; allow it in storable positions; resolve closure-value calls) plus a
+   **lowering** glue step (emit closure values + `Box<dyn FnMut>` in non-parameter
+   positions, call closure-typed loads) — all on the existing
+   `MakeClosure`/`CallClosure` + `Box<dyn FnMut>` substrate. Parity-gated like any
+   feature. Everything else rides on this.
 2. **L2 — library/runtime: PatternMatcher + graph_rewrite.** With L1, build a
    `UOp`/`UPat` type and a native `graph_rewrite(sink, rules, bottom_up, name)`
    driver (fixpoint + memoization) plus a gated `toposort(gate: Fn(UOp)->Bool)` —
