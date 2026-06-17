@@ -65,17 +65,20 @@ is narrow and one-directional.
 
 ## Layered plan (priority order)
 
-1. **L1 — language (keystone): make `owned Fn` a first-class value.** Lift the
-   "parameter-position-only" gate so `owned Fn(args) -> ret` is allowed as a
-   generic type argument (`List<owned Fn ...>`), a struct field, and a
-   `let`/`local` binding; accept a closure literal as a value expression; and
-   resolve a call on a closure-typed binding (`f(x)`). Keep `noescape`/`read Fn`
-   parameter-only. Work is **parser + checker** (type a closure literal as
-   `owned Fn`; allow it in storable positions; resolve closure-value calls) plus a
-   **lowering** glue step (emit closure values + `Box<dyn FnMut>` in non-parameter
-   positions, call closure-typed loads) — all on the existing
-   `MakeClosure`/`CallClosure` + `Box<dyn FnMut>` substrate. Parity-gated like any
-   feature. Everything else rides on this.
+1. **L1 — language (keystone): make `owned Fn` a first-class value. ✅ DONE.**
+   `owned Fn(args) -> ret` is now a first-class value: usable as a generic type
+   argument (`List<owned Fn ...>`), a struct field, a `let`/`local` binding, and a
+   return type; closure literals are accepted in value position; calls on a
+   closure-typed binding resolve (`let f = r.fxn; f(args)`). owned-only stays the
+   rule (`noescape`/`read Fn` remain parameter-only — storing a borrow-capturing
+   closure is unsound). Stored closures lower to `Rc<dyn Fn(..)>` (Clone-able
+   through `List.get`, callable via shared ref). **L1b ✅ DONE:** `Fn`-type
+   parameters now carry `read`/`mut`/`take` effects end to end, so a rule can take
+   `owned Fn(read UOp, mut Ctx) -> Option<UOp>` and mutate `ctx` in-body (exclusive
+   borrow for the call, sound + explicit) — the ctx-mutating rules transliterate
+   1:1. Verified e2e at VM↔compiled parity (`tests/vm_eval_parity/owned_fn.rs`:
+   toy probe, PatternMatcher shape, and `mut Ctx` rule). So the keystone is in;
+   L2 is now unblocked and needs **no further language change**.
 2. **L2 — library/runtime: PatternMatcher + graph_rewrite.** With L1, build a
    `UOp`/`UPat` type and a native `graph_rewrite(sink, rules, bottom_up, name)`
    driver (fixpoint + memoization) plus a gated `toposort(gate: Fn(UOp)->Bool)` —
