@@ -223,7 +223,7 @@ pub fn tensor_f32_to_le_bytes(data: &[f64]) -> Vec<i64> {
 /// a realized output device buffer back into host floats. Errors if the byte count
 /// is not a multiple of 4.
 pub fn tensor_f32_from_le_bytes(bytes: &[i64]) -> Result<Vec<f64>, TensorError> {
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return Err(TensorError::new(format!(
             "f32_from_le_bytes: byte length {} is not a multiple of 4",
             bytes.len()

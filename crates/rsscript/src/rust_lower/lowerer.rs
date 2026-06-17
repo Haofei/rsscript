@@ -3,7 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::diagnostic::Span;
 use crate::syntax::ast::{
     BinaryOp, Block, CallArg, Callee, ConstDecl, DataEffect, EffectDecl, Expr, FieldDecl, ForStmt,
-    FunctionDecl, GenericBound, Item, LetStmt, MatchPattern, MatchStmt, Param, Program, Stmt,
+    FunctionDecl, GenericBound, GenericParam, Item, LetStmt, MatchPattern, MatchStmt, Param,
+    Program, Stmt,
     SumTypeDecl, TypeAliasDecl, TypeDecl, TypeKind, TypeRef,
 };
 
@@ -410,7 +411,12 @@ impl<'a> RustLowerer<'a> {
         if ty.kind == TypeKind::Resource {
             out.push_str("#[must_use]\n");
         }
-        let derive_str = self.compute_derive_attr(&ty.derives, ty.kind == TypeKind::Resource);
+        let has_closure_field = ty.fields.iter().any(|field| type_ref_holds_closure(&field.ty));
+        let derive_str = self.compute_derive_attr(
+            &ty.derives,
+            ty.kind == TypeKind::Resource,
+            has_closure_field,
+        );
         out.push_str(&derive_str);
         out.push_str(&format!(
             "{}struct {}{} {{\n",
@@ -422,6 +428,16 @@ impl<'a> RustLowerer<'a> {
             self.lower_field_decl(field, out);
         }
         out.push_str("}\n");
+        if has_closure_field {
+            // A stored `owned Fn` (`Rc<dyn Fn..>`) is not `Debug`, so the type
+            // cannot derive `Debug`; emit a manual placeholder impl so generic
+            // `{:?}`-using code (and the auto-`Debug` contract) still holds.
+            out.push_str(&manual_struct_debug_impl(
+                &rust_ident(&ty.name),
+                &ty.type_params,
+                &ty.fields,
+            ));
+        }
 
         if ty.kind == TypeKind::Resource {
             out.push_str(&format!(
@@ -486,7 +502,11 @@ impl<'a> RustLowerer<'a> {
     }
 
     fn lower_sum_type(&mut self, sum: &SumTypeDecl, out: &mut String) {
-        let derive_str = self.compute_derive_attr(&sum.derives, false);
+        let has_closure_field = sum
+            .variants
+            .iter()
+            .any(|variant| variant.fields.iter().any(|f| type_ref_holds_closure(&f.ty)));
+        let derive_str = self.compute_derive_attr(&sum.derives, false, has_closure_field);
         out.push_str(&derive_str);
         out.push_str(&format!(
             "{}enum {} {{\n",
@@ -515,31 +535,47 @@ impl<'a> RustLowerer<'a> {
     /// Compute the `#[derive(...)]` attribute string.
     /// If user specified `derives(...)`, use those (always including Debug).
     /// Otherwise use defaults: Debug + Clone for non-resource, Debug only for resource.
-    fn compute_derive_attr(&self, user_derives: &[String], is_resource: bool) -> String {
+    fn compute_derive_attr(
+        &self,
+        user_derives: &[String],
+        is_resource: bool,
+        has_closure_field: bool,
+    ) -> String {
         if user_derives.is_empty() {
             if is_resource {
                 return "#[derive(Debug)]\n".to_string();
+            } else if has_closure_field {
+                // A stored `owned Fn` (`Rc<dyn Fn>`) is `Clone` but not `Debug`;
+                // a manual `Debug` impl is emitted alongside the type.
+                return "#[derive(Clone)]\n".to_string();
             } else {
                 return "#[derive(Debug, Clone)]\n".to_string();
             }
         }
         let mut rust_derives = Vec::new();
-        push_unique_derive(&mut rust_derives, "Debug");
+        // `Rc<dyn Fn>` is `Clone` but not `Debug`/`PartialEq`/`Eq`/`Hash`/`Ord`.
+        // For a closure-holding type, emit only the traits the closure can
+        // satisfy (`Clone`, serde shims) and provide `Debug` via a manual impl;
+        // the others are genuinely unavailable on a function value.
+        if !has_closure_field {
+            push_unique_derive(&mut rust_derives, "Debug");
+        }
         for d in user_derives {
             match d.as_str() {
                 "Debug" => {}
                 "Clone" => push_unique_derive(&mut rust_derives, "Clone"),
-                "Eq" => {
+                "Eq" if !has_closure_field => {
                     push_unique_derive(&mut rust_derives, "PartialEq");
                     push_unique_derive(&mut rust_derives, "Eq");
                 }
-                "Ord" => {
+                "Ord" if !has_closure_field => {
                     push_unique_derive(&mut rust_derives, "PartialEq");
                     push_unique_derive(&mut rust_derives, "Eq");
                     push_unique_derive(&mut rust_derives, "PartialOrd");
                     push_unique_derive(&mut rust_derives, "Ord");
                 }
-                "Hash" => push_unique_derive(&mut rust_derives, "Hash"),
+                "Hash" if !has_closure_field => push_unique_derive(&mut rust_derives, "Hash"),
+                "Eq" | "Ord" | "Hash" => {}
                 "JsonEncode" => push_unique_derive(&mut rust_derives, "serde::Serialize"),
                 "JsonDecode" => push_unique_derive(&mut rust_derives, "serde::Deserialize"),
                 "Schema" | "ReviewSchema" => {}
@@ -3142,7 +3178,13 @@ impl<'a> RustLowerer<'a> {
         if expected.name == "Fn"
             && let Expr::Closure { params, body, .. } = expr
         {
-            return self.lower_closure_for_expected_fn(params, body, expected);
+            // Every caller of this entry point places the closure into a
+            // STORABLE slot (struct/sum field init, return value, collection or
+            // Option/Result payload). A storable `owned Fn` slot lowers to
+            // `Rc<dyn Fn>`, so the closure literal is wrapped in `Rc::new`. The
+            // sole non-storable (direct parameter) case is handled separately in
+            // `lower_call_arg_for_expected_type`.
+            return self.lower_closure_for_expected_fn(params, body, expected, /* storable */ true);
         }
         if let Expr::Call {
             callee: Callee::Name(name),
@@ -3224,6 +3266,26 @@ impl<'a> RustLowerer<'a> {
     }
 
     fn lower_closure_for_expected_fn(
+        &mut self,
+        params: &[String],
+        body: &Block,
+        expected: &TypeRef,
+        storable: bool,
+    ) -> String {
+        // A storable `owned Fn` slot is `Rc<dyn Fn(..)>`; wrap the closure value
+        // in `Rc::new(..)` so it matches that type and stays `Clone`/shareable.
+        // The closure itself always `move`s its captures (owned/Copy only, per
+        // the checker's capture-soundness rule), so it can outlive the builder.
+        let wrap_rc = storable && expected.is_owned;
+        let inner = self.lower_closure_for_expected_fn_inner(params, body, expected);
+        if wrap_rc {
+            format!("std::rc::Rc::new({inner})")
+        } else {
+            inner
+        }
+    }
+
+    fn lower_closure_for_expected_fn_inner(
         &mut self,
         params: &[String],
         body: &Block,
@@ -3445,12 +3507,36 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
+    /// Whether the callee is a first-class closure VALUE (a local binding whose
+    /// inferred type is an `owned Fn(...)`), rather than a function/constructor.
+    /// Such a call dispatches through the stored `Rc<dyn Fn>`.
+    fn callee_is_closure_value(&self, callee: &Callee) -> bool {
+        let Callee::Name(name) = callee else {
+            return false;
+        };
+        // A real function/constructor takes precedence over a same-named local.
+        if self.function_param_types.contains_key(type_root_name(name)) {
+            return false;
+        }
+        self.value_types
+            .get(name)
+            .is_some_and(|ty| ty.name == "Fn" && ty.is_owned)
+    }
+
     fn lower_call_arg_for_callee(
         &mut self,
         callee: &Callee,
         arg: &CallArg,
         index: usize,
     ) -> String {
+        // Calling a first-class closure value (`let f = r.fxn; f(read u)`): the
+        // callee is `Rc<dyn Fn(P0, P1, ..) -> R>` whose parameters lower BY
+        // VALUE. So each argument is passed by value (a `read` of a non-`Copy`
+        // value becomes an owned `.clone()`), not borrowed — `f(&u)` would not
+        // match `Fn(UOp)`.
+        if self.callee_is_closure_value(callee) {
+            return self.lower_owned_expr(&arg.value);
+        }
         if runtime_intrinsic_wants_managed_handle_arg(callee, arg.name.as_deref())
             && let Expr::Effect { effect, value, .. } = &arg.value
             && self.expr_lowers_to_managed_handle(value)
@@ -3503,6 +3589,15 @@ impl<'a> RustLowerer<'a> {
 
     fn lower_call_arg_for_expected_type(&mut self, value: &Expr, expected: &TypeRef) -> String {
         if expected.name == "Fn" {
+            if let Expr::Closure { params, body, .. } = value {
+                // A closure passed to a function PARAMETER typed `owned Fn` (or
+                // `noescape Fn`) is consumed in-place: the parameter lowers to
+                // `impl FnMut`, NOT a stored `Rc<dyn Fn>`. So this path lowers
+                // the closure WITHOUT the `Rc::new` storable wrapper.
+                return self.lower_closure_for_expected_fn(
+                    params, body, expected, /* storable */ false,
+                );
+            }
             return self.lower_expr_for_expected_type(value, expected);
         }
         match value {
@@ -4583,9 +4678,24 @@ impl<'a> RustLowerer<'a> {
                 )
             });
             let return_ty = return_ty.unwrap_or_default();
-            // `owned Fn` is a stored/owning closure; like `noescape` here it lowers
-            // to an `FnMut` surface (lazy pool factories, its only use today, are
-            // special-cased in the call lowerer, so this is a forward-compat path).
+            // `owned Fn` in a STORABLE position (struct field, collection
+            // element, binding, return) is a first-class value. It lowers to
+            // `Rc<dyn Fn(...)>`:
+            //   - `Rc` is `Clone`, so it satisfies `list_get<T: Clone>`,
+            //     `#[derive(Clone)]` on a struct holding the closure, and the
+            //     `Map<K, V>` memo — `Box<dyn Fn>` is NOT `Clone` and would fail
+            //     all three.
+            //   - `Rc<dyn Fn>: Fn` via `Deref`, so a closure fetched behind a
+            //     shared read (`let r = List.get(read rules, i); (r.fxn)(..)`)
+            //     is callable through that shared reference — no `&mut` needed
+            //     (which `FnMut` would have required and which a shared `List`
+            //     read cannot give).
+            // A direct `owned Fn` PARAMETER keeps the existing `impl FnMut`
+            // surface (it is consumed in-place, not stored). `noescape Fn` is
+            // parameter-only (rejected elsewhere) and keeps its prior lowering.
+            if ty.is_owned && position != ManagedPosition::Param {
+                return format!("std::rc::Rc<dyn Fn({params}){return_ty}>");
+            }
             return match (ty.is_noescape || ty.is_owned, position) {
                 (true, ManagedPosition::Param) => {
                     format!("impl FnMut({params}){return_ty}")
@@ -5859,6 +5969,50 @@ fn push_unique_derive(derives: &mut Vec<String>, derive: &str) {
     if !derives.iter().any(|existing| existing == derive) {
         derives.push(derive.to_string());
     }
+}
+
+/// Whether a type reference is (or directly is) a first-class closure value —
+/// an `owned Fn(...)` — which lowers to `Rc<dyn Fn>`. Such a field makes the
+/// containing type underivable for `Debug`/`Eq`/`Hash`/`Ord`.
+fn type_ref_holds_closure(ty: &TypeRef) -> bool {
+    ty.is_owned && ty.name == "Fn"
+}
+
+/// A manual `Debug` impl for a struct that holds a non-`Debug` `owned Fn`
+/// (`Rc<dyn Fn>`) field. Function-value fields print as `<fn>`; every other
+/// field defers to its own `Debug`. Keeps the auto-`Debug` contract for
+/// closure-holding structs (which cannot `#[derive(Debug)]`).
+fn manual_struct_debug_impl(
+    name: &str,
+    type_params: &[GenericParam],
+    fields: &[FieldDecl],
+) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "impl{} std::fmt::Debug for {}{} {{\n",
+        lower_impl_generics(type_params),
+        name,
+        lower_generic_args(type_params)
+    ));
+    out.push_str("    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n");
+    out.push_str(&format!("        f.debug_struct({name:?})\n"));
+    for field in fields {
+        let field_ident = rust_ident(&field.name);
+        if type_ref_holds_closure(&field.ty) {
+            out.push_str(&format!(
+                "            .field({:?}, &\"<fn>\")\n",
+                field.name
+            ));
+        } else {
+            out.push_str(&format!(
+                "            .field({:?}, &self.{field_ident})\n",
+                field.name
+            ));
+        }
+    }
+    out.push_str("            .finish()\n");
+    out.push_str("    }\n}\n");
+    out
 }
 
 /// The Rust integer-literal suffix for an RSScript integer type name, e.g.

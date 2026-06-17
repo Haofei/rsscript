@@ -9,12 +9,13 @@ features: native, local
 // (crate::metal::gpu_run_1d). Results are NOT bit-exact vs CPU (GPU accumulation
 // reorders); callers validate to f32 tolerance.
 
-// Error carrier for native GPU dispatch (struct shape matches the runtime's
-// `tensor_error_value`: a single `message` field).
-struct TensorError
-
-pub fn TensorError.message(error: read TensorError) -> fresh String
-    effects(pure)
+// Error carrier for native GPU dispatch: the same `TensorError` declared by
+// tensor.rssi (single `message` field, matching the runtime's
+// `tensor_error_value`). metal.rssi and tensor.rssi are always loaded together
+// (CORE + STANDARD package interfaces), so declaring `TensorError` in BOTH is a
+// duplicate-symbol collision (RS0005) that blocks every compiled lowering.
+// metal.rssi reuses tensor.rssi's `TensorError`; it deliberately avoids
+// redeclaring only `struct Tensor` (a host may define its own).
 
 struct Metal
 

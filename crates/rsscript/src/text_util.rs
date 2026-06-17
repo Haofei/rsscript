@@ -148,16 +148,18 @@ pub(crate) fn type_arg_names(type_name: &str) -> Option<Vec<&str>> {
 }
 
 /// Split a generic argument list on top-level commas (commas nested inside
-/// `<...>` are not separators), trimming each argument. The single canonical
-/// splitter shared by [`type_arg_names`] and the VM.
+/// `<...>` or `(...)` are not separators), trimming each argument. The single
+/// canonical splitter shared by [`type_arg_names`] and the VM. Paren-awareness
+/// is required so first-class `Fn(a, b) -> r` arguments (e.g. the element of a
+/// `List<owned Fn(read UOp, mut Ctx) -> Option<UOp>>`) split on the right comma.
 pub(crate) fn split_top_level_type_args(args: &str) -> Vec<&str> {
     let mut parts = Vec::new();
     let mut start = 0usize;
     let mut depth = 0usize;
     for (index, ch) in args.char_indices() {
         match ch {
-            '<' => depth += 1,
-            '>' => depth = depth.saturating_sub(1),
+            '<' | '(' => depth += 1,
+            '>' | ')' => depth = depth.saturating_sub(1),
             ',' if depth == 0 => {
                 parts.push(args[start..index].trim());
                 start = index + ch.len_utf8();

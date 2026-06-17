@@ -3817,6 +3817,21 @@ impl RegLowerer<'_> {
         let dst = self.temp();
         match callee {
             Callee::Name(name) => {
+                // A bare name that resolves to a LOCAL BINDING (and is not a
+                // known free function) is a first-class closure value being
+                // called: `let f = r.fxn; f(7)`. Calling it dispatches through
+                // `CallClosure` on the stored `VmValue::Closure`. This is the VM
+                // side of first-class `owned Fn` values.
+                if self.function_ids.get(type_root_name(name)).is_none()
+                    && let Some(&closure) = self.function.local_regs.get(name)
+                {
+                    self.emit(RegInstr::CallClosure {
+                        dst,
+                        closure,
+                        args: arg_regs,
+                    });
+                    return Ok(dst);
+                }
                 // A generic call carries its type args in `name` (e.g.
                 // `get_v<Int>`); functions are keyed by their bare name, so strip
                 // the generics before the lookup — otherwise a generic *function*
