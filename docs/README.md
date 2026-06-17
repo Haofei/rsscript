@@ -42,6 +42,7 @@ LLMs); everything else lives here, grouped into categorized subfolders.
 | [ml-perf-todo.md](planning/ml-perf-todo.md) | ML-framework perf plan: native tensor kernels (fix VM big-matrix cliff) + AOT build-time levers. |
 | [cross-isolate-design.md](planning/cross-isolate-design.md) | Feasibility + smallest-sound-slice plan for the cross-isolate message API (§20.2-3): message-channel core landed, multi-heap isolates still future. |
 | [RSScript_AI_Generation_Feedback_v0.1.md](planning/RSScript_AI_Generation_Feedback_v0.1.md) | Agent-facing generation oracle plus fast interpreter feedback loop for AI-generated RSScript. |
+| [declarative-rewrite-roadmap.md](planning/declarative-rewrite-roadmap.md) | Highest-leverage feature for the ML port: escaping/storable closures (keystone) → a PatternMatcher/graph_rewrite library, so the scheduler transliterates tinygrad instead of paraphrasing it. |
 
 ## Conventions
 
