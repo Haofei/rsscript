@@ -4352,8 +4352,27 @@ fn fn_param_types(type_name: &str) -> Vec<&str> {
     if params.is_empty() {
         Vec::new()
     } else {
+        // A `Fn(...)` parameter may carry a leading data effect (`read`/`mut`/
+        // `take`); every caller here compares the parameter's TYPE, not its
+        // effect (the effect is enforced separately by the analyzer's closure
+        // mutability/borrow machinery), so strip the keyword to the bare type.
         split_top_level_type_args(params)
+            .into_iter()
+            .map(fn_param_bare_type)
+            .collect()
     }
+}
+
+/// Strip a leading `read`/`mut`/`take` effect keyword from a `Fn` parameter
+/// type string, leaving the bare type (`"mut Ctx"` -> `"Ctx"`).
+fn fn_param_bare_type(param: &str) -> &str {
+    let param = param.trim();
+    for keyword in ["read ", "mut ", "take "] {
+        if let Some(rest) = param.strip_prefix(keyword) {
+            return rest.trim();
+        }
+    }
+    param
 }
 
 fn fn_type_prefix(type_name: &str) -> &'static str {

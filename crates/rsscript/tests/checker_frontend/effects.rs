@@ -687,3 +687,70 @@ fn first(items: read List<ReviewFacts>) -> String {
     assert!(lowered.contains("for facts in (items).iter()"));
     assert!(!lowered.contains("for facts in (items).iter().cloned()"));
 }
+
+// A `mut`-annotated `Fn`-type parameter (`owned Fn(mut Ctx) -> Unit`) makes the
+// matching closure parameter a mutable binding: the body may update its fields,
+// exactly like a regular `mut` function parameter. This must check cleanly.
+#[test]
+fn mut_fn_param_is_mutable_in_closure_body() {
+    let source = r#"
+features: local
+
+struct Ctx derives(Clone) {
+    fired: Int
+}
+
+struct Rule derives(Clone) {
+    fxn: owned Fn(mut Ctx) -> Unit
+}
+
+fn build() -> fresh Rule {
+    return Rule(fxn: fn(ctx) captures() effects(pure) {
+        ctx.fired = ctx.fired + 1
+        return Unit
+    })
+}
+"#;
+    let errors = analyze_source("mut-fn-param-clean.rss", source)
+        .into_iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Error)
+        .map(|diagnostic| diagnostic.code)
+        .collect::<Vec<_>>();
+    assert!(
+        errors.is_empty(),
+        "a `mut` Fn-param mutating its fields must check cleanly, got {errors:?}"
+    );
+}
+
+// Soundness: a `mut` Fn-param is an exclusive mutable BORROW for the call — its
+// fields/elements may be updated, but the parameter binding itself is not
+// reassignable, exactly like a regular `mut` parameter. Rebinding it is RS0311.
+#[test]
+fn mut_fn_param_binding_is_not_reassignable() {
+    let source = r#"
+features: local
+
+struct Ctx derives(Clone) {
+    fired: Int
+}
+
+struct Rule derives(Clone) {
+    fxn: owned Fn(mut Ctx) -> Unit
+}
+
+fn build() -> fresh Rule {
+    return Rule(fxn: fn(ctx) captures() effects(pure) {
+        ctx = Ctx(fired: 99)
+        return Unit
+    })
+}
+"#;
+    let codes = analyze_source("mut-fn-param-rebind.rss", source)
+        .into_iter()
+        .map(|diagnostic| diagnostic.code)
+        .collect::<Vec<_>>();
+    assert!(
+        codes.contains(&"RS0311".to_string()),
+        "rebinding a `mut` Fn-param binding must be rejected, got {codes:?}"
+    );
+}

@@ -244,3 +244,198 @@ fn main() -> Unit {
         source,
     );
 }
+
+/// The feature this commit adds: a stored rule whose type carries a `mut`
+/// effect on a `Fn`-type parameter — `owned Fn(read UOp, mut Ctx) -> Option<UOp>`
+/// — so the RULE BODY itself mutates the shared `Ctx`. The firing count is
+/// produced BY THE RULES (`ctx.fired = ctx.fired + 1` inside each closure), not
+/// by the driver. The driver fetches each stored rule and calls it as a value
+/// with the matching call-site effects (`f(read u, mut ctx)`) across a fixpoint;
+/// the `mut Ctx` argument is an exclusive borrow for the call whose mutations
+/// propagate back. Both backends must print identical stdout: the VM writes the
+/// mutated argument register back after `CallClosure`; AOT lowers the slot to
+/// `Rc<dyn Fn(&UOp, &mut Ctx) -> Option<UOp>>` and passes `&u, &mut ctx`.
+#[test]
+fn parity_owned_fn_mut_ctx_rule() {
+    let source = r#"
+features: local
+
+pub sum Ops derives(Clone, Eq, Hash) { Const Var Add Mul }
+
+struct UOp derives(Clone, Eq, Hash) {
+    op: Ops
+    src: List<UOp>
+    arg: Int
+}
+
+struct Ctx derives(Clone) {
+    fired: Int
+}
+
+struct RwRule derives(Clone) {
+    fxn: owned Fn(read UOp, mut Ctx) -> Option<UOp>
+}
+
+fn uconst(v: Int) -> fresh UOp {
+    return UOp(op: Const, src: List.new<UOp>(), arg: v)
+}
+fn uvar(id: Int) -> fresh UOp {
+    return UOp(op: Var, src: List.new<UOp>(), arg: id)
+}
+fn ubin(o: Ops, a: read UOp, b: read UOp) -> fresh UOp {
+    local s = List.new<UOp>()
+    List.push(list: mut s, value: read a)
+    List.push(list: mut s, value: read b)
+    return UOp(op: o, src: take s, arg: 0)
+}
+
+fn is_const(u: read UOp, v: Int) -> Bool {
+    if u.op == Const {
+        if u.arg == v { return true }
+    }
+    return false
+}
+
+fn rebuild(u: read UOp) -> fresh UOp {
+    if u.op == Const { return uconst(v: u.arg) }
+    if u.op == Var { return uvar(id: u.arg) }
+    let c0 = List.get(list: read u.src, index: 0)
+    let c1 = List.get(list: read u.src, index: 1)
+    if u.op == Mul { return ubin(o: Mul, a: read c0, b: read c1) }
+    return ubin(o: Add, a: read c0, b: read c1)
+}
+
+// Each rule is a stored `owned Fn(read UOp, mut Ctx) -> Option<UOp>`. When a
+// rule FIRES, the rule body itself records the firing into the shared `Ctx`
+// (`ctx.fired = ctx.fired + 1`) — the count is produced by the rules, not the
+// driver. The `mut Ctx` parameter is an exclusive borrow for that call.
+fn build_rules() -> fresh List<RwRule> {
+    local rules = List.new<RwRule>()
+
+    // Rule 1: (x * 1) -> x. No captures; mutates `ctx` on fire.
+    let r_mul1 = RwRule(fxn: fn(u, ctx) captures() effects(pure) {
+        if u.op == Mul {
+            let lhs = List.get(list: read u.src, index: 0)
+            let rhs = List.get(list: read u.src, index: 1)
+            if is_const(u: read rhs, v: 1) {
+                ctx.fired = ctx.fired + 1
+                return Some(uvar(id: lhs.arg))
+            }
+        }
+        return None
+    })
+    List.push(list: mut rules, value: read r_mul1)
+
+    // Rule 2: (x * 0) -> Const 0. Move-captures a `String` tag and Copy-captures
+    // `zero`; mutates `ctx` on fire.
+    let zero = 0
+    let tag = "mul0"
+    let r_mul0 = RwRule(fxn: fn(u, ctx) captures(read zero, take tag) effects(pure) {
+        if u.op == Mul {
+            let rhs = List.get(list: read u.src, index: 1)
+            if is_const(u: read rhs, v: zero) {
+                if String.len(value: read tag) > 0 {
+                    ctx.fired = ctx.fired + 1
+                    return Some(uconst(v: zero))
+                }
+            }
+        }
+        return None
+    })
+    List.push(list: mut rules, value: read r_mul0)
+
+    return take rules
+}
+
+// Drive each node to a fixpoint. Each iteration FETCHES a stored rule and CALLS
+// it as a value, threading the shared `mut Ctx` THROUGH the rule
+// (`f(read cur, mut ctx)`). The rule — not the driver — increments the count.
+fn rewrite_fixed(node: read UOp, rules: read List<RwRule>, ctx: mut Ctx) -> fresh UOp {
+    let mut cur = uvar(id: node.arg)
+    if node.op == Const { cur = uconst(v: node.arg) }
+    if node.op == Mul {
+        let c0 = List.get(list: read node.src, index: 0)
+        let c1 = List.get(list: read node.src, index: 1)
+        cur = ubin(o: Mul, a: read c0, b: read c1)
+    }
+    if node.op == Add {
+        let c0 = List.get(list: read node.src, index: 0)
+        let c1 = List.get(list: read node.src, index: 1)
+        cur = ubin(o: Add, a: read c0, b: read c1)
+    }
+
+    let mut changed = true
+    let nrules = List.len(list: read rules)
+    while changed {
+        changed = false
+        let mut i = 0
+        while i < nrules {
+            let r = List.get(list: read rules, index: i)
+            let f = r.fxn
+            match f(read cur, mut ctx) {
+                Some(next) => {
+                    cur = next
+                    changed = true
+                }
+                None => {}
+            }
+            i = i + 1
+        }
+    }
+    return rebuild(u: read cur)
+}
+
+fn main() -> Unit {
+    let rules = build_rules()
+    local ctx = Ctx(fired: 0)
+    local memo = Map.new<UOp, UOp>()
+
+    let x = uvar(id: 7)
+    let one = uconst(v: 1)
+    let x_mul_1 = ubin(o: Mul, a: read x, b: read one)
+    let zero = uconst(v: 0)
+
+    let inner = rewrite_fixed(node: read x_mul_1, rules: read rules, ctx: mut ctx)
+    Map.insert(map: mut memo, key: read x_mul_1, value: read inner)
+
+    let memo_hit = Map.get(map: read memo, key: read x_mul_1)
+    let inner2 = match memo_hit {
+        Some(v) => rebuild(u: read v)
+        None => rewrite_fixed(node: read x_mul_1, rules: read rules, ctx: mut ctx)
+    }
+    let outer = ubin(o: Mul, a: read inner2, b: read zero)
+    let result = rewrite_fixed(node: read outer, rules: read rules, ctx: mut ctx)
+
+    let is_zero = is_const(u: read result, v: 0)
+    Log.write(message: read "result_is_const_0:")
+    if is_zero {
+        Log.write(message: read "yes")
+    } else {
+        Log.write(message: read "no")
+    }
+    Log.write(message: read "result_op_const:")
+    if result.op == Const {
+        Log.write(message: read "yes")
+    } else {
+        Log.write(message: read "no")
+    }
+    // The firing count was produced BY THE RULES mutating `mut Ctx`, not the
+    // driver. Rule 1 fires once on the inner (x*1)->x, Rule 2 once on the rebuilt
+    // (x*1-simplified)*0 -> Const 0, so exactly two firings.
+    Log.write(message: read "fired:")
+    Log.write(message: read String.from_int(value: ctx.fired))
+    Log.write(message: read "fired_is_2:")
+    if ctx.fired == 2 {
+        Log.write(message: read "yes")
+    } else {
+        Log.write(message: read "no")
+    }
+    return Unit
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "owned-fn-mut-ctx-rule.rss",
+        "rsscript_owned_fn_mut_ctx_rule",
+        source,
+    );
+}

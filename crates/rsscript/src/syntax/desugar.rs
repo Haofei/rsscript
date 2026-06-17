@@ -469,6 +469,7 @@ fn make_tuple_struct(arity: usize) -> Item {
                 is_noescape: false,
                 is_owned: false,
                 fn_params: Vec::new(),
+                fn_param_effects: Vec::new(),
                 fn_return: None,
                 span: span.clone(),
             },

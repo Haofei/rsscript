@@ -6530,7 +6530,14 @@ fn type_ref_name(ty: &TypeRef) -> String {
         let params = ty
             .fn_params
             .iter()
-            .map(type_ref_name)
+            .enumerate()
+            .map(|(index, param)| {
+                let prefix = match ty.fn_param_effects.get(index).copied().flatten() {
+                    Some(effect) => format!("{} ", effect.as_str()),
+                    None => String::new(),
+                };
+                format!("{prefix}{}", type_ref_name(param))
+            })
             .collect::<Vec<_>>()
             .join(", ");
         let return_ty = ty

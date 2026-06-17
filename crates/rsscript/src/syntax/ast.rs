@@ -282,6 +282,15 @@ pub struct TypeRef {
     /// and may consume its captures, so it must capture owned values.
     pub is_owned: bool,
     pub fn_params: Vec<TypeRef>,
+    /// Per-`Fn`-parameter data effect (`read`/`mut`/`take`), positional and
+    /// parallel to `fn_params`. `None` at a position means "no explicit
+    /// annotation" — the checker applies the value-model default for that param's
+    /// type (the same rule regular function parameters obey). Kept as a parallel
+    /// vector (rather than wrapping every `TypeRef`) so the ~dozen `TypeRef`
+    /// construction sites that build non-`Fn` types stay untouched: they leave it
+    /// empty, and an empty vector reads as "all defaults", which is exactly the
+    /// prior behavior.
+    pub fn_param_effects: Vec<Option<DataEffect>>,
     pub fn_return: Option<Box<TypeRef>>,
     pub span: Span,
 }
