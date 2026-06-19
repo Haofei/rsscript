@@ -8,6 +8,18 @@ pub fn Math.clamp(value: Int, min: Int, max: Int) -> Int
 
 pub fn Math.pow(base: Int, exponent: Int) -> Int
 
+pub fn Math.wrapping_add(left: Int, right: Int) -> Int
+
+pub fn Math.wrapping_sub(left: Int, right: Int) -> Int
+
+pub fn Math.wrapping_mul(left: Int, right: Int) -> Int
+
+pub fn Math.saturating_add(left: Int, right: Int) -> Int
+
+pub fn Math.saturating_sub(left: Int, right: Int) -> Int
+
+pub fn Math.saturating_mul(left: Int, right: Int) -> Int
+
 pub fn Math.abs_float(value: Float) -> Float
 
 pub fn Math.min_float(left: Float, right: Float) -> Float

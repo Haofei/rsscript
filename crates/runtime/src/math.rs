@@ -20,6 +20,34 @@ pub fn math_pow(base: i64, exponent: i64) -> i64 {
     })
 }
 
+// Explicit modular/clamping integer arithmetic. The `+`/`-`/`*` operators trap on
+// overflow in every build profile (§6.8); these are the deliberate escape hatches
+// for code that *wants* two's-complement wraparound or saturation at the Int
+// bounds. They never trap.
+pub fn math_wrapping_add(left: i64, right: i64) -> i64 {
+    left.wrapping_add(right)
+}
+
+pub fn math_wrapping_sub(left: i64, right: i64) -> i64 {
+    left.wrapping_sub(right)
+}
+
+pub fn math_wrapping_mul(left: i64, right: i64) -> i64 {
+    left.wrapping_mul(right)
+}
+
+pub fn math_saturating_add(left: i64, right: i64) -> i64 {
+    left.saturating_add(right)
+}
+
+pub fn math_saturating_sub(left: i64, right: i64) -> i64 {
+    left.saturating_sub(right)
+}
+
+pub fn math_saturating_mul(left: i64, right: i64) -> i64 {
+    left.saturating_mul(right)
+}
+
 pub fn math_abs_float(value: f64) -> f64 {
     value.abs()
 }

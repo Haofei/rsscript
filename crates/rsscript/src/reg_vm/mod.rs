@@ -2433,10 +2433,16 @@ enum RegIntrinsic {
     MathPow,
     MathPowFloat,
     MathRound,
+    MathSaturatingAdd,
+    MathSaturatingMul,
+    MathSaturatingSub,
     MathSin,
     MathSqrt,
     MathTanh,
     MathTruncFloat,
+    MathWrappingAdd,
+    MathWrappingMul,
+    MathWrappingSub,
     JsonArray,
     JsonArrayBools,
     JsonArrayContainsPrefix,
@@ -5782,10 +5788,16 @@ fn qualified_intrinsic(namespace: &str, name: &str) -> Option<RegIntrinsic> {
         ("Math", "pow") => Some(RegIntrinsic::MathPow),
         ("Math", "pow_float") => Some(RegIntrinsic::MathPowFloat),
         ("Math", "round") => Some(RegIntrinsic::MathRound),
+        ("Math", "saturating_add") => Some(RegIntrinsic::MathSaturatingAdd),
+        ("Math", "saturating_mul") => Some(RegIntrinsic::MathSaturatingMul),
+        ("Math", "saturating_sub") => Some(RegIntrinsic::MathSaturatingSub),
         ("Math", "sin") => Some(RegIntrinsic::MathSin),
         ("Math", "sqrt") => Some(RegIntrinsic::MathSqrt),
         ("Math", "tanh") => Some(RegIntrinsic::MathTanh),
         ("Math", "trunc_float") => Some(RegIntrinsic::MathTruncFloat),
+        ("Math", "wrapping_add") => Some(RegIntrinsic::MathWrappingAdd),
+        ("Math", "wrapping_mul") => Some(RegIntrinsic::MathWrappingMul),
+        ("Math", "wrapping_sub") => Some(RegIntrinsic::MathWrappingSub),
         ("Json", "array") => Some(RegIntrinsic::JsonArray),
         ("Json", "array_bools") => Some(RegIntrinsic::JsonArrayBools),
         ("Json", "array_contains_prefix") => Some(RegIntrinsic::JsonArrayContainsPrefix),
@@ -11085,7 +11097,7 @@ impl RegVm {
             | RegIntrinsic::FloatIsNan => {
                 self.exec_scalar_intrinsics(unit, intrinsic, args, base, next_base)
             }
-            RegIntrinsic::MathAbs | RegIntrinsic::MathAbsFloat | RegIntrinsic::MathCeil | RegIntrinsic::MathClamp | RegIntrinsic::MathClampFloat | RegIntrinsic::MathCos | RegIntrinsic::MathExp | RegIntrinsic::MathExp2 | RegIntrinsic::MathFloor | RegIntrinsic::MathLog | RegIntrinsic::MathLog2 | RegIntrinsic::MathMax | RegIntrinsic::MathMaxFloat | RegIntrinsic::MathMin | RegIntrinsic::MathMinFloat | RegIntrinsic::MathPow | RegIntrinsic::MathPowFloat | RegIntrinsic::MathRound | RegIntrinsic::MathSin | RegIntrinsic::MathSqrt | RegIntrinsic::MathTanh | RegIntrinsic::MathTruncFloat => self.exec_math_intrinsics(unit, intrinsic, args, base, next_base),
+            RegIntrinsic::MathAbs | RegIntrinsic::MathAbsFloat | RegIntrinsic::MathCeil | RegIntrinsic::MathClamp | RegIntrinsic::MathClampFloat | RegIntrinsic::MathCos | RegIntrinsic::MathExp | RegIntrinsic::MathExp2 | RegIntrinsic::MathFloor | RegIntrinsic::MathLog | RegIntrinsic::MathLog2 | RegIntrinsic::MathMax | RegIntrinsic::MathMaxFloat | RegIntrinsic::MathMin | RegIntrinsic::MathMinFloat | RegIntrinsic::MathPow | RegIntrinsic::MathPowFloat | RegIntrinsic::MathRound | RegIntrinsic::MathSaturatingAdd | RegIntrinsic::MathSaturatingMul | RegIntrinsic::MathSaturatingSub | RegIntrinsic::MathSin | RegIntrinsic::MathSqrt | RegIntrinsic::MathTanh | RegIntrinsic::MathTruncFloat | RegIntrinsic::MathWrappingAdd | RegIntrinsic::MathWrappingMul | RegIntrinsic::MathWrappingSub => self.exec_math_intrinsics(unit, intrinsic, args, base, next_base),
             RegIntrinsic::JsonArray | RegIntrinsic::JsonArrayBools | RegIntrinsic::JsonArrayContainsPrefix | RegIntrinsic::JsonArrayContainsString | RegIntrinsic::JsonArrayContainsSubstring | RegIntrinsic::JsonArrayCountWhere | RegIntrinsic::JsonArrayFold | RegIntrinsic::JsonArrayGet | RegIntrinsic::JsonArrayInts | RegIntrinsic::JsonArrayLen | RegIntrinsic::JsonArrayStrings | RegIntrinsic::JsonAt | RegIntrinsic::JsonAtBool | RegIntrinsic::JsonAtBoolOr | RegIntrinsic::JsonAtInt | RegIntrinsic::JsonAtIntOr | RegIntrinsic::JsonAtOptional | RegIntrinsic::JsonAtOptionalBool | RegIntrinsic::JsonAtOptionalInt | RegIntrinsic::JsonAtOptionalString | RegIntrinsic::JsonAtOr | RegIntrinsic::JsonAtString | RegIntrinsic::JsonAtStringOr | RegIntrinsic::JsonAtToString | RegIntrinsic::JsonAtToStringOr | RegIntrinsic::JsonAsBool | RegIntrinsic::JsonAsInt | RegIntrinsic::JsonAsString | RegIntrinsic::JsonBoolAt | RegIntrinsic::JsonBoolAtOr | RegIntrinsic::JsonBoolField | RegIntrinsic::JsonClone | RegIntrinsic::JsonDecode | RegIntrinsic::JsonDecodeText | RegIntrinsic::JsonEncode | RegIntrinsic::JsonErrorMessage | RegIntrinsic::JsonField | RegIntrinsic::JsonFieldBool | RegIntrinsic::JsonFieldInt | RegIntrinsic::JsonFieldOptional | RegIntrinsic::JsonFieldOptionalBool | RegIntrinsic::JsonFieldOptionalInt | RegIntrinsic::JsonFieldOptionalString | RegIntrinsic::JsonFieldString | RegIntrinsic::JsonIntAt | RegIntrinsic::JsonIntAtOr | RegIntrinsic::JsonIsArray | RegIntrinsic::JsonIsNull | RegIntrinsic::JsonIsObject | RegIntrinsic::JsonIntField | RegIntrinsic::JsonKind | RegIntrinsic::JsonObject | RegIntrinsic::JsonObjectKeys | RegIntrinsic::JsonObjectLen | RegIntrinsic::JsonParse | RegIntrinsic::JsonParseFile | RegIntrinsic::JsonQuoteString | RegIntrinsic::JsonRawField | RegIntrinsic::JsonStringAt | RegIntrinsic::JsonStringAtOr | RegIntrinsic::JsonStringArray | RegIntrinsic::JsonStringField | RegIntrinsic::JsonStrings | RegIntrinsic::JsonToStringAt | RegIntrinsic::JsonToStringAtOr | RegIntrinsic::JsonToString | RegIntrinsic::JsonValue | RegIntrinsic::JsonValues => self.exec_json_intrinsics(unit, intrinsic, args, base, next_base),
             RegIntrinsic::ListAll | RegIntrinsic::ListAny | RegIntrinsic::ListContains | RegIntrinsic::ListContainsValue | RegIntrinsic::ListCountWhere | RegIntrinsic::ListConsume | RegIntrinsic::ListFind | RegIntrinsic::ListFirst | RegIntrinsic::ListFlatMap | RegIntrinsic::ListFlatten | RegIntrinsic::ListGroupBy | RegIntrinsic::ListIsEmpty | RegIntrinsic::ListJoin | RegIntrinsic::ListLast | RegIntrinsic::ListDedup | RegIntrinsic::ListEnumerate | RegIntrinsic::ListMax | RegIntrinsic::ListMin | RegIntrinsic::ListNew | RegIntrinsic::ListPartition | RegIntrinsic::ListReverse | RegIntrinsic::ListSkip | RegIntrinsic::ListSlice | RegIntrinsic::ListSum | RegIntrinsic::ListZip | RegIntrinsic::ListTryFold | RegIntrinsic::ListTake | RegIntrinsic::ListToJsonStrings | RegIntrinsic::ListToJsonValues => self.exec_list_intrinsics(unit, intrinsic, args, base, next_base),
             RegIntrinsic::ListPipeline | RegIntrinsic::PipelineCollect => {
@@ -13282,6 +13294,36 @@ impl RegVm {
                 let left = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let right = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 Ok(VmValue::Int(left.min(right)))
+            }
+            RegIntrinsic::MathWrappingAdd => {
+                let left = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let right = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::Int(left.wrapping_add(right)))
+            }
+            RegIntrinsic::MathWrappingSub => {
+                let left = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let right = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::Int(left.wrapping_sub(right)))
+            }
+            RegIntrinsic::MathWrappingMul => {
+                let left = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let right = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::Int(left.wrapping_mul(right)))
+            }
+            RegIntrinsic::MathSaturatingAdd => {
+                let left = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let right = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::Int(left.saturating_add(right)))
+            }
+            RegIntrinsic::MathSaturatingSub => {
+                let left = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let right = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::Int(left.saturating_sub(right)))
+            }
+            RegIntrinsic::MathSaturatingMul => {
+                let left = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let right = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::Int(left.saturating_mul(right)))
             }
             RegIntrinsic::MathMinFloat => {
                 let left = expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;

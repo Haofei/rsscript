@@ -87,6 +87,33 @@ struct User derives(JsonEncode, JsonDecode) {
 }
 
 #[test]
+fn rust_package_release_profile_pins_overflow_checks() {
+    // §6.8: integer overflow traps in every build profile. The compiled tier relies
+    // on the generated release profile keeping `overflow-checks = true`; if this is
+    // ever dropped, release builds would silently wrap and diverge from the reg-VM
+    // (which traps via checked arithmetic). Guard the manifest so that can't regress.
+    let source = r#"
+fn main() -> Unit {
+    return Unit
+}
+"#;
+    let package = lower_source_to_rust_package(
+        "overflow-profile.rss",
+        source,
+        "overflow-profile-package",
+        "../runtime",
+    )
+    .expect("source should lower");
+
+    assert!(
+        package.cargo_toml.contains("[profile.release]")
+            && package.cargo_toml.contains("overflow-checks = true"),
+        "generated release profile must pin overflow-checks = true, got:\n{}",
+        package.cargo_toml
+    );
+}
+
+#[test]
 fn rust_lowering_supports_while_is_pattern() {
     let source = r#"
 fn main(value: read Option<Int>) -> Int {

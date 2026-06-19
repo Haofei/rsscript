@@ -522,6 +522,35 @@ fn main() -> Unit {
 }
 
 #[test]
+fn parity_math_wrapping_and_saturating_intrinsics() {
+    // The `+`/`-`/`*` operators trap on overflow (§6.8); these explicit APIs are
+    // the deliberate modular/clamping escape hatches and must agree on both tiers
+    // at the Int boundaries. `min` is built from `max` because the bare `i64::MIN`
+    // literal would overflow the Int lexer.
+    let source = r#"
+features: local
+
+fn main() -> Unit {
+    let max = 9223372036854775807
+    let min = 0 - max - 1
+    Log.write(message: read String.from_int(value: Math.wrapping_add(left: max, right: 1)))
+    Log.write(message: read String.from_int(value: Math.wrapping_sub(left: min, right: 1)))
+    Log.write(message: read String.from_int(value: Math.wrapping_mul(left: max, right: 2)))
+    Log.write(message: read String.from_int(value: Math.saturating_add(left: max, right: 1)))
+    Log.write(message: read String.from_int(value: Math.saturating_sub(left: min, right: 1)))
+    Log.write(message: read String.from_int(value: Math.saturating_mul(left: max, right: 2)))
+    Log.write(message: read String.from_int(value: Math.wrapping_add(left: 2, right: 3)))
+    return Unit
+}
+"#;
+    common::assert_vm_eval_matches_backend(
+        "parity-math-wrapping-saturating.rss",
+        "rsscript_parity_math_wrapping_saturating",
+        source,
+    );
+}
+
+#[test]
 fn parity_bytes_hash_and_gzip_intrinsics() {
     // Hashes/decompression use the same Rust crates on both backends, so the byte
     // outputs are identical; the gzip blob is `gzip("rsscript")` (8 bytes).
