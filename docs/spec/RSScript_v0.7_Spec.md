@@ -28,8 +28,9 @@ Surface and control flow:
     filled by name at lowering (§9.2, §14.1; `RS0204`/`RS0207`).
   - Named function values: a top-level function passed where a `Fn(...)` is
     expected desugars to a forwarding closure (§10.9).
-  - Top-level and type-associated constants `const [Type.]NAME: T = literal`,
-    literal initializers only, inlined at every reference (§6.9; `RS0015`).
+  - Top-level and type-associated constants `const [Type.]NAME[: T] = literal`,
+    literal initializers only (type annotation optional, inferred from the
+    literal), inlined at every reference (§6.9; `RS0015`).
   - Tuples: `(T0, T1, ...)` types/literals, `.itemN` access, tuple patterns, and
     `let (a, _, c) = ...` destructuring, with generic field/match inference
     (§6.10, §5A).
@@ -668,13 +669,14 @@ The following may be parsed and surfaced for review but are not executable lower
 ```text
 public Future / Waker / task-handle surface
 general user FFI
-advanced protocol/dynamic dispatch model (capability objects)  → now implemented (§20.2-2)
-scoped views / slices                                          → now implemented (§20.2-1)
 ```
 
-(Unstructured `spawn` and Rust-style open enums were previously listed here; both
-are now firm non-goals, see §21 and §20.2 — `spawn` is still rejected with a
-stable diagnostic.)
+(Capability objects / explicit `Capability<Protocol>` dynamic dispatch and scoped
+views / slices were previously listed here; both are now implemented executable
+surface — see §20.2-2 and §20.2-1, and the implemented-surface index at the top of
+this document. Unstructured `spawn` and Rust-style open enums were also previously
+listed here; both are now firm non-goals, see §21 and §20.2 — `spawn` is still
+rejected with a stable diagnostic.)
 
 `async fn` signatures are review-visible contracts. v0.7 admits an executable async
 MVP: `await` appears inside an `async fn` at a statement boundary, inside an
@@ -1034,11 +1036,10 @@ match Config.parse(text: read text) {
 }
 ```
 
-A future version may add an explicit `Result.map_err` API for this in canonical
-call form (`Result.map_err(result: ..., mapper: ...)`); it would still be an
-explicit, named call, never an implicit backend conversion. It is described here
-in prose because the closure-parameter syntax it would need is not part of the
-v0.7 surface.
+For this, v0.7 provides the explicit `Result.map_error` API in canonical call form
+(`Result.map_error(result: ..., mapper: ...)`; §18.2) — an explicit, named call,
+never an implicit backend conversion. `map_error` is the canonical spelling
+throughout the implemented surface and stdlib; there is no `map_err` alias.
 
 Core error types may expose explicit lossy message conversion helpers, for
 example `JsonError.message(error: read e)` or `FileError.message(error: read e)`.
@@ -1699,14 +1700,23 @@ never silently Copy because its fields are. A future explicit `copy struct` or
 explicit per the no-hidden-behavior rule (§2.4).
 
 **Integer overflow.** Integer arithmetic that overflows its type is *defined
-behavior, never undefined*: v0.7 lowers integer operators to native Rust integer
-arithmetic, which **traps** (aborts with a runtime diagnostic) on overflow in
-debug builds and **wraps** two's-complement in release builds. Pinning a single
-cross-build policy — a checked default with explicit `wrapping_*`/`saturating_*`
-APIs for the deliberate cases — is a deferred decision (§20.1); until then code
-must not rely on wraparound as a silent default. Float arithmetic follows
-IEEE-754 (including `inf`/`nan`), consistent with the `Float`-not-`Eq` rule
-(§14.6).
+behavior, never undefined*. The RSScript-level policy is a single,
+build-profile-independent **checked default**: an overflowing `+`/`-`/`*` (and the
+`i64::MIN / -1` and divide/modulo-by-zero edges) traps — aborts with a runtime
+diagnostic — in every build profile. A review-first language must not let the same
+source produce different numeric results across build profiles, so wraparound is
+never a silent default.
+
+This holds across both execution tiers: the reg-VM evaluates integer operators
+through checked arithmetic and raises a runtime error on overflow, and the
+Rust-lowering backend's generated package pins `[profile.release] overflow-checks =
+true` (the dev profile checks by default), so the compiled tier traps in release
+as well as debug. The two tiers therefore trap at the same points.
+
+Deliberate modular or clamping arithmetic is written through the explicit
+`Math.wrapping_*` / `Math.saturating_*` APIs (§18.2), never by relying on a build
+profile. Float arithmetic follows IEEE-754 (including `inf`/`nan`), consistent with
+the `Float`-not-`Eq` rule (§14.6).
 
 ### 6.9 Constants
 
@@ -1715,6 +1725,7 @@ A top-level `const` declares a named compile-time value:
 ```rust
 const MAX_RETRIES: Int = 4
 const PROMPT: String = "ready"
+const TIMEOUT_MS = 250        // type annotation optional; inferred as `Int`
 ```
 
 A constant may also be **associated with a type namespace** using a dotted name,
@@ -2519,29 +2530,49 @@ Freshness is also part of the callback return contract. A
 return a constructor, known fresh call, or local value created inside the
 callback; it must not return a captured managed or local value as fresh.
 
-`Fn` may also declare positional parameter types:
+`Fn` may also declare positional parameter types, and each position may carry a
+data effect (`read`/`mut`/`take`) exactly like an ordinary parameter:
 
 ```rust
 fn map(callback: noescape Fn(Int) -> String) -> Unit
+fn each(callback: noescape Fn(read Item) -> Unit) -> Unit   // borrowed view
+fn fold(callback: noescape Fn(mut Acc, read Item) -> Unit) -> Unit
 ```
+
+**Callback-argument effect rule.** An `Fn` parameter position obeys the same
+effect-to-ownership mapping as a function parameter (§10.1–§10.5): `read T` hands
+the callback a borrowed view (`&T`), `mut T` an exclusive borrow (`&mut T`), and
+`take T` an owned value. When the position carries **no** effect keyword it
+follows the same default as elsewhere — a Copy type passes by value, and a
+non-Copy type is delivered to the callback as an **owned value**. This default is
+the reason the stdlib's element-mapping callbacks (`List.map`'s
+`noescape Fn(T) -> U`, `Option.map`'s `noescape Fn(T) -> U`, `Result.map_error`'s
+`noescape Fn(E) -> F`, §18.2) are written without an effect keyword: the callback
+receives an owned `T`/`E`, which the container supplies by cloning out of its
+`read` input (so those APIs carry an implied `Clone` bound on the element type).
+A callback that only needs to inspect its argument may instead declare the
+position `read` to receive a borrowed view and avoid the clone.
 
 A closure passed to this parameter must have the same arity, for example
 `callback: |value| String.from_int(value: value)`. The callback parameter names
-are local to the closure; the contract supplies their positional types. A
-callback with the wrong parameter count is a diagnostic before lowering.
+are local to the closure; the contract supplies their positional types and
+effects. A callback with the wrong parameter count is a diagnostic before
+lowering.
 
 **Named function values.** A bare top-level free function may be passed where a
 `Fn(...)` is expected, instead of an inline closure:
 
 ```rust
-fn is_even(x: read Int) -> Bool { return x % 2 == 0 }
+fn is_even(x: Int) -> Bool { return x % 2 == 0 }
 
 List.filter(list: read xs, predicate: is_even)
 ```
 
-This is a desugaring: a function name in argument position is rewritten to a
-forwarding closure over the function's own parameters
-(`(x) { return is_even(x: read x) }`), so the checker and every backend see an
+`Int` is Copy, so its parameter carries no data effect (§10.5); only non-Copy
+parameters and receivers spell `read`/`mut`/`take`. This is a desugaring: a
+function name in argument position is rewritten to a forwarding closure over the
+function's own parameters (`(x) { return is_even(x: x) }`), so the checker and
+every backend see an
 ordinary closure with identical behavior. A name shadowed by a local binding is
 not rewritten (the local wins). There is no first-class function-pointer value;
 the function is reached only through the forwarding closure.
@@ -3063,10 +3094,12 @@ fresh Option<U>         = the whole Option is fresh: a fresh Some payload, or No
 `fresh` may be written on the wrapper (`fresh Result<T, E>`, `fresh Option<U>`) or
 inside it (`Result<fresh T, E>`). The wrapper form means the produced wrapper and
 its payload are newly created and unaliased — the freshness contract (§11) applies
-to whichever value the caller extracts. This is the form the error/option
-composition APIs use (e.g. `Result.map<T, U, E>(...) -> fresh Result<U, E>`,
-§18.2): the combinator returns a brand-new wrapper, so its result is a fresh
-source. `fresh Result<fresh T, E>` is redundant — the wrapper `fresh` already
+to whichever value the caller extracts. It is correct only when the combinator
+constructs the **entire** result anew. It is therefore *not* used by the
+error/option composition APIs (`Result.map`, `Result.map_error`, `Option.map`,
+§18.2): those take a `read` input and preserve its payload by cloning, so the
+payload is not a fresh source and the wrappers are returned plain, not `fresh`
+(see §18.2). `fresh Result<fresh T, E>` is redundant — the wrapper `fresh` already
 covers the payload — and is not written.
 
 For resource returns:
@@ -3188,10 +3221,83 @@ resolves `await handle` back to the `async let handle = callee(...)`
 initializer so the package review and REIR `async_boundary` fact still name the
 concrete awaited callee rather than only the lexical handle name.
 
+#### `select`: first-ready among async arms
+
+`select` awaits several pending async operations concurrently and runs the body of
+whichever arm becomes ready first; the losing arms are cancelled. Each arm is
+`pattern = await EXPR [?] => { ... }`. As with direct `await`, a trailing `?` on
+the arm operand applies at the arm boundary after the operand resolves.
+
+```rust
+select {
+    _ = await Timer.sleep(ms: 1)? => {
+        Log.write(message: read "fast")
+    }
+    _ = await Timer.sleep(ms: 100)? => {
+        Log.write(message: read "slow")
+    }
+}
+```
+
+Semantics: all arm operands are constructed as pending operations without running
+inline; the executor polls them and breaks to the first ready arm by completion
+timing, not by textual arm order; only the winning arm's body runs (losing arms
+produce no side effects). `select` is valid in both an `async fn` (it lowers to a
+pending suspension boundary) and an ordinary function (it drives a private
+cooperative executor to completion). The arm pattern binds the resolved value,
+e.g. `item = await Stream.next(stream: read s)? => { ... }`.
+
+#### `await for`: iterating a `Stream` / channel `Receiver`
+
+`await for BINDING in STREAM { ... }` pulls items from an async sequence until it
+is exhausted, awaiting `Stream.next` between iterations:
+
+```rust
+await for chunk in chunks {
+    Log.write(message: read "chunk")
+}
+```
+
+Each iteration awaits the next item; `Some(item)` runs the body with `item` bound,
+`None` ends the loop. The iterand is a `Stream<T>` (including one obtained from a
+channel `Receiver` via `Receiver.into_stream`). Like `select`, `await for` is
+valid inside an `async fn` and in an ordinary function (where it drives a private
+executor). The read/mut guard rules across `await` (above) apply at each step:
+the per-item binding does not outlive its iteration across the suspension point.
+
+#### `Channel`, `Sender`, `Receiver`, `Stream`
+
+The bounded MPSC channel and pull-based stream surface lives in `rss-async` and is
+isolate-local (single-isolate cooperative, not `Send`/multi-threaded). The
+v0.7-executable surface is:
+
+```rust
+Channel.bounded<T>(capacity: Int) -> Result<Channel<T>, ChannelError>
+Channel.sender<T>(channel: read Channel<T>) -> Sender<T>
+Channel.receiver<T>(channel: mut Channel<T>) -> Result<Receiver<T>, ChannelError>
+Sender.send<T>(sender: read Sender<T>, value: take T) -> ...        // awaited
+Sender.close<T>(sender: mut Sender<T>) -> Unit
+Receiver.recv<T>(receiver: read Receiver<T>) -> ...                 // awaited; Option<T> when open
+Receiver.into_stream<T>(receiver: take Receiver<T>) -> Stream<T>
+Receiver.close<T>(receiver: mut Receiver<T>) -> Unit
+Stream.from_list<T>(items: take List<T>) -> Stream<T>
+Stream.next<T>(stream: read Stream<T>) -> ...                       // awaited; Option<T>
+Stream.collect_list<T>(stream: read Stream<T>) -> Result<fresh List<T>, ChannelError>
+```
+
+`Sender.send`/`Receiver.recv`/`Stream.next` are pending operations consumed by
+`await` (`await Receiver.recv(receiver: read r)?`); cancellable variants
+(`Sender.send_cancellable`, `Receiver.recv_cancellable`) take a cancellation
+token. A `Receiver` converts to a `Stream` exactly once via `Receiver.into_stream`
+(it `take`s the receiver). These signatures are normatively fixed by the
+`rss-async` interface files; the channel value is single-isolate and never crosses
+a thread boundary.
+
 `spawn` is not executable in v0.7. Future unstructured task support must lower to
 an isolate-local primitive or an explicit cross-isolate message API; it must not
-imply `Send`, shared heap transfer, or multi-threaded execution. Streams,
-channels, async closures, and public task handles remain post-v0.7 design work.
+imply `Send`, shared heap transfer, or multi-threaded execution. Async closures
+and public task handles remain post-v0.7 design work; `select`, `await for`,
+bounded `Channel`, and `Stream` are executable v0.7 surface (above).
 
 ### 14.5 Generics
 
@@ -3288,8 +3394,15 @@ shared word must not be reused for the language feature.
 A `protocol` is an app-layer capability contract, not a general trait system.
 The v0.7 MVP supports the static contract surface: protocol declarations,
 protocol method signatures, protocol generic bounds, and explicit
-`Protocol.method(...)` calls checked against those signatures. Dynamic dispatch
-is not admitted in v0.7 source or package contracts.
+`Protocol.method(...)` calls checked against those signatures. *Implicit* dynamic
+dispatch — a bare protocol-typed value (`x: Protocol`) or Rust-style `dyn Trait`
+vtable coercion — is not admitted in v0.7 source or package contracts (those stay
+non-goals, §21). The one admitted form of runtime dispatch is the **explicit,
+review-visible `Capability<Protocol>` value** (with the `capability Protocol`
+keyword sugar), which is implemented; see "Dynamic dispatch (explicit capability
+form)" below and §20.2-2. Throughout this chapter, an unqualified "dynamic
+dispatch" refers to the disallowed implicit form unless it explicitly names the
+`Capability<Protocol>` value.
 
 #### Positive model (what a protocol is)
 
@@ -4739,6 +4852,16 @@ pub fn Math.max(left: Int, right: Int) -> Int
 pub fn Math.clamp(value: Int, min: Int, max: Int) -> Int
 pub fn Math.pow(base: Int, exponent: Int) -> Int
 
+// Explicit modular/clamping integer arithmetic (§6.8). The `+`/`-`/`*` operators
+// trap on overflow; these never trap — `wrapping_*` wraps two's-complement at the
+// Int bounds, `saturating_*` clamps to `Int` min/max.
+pub fn Math.wrapping_add(left: Int, right: Int) -> Int
+pub fn Math.wrapping_sub(left: Int, right: Int) -> Int
+pub fn Math.wrapping_mul(left: Int, right: Int) -> Int
+pub fn Math.saturating_add(left: Int, right: Int) -> Int
+pub fn Math.saturating_sub(left: Int, right: Int) -> Int
+pub fn Math.saturating_mul(left: Int, right: Int) -> Int
+
 pub fn Math.abs_float(value: Float) -> Float
 pub fn Math.min_float(left: Float, right: Float) -> Float
 pub fn Math.max_float(left: Float, right: Float) -> Float
@@ -4861,17 +4984,17 @@ languages, keeping error-boundary changes visible to reviewers:
 pub fn Result.map_error<T, E, F>(
     result: read Result<T, E>,
     mapper: noescape Fn(E) -> F,
-) -> fresh Result<T, F>
+) -> Result<T, F>
 
-pub fn Result.and_then<T, U, E>(
+pub fn Result.and_then<T, E, U>(
     result: read Result<T, E>,
     mapper: noescape Fn(T) -> Result<U, E>,
-) -> fresh Result<U, E>
+) -> Result<U, E>
 
-pub fn Result.map<T, U, E>(
+pub fn Result.map<T, E, U>(
     result: read Result<T, E>,
     mapper: noescape Fn(T) -> U,
-) -> fresh Result<U, E>
+) -> Result<U, E>
 ```
 
 The core `Option<T>` surface includes transformation, chaining, and conversion
@@ -4879,25 +5002,36 @@ to `Result`:
 
 ```rust
 pub fn Option.map<T, U>(
-    option: read Option<T>,
+    value: read Option<T>,
     mapper: noescape Fn(T) -> U,
-) -> fresh Option<U>
+) -> Option<U>
 
 pub fn Option.and_then<T, U>(
-    option: read Option<T>,
+    value: read Option<T>,
     mapper: noescape Fn(T) -> Option<U>,
-) -> fresh Option<U>
+) -> Option<U>
 
 pub fn Option.ok_or<T, E>(
-    option: read Option<T>,
+    value: read Option<T>,
     error: read E,
-) -> fresh Result<T, E>
+) -> Result<T, E>
 
 pub fn Option.unwrap_or_else<T>(
-    option: read Option<T>,
-    default_fn: noescape Fn() -> T,
+    value: read Option<T>,
+    default: noescape Fn() -> T,
 ) -> T
 ```
+
+These wrapper-transforming APIs return a **plain** `Result`/`Option`, not a
+`fresh` one. Because the input is `read` and the preserved payload (the `Ok(T)` of
+`map_error`, the `Some(T)` carried through `map`) is cloned out of that borrowed
+input rather than constructed anew, the result cannot promise the unaliased
+fresh-origin guarantee of §11.1; declaring `fresh` here would be unsound. The
+preserved-payload element therefore carries an implied `Clone` bound (§14.6). APIs
+that genuinely build their whole result — `List.map`, `Map.new`, `String.split`,
+etc. — do return `fresh`, because every level of the returned value is newly
+constructed. (The matching interface files in `stdlib/result` and `stdlib/option`
+are the normative source for these signatures.)
 
 Error composition in RSScript is always explicit at the call site. Unlike Rust's
 `From`/`Into` implicit conversions, every error-boundary crossing requires a
@@ -5277,7 +5411,8 @@ A. Extended async surface beyond the v0.7 MVP
      remaining gap is the conditionally-evaluated short-circuit `&&`/`||` RHS.
    - Async operation/task handles, if exposed, are isolate-local managed handles,
      not a user-facing Future/Pin/Poll type system.
-   - async closures and a stream / "await for" async-sequence form.
+   - async closures (still future). The stream / `await for` async-sequence form is
+     now implemented as v0.7 executable surface (§14.4, item H below).
    - single-threaded cooperative executor per isolate.
    - must not expose Future / Pin / Poll / Waker to RSScript users (section 14.4).
 
@@ -5355,7 +5490,12 @@ G. Capability objects (explicit dynamic dispatch)
      errors, fat-pointer vtable layout details in source.
 
 H. Stream<T> and await-for (async sequences)
-   - extends the async MVP with a pull-based async sequence type:
+   - implemented (§14.4): the pull-based async sequence type `Stream<T>`, the
+     `await for` loop, and the bounded MPSC `Channel`/`Sender`/`Receiver` surface
+     are executable v0.7 surface via `rss-async`. Construct a stream from a list
+     (`Stream.from_list`) or a channel receiver (`Receiver.into_stream`); pull with
+     `await for x in stream { ... }`, `await Stream.next(...)`, or
+     `Stream.collect_list(...)`.
 
        async fn lines(file: read File) -> Stream<String>
 
@@ -5363,9 +5503,10 @@ H. Stream<T> and await-for (async sequences)
            Process.println(message: read line)
        }
 
-   - streams must be isolate-local; read/mut guards cannot span await points.
+   - streams are isolate-local; read/mut guards cannot span await points.
    - channel-based streams (multi-producer) are a separate construct from
      generator-style streams (single-producer).
+   - remaining future work: generator-style (`yield`) stream producers.
    - not adopted: Rust's `AsyncIterator`/`Poll`-based streaming, pinned streams,
      or `Stream` combinators that hide allocation.
 
@@ -5457,6 +5598,18 @@ N. Native boundary and ABI adapter contracts
      declared contracts, dependency updates as review events with semantic diff.
    - not adopted: general FFI, C header parsing, automatic binding generation
      without audit, or direct pointer manipulation in RSScript source.
+
+O. Single integer-overflow policy and explicit modular APIs
+   - implemented (§6.8, §18.2): a build-profile-independent checked default —
+     overflowing `+`/`-`/`*` (and `i64::MIN / -1` and divide/modulo-by-zero) traps
+     in every profile. The reg-VM evaluates integer operators through checked
+     arithmetic; the Rust-lowering backend's generated package pins
+     `[profile.release] overflow-checks = true`, so the compiled tier traps in
+     release as well as debug. The explicit `Math.wrapping_add/sub/mul` and
+     `Math.saturating_add/sub/mul` escape-hatch APIs are implemented across both
+     tiers at parity.
+   - not adopted: undefined-behavior overflow, silent two's-complement wrap as the
+     default, or per-build-profile numeric semantics.
 ```
 
 Explicitly rejected influences. The following Dart-style conveniences conflict
@@ -5679,48 +5832,74 @@ tokens at parse time.
 ```ebnf
 file        = [ features ] { use-or-module } { item } ;
 features    = "features" ":" ident { "," ident } ;
-use-or-module = ( "module" dotted ) | ( "use" dotted [ "as" ident ] ) ;
+use-or-module = ( [ "native" ] "module" dotted [ block ] )   (* native module File { ... }, §15.3 *)
+            | ( "use" dotted [ ".*" | ( "as" ident ) ] ) ;   (* glob or alias, §14.8 *)
 dotted      = ident { "." ident } ;
 
-item        = [ "pub" ] ( fn-decl | type-decl | sum-decl | const-decl
+item        = [ "pub" ] ( fn-decl | type-decl | alias-decl | sum-decl | const-decl
                         | protocol-decl | impl-decl ) ;
-fn-decl     = [ attr ] [ "async" ] [ "native" ] "fn" name "(" [ params ] ")"
+fn-decl     = [ attr ] [ "async" ] [ "native" ] "fn" name [ generics ] "(" [ params ] ")"
               [ "->" type ] [ "effects" "(" effect-list ")" ] ( block | ) ;
 attr        = "#" ident "(" string ")" ;            (* e.g. #lower_name("...") *)
 params      = param { "," param } ;
 param       = ident ":" [ data-effect ] type [ "=" expr ] ;   (* §10.5, §14.1 *)
 data-effect = "read" | "mut" | "take" ;
-type-decl   = ( "class" | "struct" | "resource" ) name [ derives ] "{" fields
-              [ "drop" block ] "}" ;
-sum-decl    = "sum" name [ derives ] "{" { variant } "}" ;
+generics    = "<" ident { "," ident } ">" ;
+type-decl   = ( "class" | "struct" | "resource" ) name [ generics ] [ derives ]
+              "{" fields [ "drop" block ] "}" ;
+alias-decl  = "type" name [ generics ] "=" type ;             (* §6.11 *)
+sum-decl    = "sum" name [ generics ] [ derives ] "{" { variant } "}" ;
 variant     = name [ "(" fields ")" ] ;
 derives     = "derives" "(" ident { "," ident } ")" ;
-const-decl  = "const" [ type-ns "." ] NAME ":" type "=" literal ;
+const-decl  = "const" [ type-ns "." ] NAME [ ":" type ] "=" literal ;  (* type optional, §6.9 *)
+protocol-decl = "protocol" name [ generics ] "{" { fn-sig } "}" ;      (* §14.6 *)
+fn-sig      = "fn" name [ generics ] "(" [ params ] ")" [ "->" type ]
+              [ "effects" "(" effect-list ")" ] ;             (* bodyless contract *)
+impl-decl   = "impl" name [ generics ] "for" type "{" { fn-decl } "}" ;  (* §14.6 *)
 
 block       = "{" { stmt } "}" ;
-stmt        = let | assign | return | if | match | for | loop | while
+stmt        = let | view | assign | return | if | match | for | loop | while
             | with | task-group | select | break | continue | expr ;
 let         = ( "let" | "local" ) [ "mut" ] pattern [ ":" type ] "=" expr ;
+view        = "view" ident "=" expr ;                (* borrowed-region binding, §20.2-1 *)
 assign      = place "=" expr ;                       (* §5A; place not parameter root *)
 return      = "return" [ expr ] ;
 if          = "if" expr block [ "else" ( if | block ) ] ;
 match       = "match" data-effect expr "{" { arm } "}" ;
 arm         = pattern [ "if" expr ] "=>" block ;
+for         = [ "await" ] "for" ident "in" expr block ;   (* `await for` iterates a Stream, §14.4 *)
+loop        = "loop" block ;
+while       = "while" expr block ;
+break       = "break" ;
+continue    = "continue" ;
 with        = "with" expr "as" ident block ;
+task-group  = "task_group" "{" { async-let } "}" ;   (* §14.4 *)
+async-let   = "async" "let" ident "=" expr ;
+select      = "select" "{" { select-arm } "}" ;      (* first-ready arm, §14.4 *)
+select-arm  = pattern "=" "await" expr [ "?" ] "=>" block ;
 
-expr        = call | receiver-call | match | literal | tuple | collection
-            | ident | field | index | unary | binary | closure
+expr        = call | receiver-call | match | literal | interp-string | tuple
+            | collection | ident | field | index | unary | binary | closure
             | ( data-effect expr ) | ( "manage" expr ) | ( "await" expr )
             | ( expr "?" ) ;
-call        = ( name | type "." name ) "(" [ args ] ")" ;
+call        = ( name | type "." name ) [ generic-args ] "(" [ args ] ")" ;
+generic-args = "<" type { "," type } ">" ;           (* e.g. List<Int>.new(), §14.5 *)
 receiver-call = data-effect expr "." name "(" [ args ] ")" ;   (* §14.6.1 *)
 args        = arg { "," arg } ;
 arg         = ident ":" [ data-effect ] expr ;       (* all arguments are named *)
-closure     = "(" [ idents ] ")" block ;             (* noescape/owned per param type *)
+closure     = "|" [ idents ] "|" ( block | expr ) ;  (* pipe params; noescape/owned per Fn type *)
+interp-string = "$\"" { text | "{" expr "}" } "\"" ;  (* §A.1; `{{`/`}}` are literal braces *)
 tuple       = "(" expr "," expr { "," expr } ")" ;   (* arity >= 2, §6.10 *)
 pattern     = "_" | ident | literal | variant-pat | struct-pat | tuple-pat
             | list-pat ;                              (* §5A *)
 ```
+
+**String interpolation.** `$"...{expr}..."` (Appendix A.1) is the only interpolated
+string form. Each `{ ... }` embeds a single RSScript expression evaluated in the
+enclosing scope; the result is converted to `String` and spliced in textual order.
+`{{` and `}}` are literal braces. An interpolation segment is an ordinary
+expression and participates in effect/type checking like any other; the whole
+literal has type `String`.
 
 Precedence notes that the productions above leave implicit: `await` binds tighter
 than `?` (`await e?` = `(await e)?`, §14.4); `?` is postfix and applies to a
