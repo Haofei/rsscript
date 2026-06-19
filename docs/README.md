@@ -9,6 +9,7 @@ LLMs); everything else lives here, grouped into categorized subfolders.
 | Doc | What it governs |
 |-----|-----------------|
 | [RSScript_v0.7_Spec.md](spec/RSScript_v0.7_Spec.md) | The language. Opens with a binding **Constitution** (Articles I–IX) that overrides every chapter. |
+| [RSScript_Execution_Spec_v0.1.md](spec/RSScript_Execution_Spec_v0.1.md) | The execution engine: reg-VM + JIT tiers — the single home. Normative parity contract (interp ≡ tier-0 ≡ native ≡ AOT), calling convention, sandbox/hardening, host-helper ABI (§0–11), plus the consolidated implementation baseline, JIT phase status, and per-feature parity ledger (Part II appendices). Subordinate to the language spec. |
 | [RSScript_Package_Manager_Design_v0.6.md](spec/RSScript_Package_Manager_Design_v0.6.md) | The package manager (`rss pkg`): `.rssi` contracts, `rsspkg.toml`/`.lock`, semantic dependency review. |
 | [Review_Evidence_IR_Spec_v0.2.md](spec/Review_Evidence_IR_Spec_v0.2.md) | REIR — the review-evidence IR consumed by `--reir` tooling and CI gates. |
 
@@ -17,14 +18,11 @@ LLMs); everything else lives here, grouped into categorized subfolders.
 | Doc | What it governs |
 |-----|-----------------|
 | [ARCHITECTURE.md](architecture/ARCHITECTURE.md) | Module boundaries of the checker/lowering implementation. |
-| [vm-architecture.md](architecture/vm-architecture.md) | Register VM design: bytecode, dispatch, and runtime layout. |
-| [jit-roadmap.md](architecture/jit-roadmap.md) | Phased plan for the native (Cranelift) baseline JIT. |
 
 ## Ledgers
 
 | Doc | What it governs |
 |-----|-----------------|
-| [jit-semantics-ledger.md](ledgers/jit-semantics-ledger.md) | Per-op record of JIT/VM semantic parity decisions. |
 | [rss-selfhost-ledger.md](ledgers/rss-selfhost-ledger.md) | Self-hosting progress ledger for the RSScript-in-RSScript toolchain. |
 
 ## Development

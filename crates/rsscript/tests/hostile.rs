@@ -267,6 +267,90 @@ fn main() -> Int {
     }
 }
 
+/// B5 (output flood): a loop that writes to stdout every iteration is bounded by
+/// `stdout_budget` — the run trips a clean "stdout budget" error instead of
+/// growing the captured buffer until the host runs out of memory. A generous step
+/// budget is set so a regression in stdout accounting fails loudly rather than
+/// hanging.
+#[test]
+fn stdout_flood_with_output_budget_returns_clean_error() {
+    let source = r#"
+fn main() -> Int {
+    let mut index = 0
+    while index < 100000000 {
+        Log.write(message: read "spam spam spam spam spam")
+        index = index + 1
+    }
+    return 0
+}
+"#;
+    let limits = VmLimits {
+        stdout_budget: Some(64 * 1024),
+        step_budget: Some(50_000_000),
+        ..VmLimits::default()
+    };
+    let err = eval_limited(source, limits).expect_err("must trip on output flood, not OOM");
+    match err {
+        EvalError::Runtime(msg) => assert!(
+            msg.contains("stdout budget"),
+            "expected stdout-budget error, got: {msg}"
+        ),
+        other => panic!("expected EvalError::Runtime, got {other:?}"),
+    }
+}
+
+/// B6 (host-call flood): a loop that performs a stdlib call every iteration is
+/// bounded by `host_call_budget` — even though each call is individually cheap in
+/// `step_budget` terms, the run trips a clean "host call budget" error once it
+/// exceeds the configured number of host-library calls.
+#[test]
+fn host_call_flood_with_call_budget_returns_clean_error() {
+    let source = r#"
+fn main() -> Int {
+    let mut index = 0
+    let mut total = 0
+    while index < 100000000 {
+        total = total + String.len(value: read "abc")
+        index = index + 1
+    }
+    return total
+}
+"#;
+    let limits = VmLimits {
+        host_call_budget: Some(1_000),
+        step_budget: Some(50_000_000),
+        ..VmLimits::default()
+    };
+    let err = eval_limited(source, limits).expect_err("must trip on host-call flood");
+    match err {
+        EvalError::Runtime(msg) => assert!(
+            msg.contains("host call budget"),
+            "expected host-call-budget error, got: {msg}"
+        ),
+        other => panic!("expected EvalError::Runtime, got {other:?}"),
+    }
+}
+
+/// Both new budgets, like the others, must be off by default: a normal program
+/// that writes a little output and makes a few stdlib calls completes cleanly
+/// under `VmLimits::default()`.
+#[test]
+fn default_limits_allow_normal_output_and_host_calls() {
+    let source = r#"
+fn main() -> Int {
+    let mut index = 0
+    while index < 5 {
+        Log.write(message: read "hello")
+        index = index + 1
+    }
+    return index
+}
+"#;
+    let output = eval_limited(source, VmLimits::default()).expect("normal code must succeed");
+    assert_eq!(output.value, "5");
+    assert_eq!(output.stdout, "hello\nhello\nhello\nhello\nhello\n");
+}
+
 /// Analyze every file under tests/corpus/malformed/. None may panic. Files not
 /// prefixed `gap-` must also fail closed (report a diagnostic); `gap-` files are
 /// known fail-open gaps the fuzzer surfaced (still must not panic).

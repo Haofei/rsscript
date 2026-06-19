@@ -64,6 +64,44 @@ fn main() -> Unit {
 }
 
 #[test]
+fn jit_edge_integer_subtraction_overflow_traps_on_all_backends() {
+    // `i64::MIN - 1` underflows the signed range. Native code must trap (or bail to
+    // the interpreter, which traps) exactly as `checked_sub` would — never wrap.
+    let source = format!(
+        "\
+fn sub(a: Int, b: Int) -> Int {{
+    return a - b
+}}
+
+fn main() -> Unit {{
+{MIN_PRELUDE}    Log.write(message: read String.from_int(value: sub(a: read min, b: read 1)))
+    return Unit
+}}
+"
+    );
+    assert_backends_all_fail("jit-edge-sub-overflow.rss", &source, &[]);
+}
+
+#[test]
+fn jit_edge_integer_negation_overflow_traps_on_all_backends() {
+    // `0 - i64::MIN` has no representable positive counterpart; negating `i64::MIN`
+    // must trap on every backend rather than wrap back to `i64::MIN`.
+    let source = format!(
+        "\
+fn negate(a: Int) -> Int {{
+    return 0 - a
+}}
+
+fn main() -> Unit {{
+{MIN_PRELUDE}    Log.write(message: read String.from_int(value: negate(a: read min)))
+    return Unit
+}}
+"
+    );
+    assert_backends_all_fail("jit-edge-negation-overflow.rss", &source, &[]);
+}
+
+#[test]
 fn jit_edge_integer_division_by_zero_traps_on_all_backends() {
     let source = "\
 fn div(a: Int, b: Int) -> Int {

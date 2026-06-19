@@ -5676,6 +5676,16 @@ diagnostic.
 
 ## 21. Non-goals
 
+These are non-goals of the **language surface and primary execution model**. In
+particular "custom VM as primary execution target", "custom native backend", and
+"JIT" mean RSScript exposes no VM/JIT *surface* a program can observe, and the
+shipped semantic target is Rust lowering — **not** that no execution engine
+exists. A development-tier register VM and a gap-free JIT do exist and are
+specified, normatively and separately, in
+[`RSScript_Execution_Spec_v0.1.md`](RSScript_Execution_Spec_v0.1.md); they are
+constrained to produce the *same observable behavior* as the AOT path and add
+nothing to the language surface.
+
 RSScript v0.7 does not attempt to support:
 
 ```text

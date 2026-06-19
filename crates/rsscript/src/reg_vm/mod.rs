@@ -6446,6 +6446,24 @@ pub struct VmLimits {
     /// returns `EvalError::Runtime("evaluation cancelled")`. This stops the *whole*
     /// eval; see the note in `tick()` on per-task preemption.
     pub cancel: Option<Arc<AtomicBool>>,
+    /// Maximum total bytes a program may write to captured stdout (every
+    /// `Log.write`/`Debug.print`/trace path funnels through `push_stdout`). `None`
+    /// (default) = unlimited. When `Some(limit)`, the write that would push the
+    /// cumulative output past `limit` fails with a "stdout budget exceeded" error
+    /// — this stops a program that floods the host with output rather than looping
+    /// silently (which `step_budget` already catches).
+    pub stdout_budget: Option<usize>,
+    /// Maximum number of stdlib/runtime intrinsic calls — every `Type.method`
+    /// dispatch out of pure VM bytecode into host-provided library code (the
+    /// `call_intrinsic`/`call_typed_intrinsic` boundary), which is where all file /
+    /// process / network / clock / logging effects (and the pure stdlib) enter.
+    /// `None` (default) = uncounted. When `Some(limit)`, the call that would exceed
+    /// `limit` fails with a "host call budget exceeded" error. This caps the volume
+    /// of host-library calls independently of raw instruction count (a single
+    /// intrinsic can do unbounded I/O), so an agent program can be limited to N
+    /// effectful operations even if each is individually cheap in `step_budget`
+    /// terms.
+    pub host_call_budget: Option<u64>,
 }
 
 /// Default recursion-depth cap: generous enough never to trip real code (deep
@@ -6478,6 +6496,8 @@ impl Default for VmLimits {
             step_budget: None,
             mem_budget: None,
             cancel: None,
+            stdout_budget: None,
+            host_call_budget: None,
         }
     }
 }
@@ -6547,6 +6567,10 @@ struct RegVm {
     /// `MakeList`/`MakeMap` literal construction, and the `ListPush`/`ListAppend`
     /// growth handlers (the dominant allocators for adversarial blow-ups).
     live_bytes: usize,
+    /// Number of stdlib/runtime intrinsic calls dispatched so far (the
+    /// `host_call_budget` fuel gauge). Only consulted when that budget is `Some`;
+    /// the unconditional increment is the entire overhead when it is off.
+    host_calls: u64,
     /// Native (Cranelift) JIT state, `Some` when the native tier is enabled. The
     /// native tier compiles the integer/control core to machine code and is tried
     /// before the tier-0 executor; anything it can't compile (or bails on) falls
@@ -6867,6 +6891,7 @@ impl RegVm {
             limits: VmLimits::default(),
             steps: 0,
             live_bytes: 0,
+            host_calls: 0,
             #[cfg(feature = "native-jit")]
             native: None,
         }
@@ -6953,16 +6978,49 @@ impl RegVm {
         Ok(())
     }
 
+    /// Charge one stdlib/runtime intrinsic dispatch against `host_call_budget`.
+    /// Always increments the counter (the single unconditional add is the whole
+    /// cost when the budget is off), and — only when `limits.host_call_budget` is
+    /// `Some` — trips once the count exceeds the limit. Called once at the entry of
+    /// both intrinsic dispatch functions, so it caps the number of host-library
+    /// calls (file/process/net/clock/log effects all enter here) independently of
+    /// raw instruction count.
+    #[inline]
+    fn charge_host_call(&mut self) -> Result<(), EvalError> {
+        self.host_calls += 1;
+        if let Some(limit) = self.limits.host_call_budget
+            && self.host_calls > limit
+        {
+            return Err(EvalError::Runtime(format!(
+                "host call budget exceeded ({limit} stdlib calls)"
+            )));
+        }
+        Ok(())
+    }
+
     /// Append program output to the captured `stdout` buffer, and — when live
     /// streaming is enabled (`rss dev --run`) — flush newly completed lines to the
     /// real process stdout immediately. The captured buffer is appended to exactly
     /// the same way regardless, so callers that read `EvalOutput.stdout` see no
     /// difference.
-    fn push_stdout(&mut self, text: &str) {
+    ///
+    /// Enforces `stdout_budget`: when set, a write that would push cumulative
+    /// output past the ceiling fails with a clean error *before* appending, so the
+    /// captured buffer never exceeds the budget and a flood of output can't exhaust
+    /// host memory.
+    fn push_stdout(&mut self, text: &str) -> Result<(), EvalError> {
+        if let Some(limit) = self.limits.stdout_budget
+            && self.stdout.len().saturating_add(text.len()) > limit
+        {
+            return Err(EvalError::Runtime(format!(
+                "stdout budget exceeded ({limit} bytes)"
+            )));
+        }
         self.stdout.push_str(text);
         if self.stream_stdout {
             self.flush_stdout_stream();
         }
+        Ok(())
     }
 
     /// Write every complete (newline-terminated) line appended since the last
@@ -7011,6 +7069,18 @@ impl RegVm {
     /// side-effect-free, so re-running them is observationally identical.
     #[cfg(feature = "native-jit")]
     fn try_native(&mut self, func: &RegFunction, base: usize) -> Option<VmValue> {
+        // Native limit parity (execution spec §6.2, Model A): Cranelift code polls
+        // neither the step budget nor the cancel flag, so a hot, tiered-up function
+        // containing an unbounded loop would run natively and bypass `step_budget`
+        // / `cancel`. When either preemption limit is armed we refuse to dispatch
+        // natively and fall back to the tier-0 executor (and interpreter), which
+        // `tick()` on every instruction. `mem_budget` is *not* in this gate: a
+        // native-eligible function is a side-effect-free pure-scalar / read-heap
+        // leaf that allocates no VM-managed container, so it cannot grow the
+        // accounted live-set in the first place.
+        if self.limits.step_budget.is_some() || self.limits.cancel.is_some() {
+            return None;
+        }
         // Cheap negative path: a function known not native-eligible never compiles,
         // so skip all per-call tiering/cache/name-hash work and fall straight back
         // to the interpreter (keeps `jit-native` from being slower than the VM on
@@ -7791,8 +7861,19 @@ impl RegVm {
 
     fn prepare_frame(&mut self, base: usize, regs: usize) -> Result<(), EvalError> {
         self.ensure_regs(base + regs)?;
-        for written in &mut self.written[base..base + regs] {
-            *written = false;
+        // Clear the new window's written bits AND release any stale value left in a
+        // reused slot. The register stack is append-only and reuses windows in
+        // place (execution spec §4 rule 4), so a slot may still physically hold the
+        // previous frame's `VmValue` — including an `Rc` to a heap list/map/string/
+        // closure. The written bit alone only blocks stale *reads*; dropping the
+        // value here is what makes an unwritten slot non-retaining for ownership and
+        // memory accounting (execution spec §4.1). Args are written immediately
+        // after `prepare_frame` via `set_reg`, so this never clobbers live inputs.
+        for index in base..base + regs {
+            self.written[index] = false;
+            // Assigning `Unit` drops whatever the reused slot held; `Unit` owns
+            // nothing, so heap refcounts fall here rather than at next overwrite.
+            self.stack[index] = VmValue::Unit;
         }
         Ok(())
     }
@@ -9468,6 +9549,7 @@ impl RegVm {
         args: &[Reg],
         base: usize,
     ) -> Result<VmValue, EvalError> {
+        self.charge_host_call()?;
         match intrinsic {
             RegIntrinsic::JsonDecode => {
                 let value = expect_json_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -9496,6 +9578,7 @@ impl RegVm {
         base: usize,
         next_base: usize,
     ) -> Result<VmValue, EvalError> {
+        self.charge_host_call()?;
         match intrinsic {
             RegIntrinsic::ArgsAll => Ok(VmValue::List(Rc::new(RefCell::new(
                 self.args.iter().cloned().map(VmValue::string).collect(),
@@ -10449,7 +10532,7 @@ impl RegVm {
                 Ok(json_result(if sql.trim().is_empty() {
                     Err(db_error_value("SQL query is empty"))
                 } else {
-                    self.push_stdout(&format!("db query on {}: {sql}\n", conn.url));
+                    self.push_stdout(&format!("db query on {}: {sql}\n", conn.url))?;
                     conn.queries.push(sql);
                     self.set_reg(base + conn_reg, conn.to_value());
                     Ok(VmValue::Unit)
@@ -11025,8 +11108,8 @@ impl RegVm {
             RegIntrinsic::ImageInspect => {
                 let image = expect_image_state(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let line = image.inspect_line();
-                self.push_stdout(&line);
-                self.push_stdout("\n");
+                self.push_stdout(&line)?;
+                self.push_stdout("\n")?;
                 Ok(VmValue::Unit)
             }
             RegIntrinsic::ImageLoad => {
@@ -11146,20 +11229,20 @@ impl RegVm {
                     expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_string();
                 let message =
                     expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?.to_string();
-                self.push_stdout(&format!("trace {event}: {message}\n"));
+                self.push_stdout(&format!("trace {event}: {message}\n"))?;
                 Ok(VmValue::Unit)
             }
             RegIntrinsic::LogWrite => {
                 let line =
                     expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_string();
-                self.push_stdout(&line);
-                self.push_stdout("\n");
+                self.push_stdout(&line)?;
+                self.push_stdout("\n")?;
                 Ok(VmValue::Unit)
             }
             RegIntrinsic::LogWriteJson => {
                 let value = expect_json_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                self.push_stdout(&value.to_string());
-                self.push_stdout("\n");
+                self.push_stdout(&value.to_string())?;
+                self.push_stdout("\n")?;
                 Ok(VmValue::Unit)
             }
             RegIntrinsic::MapContainsKey | RegIntrinsic::MapFilter | RegIntrinsic::MapFold | RegIntrinsic::MapForEach | RegIntrinsic::MapGetOrDefault | RegIntrinsic::MapIsEmpty | RegIntrinsic::MapKeys | RegIntrinsic::MapLen | RegIntrinsic::MapMapValues | RegIntrinsic::MapMerge | RegIntrinsic::MapNew | RegIntrinsic::MapTryFold | RegIntrinsic::MapValues => self.exec_map_intrinsics(unit, intrinsic, args, base, next_base),
@@ -16187,4 +16270,116 @@ struct VmStreamState {
     items: Rc<RefCell<Vec<VmValue>>>,
     collect_error: Option<String>,
     channel_id: Option<i64>,
+}
+
+#[cfg(test)]
+mod register_window_tests {
+    use super::*;
+
+    /// Build a bare `RegVm` with an empty unit — enough to exercise the
+    /// register-stack helpers (`ensure_regs`/`set_reg`/`prepare_frame`) directly,
+    /// with no program loaded.
+    fn empty_vm() -> RegVm {
+        let unit = RegUnit {
+            functions: Vec::new(),
+            function_ids: HashMap::new(),
+            resource_drop_functions: HashMap::new(),
+            types: HashMap::new(),
+        };
+        RegVm::new(Rc::new(unit), Vec::new(), HashMap::new())
+    }
+
+    /// Execution spec §4.1: a reused register window must be *non-retaining*.
+    /// `prepare_frame` clears the written bits AND drops any stale `VmValue` the
+    /// reused slot physically held, so a big heap value allocated by a prior frame
+    /// is released the moment its window is reused — not merely when the slot is
+    /// next overwritten. Without the value-drop this asserts the previous behavior
+    /// (the `Rc` stayed alive at strong_count 2), which is the bug this pins.
+    #[test]
+    fn prepare_frame_releases_stale_heap_value() {
+        let mut vm = empty_vm();
+        vm.ensure_regs(8).expect("grow stack");
+
+        // Simulate a prior frame allocating a large list into its window.
+        let big: Rc<RefCell<Vec<VmValue>>> = Rc::new(RefCell::new(vec![VmValue::Int(0); 4096]));
+        vm.set_reg(3, VmValue::List(Rc::clone(&big)));
+        assert_eq!(
+            Rc::strong_count(&big),
+            2,
+            "the VM register and our test handle should both hold the list",
+        );
+
+        // Reusing the window for a new frame must drop the stale list.
+        vm.prepare_frame(0, 8).expect("prepare reused window");
+        assert_eq!(
+            Rc::strong_count(&big),
+            1,
+            "prepare_frame must drop the stale heap value, leaving only the test handle",
+        );
+        assert!(
+            !vm.written[3],
+            "prepare_frame must clear the written bit of every window slot",
+        );
+    }
+
+    /// `take_reg` already moved the value out and left `Unit`; `prepare_frame` over
+    /// an already-empty window must stay non-retaining and idempotent.
+    #[test]
+    fn prepare_frame_is_noop_on_empty_window() {
+        let mut vm = empty_vm();
+        vm.ensure_regs(4).expect("grow stack");
+        vm.prepare_frame(0, 4).expect("prepare empty window");
+        for index in 0..4 {
+            assert!(matches!(vm.stack[index], VmValue::Unit));
+            assert!(!vm.written[index]);
+        }
+    }
+
+    /// Execution spec §6.2 (Model A): native (Cranelift) code polls neither the
+    /// step budget nor the cancel flag, so dispatching to it while either is armed
+    /// would let a hot loop bypass the limit. `try_native` MUST refuse to dispatch
+    /// in that case and fall back to the ticking tier-0/interpreter path. The guard
+    /// is the very first thing in `try_native`, so it returns before any tiering or
+    /// stat bookkeeping — `considered`/`tier_deferred` stay at 0, proving the
+    /// function never even entered the native machinery.
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn try_native_refuses_dispatch_while_step_budget_armed() {
+        let mut vm = empty_vm();
+        // threshold 0 => without the gate this function would tier up on the first
+        // call; collect_stats so we can observe the native machinery never runs.
+        vm.native = Some(NativeState::new(0, false, true).expect("native module"));
+        vm.limits = VmLimits {
+            step_budget: Some(1_000),
+            ..VmLimits::default()
+        };
+        let func = RegFunction::placeholder("hot".to_string());
+        assert!(
+            vm.try_native(&func, 0).is_none(),
+            "an armed step_budget must make native dispatch refuse",
+        );
+        let stats = &vm.native.as_ref().unwrap().stats;
+        assert_eq!(stats.considered, 0, "gate must return before tiering");
+        assert_eq!(stats.tier_deferred, 0, "gate must return before tiering");
+        assert_eq!(stats.native_calls, 0);
+    }
+
+    /// Same gate for the ambient `cancel` hook: a watchdog flag that can fire mid-
+    /// run also makes native ineligible (it cannot poll the flag).
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn try_native_refuses_dispatch_while_cancel_armed() {
+        let mut vm = empty_vm();
+        vm.native = Some(NativeState::new(0, false, true).expect("native module"));
+        vm.limits = VmLimits {
+            cancel: Some(Arc::new(AtomicBool::new(false))),
+            ..VmLimits::default()
+        };
+        let func = RegFunction::placeholder("hot".to_string());
+        assert!(
+            vm.try_native(&func, 0).is_none(),
+            "a present cancel hook must make native dispatch refuse",
+        );
+        assert_eq!(vm.native.as_ref().unwrap().stats.considered, 0);
+    }
 }
