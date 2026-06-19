@@ -180,7 +180,17 @@ fn compile_and_run(
         .arg("--manifest-path")
         .arg(package_dir.join("Cargo.toml"))
         .env("CARGO_TARGET_DIR", generated_target_dir())
-        .env("RUSTFLAGS", "-Awarnings");
+        .env("RUSTFLAGS", "-Awarnings")
+        // Build the generated crate offline. Every dependency (`rsscript-runtime`
+        // and its transitive deps such as `imbl`/`archery`) is already vendored
+        // in the shared cargo registry by the workspace build, so no download is
+        // ever needed. Without this, `cargo` may contact crates.io to refresh the
+        // index and a transient network error (e.g. an HTTP/2 framing failure on
+        // a crate download) makes `cargo run` exit non-zero — which the
+        // differential harness would otherwise misreport as a `rust-compiled`
+        // backend divergence. Offline removes the network as a flake source; a
+        // genuinely missing dependency now surfaces as a deterministic error.
+        .env("CARGO_NET_OFFLINE", "true");
     if !args.is_empty() {
         command.arg("--").args(args);
     }
