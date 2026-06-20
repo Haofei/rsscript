@@ -111,15 +111,18 @@ speedup, **<1 = faster than the plain VM**).
 
 1. **The native JIT codegen is excellent — it just almost never runs.** On the
    native-*eligible* kernels the native tier is **15–50× faster than the VM**
-   and within ~1.4–2× of native Rust:
+   (`nat/reg` 0.02–0.07). Its distance from native Rust (`nat/rust`), though, is
+   **opcode-dependent**: pure-scalar/arith native is near-Rust (~0.9–2.1×), but
+   **read-heap native is ~13×** because each heap read crosses the host-helper
+   call boundary (§7.1 of the Exec-Spec):
 
-   | kernel | reg_vm_ms | native_ms | rust_ms | nat/reg |
-   |---|--:|--:|--:|--:|
-   | `native_scalar_loop` | 153.5 | 3.20 | 2.41 | **0.02** |
-   | `native_read_heap`   | 115.5 | 6.77 | 0.61 | **0.06** |
-   | `native_call_chain`  | 196.3 | 5.33 | 5.56 | **0.03** |
-   | `int_divmod_loop`    | 179.3 | 4.20 | 1.96 | **0.02** |
-   | `bool_logic_loop`    | 347.2 | 6.70 | 3.21 | **0.02** |
+   | kernel | reg_vm_ms | native_ms | rust_ms | nat/reg | nat/rust |
+   |---|--:|--:|--:|--:|--:|
+   | `native_scalar_loop` | 153.6 | 3.12 | 2.29 | **0.02** | 1.4× |
+   | `native_read_heap`   | 110.5 | 7.58 | 0.57 | **0.07** | **13.3×** |
+   | `native_call_chain`  | 217.8 | 5.31 | 5.65 | **0.02** | 0.9× |
+   | `int_divmod_loop`    | 168.0 | 4.13 | 1.95 | **0.02** | 2.1× |
+   | `bool_logic_loop`    | 321.7 | 6.26 | 2.98 | **0.02** | 2.1× |
 
    So the problem is **not** codegen quality — it's **eligibility/coverage**.
    The moment a function does anything outside the pure-scalar/read-heap subset
@@ -129,11 +132,13 @@ speedup, **<1 = faster than the plain VM**).
 
 2. **On the real (ineligible) kernels both JIT tiers do ~nothing** — `jit/reg`
    and `nat/reg` hover at ~1.00, and frequently **>1.0 (the tier makes it
-   slower)**: tier-0 regresses `string_text_processing` **1.80×** (the worst in
-   the suite), `selfhost_mailbox` 1.21; native regresses `float` 1.23,
-   `closure_alloc` 1.16, `list_closure` 1.09 — the tier translates part of the
-   function, bails, and eats the overhead. (The exact offenders shift run to run;
-   the pattern — tiers *regress* ineligible code — is stable.) A cheap early win:
+   slower)**. In `baseline-20260620.json`: tier-0 (`jit/reg`) regresses
+   `native_read_heap` **2.59×** and `nested_struct_field` 1.36; native (`nat/reg`)
+   regresses `task_group_spawn` 1.58, `bytes_scan` 1.42, and
+   `closure_alloc`/`option_result_chain`/`pipeline_chain` ~1.20 — the tier
+   translates part of the function, bails, and eats the overhead. (The exact
+   offenders shift run to run; re-read the JSON before quoting — the pattern,
+   tiers *regress* ineligible code, is what's stable.) A cheap early win:
    **don't attempt the JIT on functions that will predictably bail.**
 
 3. **`set_insert_contains` was pathological (reg/rust ≈ 1680×) — now FIXED

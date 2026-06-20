@@ -5,7 +5,10 @@ in the field (LuaJIT, V8 Sparkplug/Ignition, Wasmtime Winch/Wizard,
 JavaScriptCore) — **without breaking the §2 parity invariant or §6 sandbox
 guarantees** in [`docs/spec/RSScript_Execution_Spec_v0.1.md`](../spec/RSScript_Execution_Spec_v0.1.md).
 
-Status: **draft / not started.** Owner: TBD. Created 2026-06-19.
+Status: **in progress.** Phase 0 done (0.1 kernel suite + 0.2 baseline committed;
+0.3 profile and 0.4 metric remain), and the two runtime pathologies the baseline
+surfaced — hash-`Set` O(n²) and quadratic `task_group` — are **fixed**. Phases
+1–4 not started. Owner: TBD. Created 2026-06-19; updated 2026-06-19.
 
 ---
 
@@ -89,14 +92,18 @@ feeling, not a number. Establish where time actually goes before touching code.
         VM** (`nat/reg` 0.02–0.06). Native *codegen* is not the problem —
         **eligibility/coverage is.** Any heap write / string / collection /
         closure / suspend drops the whole function back to the interpreter.
-        Caveat on "near-Rust": only **pure-scalar** native is near-Rust
-        (`native_scalar_loop` 3.20 ms vs Rust 2.41, ~1.3×). **Read-heap** native
-        is *not* — `native_read_heap` is 6.77 ms vs Rust 0.61, **~11×** — because
-        the host-helper call boundary (§7.1) is not free. Phase 3 must not assume
-        every newly-eligible family lands at scalar-native speed.
+        Caveat on "near-Rust" (`native_ms` vs `rust_ms`): only **pure-scalar**
+        native is near-Rust (`native_scalar_loop` 3.12 ms vs Rust 2.29, **~1.4×**).
+        **Read-heap** native is *not* — `native_read_heap` is 7.58 ms vs Rust 0.57,
+        **~13×** — because the host-helper call boundary (§7.1) is not free. Phase 3
+        must not assume every newly-eligible family lands at scalar-native speed.
       - On the real (ineligible) kernels both tiers do ~nothing and often
-        **regress** (native `list_sort` 1.31, `map_int` 1.19; tier-0 `json`
-        1.48, `dynamic_closure` 1.66) — translate, bail, eat overhead.
+        **regress** (tier-up costs more than it saves). Current `baseline-20260620.json`
+        offenders: tier-0 (`jit/reg`) `native_read_heap` 2.59, `nested_struct_field`
+        1.36; native (`nat/reg`) `task_group_spawn` 1.58, `bytes_scan` 1.42,
+        `closure_alloc`/`option_result_chain`/`pipeline_chain` ~1.20 — translate,
+        bail, eat overhead. (These shift run to run; re-read the JSON before
+        quoting — the *pattern* is stable, the specific numbers are not.)
       - `set_insert_contains` was pathological at **1680× native Rust** — the
         `sorted_set_ops` kernel pinned it to the **hash-`Set`** (a `Vec` with a
         linear scan per op, O(n²)). **Fixed:** `Set` is now backed by the FNV
@@ -227,27 +234,38 @@ baseline beats it on the matrix *and* passes the full differential suite.
 **Re-weighted up by the Phase-0 baseline:** native is **15–50× faster than the
 VM** where it runs (`nat/reg` 0.02–0.06), so every opcode family this phase makes
 eligible converts a ~100–300× slowdown into something far closer to Rust. How
-much closer is opcode-dependent: pure-scalar native is ~1.3× Rust, but read-heap
-native is ~11× Rust (the §7.1 helper-call boundary; see §0.2) — so estimate each
+much closer is opcode-dependent: pure-scalar native is ~1.4× Rust, but read-heap
+native is ~13× Rust (the §7.1 helper-call boundary; see §0.2) — so estimate each
 family's ceiling from its helper traffic, not from the scalar number. Today
 native covers 20 scalar/read-heap opcodes with no OSR. Extend coverage and reduce
 the cliff.
 
 - [ ] **3.0 Predict-and-skip bail (cheap, do first).** Before translating, cheaply
       predict whether a function will bail (contains an op family known to be
-      unsupported) and skip native for it — the baseline shows native currently
-      *regresses* `list_sort`/`map_int`/`closure_alloc` by translating then
-      bailing. This is a guard, not new coverage, and stops the bleeding.
+      unsupported) and skip native for it — the current `baseline-20260620.json`
+      shows native *regressing* `bytes_scan` (1.42), `closure_alloc`/
+      `option_result_chain`/`pipeline_chain` (~1.20) by translating then bailing.
+      This is a guard, not new coverage, and stops the bleeding. (Refresh the
+      example list from the JSON when implementing; the offenders drift per run.)
 
 - [ ] **3.1 Coverage audit.** From the Phase-0 profile, list the highest-traffic
       opcodes that currently force a bail to the interpreter (likely list/map
       reads, string ops, struct writes). Rank by benchmark impact.
 - [ ] **3.2 Add host-helper ABIs — reads first.** Extend the **read-only** §7.1
       contract to the top read-side bail-causers (`list_get` for non-int elems,
-      map lookup, more field reads). These inherit the existing
-      immediate-bail-on-unsatisfiable-read contract and the §7.2 fallback proof
-      unchanged. One opcode family per PR, each with a ledger entry (Exec-Spec
-      Appendix C) and a force-deopt differential test.
+      map lookup, more field reads). The §7.2 *fallback proof* carries over
+      unchanged (these are still side-effect-free reads), **but the ABI does not**:
+      today's helpers (`field_int`, `list_len`, `list_get_int`) are **Int-only and
+      return a single `i64`**. A non-`Int` element or a heap-returning read (a
+      `String`, a nested `List`/`Struct`, a map *value*) cannot be expressed as one
+      `i64`, so this step is a real **ABI design task**, not a contract reuse:
+      decide the typed-result representation (tagged return + out-param, or a
+      result-into-the-handle-table scheme that hands native a *new* call-scoped
+      handle for a heap result), extend rule 2's handle domain to cover
+      helper-produced handles, and keep every unsatisfiable/wrong-type read on the
+      immediate-bail path. One opcode family per PR, each with a ledger entry
+      (Exec-Spec Appendix C) **plus a §7.1 ABI amendment** and a force-deopt
+      differential test covering the new return shapes.
 - [ ] **3.2w Heap *writes* are a separate, harder track — do NOT fold into 3.2.**
       §7.1 is **reads only** and §7.2's fallback proof depends on the compiled
       subset being side-effect-free: a bail re-runs the function from the top, so
