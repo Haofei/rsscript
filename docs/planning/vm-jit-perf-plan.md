@@ -93,16 +93,19 @@ feeling, not a number. Establish where time actually goes before touching code.
       - On the real (ineligible) kernels both tiers do ~nothing and often
         **regress** (native `list_sort` 1.31, `map_int` 1.19; tier-0 `json`
         1.48, `dynamic_closure` 1.66) — translate, bail, eat overhead.
-      - `set_insert_contains` is pathological at **1680× native Rust** — and the
-        `sorted_set_ops` kernel pins it to the **hash-`Set`** specifically: the
-        same insert+contains workload on an *ordered* set is **2.2×**, ~750×
-        faster. Heap-variant/combinator paths run 340–660×.
-      - `task_group_spawn` (structured concurrency) is **337×** *and* scales
-        **≈ quadratically** in round count under every interpreted mode
-        (`eval == vm == jit`) — a **runtime** bug (unreclaimed task frames), not a
-        JIT one. Split out alongside the Set bug.
-      - These two (hash-`Set`, quadratic `task_group`) are **separable, likely
-        cheap, high-impact runtime fixes** independent of the tier work below.
+      - `set_insert_contains` was pathological at **1680× native Rust** — the
+        `sorted_set_ops` kernel pinned it to the **hash-`Set`** (a `Vec` with a
+        linear scan per op, O(n²)). **Fixed:** `Set` is now backed by the FNV
+        `ValueMap` (value → `Unit`), O(1) membership → **4.5×**, on par with
+        `map_int`. Heap-variant/combinator paths run 340–660×.
+      - `task_group_spawn` (structured concurrency) was **337×** *and* scaled
+        **≈ quadratically** under every interpreted mode (`eval == vm == jit`) —
+        a **runtime** bug: finished task slots were never reclaimed, so the
+        scheduler's per-step scans grew O(n). **Fixed:** reap a task slot on join
+        (RS0030 guarantees a handle is awaited once) → linear; kernel restored to
+        size 20 000.
+      - Both runtime bugs (hash-`Set`, quadratic `task_group`) are now fixed,
+        independent of the tier work below.
 
       **Re-weighting from the data (overrides the Phase-1-first hypothesis):**
       Phase 3 (widen native eligibility) is now likely the **highest-ROI lever**,

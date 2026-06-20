@@ -136,23 +136,29 @@ speedup, **<1 = faster than the plain VM**).
    the pattern — tiers *regress* ineligible code — is stable.) A cheap early win:
    **don't attempt the JIT on functions that will predictably bail.**
 
-3. **`set_insert_contains` is pathological: reg/rust ≈ 1680×** (1796 ms vs
-   1.07 ms) — and the new `sorted_set_ops` kernel makes it a smoking gun: the
-   *same* insert+contains workload on an **ordered** set is **2.2×** reg/rust
-   (1.30 ms). So an ordered membership structure is ~750× faster than the hash
-   `Set` at the same job. This isolates the cost to the **hash-`Set`
-   implementation specifically** (almost certainly an O(n) or rehash-thrash bug),
-   not to dispatch or to set semantics generally. Its own, likely cheap, fix.
+3. **`set_insert_contains` was pathological (reg/rust ≈ 1680×) — now FIXED
+   (≈ 4.5×).** The `sorted_set_ops` kernel was the smoking gun: the *same*
+   insert+contains workload on an **ordered** set was **2.2×** reg/rust while the
+   hash `Set` was ~750× slower, isolating the cost to the hash-`Set` itself. The
+   reg-VM was backing `Set` with a plain `Vec` and doing a **linear scan** on
+   every insert/contains/remove — O(n²) overall. Fixed by backing `Set` with the
+   same FNV `ValueMap` the `Map` type uses (value → `Unit`), making membership
+   O(1); `set` now runs **4.5× reg/rust**, on par with `map_int` (4.2×). (Bonus:
+   `HashMap` equality is order-insensitive, fixing a latent mismatch where two
+   equal sets built in different insertion orders compared unequal under the old
+   `Vec` backing.)
 
-4. **Structured concurrency is both slow and super-linear.** `task_group_spawn`
-   is **337× reg/rust** even at the small size it now runs (2 000 rounds), and
-   worse, it scales **≈ quadratically**: jit-internal measured 0.34 ms / 9.9 ms /
-   725 ms at 100 / 1 000 / 10 000 rounds (and identically under plain `eval`, so
-   it is a **runtime** bug, not a JIT one — completed `task_group` frames look
-   unreclaimed). The original 100 000-round size was uncapped and hung the suite;
-   the kernel is pinned to 2 000 and the runner now has a per-mode `--timeout`
-   guard so a pathological case degrades to `n/a` instead of hanging. Flag for
-   its own investigation alongside the Set bug.
+4. **Structured concurrency was slow *and* super-linear — now FIXED (linear).**
+   `task_group_spawn` once scaled **≈ quadratically**: jit-internal measured
+   0.34 / 9.9 / 725 ms at 100 / 1 000 / 10 000 rounds (identically under plain
+   `eval`, so a **runtime** bug, not a JIT one). The scheduler never removed a
+   finished task's slot from its task table, so its per-step `satisfy_waiters`
+   scan grew O(n) and the whole loop went O(n²). Fixed by **reaping a task slot
+   on join** (a handle is awaited at most once, RS0030) — it now scales linearly
+   (1.8 / 17.4 / 153 ms at 1k / 10k / 100k) and the kernel is restored to size
+   20 000 (~30 ms, comparable to `async_call_loop`). The runner also gained a
+   per-mode `--timeout` guard so any *future* pathological case degrades to `n/a`
+   instead of hanging the suite.
 
 5. **Heap-variant & combinator paths are 340–660×** (`option_result_chain` 662×,
    `match_option_loop` 362×, `variant_match_loop` 342×, `nested_struct_field`
@@ -171,9 +177,9 @@ speedup, **<1 = faster than the plain VM**).
 
 Implications for the plan: (a) Phase 3 (widen native eligibility) is re-weighted
 **up** — native is already near-Rust where it runs; (b) add a "predict-and-skip
-bail" guard so the tiers stop *regressing* ineligible code (#2); (c) the hash-Set
-anomaly (#3) and the quadratic `task_group` runtime (#4) are separate, likely
-cheap, high-impact bug fixes that do not depend on the tier work; (d) Rc/clone
+bail" guard so the tiers stop *regressing* ineligible code (#2); (c) the two
+runtime bugs the suite surfaced — the hash-`Set` (#3) and the quadratic
+`task_group` (#4) — **are now fixed**, independent of the tier work; (d) Rc/clone
 traffic (#7) confirms Phase 4 can stay deferred.
 
 ## Adding a kernel

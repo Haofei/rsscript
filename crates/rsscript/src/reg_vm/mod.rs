@@ -8177,6 +8177,12 @@ impl RegVm {
                     .get(&task)
                     .and_then(|slot| slot.done.clone())
                     .expect("joined task finished");
+                // Reap the joined slot: its value has been delivered and a handle
+                // is awaited at most once (RS0030), so nothing references it again.
+                // Without this the task table grows by one slot per `async let`
+                // forever, making the scheduler's per-step scans O(n²) (see the
+                // `AwaitJoin` immediate-path note).
+                self.tasks.remove(&task);
                 self.complete_wait(tid, result);
             }
             Wait::Sleep { .. } => {
@@ -8445,7 +8451,15 @@ impl RegVm {
                                 Some(task) => {
                                     match self.tasks.get(&task).and_then(|s| s.done.clone()) {
                                         // Already finished: take its value, no park.
-                                        Some(result) => self.set_reg(base + *dst, result),
+                                        // Reap the slot — a handle is awaited at most
+                                        // once (RS0030), so its value is now consumed
+                                        // and the slot must not linger (else the task
+                                        // table grows unboundedly across loop rounds,
+                                        // turning the scheduler's per-step scans O(n²)).
+                                        Some(result) => {
+                                            self.tasks.remove(&task);
+                                            self.set_reg(base + *dst, result);
+                                        }
                                         // Park until the joined task completes.
                                         None => {
                                             self.suspension = Some(Suspension {
@@ -8630,29 +8644,33 @@ impl RegVm {
                             self.set_reg(base + *dst, VmValue::Unit);
                         }
                         RegInstr::SetClear { dst, set } => {
-                            expect_list_ref(self.reg(base + *set))?.borrow_mut().clear();
+                            expect_map_ref(self.reg(base + *set))?.borrow_mut().clear();
                             self.set_reg(base + *dst, VmValue::Unit);
                         }
                         RegInstr::SetForEach { dst, set, callback } => {
-                            let set = expect_list_ref(self.reg(base + *set))?;
+                            let set = expect_map_ref(self.reg(base + *set))?;
                             let callback = expect_closure_rc(self.reg(base + *callback))?;
-                            let len = set.borrow().len();
-                            for index in 0..len {
-                                let value = set.borrow()[index].clone();
+                            let values = set
+                                .borrow()
+                                .keys()
+                                .map(vm_value_from_map_key)
+                                .collect::<Vec<_>>();
+                            for value in values {
                                 let _ = self.call_closure_one(unit, &callback, value, next_base)?;
                             }
                             self.set_reg(base + *dst, VmValue::Unit);
                         }
                         RegInstr::SetInsert { dst, set, value } => {
-                            let value = self.reg(base + *value).clone();
-                            let list = expect_list_ref(self.reg(base + *set))?;
-                            let inserted = set_insert_vm(&mut list.borrow_mut(), value);
+                            let key = map_key_from_value(self.reg(base + *value))?;
+                            let map = expect_map_ref(self.reg(base + *set))?;
+                            let inserted =
+                                map.borrow_mut().insert(key, VmValue::Unit).is_none();
                             self.set_reg(base + *dst, VmValue::Bool(inserted));
                         }
                         RegInstr::SetRemove { dst, set, value } => {
-                            let value = self.reg(base + *value).clone();
-                            let list = expect_list_ref(self.reg(base + *set))?;
-                            let removed = set_remove_vm(&mut list.borrow_mut(), &value);
+                            let key = map_key_from_value(self.reg(base + *value))?;
+                            let map = expect_map_ref(self.reg(base + *set))?;
+                            let removed = map.borrow_mut().remove(&key).is_some();
                             self.set_reg(base + *dst, VmValue::Bool(removed));
                         }
                         RegInstr::SortedSetClear { dst, set } => {
@@ -13900,65 +13918,70 @@ impl RegVm {
         let _ = next_base;
         match intrinsic {
             RegIntrinsic::SetContains => {
-                let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let value = intrinsic_arg(&self.stack, base, args, 1)?;
-                Ok(VmValue::Bool(set.borrow().iter().any(|item| item == value)))
+                let set = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let key = map_key_from_value(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::Bool(set.borrow().contains_key(&key)))
             }
             RegIntrinsic::SetDifference => {
-                let left = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let right = expect_list_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let right = right.borrow().clone();
-                let values = left
+                let left = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let right = expect_map_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let right = right.borrow();
+                let result = left
                     .borrow()
                     .iter()
-                    .filter(|value| !right.iter().any(|item| item == *value))
-                    .cloned()
-                    .collect::<Vec<_>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(values))))
+                    .filter(|(key, _)| !right.contains_key(key))
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect::<ValueMap>();
+                Ok(VmValue::Map(Rc::new(RefCell::new(result))))
             }
             RegIntrinsic::SetIntersection => {
-                let left = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let right = expect_list_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let right = right.borrow().clone();
-                let values = left
+                let left = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let right = expect_map_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let right = right.borrow();
+                let result = left
                     .borrow()
                     .iter()
-                    .filter(|value| right.iter().any(|item| item == *value))
-                    .cloned()
-                    .collect::<Vec<_>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(values))))
+                    .filter(|(key, _)| right.contains_key(key))
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect::<ValueMap>();
+                Ok(VmValue::Map(Rc::new(RefCell::new(result))))
             }
             RegIntrinsic::SetIsEmpty => {
-                let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let set = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::Bool(set.borrow().is_empty()))
             }
             RegIntrinsic::SetIsSubset => {
-                let left = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let right = expect_list_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let right = right.borrow().clone();
+                let left = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let right = expect_map_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let right = right.borrow();
                 Ok(VmValue::Bool(
-                    left.borrow()
-                        .iter()
-                        .all(|value| right.iter().any(|item| item == value)),
+                    left.borrow().keys().all(|key| right.contains_key(key)),
                 ))
             }
             RegIntrinsic::SetLen => {
-                let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let set = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::Int(set.borrow().len() as i64))
             }
-            RegIntrinsic::SetNew => Ok(VmValue::List(Rc::new(RefCell::new(Vec::new())))),
+            RegIntrinsic::SetNew => {
+                Ok(VmValue::Map(Rc::new(RefCell::new(ValueMap::default()))))
+            }
             RegIntrinsic::SetToList => {
-                let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::List(Rc::new(RefCell::new(set.borrow().clone()))))
+                let set = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let values = set
+                    .borrow()
+                    .keys()
+                    .map(vm_value_from_map_key)
+                    .collect::<Vec<_>>();
+                Ok(VmValue::List(Rc::new(RefCell::new(values))))
             }
             RegIntrinsic::SetUnion => {
-                let left = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let right = expect_list_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let mut values = left.borrow().clone();
-                for value in right.borrow().iter().cloned() {
-                    set_insert_vm(&mut values, value);
+                let left = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let right = expect_map_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let mut result = left.borrow().clone();
+                for (key, value) in right.borrow().iter() {
+                    result.entry(key.clone()).or_insert_with(|| value.clone());
                 }
-                Ok(VmValue::List(Rc::new(RefCell::new(values))))
+                Ok(VmValue::Map(Rc::new(RefCell::new(result))))
             }
             RegIntrinsic::SortedSetContains => {
                 let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -14591,22 +14614,6 @@ fn date_days_in_month(year: i64, month: i64) -> i64 {
         return 0;
     };
     (next_month - first).num_days()
-}
-
-fn set_insert_vm(items: &mut Vec<VmValue>, value: VmValue) -> bool {
-    if items.iter().any(|item| item == &value) {
-        return false;
-    }
-    items.push(value);
-    true
-}
-
-fn set_remove_vm(items: &mut Vec<VmValue>, value: &VmValue) -> bool {
-    let Some(index) = items.iter().position(|item| item == value) else {
-        return false;
-    };
-    items.remove(index);
-    true
 }
 
 /// Insert `value` into an already-sorted `Vec` via binary search, keeping it

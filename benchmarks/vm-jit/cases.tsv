@@ -49,6 +49,6 @@ deep-copy           benchmarks/vm-jit/kernels/deep_copy_list.rss                
 closure-dynamic     benchmarks/vm-jit/kernels/dynamic_closure_call.rss           200000    stored owned Fn dynamic call
 json                benchmarks/micro/json_parse_access.rss                       50000     Json parse/field access
 async               benchmarks/micro/async_call_loop.rss                         200000    async call/await park/resume
-async-taskgroup     benchmarks/vm-jit/kernels/task_group_spawn.rss               2000      structured concurrency spawn+join
+async-taskgroup     benchmarks/vm-jit/kernels/task_group_spawn.rss               20000     structured concurrency spawn+join
 selfhost-manifest   benchmarks/micro/selfhost_manifest_inspector.rss             benchmarks/micro/fixtures/package-medium/rsspkg.toml   realistic mixed (parse+collections)
 selfhost-mailbox    benchmarks/micro/selfhost_mailbox_bench.rss                  60000     realistic async actor loop

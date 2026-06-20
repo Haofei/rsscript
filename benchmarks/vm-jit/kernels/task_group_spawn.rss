@@ -5,10 +5,10 @@ features: async
 // distinct from async_call_loop's single sequential await. (RSScript has no
 // `select`; a task_group implicitly joins all its tasks at block end.)
 //
-// NOTE: this kernel scales ~QUADRATICALLY in round count under every interpreted
-// mode (eval == vm == jit: ~0.34/9.9/725 ms at 100/1k/10k rounds), so it is run
-// at a deliberately small size (2000). The blowup is a runtime bug (completed
-// task_group frames appear unreclaimed), not a JIT issue — see README finding #4.
+// HISTORY: this kernel once scaled ~quadratically in round count (completed
+// task slots were never reclaimed from the scheduler's task table, so its
+// per-step scans grew O(n)). Fixed by reaping a task slot on join — it now
+// scales linearly. See README finding #4.
 
 fn bench_size(default: Int) -> Int {
     let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
@@ -41,7 +41,7 @@ fn run_round(seed: Int) -> Result<Int, String> {
 }
 
 fn main() -> Result<Unit, String> {
-    let limit = bench_size(default: 2000)
+    let limit = bench_size(default: 20000)
     let mut index = 0
     let mut total = 0
 
