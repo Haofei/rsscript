@@ -42,12 +42,31 @@ The native tier covers only Int/Bool/Float **scalar** arithmetic + control flow 
 read-only heap helpers. Everything below is a slow path. ★ = kernel new to this
 suite; others are referenced from `../micro` (see `cases.tsv`).
 
+### Native-eligible — the JIT hot path (★ new)
+These are the *only* kernels the native (Cranelift) tier actually compiles and
+runs (`translated:1, native_calls:1, bails:0`). They are the regression anchors
+for the native tier itself — the kernels where `nat/reg` should drop well below
+1.0. Every one keeps the hot loop in its own pure function so `main`'s arg
+parsing doesn't taint per-function eligibility.
+
+| Native hot path | Kernel | Exercises |
+|---|---|---|
+| Pure-Int scalar loop | ★ `native_scalar_loop` | the native core (arith + control) |
+| Read-only heap | ★ `native_read_heap` | `list_len`/`list_get_int` host helpers |
+| Cross-function call | ★ `native_call_chain` | `CallKnown` inside compiled code |
+| Div/mod + guard | ★ `int_divmod_loop` | `DivInt`/`ModInt`, div-by-zero guard |
+| Boolean/branch | ★ `bool_logic_loop` | `&&`/`||`, `JumpIfIntCompare` |
+
+### VM slow paths (native bails / not eligible)
+
 | Slow path | Kernel | Why it's slow |
 |---|---|---|
 | Int arith + control *(baseline)* | `pure_loop_sum` | the fast path — the yardstick |
 | Struct field read/write | `struct_field_rw` | per-access field lookup |
+| Nested struct build + read | ★ `nested_struct_field` | nested `MakeStruct` + `a.b.c` chains |
 | Static call frame churn | `function_call_hot_loop` | `CallKnown` setup/teardown |
-| Deep recursion | ★ `recursion_fib` | frame/register-window alloc per call |
+| Tree recursion | ★ `recursion_fib` | exponential call fan-out |
+| Linear recursion (depth) | ★ `linear_recursion` | sustained frame push/pop depth |
 | Float arithmetic | ★ `float_loop_sum` | Float family + Int↔Float / Float→String |
 | String build/inspect | ★ `string_build_scan` | concat alloc, slice, format |
 | String-keyed map | `map_string_keys` | string hashing |
@@ -56,6 +75,7 @@ suite; others are referenced from `../micro` (see `cases.tsv`).
 | Option/Result combinators | `option_result_chain` | closure-bearing combinators |
 | List scan | `list_index_scan` | push/get/len |
 | List closures | `list_closure_pipeline` | map/filter/fold closures |
+| Per-iteration closure alloc | ★ `closure_alloc_loop` | `MakeClosure`+`CallClosure` each loop |
 | Lazy pipeline | `pipeline_chain` | Pipeline map/filter/collect |
 | List sort | ★ `list_sort` | comparison-driven `List.sort` |
 | Int map | `map_insert_lookup` | hash insert/get |
@@ -75,34 +95,58 @@ suite; others are referenced from `../micro` (see `cases.tsv`).
 - **Tensor / ML kernels** — those are native-backed already (see the ML perf
   work) and live outside this VM-dispatch baseline.
 
-## First baseline (2026-06-20) — headline findings
+## Baseline (2026-06-20) — headline findings
 
 Full numbers: `baseline/baseline-20260620.json` (5 iters, 1 warmup). Ratios are
 `reg/rust` (VM vs native Rust, higher = worse) and `jit/reg`, `nat/reg` (tier
 speedup, **<1 = faster than the plain VM**).
 
-1. **The JIT tiers do almost nothing.** `jit/reg` and `nat/reg` sit at ~1.00
-   across nearly every kernel — the tier-0 "JIT" and even the native tier give
-   no measurable speedup on the common path. This is the central problem the
-   perf plan is built around, now quantified. The **only** real win is
-   `deque_queue` (jit 0.62, native 0.44); native is occasionally *slower*
-   (`selfhost_mailbox` 1.27, `closure_dynamic` 1.09) — it translates, bails, and
-   eats the overhead.
-2. **`set_insert_contains` is pathological: reg/rust ≈ 1628×** (1779 ms vs
-   1.09 ms). Set membership is wildly more expensive than the comparable Map
-   kernels (`map_int` 3.1×). This looks like a real Set implementation bug, not
-   just dispatch cost — flagged for its own investigation, separate from the
-   tier work.
-3. **Heap-variant & combinator paths are 300–610×**
-   (`option_result_chain` 610×, `match_option_loop` 344×, `variant_match_loop`
-   299×) — make/match/allocate of Option/Result/sum values dominates.
-4. **Struct field churn 255×** and **recursion 68×** confirm the
-   field-hashing and frame-alloc costs the plan calls out.
-5. **String/Map/Json kernels are the closest to Rust** (1.3–9×) because their
-   work is already in native runtime helpers — least to gain from VM-tier work.
+1. **The native JIT codegen is excellent — it just almost never runs.** On the
+   native-*eligible* kernels the native tier is **15–50× faster than the VM**
+   and within ~1.4–2× of native Rust:
 
-Implication for the plan: Phase 1 (dispatch) addresses the broad ~1.0 tier
-ratios; the Set anomaly (#2) is a separate, likely higher-ROI bug fix.
+   | kernel | reg_vm_ms | native_ms | rust_ms | nat/reg |
+   |---|--:|--:|--:|--:|
+   | `native_scalar_loop` | 153.5 | 3.18 | 2.31 | **0.02** |
+   | `native_read_heap`   | 115.6 | 6.58 | 0.58 | **0.06** |
+   | `native_call_chain`  | 202.0 | 5.41 | 5.58 | **0.03** |
+   | `int_divmod_loop`    | 168.9 | 4.23 | 1.90 | **0.03** |
+   | `bool_logic_loop`    | 326.7 | 6.60 | 2.99 | **0.02** |
+
+   So the problem is **not** codegen quality — it's **eligibility/coverage**.
+   The moment a function does anything outside the pure-scalar/read-heap subset
+   (any heap write, string, collection op, closure, suspend), the whole function
+   falls back to the interpreter. This reframes the plan: **widening native
+   eligibility (Phase 3) is likely the highest-ROI lever**, not just dispatch.
+
+2. **On the real (ineligible) kernels both JIT tiers do ~nothing** — `jit/reg`
+   and `nat/reg` hover at ~1.00, and frequently **>1.0 (native makes it
+   slower)**: `list_sort` 1.31, `map_int` 1.19, `closure_alloc` 1.13,
+   `recursion_fib` 1.09 — the tier translates part of the function, bails, and
+   eats the overhead. Tier-0 similarly regresses `json` (1.48), `dynamic_closure`
+   (1.66), `float` (1.27). A cheap early win: **don't attempt native on
+   functions that will predictably bail.**
+
+3. **`set_insert_contains` is pathological: reg/rust ≈ 1680×** (1774 ms vs
+   1.06 ms), vs the comparable `map_int` at 4.5×. Almost certainly a Set
+   implementation bug, not dispatch cost — flagged for its own investigation,
+   separate from the tier work.
+
+4. **Heap-variant & combinator paths are 290–655×** (`option_result_chain` 655×,
+   `match_option_loop` 331×, `variant_match_loop` 288×, `nested_struct_field`
+   380×) — make/match/allocate of Option/Result/sum/struct values dominates.
+
+5. **`linear_recursion` is the slowest non-Set kernel at 314×** (4.6 s) — deep
+   frame push/pop depth is expensive; the one kernel where tier-0 actually helps
+   a little (0.88).
+
+6. **String/Map/Json/Bytes kernels are closest to Rust** (1.5–9×) because their
+   work already lives in native runtime helpers — least to gain from VM-tier work.
+
+Implications for the plan: (a) Phase 3 (widen native eligibility) is re-weighted
+**up** — native is already near-Rust where it runs; (b) add a "predict-and-skip
+bail" guard so the tiers stop *regressing* ineligible code; (c) the Set anomaly
+(#3) is a separate, likely cheap, high-impact bug fix.
 
 ## Adding a kernel
 

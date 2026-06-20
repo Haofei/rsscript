@@ -82,13 +82,25 @@ feeling, not a number. Establish where time actually goes before touching code.
       referenced from `benchmarks/micro`. Each is data-dependent so nothing folds
       away. Coverage matrix + the "intentionally not covered" list are in the
       folder README.
-- [x] **0.2 Record & commit the baseline matrix.** Done — first capture in
-      `benchmarks/vm-jit/baseline/baseline-20260620.json`, findings summarized in
-      the folder README. Headlines: JIT tiers give ~0 speedup (`jit/reg` ≈
-      `nat/reg` ≈ 1.00 nearly everywhere — the core finding, now measured);
-      `set_insert_contains` is pathological at **1628× native Rust** (likely a
-      Set bug, not dispatch — split out); heap-variant/combinator paths run
-      300–610×. Re-run the script to refresh against this reference.
+- [x] **0.2 Record & commit the baseline matrix.** Done — capture in
+      `benchmarks/vm-jit/baseline/baseline-20260620.json`, findings in the folder
+      README. **The baseline reframed the problem:**
+      - On native-*eligible* kernels the native tier is **15–50× faster than the
+        VM and within ~1.4–2× of native Rust** (`nat/reg` 0.02–0.06). Native
+        codegen is *not* the problem — **eligibility/coverage is.** Any heap
+        write / string / collection / closure / suspend drops the whole function
+        back to the interpreter.
+      - On the real (ineligible) kernels both tiers do ~nothing and often
+        **regress** (native `list_sort` 1.31, `map_int` 1.19; tier-0 `json`
+        1.48, `dynamic_closure` 1.66) — translate, bail, eat overhead.
+      - `set_insert_contains` is pathological at **1680× native Rust** (likely a
+        Set bug, split out). Heap-variant/combinator paths run 290–655×.
+
+      **Re-weighting from the data (overrides the Phase-1-first hypothesis):**
+      Phase 3 (widen native eligibility) is now likely the **highest-ROI lever**,
+      and a cheap "predict-and-skip bail" guard should land early so the tiers
+      stop regressing ineligible code. Phase 1 (dispatch) still matters for the
+      large body of code that will never be native-eligible.
 - [ ] **0.3 Profile the interpreter** on the 3 slowest kernels (perf/`cargo
       flamegraph` inside the `dev` container) and confirm the hypothesis:
       dispatch + `try_exec_pure` call overhead dominates. Capture flamegraphs.
@@ -159,8 +171,16 @@ baseline beats it on the matrix *and* passes the full differential suite.
 
 ## Phase 3 — Widen & deepen the native (Cranelift) tier
 
-Today native covers 20 scalar/read-heap opcodes with no OSR. Extend coverage and
-reduce the cliff.
+**Re-weighted up by the Phase-0 baseline:** native is already near-Rust where it
+runs (`nat/reg` 0.02–0.06), so every opcode family this phase makes eligible
+converts a ~100–300× slowdown into ~near-Rust. Today native covers 20
+scalar/read-heap opcodes with no OSR. Extend coverage and reduce the cliff.
+
+- [ ] **3.0 Predict-and-skip bail (cheap, do first).** Before translating, cheaply
+      predict whether a function will bail (contains an op family known to be
+      unsupported) and skip native for it — the baseline shows native currently
+      *regresses* `list_sort`/`map_int`/`closure_alloc` by translating then
+      bailing. This is a guard, not new coverage, and stops the bleeding.
 
 - [ ] **3.1 Coverage audit.** From the Phase-0 profile, list the highest-traffic
       opcodes that currently force a bail to the interpreter (likely list/map

@@ -1,0 +1,40 @@
+// Slow path: nested struct construction + chained field reads (`a.b.c`).
+// Each iteration builds a two-level struct (nested MakeStruct) and reads through
+// it, exercising GetFieldSlot chains the flat struct_field_rw kernel doesn't.
+
+struct Inner {
+    value: Int,
+    weight: Int
+}
+
+struct Outer {
+    inner: Inner,
+    tag: Int
+}
+
+fn bench_size(default: Int) -> Int {
+    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
+    match String.parse_int(value: read raw) {
+        Some(value) => {
+            return value
+        }
+        None => {
+            return default
+        }
+    }
+}
+
+fn main() -> Unit {
+    let limit = bench_size(default: 300000)
+    let mut i = 0
+    let mut total = 0
+
+    while i < limit {
+        let node = Outer(inner: Inner(value: i, weight: i * 2), tag: i - 1)
+        total = total + node.inner.value + node.inner.weight + node.tag
+        i = i + 1
+    }
+
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}

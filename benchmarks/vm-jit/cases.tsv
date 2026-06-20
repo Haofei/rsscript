@@ -8,11 +8,24 @@
 # NOT cover) has at least one focused kernel here. Int-arith/control kernels are
 # kept as the fast-path baseline to measure the others against.
 #
+# --- JIT hot path: native-ELIGIBLE kernels (native actually compiles + runs).
+# These are the only kernels where nat/reg should drop well below 1.0; they are
+# the regression anchors for the native tier itself.
+# category          path                                                         size      slow_path
+native-scalar       benchmarks/vm-jit/kernels/native_scalar_loop.rss             2000000   pure-Int scalar loop (native core)
+native-read-heap    benchmarks/vm-jit/kernels/native_read_heap.rss               2000000   read-heap helpers (list_len/get)
+native-call         benchmarks/vm-jit/kernels/native_call_chain.rss              1500000   native cross-function call
+int-divmod          benchmarks/vm-jit/kernels/int_divmod_loop.rss                2000000   DivInt/ModInt + div-by-zero guard
+bool-logic          benchmarks/vm-jit/kernels/bool_logic_loop.rss                2000000   &&/|| short-circuit + branches
+#
+# --- VM slow paths (native bails or is not eligible).
 # category          path                                                         size      slow_path
 int-arith           benchmarks/micro/pure_loop_sum.rss                           2000000   int-arith+control (baseline)
 struct-field        benchmarks/micro/struct_field_rw.rss                         200000    struct field read/write
+struct-nested       benchmarks/vm-jit/kernels/nested_struct_field.rss            300000    nested struct build + a.b.c reads
 call-static         benchmarks/micro/function_call_hot_loop.rss                  200000    CallKnown frame churn
-recursion           benchmarks/vm-jit/kernels/recursion_fib.rss                  30        deep recursion / frame alloc
+recursion-tree      benchmarks/vm-jit/kernels/recursion_fib.rss                  30        tree recursion (exponential breadth)
+recursion-linear    benchmarks/vm-jit/kernels/linear_recursion.rss               50000     linear recursion (frame depth)
 float               benchmarks/vm-jit/kernels/float_loop_sum.rss                 1000000   Float arithmetic + conversions
 string              benchmarks/vm-jit/kernels/string_build_scan.rss              200000    String concat/slice/format
 string-map          benchmarks/micro/map_string_keys.rss                         16000     String-keyed Map (hash strings)
@@ -21,6 +34,7 @@ variant-option      benchmarks/micro/match_option_loop.rss                      
 variant-combinator  benchmarks/micro/option_result_chain.rss                     60000     Option/Result combinators
 list-scan           benchmarks/micro/list_index_scan.rss                         19000     List push/get/len
 list-closure        benchmarks/micro/list_closure_pipeline.rss                   12000     List map/filter/fold closures
+closure-alloc       benchmarks/vm-jit/kernels/closure_alloc_loop.rss             300000    per-iteration MakeClosure churn
 list-pipeline       benchmarks/micro/pipeline_chain.rss                          16000     lazy Pipeline map/filter/collect
 list-sort           benchmarks/vm-jit/kernels/list_sort.rss                      4000      List.sort
 map-int             benchmarks/micro/map_insert_lookup.rss                       17000     Map<Int,Int> insert/get

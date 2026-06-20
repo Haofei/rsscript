@@ -1,0 +1,44 @@
+features: local
+
+// JIT hot path: read-only heap access (List.len / List.get) inside a pure scalar
+// loop in its own function — exercises the native tier's host-helper read ABI
+// (list_len / list_get_int). `main` builds a small list once (cheap) and `hot`
+// does the heavy read loop, so eligibility is not tainted by the build.
+
+fn bench_size(default: Int) -> Int {
+    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
+    match String.parse_int(value: read raw) {
+        Some(value) => {
+            return value
+        }
+        None => {
+            return default
+        }
+    }
+}
+
+fn hot(xs: read List<Int>, limit: Int) -> Int {
+    let mut i = 0
+    let mut total = 0
+    let n = List.len<Int>(list: read xs)
+    while i < limit {
+        let idx = i % n
+        total = total + List.get<Int>(list: read xs, index: idx)
+        i = i + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    let limit = bench_size(default: 2000000)
+    local xs = List<Int>.new()
+    let mut k = 0
+    while k < 16 {
+        let v = k * k - k
+        List.push<Int>(list: mut xs, value: read v)
+        k = k + 1
+    }
+    let result = hot(xs: read xs, limit: limit)
+    Log.write(message: read String.from_int(value: result))
+    return Unit
+}

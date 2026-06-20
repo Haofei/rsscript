@@ -1,0 +1,37 @@
+// JIT hot path: boolean-logic / branch heavy, pure scalar. Exercises `&&`/`||`
+// short-circuit, integer comparisons, and conditional branches (JumpIfBool /
+// JumpIfIntCompare). Native-eligible; a stress test for the branch-dispatch path.
+
+fn bench_size(default: Int) -> Int {
+    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
+    match String.parse_int(value: read raw) {
+        Some(value) => {
+            return value
+        }
+        None => {
+            return default
+        }
+    }
+}
+
+fn hot(limit: Int) -> Int {
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        if i % 2 == 0 && i % 3 == 0 {
+            total = total + 5
+        }
+        if i % 5 == 0 || i % 7 == 0 {
+            total = total + 1
+        }
+        i = i + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    let limit = bench_size(default: 2000000)
+    let result = hot(limit: limit)
+    Log.write(message: read String.from_int(value: result))
+    return Unit
+}
