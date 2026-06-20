@@ -86,10 +86,14 @@ feeling, not a number. Establish where time actually goes before touching code.
       `benchmarks/vm-jit/baseline/baseline-20260620.json`, findings in the folder
       README. **The baseline reframed the problem:**
       - On native-*eligible* kernels the native tier is **15–50× faster than the
-        VM and within ~1.4–2× of native Rust** (`nat/reg` 0.02–0.06). Native
-        codegen is *not* the problem — **eligibility/coverage is.** Any heap
-        write / string / collection / closure / suspend drops the whole function
-        back to the interpreter.
+        VM** (`nat/reg` 0.02–0.06). Native *codegen* is not the problem —
+        **eligibility/coverage is.** Any heap write / string / collection /
+        closure / suspend drops the whole function back to the interpreter.
+        Caveat on "near-Rust": only **pure-scalar** native is near-Rust
+        (`native_scalar_loop` 3.20 ms vs Rust 2.41, ~1.3×). **Read-heap** native
+        is *not* — `native_read_heap` is 6.77 ms vs Rust 0.61, **~11×** — because
+        the host-helper call boundary (§7.1) is not free. Phase 3 must not assume
+        every newly-eligible family lands at scalar-native speed.
       - On the real (ineligible) kernels both tiers do ~nothing and often
         **regress** (native `list_sort` 1.31, `map_int` 1.19; tier-0 `json`
         1.48, `dynamic_closure` 1.66) — translate, bail, eat overhead.
@@ -112,34 +116,57 @@ feeling, not a number. Establish where time actually goes before touching code.
       and a cheap "predict-and-skip bail" guard should land early so the tiers
       stop regressing ineligible code. Phase 1 (dispatch) still matters for the
       large body of code that will never be native-eligible.
-- [ ] **0.3 Profile the interpreter** on the 3 slowest kernels (perf/`cargo
-      flamegraph` inside the `dev` container) and confirm the hypothesis:
-      dispatch + `try_exec_pure` call overhead dominates. Capture flamegraphs.
+- [ ] **0.3 Profile the interpreter by *cohort*, not by raw slowest kernel.**
+      "Slowest" is misleading: the two slowest kernels in the matrix were runtime
+      **bugs** (hash-`Set` O(n²), quadratic `task_group`), now fixed — profiling
+      them would have "refuted dispatch" for the wrong reason. Instead flamegraph
+      (perf/`cargo flamegraph` in the `dev` container) one representative per
+      cohort, because each stresses a different cost and implies a different phase:
+      - **dispatch-bound** — `pure_loop_sum`, `bool_logic_loop` (→ Phase 1);
+      - **allocation/variant** — `variant_match_loop`, `nested_struct_field`,
+        `option_result_chain` (→ Phase 3 / Phase 4 `Rc` traffic);
+      - **frame churn** — `linear_recursion`, `function_call_hot_loop` (→ Phase 1);
+      - **runtime-helper-bound** — `string_text_processing`, `json_parse_access`
+        (already near-Rust; little VM-tier upside).
+      Report a per-cohort cost split (dispatch vs `Rc` inc/dec vs alloc vs helper),
+      and re-confirm the two fixed pathologies are now O(n) rather than assuming it.
 - [ ] **0.4 Define the win metric.** Pick target speedups per tier
       (e.g. interpreter ≥1.5×, baseline ≥3× over interpreter) and wire a
       regression check so CI fails if a kernel slows >10%.
 
-**Acceptance:** a committed baseline + flamegraphs that confirm (or refute) that
-dispatch is the dominant interpreter cost. If the profile says otherwise (e.g.
-`Rc` refcount traffic or allocation), **re-order the phases below to match the
-data** — do not proceed on assumption.
+**Acceptance:** a committed baseline + per-cohort flamegraphs (0.3) that say
+*which* cost dominates *which* cohort — dispatch, `Rc` refcount traffic,
+allocation, frame churn, or runtime helpers. **Re-order the phases below to match
+that split** — e.g. dispatch-bound → Phase 1, alloc/`Rc`-bound → Phase 3/4. Do
+not proceed on the assumption that dispatch dominates everything.
 
-## Phase 1 — Interpreter dispatch (highest leverage)
+> **Note on ordering.** The "Phase N" numbers are *labels, not sequence.* The
+> Phase-0 data re-weighted the execution order — see the
+> [Sequencing](#sequencing--exit-criteria) section for the current data-driven
+> order (3.0 → 3 → 1 → 2, Phase 4 only if justified). Read the phases below for
+> *what* each entails; read Sequencing for *when*.
 
-Goal: remove the per-instruction indirect-branch + function-call cost. Model:
-Wizard's tail-call threaded dispatch.
+## Phase 1 — Interpreter dispatch (broad base: all non-native-eligible code)
 
-- [ ] **1.1 Spike: tail-call threaded dispatch.** Prototype the dispatch loop as
-      one handler-fn-per-opcode that tail-calls the next handler, VM state
-      (`ip`, `base`, regs ptr) passed in registers. Rust `become` (explicit tail
-      calls) is the target; if unstable, evaluate a computed-goto-style
-      `loop { match }` with `#[inline(always)]` hot arms and a manual jump table.
-      Measure against baseline on the integer-loop kernel **before** committing
-      to the rewrite.
-- [ ] **1.2 Decide dispatch strategy** from 1.1 data: (a) tail-call threading,
-      (b) keep the `match` but inline `try_exec_pure` into `drive()` to kill the
-      call boundary and let the compiler keep state in registers, or (c) hybrid.
-      Cheapest viable win first.
+Goal: remove the per-instruction indirect-branch + function-call cost. Default
+mechanism is inlining the match on stable (1.1); Wizard-style tail-call threading
+(1.2) is a nightly research alternative, not the plan of record.
+
+- [ ] **1.1 Default plan — inline the match (stable toolchain).** Inline
+      `try_exec_pure` into the `drive()` loop to kill the per-step
+      function-call boundary so the compiler keeps VM state (`ip`, `base`, regs
+      ptr) in registers across the hot arms; shape it as `loop { match }` with
+      `#[inline(always)]` on the hottest arms. This is the **committed** Phase 1
+      path: it needs no nightly features and already removes the call boundary
+      called out in §1. Measure on the integer-loop kernel before/after.
+- [ ] **1.2 Tail-call threaded dispatch — nightly *research* branch, not the
+      critical path.** One handler-fn-per-opcode tail-calling the next, VM state
+      in registers (the Wizard model). This needs Rust `become` (explicit
+      guaranteed tail calls), which is **nightly-only** (`#![feature(explicit_tail_calls)]`;
+      stable `rustc` rejects it with **E0658**) — and the `dev` container pins
+      **stable**. So treat it as a separate spike on a nightly branch that must
+      *beat 1.1's numbers by a margin worth a toolchain split* before it is even
+      considered for adoption. If it doesn't, 1.1 stands and this is dropped.
 - [ ] **1.3 Split hot vs cold opcodes.** Keep the ~15 hottest (loads, int
       arith, compare, move, jump) on the threaded fast path; route the ~80 cold
       ones (collections, string, json, async) through a slow `match`. Keeps the
@@ -151,9 +178,11 @@ Wizard's tail-call threaded dispatch.
 - [ ] **1.5 Re-run the matrix; prove parity.** Full `backend_differential`
       green, micro-bench matrix shows the 1.x target, no kernel regressed.
 
-**Risk:** Rust tail-call support (`become`) may be unstable; the inline-the-match
-fallback (1.2b) is low-risk and still removes the call boundary. Land that first
-regardless.
+**Risk:** the big win (tail-call threading, 1.2) is gated on a nightly feature
+the pinned toolchain doesn't have, so it cannot be the plan of record. The
+inline-the-match path (1.1) is low-risk, stable, and still removes the call
+boundary — **land it first regardless**, and only revisit tail calls if a nightly
+spike proves a margin that justifies splitting the toolchain.
 
 ## Phase 2 — A real baseline (tier-0) compiler
 
@@ -165,12 +194,25 @@ your stack) and Sparkplug (no IR, one template per opcode).
       (the Winch approach) to emit code without building Cranelift IR, vs. a
       hand-rolled emitter. Prefer Winch-style reuse to inherit register naming,
       relocations, and the existing `vm-jit` plumbing.
-- [ ] **2.2 Single-pass codegen for the pure subset.** One linear walk over
-      `RegInstr`, emitting a fixed instruction template per opcode against the
-      register window in memory (no register allocation, no optimization). Target
-      the same eligibility set tier-0 already proves (non-suspending pure).
-- [ ] **2.3 Wire it as the new tier-0**, gated behind a feature flag, with the
-      old `run_jit()` as the deopt fallback so parity is provable side-by-side.
+- [ ] **2.2 Single-pass codegen — side-effect-free subset FIRST.** One linear
+      walk over `RegInstr`, emitting a fixed template per opcode against the
+      in-memory register window (no register allocation, no optimization).
+      **Caution on scope:** tier-0's *proven* eligibility (`jit_supported_instruction`,
+      `mod.rs:251`) is "non-suspending," which is **not** side-effect-free — it
+      already admits `SetField`/`MakeStruct`/`MakeList`/`MakeMap`/`MakeClosure`,
+      `ListPush/Set/Pop`, `MapInsert/Remove`, the `Match*` family, and `CallKnown`.
+      The first machine-code milestone must target only the **side-effect-free**
+      slice of that set (scalar arith/compare/branch + the read-only heap helpers),
+      because — see 2.3 — the deopt oracle is only sound before a side effect.
+- [ ] **2.3 Wire it as the new tier-0**, behind a feature flag, with the old
+      `run_jit()` as the deopt oracle. **This fallback is only valid for the
+      side-effect-free subset:** `run_jit()` re-executes from the function top, so
+      if compiled code performs a heap write (a mutation tier-0 *is* eligible for)
+      and then bails, the fallback applies that write twice — the same §7.2 hazard
+      as the native write track (3.2w). Compiling the side-effecting remainder of
+      tier-0's eligibility set is therefore **gated on the same replacement
+      equivalence design as 3.2w** (preflight-before-commit / checkpoint-rollback /
+      no-bail-after-commit), not on this oracle.
 - [ ] **2.4 Respect the sandbox.** Emit a step-budget tick (or honor the
       preemption gate) so the baseline cannot bypass `VmLimits`. Verify against
       the hostile-input suite.
@@ -182,10 +224,14 @@ baseline beats it on the matrix *and* passes the full differential suite.
 
 ## Phase 3 — Widen & deepen the native (Cranelift) tier
 
-**Re-weighted up by the Phase-0 baseline:** native is already near-Rust where it
-runs (`nat/reg` 0.02–0.06), so every opcode family this phase makes eligible
-converts a ~100–300× slowdown into ~near-Rust. Today native covers 20
-scalar/read-heap opcodes with no OSR. Extend coverage and reduce the cliff.
+**Re-weighted up by the Phase-0 baseline:** native is **15–50× faster than the
+VM** where it runs (`nat/reg` 0.02–0.06), so every opcode family this phase makes
+eligible converts a ~100–300× slowdown into something far closer to Rust. How
+much closer is opcode-dependent: pure-scalar native is ~1.3× Rust, but read-heap
+native is ~11× Rust (the §7.1 helper-call boundary; see §0.2) — so estimate each
+family's ceiling from its helper traffic, not from the scalar number. Today
+native covers 20 scalar/read-heap opcodes with no OSR. Extend coverage and reduce
+the cliff.
 
 - [ ] **3.0 Predict-and-skip bail (cheap, do first).** Before translating, cheaply
       predict whether a function will bail (contains an op family known to be
@@ -196,15 +242,36 @@ scalar/read-heap opcodes with no OSR. Extend coverage and reduce the cliff.
 - [ ] **3.1 Coverage audit.** From the Phase-0 profile, list the highest-traffic
       opcodes that currently force a bail to the interpreter (likely list/map
       reads, string ops, struct writes). Rank by benchmark impact.
-- [ ] **3.2 Add host-helper ABIs** for the top bail-causers (e.g. `list_get`
-      for non-int elems, map lookup, struct field *write*), each with the
-      immediate-bail-on-unsatisfiable-read contract already in §7.1. One opcode
-      family per PR, each with a ledger entry (Exec-Spec Appendix C).
-- [ ] **3.3 OSR entry (loops).** Today native is function-at-a-time, so a long
-      loop discovered mid-function never tiers up until the next call. Evaluate
-      OSR-entry so a hot loop can transfer into native mid-execution
-      (JavaScriptCore model). Spike first — measure the win on a long single-call
-      loop kernel before committing.
+- [ ] **3.2 Add host-helper ABIs — reads first.** Extend the **read-only** §7.1
+      contract to the top read-side bail-causers (`list_get` for non-int elems,
+      map lookup, more field reads). These inherit the existing
+      immediate-bail-on-unsatisfiable-read contract and the §7.2 fallback proof
+      unchanged. One opcode family per PR, each with a ledger entry (Exec-Spec
+      Appendix C) and a force-deopt differential test.
+- [ ] **3.2w Heap *writes* are a separate, harder track — do NOT fold into 3.2.**
+      §7.1 is **reads only** and §7.2's fallback proof depends on the compiled
+      subset being side-effect-free: a bail re-runs the function from the top, so
+      *any* write performed before the bail would be applied twice. A struct/list
+      /map write therefore **cannot** use the read helper contract. It requires a
+      §7.2 *replacement equivalence argument* before any code lands — pick one and
+      spec it: (a) **preflight-before-commit** (do every bail-able check, then
+      perform all writes in a no-bail tail), (b) **checkpoint/rollback** of the
+      touched heap on bail, or (c) **no-bail-after-first-commit** (the function is
+      ineligible the moment a write is followed by a bail-able op). Plus:
+      `mem_budget` accounting for the writes (the current native gate excludes
+      `mem_budget` *because* the subset allocates nothing — that exemption dies
+      here), and differential tests covering the **failure/bail-after-write path**,
+      not just the success path. Until that design exists, writes stay on the
+      interpreter.
+- [ ] **3.3 OSR entry (loops) — requires a spec amendment first.** Today native
+      is function-at-a-time, so a long loop discovered mid-function never tiers up
+      until the next call. OSR-entry (JavaScriptCore model) would let a hot loop
+      transfer into native mid-execution. **Blocker:** Exec-Spec §7 currently
+      states "OSR is **not applicable**: this is a method-at-a-time JIT … there is
+      no mid-loop replacement to perform." Pursuing OSR contradicts the normative
+      spec, so step 1 is a spec change (mid-loop entry/exit state mapping +
+      its parity argument), *then* a spike measuring the win on a long single-call
+      loop kernel. Do not implement against the current spec.
 - [ ] **3.4 Tune the tier-up threshold** (`tier_up_threshold`, `mod.rs:7105`)
       from the baseline data instead of the current default-0 heuristic.
 
@@ -227,13 +294,24 @@ interpreter on success *and* error paths.
 
 ## Sequencing & exit criteria
 
+**Data-driven order (supersedes the numeric phase order).** The original
+hypothesis was 1 → 2 → 3 (dispatch first). The Phase-0 baseline overturned that:
+native is 15–50× the VM where it runs but almost never runs, so *widening
+eligibility* is the highest-ROI lever, and a cheap guard stops the tiers
+regressing ineligible code today. Recommended execution order:
+
 ```
-Phase 0 (measure)  ──►  Phase 1 (dispatch)  ──►  Phase 2 (baseline)  ──►  Phase 3 (native widen)
-                                                                            Phase 4 only if 0 justifies
+Phase 0 (measure) ─┬─► 3.0 predict-and-skip bail   (cheap guard, stop the bleeding)
+                   ├─► Phase 3   (widen native — highest ROI per the data)
+                   ├─► Phase 1   (dispatch — broad win for the non-eligible majority)
+                   └─► Phase 2   (real baseline compiler — highest effort, do once 1+3 plateau)
+                        Phase 4 only if Phase 0 profiling justifies it
 ```
 
-- **Do Phase 0 first, fully.** Every later phase is re-orderable based on what
-  the profile says; the order above is the *hypothesis*, not a commitment.
+- **Finish Phase 0 first** (0.3 profile + 0.4 metric remain). The order above is
+  the current data-driven recommendation; 0.3's per-cohort split can still
+  re-order it — e.g. if `Rc`/alloc traffic dominates the variant cohort, Phase 4
+  rises and pure-dispatch work (Phase 1) falls.
 - **Every phase exits on two gates:** (1) full `backend_differential` green
   (parity), (2) the committed micro-bench matrix shows the phase's target
   speedup with no kernel regressed >10%.
@@ -243,8 +321,10 @@ Phase 0 (measure)  ──►  Phase 1 (dispatch)  ──►  Phase 2 (baseline) 
 
 ## Open questions
 
-- Is Rust's `become` (explicit tail calls) stable enough in the toolchain pinned
-  by the `dev` container? If not, Phase 1 lands as the inline-the-match variant.
+- Rust's `become` (explicit tail calls) is **nightly-only** (E0658) and the `dev`
+  container pins stable, so Phase 1 lands as the inline-the-match variant (1.1).
+  Open part: is a nightly-only dispatch tier worth a toolchain split *at all*, or
+  do we wait for `explicit_tail_calls` to stabilize before spending on 1.2?
 - Does Winch-style codegen expose enough of Cranelift's assembler as a public API
   at the pinned Cranelift version, or do we vendor/fork?
 - Acceptable parity-test runtime budget — the 5-way suite already runs ~3.5 min;
