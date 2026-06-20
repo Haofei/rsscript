@@ -1,0 +1,36 @@
+# VM/JIT performance baseline cases.
+# One row per kernel. Columns are TAB-separated:
+#   category    path(relative to repo root)    size    slow_path_tag
+# `size` is passed to the program after `--` (an Int loop bound, a fib arg, or a
+# fixture path for the selfhost cases). Lines starting with `#` are ignored.
+#
+# Coverage goal: every major slow path (anything the native Cranelift tier does
+# NOT cover) has at least one focused kernel here. Int-arith/control kernels are
+# kept as the fast-path baseline to measure the others against.
+#
+# category          path                                                         size      slow_path
+int-arith           benchmarks/micro/pure_loop_sum.rss                           2000000   int-arith+control (baseline)
+struct-field        benchmarks/micro/struct_field_rw.rss                         200000    struct field read/write
+call-static         benchmarks/micro/function_call_hot_loop.rss                  200000    CallKnown frame churn
+recursion           benchmarks/vm-jit/kernels/recursion_fib.rss                  30        deep recursion / frame alloc
+float               benchmarks/vm-jit/kernels/float_loop_sum.rss                 1000000   Float arithmetic + conversions
+string              benchmarks/vm-jit/kernels/string_build_scan.rss              200000    String concat/slice/format
+string-map          benchmarks/micro/map_string_keys.rss                         16000     String-keyed Map (hash strings)
+variant-user        benchmarks/vm-jit/kernels/variant_match_loop.rss             300000    user sum-type make/match
+variant-option      benchmarks/micro/match_option_loop.rss                       200000    Option match
+variant-combinator  benchmarks/micro/option_result_chain.rss                     60000     Option/Result combinators
+list-scan           benchmarks/micro/list_index_scan.rss                         19000     List push/get/len
+list-closure        benchmarks/micro/list_closure_pipeline.rss                   12000     List map/filter/fold closures
+list-pipeline       benchmarks/micro/pipeline_chain.rss                          16000     lazy Pipeline map/filter/collect
+list-sort           benchmarks/vm-jit/kernels/list_sort.rss                      4000      List.sort
+map-int             benchmarks/micro/map_insert_lookup.rss                       17000     Map<Int,Int> insert/get
+sorted-map-insert   benchmarks/micro/sorted_map_insert.rss                       8000      SortedMap insert
+sorted-map-scan     benchmarks/micro/sorted_map_scan.rss                         12000     SortedMap keys/get scan
+set                 benchmarks/vm-jit/kernels/set_insert_contains.rss            30000     Set insert/contains
+deque               benchmarks/micro/deque_queue.rss                             50000     Deque push_back/pop_front
+bytes               benchmarks/vm-jit/kernels/bytes_scan.rss                     200000    Bytes construct/slice/len
+closure-dynamic     benchmarks/vm-jit/kernels/dynamic_closure_call.rss           200000    stored owned Fn dynamic call
+json                benchmarks/micro/json_parse_access.rss                       50000     Json parse/field access
+async               benchmarks/micro/async_call_loop.rss                         200000    async call/await park/resume
+selfhost-manifest   benchmarks/micro/selfhost_manifest_inspector.rss             benchmarks/micro/fixtures/package-medium/rsspkg.toml   realistic mixed (parse+collections)
+selfhost-mailbox    benchmarks/micro/selfhost_mailbox_bench.rss                  60000     realistic async actor loop

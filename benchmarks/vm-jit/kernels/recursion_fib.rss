@@ -1,0 +1,33 @@
+features: local
+
+// Slow path: deep direct recursion (frame allocation / call-and-return churn).
+// fib(n) makes ~fib(n) calls; this stresses the frame/register-window setup and
+// teardown the perf plan flags as proportional to stack footprint. Recursive
+// call graphs are also ineligible for the current native tier.
+
+fn bench_size(default: Int) -> Int {
+    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
+    match String.parse_int(value: read raw) {
+        Some(value) => {
+            return value
+        }
+        None => {
+            return default
+        }
+    }
+}
+
+fn fib(n: Int) -> Int {
+    if n < 2 {
+        return n
+    }
+    return fib(n: n - 1) + fib(n: n - 2)
+}
+
+fn main() -> Unit {
+    // `size` is the fib argument (exponential work); keep it small.
+    let n = bench_size(default: 30)
+    let result = fib(n: n)
+    Log.write(message: read String.from_int(value: result))
+    return Unit
+}

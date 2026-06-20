@@ -1,0 +1,40 @@
+features: local
+
+// Slow path: List.sort over a freshly-built reverse-ordered list, repeated.
+// Exercises the ListSort intrinsic (comparison-driven, allocation-touching),
+// which the native tier never sees. Each outer iteration rebuilds a small list
+// so the sort cannot be hoisted/cached.
+
+fn bench_size(default: Int) -> Int {
+    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
+    match String.parse_int(value: read raw) {
+        Some(value) => {
+            return value
+        }
+        None => {
+            return default
+        }
+    }
+}
+
+fn main() -> Unit {
+    let limit = bench_size(default: 4000)
+    let mut outer = 0
+    let mut total = 0
+
+    while outer < limit {
+        local values = List<Int>.new()
+        let mut i = 0
+        while i < 64 {
+            let v = 64 - i
+            List.push<Int>(list: mut values, value: read v)
+            i = i + 1
+        }
+        List.sort(list: mut values)
+        total = total + List.get<Int>(list: read values, index: 0)
+        outer = outer + 1
+    }
+
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
