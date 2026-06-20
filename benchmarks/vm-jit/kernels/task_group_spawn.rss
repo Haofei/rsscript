@@ -1,0 +1,56 @@
+features: async
+
+// Slow path: structured concurrency — each round spawns 3 concurrent tasks in a
+// `task_group` and joins them (the SpawnTask / async-let / await-join machinery),
+// distinct from async_call_loop's single sequential await. (RSScript has no
+// `select`; a task_group implicitly joins all its tasks at block end.)
+//
+// NOTE: this kernel scales ~QUADRATICALLY in round count under every interpreted
+// mode (eval == vm == jit: ~0.34/9.9/725 ms at 100/1k/10k rounds), so it is run
+// at a deliberately small size (2000). The blowup is a runtime bug (completed
+// task_group frames appear unreclaimed), not a JIT issue — see README finding #4.
+
+fn bench_size(default: Int) -> Int {
+    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
+    match String.parse_int(value: read raw) {
+        Some(value) => {
+            return value
+        }
+        None => {
+            return default
+        }
+    }
+}
+
+async fn work(seed: Int) -> Result<Int, String> {
+    return Ok(seed * 2 + 1)
+}
+
+fn run_round(seed: Int) -> Result<Int, String> {
+    let mut sum = 0
+    task_group {
+        async let a = work(seed: seed)
+        async let b = work(seed: seed + 1)
+        async let c = work(seed: seed + 2)
+        let ra = await a?
+        let rb = await b?
+        let rc = await c?
+        sum = ra + rb + rc
+    }
+    return Ok(sum)
+}
+
+fn main() -> Result<Unit, String> {
+    let limit = bench_size(default: 2000)
+    let mut index = 0
+    let mut total = 0
+
+    while index < limit {
+        let r = run_round(seed: index)?
+        total = total + r
+        index = index + 1
+    }
+
+    Log.write(message: read String.from_int(value: total))
+    return Ok(Unit)
+}

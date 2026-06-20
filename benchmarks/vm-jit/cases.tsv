@@ -28,6 +28,7 @@ recursion-tree      benchmarks/vm-jit/kernels/recursion_fib.rss                 
 recursion-linear    benchmarks/vm-jit/kernels/linear_recursion.rss               50000     linear recursion (frame depth)
 float               benchmarks/vm-jit/kernels/float_loop_sum.rss                 1000000   Float arithmetic + conversions
 string              benchmarks/vm-jit/kernels/string_build_scan.rss              200000    String concat/slice/format
+string-text         benchmarks/vm-jit/kernels/string_text_processing.rss         100000    String split/pad_left/starts_with
 string-map          benchmarks/micro/map_string_keys.rss                         16000     String-keyed Map (hash strings)
 variant-user        benchmarks/vm-jit/kernels/variant_match_loop.rss             300000    user sum-type make/match
 variant-option      benchmarks/micro/match_option_loop.rss                       200000    Option match
@@ -41,10 +42,13 @@ map-int             benchmarks/micro/map_insert_lookup.rss                      
 sorted-map-insert   benchmarks/micro/sorted_map_insert.rss                       8000      SortedMap insert
 sorted-map-scan     benchmarks/micro/sorted_map_scan.rss                         12000     SortedMap keys/get scan
 set                 benchmarks/vm-jit/kernels/set_insert_contains.rss            30000     Set insert/contains
+sorted-set          benchmarks/vm-jit/kernels/sorted_set_ops.rss                 8000      SortedSet insert/contains
 deque               benchmarks/micro/deque_queue.rss                             50000     Deque push_back/pop_front
 bytes               benchmarks/vm-jit/kernels/bytes_scan.rss                     200000    Bytes construct/slice/len
+deep-copy           benchmarks/vm-jit/kernels/deep_copy_list.rss                 100000    deep List copy (Rc/clone traffic)
 closure-dynamic     benchmarks/vm-jit/kernels/dynamic_closure_call.rss           200000    stored owned Fn dynamic call
 json                benchmarks/micro/json_parse_access.rss                       50000     Json parse/field access
 async               benchmarks/micro/async_call_loop.rss                         200000    async call/await park/resume
+async-taskgroup     benchmarks/vm-jit/kernels/task_group_spawn.rss               2000      structured concurrency spawn+join
 selfhost-manifest   benchmarks/micro/selfhost_manifest_inspector.rss             benchmarks/micro/fixtures/package-medium/rsspkg.toml   realistic mixed (parse+collections)
 selfhost-mailbox    benchmarks/micro/selfhost_mailbox_bench.rss                  60000     realistic async actor loop

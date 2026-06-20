@@ -19,14 +19,19 @@ set -euo pipefail
 iterations=5
 warmup=1
 out=""
+# Per-mode wall-clock cap. A pathological kernel (e.g. a super-linear runtime
+# path) must degrade to an `n/a` cell, never hang the whole suite. Override with
+# --timeout 0 to disable.
+mode_timeout=180
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --iterations) iterations="$2"; shift 2 ;;
     --warmup)     warmup="$2";     shift 2 ;;
+    --timeout)    mode_timeout="$2"; shift 2 ;;
     --out)        out="$2";        shift 2 ;;
     -h|--help)
-      printf 'usage: %s [--iterations N] [--warmup N] [--out PATH]\n' "$0"
+      printf 'usage: %s [--iterations N] [--warmup N] [--timeout SECS] [--out PATH]\n' "$0"
       exit 0 ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
   esac
@@ -60,8 +65,10 @@ fmt_ms() { if [[ "$1" =~ ^[0-9.]+$ ]]; then printf '%11.3f' "$1"; else printf '%
 # Emit a numeric value or JSON null for non-numeric ("n/a") cells.
 jnum() { if [[ "$1" =~ ^[0-9.]+$ ]]; then printf '%s' "$1"; else printf 'null'; fi; }
 
-run_mode() { # mode, path, size  ->  bench JSON or empty
-  "${bench_cmd[@]}" bench --json --mode "$1" "${@:4}" \
+run_mode() { # mode, path, size  ->  bench JSON or empty (empty => prints n/a)
+  local guard=()
+  [[ "$mode_timeout" != "0" ]] && guard=(timeout "$mode_timeout")
+  "${guard[@]}" "${bench_cmd[@]}" bench --json --mode "$1" "${@:4}" \
     --iterations "$iterations" --warmup "$warmup" "$2" -- "$3" 2>/dev/null || true
 }
 

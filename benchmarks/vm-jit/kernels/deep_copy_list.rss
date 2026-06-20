@@ -1,0 +1,41 @@
+features: local
+
+// Slow path: deep value copy (Rc/clone traffic). Each iteration makes an
+// independent copy of a 256-element list via List.slice(full range), exercising
+// the value-clone path that the perf plan's Phase 4 asks about ("is Rc/clone
+// traffic a real cost?"). The copy cannot be elided — its head is read out.
+
+fn bench_size(default: Int) -> Int {
+    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
+    match String.parse_int(value: read raw) {
+        Some(value) => {
+            return value
+        }
+        None => {
+            return default
+        }
+    }
+}
+
+fn main() -> Unit {
+    let limit = bench_size(default: 100000)
+    local base = List<Int>.new()
+    let mut k = 0
+    while k < 256 {
+        let v = k * k - k
+        List.push<Int>(list: mut base, value: read v)
+        k = k + 1
+    }
+    let n = List.len<Int>(list: read base)
+
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        local copy = List.slice(list: read base, start: 0, len: n)
+        total = total + List.get<Int>(list: read copy, index: 0)
+        index = index + 1
+    }
+
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}

@@ -17,8 +17,12 @@ From the repo root, inside the dev container:
 
 ```sh
 docker compose run --rm dev ./benchmarks/vm-jit/run-baseline.sh
-# options: --iterations N  --warmup N  --out PATH
+# options: --iterations N  --warmup N  --timeout SECS  --out PATH
 ```
+
+`--timeout` (default 180 s) caps each mode per case: a pathological kernel — e.g.
+a super-linear runtime path like `task_group_spawn` at large sizes — degrades to
+an `n/a` cell instead of hanging the whole suite. `--timeout 0` disables it.
 
 Each case runs through four modes and reports mean ms + tier ratios:
 
@@ -69,6 +73,7 @@ parsing doesn't taint per-function eligibility.
 | Linear recursion (depth) | ★ `linear_recursion` | sustained frame push/pop depth |
 | Float arithmetic | ★ `float_loop_sum` | Float family + Int↔Float / Float→String |
 | String build/inspect | ★ `string_build_scan` | concat alloc, slice, format |
+| String text-processing | ★ `string_text_processing` | `split`/`pad_left`/`starts_with` intrinsics |
 | String-keyed map | `map_string_keys` | string hashing |
 | User sum-type make/match | ★ `variant_match_loop` | `MakeVariant`/`MatchVariant` |
 | Option match | `match_option_loop` | option destructure |
@@ -82,11 +87,14 @@ parsing doesn't taint per-function eligibility.
 | Sorted map insert | `sorted_map_insert` | ordered insert |
 | Sorted map scan | `sorted_map_scan` | keys + get scan |
 | Set membership | ★ `set_insert_contains` | Set insert/contains |
+| Sorted-set membership | ★ `sorted_set_ops` | ordered insert + `contains` |
 | Deque FIFO | `deque_queue` | push_back/pop_front |
 | Bytes | ★ `bytes_scan` | Bytes construct/slice/len |
+| Deep value copy | ★ `deep_copy_list` | per-iter List copy (Rc/clone traffic) |
 | Stored `owned Fn` dynamic call | ★ `dynamic_closure_call` | indirect closure dispatch |
 | Json | `json_parse_access` | parse + field access |
 | Async call/await | `async_call_loop` | park/resume frame state |
+| Structured concurrency | ★ `task_group_spawn` | `task_group` spawn + async-let join |
 | Realistic mixed | `selfhost_manifest_inspector`, `selfhost_mailbox_bench` | end-to-end blends |
 
 ### Known not covered (intentionally)
@@ -107,11 +115,11 @@ speedup, **<1 = faster than the plain VM**).
 
    | kernel | reg_vm_ms | native_ms | rust_ms | nat/reg |
    |---|--:|--:|--:|--:|
-   | `native_scalar_loop` | 153.5 | 3.18 | 2.31 | **0.02** |
-   | `native_read_heap`   | 115.6 | 6.58 | 0.58 | **0.06** |
-   | `native_call_chain`  | 202.0 | 5.41 | 5.58 | **0.03** |
-   | `int_divmod_loop`    | 168.9 | 4.23 | 1.90 | **0.03** |
-   | `bool_logic_loop`    | 326.7 | 6.60 | 2.99 | **0.02** |
+   | `native_scalar_loop` | 153.5 | 3.20 | 2.41 | **0.02** |
+   | `native_read_heap`   | 115.5 | 6.77 | 0.61 | **0.06** |
+   | `native_call_chain`  | 196.3 | 5.33 | 5.56 | **0.03** |
+   | `int_divmod_loop`    | 179.3 | 4.20 | 1.96 | **0.02** |
+   | `bool_logic_loop`    | 347.2 | 6.70 | 3.21 | **0.02** |
 
    So the problem is **not** codegen quality — it's **eligibility/coverage**.
    The moment a function does anything outside the pure-scalar/read-heap subset
@@ -120,33 +128,53 @@ speedup, **<1 = faster than the plain VM**).
    eligibility (Phase 3) is likely the highest-ROI lever**, not just dispatch.
 
 2. **On the real (ineligible) kernels both JIT tiers do ~nothing** — `jit/reg`
-   and `nat/reg` hover at ~1.00, and frequently **>1.0 (native makes it
-   slower)**: `list_sort` 1.31, `map_int` 1.19, `closure_alloc` 1.13,
-   `recursion_fib` 1.09 — the tier translates part of the function, bails, and
-   eats the overhead. Tier-0 similarly regresses `json` (1.48), `dynamic_closure`
-   (1.66), `float` (1.27). A cheap early win: **don't attempt native on
-   functions that will predictably bail.**
+   and `nat/reg` hover at ~1.00, and frequently **>1.0 (the tier makes it
+   slower)**: tier-0 regresses `string_text_processing` **1.80×** (the worst in
+   the suite), `selfhost_mailbox` 1.21; native regresses `float` 1.23,
+   `closure_alloc` 1.16, `list_closure` 1.09 — the tier translates part of the
+   function, bails, and eats the overhead. (The exact offenders shift run to run;
+   the pattern — tiers *regress* ineligible code — is stable.) A cheap early win:
+   **don't attempt the JIT on functions that will predictably bail.**
 
-3. **`set_insert_contains` is pathological: reg/rust ≈ 1680×** (1774 ms vs
-   1.06 ms), vs the comparable `map_int` at 4.5×. Almost certainly a Set
-   implementation bug, not dispatch cost — flagged for its own investigation,
-   separate from the tier work.
+3. **`set_insert_contains` is pathological: reg/rust ≈ 1680×** (1796 ms vs
+   1.07 ms) — and the new `sorted_set_ops` kernel makes it a smoking gun: the
+   *same* insert+contains workload on an **ordered** set is **2.2×** reg/rust
+   (1.30 ms). So an ordered membership structure is ~750× faster than the hash
+   `Set` at the same job. This isolates the cost to the **hash-`Set`
+   implementation specifically** (almost certainly an O(n) or rehash-thrash bug),
+   not to dispatch or to set semantics generally. Its own, likely cheap, fix.
 
-4. **Heap-variant & combinator paths are 290–655×** (`option_result_chain` 655×,
-   `match_option_loop` 331×, `variant_match_loop` 288×, `nested_struct_field`
-   380×) — make/match/allocate of Option/Result/sum/struct values dominates.
+4. **Structured concurrency is both slow and super-linear.** `task_group_spawn`
+   is **337× reg/rust** even at the small size it now runs (2 000 rounds), and
+   worse, it scales **≈ quadratically**: jit-internal measured 0.34 ms / 9.9 ms /
+   725 ms at 100 / 1 000 / 10 000 rounds (and identically under plain `eval`, so
+   it is a **runtime** bug, not a JIT one — completed `task_group` frames look
+   unreclaimed). The original 100 000-round size was uncapped and hung the suite;
+   the kernel is pinned to 2 000 and the runner now has a per-mode `--timeout`
+   guard so a pathological case degrades to `n/a` instead of hanging. Flag for
+   its own investigation alongside the Set bug.
 
-5. **`linear_recursion` is the slowest non-Set kernel at 314×** (4.6 s) — deep
-   frame push/pop depth is expensive; the one kernel where tier-0 actually helps
-   a little (0.88).
+5. **Heap-variant & combinator paths are 340–660×** (`option_result_chain` 662×,
+   `match_option_loop` 362×, `variant_match_loop` 342×, `nested_struct_field`
+   374×) — make/match/allocate of Option/Result/sum/struct values dominates.
 
-6. **String/Map/Json/Bytes kernels are closest to Rust** (1.5–9×) because their
-   work already lives in native runtime helpers — least to gain from VM-tier work.
+6. **`linear_recursion` is the slowest non-pathological kernel at ~294×** (4.1 s)
+   — deep frame push/pop depth is expensive.
+
+7. **Deep value copy (Rc/clone) is a ~22× tax** (`deep_copy_list` 21.7×) — real
+   but well below the variant/struct make/match tier, so Phase 4 (value-rep)
+   stays low priority: clone traffic is not where the big wins are.
+
+8. **String/Map/Json/Bytes/SortedSet kernels are closest to Rust** (1.5–9×)
+   because their work already lives in native runtime helpers — least to gain
+   from VM-tier work.
 
 Implications for the plan: (a) Phase 3 (widen native eligibility) is re-weighted
 **up** — native is already near-Rust where it runs; (b) add a "predict-and-skip
-bail" guard so the tiers stop *regressing* ineligible code; (c) the Set anomaly
-(#3) is a separate, likely cheap, high-impact bug fix.
+bail" guard so the tiers stop *regressing* ineligible code (#2); (c) the hash-Set
+anomaly (#3) and the quadratic `task_group` runtime (#4) are separate, likely
+cheap, high-impact bug fixes that do not depend on the tier work; (d) Rc/clone
+traffic (#7) confirms Phase 4 can stay deferred.
 
 ## Adding a kernel
 
