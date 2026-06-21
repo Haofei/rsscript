@@ -20,6 +20,7 @@ enum BenchMode {
     VmInternal,
     JitInternal,
     JitNative,
+    JitNativeOsr,
     Run,
     Release,
     ReleaseInternal,
@@ -38,11 +39,12 @@ impl BenchMode {
             "vm-internal" => Ok(Self::VmInternal),
             "jit-internal" => Ok(Self::JitInternal),
             "jit-native" => Ok(Self::JitNative),
+            "jit-native-osr" => Ok(Self::JitNativeOsr),
             "run" => Ok(Self::Run),
             "release" => Ok(Self::Release),
             "release-internal" => Ok(Self::ReleaseInternal),
             _ => Err(format!(
-                "invalid benchmark mode `{value}`; expected eval, vm, vm-internal, jit-internal, jit-native, run, release, or release-internal."
+                "invalid benchmark mode `{value}`; expected eval, vm, vm-internal, jit-internal, jit-native, jit-native-osr, run, release, or release-internal."
             )),
         }
     }
@@ -54,6 +56,7 @@ impl BenchMode {
             Self::VmInternal => "vm-internal",
             Self::JitInternal => "jit-internal",
             Self::JitNative => "jit-native",
+            Self::JitNativeOsr => "jit-native-osr",
             Self::Run => "run",
             Self::Release => "release",
             Self::ReleaseInternal => "release-internal",
@@ -62,7 +65,12 @@ impl BenchMode {
 
     fn cargo_profile_dir(self) -> &'static str {
         match self {
-            Self::Eval | Self::Vm | Self::VmInternal | Self::JitInternal | Self::JitNative => {
+            Self::Eval
+            | Self::Vm
+            | Self::VmInternal
+            | Self::JitInternal
+            | Self::JitNative
+            | Self::JitNativeOsr => {
                 unreachable!("eval/vm/jit mode does not build a cargo profile")
             }
             Self::Run => "debug",
@@ -224,6 +232,7 @@ fn run_bench_inner(options: &BenchOptions<'_>) -> Result<BenchResult, String> {
         BenchMode::VmInternal => run_reg_vm_internal_bench(options),
         BenchMode::JitInternal => run_reg_vm_jit_bench(options),
         BenchMode::JitNative => run_reg_vm_native_bench(options),
+        BenchMode::JitNativeOsr => run_reg_vm_native_osr_bench(options),
         BenchMode::Run | BenchMode::Release | BenchMode::ReleaseInternal => {
             run_generated_bench(options)
         }
@@ -380,6 +389,58 @@ fn run_reg_vm_native_bench(options: &BenchOptions<'_>) -> Result<BenchResult, St
             let (stats_executable, _stats_bindings) = compile_vm_internal_target(options)?;
             let (_output, stats) = stats_executable
                 .eval_main_with_args_native_with_stats(options.program_args.iter().copied())
+                .map_err(format_eval_error)?;
+            result.jit = Some(stats.to_json());
+        }
+        Ok(result)
+    }
+}
+
+/// J5.2 OSR benchmark: like `jit-native`, but with on-stack replacement forced on
+/// — a native-subset hot loop inside an otherwise native-INELIGIBLE (once-called,
+/// I/O-tangled) function runs natively mid-function (OSR-entry at the header,
+/// OSR-exit at the post-loop ip). Apples-to-apples with `jit-native` (the OSR-off
+/// baseline) for the once-called-hot-loop shape. Requires `--features native-jit`.
+fn run_reg_vm_native_osr_bench(options: &BenchOptions<'_>) -> Result<BenchResult, String> {
+    #[cfg(not(feature = "native-jit"))]
+    {
+        let _ = options;
+        Err(
+            "rss bench --mode jit-native-osr requires building with `--features native-jit`."
+                .to_string(),
+        )
+    }
+    #[cfg(feature = "native-jit")]
+    {
+        let (executable, _bindings) = compile_vm_internal_target(options)?;
+        let run_once = || {
+            executable
+                .eval_main_with_args_native_osr(options.program_args.iter().copied())
+                .map_err(format_eval_error)
+        };
+        for _ in 0..options.warmup {
+            run_once()?;
+        }
+        let mut measurements = Vec::with_capacity(options.iterations);
+        for _ in 0..options.iterations {
+            let start = Instant::now();
+            run_once()?;
+            measurements.push(start.elapsed());
+        }
+        let mut result = summarize_measurements(
+            benchmark_name(options.path),
+            options.mode,
+            options.vm,
+            options.iterations,
+            options.warmup,
+            &measurements,
+        );
+        // Capture OSR telemetry (notably `osr_entries`) on a fresh executable so the
+        // verdict cache doesn't suppress it — matches the `jit-native` stats path.
+        if options.json {
+            let (stats_executable, _stats_bindings) = compile_vm_internal_target(options)?;
+            let (_output, stats) = stats_executable
+                .eval_main_with_args_native_osr_with_stats(options.program_args.iter().copied())
                 .map_err(format_eval_error)?;
             result.jit = Some(stats.to_json());
         }
@@ -835,7 +896,7 @@ mod tests {
         assert_eq!(
             super::parse_bench_args(&args(&["--mode", "fast", "bench.rss"]))
                 .expect_err("unknown mode should fail"),
-            "invalid benchmark mode `fast`; expected eval, vm, vm-internal, jit-internal, jit-native, run, release, or release-internal."
+            "invalid benchmark mode `fast`; expected eval, vm, vm-internal, jit-internal, jit-native, jit-native-osr, run, release, or release-internal."
         );
         assert_eq!(
             super::parse_bench_args(&args(&["--vm", "fast", "bench.rss"]))

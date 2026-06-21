@@ -1,0 +1,43 @@
+// J5.2 OSR (on-stack replacement) kernel: a hot, pure-Int scalar loop wrapped by
+// non-native I/O *in the same, once-called function* — so the function as a whole
+// is native-INELIGIBLE (the `Log.write` calls keep it off the whole-function
+// native tier), and ONLY OSR can run the loop natively. This is the "once-called
+// hot loop" cliff from the perf plan (§3.4): no other JIT feature can accelerate
+// it, because the containing function never reaches native as a whole.
+//
+// Run it with OSR off (`--mode jit-native`, today's interpreter for this shape)
+// vs OSR on (`--mode jit-native-osr`); the OSR median should beat the off median.
+// Keep `hot` separate from `main` so `main`'s arg parsing doesn't taint anything,
+// and keep the I/O INSIDE `hot` (around the loop) so the whole function is
+// native-ineligible — the exact shape OSR targets.
+
+fn bench_size(default: Int) -> Int {
+    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
+    match String.parse_int(value: read raw) {
+        Some(value) => {
+            return value
+        }
+        None => {
+            return default
+        }
+    }
+}
+
+fn hot(limit: Int, seed: Int) -> Int {
+    Log.write(message: read "osr-begin")
+    let mut i = 0
+    let mut total = seed
+    while i < limit {
+        total = total + i * 3 - i / 2 + 7
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    let limit = bench_size(default: 2000000)
+    let result = hot(limit: limit, seed: 0)
+    Log.write(message: read String.from_int(value: result))
+    return Unit
+}

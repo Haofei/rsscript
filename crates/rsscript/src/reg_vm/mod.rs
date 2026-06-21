@@ -145,6 +145,20 @@ pub fn reg_vm_eval_source_main_native_precise(
     reg_vm_compile_source(file, source)?.eval_main_with_args_native_precise(args)
 }
 
+/// Native-tier entry point with J5.2 **OSR** (on-stack replacement) forced on: a
+/// function with a qualifying native-subset hot loop runs that loop natively
+/// mid-function (OSR-entry at the loop header reading the live-in window;
+/// OSR-exit/precise-resume at the post-loop ip with the live-out window). Must
+/// equal every other backend byte-for-byte. Validation/test/bench entry point.
+#[cfg(feature = "native-jit")]
+pub fn reg_vm_eval_source_main_native_osr(
+    file: &str,
+    source: &str,
+    args: impl IntoIterator<Item = impl Into<String>>,
+) -> Result<EvalOutput, EvalError> {
+    reg_vm_compile_source(file, source)?.eval_main_with_args_native_osr(args)
+}
+
 /// Per-program JIT eligibility: how many functions are fully covered by the
 /// tier-0 JIT-supported instruction subset (and so are candidates for native
 /// codegen) versus how many must fall back to the interpreter.
@@ -2003,6 +2017,376 @@ fn require(condition: bool) -> Option<()> {
     condition.then_some(())
 }
 
+/// A single natural loop identified for OSR (J5.2): the conservative shape this
+/// slice compiles. `header` is the loop's entry instruction (a conditional branch
+/// that is the target of the loop's backedge); `exit` is the post-loop instruction
+/// the header's branch leaves to. Native execution OSR-enters at `header` and
+/// OSR-exits (deopts) at `exit`.
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OsrLoop {
+    header: usize,
+    exit: usize,
+}
+
+/// Identify the single natural loop OSR will compile, **conservatively** (any
+/// shape we cannot analyze soundly returns `None`, so OSR does not apply).
+///
+/// The shape this slice accepts is the canonical lowered `while cond { body }`:
+///   - `header`: a `JumpIfIntCompare`/`JumpIfBool` at `header` whose `target` is
+///     the post-loop `exit` (the branch *leaves* the loop), and
+///   - a single backedge `Jump { target: header }` at some `b > header`, and
+///   - every instruction in the loop body `header..=b` stays in `header..exit`
+///     (no other edge escapes the region; the only way out is the header's branch
+///     to `exit`), and there is exactly one backedge to `header`.
+///
+/// Requiring a single backedge, a single exit edge (the header test), and that no
+/// body instruction jumps outside `[header, exit)` makes the region a
+/// single-entry/single-exit natural loop — the only thing we can OSR soundly here.
+#[cfg(feature = "native-jit")]
+fn detect_single_natural_loop(code: &[RegInstr]) -> Option<OsrLoop> {
+    let n = code.len();
+    // Collect backedges: a jump/branch whose target is at or before it.
+    let mut backedges: Vec<(usize, usize)> = Vec::new(); // (from, header)
+    for (i, instr) in code.iter().enumerate() {
+        let target = match instr {
+            RegInstr::Jump { target } => Some(*target),
+            RegInstr::JumpIfBool { target, .. } | RegInstr::JumpIfIntCompare { target, .. } => {
+                Some(*target)
+            }
+            _ => None,
+        };
+        if let Some(t) = target {
+            if t <= i {
+                backedges.push((i, t));
+            }
+        }
+    }
+    // Exactly one backedge ⇒ a single loop (this slice).
+    if backedges.len() != 1 {
+        return None;
+    }
+    let (backedge_from, header) = backedges[0];
+    if header >= n {
+        return None;
+    }
+    // The header must be a conditional branch that *exits* the loop on one edge: a
+    // `JumpIfIntCompare`/`JumpIfBool` whose `target` is the post-loop exit (the
+    // fall-through stays in the loop body). The exit must lie outside the body.
+    let exit = match &code[header] {
+        RegInstr::JumpIfIntCompare { target, .. } | RegInstr::JumpIfBool { target, .. } => *target,
+        _ => return None,
+    };
+    // The loop body is `header..=backedge_from`; the exit must be after it (the
+    // loop's only way out). A header whose exit target points back inside the body
+    // is not the simple while-shape we accept.
+    if exit <= backedge_from || exit > n {
+        return None;
+    }
+    // No instruction in the body `header..=backedge_from` may transfer control
+    // outside `[header, exit)` except the header's own exit edge and the backedge.
+    // (Any other escape would mean multiple exits / an irreducible shape.)
+    for i in header..=backedge_from {
+        let in_region = |t: usize| t >= header && t < exit;
+        match &code[i] {
+            RegInstr::Jump { target } => {
+                if i != backedge_from && !in_region(*target) {
+                    return None;
+                }
+            }
+            RegInstr::JumpIfBool { target, .. } | RegInstr::JumpIfIntCompare { target, .. } => {
+                // The header's exit edge to `exit` is the sole permitted escape.
+                if i == header {
+                    continue;
+                }
+                if !in_region(*target) {
+                    return None;
+                }
+            }
+            // A `Return`/`RuntimeError` inside the loop is an extra exit edge we do
+            // not model in the OSR-exit (single exit only) — bail conservatively.
+            RegInstr::Return { .. } | RegInstr::RuntimeError { .. } => return None,
+            // Any non-straight-line match/call inside the body is rejected by the
+            // subset check in `translate_osr_loop`; control-flow-wise it falls
+            // through, which stays in-region.
+            _ => {}
+        }
+    }
+    Some(OsrLoop { header, exit })
+}
+
+/// Build an OSR [`vm_jit::JitFunction`] for the loop `lp` in `func`, **identity-
+/// indexed** with `func.code` so a native OSR-exit's `resume_ip` is directly the
+/// interpreter's instruction index (the soundness keystone: no inlining / no
+/// scalar-replacement, so indices never drift).
+///
+/// Every instruction in the loop body region must be in the native subset. The
+/// exit instruction becomes [`vm_jit::JitInstr::OsrExit`] (deopt back to the
+/// interpreter with the live-out window). All instructions outside the loop region
+/// (the pre-loop, the post-loop) become [`vm_jit::JitInstr::Bail`]/`Nop`: they are
+/// never reached natively (entry is the header, the only exit is `OsrExit`), but
+/// they keep the index alignment. Returns the function plus the per-register types
+/// so the caller can marshal the live-in window. `None` if the loop body leaves
+/// the subset or types don't unify.
+#[cfg(feature = "native-jit")]
+fn translate_osr_loop(
+    func: &RegFunction,
+    lp: OsrLoop,
+) -> Option<(vm_jit::JitFunction, Vec<NativeTy>)> {
+    use vm_jit::{JitCompare, JitInstr};
+
+    if func.captures != 0 {
+        return None;
+    }
+    let code = &func.code;
+    let n = code.len();
+    let n_regs = func.regs;
+    if lp.header >= n || lp.exit > n {
+        return None;
+    }
+
+    // The set of instruction indices that belong to the loop region (header..exit).
+    // Only these run natively; the type inference and subset check apply to them.
+    let in_loop = |i: usize| i >= lp.header && i < lp.exit;
+
+    // Every loop-region instruction must be a native-subset instruction. (The exit
+    // and everything outside the region may be anything — they don't run natively.)
+    for i in lp.header..lp.exit {
+        if !native_subset_instruction(&code[i]) {
+            return None;
+        }
+    }
+
+    // Type inference by unification over the loop region only (a fixpoint to handle
+    // the backedge). Same rules as `translate_to_native_jit`; registers live-in to
+    // the header acquire their type from the operands they combine with.
+    let mut ty: Vec<Option<NativeTy>> = vec![None; n_regs];
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for i in lp.header..lp.exit {
+            let instr = &code[i];
+            let ty = &mut ty;
+            let c = &mut changed;
+            let ok = match instr {
+                RegInstr::LoadInt { dst, .. } => native_set_ty(ty, *dst, NativeTy::Int, c),
+                RegInstr::LoadFloat { dst, .. } => native_set_ty(ty, *dst, NativeTy::Float, c),
+                RegInstr::LoadBool { dst, .. } => native_set_ty(ty, *dst, NativeTy::Bool, c),
+                RegInstr::ModInt { dst, lhs, rhs }
+                | RegInstr::BitAndInt { dst, lhs, rhs }
+                | RegInstr::BitOrInt { dst, lhs, rhs }
+                | RegInstr::BitXorInt { dst, lhs, rhs }
+                | RegInstr::ShiftLeftInt { dst, lhs, rhs }
+                | RegInstr::ShiftRightInt { dst, lhs, rhs } => {
+                    native_set_ty(ty, *dst, NativeTy::Int, c)
+                        && native_set_ty(ty, *lhs, NativeTy::Int, c)
+                        && native_set_ty(ty, *rhs, NativeTy::Int, c)
+                }
+                RegInstr::AddInt { dst, lhs, rhs }
+                | RegInstr::SubInt { dst, lhs, rhs }
+                | RegInstr::MulInt { dst, lhs, rhs }
+                | RegInstr::DivInt { dst, lhs, rhs } => {
+                    native_unify(ty, *lhs, *rhs, c) && native_unify(ty, *dst, *lhs, c)
+                }
+                RegInstr::LessInt { dst, lhs, rhs }
+                | RegInstr::LessEqualInt { dst, lhs, rhs }
+                | RegInstr::GreaterInt { dst, lhs, rhs }
+                | RegInstr::GreaterEqualInt { dst, lhs, rhs }
+                | RegInstr::Equal { dst, lhs, rhs }
+                | RegInstr::NotEqual { dst, lhs, rhs } => {
+                    native_unify(ty, *lhs, *rhs, c) && native_set_ty(ty, *dst, NativeTy::Bool, c)
+                }
+                RegInstr::Move { dst, src } => native_unify(ty, *dst, *src, c),
+                RegInstr::JumpIfBool { cond, .. } => native_set_ty(ty, *cond, NativeTy::Bool, c),
+                RegInstr::JumpIfIntCompare { lhs, rhs, .. } => native_unify(ty, *lhs, *rhs, c),
+                RegInstr::ListLen { dst, list } => {
+                    native_set_ty(ty, *list, NativeTy::Handle, c)
+                        && native_set_ty(ty, *dst, NativeTy::Int, c)
+                }
+                RegInstr::ListGet { list, index, .. } => {
+                    native_set_ty(ty, *list, NativeTy::Handle, c)
+                        && native_set_ty(ty, *index, NativeTy::Int, c)
+                }
+                RegInstr::GetFieldSlot { base, .. } => {
+                    native_set_ty(ty, *base, NativeTy::Handle, c)
+                }
+                _ => true,
+            };
+            if !ok {
+                return None;
+            }
+        }
+    }
+
+    let int = |reg: usize| ty[reg] == Some(NativeTy::Int);
+    let int_or_free = |reg: usize| matches!(ty[reg], None | Some(NativeTy::Int));
+    let float = |reg: usize| ty[reg] == Some(NativeTy::Float);
+    let bool_ty = |reg: usize| ty[reg] == Some(NativeTy::Bool);
+    let numeric = |reg: usize| matches!(ty[reg], Some(NativeTy::Int | NativeTy::Float));
+    let same = |a: usize, b: usize| ty[a].is_some() && ty[a] == ty[b];
+    // Handles only enter via the caller's heap-arg window; for OSR the window
+    // carries whatever the interpreter has, so a Handle base must be a *parameter*
+    // register (consistent with `translate_to_native_jit`, and marshalled the same).
+    let handle_param = |reg: usize| ty[reg] == Some(NativeTy::Handle) && reg < func.params;
+    let r = |reg: usize| reg as u32;
+    let cmp = |op: &RegIntCompare| match op {
+        RegIntCompare::Less => JitCompare::Lt,
+        RegIntCompare::LessEqual => JitCompare::Le,
+        RegIntCompare::Greater => JitCompare::Gt,
+        RegIntCompare::GreaterEqual => JitCompare::Ge,
+    };
+
+    let mut jit_code: Vec<JitInstr> = Vec::with_capacity(n);
+    for (i, instr) in code.iter().enumerate() {
+        if i == lp.exit {
+            // The loop's single exit edge: deopt back to the interpreter here with
+            // the live-out window (precise-deopt resume at this ip).
+            jit_code.push(JitInstr::OsrExit);
+            continue;
+        }
+        if !in_loop(i) {
+            // Outside the loop region: never reached natively under OSR. Keep an
+            // index-aligned `Bail` so any unexpected arrival is a safe fallback.
+            jit_code.push(JitInstr::Bail);
+            continue;
+        }
+        let jit = match instr {
+            RegInstr::LoadInt { dst, value } => JitInstr::LoadInt { dst: r(*dst), value: *value },
+            RegInstr::LoadFloat { dst, value } => JitInstr::LoadFloat { dst: r(*dst), value: *value },
+            RegInstr::LoadBool { dst, value } => JitInstr::LoadBool { dst: r(*dst), value: *value },
+            RegInstr::Move { dst, src } => {
+                ty[*src]?;
+                JitInstr::Move { dst: r(*dst), src: r(*src) }
+            }
+            RegInstr::DeepCopy { .. } => JitInstr::Nop,
+            RegInstr::AddInt { dst, lhs, rhs } => {
+                require(numeric(*lhs) && same(*lhs, *rhs))?;
+                JitInstr::Add { dst: r(*dst), lhs: r(*lhs), rhs: r(*rhs) }
+            }
+            RegInstr::SubInt { dst, lhs, rhs } => {
+                require(numeric(*lhs) && same(*lhs, *rhs))?;
+                JitInstr::Sub { dst: r(*dst), lhs: r(*lhs), rhs: r(*rhs) }
+            }
+            RegInstr::MulInt { dst, lhs, rhs } => {
+                require(numeric(*lhs) && same(*lhs, *rhs))?;
+                JitInstr::Mul { dst: r(*dst), lhs: r(*lhs), rhs: r(*rhs) }
+            }
+            RegInstr::DivInt { dst, lhs, rhs } => {
+                require(numeric(*lhs) && same(*lhs, *rhs))?;
+                JitInstr::Div { dst: r(*dst), lhs: r(*lhs), rhs: r(*rhs) }
+            }
+            RegInstr::ModInt { dst, lhs, rhs } => {
+                require(int(*lhs) && int(*rhs))?;
+                JitInstr::Mod { dst: r(*dst), lhs: r(*lhs), rhs: r(*rhs) }
+            }
+            RegInstr::BitAndInt { dst, lhs, rhs } => {
+                require(int(*lhs) && int(*rhs))?;
+                JitInstr::BitAnd { dst: r(*dst), lhs: r(*lhs), rhs: r(*rhs) }
+            }
+            RegInstr::BitOrInt { dst, lhs, rhs } => {
+                require(int(*lhs) && int(*rhs))?;
+                JitInstr::BitOr { dst: r(*dst), lhs: r(*lhs), rhs: r(*rhs) }
+            }
+            RegInstr::BitXorInt { dst, lhs, rhs } => {
+                require(int(*lhs) && int(*rhs))?;
+                JitInstr::BitXor { dst: r(*dst), lhs: r(*lhs), rhs: r(*rhs) }
+            }
+            RegInstr::ShiftLeftInt { dst, lhs, rhs } => {
+                require(int(*lhs) && int(*rhs))?;
+                JitInstr::Shl { dst: r(*dst), lhs: r(*lhs), rhs: r(*rhs) }
+            }
+            RegInstr::ShiftRightInt { dst, lhs, rhs } => {
+                require(int(*lhs) && int(*rhs))?;
+                JitInstr::Shr { dst: r(*dst), lhs: r(*lhs), rhs: r(*rhs) }
+            }
+            RegInstr::LessInt { dst, lhs, rhs }
+            | RegInstr::LessEqualInt { dst, lhs, rhs }
+            | RegInstr::GreaterInt { dst, lhs, rhs }
+            | RegInstr::GreaterEqualInt { dst, lhs, rhs } => {
+                require(numeric(*lhs) && same(*lhs, *rhs))?;
+                let op = match instr {
+                    RegInstr::LessInt { .. } => JitCompare::Lt,
+                    RegInstr::LessEqualInt { .. } => JitCompare::Le,
+                    RegInstr::GreaterInt { .. } => JitCompare::Gt,
+                    _ => JitCompare::Ge,
+                };
+                JitInstr::Compare { dst: r(*dst), op, lhs: r(*lhs), rhs: r(*rhs) }
+            }
+            RegInstr::Equal { dst, lhs, rhs } => {
+                require(same(*lhs, *rhs))?;
+                JitInstr::Equal { dst: r(*dst), lhs: r(*lhs), rhs: r(*rhs) }
+            }
+            RegInstr::NotEqual { dst, lhs, rhs } => {
+                require(same(*lhs, *rhs))?;
+                JitInstr::NotEqual { dst: r(*dst), lhs: r(*lhs), rhs: r(*rhs) }
+            }
+            RegInstr::Jump { target } => {
+                // Every in-region jump target was checked to stay in `[header, exit)`
+                // by `detect_single_natural_loop`, and that range is all native here.
+                JitInstr::Jump { target: r(*target) }
+            }
+            RegInstr::JumpIfBool { cond, expected, target } => {
+                require(bool_ty(*cond))?;
+                JitInstr::JumpIfBool { cond: r(*cond), expected: *expected, target: r(*target) }
+            }
+            RegInstr::JumpIfIntCompare { lhs, rhs, op, expected, target } => {
+                require(numeric(*lhs) && same(*lhs, *rhs))?;
+                JitInstr::JumpIfIntCompare {
+                    lhs: r(*lhs),
+                    rhs: r(*rhs),
+                    op: cmp(op),
+                    expected: *expected,
+                    target: r(*target),
+                }
+            }
+            // A `Return` inside the loop was rejected by `detect_single_natural_loop`
+            // (single-exit only), so we never reach one here.
+            RegInstr::GetFieldSlot { dst, base, slot } => {
+                require(handle_param(*base))?;
+                if float(*dst) {
+                    JitInstr::FieldFloat { dst: r(*dst), base: r(*base), slot: *slot as u32 }
+                } else {
+                    require(int_or_free(*dst))?;
+                    JitInstr::FieldInt { dst: r(*dst), base: r(*base), slot: *slot as u32 }
+                }
+            }
+            RegInstr::ListLen { dst, list } => {
+                require(int(*dst) && handle_param(*list))?;
+                JitInstr::ListLen { dst: r(*dst), base: r(*list) }
+            }
+            RegInstr::ListGet { dst, list, index } => {
+                require(int(*index) && handle_param(*list))?;
+                if float(*dst) {
+                    JitInstr::ListGetFloat { dst: r(*dst), base: r(*list), index: r(*index) }
+                } else {
+                    require(int_or_free(*dst))?;
+                    JitInstr::ListGetInt { dst: r(*dst), base: r(*list), index: r(*index) }
+                }
+            }
+            // Any other (non-subset) instruction in-region was already rejected.
+            _ => return None,
+        };
+        jit_code.push(jit);
+    }
+
+    let reg_types = (0..n_regs)
+        .map(|reg| ty[reg].unwrap_or(NativeTy::Int).jit_value_type())
+        .collect();
+    // Param types so the caller can marshal handle params (List/struct) in the
+    // window; scalar live-in regs marshal directly by `reg_types`.
+    let param_types: Vec<NativeTy> = (0..func.params)
+        .map(|reg| ty[reg].unwrap_or(NativeTy::Int))
+        .collect();
+
+    let jit_fn = vm_jit::JitFunction {
+        n_params: func.params as u32,
+        n_regs: n_regs as u32,
+        reg_types,
+        code: jit_code,
+    };
+    Some((jit_fn, param_types))
+}
+
 /// Argument positions of a closure call site that carry a `mut` effect marker
 /// (`f(read u, mut ctx)`), so a `CallClosure` can write the mutated values back
 /// to the caller after the closure body runs. The call-site effect is the
@@ -2246,6 +2630,7 @@ impl RegVmExecutable {
             false,
             std::env::var_os("RSS_JIT_STATS").is_some(),
             false,
+            false,
         )
         .map(|(output, _stats)| output)
     }
@@ -2257,7 +2642,39 @@ impl RegVmExecutable {
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<(EvalOutput, NativeStats), EvalError> {
-        self.eval_main_with_args_native_inner(args, 0, false, true, false)
+        self.eval_main_with_args_native_inner(args, 0, false, true, false, false)
+    }
+
+    /// Like [`Self::eval_main_with_args_native_osr`] but also returns the
+    /// native-tier [`NativeStats`] (notably `osr_entries`) for bench telemetry.
+    #[cfg(feature = "native-jit")]
+    pub fn eval_main_with_args_native_osr_with_stats(
+        &self,
+        args: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Result<(EvalOutput, NativeStats), EvalError> {
+        self.eval_main_with_args_native_inner(args, 0, false, true, true, true)
+    }
+
+    /// Run `main` with the native tier AND J5.2 OSR forced on (deterministically,
+    /// independent of `RSS_JIT_OSR`): a function with a qualifying native-subset
+    /// hot loop runs that loop natively mid-function (OSR-entry at the header,
+    /// OSR-exit/precise-resume at the post-loop ip). Must equal every other backend
+    /// byte-for-byte. Test/validation + bench entry point.
+    #[cfg(feature = "native-jit")]
+    pub fn eval_main_with_args_native_osr(
+        &self,
+        args: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Result<EvalOutput, EvalError> {
+        self.eval_main_with_args_native_inner(
+            args,
+            0,
+            false,
+            std::env::var_os("RSS_JIT_STATS").is_some(),
+            // OSR-exit resumes via the precise-deopt path, so OSR implies precise.
+            true,
+            true,
+        )
+        .map(|(output, _stats)| output)
     }
 
     /// Run `main` with the native tier AND J0.2 precise resume forced on,
@@ -2278,6 +2695,7 @@ impl RegVmExecutable {
             false,
             std::env::var_os("RSS_JIT_STATS").is_some(),
             true,
+            false,
         )
         .map(|(output, _stats)| output)
     }
@@ -2297,6 +2715,7 @@ impl RegVmExecutable {
             true,
             std::env::var_os("RSS_JIT_STATS").is_some(),
             false,
+            false,
         )
         .map(|(output, _stats)| output)
     }
@@ -2309,6 +2728,7 @@ impl RegVmExecutable {
         force_bail: bool,
         collect_stats: bool,
         precise_deopt_override: bool,
+        osr_override: bool,
     ) -> Result<(EvalOutput, NativeStats), EvalError> {
         let mut vm = RegVm::new(
             Rc::clone(&self.unit),
@@ -2331,12 +2751,20 @@ impl RegVmExecutable {
         // `precise_deopt_override`, avoiding a racy process env var.
         let precise_deopt =
             precise_deopt_override || std::env::var_os("RSS_JIT_PRECISE_DEOPT").is_some();
+        // `RSS_JIT_OSR=1` (J5.2) arms on-stack replacement: a function with a
+        // qualifying native-subset hot loop runs that loop natively mid-function.
+        // OSR-exit resumes via the precise-deopt path, so OSR implies precise. A
+        // caller may force it deterministically via `osr_override` (test/bench
+        // entry). Default (unset, not overridden) leaves the OSR hook unarmed.
+        let osr_enabled = osr_override || std::env::var_os("RSS_JIT_OSR").is_some();
+        let precise_deopt = precise_deopt || osr_enabled;
         vm.native = Some(NativeState::new_with_opt(
             tier_up_threshold,
             force_bail,
             collect_stats,
             baseline,
             precise_deopt,
+            osr_enabled,
         )?);
         vm.jit_enabled = true;
         vm.jit_force_all = true;
@@ -7984,6 +8412,21 @@ struct NativeState {
     /// re-running the function from the top. Default `false` ⇒ byte-identical
     /// re-run-from-top (the safe baseline). Wired from `RSS_JIT_PRECISE_DEOPT`.
     precise_deopt: bool,
+    /// J5.2 OSR (on-stack replacement): when set, a function with a qualifying
+    /// native-subset hot loop (see [`detect_single_natural_loop`]) runs that loop
+    /// natively *mid-function* — the interpreter reaches the loop header, hands the
+    /// register window to an OSR-compiled loop body, then resumes at the post-loop
+    /// ip with the live-out window (OSR-exit / precise-deopt resume). Forced trigger
+    /// only (fires whenever the interpreter reaches a qualifying header); wired from
+    /// `RSS_JIT_OSR` or a deterministic test override. Default `false` ⇒ the OSR
+    /// hook is never armed and the interpreter hot path is untouched.
+    osr_enabled: bool,
+    /// Per-function OSR compile cache, keyed like `cache`. `Some((id, loop, params))`
+    /// is a compiled OSR-entry handle plus the loop it covers and the live-in param
+    /// types (for window marshalling); `None` means "known not OSR-eligible" (don't
+    /// re-analyze). Populated lazily the first time the interpreter reaches a header.
+    #[allow(clippy::type_complexity)]
+    osr_cache: HashMap<usize, Option<(vm_jit::CompiledId, OsrLoop, Vec<NativeTy>)>>,
 }
 
 /// Native-JIT telemetry. The VM is single-threaded, so plain counters suffice.
@@ -8012,6 +8455,9 @@ pub struct NativeStats {
     pub compile_nanos: u128,
     /// Total nanoseconds spent executing native code.
     pub run_nanos: u128,
+    /// J5.2: OSR-entries that ran a loop natively mid-function and resumed at the
+    /// post-loop ip (the forced-trigger success count).
+    pub osr_entries: u64,
 }
 
 #[cfg(feature = "native-jit")]
@@ -8020,7 +8466,7 @@ impl NativeStats {
         format!(
             "native-jit: considered={} translated={} compiled={} not_eligible={} \
 compile_failed={} calls={} bails={} arg_mismatch={} tier_deferred={} \
-compile_ms={:.3} run_ms={:.3}",
+compile_ms={:.3} run_ms={:.3} osr_entries={}",
             self.considered,
             self.translated,
             self.compiled,
@@ -8032,6 +8478,7 @@ compile_ms={:.3} run_ms={:.3}",
             self.tier_deferred,
             self.compile_nanos as f64 / 1.0e6,
             self.run_nanos as f64 / 1.0e6,
+            self.osr_entries,
         )
     }
 
@@ -8049,6 +8496,7 @@ compile_ms={:.3} run_ms={:.3}",
             "tier_deferred": self.tier_deferred,
             "compile_ms": self.compile_nanos as f64 / 1.0e6,
             "run_ms": self.run_nanos as f64 / 1.0e6,
+            "osr_entries": self.osr_entries,
         })
     }
 }
@@ -8259,7 +8707,7 @@ impl NativeState {
         force_bail: bool,
         collect_stats: bool,
     ) -> Result<Self, EvalError> {
-        Self::new_with_opt(tier_up_threshold, force_bail, collect_stats, false, false)
+        Self::new_with_opt(tier_up_threshold, force_bail, collect_stats, false, false, false)
     }
 
     /// Build the native state at a selectable optimization level. `baseline ==
@@ -8274,6 +8722,7 @@ impl NativeState {
         collect_stats: bool,
         baseline: bool,
         precise_deopt: bool,
+        osr_enabled: bool,
     ) -> Result<Self, EvalError> {
         Ok(Self {
             module: vm_jit::NativeModule::new_with_opt(jit_host_helpers(), baseline)
@@ -8286,6 +8735,8 @@ impl NativeState {
             stats: NativeStats::default(),
             collect_stats,
             precise_deopt,
+            osr_enabled,
+            osr_cache: HashMap::new(),
         })
     }
 
@@ -8883,6 +9334,169 @@ impl RegVm {
                 }
                 NativeAttempt::Fallback
             }
+        }
+    }
+
+    /// J5.2 OSR (on-stack replacement). The interpreter has reached `header_ip` —
+    /// the entry of a qualifying native-subset hot loop in `func` — with the active
+    /// frame's window at `base`. Hand that window to an OSR-compiled native loop
+    /// body (OSR-entry loads the live-in registers from the window and jumps to the
+    /// header; the loop runs natively); when the loop exits, native deopts at the
+    /// post-loop ip with the live-out window. Restore that window and set the
+    /// frame's `ip` to the post-loop ip, so the interpreter resumes there (running
+    /// the rest of the function — the I/O / setup the loop was tangled with).
+    ///
+    /// Returns `true` iff OSR ran and the frame was resumed at the post-loop ip
+    /// (the caller must re-read `ip` and keep interpreting). `false` means OSR did
+    /// not apply (not eligible, marshalling mismatch, or an unexpected bail): the
+    /// frame is untouched and the interpreter just keeps running the loop normally —
+    /// the safe, behavior-preserving default. **Soundness:** the OSR loop body is
+    /// identity-indexed with `func.code`, the loop region is fully native-subset,
+    /// and the only native exit is the OSR-exit, whose `resume_ip` is the
+    /// interpreter's own post-loop instruction index — so resuming there with the
+    /// restored window is byte-identical to having interpreted the loop.
+    #[cfg(feature = "native-jit")]
+    fn try_osr(&mut self, func: &RegFunction, base: usize, header_ip: usize) -> bool {
+        // Preemption parity (as in `try_native`): native loops poll neither the
+        // step budget nor the cancel flag, so refuse OSR while either is armed.
+        if self.limits.step_budget.is_some() || self.limits.cancel.is_some() {
+            return false;
+        }
+        let native_key = func as *const RegFunction as usize;
+
+        // Phase 1: resolve (and lazily compile) the OSR loop body for this function,
+        // then gate on being at the loop header. This runs at every instruction when
+        // OSR is armed, so it must be cheap on the common (not-at-header) path: the
+        // cache lookup + header compare returns without cloning anything.
+        let (id, lp, param_types) = {
+            // Fast path: cached and NOT at the header ⇒ nothing to do (no clone).
+            if let Some(native) = self.native.as_ref() {
+                if let Some(entry) = native.osr_cache.get(&native_key) {
+                    match entry {
+                        Some((_, lp, _)) if lp.header == header_ip => {}
+                        _ => return false,
+                    }
+                }
+            }
+            let Some(native) = self.native.as_mut() else {
+                return false;
+            };
+            // Detect + compile the function's single OSR loop ONCE, keyed by the
+            // function (independent of the current ip). The header gate decides when
+            // to actually fire.
+            if !native.osr_cache.contains_key(&native_key) {
+                let entry = detect_single_natural_loop(&func.code).and_then(|lp| {
+                    translate_osr_loop(func, lp).and_then(|(jit_fn, params)| {
+                        match native.module.compile_osr(&jit_fn, lp.header as u32) {
+                            Ok(id) => Some((id, lp, params)),
+                            Err(_) => None,
+                        }
+                    })
+                });
+                native.osr_cache.insert(native_key, entry);
+            }
+            match native.osr_cache.get(&native_key) {
+                // Only OSR when the interpreter is *at* the cached loop's header.
+                Some(Some((id, lp, params))) if lp.header == header_ip => {
+                    (*id, *lp, params.clone())
+                }
+                _ => return false,
+            }
+        };
+
+        // Phase 2: marshal the current register window into the OSR call. The OSR
+        // ABI's `args_ptr` is the full `n_regs`-wide window indexed by register: a
+        // scalar register contributes its raw bits, a handle (List/struct) param its
+        // heap-table index (the host helpers read through it), and an unwritten /
+        // non-scalar slot contributes 0 (native only ever loads the live-in subset,
+        // all of which are written by definite-assignment at the header). A drop
+        // guard clears the heap table on every exit path.
+        let _heap_guard = JitHeapArgsGuard;
+        let n_regs = func.regs;
+        let mut window = vec![0i64; n_regs];
+        let lens = vec![0i64; n_regs];
+        for reg in 0..n_regs {
+            if !self.written.get(base + reg).copied().unwrap_or(false) {
+                continue; // not live here; native won't read it
+            }
+            let value = self.reg(base + reg);
+            let ty = param_types.get(reg).copied().unwrap_or(NativeTy::Int);
+            let bits = match (ty, value) {
+                (NativeTy::Float, VmValue::Float(f)) => f.to_bits() as i64,
+                (NativeTy::Float, VmValue::Int(i)) => (*i as f64).to_bits() as i64,
+                (_, VmValue::Int(i)) => *i,
+                (_, VmValue::Bool(b)) => i64::from(*b),
+                (_, VmValue::Float(f)) => f.to_bits() as i64,
+                // A handle (List/struct/etc.): pass its heap-table index.
+                (_, other) => JIT_HEAP_ARGS.with(|table| {
+                    let mut table = table.borrow_mut();
+                    table.push(other.clone());
+                    (table.len() - 1) as i64
+                }),
+            };
+            window[reg] = bits;
+        }
+
+        // Phase 3: run the OSR loop body natively.
+        let Some(native_ref) = self.native.as_ref() else {
+            return false;
+        };
+        let collect_stats = native_ref.collect_stats;
+        let started = collect_stats.then(std::time::Instant::now);
+        let result = native_ref.module.call(id, &window, &lens);
+        let elapsed = started.map(|started| started.elapsed().as_nanos());
+        if let Some(native) = self.native.as_mut() {
+            if let Some(elapsed) = elapsed {
+                native.stats.run_nanos += elapsed;
+            }
+        }
+
+        // Phase 4: OSR-exit. The loop always exits via the `OsrExit` safepoint (a
+        // deopt). Resume the interpreter at the post-loop ip with the restored
+        // live-out window — the precise-deopt resume, reused verbatim.
+        match result {
+            vm_jit::NativeOutcome::Deopt { safepoint_id, live } if safepoint_id.0 >= 1 => {
+                let resume_ip = self
+                    .native
+                    .as_ref()
+                    .and_then(|n| n.module.deopt_map(id))
+                    .and_then(|m| m.sites.get(safepoint_id.0 as usize - 1))
+                    .map(|site| site.resume_ip);
+                let Some(resume_ip) = resume_ip else {
+                    return false;
+                };
+                // The OSR-exit's resume_ip MUST be the loop's post-loop ip; anything
+                // else is an OSR construction bug. Fall back rather than misresume.
+                if resume_ip as usize != lp.exit {
+                    return false;
+                }
+                // Restore the live-out window, SKIPPING parameter registers (their
+                // slots already hold valid — possibly heap — values the scalar deopt
+                // payload cannot represent; non-param live-out regs are all scalar by
+                // construction of `translate_osr_loop`).
+                let n_params = func.params;
+                for vm_jit::DeoptReg { reg, value } in live {
+                    if (reg as usize) < n_params {
+                        continue;
+                    }
+                    let vm_value = match value {
+                        vm_jit::DeoptValue::Int(i) => VmValue::Int(i),
+                        vm_jit::DeoptValue::Float(f) => VmValue::Float(f),
+                    };
+                    self.set_reg(base + reg as usize, vm_value);
+                }
+                self.frames.last_mut().expect("active frame").ip = resume_ip as usize;
+                if let Some(native) = self.native.as_mut() {
+                    if native.collect_stats {
+                        native.stats.osr_entries += 1;
+                    }
+                }
+                true
+            }
+            // A completion (the OSR body has no `Return`) or an anonymous/early bail
+            // is not a normal OSR-exit: leave the frame untouched and let the
+            // interpreter run the loop. Safe and behavior-preserving.
+            _ => false,
         }
     }
 
@@ -10107,7 +10721,34 @@ impl RegVm {
                 continue 'frames;
             }
 
+            // J5.2 OSR (forced trigger): is on-stack replacement armed for this run?
+            // A single per-frame `Cell` read; when OSR is off (the default and every
+            // production path) `osr_active` is `false`, so the per-instruction check
+            // below is a single never-taken branch and the interpreter hot path is
+            // unchanged. When on, the first time the interpreter reaches a qualifying
+            // loop header we hand the loop to the native OSR body (see `try_osr`).
+            // NOTE: this is deliberately NOT gated on `native_status`: OSR targets
+            // exactly the functions that are native-INELIGIBLE as a whole (the loop
+            // is wrapped by non-native I/O), which `try_native` marks NOT_ELIGIBLE.
+            // Gating on it would exclude every OSR candidate. The per-function OSR
+            // verdict is cached separately in `native.osr_cache`.
+            #[cfg(feature = "native-jit")]
+            let osr_active = self.native.as_ref().is_some_and(|n| n.osr_enabled);
+            #[cfg(not(feature = "native-jit"))]
+            let osr_active = false;
+
             while let Some(instr) = func.code.get(ip) {
+                // OSR trigger: when armed and the interpreter is *at* a qualifying
+                // loop header, run the loop natively and resume at the post-loop ip.
+                // `try_osr` is total — on any non-applicability it leaves the frame
+                // untouched and returns `false`, so the loop just runs normally.
+                #[cfg(feature = "native-jit")]
+                if osr_active {
+                    self.frames.last_mut().expect("active frame").ip = ip;
+                    if self.try_osr(&func, base, ip) {
+                        continue 'frames;
+                    }
+                }
                 self.tick()?;
                 ip += 1;
                 // Pure instructions (loads, arithmetic, jumps, matches, heap
@@ -18326,6 +18967,7 @@ struct VmStreamState {
 mod register_window_tests {
     use super::*;
 
+
     /// Build a bare `RegVm` with an empty unit — enough to exercise the
     /// register-stack helpers (`ensure_regs`/`set_reg`/`prepare_frame`) directly,
     /// with no program loaded.
@@ -18687,7 +19329,7 @@ mod register_window_tests {
         let mut vm = empty_vm();
         // threshold 0 => compile/attempt on the first call; precise_deopt on.
         vm.native = Some(
-            NativeState::new_with_opt(0, false, true, false, true).expect("native module"),
+            NativeState::new_with_opt(0, false, true, false, true, false).expect("native module"),
         );
         let func = Rc::new(add_then_square_func());
 
@@ -18741,7 +19383,7 @@ mod register_window_tests {
         let mut vm = empty_vm();
         // precise_deopt OFF (the last arg).
         vm.native = Some(
-            NativeState::new_with_opt(0, false, true, false, false).expect("native module"),
+            NativeState::new_with_opt(0, false, true, false, false, false).expect("native module"),
         );
         let func = Rc::new(add_then_square_func());
 

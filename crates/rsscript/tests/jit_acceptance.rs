@@ -446,6 +446,87 @@ fn main() -> Unit {
     assert_eq!(precise.stdout.trim(), "97664");
 }
 
+/// J5.2 OSR (on-stack replacement) correctness: a native-subset hot scalar loop
+/// wrapped by non-native I/O *in the same function* (a `Log.write` before and
+/// after the loop), so the function as a whole is native-INELIGIBLE and only OSR
+/// can run the loop natively. With OSR forced on, the program's output (the
+/// pre-loop log line, the loop's computed total, the post-loop log line, and the
+/// returned value) must be byte-identical to the pure interpreter. This proves the
+/// OSR-entry loaded the live-in window correctly, the loop ran natively, and the
+/// OSR-exit resumed the interpreter at the post-loop ip with the live-out window.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_scalar_loop_matches_interpreter() {
+    let source = "\
+fn compute(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        total = total + i * i
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: compute(limit: read 50)))
+    return Unit
+}
+";
+    let file = "jit-osr-scalar.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let osr = rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "OSR loop must be byte-identical to the interpreter (stdout)"
+    );
+    // sum_{i=0}^{49} i*i = 40425; the wrapping I/O lines must also match exactly.
+    assert_eq!(osr.stdout.trim_end(), "begin\n40425\n40425");
+}
+
+/// J5.2 OSR over a **read-heap** loop: the hot loop reads list elements
+/// (`List.len`/`List.get`) — the read-only heap-helper subset — inside an
+/// I/O-tangled, native-ineligible function. With OSR forced on, the result must be
+/// byte-identical to the interpreter (exercises the host-helper read path under
+/// OSR-entry/exit, including the handle-param window marshalling).
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_read_heap_loop_matches_interpreter() {
+    let source = "\
+fn sum_list(values: read List<Int>) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    let n = List.len(list: read values)
+    while i < n {
+        total = total + List.get(list: read values, index: read i)
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    let xs = [3, 1, 4, 1, 5, 9, 2, 6]
+    Log.write(message: read String.from_int(value: sum_list(values: read xs)))
+    return Unit
+}
+";
+    let file = "jit-osr-readheap.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let osr = rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "OSR read-heap loop must be byte-identical to the interpreter (stdout)"
+    );
+    // 3+1+4+1+5+9+2+6 = 31.
+    assert_eq!(osr.stdout.trim_end(), "begin\n31\n31");
+}
+
 /// J2.1 profile-guided monomorphic closure inlining — the program shape the
 /// optimization targets: a higher-order `dispatch(f, x)` whose closure parameter is
 /// the same callee on every warm call, so J1 profiles the `CallClosure` site as

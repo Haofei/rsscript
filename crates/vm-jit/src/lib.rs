@@ -322,6 +322,17 @@ pub enum JitInstr {
         dst: u32,
         base: u32,
     },
+    /// OSR-exit (J5.2). Marks the post-loop instruction at the loop's exit edge: a
+    /// function compiled with an OSR-entry (see [`NativeModule::compile_osr`]) runs
+    /// only the loop region natively, so reaching this instruction means the loop
+    /// has exited and control must return to the interpreter. It lowers to an
+    /// *unconditional* deopt safepoint whose `resume_ip` is this instruction's own
+    /// index and whose `live` set is the registers definitely assigned on entry to
+    /// it (the loop's live-out): the captured live-out window plus `resume_ip` are
+    /// surfaced via [`NativeOutcome::Deopt`], and the host resumes the interpreter
+    /// there (the precise-deopt resume path). Only valid in an OSR compilation; the
+    /// default [`compile`](NativeModule::compile) path never emits it.
+    OsrExit,
 }
 
 /// Storage class of a register: an unboxed `i64` (integers and booleans) or an
@@ -448,6 +459,12 @@ struct CompiledFunc {
     /// Per-safepoint deopt state-map (resume_ip + live registers), built host-side
     /// during `compile`. See [`DeoptMap`].
     deopt_map: DeoptMap,
+    /// OSR-entry (J5.2): when `true`, the function was compiled with
+    /// [`compile_osr`](NativeModule::compile_osr). Its `args_ptr` is the
+    /// interpreter's full `n_regs`-wide register *window* (indexed by register),
+    /// not a packed `n_params` arg array, so `call` validates the slice length
+    /// against `n_regs` instead of `n_params`.
+    osr: bool,
 }
 
 /// Process-wide source of per-module identities, so a [`CompiledId`] minted by one
@@ -671,7 +688,7 @@ impl NativeModule {
 
     /// Compile `function` to native code and return a handle to call it.
     pub fn compile(&mut self, function: &JitFunction) -> Result<CompiledId, JitError> {
-        self.compile_inner(function, None)
+        self.compile_inner(function, None, None)
     }
 
     /// Compile `function` while forcing the safepoint with id `force_site` (sites are
@@ -689,13 +706,40 @@ impl NativeModule {
         function: &JitFunction,
         force_site: u32,
     ) -> Result<CompiledId, JitError> {
-        self.compile_inner(function, Some(force_site))
+        self.compile_inner(function, Some(force_site), None)
+    }
+
+    /// Compile `function` as an **OSR (on-stack replacement) entry** at `header_ip`
+    /// (J5.2). Instead of the normal param-loading entry, the generated function's
+    /// entry block treats its `args_ptr` argument as the interpreter's **register
+    /// window** (an `i64`/`f64` array of width `n_regs`, indexed by register), loads
+    /// the registers definitely-assigned on entry to `header_ip` (the loop's
+    /// live-in) out of it, then jumps directly to the block for `header_ip` — so
+    /// native execution begins *inside* the loop rather than at the function top.
+    ///
+    /// The loop exits by reaching a [`JitInstr::OsrExit`] (the post-loop ip), which
+    /// deopts with the live-out window and that ip as `resume_ip`; the host then
+    /// resumes the interpreter there via the precise-deopt path. Everything outside
+    /// the loop (which the host never reaches natively under OSR) is `Bail`/`OsrExit`.
+    ///
+    /// The window ABI reuses the `CompiledAbi` `args_ptr` slot: it must be a buffer
+    /// of `n_regs` 8-byte words (each register's value at offset `reg * 8`; an f64
+    /// register's bit pattern in its slot), and the caller passes `n_args = n_regs`
+    /// with an `n_regs`-long `lens` slice. An out-of-range `header_ip` (no leader
+    /// block) is rejected as a [`JitError`].
+    pub fn compile_osr(
+        &mut self,
+        function: &JitFunction,
+        header_ip: u32,
+    ) -> Result<CompiledId, JitError> {
+        self.compile_inner(function, None, Some(header_ip))
     }
 
     fn compile_inner(
         &mut self,
         function: &JitFunction,
         forced: Option<u32>,
+        osr_header: Option<u32>,
     ) -> Result<CompiledId, JitError> {
         // `JitFunction` is a public, versioned surface: a malformed producer must
         // fail cleanly here, not panic inside `build_function` (out-of-range index)
@@ -723,7 +767,8 @@ impl NativeModule {
             self.imports,
             function,
             forced,
-        );
+            osr_header,
+        )?;
 
         let name = format!("rss_jit_{}", self.counter);
         self.counter += 1;
@@ -751,6 +796,7 @@ impl NativeModule {
             n_params: function.n_params as usize,
             n_regs: function.n_regs as usize,
             deopt_map,
+            osr: osr_header.is_some(),
         });
         Ok(handle)
     }
@@ -796,10 +842,17 @@ impl NativeModule {
                 }
             }
         };
-        // The generated entry block reads exactly `n_params` words from `args_ptr`
-        // (and `lens_ptr`) without consulting `n_args`, so a slice shorter than
-        // `n_params` would read out of bounds. Reject any length mismatch.
-        if args.len() != func.n_params || lens.len() != func.n_params {
+        // The generated entry block reads words from `args_ptr` (and `lens_ptr`)
+        // without consulting `n_args`, so a slice shorter than what the entry reads
+        // would read out of bounds. A normal compile reads `n_params` packed args; an
+        // OSR-entry reads from the full `n_regs`-wide register window. Reject any
+        // length mismatch against the required width.
+        let required = if func.osr {
+            func.n_regs
+        } else {
+            func.n_params
+        };
+        if args.len() != required || lens.len() != required {
             return NativeOutcome::Deopt {
                 safepoint_id: SafepointId::ANONYMOUS,
                 live: Vec::new(),
@@ -1203,6 +1256,10 @@ fn validate(program: &JitFunction) -> Result<(), JitError> {
                 require_class(*base, JitValueType::Handle, "ClosureId base")?;
                 require_class(*dst, JitValueType::Int, "ClosureId result")?;
             }
+            // OSR-exit is a parameterless terminator (an unconditional deopt at its
+            // own ip); its live set is computed from definite-assignment, so it
+            // carries no operands to validate.
+            JitInstr::OsrExit => {}
         }
     }
     Ok(())
@@ -1244,6 +1301,7 @@ fn instr_def(instr: &JitInstr) -> Option<u32> {
         | JitInstr::JumpIfIntCompare { .. }
         | JitInstr::Return { .. }
         | JitInstr::GuardClosureId { .. }
+        | JitInstr::OsrExit
         | JitInstr::Bail => None,
     }
 }
@@ -1275,7 +1333,7 @@ fn successors(program: &JitFunction, i: usize) -> Vec<usize> {
             }
             succ
         }
-        JitInstr::Return { .. } | JitInstr::Bail => vec![],
+        JitInstr::Return { .. } | JitInstr::Bail | JitInstr::OsrExit => vec![],
         _ => {
             if next < n {
                 vec![next]
@@ -1622,6 +1680,7 @@ fn arith_cannot_overflow(intervals: &[Interval], instr: &JitInstr) -> bool {
     result.fits_i64()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_function(
     func: &mut cranelift_codegen::ir::Function,
     fbctx: &mut FunctionBuilderContext,
@@ -1629,7 +1688,8 @@ fn build_function(
     imports: HostFuncs,
     program: &JitFunction,
     forced: Option<u32>,
-) -> DeoptMap {
+    osr_header: Option<u32>,
+) -> Result<DeoptMap, JitError> {
     // Definite-assignment ("must") sets per instruction, computed once up front so
     // each bail site can record its live (entry-assigned) registers. Purely
     // host-side analysis — it shapes no emitted code.
@@ -1683,20 +1743,42 @@ fn build_function(
     // Running per-site bail-id counter. Starts at 1 (0 is reserved = no bail);
     // `bail_if` post-increments it so every guard/bail site gets a stable id.
     let mut next_id: i64 = 1;
-    for (i, &var) in vars.iter().take(program.n_params as usize).enumerate() {
+    // The set of registers to load from the entry window. For a normal compile this
+    // is the parameter registers (`0..n_params`, loaded by index from `args_ptr`).
+    // For an OSR-entry it is the loop's *live-in* set: the registers definitely
+    // assigned on entry to `header_ip`, loaded by register index from the window
+    // (`args_ptr` is the interpreter's `n_regs`-wide register window, not a packed
+    // arg array). Every other register is zero-initialized so the var is defined on
+    // every path (SSA), exactly as on the normal entry.
+    let load_set: Vec<usize> = match osr_header {
+        Some(header) => {
+            let header = header as usize;
+            match assigned_in.get(header) {
+                Some(set) => set
+                    .iter()
+                    .enumerate()
+                    .filter(|&(_, &assigned)| assigned)
+                    .map(|(r, _)| r)
+                    .collect(),
+                None => Vec::new(),
+            }
+        }
+        None => (0..program.n_params as usize).collect(),
+    };
+    let mut is_loaded = vec![false; n_regs];
+    for &r in &load_set {
+        is_loaded[r] = true;
         let v = bcx
             .ins()
-            .load(var_ty(i), MemFlags::trusted(), args_ptr, (i as i32) * 8);
-        bcx.def_var(var, v);
+            .load(var_ty(r), MemFlags::trusted(), args_ptr, (r as i32) * 8);
+        bcx.def_var(vars[r], v);
     }
     let zero_i = bcx.ins().iconst(types::I64, 0);
     let zero_f = bcx.ins().f64const(0.0);
-    for (i, &var) in vars
-        .iter()
-        .enumerate()
-        .take(n_regs)
-        .skip(program.n_params as usize)
-    {
+    for (i, &var) in vars.iter().enumerate().take(n_regs) {
+        if is_loaded[i] {
+            continue;
+        }
         bcx.def_var(
             var,
             if var_ty(i) == types::F64 {
@@ -1730,7 +1812,7 @@ fn build_function(
                     is_leader[i + 1] = true;
                 }
             }
-            JitInstr::Return { .. } | JitInstr::Bail if i + 1 < n => {
+            JitInstr::Return { .. } | JitInstr::Bail | JitInstr::OsrExit if i + 1 < n => {
                 is_leader[i + 1] = true;
             }
             _ => {}
@@ -1760,14 +1842,40 @@ fn build_function(
                 reg_types: &program.reg_types,
                 sites: &mut sites,
                 forced,
+                unconditional: false,
+            }
+        };
+        ($ip:expr, unconditional) => {
+            &mut DeoptCtx {
+                ip: $ip as u32,
+                assigned_in: &assigned_in,
+                reg_types: &program.reg_types,
+                sites: &mut sites,
+                forced,
+                unconditional: true,
             }
         };
     }
 
-    if n == 0 {
-        bcx.ins().jump(fallback, &[]);
-    } else {
-        bcx.ins().jump(block_for[0].unwrap(), &[]);
+    match osr_header {
+        // OSR-entry: begin native execution *inside* the loop at the header block.
+        // The header is a backedge target, hence a leader, so its block exists; if a
+        // caller passes a non-leader (or out-of-range) header we reject cleanly.
+        Some(header) => {
+            let header = header as usize;
+            let target = block_for.get(header).copied().flatten().ok_or_else(|| {
+                JitError(format!(
+                    "OSR header ip {header} is not a leader / jump-target block"
+                ))
+            })?;
+            bcx.ins().jump(target, &[]);
+        }
+        None if n == 0 => {
+            bcx.ins().jump(fallback, &[]);
+        }
+        None => {
+            bcx.ins().jump(block_for[0].unwrap(), &[]);
+        }
     }
 
     let mut terminated = true;
@@ -2053,6 +2161,32 @@ fn build_function(
                 bcx.ins().jump(fallback, &[]);
                 terminated = true;
             }
+            JitInstr::OsrExit => {
+                // OSR-exit (J5.2): the loop has exited. Deopt *unconditionally* at
+                // this ip, capturing the live-out window so the host resumes the
+                // interpreter here (precise-deopt). Reuse `bail_if` in its
+                // unconditional mode: it mints a stable safepoint id, records the
+                // `DeoptSite` (resume_ip = this ip, live = entry-assigned regs), and
+                // emits the id-store + live-capture on the (unconditionally taken)
+                // bail edge — the exact same machinery a guard bail uses.
+                let always = bcx.ins().iconst(types::I8, 1);
+                let cont = bail_if(
+                    &mut bcx,
+                    always,
+                    fallback,
+                    safepoint_ptr,
+                    payload_ptr,
+                    &vars,
+                    &mut next_id,
+                    deopt!(i, unconditional),
+                );
+                // `bail_if` switched us to the (now unreachable, since the bail is
+                // unconditional) `cont` block; terminate it so it stays well-formed
+                // for `seal_all_blocks` (Cranelift DCE drops the dead block).
+                bcx.switch_to_block(cont);
+                bcx.ins().jump(fallback, &[]);
+                terminated = true;
+            }
             JitInstr::FieldInt { dst, base, slot } => {
                 let handle = bcx.use_var(reg(*base));
                 let slot_v = bcx.ins().iconst(types::I64, i64::from(*slot));
@@ -2238,7 +2372,7 @@ fn build_function(
     bcx.seal_all_blocks();
     bcx.finalize();
 
-    DeoptMap { sites }
+    Ok(DeoptMap { sites })
 }
 
 /// TV2 direct list read: `cont: dst = base_ptr[index]`, bounds-checked against the
@@ -2302,6 +2436,10 @@ struct DeoptCtx<'a> {
     /// unconditionally (see [`NativeModule::compile_forcing_bail`]). `None` on the
     /// default [`compile`](NativeModule::compile) path, where every site is guarded.
     forced: Option<u32>,
+    /// OSR-exit (J5.2): when set, the site about to be minted bails unconditionally
+    /// (the loop-exit edge always deopts). Independent of `forced` (which is keyed
+    /// by a specific id); this applies to whatever id this single `bail_if` mints.
+    unconditional: bool,
 }
 
 impl DeoptCtx<'_> {
@@ -2355,7 +2493,7 @@ fn bail_if(
 ) -> Block {
     let site_id = *next_id;
     *next_id += 1;
-    let forced = deopt.forced == Some(site_id as u32);
+    let forced = deopt.forced == Some(site_id as u32) || deopt.unconditional;
     let live = deopt.record();
     let site_block = bcx.create_block();
     let cont = bcx.create_block();
@@ -3109,6 +3247,79 @@ mod tests {
         assert_eq!(m.callt(id, &[10]), Some(55));
         assert_eq!(m.callt(id, &[0]), Some(0));
         assert_eq!(m.callt(id, &[100]), Some(5050));
+    }
+
+    #[test]
+    fn osr_entry_runs_loop_and_exits_with_live_out() {
+        // Same loop as `loop_sum_to_n`, but compiled as an OSR-entry at the loop
+        // header (ip 3) with the post-loop `Return` replaced by `OsrExit`. The
+        // entry loads the live-in window (regs definitely-assigned at ip 3: total,
+        // i, one, n) and jumps into the loop; the loop runs natively; on exit it
+        // deopts at ip 8 with the live-out window (`total`).
+        let mut m = module();
+        let code = vec![
+            JitInstr::LoadInt { dst: 1, value: 0 }, // 0 total=0 (pre-loop; not run under OSR)
+            JitInstr::LoadInt { dst: 2, value: 1 }, // 1 i=1
+            JitInstr::LoadInt { dst: 3, value: 1 }, // 2 one=1
+            // 3: loop head: if !(i<=n) goto end(8)
+            JitInstr::JumpIfIntCompare {
+                lhs: 2,
+                rhs: 0,
+                op: JitCompare::Le,
+                expected: false,
+                target: 8,
+            },
+            JitInstr::Add { dst: 1, lhs: 1, rhs: 2 }, // 4 total+=i
+            JitInstr::Add { dst: 2, lhs: 2, rhs: 3 }, // 5 i+=1
+            JitInstr::Jump { target: 3 },             // 6 loop
+            JitInstr::Nop,                            // 7 (padding leader)
+            JitInstr::OsrExit,                        // 8 OSR-exit (was Return)
+        ];
+        let prog = f(1, 4, code);
+        let id = m.compile_osr(&prog, 3).unwrap();
+        // The window is `n_regs`-wide, indexed by register. Seed the loop live-in:
+        // total=0 (reg1), i=1 (reg2), one=1 (reg3), n (reg0). lens parallel & unused.
+        let run = |n: i64| -> NativeOutcome {
+            let window = [n, 0, 1, 1]; // reg0=n, reg1=total, reg2=i, reg3=one
+            let lens = [0i64; 4];
+            m.call(id, &window, &lens)
+        };
+        for &(n, expected) in &[(10i64, 55i64), (0, 0), (100, 5050)] {
+            match run(n) {
+                NativeOutcome::Deopt { safepoint_id, live } => {
+                    let site = m.deopt_map(id).unwrap().sites[safepoint_id.0 as usize - 1].clone();
+                    assert_eq!(site.resume_ip, 8, "OSR-exit resumes at the post-loop ip");
+                    let total = live
+                        .iter()
+                        .find(|r| r.reg == 1)
+                        .map(|r| match r.value {
+                            DeoptValue::Int(v) => v,
+                            DeoptValue::Float(_) => panic!("total is Int"),
+                        })
+                        .expect("total is live-out");
+                    assert_eq!(total, expected, "live-out total for n={n}");
+                }
+                NativeOutcome::Completed(_) => panic!("OSR loop must deopt at exit, not complete"),
+            }
+        }
+    }
+
+    #[test]
+    fn osr_rejects_non_leader_header() {
+        // An OSR header ip that is not a leader / jump-target block is rejected
+        // cleanly (no panic, no miscompile).
+        let mut m = module();
+        let prog = f(
+            1,
+            2,
+            vec![
+                JitInstr::Add { dst: 1, lhs: 0, rhs: 0 },
+                JitInstr::Return { src: 1 },
+            ],
+        );
+        // ip 1 (the Return) is a leader only if a jump targets it; here none does,
+        // and it is not ip 0, so it has no block.
+        assert!(m.compile_osr(&prog, 1).is_err());
     }
 
     #[test]

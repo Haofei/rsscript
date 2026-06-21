@@ -112,6 +112,27 @@ impl Backend for NativeJitForceDeopt {
     }
 }
 
+/// The native tier with J5.2 OSR forced on: a function with a qualifying
+/// native-subset hot loop runs that loop natively *mid-function* (OSR-entry at the
+/// loop header reading the live-in window; OSR-exit / precise-resume at the
+/// post-loop ip). Must agree byte-for-byte with every other backend — the OSR loop
+/// is required to be observably identical to interpreting it.
+#[cfg(feature = "native-jit")]
+pub struct NativeJitOsr;
+
+#[cfg(feature = "native-jit")]
+impl Backend for NativeJitOsr {
+    fn name(&self) -> &'static str {
+        "vm-jit-native-osr"
+    }
+
+    fn run_stdout(&self, file: &str, source: &str, args: &[&str]) -> Result<String, String> {
+        rsscript::reg_vm_eval_source_main_native_osr(file, source, args.iter().copied())
+            .map_err(|error| format!("{error:?}"))
+            .and_then(stdout_or_main_err)
+    }
+}
+
 /// The fast default execution backends. These stay in-process, so broad
 /// differential sweeps do not spawn Cargo for every generated program.
 pub fn fast_backends() -> Vec<Box<dyn Backend>> {
@@ -120,6 +141,7 @@ pub fn fast_backends() -> Vec<Box<dyn Backend>> {
         let mut backends: Vec<Box<dyn Backend>> = vec![Box::new(Interpreter), Box::new(Jit)];
         backends.push(Box::new(NativeJit));
         backends.push(Box::new(NativeJitForceDeopt));
+        backends.push(Box::new(NativeJitOsr));
         backends
     }
     #[cfg(not(feature = "native-jit"))]
