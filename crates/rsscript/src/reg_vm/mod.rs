@@ -1011,8 +1011,15 @@ fn translate_to_native_jit(
                     src: r(*src),
                 }
             }
-            RegInstr::DeepCopy { reg } => {
-                ty[*reg]?; // copy of an int/bool register is a no-op
+            RegInstr::DeepCopy { .. } => {
+                // Always a Nop in a native-eligible function: these are pure, leaf,
+                // side-effect-free, and never mutate a container, so an independent
+                // copy is never observably distinct from the original — for a scalar
+                // register or a heap handle/flat param alike. (The previous `ty[reg]?`
+                // also *rejected the whole function* when `reg` was untyped — e.g. an
+                // unused parameter pins no type — needlessly disqualifying otherwise
+                // eligible functions; an untyped register defaults to a scalar `Int`
+                // everywhere else, so a copy of it is likewise a no-op.)
                 JitInstr::Nop
             }
             RegInstr::AddInt { dst, lhs, rhs } => {

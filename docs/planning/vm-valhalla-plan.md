@@ -132,12 +132,31 @@ element kind. Forcing every producer to specialize is brittle. Instead:
   duration of native execution** (or snapshot the pointer+len under that borrow), so
   no `borrow_mut`/realloc can occur; the handle table already hands native a stable
   reference. State and test this before TV2 lands. Force-deopt differential per shape.
-- **[ ] (NEXT) typed-list loop optimization** — the natural follow-up now that flat
-  arrays + native direct reads exist: hoist the typed-list handle/len once per loop;
-  drop repeated bounds checks when the loop shape proves `i < len`; recognize
-  sum/scan/fold over `List<Int>`/`List<Float>`; later, inline tiny scalar closures
-  into native list loops. This is where RSS starts feeling close to AOT for
-  numeric/data-processing code.
+- **[~] typed-list loop optimization — INVESTIGATED; core already worked.** A CLIF
+  audit of the native sum/read loops (`native_sum_loop.rss`, `native_read_heap.rss`)
+  found:
+  - **Recognize sum/scan/fold over `List<Int>`/`List<Float>` — already native-eligible
+    and ~128× over the interpreter** (a pure `while i < List.len(xs)` sum in a leaf
+    function: 9.4 ms native vs 1202 ms interpreter). No new recognition pass needed.
+  - **Fixed a real eligibility bug (shipped):** `DeepCopy` of an *untyped* register
+    (e.g. an unused/under-typed parameter) wrongly rejected the **whole** function for
+    native translation (`ty[reg]?` in the lowerer). A `DeepCopy` in a pure leaf
+    function is always a no-op, so it now lowers to `Nop` unconditionally — unblocking
+    otherwise-eligible numeric loops that carry a config/unused param.
+  - **Hoist len once per loop — tried, reverted (perf-neutral).** A deterministic
+    entry-block hoist of each flat param's `len` (Cranelift's GVN won't lift the
+    `readonly` load across the loop back-edge) removed one load/iter in the CLIF but
+    measured within noise on both the read and pure-sum kernels. The `len` reload was
+    never the bottleneck, so it was not shipped (measure-and-reject).
+  - **Bounds-check elimination — not pursued.** Limited upside (see next bullet) and a
+    high safety bar (a mis-proof is an out-of-bounds native read = UB).
+- **[ ] (NEXT LEVER) per-iteration overflow-checked Int arithmetic — DATA-GATED.** The
+  CLIF audit showed the dominant remaining gap to compiled Rust (~4.4× on int loops) is
+  **not** list access: every `total += x` / `i += 1` lowers to `sadd_overflow` + a bail
+  branch (RSS Int overflow semantics defer to the interpreter), which also blocks
+  auto-vectorization. Closing it is a *language-semantics* effort (opt-in wrapping `Int`,
+  or a "provably non-overflowing" range analysis that drops the checks), separate from
+  typed-list work. Documented here as the real next performance lever; not started.
 - **[ ] TV3 — typed struct fields. DATA-GATED, not next.** Flatten a struct's scalar
   fields in `VmStruct` — **only** when a benchmark shows struct fields are the
   dominant remaining cost. Do not start by default; typed lists just solved the

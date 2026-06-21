@@ -1,0 +1,51 @@
+features: local
+
+// Loop-opt isolation kernel: a *pure* sum over `List<Int>` in its own
+// native-eligible leaf function, bounded by `List.len` (no modulo, unlike
+// native_read_heap). `hot` exercises exactly the typed-list loop the loop
+// optimization targets: one `List.len` per loop and one `List.get` per element.
+// `main` builds the list once (cheap) and calls `hot` repeatedly so eligibility
+// is not tainted by the build.
+
+fn bench_size(default: Int) -> Int {
+    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
+    match String.parse_int(value: read raw) {
+        Some(value) => {
+            return value
+        }
+        None => {
+            return default
+        }
+    }
+}
+
+fn hot(xs: read List<Int>) -> Int {
+    let mut i = 0
+    let mut total = 0
+    let n = List.len<Int>(list: read xs)
+    while i < n {
+        total = total + List.get<Int>(list: read xs, index: i)
+        i = i + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    let passes = bench_size(default: 4000)
+    local xs = List<Int>.new()
+    let mut k = 0
+    while k < 2000 {
+        List.push<Int>(list: mut xs, value: read k)
+        k = k + 1
+    }
+
+    let mut total = 0
+    let mut r = 0
+    while r < passes {
+        total = total + hot(xs: read xs)
+        r = r + 1
+    }
+
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
