@@ -335,16 +335,20 @@ impl JitFunction {
 }
 
 /// The native ABI of every compiled function:
-/// `(args_ptr, n_args, lens_ptr, out_ptr, bail_ptr) -> completed`. Returns `1` and
-/// writes the result to `*out` on success, or `0` (leaving `*out` untouched) to
-/// request fallback. `lens_ptr` points at an `i64` array parallel to `args`: for a
-/// TV2 flat-array param (`FlatInt`/`FlatFloat`) the args word holds the raw data
-/// pointer and the `lens` word holds the element count (for in-register
+/// `(args_ptr, n_args, lens_ptr, out_ptr, bail_ptr, safepoint_ptr) -> completed`.
+/// Returns `1` and writes the result to `*out` on success, or `0` (leaving `*out`
+/// untouched) to request fallback. `lens_ptr` points at an `i64` array parallel to
+/// `args`: for a TV2 flat-array param (`FlatInt`/`FlatFloat`) the args word holds
+/// the raw data pointer and the `lens` word holds the element count (for in-register
 /// bounds-checked direct reads); other params' `lens` words are unused. `bail_ptr`
 /// points at a `u8` flag the host helpers set when a heap read can't be satisfied;
 /// the generated code loads it after every helper call and branches to fallback
-/// immediately, so a bad read can't keep executing.
-type CompiledAbi = unsafe extern "C" fn(*const i64, usize, *const i64, *mut i64, *const u8) -> u8;
+/// immediately, so a bad read can't keep executing. `safepoint_ptr` points at a
+/// host-owned `i64` cell into which the generated code *stores* the unique
+/// [`SafepointId`] of the bail site on the bail edge (and only there — the hot
+/// fall-through path never touches it); `0` means no bail was recorded.
+type CompiledAbi =
+    unsafe extern "C" fn(*const i64, usize, *const i64, *mut i64, *const u8, *mut i64) -> u8;
 
 #[derive(Debug)]
 pub struct JitError(pub String);
@@ -439,16 +443,17 @@ pub struct CompiledId {
     index: usize,
 }
 
-/// Identity of a deopt (bail) point in a compiled function. Today there is exactly
-/// one anonymous deopt point per function — every bail (guard or host-helper) maps
-/// to [`SafepointId::ANONYMOUS`]. Codegen will emit per-site ids in J0.0 slice 2;
-/// this slice introduces only the type so the ABI boundary already names the point.
+/// Identity of a deopt (bail) point in a compiled function. Codegen assigns every
+/// distinct guard/bail site a unique id numbered from 1 (see `build_function`);
+/// the generated code stores it into the host's safepoint cell on the bail edge,
+/// and [`NativeModule::call`] surfaces it as [`NativeOutcome::Deopt`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SafepointId(pub u32);
 
 impl SafepointId {
-    /// The single anonymous deopt point shared by every bail until codegen emits
-    /// per-site ids (J0.0 slice 2).
+    /// Reserved id `0`: no bail was recorded (the call either fell through to
+    /// completion or bailed before any site stored its id). Real bail sites are
+    /// numbered from `1`.
     pub const ANONYMOUS: SafepointId = SafepointId(0);
 }
 
@@ -557,6 +562,7 @@ impl NativeModule {
         self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // lens ptr (TV2)
         self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // out ptr
         self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // bail flag ptr
+        self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // safepoint id out ptr
         self.ctx
             .func
             .signature
@@ -603,8 +609,9 @@ impl NativeModule {
     /// on completion, or [`NativeOutcome::Deopt`] when the native code bailed and the
     /// interpreter should re-run the function — either a guard bail (overflow/
     /// divide-by-zero edge) or a host-helper bail (an unsatisfiable heap read; see
-    /// [`signal_bail`]). Every bail maps to [`SafepointId::ANONYMOUS`] today (the
-    /// single anonymous deopt point; per-site ids land in J0.0 slice 2).
+    /// [`signal_bail`]). The returned [`SafepointId`] identifies the exact bail site
+    /// (codegen numbers sites from 1; [`SafepointId::ANONYMOUS`] / `0` means no site
+    /// recorded an id, e.g. an id/length mismatch rejected before the call).
     ///
     /// This is a **fully safe** boundary for scalar/handle args. The bail flag is a
     /// per-thread `u8` owned by this crate; `call` resets it, passes its own address
@@ -648,32 +655,41 @@ impl NativeModule {
         let f = func.f;
         let mut out: i64 = 0;
         BAIL_FLAG.with(|bail| {
-            bail.set(0);
-            let bail_ptr = bail.as_ptr() as *const u8;
-            // SAFETY: `f` was produced by `compile` with the `CompiledAbi`
-            // signature; it reads `args.len()` i64s from `args.as_ptr()` and
-            // `lens.as_ptr()`, writes one i64 to `&mut out`, and only ever loads
-            // (never stores) the `u8` at `bail_ptr` — this thread's `BAIL_FLAG`
-            // cell, valid for the call. Any flat-array data pointer in `args` is
-            // read in-bounds (against the matching `lens` entry) per the caller's
-            // borrow-protocol obligation documented above. The generated code never
-            // retains any of the pointers.
-            let completed = unsafe {
-                f(
-                    args.as_ptr(),
-                    args.len(),
-                    lens.as_ptr(),
-                    &mut out as *mut i64,
-                    bail_ptr,
-                )
-            };
-            if completed != 0 && bail.get() == 0 {
-                NativeOutcome::Completed(out)
-            } else {
-                NativeOutcome::Deopt {
-                    safepoint_id: SafepointId::ANONYMOUS,
+            SAFEPOINT_ID.with(|safepoint| {
+                bail.set(0);
+                safepoint.set(0);
+                let bail_ptr = bail.as_ptr() as *const u8;
+                let safepoint_ptr = safepoint.as_ptr();
+                // SAFETY: `f` was produced by `compile` with the `CompiledAbi`
+                // signature; it reads `args.len()` i64s from `args.as_ptr()` and
+                // `lens.as_ptr()`, writes one i64 to `&mut out`, and only ever loads
+                // (never stores) the `u8` at `bail_ptr` — this thread's `BAIL_FLAG`
+                // cell, valid for the call. It only ever *stores* to the `i64` at
+                // `safepoint_ptr` (the symmetric write-direction-opposite of
+                // `bail_ptr`) — this thread's `SAFEPOINT_ID` cell, also valid for the
+                // call, and only on a bail edge (the hot path never touches it). Any
+                // flat-array data pointer in `args` is read in-bounds (against the
+                // matching `lens` entry) per the caller's borrow-protocol obligation
+                // documented above. The generated code never retains any of the
+                // pointers.
+                let completed = unsafe {
+                    f(
+                        args.as_ptr(),
+                        args.len(),
+                        lens.as_ptr(),
+                        &mut out as *mut i64,
+                        bail_ptr,
+                        safepoint_ptr,
+                    )
+                };
+                if completed != 0 && bail.get() == 0 {
+                    NativeOutcome::Completed(out)
+                } else {
+                    NativeOutcome::Deopt {
+                        safepoint_id: SafepointId(safepoint.get() as u32),
+                    }
                 }
-            }
+            })
         })
     }
 }
@@ -683,6 +699,13 @@ std::thread_local! {
     /// it) and the host helpers (which set it via [`signal_bail`]). `call` resets it
     /// before each invocation, so it is only meaningful during a call.
     static BAIL_FLAG: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+
+    /// Per-thread safepoint-id cell the in-flight compiled call *stores* into on a
+    /// bail edge (mirrors [`BAIL_FLAG`], opposite write direction). `call` resets it
+    /// to `0` before each invocation, so it is only meaningful during a call: `0`
+    /// means no bail site fired; a non-zero value is the [`SafepointId`] of the site
+    /// that bailed.
+    static SAFEPOINT_ID: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
 }
 
 /// Signal from a [`HostHelpers`] callback that the in-flight native call cannot be
@@ -985,6 +1008,10 @@ fn build_function(
     let lens_ptr = params[2];
     let out_ptr = params[3];
     let bail_ptr = params[4];
+    let safepoint_ptr = params[5];
+    // Running per-site bail-id counter. Starts at 1 (0 is reserved = no bail);
+    // `bail_if` post-increments it so every guard/bail site gets a stable id.
+    let mut next_id: i64 = 1;
     for (i, &var) in vars.iter().take(program.n_params as usize).enumerate() {
         let v = bcx
             .ins()
@@ -1091,7 +1118,7 @@ fn build_function(
                     bcx.def_var(reg(*dst), res);
                 } else {
                     let (res, of) = bcx.ins().sadd_overflow(a, b);
-                    let cont = bail_if(&mut bcx, of, fallback);
+                    let cont = bail_if(&mut bcx, of, fallback, safepoint_ptr, &mut next_id);
                     bcx.switch_to_block(cont);
                     bcx.def_var(reg(*dst), res);
                 }
@@ -1104,7 +1131,7 @@ fn build_function(
                     bcx.def_var(reg(*dst), res);
                 } else {
                     let (res, of) = bcx.ins().ssub_overflow(a, b);
-                    let cont = bail_if(&mut bcx, of, fallback);
+                    let cont = bail_if(&mut bcx, of, fallback, safepoint_ptr, &mut next_id);
                     bcx.switch_to_block(cont);
                     bcx.def_var(reg(*dst), res);
                 }
@@ -1117,7 +1144,7 @@ fn build_function(
                     bcx.def_var(reg(*dst), res);
                 } else {
                     let (res, of) = bcx.ins().smul_overflow(a, b);
-                    let cont = bail_if(&mut bcx, of, fallback);
+                    let cont = bail_if(&mut bcx, of, fallback, safepoint_ptr, &mut next_id);
                     bcx.switch_to_block(cont);
                     bcx.def_var(reg(*dst), res);
                 }
@@ -1131,14 +1158,30 @@ fn build_function(
                     let res = bcx.ins().fdiv(a, b);
                     bcx.def_var(reg(*dst), res);
                 } else {
-                    let res = emit_checked_divrem(&mut bcx, reg(*lhs), reg(*rhs), fallback, false);
+                    let res = emit_checked_divrem(
+                        &mut bcx,
+                        reg(*lhs),
+                        reg(*rhs),
+                        fallback,
+                        safepoint_ptr,
+                        &mut next_id,
+                        false,
+                    );
                     bcx.def_var(reg(*dst), res);
                 }
             }
             JitInstr::Mod { dst, lhs, rhs } => {
                 // Float modulo is a runtime error in the VM, so only integer
                 // registers reach here (eligibility rejects float `%`).
-                let res = emit_checked_divrem(&mut bcx, reg(*lhs), reg(*rhs), fallback, true);
+                let res = emit_checked_divrem(
+                    &mut bcx,
+                    reg(*lhs),
+                    reg(*rhs),
+                    fallback,
+                    safepoint_ptr,
+                    &mut next_id,
+                    true,
+                );
                 bcx.def_var(reg(*dst), res);
             }
             JitInstr::BitAnd { dst, lhs, rhs } => {
@@ -1160,11 +1203,27 @@ fn build_function(
                 bcx.def_var(reg(*dst), v);
             }
             JitInstr::Shl { dst, lhs, rhs } => {
-                let res = emit_checked_shift(&mut bcx, reg(*lhs), reg(*rhs), fallback, false);
+                let res = emit_checked_shift(
+                    &mut bcx,
+                    reg(*lhs),
+                    reg(*rhs),
+                    fallback,
+                    safepoint_ptr,
+                    &mut next_id,
+                    false,
+                );
                 bcx.def_var(reg(*dst), res);
             }
             JitInstr::Shr { dst, lhs, rhs } => {
-                let res = emit_checked_shift(&mut bcx, reg(*lhs), reg(*rhs), fallback, true);
+                let res = emit_checked_shift(
+                    &mut bcx,
+                    reg(*lhs),
+                    reg(*rhs),
+                    fallback,
+                    safepoint_ptr,
+                    &mut next_id,
+                    true,
+                );
                 bcx.def_var(reg(*dst), res);
             }
             JitInstr::Compare { dst, op, lhs, rhs } => {
@@ -1258,7 +1317,8 @@ fn build_function(
                 let slot_v = bcx.ins().iconst(types::I64, i64::from(*slot));
                 let call = bcx.ins().call(field_int_ref, &[handle, slot_v]);
                 let result = bcx.inst_results(call)[0];
-                let cont = bail_if_helper_failed(&mut bcx, bail_ptr, fallback);
+                let cont =
+                    bail_if_helper_failed(&mut bcx, bail_ptr, fallback, safepoint_ptr, &mut next_id);
                 bcx.switch_to_block(cont);
                 bcx.def_var(reg(*dst), result);
             }
@@ -1266,7 +1326,8 @@ fn build_function(
                 let handle = bcx.use_var(reg(*base));
                 let call = bcx.ins().call(list_len_ref, &[handle]);
                 let result = bcx.inst_results(call)[0];
-                let cont = bail_if_helper_failed(&mut bcx, bail_ptr, fallback);
+                let cont =
+                    bail_if_helper_failed(&mut bcx, bail_ptr, fallback, safepoint_ptr, &mut next_id);
                 bcx.switch_to_block(cont);
                 bcx.def_var(reg(*dst), result);
             }
@@ -1275,7 +1336,8 @@ fn build_function(
                 let index_v = bcx.use_var(reg(*index));
                 let call = bcx.ins().call(list_get_int_ref, &[handle, index_v]);
                 let result = bcx.inst_results(call)[0];
-                let cont = bail_if_helper_failed(&mut bcx, bail_ptr, fallback);
+                let cont =
+                    bail_if_helper_failed(&mut bcx, bail_ptr, fallback, safepoint_ptr, &mut next_id);
                 bcx.switch_to_block(cont);
                 bcx.def_var(reg(*dst), result);
             }
@@ -1284,7 +1346,8 @@ fn build_function(
                 let slot_v = bcx.ins().iconst(types::I64, i64::from(*slot));
                 let call = bcx.ins().call(field_float_ref, &[handle, slot_v]);
                 let result = bcx.inst_results(call)[0];
-                let cont = bail_if_helper_failed(&mut bcx, bail_ptr, fallback);
+                let cont =
+                    bail_if_helper_failed(&mut bcx, bail_ptr, fallback, safepoint_ptr, &mut next_id);
                 bcx.switch_to_block(cont);
                 bcx.def_var(reg(*dst), result);
             }
@@ -1293,19 +1356,36 @@ fn build_function(
                 let index_v = bcx.use_var(reg(*index));
                 let call = bcx.ins().call(list_get_float_ref, &[handle, index_v]);
                 let result = bcx.inst_results(call)[0];
-                let cont = bail_if_helper_failed(&mut bcx, bail_ptr, fallback);
+                let cont =
+                    bail_if_helper_failed(&mut bcx, bail_ptr, fallback, safepoint_ptr, &mut next_id);
                 bcx.switch_to_block(cont);
                 bcx.def_var(reg(*dst), result);
             }
             JitInstr::ListGetIntDirect { dst, base, index } => {
                 let result = emit_direct_get(
-                    &mut bcx, lens_ptr, fallback, reg(*base), reg(*index), *base, types::I64,
+                    &mut bcx,
+                    lens_ptr,
+                    fallback,
+                    safepoint_ptr,
+                    &mut next_id,
+                    reg(*base),
+                    reg(*index),
+                    *base,
+                    types::I64,
                 );
                 bcx.def_var(reg(*dst), result);
             }
             JitInstr::ListGetFloatDirect { dst, base, index } => {
                 let result = emit_direct_get(
-                    &mut bcx, lens_ptr, fallback, reg(*base), reg(*index), *base, types::F64,
+                    &mut bcx,
+                    lens_ptr,
+                    fallback,
+                    safepoint_ptr,
+                    &mut next_id,
+                    reg(*base),
+                    reg(*index),
+                    *base,
+                    types::F64,
                 );
                 bcx.def_var(reg(*dst), result);
             }
@@ -1354,6 +1434,8 @@ fn emit_direct_get(
     bcx: &mut FunctionBuilder,
     lens_ptr: Value,
     fallback: Block,
+    safepoint_ptr: Value,
+    next_id: &mut i64,
     base_var: Variable,
     index_var: Variable,
     base_param: u32,
@@ -1368,7 +1450,7 @@ fn emit_direct_get(
     let oob = bcx
         .ins()
         .icmp(IntCC::UnsignedGreaterThanOrEqual, index, len);
-    let cont = bail_if(bcx, oob, fallback);
+    let cont = bail_if(bcx, oob, fallback, safepoint_ptr, next_id);
     bcx.switch_to_block(cont);
     let base_ptr = bcx.use_var(base_var);
     let offset = bcx.ins().imul_imm(index, 8);
@@ -1376,19 +1458,47 @@ fn emit_direct_get(
     bcx.ins().load(elem_ty, MemFlags::trusted(), addr, 0)
 }
 
-/// Emit `brif(cond, fallback, cont)` and return the `cont` block to continue in.
-fn bail_if(bcx: &mut FunctionBuilder, cond: Value, fallback: Block) -> Block {
+/// Emit a per-site guarded bail and return the `cont` block to continue in.
+///
+/// `safepoint_ptr` is the host's safepoint-id cell; `next_id` is the running
+/// site-id counter (post-incremented to mint this site's stable id, starting from
+/// 1; `0` stays reserved). On the bail edge — and *only* there — a dedicated cold
+/// `site_block` stores this site's id into `safepoint_ptr` before jumping to the
+/// shared `fallback`. The hot fall-through (`cont`) path executes zero extra
+/// instructions, so non-bailing iterations are unaffected.
+fn bail_if(
+    bcx: &mut FunctionBuilder,
+    cond: Value,
+    fallback: Block,
+    safepoint_ptr: Value,
+    next_id: &mut i64,
+) -> Block {
+    let site_id = *next_id;
+    *next_id += 1;
+    let site_block = bcx.create_block();
     let cont = bcx.create_block();
-    bcx.ins().brif(cond, fallback, &[], cont, &[]);
+    bcx.ins().brif(cond, site_block, &[], cont, &[]);
+    // Cold path: record this site's id, then fall through to the shared fallback.
+    bcx.switch_to_block(site_block);
+    let id_v = bcx.ins().iconst(types::I64, site_id);
+    bcx.ins().store(MemFlags::trusted(), id_v, safepoint_ptr, 0);
+    bcx.ins().jump(fallback, &[]);
+    bcx.switch_to_block(cont);
     cont
 }
 
 /// Load the host-helper bail flag and branch to `fallback` if a preceding heap
 /// read flagged failure — checked immediately after each helper call so a bad
 /// read never keeps executing. Returns the continuation block.
-fn bail_if_helper_failed(bcx: &mut FunctionBuilder, bail_ptr: Value, fallback: Block) -> Block {
+fn bail_if_helper_failed(
+    bcx: &mut FunctionBuilder,
+    bail_ptr: Value,
+    fallback: Block,
+    safepoint_ptr: Value,
+    next_id: &mut i64,
+) -> Block {
     let flag = bcx.ins().load(types::I8, MemFlags::trusted(), bail_ptr, 0);
-    bail_if(bcx, flag, fallback)
+    bail_if(bcx, flag, fallback, safepoint_ptr, next_id)
 }
 
 /// Checked division / remainder matching the interpreter: bail on divide-by-zero
@@ -1398,20 +1508,22 @@ fn emit_checked_divrem(
     lhs: Variable,
     rhs: Variable,
     fallback: Block,
+    safepoint_ptr: Value,
+    next_id: &mut i64,
     is_rem: bool,
 ) -> Value {
     let a = bcx.use_var(lhs);
     let b = bcx.use_var(rhs);
     let zero = bcx.ins().iconst(types::I64, 0);
     let is_zero = bcx.ins().icmp(IntCC::Equal, b, zero);
-    let cont1 = bail_if(bcx, is_zero, fallback);
+    let cont1 = bail_if(bcx, is_zero, fallback, safepoint_ptr, next_id);
     bcx.switch_to_block(cont1);
     let imin = bcx.ins().iconst(types::I64, i64::MIN);
     let neg1 = bcx.ins().iconst(types::I64, -1);
     let a_is_min = bcx.ins().icmp(IntCC::Equal, a, imin);
     let b_is_neg1 = bcx.ins().icmp(IntCC::Equal, b, neg1);
     let overflow = bcx.ins().band(a_is_min, b_is_neg1);
-    let cont2 = bail_if(bcx, overflow, fallback);
+    let cont2 = bail_if(bcx, overflow, fallback, safepoint_ptr, next_id);
     bcx.switch_to_block(cont2);
     if is_rem {
         bcx.ins().srem(a, b)
@@ -1427,6 +1539,8 @@ fn emit_checked_shift(
     lhs: Variable,
     rhs: Variable,
     fallback: Block,
+    safepoint_ptr: Value,
+    next_id: &mut i64,
     is_right: bool,
 ) -> Value {
     let a = bcx.use_var(lhs);
@@ -1436,7 +1550,7 @@ fn emit_checked_shift(
     let oob = bcx
         .ins()
         .icmp(IntCC::UnsignedGreaterThanOrEqual, amt, limit);
-    let cont = bail_if(bcx, oob, fallback);
+    let cont = bail_if(bcx, oob, fallback, safepoint_ptr, next_id);
     bcx.switch_to_block(cont);
     if is_right {
         bcx.ins().sshr(a, amt)
@@ -1681,6 +1795,60 @@ mod tests {
             ))
             .unwrap();
         assert_eq!(m.call(id_len, &[ints_ptr], &[ilen]).completed(), Some(3));
+    }
+
+    #[test]
+    fn distinct_bail_sites_get_stable_safepoint_ids() {
+        use JitValueType::{FlatInt, Int};
+        let mut m = module();
+
+        // fn(a: FlatInt, x: Int, i: Int) -> Int { t = x + x; return a[i] }
+        // Two distinct bail sites: the `Add` overflow guard (site 1) precedes the
+        // `ListGetIntDirect` OOB guard (site 2). regs 0=a,1=x,2=i,3=t,4=res.
+        let id = m
+            .compile(&ft(
+                3,
+                vec![FlatInt, Int, Int, Int, Int],
+                vec![
+                    JitInstr::Add {
+                        dst: 3,
+                        lhs: 1,
+                        rhs: 1,
+                    },
+                    JitInstr::ListGetIntDirect {
+                        dst: 4,
+                        base: 0,
+                        index: 2,
+                    },
+                    JitInstr::Return { src: 4 },
+                ],
+            ))
+            .unwrap();
+        let ints: Vec<i64> = vec![10, 20, 30];
+        let ints_ptr = ints.as_ptr() as i64;
+        let ilen = ints.len() as i64;
+
+        // Bail at the FIRST site: x + x overflows, so the `Add` guard fires (id 1)
+        // before the list read is ever reached.
+        assert_eq!(
+            m.call(id, &[ints_ptr, i64::MAX, 0], &[ilen, 0, 0]),
+            NativeOutcome::Deopt {
+                safepoint_id: SafepointId(1)
+            }
+        );
+        // Pass the first guard (small x, no overflow) but bail at the SECOND site:
+        // index 5 is out of bounds, so the direct-read OOB guard fires (id 2).
+        assert_eq!(
+            m.call(id, &[ints_ptr, 1, 5], &[ilen, 0, 0]),
+            NativeOutcome::Deopt {
+                safepoint_id: SafepointId(2)
+            }
+        );
+        // Both guards pass → completes (id stays 0 = no bail recorded).
+        assert!(matches!(
+            m.call(id, &[ints_ptr, 1, 2], &[ilen, 0, 0]),
+            NativeOutcome::Completed(_)
+        ));
     }
 
     #[test]
