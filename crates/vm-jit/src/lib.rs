@@ -90,7 +90,7 @@ pub struct HostHelpers {
 /// producer (`rsscript`) translates its private bytecode into this stable,
 /// versioned surface, so the two crates are decoupled: a breaking IR change bumps
 /// this and the producer is updated in lock-step.
-pub const IR_VERSION: u32 = 5;
+pub const IR_VERSION: u32 = 6;
 
 /// Signed integer comparison (the four ordered comparisons; equality is its own
 /// instruction so it can also apply to booleans).
@@ -308,6 +308,19 @@ pub enum JitInstr {
     GuardClosureId {
         base: u32,
         expected: i64,
+    },
+    /// Profile-guided polymorphic inline cache (J2.2). `base` is a `Handle`
+    /// register holding a closure handle; reads its underlying function id via
+    /// [`HostHelpers::closure_id`] (a single, total helper call — `-1` for a
+    /// non-closure handle) into the `Int` register `dst`. The id is then compared
+    /// against each speculated callee key with ordinary integer
+    /// compare/branch instructions; the no-match arm reuses the standard
+    /// re-run-from-top [`Bail`]. Unlike [`GuardClosureId`] (which bails on the
+    /// spot), this only materializes the id so the dispatcher can select among
+    /// 2–3 inlined callee bodies. Writes `dst`.
+    ClosureId {
+        dst: u32,
+        base: u32,
     },
 }
 
@@ -1183,6 +1196,10 @@ fn validate(program: &JitFunction) -> Result<(), JitError> {
                     )));
                 }
             }
+            JitInstr::ClosureId { dst, base } => {
+                require_class(*base, JitValueType::Handle, "ClosureId base")?;
+                require_class(*dst, JitValueType::Int, "ClosureId result")?;
+            }
         }
     }
     Ok(())
@@ -1216,7 +1233,8 @@ fn instr_def(instr: &JitInstr) -> Option<u32> {
         | JitInstr::ListGetFloat { dst, .. }
         | JitInstr::ListGetIntDirect { dst, .. }
         | JitInstr::ListGetFloatDirect { dst, .. }
-        | JitInstr::ListLenDirect { dst, .. } => Some(*dst),
+        | JitInstr::ListLenDirect { dst, .. }
+        | JitInstr::ClosureId { dst, .. } => Some(*dst),
         JitInstr::Nop
         | JitInstr::Jump { .. }
         | JitInstr::JumpIfBool { .. }
@@ -1919,6 +1937,17 @@ fn build_function(
                 );
                 bcx.switch_to_block(cont);
             }
+            JitInstr::ClosureId { dst, base } => {
+                // Polymorphic inline cache (J2.2): read the closure handle's
+                // underlying function id once into `dst` (a single, total helper
+                // call — `-1` for a non-closure). The dispatcher then selects an
+                // inlined callee with ordinary integer compares/branches; a
+                // no-match arm bails via the standard re-run-from-top fallback.
+                let handle = bcx.use_var(reg(*base));
+                let call = bcx.ins().call(closure_id_ref, &[handle]);
+                let id = bcx.inst_results(call)[0];
+                bcx.def_var(reg(*dst), id);
+            }
         }
     }
     if !terminated {
@@ -2382,6 +2411,92 @@ mod tests {
         assert_eq!(m.callt(id, &[7, 5]), Some(105));
         // Mismatched callee (handle != 7): guard bails to the interpreter (None).
         assert_eq!(m.callt(id, &[8, 5]), None);
+        assert_eq!(m.callt(id, &[0, 5]), None);
+    }
+
+    #[test]
+    fn closure_id_dispatch_selects_arm_or_bails() {
+        use JitValueType::{Handle, Int};
+        // `closure_id` is the identity on the handle arg, so the handle value IS the
+        // observed function id — the test drives the polymorphic dispatch directly,
+        // mirroring the producer's lowering (read id once via ClosureId, then
+        // LoadInt + Equal + JumpIfBool per arm, with a no-match Bail).
+        extern "C" fn closure_id(handle: i64) -> i64 {
+            handle
+        }
+        let mut m = NativeModule::new(HostHelpers {
+            field_int: noop_field_int,
+            list_len: noop_list_len,
+            list_get_int: noop_list_get_int,
+            field_float: noop_field_float,
+            list_get_float: noop_list_get_float,
+            closure_id,
+        })
+        .unwrap();
+        // Polymorphic inline cache over two callees {3, 5}:
+        //   0: id  = closure_id(h)
+        //   1: key = 3
+        //   2: eq  = (id == key)
+        //   3: if eq -> arm3 (8)
+        //   4: key = 5
+        //   5: eq  = (id == key)
+        //   6: if eq -> arm5 (11)
+        //   7: Bail                    ; no match
+        //   8: c30 = 30  9: res = x+30  10: return res   (arm3)
+        //  11: c50 = 50 12: res = x+50  13: return res   (arm5)
+        // regs: 0=h(Handle) 1=x 2=id 3=key 4=eq 5=c30 6=res3 7=c50 8=res5
+        let id = m
+            .compile(&ft(
+                2,
+                vec![Handle, Int, Int, Int, Int, Int, Int, Int, Int],
+                vec![
+                    JitInstr::ClosureId { dst: 2, base: 0 }, // 0
+                    JitInstr::LoadInt { dst: 3, value: 3 },  // 1
+                    JitInstr::Equal {
+                        dst: 4,
+                        lhs: 2,
+                        rhs: 3,
+                    }, // 2
+                    JitInstr::JumpIfBool {
+                        cond: 4,
+                        expected: true,
+                        target: 8,
+                    }, // 3
+                    JitInstr::LoadInt { dst: 3, value: 5 }, // 4
+                    JitInstr::Equal {
+                        dst: 4,
+                        lhs: 2,
+                        rhs: 3,
+                    }, // 5
+                    JitInstr::JumpIfBool {
+                        cond: 4,
+                        expected: true,
+                        target: 11,
+                    }, // 6
+                    JitInstr::Bail,                          // 7 (no match)
+                    JitInstr::LoadInt { dst: 5, value: 30 }, // 8 arm3
+                    JitInstr::Add {
+                        dst: 6,
+                        lhs: 1,
+                        rhs: 5,
+                    }, // 9
+                    JitInstr::Return { src: 6 },             // 10
+                    JitInstr::LoadInt { dst: 7, value: 50 }, // 11 arm5
+                    JitInstr::Add {
+                        dst: 8,
+                        lhs: 1,
+                        rhs: 7,
+                    }, // 12
+                    JitInstr::Return { src: 8 }, // 13
+                ],
+            ))
+            .unwrap();
+        // Arm 3 selected (h == 3): x + 30.
+        assert_eq!(m.callt(id, &[3, 5]), Some(35));
+        // Arm 5 selected (h == 5): x + 50.
+        assert_eq!(m.callt(id, &[5, 5]), Some(55));
+        // No arm matches (h == 9): the cache bails to the interpreter (None).
+        assert_eq!(m.callt(id, &[9, 5]), None);
         assert_eq!(m.callt(id, &[0, 5]), None);
     }
 

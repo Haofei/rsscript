@@ -541,3 +541,170 @@ fn main() -> Unit {
         );
     }
 }
+
+/// J2.2 POLYMORPHIC inline cache (2 callees). A higher-order `dispatch(f, x)` site
+/// warmed by alternating between TWO distinct non-capturing closures A/B, so J1
+/// profiles the `CallClosure` site as Polymorphic with two keys and J2 emits a
+/// 2-arm inline cache (read the closure id once, dispatch to the matching inlined
+/// body, bail on no match). All backends must agree byte-for-byte.
+#[test]
+fn jit_acceptance_runs_polymorphic_closure_inline_two() {
+    let source = "\
+fn dispatch(f: read Fn(Int) -> Int, x: Int) -> Int {
+    return f(x)
+}
+
+fn main() -> Unit {
+    let mut total = 0
+    let mut i = 0
+    while i < 200 {
+        if i % 2 == 0 {
+            let a: Fn(Int) -> Int = |x| { return x * 2 - 1 }
+            total = total + dispatch(f: read a, x: read i)
+        } else {
+            let b: Fn(Int) -> Int = |x| { return x + 7 }
+            total = total + dispatch(f: read b, x: read i)
+        }
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+";
+    assert_fast_jit_backends_agree("jit-accept-poly-closure-inline-2.rss", source);
+}
+
+/// J2.2 POLYMORPHIC inline cache (3 callees) + native-execution proof. A higher-
+/// order `dispatch(f, x)` site warmed by ROTATING among THREE distinct
+/// non-capturing closures A/B/C (`i % 3`), so J1 profiles the `CallClosure` site as
+/// Polymorphic with three keys and J2 emits a 3-arm inline cache. The differential
+/// (`assert_fast_jit_backends_agree`) proves EVERY inlined dispatch arm is correct:
+/// the native run (which routes A/B/C through their three inlined arms) equals the
+/// pure interpreter byte-for-byte, so each of the three arms computes the right
+/// closure's result. Under `native-jit` we additionally assert the native tier
+/// really ran (`translated > 0 && native_calls > 0 && compile_failed == 0`).
+#[test]
+fn jit_acceptance_runs_polymorphic_closure_inline_three() {
+    let source = "\
+fn dispatch(f: read Fn(Int) -> Int, x: Int) -> Int {
+    return f(x)
+}
+
+fn main() -> Unit {
+    let mut total = 0
+    let mut i = 0
+    while i < 300 {
+        if i % 3 == 0 {
+            let a: Fn(Int) -> Int = |x| { return x * 2 - 1 }
+            total = total + dispatch(f: read a, x: read i)
+        } else if i % 3 == 1 {
+            let b: Fn(Int) -> Int = |x| { return x + 7 }
+            total = total + dispatch(f: read b, x: read i)
+        } else {
+            let c: Fn(Int) -> Int = |x| { return 0 - x }
+            total = total + dispatch(f: read c, x: read i)
+        }
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+";
+    let file = "jit-accept-poly-closure-inline-3.rss";
+    // Differential: native (3-arm inline cache) must equal every other backend, so
+    // each of the three arms (A/B/C) is exercised and computes the correct result.
+    assert_fast_jit_backends_agree(file, source);
+
+    #[cfg(feature = "native-jit")]
+    {
+        let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+        let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+        let (native, stats) = executable
+            .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
+            .expect("native JIT run should succeed");
+        assert_eq!(
+            native.stdout, interp.stdout,
+            "native (3-arm poly inline cache) must equal the pure interpreter",
+        );
+        assert!(
+            stats.translated > 0 && stats.native_calls > 0,
+            "the polymorphic dispatch site must reach native (inline cache): {stats:?}",
+        );
+        assert_eq!(
+            stats.compile_failed, 0,
+            "native compilation must not fail: {stats:?}",
+        );
+    }
+}
+
+/// J2.2 POLYMORPHIC inline-cache MISS-BAIL. Warm `dispatch` to a Polymorphic
+/// profile over THREE closures A/B/C (so its `CallClosure` site gets a 3-arm inline
+/// cache and tiers up to native), then drive the SAME site with a FOURTH, never-
+/// before-seen closure D. No arm matches D's id, so the cache bails via the
+/// existing re-run-from-top fallback (sound: every inlined arm is side-effect-free)
+/// and the interpreter handles D. The result still equals the pure interpreter, so
+/// the miss-bail is correct. Under `native-jit` we also confirm the native tier ran
+/// (proving the bail path was genuinely exercised, not skipped).
+#[test]
+fn jit_acceptance_polymorphic_inline_bails_on_fourth_closure() {
+    let source = "\
+fn dispatch(f: read Fn(Int) -> Int, x: Int) -> Int {
+    return f(x)
+}
+
+fn main() -> Unit {
+    let mut total = 0
+    let mut i = 0
+    // Warm phase: rotate A/B/C so the dispatch site profiles Polymorphic (3 keys),
+    // gets a 3-arm inline cache, and tiers up to native.
+    while i < 300 {
+        if i % 3 == 0 {
+            let a: Fn(Int) -> Int = |x| { return x * 2 - 1 }
+            total = total + dispatch(f: read a, x: read i)
+        } else if i % 3 == 1 {
+            let b: Fn(Int) -> Int = |x| { return x + 7 }
+            total = total + dispatch(f: read b, x: read i)
+        } else {
+            let c: Fn(Int) -> Int = |x| { return 0 - x }
+            total = total + dispatch(f: read c, x: read i)
+        }
+        i = i + 1
+    }
+    // Miss phase: a FOURTH closure D (x * 100), never among A/B/C, through the now-
+    // native, 3-arm-inlined site. No arm matches D's id; the cache bails to the
+    // interpreter, which runs D. If the dispatch were unsound, D would take one of
+    // A/B/C's arms and diverge.
+    let mut j = 0
+    while j < 40 {
+        let d: Fn(Int) -> Int = |x| { return x * 100 }
+        total = total + dispatch(f: read d, x: read j)
+        j = j + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+";
+    let file = "jit-accept-poly-inline-miss-bail.rss";
+    assert_fast_jit_backends_agree(file, source);
+
+    #[cfg(feature = "native-jit")]
+    {
+        let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+        let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+        let (native, stats) = executable
+            .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
+            .expect("native JIT run should succeed");
+        assert_eq!(
+            native.stdout, interp.stdout,
+            "native (3-arm poly cache, bailing on D) must equal the pure interpreter",
+        );
+        assert!(
+            stats.translated > 0 && stats.native_calls > 0,
+            "the polymorphic dispatch site must reach native (inline cache + bail): {stats:?}",
+        );
+        assert_eq!(
+            stats.compile_failed, 0,
+            "native compilation must not fail: {stats:?}",
+        );
+    }
+}

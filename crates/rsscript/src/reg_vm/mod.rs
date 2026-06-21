@@ -414,6 +414,7 @@ fn native_subset_instruction(instr: &RegInstr) -> bool {
             // Synthetic J2 monomorphic-inlining guard (only ever present in
             // native-rewritten code; never in a lowered function body).
             | RegInstr::NativeGuardClosureId { .. }
+            | RegInstr::NativeClosureId { .. }
     )
 }
 
@@ -717,6 +718,67 @@ fn monomorphic_closure_inline_target(
     Some(k)
 }
 
+/// J2.2 polymorphic inline cache gate. If the `CallClosure` at instruction index
+/// `i` qualifies, return its 2–3 observed callee ids (into `unit.functions`);
+/// otherwise `None`. Sibling to [`monomorphic_closure_inline_target`] — a site is
+/// EITHER mono (single-guard path) OR poly (this dispatch path), never both.
+///
+/// All of the following must hold (any failure ⇒ leave the site on its normal
+/// interpreter path — behavior unchanged):
+/// - `func.code[i]` is a `CallClosure` with **no `mut` args** and a closure operand
+///   that is a **parameter** (`< func.params`), i.e. a native-visible handle (same
+///   shape gate as the monomorphic case);
+/// - J1's profile for site `i` is **Polymorphic** — by construction (J1 caps the
+///   observed set at 4 and marks >3 as Megamorphic) this means **2 or 3** distinct
+///   observed callee keys;
+/// - **EVERY** observed callee is **non-capturing** and [`native_callee_inlinable`]
+///   at the call's arity. If any single observed callee fails, the WHOLE site is
+///   disqualified (no partial inlining): a no-match bail must be able to re-run the
+///   exact same side-effect-free subset on the interpreter.
+///
+/// Read-only over the profile (a `try_borrow`, never a panic); never mutates state.
+#[cfg(feature = "native-jit")]
+fn polymorphic_closure_inline_targets(
+    unit: &RegUnit,
+    func: &RegFunction,
+    i: usize,
+) -> Option<Vec<usize>> {
+    let (closure, args, mut_args) = match func.code.get(i)? {
+        RegInstr::CallClosure {
+            closure,
+            args,
+            mut_args,
+            ..
+        } => (*closure, args, mut_args),
+        _ => return None,
+    };
+    // Same conservative shape gate as the monomorphic case.
+    if !mut_args.is_empty() || closure >= func.params {
+        return None;
+    }
+    let profile = func.profile.try_borrow().ok()?;
+    let feedback = profile.as_ref()?.call_sites.get(&i)?;
+    if feedback.state() != MonoState::Polymorphic {
+        return None;
+    }
+    // Polymorphic ⇒ 2 or 3 distinct observed callees (J1 caps at 4 / >3 ⇒ Mega).
+    let n = feedback.observed.len();
+    if !(2..=3).contains(&n) {
+        return None;
+    }
+    let mut targets = Vec::with_capacity(n);
+    for &(key, _) in &feedback.observed {
+        let k = usize::try_from(key).ok()?;
+        let callee = unit.functions.get(k)?;
+        // EVERY observed callee must be inlinable, else disqualify the whole site.
+        if callee.captures != 0 || !native_callee_inlinable(callee, args.len()) {
+            return None;
+        }
+        targets.push(k);
+    }
+    Some(targets)
+}
+
 /// True if `func` contains a `CallClosure` that *structurally* could become J2-
 /// inlinable (non-`mut`, closure operand is a parameter handle, observed/observable
 /// callee non-capturing + native-inlinable) but whose J1 profile has **not yet
@@ -741,20 +803,23 @@ fn native_translation_pending_on_profile(unit: &RegUnit, func: &RegFunction) -> 
             if !mut_args.is_empty() || *closure >= func.params {
                 return false;
             }
-            // Already qualifying ⇒ not "pending" (translation will inline it now).
-            if monomorphic_closure_inline_target(unit, func, i).is_some() {
+            // Already qualifying (mono single-guard OR poly inline cache) ⇒ not
+            // "pending" (translation will inline it now).
+            if monomorphic_closure_inline_target(unit, func, i).is_some()
+                || polymorphic_closure_inline_targets(unit, func, i).is_some()
+            {
                 return false;
             }
-            // Structurally could still become monomorphic: either no decision yet,
-            // or the single observed callee is inlinable. Use a `try_borrow` to stay
-            // panic-free; a contended borrow conservatively counts as pending.
+            // Structurally could still settle on a qualifying mono/poly decision:
+            // either no samples yet, or a non-megamorphic profile that hasn't frozen
+            // (a mono site may stay mono or grow into a qualifying 2–3-callee poly
+            // site; a poly site may add a 3rd inlinable callee). Use a `try_borrow`
+            // to stay panic-free; a contended borrow conservatively counts as
+            // pending. A Megamorphic site is permanently disqualified.
             match func.profile.try_borrow() {
                 Ok(profile) => match profile.as_ref().and_then(|p| p.call_sites.get(&i)) {
-                    // No samples yet, or still monomorphic-with-one-observed but the
-                    // observed callee not (yet) confirmed inlinable — keep retrying
-                    // while the profile is unfrozen.
                     None => true,
-                    Some(feedback) => feedback.state() == MonoState::Monomorphic,
+                    Some(feedback) => feedback.state() != MonoState::Megamorphic,
                 },
                 Err(_) => true,
             }
@@ -767,7 +832,10 @@ fn native_translation_pending_on_profile(unit: &RegUnit, func: &RegFunction) -> 
 fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<RegInstr>, usize)> {
     let has_inlinable_call = func.code.iter().enumerate().any(|(i, instr)| match instr {
         RegInstr::CallKnown { .. } => true,
-        RegInstr::CallClosure { .. } => monomorphic_closure_inline_target(unit, func, i).is_some(),
+        RegInstr::CallClosure { .. } => {
+            monomorphic_closure_inline_target(unit, func, i).is_some()
+                || polymorphic_closure_inline_targets(unit, func, i).is_some()
+        }
         _ => false,
     });
     if !has_inlinable_call {
@@ -780,19 +848,112 @@ fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<R
         Caller(usize),
         /// Target is a callee instruction index within splice `id` (use its `cmap`).
         Callee { id: usize, callee_target: usize },
-        /// A `Return` jump to the position just past splice `id`'s block.
+        /// A `Return` jump to the shared join slot `slot` (use `joins[slot]`). A
+        /// `CallKnown`/monomorphic-`CallClosure` splice owns a private join slot; a
+        /// polymorphic dispatch shares ONE join slot across all of its arms.
         Join(usize),
     }
     struct Splice {
         cmap: Vec<usize>,
-        join: usize,
     }
 
     let mut new_code: Vec<RegInstr> = Vec::new();
     let mut index_map = vec![0usize; func.code.len()];
     let mut fixups: Vec<(usize, Fix)> = Vec::new();
     let mut splices: Vec<Splice> = Vec::new();
+    // Join positions, patched once known. One slot per `CallKnown`/mono splice; one
+    // shared slot per polymorphic dispatch (all its arms target the same slot).
+    let mut joins: Vec<usize> = Vec::new();
     let mut next_reg = func.regs;
+
+    /// Splice one callee's reachable body into `new_code`, remapping its internal
+    /// jumps and rewriting each `Return` into `Move dst <- result` + a `Jump` to the
+    /// shared `join_slot`. Returns the splice id (registered in `splices` for
+    /// `Fix::Callee` resolution). Args must already be moved into the `base` window.
+    /// `None` if any callee instruction can't be offset into the native subset.
+    #[allow(clippy::too_many_arguments)]
+    fn splice_callee(
+        callee: &RegFunction,
+        dst: usize,
+        base: usize,
+        join_slot: usize,
+        new_code: &mut Vec<RegInstr>,
+        fixups: &mut Vec<(usize, Fix)>,
+        splices: &mut Vec<Splice>,
+    ) -> Option<()> {
+        let id = splices.len();
+        let reachable = native_reachable_instructions(&callee.code);
+        let mut cmap = vec![0usize; callee.code.len()];
+        for (ci, cinstr) in callee.code.iter().enumerate() {
+            if !reachable[ci] {
+                continue;
+            }
+            cmap[ci] = new_code.len();
+            match cinstr {
+                RegInstr::Return { src } => {
+                    new_code.push(RegInstr::Move {
+                        dst,
+                        src: base + src,
+                    });
+                    fixups.push((new_code.len(), Fix::Join(join_slot)));
+                    new_code.push(RegInstr::Jump { target: 0 });
+                }
+                RegInstr::Jump { target } => {
+                    fixups.push((
+                        new_code.len(),
+                        Fix::Callee {
+                            id,
+                            callee_target: *target,
+                        },
+                    ));
+                    new_code.push(RegInstr::Jump { target: 0 });
+                }
+                RegInstr::JumpIfBool {
+                    cond,
+                    expected,
+                    target,
+                } => {
+                    fixups.push((
+                        new_code.len(),
+                        Fix::Callee {
+                            id,
+                            callee_target: *target,
+                        },
+                    ));
+                    new_code.push(RegInstr::JumpIfBool {
+                        cond: cond + base,
+                        expected: *expected,
+                        target: 0,
+                    });
+                }
+                RegInstr::JumpIfIntCompare {
+                    lhs,
+                    rhs,
+                    op,
+                    expected,
+                    target,
+                } => {
+                    fixups.push((
+                        new_code.len(),
+                        Fix::Callee {
+                            id,
+                            callee_target: *target,
+                        },
+                    ));
+                    new_code.push(RegInstr::JumpIfIntCompare {
+                        lhs: lhs + base,
+                        rhs: rhs + base,
+                        op: *op,
+                        expected: *expected,
+                        target: 0,
+                    });
+                }
+                pure => new_code.push(native_offset_regs(pure, base)?),
+            }
+        }
+        splices.push(Splice { cmap });
+        Some(())
+    }
 
     for (i, instr) in func.code.iter().enumerate() {
         index_map[i] = new_code.len();
@@ -817,78 +978,18 @@ fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<R
                         src: *arg,
                     });
                 }
-                let id = splices.len();
-                let reachable = native_reachable_instructions(&callee.code);
-                let mut cmap = vec![0usize; callee.code.len()];
-                for (ci, cinstr) in callee.code.iter().enumerate() {
-                    if !reachable[ci] {
-                        continue;
-                    }
-                    cmap[ci] = new_code.len();
-                    match cinstr {
-                        RegInstr::Return { src } => {
-                            new_code.push(RegInstr::Move {
-                                dst: *dst,
-                                src: base + src,
-                            });
-                            fixups.push((new_code.len(), Fix::Join(id)));
-                            new_code.push(RegInstr::Jump { target: 0 });
-                        }
-                        RegInstr::Jump { target } => {
-                            fixups.push((
-                                new_code.len(),
-                                Fix::Callee {
-                                    id,
-                                    callee_target: *target,
-                                },
-                            ));
-                            new_code.push(RegInstr::Jump { target: 0 });
-                        }
-                        RegInstr::JumpIfBool {
-                            cond,
-                            expected,
-                            target,
-                        } => {
-                            fixups.push((
-                                new_code.len(),
-                                Fix::Callee {
-                                    id,
-                                    callee_target: *target,
-                                },
-                            ));
-                            new_code.push(RegInstr::JumpIfBool {
-                                cond: cond + base,
-                                expected: *expected,
-                                target: 0,
-                            });
-                        }
-                        RegInstr::JumpIfIntCompare {
-                            lhs,
-                            rhs,
-                            op,
-                            expected,
-                            target,
-                        } => {
-                            fixups.push((
-                                new_code.len(),
-                                Fix::Callee {
-                                    id,
-                                    callee_target: *target,
-                                },
-                            ));
-                            new_code.push(RegInstr::JumpIfIntCompare {
-                                lhs: lhs + base,
-                                rhs: rhs + base,
-                                op: *op,
-                                expected: *expected,
-                                target: 0,
-                            });
-                        }
-                        pure => new_code.push(native_offset_regs(pure, base)?),
-                    }
-                }
-                let join = new_code.len();
-                splices.push(Splice { cmap, join });
+                let join_slot = joins.len();
+                joins.push(0);
+                splice_callee(
+                    callee,
+                    *dst,
+                    base,
+                    join_slot,
+                    &mut new_code,
+                    &mut fixups,
+                    &mut splices,
+                )?;
+                joins[join_slot] = new_code.len();
             }
             RegInstr::CallClosure {
                 dst,
@@ -896,7 +997,7 @@ fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<R
                 args,
                 mut_args,
             } if monomorphic_closure_inline_target(unit, func, i).is_some() => {
-                // J2 profile-guided monomorphic inlining: J1 profiled this site as
+                // J2.1 profile-guided monomorphic inlining: J1 profiled this site as
                 // calling exactly one callee `k` (non-capturing, native-inlinable).
                 // Guard the closure's identity, then inline `k`'s body. On a callee
                 // mismatch the guard bails (re-run-from-top fallback), so the
@@ -920,78 +1021,105 @@ fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<R
                         src: *arg,
                     });
                 }
-                let id = splices.len();
-                let reachable = native_reachable_instructions(&callee.code);
-                let mut cmap = vec![0usize; callee.code.len()];
-                for (ci, cinstr) in callee.code.iter().enumerate() {
-                    if !reachable[ci] {
-                        continue;
-                    }
-                    cmap[ci] = new_code.len();
-                    match cinstr {
-                        RegInstr::Return { src } => {
-                            new_code.push(RegInstr::Move {
-                                dst: *dst,
-                                src: base + src,
-                            });
-                            fixups.push((new_code.len(), Fix::Join(id)));
-                            new_code.push(RegInstr::Jump { target: 0 });
-                        }
-                        RegInstr::Jump { target } => {
-                            fixups.push((
-                                new_code.len(),
-                                Fix::Callee {
-                                    id,
-                                    callee_target: *target,
-                                },
-                            ));
-                            new_code.push(RegInstr::Jump { target: 0 });
-                        }
-                        RegInstr::JumpIfBool {
-                            cond,
-                            expected,
-                            target,
-                        } => {
-                            fixups.push((
-                                new_code.len(),
-                                Fix::Callee {
-                                    id,
-                                    callee_target: *target,
-                                },
-                            ));
-                            new_code.push(RegInstr::JumpIfBool {
-                                cond: cond + base,
-                                expected: *expected,
-                                target: 0,
-                            });
-                        }
-                        RegInstr::JumpIfIntCompare {
-                            lhs,
-                            rhs,
-                            op,
-                            expected,
-                            target,
-                        } => {
-                            fixups.push((
-                                new_code.len(),
-                                Fix::Callee {
-                                    id,
-                                    callee_target: *target,
-                                },
-                            ));
-                            new_code.push(RegInstr::JumpIfIntCompare {
-                                lhs: lhs + base,
-                                rhs: rhs + base,
-                                op: *op,
-                                expected: *expected,
-                                target: 0,
-                            });
-                        }
-                        pure => new_code.push(native_offset_regs(pure, base)?),
-                    }
+                let join_slot = joins.len();
+                joins.push(0);
+                splice_callee(
+                    callee,
+                    *dst,
+                    base,
+                    join_slot,
+                    &mut new_code,
+                    &mut fixups,
+                    &mut splices,
+                )?;
+                joins[join_slot] = new_code.len();
+            }
+            RegInstr::CallClosure {
+                dst,
+                closure,
+                args,
+                mut_args,
+            } if polymorphic_closure_inline_targets(unit, func, i).is_some() => {
+                // J2.2 polymorphic inline cache: J1 profiled this site as calling 2–3
+                // distinct callees, EVERY one non-capturing and native-inlinable. Read
+                // the closure's function id ONCE, then dispatch: `if id == Kj { inline
+                // body of Kj; jump join }` for each speculated callee; if NONE match,
+                // bail via the existing re-run-from-top fallback (a `RuntimeError`,
+                // which lowers to `JitInstr::Bail`). Sound: every inlined body is
+                // side-effect-free, so re-running from the top on a miss is safe —
+                // identical discipline to J2.1's single-guard bail.
+                debug_assert!(mut_args.is_empty());
+                let targets = polymorphic_closure_inline_targets(unit, func, i)?;
+                // Scratch registers for the dispatch: the id (read once), a per-arm
+                // key constant, and the equality result. They live above every
+                // inlined callee's window, so no arm can clobber them.
+                let id_reg = next_reg;
+                let key_reg = next_reg + 1;
+                let eq_reg = next_reg + 2;
+                next_reg += 3;
+                // Read the closure's function id exactly once.
+                new_code.push(RegInstr::NativeClosureId {
+                    dst: id_reg,
+                    closure: *closure,
+                });
+                // One shared join past the last arm: every arm's `Return` jumps here.
+                let join_slot = joins.len();
+                joins.push(0);
+                // Dispatch prologue: for each callee `Kj`, compare `id == Kj` and, on
+                // match, jump to that arm (target patched once the arm is emitted).
+                // Record one fixup slot per arm to backpatch its branch target.
+                let mut arm_branch_pos: Vec<usize> = Vec::with_capacity(targets.len());
+                for &k in &targets {
+                    new_code.push(RegInstr::LoadInt {
+                        dst: key_reg,
+                        value: k as i64,
+                    });
+                    new_code.push(RegInstr::Equal {
+                        dst: eq_reg,
+                        lhs: id_reg,
+                        rhs: key_reg,
+                    });
+                    arm_branch_pos.push(new_code.len());
+                    new_code.push(RegInstr::JumpIfBool {
+                        cond: eq_reg,
+                        expected: true,
+                        target: 0, // patched to the arm start below
+                    });
                 }
-                let join = new_code.len();
-                splices.push(Splice { cmap, join });
+                // No-match: bail to the interpreter (re-run from the top). Sound
+                // because every candidate body is side-effect-free.
+                new_code.push(RegInstr::RuntimeError {
+                    message: String::new(),
+                });
+                // Emit each arm's inlined body; record its start to patch the branch.
+                for (arm, &k) in targets.iter().enumerate() {
+                    let callee = unit.functions.get(k)?;
+                    let arm_start = new_code.len();
+                    // Backpatch this arm's dispatch branch to its body start.
+                    if let RegInstr::JumpIfBool { target, .. } = &mut new_code[arm_branch_pos[arm]]
+                    {
+                        *target = arm_start;
+                    }
+                    let base = next_reg;
+                    next_reg += callee.regs;
+                    for (param, arg) in args.iter().enumerate() {
+                        new_code.push(RegInstr::Move {
+                            dst: base + param,
+                            src: *arg,
+                        });
+                    }
+                    splice_callee(
+                        callee,
+                        *dst,
+                        base,
+                        join_slot,
+                        &mut new_code,
+                        &mut fixups,
+                        &mut splices,
+                    )?;
+                }
+                // Shared join lands just past the final arm.
+                joins[join_slot] = new_code.len();
             }
             RegInstr::Jump { target }
             | RegInstr::JumpIfBool { target, .. }
@@ -1007,7 +1135,7 @@ fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<R
         let target = match fix {
             Fix::Caller(t) => index_map[t],
             Fix::Callee { id, callee_target } => splices[id].cmap[callee_target],
-            Fix::Join(id) => splices[id].join,
+            Fix::Join(slot) => joins[slot],
         };
         match &mut new_code[pos] {
             RegInstr::Jump { target: t }
@@ -1127,6 +1255,12 @@ fn translate_to_native_jit(
                 // in as a parameter handle); the guard reads its function id.
                 RegInstr::NativeGuardClosureId { closure, .. } => {
                     native_set_ty(ty, *closure, NativeTy::Handle, c)
+                }
+                // J2.2 dispatch: the closure operand is a native handle; the read
+                // function id is an `Int` (consumed by integer compares/branches).
+                RegInstr::NativeClosureId { dst, closure } => {
+                    native_set_ty(ty, *closure, NativeTy::Handle, c)
+                        && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
                 _ => true,
             };
@@ -1486,6 +1620,15 @@ fn translate_to_native_jit(
                 JitInstr::GuardClosureId {
                     base: r(*closure),
                     expected,
+                }
+            }
+            RegInstr::NativeClosureId { dst, closure } => {
+                // The closure handle must be a native Handle parameter; reads its
+                // function id once into `dst` for the polymorphic dispatcher.
+                require(handle_param(*closure))?;
+                JitInstr::ClosureId {
+                    dst: r(*dst),
+                    base: r(*closure),
                 }
             }
             // `native_subset_instruction` already rejected everything else.
@@ -2589,6 +2732,19 @@ enum RegInstr {
     NativeGuardClosureId {
         closure: Reg,
         expected: usize,
+    },
+    /// Synthetic, native-JIT-only id read (J2.2 polymorphic inline cache). NEVER
+    /// emitted by the lowerer and NEVER executed by the interpreter — synthesized
+    /// only inside [`native_inline_leaf_calls`] and consumed solely by
+    /// [`translate_to_native_jit`]. Lowers to a [`vm_jit::JitInstr::ClosureId`]:
+    /// reads `closure`'s underlying function id once into the `Int` register `dst`,
+    /// which the dispatcher then compares against each speculated callee key with
+    /// ordinary integer compare/branch instructions (the no-match arm bails via the
+    /// existing re-run-from-top fallback). `closure` is a parameter handle.
+    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    NativeClosureId {
+        dst: Reg,
+        closure: Reg,
     },
     ListFilter {
         dst: Reg,
