@@ -7792,10 +7792,11 @@ impl RegVm {
                 }
             }
         }
-        // Phase 3: call. `call` returns `None` if the native code bailed at a guard
-        // *or* a host helper flagged an unsatisfiable heap read; either way the
-        // interpreter re-runs the function. A clean result is boxed per the
-        // function's return type (a float register stored its `f64` bit pattern).
+        // Phase 3: call. `call` returns `NativeOutcome::Deopt` if the native code
+        // bailed at a guard *or* a host helper flagged an unsatisfiable heap read;
+        // either way the interpreter re-runs the function. A clean
+        // `NativeOutcome::Completed` result is boxed per the function's return type
+        // (a float register stored its `f64` bit pattern).
         let collect_stats = self.native.as_ref()?.collect_stats;
         let started = collect_stats.then(std::time::Instant::now);
         let result = self.native.as_ref()?.module.call(id, &args, &lens);
@@ -7805,7 +7806,7 @@ impl RegVm {
             native.stats.run_nanos += elapsed;
         }
         match result {
-            Some(bits) => {
+            vm_jit::NativeOutcome::Completed(bits) => {
                 if native.collect_stats {
                     native.stats.native_calls += 1;
                 }
@@ -7817,7 +7818,7 @@ impl RegVm {
                     _ => VmValue::Int(bits),
                 })
             }
-            None => {
+            vm_jit::NativeOutcome::Deopt { .. } => {
                 if native.collect_stats {
                     native.stats.native_bails += 1;
                 }

@@ -439,6 +439,43 @@ pub struct CompiledId {
     index: usize,
 }
 
+/// Identity of a deopt (bail) point in a compiled function. Today there is exactly
+/// one anonymous deopt point per function — every bail (guard or host-helper) maps
+/// to [`SafepointId::ANONYMOUS`]. Codegen will emit per-site ids in J0.0 slice 2;
+/// this slice introduces only the type so the ABI boundary already names the point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SafepointId(pub u32);
+
+impl SafepointId {
+    /// The single anonymous deopt point shared by every bail until codegen emits
+    /// per-site ids (J0.0 slice 2).
+    pub const ANONYMOUS: SafepointId = SafepointId(0);
+}
+
+/// Outcome of running a compiled function via [`NativeModule::call`]: either the
+/// function ran to completion with a 64-bit result, or it deopted at a named
+/// safepoint and the interpreter should re-run it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeOutcome {
+    /// The function completed; the payload is the result bits (an `i64`, or an
+    /// `f64` bit pattern for a float-returning function).
+    Completed(i64),
+    /// The function deopted at `safepoint_id` (a guard bail or a host-helper bail)
+    /// and the caller must fall back to the interpreter.
+    Deopt { safepoint_id: SafepointId },
+}
+
+impl NativeOutcome {
+    /// The completed result, or `None` on a deopt. Convenience for callers that
+    /// only care whether the call produced a value.
+    pub fn completed(self) -> Option<i64> {
+        match self {
+            NativeOutcome::Completed(value) => Some(value),
+            NativeOutcome::Deopt { .. } => None,
+        }
+    }
+}
+
 impl NativeModule {
     /// Optimizing native tier (back-compat default): `opt_level="speed"`.
     pub fn new(helpers: HostHelpers) -> Result<Self, JitError> {
@@ -562,10 +599,12 @@ impl NativeModule {
         Ok(handle)
     }
 
-    /// Run a compiled function. Returns `Some(result)` on completion, or `None`
-    /// when the native code bailed and the interpreter should re-run the function —
-    /// either a guard bail (overflow/divide-by-zero edge) or a host-helper bail
-    /// (an unsatisfiable heap read; see [`signal_bail`]).
+    /// Run a compiled function. Returns [`NativeOutcome::Completed`] with the result
+    /// on completion, or [`NativeOutcome::Deopt`] when the native code bailed and the
+    /// interpreter should re-run the function — either a guard bail (overflow/
+    /// divide-by-zero edge) or a host-helper bail (an unsatisfiable heap read; see
+    /// [`signal_bail`]). Every bail maps to [`SafepointId::ANONYMOUS`] today (the
+    /// single anonymous deopt point; per-site ids land in J0.0 slice 2).
     ///
     /// This is a **fully safe** boundary for scalar/handle args. The bail flag is a
     /// per-thread `u8` owned by this crate; `call` resets it, passes its own address
@@ -582,18 +621,29 @@ impl NativeModule {
     /// `signal_bail` on OOB) and never writes or retains it. The VM caller satisfies
     /// this by pinning a shared `Ref` borrow of the backing `RefCell<TypedVec>` for
     /// the call (so no `borrow_mut`/realloc can occur); see `try_native`.
-    pub fn call(&self, id: CompiledId, args: &[i64], lens: &[i64]) -> Option<i64> {
+    pub fn call(&self, id: CompiledId, args: &[i64], lens: &[i64]) -> NativeOutcome {
         // Reject an id from a different module and an out-of-range index: either
         // would invoke the wrong (or no) function. Falling back is always safe.
         if id.module_id != self.id {
-            return None;
+            return NativeOutcome::Deopt {
+                safepoint_id: SafepointId::ANONYMOUS,
+            };
         }
-        let func = self.funcs.get(id.index)?;
+        let func = match self.funcs.get(id.index) {
+            Some(func) => func,
+            None => {
+                return NativeOutcome::Deopt {
+                    safepoint_id: SafepointId::ANONYMOUS,
+                }
+            }
+        };
         // The generated entry block reads exactly `n_params` words from `args_ptr`
         // (and `lens_ptr`) without consulting `n_args`, so a slice shorter than
         // `n_params` would read out of bounds. Reject any length mismatch.
         if args.len() != func.n_params || lens.len() != func.n_params {
-            return None;
+            return NativeOutcome::Deopt {
+                safepoint_id: SafepointId::ANONYMOUS,
+            };
         }
         let f = func.f;
         let mut out: i64 = 0;
@@ -618,9 +668,11 @@ impl NativeModule {
                 )
             };
             if completed != 0 && bail.get() == 0 {
-                Some(out)
+                NativeOutcome::Completed(out)
             } else {
-                None
+                NativeOutcome::Deopt {
+                    safepoint_id: SafepointId::ANONYMOUS,
+                }
             }
         })
     }
@@ -1405,7 +1457,7 @@ mod tests {
     impl CallScalar for NativeModule {
         fn callt(&self, id: CompiledId, args: &[i64]) -> Option<i64> {
             let lens = vec![0i64; args.len()];
-            self.call(id, args, &lens)
+            self.call(id, args, &lens).completed()
         }
     }
 
@@ -1584,11 +1636,11 @@ mod tests {
         let ints_ptr = ints.as_ptr() as i64;
         let ilen = ints.len() as i64;
         // In-bounds reads index directly out of the flat buffer.
-        assert_eq!(m.call(id_int, &[ints_ptr, 0], &[ilen, 0]), Some(10));
-        assert_eq!(m.call(id_int, &[ints_ptr, 2], &[ilen, 0]), Some(30));
+        assert_eq!(m.call(id_int, &[ints_ptr, 0], &[ilen, 0]).completed(), Some(10));
+        assert_eq!(m.call(id_int, &[ints_ptr, 2], &[ilen, 0]).completed(), Some(30));
         // OOB (>= len and < 0) → fallback (None), like the helper's bail.
-        assert_eq!(m.call(id_int, &[ints_ptr, 3], &[ilen, 0]), None);
-        assert_eq!(m.call(id_int, &[ints_ptr, -1], &[ilen, 0]), None);
+        assert_eq!(m.call(id_int, &[ints_ptr, 3], &[ilen, 0]).completed(), None);
+        assert_eq!(m.call(id_int, &[ints_ptr, -1], &[ilen, 0]).completed(), None);
 
         // fn(a: FlatFloat, i: Int) -> Float { return a[i] }
         let id_f = m
@@ -1610,6 +1662,7 @@ mod tests {
         let flen = floats.len() as i64;
         let read = |i: i64| {
             m.call(id_f, &[fptr, i], &[flen, 0])
+                .completed()
                 .map(|b| f64::from_bits(b as u64))
         };
         assert_eq!(read(1), Some(2.5));
@@ -1627,7 +1680,7 @@ mod tests {
                 ],
             ))
             .unwrap();
-        assert_eq!(m.call(id_len, &[ints_ptr], &[ilen]), Some(3));
+        assert_eq!(m.call(id_len, &[ints_ptr], &[ilen]).completed(), Some(3));
     }
 
     #[test]
