@@ -401,6 +401,12 @@ fn declare_import_f64(
 struct CompiledFunc {
     f: CompiledAbi,
     n_params: usize,
+    /// Register count of the source [`JitFunction`] (the width of each site's
+    /// register space; future slices size their payload by it).
+    n_regs: usize,
+    /// Per-safepoint deopt state-map (resume_ip + live registers), built host-side
+    /// during `compile`. See [`DeoptMap`].
+    deopt_map: DeoptMap,
 }
 
 /// Process-wide source of per-module identities, so a [`CompiledId`] minted by one
@@ -455,6 +461,45 @@ impl SafepointId {
     /// completion or bailed before any site stored its id). Real bail sites are
     /// numbered from `1`.
     pub const ANONYMOUS: SafepointId = SafepointId(0);
+}
+
+/// The deopt state for one safepoint: where the interpreter must resume and which
+/// registers carry live state into that resume point.
+///
+/// `resume_ip` is the [`JitInstr`] index the interpreter re-executes when this
+/// guard fires. It is the very instruction whose guard bailed: native code bails
+/// *before* completing that instruction (e.g. before storing an `Add`'s checked
+/// result), so the interpreter must run it again. Its inputs are therefore exactly
+/// the registers definitely assigned on entry to that instruction.
+///
+/// `live` lists those entry-assigned registers (definite-assignment / "must"
+/// analysis — see [`definite_assignment`]), each paired with its storage class. A
+/// register absent from `live` is not guaranteed assigned on every path to the
+/// resume point, so it carries no meaningful value to reconstruct.
+///
+/// This slice (J0.1a) only *computes and stores* the map; nothing reads it into the
+/// running ABI yet (no payload is captured, no emitted code changes). It is the
+/// schema foundation for J0.1b's payload capture and J0.2's reconstruction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeoptSite {
+    /// The `JitInstr` index to resume interpretation at (the bailing instruction).
+    pub resume_ip: u32,
+    /// Registers definitely assigned on entry to `resume_ip`, each `(reg, type)`.
+    pub live: Vec<(u32, JitValueType)>,
+}
+
+/// Per-function deopt state-map, indexed by safepoint id.
+///
+/// Codegen mints safepoint ids from `1` (id `0` is [`SafepointId::ANONYMOUS`]), one
+/// per [`bail_if`] call in emission order. This map mirrors that numbering with a
+/// **0-based** vector: `sites[id - 1]` is the [`DeoptSite`] for `safepoint_id == id`
+/// (so `sites[0]` is id `1`). The alignment is structural — codegen pushes exactly
+/// one [`DeoptSite`] per `bail_if` call, in the same traversal that increments the
+/// id counter — so indices never drift from ids.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DeoptMap {
+    /// `sites[id - 1]` is the site for `safepoint_id == id` (ids start at 1).
+    pub sites: Vec<DeoptSite>,
 }
 
 /// Outcome of running a compiled function via [`NativeModule::call`]: either the
@@ -569,7 +614,7 @@ impl NativeModule {
             .returns
             .push(AbiParam::new(types::I8));
 
-        build_function(
+        let deopt_map = build_function(
             &mut self.ctx.func,
             &mut self.fbctx,
             &mut self.module,
@@ -601,6 +646,8 @@ impl NativeModule {
         self.funcs.push(CompiledFunc {
             f,
             n_params: function.n_params as usize,
+            n_regs: function.n_regs as usize,
+            deopt_map,
         });
         Ok(handle)
     }
@@ -691,6 +738,27 @@ impl NativeModule {
                 }
             })
         })
+    }
+
+    /// The per-function [`DeoptMap`] computed at compile time, or `None` if `id`
+    /// is foreign / out of range (validated exactly like [`call`]). Index it by
+    /// safepoint id via `map.sites[id - 1]` (ids start at 1). Host-side metadata
+    /// only — reading it has no effect on execution.
+    pub fn deopt_map(&self, id: CompiledId) -> Option<&DeoptMap> {
+        if id.module_id != self.id {
+            return None;
+        }
+        self.funcs.get(id.index).map(|func| &func.deopt_map)
+    }
+
+    /// Register count of the compiled function (the width of its register space),
+    /// or `None` for a foreign / out-of-range `id`. Companion to [`deopt_map`]: a
+    /// site's `live` regs index into this space.
+    pub fn n_regs(&self, id: CompiledId) -> Option<usize> {
+        if id.module_id != self.id {
+            return None;
+        }
+        self.funcs.get(id.index).map(|func| func.n_regs)
     }
 }
 
@@ -967,13 +1035,180 @@ fn validate(program: &JitFunction) -> Result<(), JitError> {
     Ok(())
 }
 
+/// The register an instruction definitely writes (its `dst`), if any. Control
+/// instructions (`Return`/`Jump`/`JumpIf*`/`Bail`) and `Nop` write nothing.
+fn instr_def(instr: &JitInstr) -> Option<u32> {
+    match instr {
+        JitInstr::LoadInt { dst, .. }
+        | JitInstr::LoadFloat { dst, .. }
+        | JitInstr::LoadBool { dst, .. }
+        | JitInstr::Move { dst, .. }
+        | JitInstr::Add { dst, .. }
+        | JitInstr::Sub { dst, .. }
+        | JitInstr::Mul { dst, .. }
+        | JitInstr::Div { dst, .. }
+        | JitInstr::Mod { dst, .. }
+        | JitInstr::BitAnd { dst, .. }
+        | JitInstr::BitOr { dst, .. }
+        | JitInstr::BitXor { dst, .. }
+        | JitInstr::Shl { dst, .. }
+        | JitInstr::Shr { dst, .. }
+        | JitInstr::Compare { dst, .. }
+        | JitInstr::Equal { dst, .. }
+        | JitInstr::NotEqual { dst, .. }
+        | JitInstr::FieldInt { dst, .. }
+        | JitInstr::ListLen { dst, .. }
+        | JitInstr::ListGetInt { dst, .. }
+        | JitInstr::FieldFloat { dst, .. }
+        | JitInstr::ListGetFloat { dst, .. }
+        | JitInstr::ListGetIntDirect { dst, .. }
+        | JitInstr::ListGetFloatDirect { dst, .. }
+        | JitInstr::ListLenDirect { dst, .. } => Some(*dst),
+        JitInstr::Nop
+        | JitInstr::Jump { .. }
+        | JitInstr::JumpIfBool { .. }
+        | JitInstr::JumpIfIntCompare { .. }
+        | JitInstr::Return { .. }
+        | JitInstr::Bail => None,
+    }
+}
+
+/// The control-flow successors of instruction `i` (indices into `program.code`):
+/// fallthrough to `i + 1` unless `i` is an unconditional `Jump`; conditional
+/// branches add their target; `Jump` goes only to its target; `Return`/`Bail` (and
+/// running off the end) go nowhere. Out-of-range targets are dropped — `validate`
+/// rejects those before codegen, and the analysis stays total regardless.
+fn successors(program: &JitFunction, i: usize) -> Vec<usize> {
+    let n = program.code.len();
+    let in_range = |t: u32| (t as usize) < n;
+    let next = i + 1;
+    match &program.code[i] {
+        JitInstr::Jump { target } => {
+            if in_range(*target) {
+                vec![*target as usize]
+            } else {
+                vec![]
+            }
+        }
+        JitInstr::JumpIfBool { target, .. } | JitInstr::JumpIfIntCompare { target, .. } => {
+            let mut succ = Vec::new();
+            if next < n {
+                succ.push(next);
+            }
+            if in_range(*target) {
+                succ.push(*target as usize);
+            }
+            succ
+        }
+        JitInstr::Return { .. } | JitInstr::Bail => vec![],
+        _ => {
+            if next < n {
+                vec![next]
+            } else {
+                vec![]
+            }
+        }
+    }
+}
+
+/// Definite-assignment ("must") analysis over the [`JitInstr`] CFG. Returns, per
+/// instruction index `i`, the set (as a `reg -> bool` vector of width `n_regs`) of
+/// registers **definitely assigned on entry to `i`** — i.e. assigned on *every*
+/// path from the function entry to `i`.
+///
+/// Lattice: forward must-analysis. The entry-to-instruction-0 set is the parameter
+/// registers `0..n_params`. `assigned_out[i] = assigned_in[i] ∪ defs(i)`, and for a
+/// non-entry instruction `assigned_in[j] = ⋂ assigned_out[p]` over predecessors `p`
+/// (intersection — a register is live on entry only if every incoming path assigns
+/// it). Non-entry `assigned_in` starts at the full set and the intersection shrinks
+/// it to the fixpoint; instruction 0's entry set is the params and is never
+/// intersected down.
+fn definite_assignment(program: &JitFunction) -> Vec<Vec<bool>> {
+    let n = program.code.len();
+    let n_regs = program.n_regs as usize;
+    if n == 0 {
+        return Vec::new();
+    }
+
+    // Predecessor lists, derived from the forward CFG.
+    let mut preds: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for i in 0..n {
+        for s in successors(program, i) {
+            preds[s].push(i);
+        }
+    }
+
+    // Entry set for instruction 0: the parameters are assigned, nothing else.
+    let mut entry0 = vec![false; n_regs];
+    for r in 0..(program.n_params as usize).min(n_regs) {
+        entry0[r] = true;
+    }
+
+    // `assigned_in[0]` is pinned to the params; every other block starts at the
+    // full (all-true) set so intersection can only shrink it toward the fixpoint.
+    let mut assigned_in: Vec<Vec<bool>> = (0..n)
+        .map(|i| {
+            if i == 0 {
+                entry0.clone()
+            } else {
+                vec![true; n_regs]
+            }
+        })
+        .collect();
+
+    let out_of = |in_set: &[bool], i: usize| -> Vec<bool> {
+        let mut out = in_set.to_vec();
+        if let Some(d) = instr_def(&program.code[i]) {
+            if (d as usize) < n_regs {
+                out[d as usize] = true;
+            }
+        }
+        out
+    };
+
+    // Iterate to a fixpoint. Intersection is monotone (only clears bits), so the
+    // loop terminates in at most `n_regs * n` bit-clears.
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for j in 1..n {
+            if preds[j].is_empty() {
+                // Unreachable block: leave at the full set (it has no resume site of
+                // its own that we rely on; its inputs are vacuously satisfied).
+                continue;
+            }
+            let mut new_in = vec![true; n_regs];
+            for &p in &preds[j] {
+                let out = out_of(&assigned_in[p], p);
+                for r in 0..n_regs {
+                    new_in[r] = new_in[r] && out[r];
+                }
+            }
+            if new_in != assigned_in[j] {
+                assigned_in[j] = new_in;
+                changed = true;
+            }
+        }
+    }
+
+    assigned_in
+}
+
 fn build_function(
     func: &mut cranelift_codegen::ir::Function,
     fbctx: &mut FunctionBuilderContext,
     module: &mut JITModule,
     imports: HostFuncs,
     program: &JitFunction,
-) {
+) -> DeoptMap {
+    // Definite-assignment ("must") sets per instruction, computed once up front so
+    // each bail site can record its live (entry-assigned) registers. Purely
+    // host-side analysis — it shapes no emitted code.
+    let assigned_in = definite_assignment(program);
+    // Sites accumulate in emission order, aligned 1:1 with the `next_id` counter
+    // (`sites[id - 1]` is the site for id `id`).
+    let mut sites: Vec<DeoptSite> = Vec::new();
+
     let mut bcx = FunctionBuilder::new(func, fbctx);
 
     // Per-function references to the imported host helpers (heap reads call these).
@@ -1077,6 +1312,21 @@ fn build_function(
 
     let reg = |program_reg: u32| vars[program_reg as usize];
 
+    // Fresh per-call deopt context for the instruction currently being lowered
+    // (`i`). Each `bail_if` consumes one and pushes one site, so ids and `sites`
+    // indices stay in lock-step. A macro (not a closure) so the `&mut sites` borrow
+    // lives only for the single `bail_if` call.
+    macro_rules! deopt {
+        ($ip:expr) => {
+            &mut DeoptCtx {
+                ip: $ip as u32,
+                assigned_in: &assigned_in,
+                reg_types: &program.reg_types,
+                sites: &mut sites,
+            }
+        };
+    }
+
     if n == 0 {
         bcx.ins().jump(fallback, &[]);
     } else {
@@ -1118,7 +1368,8 @@ fn build_function(
                     bcx.def_var(reg(*dst), res);
                 } else {
                     let (res, of) = bcx.ins().sadd_overflow(a, b);
-                    let cont = bail_if(&mut bcx, of, fallback, safepoint_ptr, &mut next_id);
+                    let cont =
+                        bail_if(&mut bcx, of, fallback, safepoint_ptr, &mut next_id, deopt!(i));
                     bcx.switch_to_block(cont);
                     bcx.def_var(reg(*dst), res);
                 }
@@ -1131,7 +1382,8 @@ fn build_function(
                     bcx.def_var(reg(*dst), res);
                 } else {
                     let (res, of) = bcx.ins().ssub_overflow(a, b);
-                    let cont = bail_if(&mut bcx, of, fallback, safepoint_ptr, &mut next_id);
+                    let cont =
+                        bail_if(&mut bcx, of, fallback, safepoint_ptr, &mut next_id, deopt!(i));
                     bcx.switch_to_block(cont);
                     bcx.def_var(reg(*dst), res);
                 }
@@ -1144,7 +1396,8 @@ fn build_function(
                     bcx.def_var(reg(*dst), res);
                 } else {
                     let (res, of) = bcx.ins().smul_overflow(a, b);
-                    let cont = bail_if(&mut bcx, of, fallback, safepoint_ptr, &mut next_id);
+                    let cont =
+                        bail_if(&mut bcx, of, fallback, safepoint_ptr, &mut next_id, deopt!(i));
                     bcx.switch_to_block(cont);
                     bcx.def_var(reg(*dst), res);
                 }
@@ -1165,6 +1418,7 @@ fn build_function(
                         fallback,
                         safepoint_ptr,
                         &mut next_id,
+                        deopt!(i),
                         false,
                     );
                     bcx.def_var(reg(*dst), res);
@@ -1180,6 +1434,7 @@ fn build_function(
                     fallback,
                     safepoint_ptr,
                     &mut next_id,
+                    deopt!(i),
                     true,
                 );
                 bcx.def_var(reg(*dst), res);
@@ -1210,6 +1465,7 @@ fn build_function(
                     fallback,
                     safepoint_ptr,
                     &mut next_id,
+                    deopt!(i),
                     false,
                 );
                 bcx.def_var(reg(*dst), res);
@@ -1222,6 +1478,7 @@ fn build_function(
                     fallback,
                     safepoint_ptr,
                     &mut next_id,
+                    deopt!(i),
                     true,
                 );
                 bcx.def_var(reg(*dst), res);
@@ -1317,8 +1574,14 @@ fn build_function(
                 let slot_v = bcx.ins().iconst(types::I64, i64::from(*slot));
                 let call = bcx.ins().call(field_int_ref, &[handle, slot_v]);
                 let result = bcx.inst_results(call)[0];
-                let cont =
-                    bail_if_helper_failed(&mut bcx, bail_ptr, fallback, safepoint_ptr, &mut next_id);
+                let cont = bail_if_helper_failed(
+                    &mut bcx,
+                    bail_ptr,
+                    fallback,
+                    safepoint_ptr,
+                    &mut next_id,
+                    deopt!(i),
+                );
                 bcx.switch_to_block(cont);
                 bcx.def_var(reg(*dst), result);
             }
@@ -1326,8 +1589,14 @@ fn build_function(
                 let handle = bcx.use_var(reg(*base));
                 let call = bcx.ins().call(list_len_ref, &[handle]);
                 let result = bcx.inst_results(call)[0];
-                let cont =
-                    bail_if_helper_failed(&mut bcx, bail_ptr, fallback, safepoint_ptr, &mut next_id);
+                let cont = bail_if_helper_failed(
+                    &mut bcx,
+                    bail_ptr,
+                    fallback,
+                    safepoint_ptr,
+                    &mut next_id,
+                    deopt!(i),
+                );
                 bcx.switch_to_block(cont);
                 bcx.def_var(reg(*dst), result);
             }
@@ -1336,8 +1605,14 @@ fn build_function(
                 let index_v = bcx.use_var(reg(*index));
                 let call = bcx.ins().call(list_get_int_ref, &[handle, index_v]);
                 let result = bcx.inst_results(call)[0];
-                let cont =
-                    bail_if_helper_failed(&mut bcx, bail_ptr, fallback, safepoint_ptr, &mut next_id);
+                let cont = bail_if_helper_failed(
+                    &mut bcx,
+                    bail_ptr,
+                    fallback,
+                    safepoint_ptr,
+                    &mut next_id,
+                    deopt!(i),
+                );
                 bcx.switch_to_block(cont);
                 bcx.def_var(reg(*dst), result);
             }
@@ -1346,8 +1621,14 @@ fn build_function(
                 let slot_v = bcx.ins().iconst(types::I64, i64::from(*slot));
                 let call = bcx.ins().call(field_float_ref, &[handle, slot_v]);
                 let result = bcx.inst_results(call)[0];
-                let cont =
-                    bail_if_helper_failed(&mut bcx, bail_ptr, fallback, safepoint_ptr, &mut next_id);
+                let cont = bail_if_helper_failed(
+                    &mut bcx,
+                    bail_ptr,
+                    fallback,
+                    safepoint_ptr,
+                    &mut next_id,
+                    deopt!(i),
+                );
                 bcx.switch_to_block(cont);
                 bcx.def_var(reg(*dst), result);
             }
@@ -1356,8 +1637,14 @@ fn build_function(
                 let index_v = bcx.use_var(reg(*index));
                 let call = bcx.ins().call(list_get_float_ref, &[handle, index_v]);
                 let result = bcx.inst_results(call)[0];
-                let cont =
-                    bail_if_helper_failed(&mut bcx, bail_ptr, fallback, safepoint_ptr, &mut next_id);
+                let cont = bail_if_helper_failed(
+                    &mut bcx,
+                    bail_ptr,
+                    fallback,
+                    safepoint_ptr,
+                    &mut next_id,
+                    deopt!(i),
+                );
                 bcx.switch_to_block(cont);
                 bcx.def_var(reg(*dst), result);
             }
@@ -1368,6 +1655,7 @@ fn build_function(
                     fallback,
                     safepoint_ptr,
                     &mut next_id,
+                    deopt!(i),
                     reg(*base),
                     reg(*index),
                     *base,
@@ -1382,6 +1670,7 @@ fn build_function(
                     fallback,
                     safepoint_ptr,
                     &mut next_id,
+                    deopt!(i),
                     reg(*base),
                     reg(*index),
                     *base,
@@ -1416,6 +1705,8 @@ fn build_function(
 
     bcx.seal_all_blocks();
     bcx.finalize();
+
+    DeoptMap { sites }
 }
 
 /// TV2 direct list read: `cont: dst = base_ptr[index]`, bounds-checked against the
@@ -1436,6 +1727,7 @@ fn emit_direct_get(
     fallback: Block,
     safepoint_ptr: Value,
     next_id: &mut i64,
+    deopt: &mut DeoptCtx,
     base_var: Variable,
     index_var: Variable,
     base_param: u32,
@@ -1450,12 +1742,48 @@ fn emit_direct_get(
     let oob = bcx
         .ins()
         .icmp(IntCC::UnsignedGreaterThanOrEqual, index, len);
-    let cont = bail_if(bcx, oob, fallback, safepoint_ptr, next_id);
+    let cont = bail_if(bcx, oob, fallback, safepoint_ptr, next_id, deopt);
     bcx.switch_to_block(cont);
     let base_ptr = bcx.use_var(base_var);
     let offset = bcx.ins().imul_imm(index, 8);
     let addr = bcx.ins().iadd(base_ptr, offset);
     bcx.ins().load(elem_ty, MemFlags::trusted(), addr, 0)
+}
+
+/// Host-side deopt bookkeeping threaded through every guard emission. Each
+/// [`bail_if`] call records one [`DeoptSite`] into `sites` for the instruction
+/// currently being emitted (`ip`), keeping `sites` aligned 1:1 with the minted
+/// safepoint ids. Carries no Cranelift state — it shapes no machine code.
+struct DeoptCtx<'a> {
+    /// Index of the instruction currently being lowered (the resume_ip for any
+    /// guard it emits).
+    ip: u32,
+    /// Definite-assignment sets per instruction (see [`definite_assignment`]).
+    assigned_in: &'a [Vec<bool>],
+    /// Storage class per register, to type each live register.
+    reg_types: &'a [JitValueType],
+    /// Accumulated sites, in emission (= id) order.
+    sites: &'a mut Vec<DeoptSite>,
+}
+
+impl DeoptCtx<'_> {
+    /// Record the site for the safepoint about to be minted: resume at the current
+    /// instruction with its entry-assigned (definitely-live) registers.
+    fn record(&mut self) {
+        let live = match self.assigned_in.get(self.ip as usize) {
+            Some(set) => set
+                .iter()
+                .enumerate()
+                .filter(|&(_, &assigned)| assigned)
+                .map(|(r, _)| (r as u32, self.reg_types[r]))
+                .collect(),
+            None => Vec::new(),
+        };
+        self.sites.push(DeoptSite {
+            resume_ip: self.ip,
+            live,
+        });
+    }
 }
 
 /// Emit a per-site guarded bail and return the `cont` block to continue in.
@@ -1466,15 +1794,21 @@ fn emit_direct_get(
 /// `site_block` stores this site's id into `safepoint_ptr` before jumping to the
 /// shared `fallback`. The hot fall-through (`cont`) path executes zero extra
 /// instructions, so non-bailing iterations are unaffected.
+///
+/// `deopt` records this site's [`DeoptSite`] (resume_ip + live regs) host-side,
+/// pushed in lock-step with `next_id` so `sites[id - 1]` aligns with the id minted
+/// here. This recording emits no machine code.
 fn bail_if(
     bcx: &mut FunctionBuilder,
     cond: Value,
     fallback: Block,
     safepoint_ptr: Value,
     next_id: &mut i64,
+    deopt: &mut DeoptCtx,
 ) -> Block {
     let site_id = *next_id;
     *next_id += 1;
+    deopt.record();
     let site_block = bcx.create_block();
     let cont = bcx.create_block();
     bcx.ins().brif(cond, site_block, &[], cont, &[]);
@@ -1496,9 +1830,10 @@ fn bail_if_helper_failed(
     fallback: Block,
     safepoint_ptr: Value,
     next_id: &mut i64,
+    deopt: &mut DeoptCtx,
 ) -> Block {
     let flag = bcx.ins().load(types::I8, MemFlags::trusted(), bail_ptr, 0);
-    bail_if(bcx, flag, fallback, safepoint_ptr, next_id)
+    bail_if(bcx, flag, fallback, safepoint_ptr, next_id, deopt)
 }
 
 /// Checked division / remainder matching the interpreter: bail on divide-by-zero
@@ -1510,20 +1845,21 @@ fn emit_checked_divrem(
     fallback: Block,
     safepoint_ptr: Value,
     next_id: &mut i64,
+    deopt: &mut DeoptCtx,
     is_rem: bool,
 ) -> Value {
     let a = bcx.use_var(lhs);
     let b = bcx.use_var(rhs);
     let zero = bcx.ins().iconst(types::I64, 0);
     let is_zero = bcx.ins().icmp(IntCC::Equal, b, zero);
-    let cont1 = bail_if(bcx, is_zero, fallback, safepoint_ptr, next_id);
+    let cont1 = bail_if(bcx, is_zero, fallback, safepoint_ptr, next_id, deopt);
     bcx.switch_to_block(cont1);
     let imin = bcx.ins().iconst(types::I64, i64::MIN);
     let neg1 = bcx.ins().iconst(types::I64, -1);
     let a_is_min = bcx.ins().icmp(IntCC::Equal, a, imin);
     let b_is_neg1 = bcx.ins().icmp(IntCC::Equal, b, neg1);
     let overflow = bcx.ins().band(a_is_min, b_is_neg1);
-    let cont2 = bail_if(bcx, overflow, fallback, safepoint_ptr, next_id);
+    let cont2 = bail_if(bcx, overflow, fallback, safepoint_ptr, next_id, deopt);
     bcx.switch_to_block(cont2);
     if is_rem {
         bcx.ins().srem(a, b)
@@ -1541,6 +1877,7 @@ fn emit_checked_shift(
     fallback: Block,
     safepoint_ptr: Value,
     next_id: &mut i64,
+    deopt: &mut DeoptCtx,
     is_right: bool,
 ) -> Value {
     let a = bcx.use_var(lhs);
@@ -1550,7 +1887,7 @@ fn emit_checked_shift(
     let oob = bcx
         .ins()
         .icmp(IntCC::UnsignedGreaterThanOrEqual, amt, limit);
-    let cont = bail_if(bcx, oob, fallback, safepoint_ptr, next_id);
+    let cont = bail_if(bcx, oob, fallback, safepoint_ptr, next_id, deopt);
     bcx.switch_to_block(cont);
     if is_right {
         bcx.ins().sshr(a, amt)
@@ -1849,6 +2186,156 @@ mod tests {
             m.call(id, &[ints_ptr, 1, 2], &[ilen, 0, 0]),
             NativeOutcome::Completed(_)
         ));
+    }
+
+    // --- J0.1a: deopt state-map (must-analysis) -------------------------------
+
+    #[test]
+    fn deopt_map_straightline_single_guard() {
+        // fn(a, b) { t = a + b; return t }  regs 0=a,1=b,2=t. The `Add` (ip 0) has
+        // one overflow guard (site id 1) → one site, resuming at ip 0 with the two
+        // params live (t is not yet assigned on entry to its own instruction).
+        let mut m = module();
+        let id = m
+            .compile(&f(
+                2,
+                3,
+                vec![
+                    JitInstr::Add {
+                        dst: 2,
+                        lhs: 0,
+                        rhs: 1,
+                    },
+                    JitInstr::Return { src: 2 },
+                ],
+            ))
+            .unwrap();
+        let map = m.deopt_map(id).expect("map for valid id");
+        assert_eq!(map.sites.len(), 1);
+        assert_eq!(map.sites[0].resume_ip, 0);
+        assert_eq!(
+            map.sites[0].live,
+            vec![(0, JitValueType::Int), (1, JitValueType::Int)]
+        );
+    }
+
+    #[test]
+    fn deopt_map_two_distinct_sites_track_prior_defs() {
+        use JitValueType::{FlatInt, Int};
+        // fn(a: FlatInt, x, i) { t = x + x; return a[i] }  regs 0=a,1=x,2=i,3=t,4=res.
+        // Site 1: the `Add` overflow guard at ip 0 (t not yet live). Site 2: the
+        // `ListGetIntDirect` OOB guard at ip 1 — by then `t` (reg 3) is definitely
+        // assigned, so it appears in site 2's live set but not site 1's. (Mirrors
+        // `distinct_bail_sites_get_stable_safepoint_ids`.)
+        let mut m = module();
+        let id = m
+            .compile(&ft(
+                3,
+                vec![FlatInt, Int, Int, Int, Int],
+                vec![
+                    JitInstr::Add {
+                        dst: 3,
+                        lhs: 1,
+                        rhs: 1,
+                    },
+                    JitInstr::ListGetIntDirect {
+                        dst: 4,
+                        base: 0,
+                        index: 2,
+                    },
+                    JitInstr::Return { src: 4 },
+                ],
+            ))
+            .unwrap();
+        let map = m.deopt_map(id).expect("map for valid id");
+        assert_eq!(map.sites.len(), 2);
+
+        // Site 1 (id 1): resume at the Add (ip 0); params live, t (reg 3) is NOT.
+        assert_eq!(map.sites[0].resume_ip, 0);
+        assert!(!map.sites[0].live.iter().any(|(r, _)| *r == 3));
+        // Params 0..3 are live (a is FlatInt, x/i are Int).
+        assert_eq!(
+            map.sites[0].live,
+            vec![
+                (0, JitValueType::FlatInt),
+                (1, JitValueType::Int),
+                (2, JitValueType::Int)
+            ]
+        );
+
+        // Site 2 (id 2): resume at the direct read (ip 1); t (reg 3) is now live.
+        assert_eq!(map.sites[1].resume_ip, 1);
+        assert!(map.sites[1].live.contains(&(3, JitValueType::Int)));
+    }
+
+    #[test]
+    fn deopt_map_must_analysis_excludes_one_armed_def() {
+        // A register assigned on only ONE arm before a join with a guard must NOT be
+        // in the join's live set (intersection / must-analysis).
+        //
+        //   0: if cond(reg1) goto 3            (cond is param reg 1)
+        //   1:   t(reg3) = a(reg0) + a(reg0)   only the fall-through arm assigns t
+        //   2:   goto 4
+        //   3:   nop                           the taken arm leaves t unassigned
+        //   4:   u(reg4) = a + a               guard here joins both arms
+        //   5:   return u
+        // regs: 0=a, 1=cond, 2=(unused scratch), 3=t, 4=u.
+        use JitValueType::Int;
+        let mut m = module();
+        let id = m
+            .compile(&ft(
+                2,
+                vec![Int, Int, Int, Int, Int],
+                vec![
+                    JitInstr::JumpIfBool {
+                        cond: 1,
+                        expected: true,
+                        target: 3,
+                    },
+                    JitInstr::Add {
+                        dst: 3,
+                        lhs: 0,
+                        rhs: 0,
+                    },
+                    JitInstr::Jump { target: 4 },
+                    JitInstr::Nop,
+                    JitInstr::Add {
+                        dst: 4,
+                        lhs: 0,
+                        rhs: 0,
+                    },
+                    JitInstr::Return { src: 4 },
+                ],
+            ))
+            .unwrap();
+        let map = m.deopt_map(id).expect("map for valid id");
+        // Two Add guards: site 1 at ip 1, site 2 at the post-join ip 4.
+        assert_eq!(map.sites.len(), 2);
+        assert_eq!(map.sites[0].resume_ip, 1);
+        assert_eq!(map.sites[1].resume_ip, 4);
+        // The key assertion: at the post-join guard (ip 4), `t` (reg 3) is assigned
+        // on only one arm, so intersection excludes it from the live set.
+        assert!(
+            !map.sites[1].live.iter().any(|(r, _)| *r == 3),
+            "reg 3 assigned on only one arm must not be live at the join: {:?}",
+            map.sites[1].live
+        );
+        // The params (regs 0 and 1) are assigned on every path → still live.
+        assert!(map.sites[1].live.contains(&(0, JitValueType::Int)));
+        assert!(map.sites[1].live.contains(&(1, JitValueType::Int)));
+        // On the fall-through arm's own guard (ip 1) t is also not-yet live.
+        assert!(!map.sites[0].live.iter().any(|(r, _)| *r == 3));
+    }
+
+    #[test]
+    fn deopt_map_rejects_foreign_id() {
+        // A foreign / out-of-range id yields no map, mirroring `call`'s validation.
+        let mut m1 = module();
+        let mut m2 = module();
+        let id1 = m1.compile(&two_param_add()).unwrap();
+        let _id2 = m2.compile(&two_param_add()).unwrap();
+        assert!(m1.deopt_map(id1).is_some());
+        assert!(m2.deopt_map(id1).is_none());
     }
 
     #[test]
