@@ -345,3 +345,103 @@ fn main() -> Unit {
         "native tier should not fail compilation: {stats:?}"
     );
 }
+
+/// J0.2 precise resume-at-safepoint deopt: when a native-eligible function bails
+/// at a REAL guard mid-function, the precise path reconstructs the interpreter
+/// register window from the J0.1b captured live values, sets the frame `ip` to
+/// the safepoint's `resume_ip`, and resumes interpretation there — instead of
+/// re-running the function from the top. The observable result must be identical
+/// to the pure interpreter.
+///
+/// `accumulate` runs several arithmetic statements (`a`, `b`, `c` become live
+/// registers), then its final `a * c` overflows i64 on the chosen inputs. Native
+/// executes the prefix, captures `{a, b, c}`, and bails inside the `MulInt`
+/// guard at a non-first safepoint. Precise resume restores those registers and
+/// re-enters the interpreter AT the multiply, which re-traps exactly as the pure
+/// interpreter does — so both backends surface the identical `main`-returned
+/// error (overflow). This proves reconstruction + resume-ip placement are sound
+/// (a wrong `resume_ip` or a missing/garbled register would diverge here).
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_precise_resume_at_real_guard_matches_interpreter() {
+    // `a * c` overflows i64; the earlier statements compute live registers the
+    // deopt must capture and restore.
+    let source = "\
+fn accumulate(seed: Int) -> Int {
+    let a = seed + 7
+    let b = a - 4
+    let c = b + 1
+    return a * c
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: accumulate(seed: read 3037000503)))
+    return Unit
+}
+";
+    let file = "jit-precise-resume-overflow.rss";
+    let interp = common::run_vm_source(file, source, &[]);
+    let precise = rsscript::reg_vm_eval_source_main_native_precise(
+        file,
+        source,
+        std::iter::empty::<String>(),
+    );
+
+    // This program must actually exercise a bail: the multiply overflows, so the
+    // interpreter run does not produce the normal product (otherwise the test
+    // would pass vacuously). Overflow surfaces either as a hard `Err` or as a
+    // `main`-returned `Err` variant depending on the program shape; either way it
+    // is NOT a clean success printing the wrapped value.
+    let interp_is_trap = match &interp {
+        Err(_) => true,
+        Ok(out) => matches!(
+            &out.native_value,
+            Some(rsscript::NativeValue::Variant { name, .. }) if name == "Err"
+        ),
+    };
+    assert!(
+        interp_is_trap,
+        "precondition: the overflow program must trap on the interpreter; got {interp:?}",
+    );
+    // Precise resume must reproduce the identical outcome (same error). Compare
+    // the normalized Debug form so any divergence (success-vs-error, or a
+    // different error) fails loudly.
+    assert_eq!(
+        format!("{interp:?}"),
+        format!("{precise:?}"),
+        "precise resume-at-safepoint must match the pure interpreter on a real \
+         mid-function guard bail",
+    );
+}
+
+/// Companion success-path check: a native-eligible function whose guards never
+/// fire runs natively to completion (no reconstruction), and a precise-mode run
+/// must still produce the identical value as the interpreter. Locks that turning
+/// the flag on never perturbs the clean-completion path.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_precise_clean_completion_matches_interpreter() {
+    let source = "\
+fn hot(limit: Int) -> Int {
+    let mut total = 0
+    let mut i = 0
+    while i < limit {
+        total = total + i * 3 - 1
+        i = i + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: hot(limit: read 256)))
+    return Unit
+}
+";
+    let file = "jit-precise-clean.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let precise =
+        rsscript::reg_vm_eval_source_main_native_precise(file, source, std::iter::empty::<String>())
+            .expect("precise native run");
+    assert_eq!(interp.stdout, precise.stdout);
+    assert_eq!(precise.stdout.trim(), "97664");
+}

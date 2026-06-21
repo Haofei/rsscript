@@ -132,6 +132,19 @@ pub fn reg_vm_eval_source_main_native_force_deopt(
     reg_vm_compile_source(file, source)?.eval_main_with_args_native_force_deopt(args)
 }
 
+/// Native-tier entry point with J0.2 **precise resume** forced on: a real native
+/// guard bail reconstructs the interpreter register window and resumes at the
+/// safepoint instead of re-running from the function top. Must equal every other
+/// backend. Validation/test entry point (sets the flag deterministically).
+#[cfg(feature = "native-jit")]
+pub fn reg_vm_eval_source_main_native_precise(
+    file: &str,
+    source: &str,
+    args: impl IntoIterator<Item = impl Into<String>>,
+) -> Result<EvalOutput, EvalError> {
+    reg_vm_compile_source(file, source)?.eval_main_with_args_native_precise(args)
+}
+
 /// Per-program JIT eligibility: how many functions are fully covered by the
 /// tier-0 JIT-supported instruction subset (and so are candidates for native
 /// codegen) versus how many must fall back to the interpreter.
@@ -1527,6 +1540,7 @@ impl RegVmExecutable {
             tier_up_threshold,
             false,
             std::env::var_os("RSS_JIT_STATS").is_some(),
+            false,
         )
         .map(|(output, _stats)| output)
     }
@@ -1538,7 +1552,29 @@ impl RegVmExecutable {
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<(EvalOutput, NativeStats), EvalError> {
-        self.eval_main_with_args_native_inner(args, 0, false, true)
+        self.eval_main_with_args_native_inner(args, 0, false, true, false)
+    }
+
+    /// Run `main` with the native tier AND J0.2 precise resume forced on,
+    /// regardless of `RSS_JIT_PRECISE_DEOPT`. Native code runs for real; when it
+    /// bails at a real guard safepoint, the live interpreter register window is
+    /// reconstructed and interpretation resumes AT the safepoint (instead of re-
+    /// running the function from the top). The observable result must equal every
+    /// non-precise backend. Test/validation entry point only — lets the test set
+    /// `precise_deopt` deterministically without a (racy) process env var.
+    #[cfg(feature = "native-jit")]
+    pub fn eval_main_with_args_native_precise(
+        &self,
+        args: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Result<EvalOutput, EvalError> {
+        self.eval_main_with_args_native_inner(
+            args,
+            0,
+            false,
+            std::env::var_os("RSS_JIT_STATS").is_some(),
+            true,
+        )
+        .map(|(output, _stats)| output)
     }
 
     /// Run `main` with the native tier in **deopt stress mode**: the native code
@@ -1555,6 +1591,7 @@ impl RegVmExecutable {
             0,
             true,
             std::env::var_os("RSS_JIT_STATS").is_some(),
+            false,
         )
         .map(|(output, _stats)| output)
     }
@@ -1566,6 +1603,7 @@ impl RegVmExecutable {
         tier_up_threshold: u32,
         force_bail: bool,
         collect_stats: bool,
+        precise_deopt_override: bool,
     ) -> Result<(EvalOutput, NativeStats), EvalError> {
         let mut vm = RegVm::new(
             Rc::clone(&self.unit),
@@ -1579,11 +1617,21 @@ impl RegVmExecutable {
         // compiled subset, host helpers, and deopt oracle are identical, so the
         // differential (which never sets this var) is undisturbed.
         let baseline = std::env::var_os("RSS_JIT_BASELINE").is_some();
+        // `RSS_JIT_PRECISE_DEOPT=1` (J0.2) makes a native bail resume the
+        // interpreter at the safepoint's `resume_ip` (reconstructing the live
+        // register window) instead of re-running from the function top. Default
+        // (unset) keeps the byte-identical re-run-from-top baseline, so the
+        // differential (which never sets this var) keeps full coverage. A caller
+        // may also force it on deterministically (test entry points) via
+        // `precise_deopt_override`, avoiding a racy process env var.
+        let precise_deopt =
+            precise_deopt_override || std::env::var_os("RSS_JIT_PRECISE_DEOPT").is_some();
         vm.native = Some(NativeState::new_with_opt(
             tier_up_threshold,
             force_bail,
             collect_stats,
             baseline,
+            precise_deopt,
         )?);
         vm.jit_enabled = true;
         vm.jit_force_all = true;
@@ -6974,6 +7022,24 @@ struct RegVm {
     noncapturing_closure_cache: Vec<Option<Rc<VmClosure>>>,
 }
 
+/// Outcome of a [`RegVm::try_native`] attempt.
+///
+/// `Completed` carries the native result (the caller finishes the frame exactly
+/// like the `Return` arm). `Resumed` means a native bail was reconstructed into
+/// the interpreter at the safepoint's `resume_ip` (J0.2, only under the
+/// `precise_deopt` flag): the live register window has been restored and the
+/// frame's `ip` advanced, so the caller just re-enters the interpreter loop.
+/// `Fallback` means native did not produce a value (ineligible, arg mismatch, or
+/// a bail that precise resume didn't apply): the frame `ip` is still `0`, so the
+/// caller re-runs the function from the top on the interpreter — the safe,
+/// behavior-preserving default.
+#[cfg(feature = "native-jit")]
+enum NativeAttempt {
+    Completed(VmValue),
+    Resumed,
+    Fallback,
+}
+
 /// State for the native JIT tier: the Cranelift module owning the compiled code,
 /// a per-function cache (`None` = known not native-eligible), and the tiering /
 /// deopt knobs.
@@ -7007,6 +7073,12 @@ struct NativeState {
     /// Whether to collect telemetry. Keep timing and counter updates out of the
     /// native-call hot path unless a caller explicitly asks for them.
     collect_stats: bool,
+    /// J0.2 precise deopt: when set, a native bail at a known safepoint
+    /// reconstructs the interpreter register window from the captured live values
+    /// and resumes interpretation AT the safepoint's `resume_ip`, instead of
+    /// re-running the function from the top. Default `false` ⇒ byte-identical
+    /// re-run-from-top (the safe baseline). Wired from `RSS_JIT_PRECISE_DEOPT`.
+    precise_deopt: bool,
 }
 
 /// Native-JIT telemetry. The VM is single-threaded, so plain counters suffice.
@@ -7262,7 +7334,7 @@ impl NativeState {
         force_bail: bool,
         collect_stats: bool,
     ) -> Result<Self, EvalError> {
-        Self::new_with_opt(tier_up_threshold, force_bail, collect_stats, false)
+        Self::new_with_opt(tier_up_threshold, force_bail, collect_stats, false, false)
     }
 
     /// Build the native state at a selectable optimization level. `baseline ==
@@ -7276,6 +7348,7 @@ impl NativeState {
         force_bail: bool,
         collect_stats: bool,
         baseline: bool,
+        precise_deopt: bool,
     ) -> Result<Self, EvalError> {
         Ok(Self {
             module: vm_jit::NativeModule::new_with_opt(jit_host_helpers(), baseline)
@@ -7287,6 +7360,7 @@ impl NativeState {
             force_bail,
             stats: NativeStats::default(),
             collect_stats,
+            precise_deopt,
         })
     }
 
@@ -7575,15 +7649,19 @@ impl RegVm {
         eligible && (self.jit_force_all || has_loop)
     }
 
-    /// Try to run `func` on the native (Cranelift) tier. Returns `Some(result)` if
-    /// the compiled code ran to completion, or `None` when the function isn't
-    /// native-eligible, an argument isn't an `Int`, or the native code bailed on an
-    /// edge (overflow / divide-by-zero / out-of-range shift) — in all of which
-    /// cases the caller falls back to the interpreter, which produces the exact
-    /// value or error. Safe because native-eligible functions are leaf and
+    /// Try to run `func` on the native (Cranelift) tier. Returns
+    /// [`NativeAttempt::Completed`] if the compiled code ran to completion;
+    /// [`NativeAttempt::Resumed`] if a native bail was reconstructed into the
+    /// interpreter at a safepoint (J0.2, only under `precise_deopt`); or
+    /// [`NativeAttempt::Fallback`] when the function isn't native-eligible, an
+    /// argument isn't the inferred type, or the native code bailed and precise
+    /// resume did not (or could not) apply — in all of which cases the caller
+    /// re-runs the function from the top on the interpreter, which produces the
+    /// exact value or error. Safe because native-eligible functions are leaf and
     /// side-effect-free, so re-running them is observationally identical.
     #[cfg(feature = "native-jit")]
-    fn try_native(&mut self, func: &RegFunction, base: usize) -> Option<VmValue> {
+    #[allow(clippy::wrong_self_convention)]
+    fn try_native(&mut self, func: &RegFunction, base: usize) -> NativeAttempt {
         // Native limit parity (execution spec §6.2, Model A): Cranelift code polls
         // neither the step budget nor the cancel flag, so a hot, tiered-up function
         // containing an unbounded loop would run natively and bypass `step_budget`
@@ -7594,14 +7672,14 @@ impl RegVm {
         // leaf that allocates no VM-managed container, so it cannot grow the
         // accounted live-set in the first place.
         if self.limits.step_budget.is_some() || self.limits.cancel.is_some() {
-            return None;
+            return NativeAttempt::Fallback;
         }
         // Cheap negative path: a function known not native-eligible never compiles,
         // so skip all per-call tiering/cache/name-hash work and fall straight back
         // to the interpreter (keeps `jit-native` from being slower than the VM on
         // code the native tier can't take).
         if func.native_status.get() == NATIVE_STATUS_NOT_ELIGIBLE {
-            return None;
+            return NativeAttempt::Fallback;
         }
         // The unit is needed to resolve inlinable callees; clone the `Rc` so the
         // mutable `self.native` borrow below doesn't conflict.
@@ -7610,11 +7688,13 @@ impl RegVm {
         // Phase 1: tiering + resolve (and lazily compile) the native function.
         // `None` in the cache means "known not native-eligible".
         let (id, ret_type, param_types) = {
-            let native = self.native.as_mut()?;
+            let Some(native) = self.native.as_mut() else {
+                return NativeAttempt::Fallback;
+            };
             if native.force_bail {
                 // Deopt stress mode: pretend the native code bailed at its first
                 // guard, so the interpreter handles the function.
-                return None;
+                return NativeAttempt::Fallback;
             }
             // Tiering: stay on the interpreter until the function is hot.
             let count = native.counts.entry(native_key).or_insert(0);
@@ -7623,7 +7703,7 @@ impl RegVm {
                 if native.collect_stats {
                     native.stats.tier_deferred += 1;
                 }
-                return None;
+                return NativeAttempt::Fallback;
             }
             if native.collect_stats {
                 native.stats.considered += 1;
@@ -7670,7 +7750,10 @@ impl RegVm {
                     entry
                 }
             };
-            entry?
+            match entry {
+                Some(entry) => entry,
+                None => return NativeAttempt::Fallback,
+            }
         };
         // Phase 2: marshal each argument to 64 bits per its inferred parameter
         // type. Scalars unbox directly; a `Handle` (struct/list) is registered in
@@ -7751,7 +7834,7 @@ impl RegVm {
                 Some(bits) => args[index] = bits,
                 None => {
                     bail_marshal(self);
-                    return None;
+                    return NativeAttempt::Fallback;
                 }
             }
         }
@@ -7797,11 +7880,16 @@ impl RegVm {
         // either way the interpreter re-runs the function. A clean
         // `NativeOutcome::Completed` result is boxed per the function's return type
         // (a float register stored its `f64` bit pattern).
-        let collect_stats = self.native.as_ref()?.collect_stats;
+        let Some(native_ref) = self.native.as_ref() else {
+            return NativeAttempt::Fallback;
+        };
+        let collect_stats = native_ref.collect_stats;
         let started = collect_stats.then(std::time::Instant::now);
-        let result = self.native.as_ref()?.module.call(id, &args, &lens);
+        let result = native_ref.module.call(id, &args, &lens);
         let elapsed = started.map(|started| started.elapsed().as_nanos());
-        let native = self.native.as_mut()?;
+        let Some(native) = self.native.as_mut() else {
+            return NativeAttempt::Fallback;
+        };
         if let Some(elapsed) = elapsed {
             native.stats.run_nanos += elapsed;
         }
@@ -7813,17 +7901,54 @@ impl RegVm {
                 // Consecutive-bail semantics: a clean completion clears the
                 // give-up counter, so only *sustained* failure demotes a function.
                 native.bail_counts.insert(native_key, 0);
-                Some(match ret_type {
+                NativeAttempt::Completed(match ret_type {
                     NativeTy::Float => VmValue::Float(f64::from_bits(bits as u64)),
                     _ => VmValue::Int(bits),
                 })
             }
-            vm_jit::NativeOutcome::Deopt { .. } => {
+            vm_jit::NativeOutcome::Deopt { safepoint_id, live } => {
+                // Bail bookkeeping is identical on both paths (precise or not):
+                // a bail is still a bail for the give-up/demotion heuristic.
                 if native.collect_stats {
                     native.stats.native_bails += 1;
                 }
                 native.record_bail(native_key, func);
-                None
+                let precise_deopt = native.precise_deopt;
+                // J0.2 precise resume: take it ONLY when the flag is on AND this is
+                // a real, mapped safepoint (id ≥ 1 with a recorded site). Anything
+                // else (flag off, anonymous/early bail, or a missing site) falls
+                // back to the safe re-run-from-top default.
+                if precise_deopt && safepoint_id.0 >= 1 {
+                    // Re-borrow `native` immutably to look up the site; clone the
+                    // `resume_ip` out so the borrow ends before we touch `self`.
+                    let resume_ip = self
+                        .native
+                        .as_ref()
+                        .and_then(|n| n.module.deopt_map(id))
+                        .and_then(|m| m.sites.get(safepoint_id.0 as usize - 1))
+                        .map(|site| site.resume_ip);
+                    if let Some(resume_ip) = resume_ip {
+                        // Restore the live register window from the captured values,
+                        // SKIPPING parameter registers: their window slots
+                        // `base..base+n_params` are already valid and may hold heap
+                        // `VmValue`s the scalar deopt payload cannot represent.
+                        let n_params = func.params;
+                        for vm_jit::DeoptReg { reg, value } in live {
+                            if (reg as usize) < n_params {
+                                continue;
+                            }
+                            let vm_value = match value {
+                                vm_jit::DeoptValue::Int(i) => VmValue::Int(i),
+                                vm_jit::DeoptValue::Float(f) => VmValue::Float(f),
+                            };
+                            self.set_reg(base + reg as usize, vm_value);
+                        }
+                        // Resume interpretation AT the bailing instruction.
+                        self.frames.last_mut().expect("active frame").ip = resume_ip as usize;
+                        return NativeAttempt::Resumed;
+                    }
+                }
+                NativeAttempt::Fallback
             }
         }
     }
@@ -9011,15 +9136,27 @@ impl RegVm {
                 // Inline negative check: skip the `try_native` call entirely for
                 // functions already known not native-eligible (just a `Cell` read).
                 && func.native_status.get() != NATIVE_STATUS_NOT_ELIGIBLE
-                && let Some(value) = self.try_native(&func, base)
             {
-                let frame = self.frames.pop().expect("active frame");
-                self.apply_mut_writeback(&frame);
-                if self.frames.len() == floor {
-                    return Ok(Outcome::Completed(value));
+                match self.try_native(&func, base) {
+                    NativeAttempt::Completed(value) => {
+                        let frame = self.frames.pop().expect("active frame");
+                        self.apply_mut_writeback(&frame);
+                        if self.frames.len() == floor {
+                            return Ok(Outcome::Completed(value));
+                        }
+                        self.set_reg(frame.ret_dst, value);
+                        continue 'frames;
+                    }
+                    // J0.2 precise resume: `try_native` already restored the live
+                    // register window and set this frame's `ip` to the safepoint
+                    // `resume_ip`. Re-enter the interpreter loop; because `ip != 0`
+                    // the re-entry skips the native/tier-0 dispatch and resumes
+                    // interpretation mid-function.
+                    NativeAttempt::Resumed => continue 'frames,
+                    // Fall through to tier-0 + the interpreter loop. The frame's
+                    // `ip` is still `0`, so the function re-runs from the top.
+                    NativeAttempt::Fallback => {}
                 }
-                self.set_reg(frame.ret_dst, value);
-                continue 'frames;
             }
 
             // Tier-0 JIT: a fresh JIT-eligible frame runs via the specializing
@@ -17427,7 +17564,7 @@ mod register_window_tests {
         };
         let func = RegFunction::placeholder("hot".to_string());
         assert!(
-            vm.try_native(&func, 0).is_none(),
+            matches!(vm.try_native(&func, 0), NativeAttempt::Fallback),
             "an armed step_budget must make native dispatch refuse",
         );
         let stats = &vm.native.as_ref().unwrap().stats;
@@ -17449,7 +17586,7 @@ mod register_window_tests {
         };
         let func = RegFunction::placeholder("hot".to_string());
         assert!(
-            vm.try_native(&func, 0).is_none(),
+            matches!(vm.try_native(&func, 0), NativeAttempt::Fallback),
             "a present cancel hook must make native dispatch refuse",
         );
         assert_eq!(vm.native.as_ref().unwrap().stats.considered, 0);
@@ -17512,7 +17649,7 @@ mod register_window_tests {
             // Native is never chosen (it bails), so the result is always `None`
             // (fall back to the interpreter).
             assert!(
-                vm.try_native(&func, 0).is_none(),
+                matches!(vm.try_native(&func, 0), NativeAttempt::Fallback),
                 "always-mismatching native call must bail to the interpreter",
             );
             if func.native_status.get() == NATIVE_STATUS_NOT_ELIGIBLE
@@ -17547,6 +17684,135 @@ mod register_window_tests {
                 &(&func as *const RegFunction as usize)
             ),
             "compiled code must be evicted on give-up",
+        );
+    }
+
+    /// A native-eligible function `f(x) = { let a = x + 1; return a * a }`. The
+    /// `MulInt` overflows i64 for a large `x`, so native bails inside that guard —
+    /// a REAL, mapped safepoint *after* `a` (reg 1) has been computed. `a` is a
+    /// non-param live register, so the J0.2 precise path must restore it and
+    /// resume AT the multiply.
+    #[cfg(feature = "native-jit")]
+    fn add_then_square_func() -> RegFunction {
+        // reg 0 = param `x`; reg 1 = const 1 then `a = x + 1`; reg 2 = `a * a`.
+        let code = vec![
+            RegInstr::LoadInt { dst: 1, value: 1 },
+            RegInstr::AddInt {
+                dst: 1,
+                lhs: 0,
+                rhs: 1,
+            },
+            RegInstr::MulInt {
+                dst: 2,
+                lhs: 1,
+                rhs: 1,
+            },
+            RegInstr::Return { src: 2 },
+        ];
+        RegFunction {
+            name: "f".to_string(),
+            params: 1,
+            captures: 0,
+            regs: 3,
+            local_regs: HashMap::new(),
+            code,
+            jit_analysis: std::cell::Cell::new(None),
+            native_status: std::cell::Cell::new(0),
+        }
+    }
+
+    /// J0.2 white-box: with `precise_deopt` on, a real native guard bail must
+    /// return [`NativeAttempt::Resumed`], set the active frame's `ip` to the
+    /// bailing instruction's `resume_ip`, and reconstruct the captured non-param
+    /// live registers into the window (params are left untouched). This is the
+    /// mechanical proof that resume-at-safepoint engages (a black-box output test
+    /// can't distinguish it from re-run-from-top, since the subset is
+    /// side-effect-free and both produce the same value by design).
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn precise_deopt_resumes_at_safepoint_and_restores_live_regs() {
+        let mut vm = empty_vm();
+        // threshold 0 => compile/attempt on the first call; precise_deopt on.
+        vm.native = Some(
+            NativeState::new_with_opt(0, false, true, false, true).expect("native module"),
+        );
+        let func = Rc::new(add_then_square_func());
+
+        // Window at base 0; push an active frame so the precise path can set its
+        // `ip`. A large `x` makes `a * a` overflow i64 → real guard bail.
+        let big: i64 = 4_000_000_000;
+        vm.prepare_frame(0, func.regs).expect("frame");
+        vm.set_reg(0, VmValue::Int(big));
+        vm.push_frame(Frame {
+            func: Rc::clone(&func),
+            ip: 0,
+            base: 0,
+            ret_dst: usize::MAX,
+            mut_writeback: Vec::new(),
+        })
+        .expect("push frame");
+
+        let outcome = vm.try_native(&func, 0);
+        assert!(
+            matches!(outcome, NativeAttempt::Resumed),
+            "a real guard bail under precise_deopt must resume at the safepoint",
+        );
+
+        // The frame ip must now be the bailing instruction's resume_ip: the
+        // `MulInt` at code index 2.
+        let frame_ip = vm.frames.last().expect("frame").ip;
+        assert_eq!(
+            frame_ip, 2,
+            "frame ip must be set to the bailing instruction's resume_ip (the MulInt)",
+        );
+
+        // The non-param live register `a` (reg 1) must be reconstructed to the
+        // native-computed `x + 1`; the param (reg 0) is left as the window held it.
+        assert_eq!(
+            *vm.reg(1),
+            VmValue::Int(big + 1),
+            "non-param live register must be restored from the captured deopt value",
+        );
+        assert_eq!(
+            *vm.reg(0),
+            VmValue::Int(big),
+            "param register must be left untouched by precise reconstruction",
+        );
+    }
+
+    /// Flag-off default: the SAME real guard bail must take the safe fallback
+    /// (re-run-from-top), leaving the frame `ip` at 0 — byte-identical to today.
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn deopt_without_precise_flag_falls_back_from_top() {
+        let mut vm = empty_vm();
+        // precise_deopt OFF (the last arg).
+        vm.native = Some(
+            NativeState::new_with_opt(0, false, true, false, false).expect("native module"),
+        );
+        let func = Rc::new(add_then_square_func());
+
+        let big: i64 = 4_000_000_000;
+        vm.prepare_frame(0, func.regs).expect("frame");
+        vm.set_reg(0, VmValue::Int(big));
+        vm.push_frame(Frame {
+            func: Rc::clone(&func),
+            ip: 0,
+            base: 0,
+            ret_dst: usize::MAX,
+            mut_writeback: Vec::new(),
+        })
+        .expect("push frame");
+
+        let outcome = vm.try_native(&func, 0);
+        assert!(
+            matches!(outcome, NativeAttempt::Fallback),
+            "with the flag off, a guard bail must fall back to re-run-from-top",
+        );
+        assert_eq!(
+            vm.frames.last().expect("frame").ip,
+            0,
+            "fallback must leave the frame ip at 0 (re-run from the top)",
         );
     }
 
