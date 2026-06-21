@@ -245,3 +245,46 @@ fn main() -> Unit {
 ";
     assert_backends_agree("jit-edge-float-inf.rss", source, &[]);
 }
+
+// --- J4.3: range-proof check-elision parity -------------------------------
+
+#[test]
+fn jit_edge_proven_nonoverflowing_constants_agree_at_extremes() {
+    // A region where the native range analysis can PROVE the additions cannot
+    // overflow (the operands are compile-time constants whose sums fit i64,
+    // including a sum landing exactly on i64::MAX). The native tier may emit
+    // unchecked `iadd` here; every backend must still produce the identical value.
+    // If the proof were unsound, the unchecked op would wrap and diverge from the
+    // checked interpreter — this asserts byte-identical results at the boundary.
+    let source = "\
+fn main() -> Unit {
+    let max = 9223372036854775807
+    let near = max - 10
+    let exact = near + 10
+    Log.write(message: read String.from_int(value: exact))
+    let small = 5 + 3
+    Log.write(message: read String.from_int(value: small))
+    return Unit
+}
+";
+    assert_backends_agree("jit-edge-proven-noflow.rss", source, &[]);
+}
+
+#[test]
+fn jit_edge_unknown_addition_at_max_still_traps() {
+    // The mirror of the proven case: when an addend is `read` (runtime-unknown ⇒
+    // TOP in the range analysis), the native tier must KEEP the overflow check.
+    // `i64::MAX + 1` over unknown operands must therefore trap on every backend,
+    // proving the proof did not over-eagerly strip the check.
+    let source = "\
+fn add(a: Int, b: Int) -> Int {
+    return a + b
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: add(a: read 9223372036854775807, b: read 1)))
+    return Unit
+}
+";
+    assert_backends_all_fail("jit-edge-unknown-add-overflow.rss", source, &[]);
+}

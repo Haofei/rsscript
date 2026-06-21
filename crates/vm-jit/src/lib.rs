@@ -1366,6 +1366,259 @@ fn definite_assignment(program: &JitFunction) -> Vec<Vec<bool>> {
     assigned_in
 }
 
+/// A sound integer interval `[lo, hi]` (inclusive) over `i128`, an
+/// over-approximation of the set of `i64` values an Int register may hold. Held in
+/// `i128` so the analysis arithmetic itself never overflows. `TOP` is the full
+/// `i64` range — the safe default for any value we cannot track precisely.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Interval {
+    lo: i128,
+    hi: i128,
+}
+
+impl Interval {
+    const TOP: Interval = Interval {
+        lo: i64::MIN as i128,
+        hi: i64::MAX as i128,
+    };
+
+    fn constant(c: i64) -> Interval {
+        Interval {
+            lo: c as i128,
+            hi: c as i128,
+        }
+    }
+
+    /// Convex hull (union over-approximation) of two intervals.
+    fn hull(self, other: Interval) -> Interval {
+        Interval {
+            lo: self.lo.min(other.lo),
+            hi: self.hi.max(other.hi),
+        }
+    }
+
+    /// True iff every value in `[lo, hi]` fits in an `i64`. When this holds for the
+    /// *result* interval of an Int op, that op provably cannot overflow.
+    fn fits_i64(self) -> bool {
+        self.lo >= i64::MIN as i128 && self.hi <= i64::MAX as i128
+    }
+}
+
+/// Forward integer-interval ("range") analysis over the Int registers of a native
+/// function. Returns, per instruction index `i`, an `i128` interval per register
+/// that **soundly over-approximates** every value the register may hold on entry to
+/// `i`. Used solely to prove — conservatively, at compile time — that a particular
+/// `Add`/`Sub`/`Mul` cannot overflow, so the checked `*_overflow` + bail can be
+/// replaced by a plain `iadd`/`isub`/`imul` with byte-identical results.
+///
+/// Soundness is the whole point: every transfer function is an over-approximation,
+/// and any register/operation we cannot prove a finite bound for is `TOP`
+/// (`[i64::MIN, i64::MAX]`), which forces the checked path. Non-Int registers carry
+/// `TOP` and are never consulted. The lattice has height 3 per register
+/// (constant-derived range ⊑ wider range ⊑ TOP); a widening at every join jumps any
+/// register whose merged interval grew straight to `TOP`, which both guarantees
+/// termination (no infinite ascending chains across loop back-edges — an
+/// unbounded-in-a-loop register widens to `TOP`, the safe answer) and keeps the
+/// analysis cheap.
+fn interval_analysis(program: &JitFunction) -> Vec<Vec<Interval>> {
+    let n = program.code.len();
+    let n_regs = program.n_regs as usize;
+    if n == 0 {
+        return Vec::new();
+    }
+
+    let is_int = |r: u32| program.reg_types[r as usize] == JitValueType::Int;
+    // Read an operand's interval from an in-set: TOP for any non-Int register (we
+    // only reason about Int arithmetic) and for out-of-range indices.
+    let read = |set: &[Interval], r: u32| -> Interval {
+        if is_int(r) {
+            set.get(r as usize).copied().unwrap_or(Interval::TOP)
+        } else {
+            Interval::TOP
+        }
+    };
+
+    // Predecessor lists from the forward CFG (same shape as definite_assignment).
+    let mut preds: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for i in 0..n {
+        for s in successors(program, i) {
+            preds[s].push(i);
+        }
+    }
+
+    // Transfer function: given the in-set at `i`, produce the out-set. Only the
+    // proven cases narrow below TOP; everything else stays/becomes TOP.
+    let out_of = |in_set: &[Interval], i: usize| -> Vec<Interval> {
+        let mut out = in_set.to_vec();
+        let set = |out: &mut Vec<Interval>, r: u32, v: Interval| {
+            if (r as usize) < n_regs {
+                // Collapse any range that doesn't fit i64 straight to TOP. Such a
+                // range can never prove an op safe anyway, and clamping here keeps the
+                // analysis's own i128 arithmetic bounded (a register always holds an
+                // i64-fitting range or TOP, so downstream corner products stay well
+                // within i128). Also never claim a tighter bound than the register's
+                // storage class allows.
+                out[r as usize] = if is_int(r) && v.fits_i64() {
+                    v
+                } else {
+                    Interval::TOP
+                };
+            }
+        };
+        match &program.code[i] {
+            JitInstr::LoadInt { dst, value } => set(&mut out, *dst, Interval::constant(*value)),
+            JitInstr::LoadBool { dst, value } => {
+                set(&mut out, *dst, Interval::constant(i64::from(*value)));
+            }
+            JitInstr::Move { dst, src } => {
+                let v = read(in_set, *src);
+                set(&mut out, *dst, v);
+            }
+            // A list/array length is a non-negative element count; we soundly bound
+            // it to `[0, i64::MAX]` and deliberately assume NO tighter upper bound.
+            JitInstr::ListLen { dst, .. } | JitInstr::ListLenDirect { dst, .. } => {
+                set(&mut out, *dst, Interval { lo: 0, hi: i64::MAX as i128 });
+            }
+            JitInstr::Add { dst, lhs, rhs } if is_int(*lhs) => {
+                let a = read(in_set, *lhs);
+                let b = read(in_set, *rhs);
+                set(&mut out, *dst, Interval { lo: a.lo + b.lo, hi: a.hi + b.hi });
+            }
+            JitInstr::Sub { dst, lhs, rhs } if is_int(*lhs) => {
+                let a = read(in_set, *lhs);
+                let b = read(in_set, *rhs);
+                set(&mut out, *dst, Interval { lo: a.lo - b.hi, hi: a.hi - b.lo });
+            }
+            JitInstr::Mul { dst, lhs, rhs } if is_int(*lhs) => {
+                let a = read(in_set, *lhs);
+                let b = read(in_set, *rhs);
+                // Product range is the hull of the four corner products (i128, so
+                // the proof arithmetic cannot itself overflow for i64 operands).
+                let c1 = a.lo * b.lo;
+                let c2 = a.lo * b.hi;
+                let c3 = a.hi * b.lo;
+                let c4 = a.hi * b.hi;
+                let lo = c1.min(c2).min(c3).min(c4);
+                let hi = c1.max(c2).max(c3).max(c4);
+                set(&mut out, *dst, Interval { lo, hi });
+            }
+            // Every other definer produces an untracked value ⇒ TOP. (Covers Div,
+            // Mod, bitops, shifts, compares, heap reads, ClosureId, params, etc.)
+            other => {
+                if let Some(d) = instr_def(other) {
+                    set(&mut out, d, Interval::TOP);
+                }
+            }
+        }
+        out
+    };
+
+    // Entry to instruction 0: params are untracked (TOP); everything else TOP too.
+    // Every per-instruction register starts at TOP and the analysis narrows it only
+    // where a definer/merge proves a bound. `initialized[j]` tracks whether block
+    // `j`'s in-set has been computed from predecessors at least once (the first such
+    // pass *replaces* the all-TOP seed rather than hulling against it).
+    let mut interval_in: Vec<Vec<Interval>> =
+        (0..n).map(|_| vec![Interval::TOP; n_regs]).collect();
+    let mut initialized = vec![false; n];
+    // Sticky-widened marker per (instruction, register): once a register at block
+    // `j` widens to TOP (e.g. across a loop back-edge), it is pinned to TOP and
+    // never narrowed again. This makes each register monotone — narrowed at most
+    // once, then only ever widened to the sticky TOP — which guarantees the fixpoint
+    // terminates (no narrow/widen oscillation) and keeps any unbounded-in-a-loop
+    // register at the safe TOP. Lattice height per register ≤ 3.
+    let mut pinned_top: Vec<Vec<bool>> = (0..n).map(|_| vec![false; n_regs]).collect();
+
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for j in 0..n {
+            // Instruction 0 and any predecessor-less block keep the all-TOP entry,
+            // which is sound (params and unreachable-block inputs are untracked).
+            if preds[j].is_empty() {
+                continue;
+            }
+            let mut new_in: Vec<Interval> = vec![
+                Interval { lo: i128::MAX, hi: i128::MIN };
+                n_regs
+            ];
+            for &p in &preds[j] {
+                let out = out_of(&interval_in[p], p);
+                for r in 0..n_regs {
+                    new_in[r] = new_in[r].hull(out[r]);
+                }
+            }
+            let first = !initialized[j];
+            for r in 0..n_regs {
+                if pinned_top[j][r] {
+                    new_in[r] = Interval::TOP;
+                    continue;
+                }
+                let merged = new_in[r];
+                if first {
+                    // First real computation: adopt the predecessors' hull directly,
+                    // narrowing off the TOP seed.
+                    new_in[r] = merged;
+                    continue;
+                }
+                let old = interval_in[j][r];
+                // Subsequent passes: if the merged interval grew strictly wider than
+                // the current value, pin to TOP; otherwise keep the (non-growing)
+                // merged interval.
+                if merged.lo < old.lo || merged.hi > old.hi {
+                    new_in[r] = Interval::TOP;
+                    pinned_top[j][r] = true;
+                } else {
+                    new_in[r] = merged;
+                }
+            }
+            if new_in != interval_in[j] || first {
+                interval_in[j] = new_in;
+                initialized[j] = true;
+                changed = true;
+            }
+        }
+    }
+
+    interval_in
+}
+
+/// Whether the result of the `Add`/`Sub`/`Mul` at instruction `i` provably fits in
+/// `i64` given the operand intervals on entry — i.e. the op cannot overflow, so the
+/// checked `*_overflow` + bail may be replaced by a plain unchecked op with
+/// identical results. Conservative: any TOP operand (or a non-Int op) makes the
+/// result range TOP, which does NOT fit, so the checked path is kept. The result
+/// interval is computed in `i128` exactly as the analysis transfer function does.
+fn arith_cannot_overflow(intervals: &[Interval], instr: &JitInstr) -> bool {
+    let get = |r: u32| intervals.get(r as usize).copied().unwrap_or(Interval::TOP);
+    let result = match instr {
+        JitInstr::Add { lhs, rhs, .. } => {
+            let a = get(*lhs);
+            let b = get(*rhs);
+            Interval { lo: a.lo + b.lo, hi: a.hi + b.hi }
+        }
+        JitInstr::Sub { lhs, rhs, .. } => {
+            let a = get(*lhs);
+            let b = get(*rhs);
+            Interval { lo: a.lo - b.hi, hi: a.hi - b.lo }
+        }
+        JitInstr::Mul { lhs, rhs, .. } => {
+            let a = get(*lhs);
+            let b = get(*rhs);
+            let c1 = a.lo * b.lo;
+            let c2 = a.lo * b.hi;
+            let c3 = a.hi * b.lo;
+            let c4 = a.hi * b.hi;
+            Interval {
+                lo: c1.min(c2).min(c3).min(c4),
+                hi: c1.max(c2).max(c3).max(c4),
+            }
+        }
+        _ => return false,
+    };
+    result.fits_i64()
+}
+
 fn build_function(
     func: &mut cranelift_codegen::ir::Function,
     fbctx: &mut FunctionBuilderContext,
@@ -1378,6 +1631,11 @@ fn build_function(
     // each bail site can record its live (entry-assigned) registers. Purely
     // host-side analysis — it shapes no emitted code.
     let assigned_in = definite_assignment(program);
+    // Forward integer-interval analysis (J4.3): per-instruction sound ranges for
+    // Int registers, used purely to elide provably-non-overflowing checks. Like
+    // `definite_assignment`, host-side only — it shapes no code beyond choosing the
+    // checked vs unchecked arithmetic form.
+    let intervals = interval_analysis(program);
     // Sites accumulate in emission order, aligned 1:1 with the `next_id` counter
     // (`sites[id - 1]` is the site for id `id`).
     let mut sites: Vec<DeoptSite> = Vec::new();
@@ -1542,6 +1800,12 @@ fn build_function(
                 if program.is_float(*lhs) {
                     let res = bcx.ins().fadd(a, b);
                     bcx.def_var(reg(*dst), res);
+                } else if arith_cannot_overflow(&intervals[i], &program.code[i]) {
+                    // Proven non-overflowing by range analysis ⇒ plain unchecked
+                    // add, no overflow flag, no bail. Result is byte-identical to the
+                    // checked form (which only differs by trapping on overflow).
+                    let res = bcx.ins().iadd(a, b);
+                    bcx.def_var(reg(*dst), res);
                 } else {
                     let (res, of) = bcx.ins().sadd_overflow(a, b);
                     let cont =
@@ -1565,6 +1829,9 @@ fn build_function(
                 if program.is_float(*lhs) {
                     let res = bcx.ins().fsub(a, b);
                     bcx.def_var(reg(*dst), res);
+                } else if arith_cannot_overflow(&intervals[i], &program.code[i]) {
+                    let res = bcx.ins().isub(a, b);
+                    bcx.def_var(reg(*dst), res);
                 } else {
                     let (res, of) = bcx.ins().ssub_overflow(a, b);
                     let cont =
@@ -1587,6 +1854,9 @@ fn build_function(
                 let b = bcx.use_var(reg(*rhs));
                 if program.is_float(*lhs) {
                     let res = bcx.ins().fmul(a, b);
+                    bcx.def_var(reg(*dst), res);
+                } else if arith_cannot_overflow(&intervals[i], &program.code[i]) {
+                    let res = bcx.ins().imul(a, b);
                     bcx.def_var(reg(*dst), res);
                 } else {
                     let (res, of) = bcx.ins().smul_overflow(a, b);
@@ -3691,5 +3961,246 @@ mod tests {
                 other => other,
             }
         }
+    }
+
+    // --- J4.3: conservative range proof for eliding overflow checks -----------
+
+    /// LoadInt c ⇒ [c, c]; an Add of two known constants whose sum fits i64 is
+    /// proven non-overflowing (and the proof line is computed in i128).
+    #[test]
+    fn interval_load_and_add_constants() {
+        let prog = f(
+            0,
+            3,
+            vec![
+                JitInstr::LoadInt { dst: 0, value: 5 },
+                JitInstr::LoadInt { dst: 1, value: 3 },
+                JitInstr::Add { dst: 2, lhs: 0, rhs: 1 },
+                JitInstr::Return { src: 2 },
+            ],
+        );
+        let iv = interval_analysis(&prog);
+        // On entry to the Add (ip 2), reg0=[5,5], reg1=[3,3].
+        assert_eq!(iv[2][0], Interval { lo: 5, hi: 5 });
+        assert_eq!(iv[2][1], Interval { lo: 3, hi: 3 });
+        // The Add is proven non-overflowing ([8,8] ⊂ i64).
+        assert!(arith_cannot_overflow(&iv[2], &prog.code[2]));
+        // The result [8,8] flows to the Return's in-set (ip 3).
+        assert_eq!(iv[3][2], Interval { lo: 8, hi: 8 });
+    }
+
+    /// A proven-unchecked add of two large constants whose sum is STILL within i64
+    /// produces the exact (non-wrapping) sum — the unchecked op is byte-identical to
+    /// the checked one here because the proof guarantees no overflow.
+    #[test]
+    fn proven_large_constant_add_is_correct() {
+        let mut m = module();
+        // c = (i64::MAX - 10) + 10 = i64::MAX, proven safe ⇒ unchecked, exact.
+        let id = m
+            .compile(&f(
+                0,
+                3,
+                vec![
+                    JitInstr::LoadInt { dst: 0, value: i64::MAX - 10 },
+                    JitInstr::LoadInt { dst: 1, value: 10 },
+                    JitInstr::Add { dst: 2, lhs: 0, rhs: 1 },
+                    JitInstr::Return { src: 2 },
+                ],
+            ))
+            .unwrap();
+        assert_eq!(m.callt(id, &[]), Some(i64::MAX));
+    }
+
+    /// Boundary: operand ranges summing to EXACTLY i64::MAX are proven safe; summing
+    /// to i64::MAX + 1 are NOT (the analysis draws the line at the i64 boundary).
+    #[test]
+    fn boundary_exact_max_proven_overflow_unproven() {
+        // Proven: (i64::MAX - 1) + 1 = i64::MAX, fits ⇒ unchecked.
+        let safe = f(
+            0,
+            3,
+            vec![
+                JitInstr::LoadInt { dst: 0, value: i64::MAX - 1 },
+                JitInstr::LoadInt { dst: 1, value: 1 },
+                JitInstr::Add { dst: 2, lhs: 0, rhs: 1 },
+                JitInstr::Return { src: 2 },
+            ],
+        );
+        let iv = interval_analysis(&safe);
+        assert_eq!(iv[2][0], Interval { lo: i64::MAX as i128 - 1, hi: i64::MAX as i128 - 1 });
+        assert!(arith_cannot_overflow(&iv[2], &safe.code[2]));
+
+        // Just over: i64::MAX + 1 overflows ⇒ NOT proven, stays checked.
+        let over = f(
+            0,
+            3,
+            vec![
+                JitInstr::LoadInt { dst: 0, value: i64::MAX },
+                JitInstr::LoadInt { dst: 1, value: 1 },
+                JitInstr::Add { dst: 2, lhs: 0, rhs: 1 },
+                JitInstr::Return { src: 2 },
+            ],
+        );
+        let iv2 = interval_analysis(&over);
+        assert!(!arith_cannot_overflow(&iv2[2], &over.code[2]));
+    }
+
+    /// The proven-boundary add runs unchecked and yields exactly i64::MAX (no bail);
+    /// the over-boundary constant add — which the proof leaves CHECKED — bails on its
+    /// actual overflow. Same analysis, opposite emission, both correct.
+    #[test]
+    fn boundary_proven_runs_overflow_constant_bails() {
+        let mut m = module();
+        let safe = m
+            .compile(&f(
+                0,
+                3,
+                vec![
+                    JitInstr::LoadInt { dst: 0, value: i64::MAX - 1 },
+                    JitInstr::LoadInt { dst: 1, value: 1 },
+                    JitInstr::Add { dst: 2, lhs: 0, rhs: 1 },
+                    JitInstr::Return { src: 2 },
+                ],
+            ))
+            .unwrap();
+        assert_eq!(m.callt(safe, &[]), Some(i64::MAX));
+
+        let over = m
+            .compile(&f(
+                0,
+                3,
+                vec![
+                    JitInstr::LoadInt { dst: 0, value: i64::MAX },
+                    JitInstr::LoadInt { dst: 1, value: 1 },
+                    JitInstr::Add { dst: 2, lhs: 0, rhs: 1 },
+                    JitInstr::Return { src: 2 },
+                ],
+            ))
+            .unwrap();
+        // Constant operands are tracked, [i64::MAX]+[1] doesn't fit ⇒ stays checked ⇒
+        // the sadd_overflow guard fires on the real overflow ⇒ Deopt (None).
+        assert_eq!(m.callt(over, &[]), None);
+    }
+
+    /// Params are untracked (TOP). `a + b` over params stays CHECKED and bails on a
+    /// real overflow (i64::MAX + 1) exactly as before — proving checks are NOT
+    /// over-eagerly stripped.
+    #[test]
+    fn unknown_params_stay_checked_and_bail() {
+        let mut m = module();
+        // fn(a, b) -> Int { return a + b }, params untracked ⇒ TOP ⇒ checked.
+        let prog = f(
+            2,
+            3,
+            vec![
+                JitInstr::Add { dst: 2, lhs: 0, rhs: 1 },
+                JitInstr::Return { src: 2 },
+            ],
+        );
+        let iv = interval_analysis(&prog);
+        // Both operands TOP ⇒ result range is TOP ⇒ not proven.
+        assert!(!arith_cannot_overflow(&iv[0], &prog.code[0]));
+        let id = m.compile(&prog).unwrap();
+        // In-range add returns the exact sum.
+        assert_eq!(m.callt(id, &[2, 3]), Some(5));
+        // i64::MAX + 1 overflows ⇒ the retained check bails.
+        assert_eq!(m.callt(id, &[i64::MAX, 1]), None);
+    }
+
+    /// A register fed by `ListLen` is `[0, i64::MAX]` — non-negative but with NO
+    /// tighter upper bound. So `len + len` can reach 2*i64::MAX, does NOT fit i64,
+    /// and stays CHECKED (we did not assume a smaller length bound).
+    #[test]
+    fn list_len_is_nonneg_unbounded_above() {
+        use JitValueType::{Handle, Int};
+        let prog = ft(
+            1,
+            vec![Handle, Int, Int],
+            vec![
+                JitInstr::ListLen { dst: 1, base: 0 },
+                // len + len
+                JitInstr::Add { dst: 2, lhs: 1, rhs: 1 },
+                JitInstr::Return { src: 2 },
+            ],
+        );
+        let iv = interval_analysis(&prog);
+        // ListLen result is exactly [0, i64::MAX] on entry to the Add (ip 1).
+        assert_eq!(iv[1][1], Interval { lo: 0, hi: i64::MAX as i128 });
+        // [0,MAX]+[0,MAX] = [0, 2*MAX] does NOT fit i64 ⇒ stays checked.
+        assert!(!arith_cannot_overflow(&iv[1], &prog.code[1]));
+    }
+
+    /// ListLenDirect is treated identically to ListLen: [0, i64::MAX].
+    #[test]
+    fn list_len_direct_is_nonneg() {
+        use JitValueType::{FlatInt, Int};
+        let prog = ft(
+            1,
+            vec![FlatInt, Int],
+            vec![
+                JitInstr::ListLenDirect { dst: 1, base: 0 },
+                JitInstr::Return { src: 1 },
+            ],
+        );
+        let iv = interval_analysis(&prog);
+        assert_eq!(iv[1][1], Interval { lo: 0, hi: i64::MAX as i128 });
+    }
+
+    /// Sub and Mul interval transfer functions, plus their proven/unproven lines.
+    #[test]
+    fn interval_sub_and_mul_transfer() {
+        // (10 - 3) = 7, proven; Move copies a range.
+        let prog = f(
+            0,
+            4,
+            vec![
+                JitInstr::LoadInt { dst: 0, value: 10 },
+                JitInstr::LoadInt { dst: 1, value: 3 },
+                JitInstr::Sub { dst: 2, lhs: 0, rhs: 1 },
+                JitInstr::Mul { dst: 3, lhs: 2, rhs: 1 },
+                JitInstr::Return { src: 3 },
+            ],
+        );
+        let iv = interval_analysis(&prog);
+        assert!(arith_cannot_overflow(&iv[2], &prog.code[2])); // [10,10]-[3,3]=[7,7]
+        assert_eq!(iv[3][2], Interval { lo: 7, hi: 7 });
+        assert!(arith_cannot_overflow(&iv[3], &prog.code[3])); // [7,7]*[3,3]=[21,21]
+
+        // A Mul of two large constants whose product overflows is NOT proven.
+        let big = f(
+            0,
+            3,
+            vec![
+                JitInstr::LoadInt { dst: 0, value: i64::MAX },
+                JitInstr::LoadInt { dst: 1, value: 2 },
+                JitInstr::Mul { dst: 2, lhs: 0, rhs: 1 },
+                JitInstr::Return { src: 2 },
+            ],
+        );
+        let iv2 = interval_analysis(&big);
+        assert!(!arith_cannot_overflow(&iv2[2], &big.code[2]));
+    }
+
+    /// A register incremented across a loop back-edge widens to TOP (we infer no loop
+    /// bound), so an unbounded accumulator's add stays CHECKED — and the fixpoint
+    /// terminates.
+    #[test]
+    fn loop_accumulator_widens_to_top() {
+        // i = 0; loop { i = i + 1; } (no exit) — i grows unbounded.
+        // regs: 0=i, 1=one
+        let prog = f(
+            0,
+            2,
+            vec![
+                JitInstr::LoadInt { dst: 0, value: 0 }, // 0
+                JitInstr::LoadInt { dst: 1, value: 1 }, // 1
+                JitInstr::Add { dst: 0, lhs: 0, rhs: 1 }, // 2: i = i + 1
+                JitInstr::Jump { target: 2 },           // 3: back-edge to the Add
+            ],
+        );
+        let iv = interval_analysis(&prog);
+        // After widening, `i` on entry to the Add is TOP ⇒ the increment stays checked.
+        assert_eq!(iv[2][0], Interval::TOP);
+        assert!(!arith_cannot_overflow(&iv[2], &prog.code[0 + 2]));
     }
 }
