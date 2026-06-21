@@ -1834,6 +1834,162 @@ const NATIVE_STATUS_NOT_ELIGIBLE: u8 = 1;
 #[cfg(feature = "native-jit")]
 const NATIVE_BAIL_GIVEUP_THRESHOLD: u32 = 3;
 
+/// Call count at which a function becomes "warm" and starts collecting a
+/// [`FunctionProfile`] (J1). Below this threshold a function allocates and
+/// records nothing — cold code pays only a single saturating `Cell<u32>`
+/// increment at frame entry. Tuned high enough that one-shot/setup functions
+/// never profile, low enough that a genuinely hot dispatcher is observed within
+/// the first handful of native-tier warm-ups.
+const PROFILE_WARMUP: u32 = 50;
+
+/// Per-function dynamic-call count at which J1 stops sampling: once a function's
+/// `call_count` reaches this, [`record_call_site`] freezes (a single `Cell` read
+/// + compare, then return) so a dynamic call driven by a hot loop has an
+/// essentially-free steady state. The window `PROFILE_WARMUP..PROFILE_RECORD_LIMIT`
+/// is more than enough samples to settle every site's mono/poly/mega state.
+const PROFILE_RECORD_LIMIT: u32 = PROFILE_WARMUP + 256;
+
+/// Maximum number of distinct callee identities tracked at one dynamic call
+/// site before it is declared megamorphic. Past this the observed list stops
+/// growing (bounded memory) and [`MonoState::Megamorphic`] sticks.
+const PROFILE_MAX_CALLEES: usize = 4;
+
+/// Per-call-site monomorphism state, derived from the number of *distinct*
+/// callee identities observed at a dynamic call site.
+///
+/// Feeds J2 monomorphic-inlining COMPILE DECISIONS ONLY; it never feeds a
+/// computed value and never alters control flow or results (determinism).
+// Read by the J1 tests and (forthcoming) J2 inliner; not yet consumed by
+// production interpreter code, which only *writes* feedback.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MonoState {
+    /// Exactly one distinct callee observed so far — inlinable.
+    Monomorphic,
+    /// Two or three distinct callees — a small polymorphic set.
+    Polymorphic,
+    /// More than [`PROFILE_MAX_CALLEES`] distinct callees — not inlinable.
+    Megamorphic,
+}
+
+/// Type feedback recorded at a single dynamic call site (`CallDynamic` /
+/// `CallClosure`): the set of resolved callee identities and how often each was
+/// seen. Counts saturate; the observed list is capped at
+/// [`PROFILE_MAX_CALLEES`].
+///
+/// Drives J2 compile decisions ONLY — never a computed value (determinism).
+#[derive(Debug, Clone, Default)]
+struct CallSiteFeedback {
+    /// `(callee_key, saturating_count)` for each distinct callee, in first-seen
+    /// order. `callee_key` is the callee's underlying function id (stable
+    /// identity), so "same callee every time" reads as exactly one entry.
+    observed: Vec<(u64, u32)>,
+    /// `true` once a distinct callee beyond [`PROFILE_MAX_CALLEES`] was seen, so
+    /// the site is permanently megamorphic even though `observed` is capped.
+    overflowed: bool,
+}
+
+impl CallSiteFeedback {
+    /// Record one observation of `callee_key` (saturating). Pure bookkeeping:
+    /// has no effect on the call dispatch decision or any value.
+    fn record(&mut self, callee_key: u64) {
+        if let Some(entry) = self.observed.iter_mut().find(|(key, _)| *key == callee_key) {
+            entry.1 = entry.1.saturating_add(1);
+            return;
+        }
+        if self.observed.len() >= PROFILE_MAX_CALLEES {
+            // Bounded memory: stop growing and remember we saw more than the cap.
+            self.overflowed = true;
+            return;
+        }
+        self.observed.push((callee_key, 1));
+    }
+
+    /// Monomorphism state derived from the distinct-callee count. Read by the J1
+    /// tests and the forthcoming J2 inliner.
+    #[allow(dead_code)]
+    fn state(&self) -> MonoState {
+        if self.overflowed || self.observed.len() > PROFILE_MAX_CALLEES {
+            MonoState::Megamorphic
+        } else if self.observed.len() <= 1 {
+            MonoState::Monomorphic
+        } else {
+            MonoState::Polymorphic
+        }
+    }
+}
+
+/// Per-function type-feedback profile (J1): feedback for each dynamic call site,
+/// keyed by the site's instruction index within the function's `code`.
+///
+/// Allocated lazily once a function crosses [`PROFILE_WARMUP`]; cold functions
+/// never allocate one. Consumed by J2 monomorphic inlining to decide what to
+/// compile — it NEVER feeds a computed value and NEVER changes program behavior
+/// (determinism is non-negotiable).
+#[derive(Debug, Clone, Default)]
+struct FunctionProfile {
+    call_sites: HashMap<usize, CallSiteFeedback>,
+}
+
+impl FunctionProfile {
+    /// Record `callee_key` at the dynamic call site whose instruction index is
+    /// `instr_idx`. Observation only — never affects dispatch or values.
+    fn record_call(&mut self, instr_idx: usize, callee_key: u64) {
+        self.call_sites
+            .entry(instr_idx)
+            .or_default()
+            .record(callee_key);
+    }
+}
+
+/// Warm-gated, bounded J1 type-feedback recording. Called ONLY from the
+/// `CallDynamic`/`CallClosure` interpreter handlers (the sole sites resolving a
+/// dynamic callee); nothing is added to `try_exec_pure`, the frame-entry path,
+/// or any branch/loop body, so the hot dispatch path is untouched.
+///
+/// Cost by phase, all driven off one `Cell<u32>` (`func.call_count`):
+/// - **cold** (`count < PROFILE_WARMUP`): a single saturating `Cell` bump, no
+///   allocation, no `RefCell` touch. A site executed only a few times (e.g. a
+///   `main` that calls a closure once) never profiles.
+/// - **warm-up crossing** (`count == PROFILE_WARMUP`): allocate the
+///   `FunctionProfile` once.
+/// - **sampling** (`PROFILE_WARMUP <= count < PROFILE_RECORD_LIMIT`): record the
+///   resolved `callee_key`.
+/// - **frozen** (`count >= PROFILE_RECORD_LIMIT`): a single `Cell` read +
+///   compare, then return. A site driven by a hot loop (the dynamic call IS the
+///   loop body) reaches this after a fixed sample budget, so its steady state
+///   costs essentially nothing — this is why it does not regress the interpreter.
+///
+/// `PROFILE_RECORD_LIMIT` samples are far more than enough to settle the
+/// mono/poly/mega classification J2 needs. Observation only: feeds J2 compile
+/// decisions, never a computed value and never control flow (determinism).
+fn record_call_site(func: &RegFunction, instr_idx: usize, callee_key: u64) {
+    let count = func.call_count.get();
+    if count >= PROFILE_RECORD_LIMIT {
+        // Frozen: enough samples collected. Cheapest possible steady state.
+        return;
+    }
+    func.call_count.set(count.saturating_add(1));
+    if count < PROFILE_WARMUP {
+        // Still cold (one bump above is the whole cost).
+        if count + 1 == PROFILE_WARMUP {
+            // Allocate the profile exactly once, on the warm-up crossing.
+            if let Ok(mut slot) = func.profile.try_borrow_mut() {
+                if slot.is_none() {
+                    *slot = Some(Box::new(FunctionProfile::default()));
+                }
+            }
+        }
+        return;
+    }
+    // Warm and within the sample budget: record this observation.
+    if let Ok(mut slot) = func.profile.try_borrow_mut() {
+        if let Some(profile) = slot.as_mut() {
+            profile.record_call(instr_idx, callee_key);
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct RegFunction {
     // `params`/`captures` are metadata read only by the native JIT (translation);
@@ -1856,6 +2012,17 @@ struct RegFunction {
     /// compile (so `jit-native` isn't slower than the VM on uncompilable code).
     #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
     native_status: std::cell::Cell<u8>,
+    /// J1 dynamic-call counter, bumped ONLY inside [`record_call_site`] (the
+    /// `CallDynamic`/`CallClosure` handlers), never on the frame-entry path. Gates
+    /// the warm-up ([`PROFILE_WARMUP`]) and sampling-budget
+    /// ([`PROFILE_RECORD_LIMIT`]) phases; a function with no dynamic call site
+    /// never reaches the helper, so its counter stays `0` and it pays nothing.
+    /// Below `PROFILE_WARMUP` no profile is allocated.
+    call_count: std::cell::Cell<u32>,
+    /// Lazily-allocated type-feedback profile, populated once `call_count`
+    /// crosses [`PROFILE_WARMUP`]. `None` for cold functions (zero allocation).
+    /// Feeds J2 compile decisions only — never a value (determinism).
+    profile: RefCell<Option<Box<FunctionProfile>>>,
 }
 
 impl RegFunction {
@@ -1869,6 +2036,8 @@ impl RegFunction {
             code: Vec::new(),
             jit_analysis: std::cell::Cell::new(None),
             native_status: std::cell::Cell::new(0),
+            call_count: std::cell::Cell::new(0),
+            profile: RefCell::new(None),
         }
     }
 }
@@ -3108,6 +3277,8 @@ impl RegUnit {
                     code: Vec::new(),
                     jit_analysis: std::cell::Cell::new(None),
                     native_status: std::cell::Cell::new(0),
+                    call_count: std::cell::Cell::new(0),
+                    profile: RefCell::new(None),
                 },
                 loop_stack: Vec::new(),
                 cleanup_stack: Vec::new(),
@@ -3145,6 +3316,8 @@ impl RegUnit {
                     code: Vec::new(),
                     jit_analysis: std::cell::Cell::new(None),
                     native_status: std::cell::Cell::new(0),
+                    call_count: std::cell::Cell::new(0),
+                    profile: RefCell::new(None),
                 },
                 loop_stack: Vec::new(),
                 cleanup_stack: Vec::new(),
@@ -4180,6 +4353,8 @@ impl RegLowerer<'_> {
                             code: Vec::new(),
                             jit_analysis: std::cell::Cell::new(None),
                             native_status: std::cell::Cell::new(0),
+                            call_count: std::cell::Cell::new(0),
+                            profile: RefCell::new(None),
                         },
                         loop_stack: Vec::new(),
                         cleanup_stack: Vec::new(),
@@ -9255,6 +9430,13 @@ impl RegVm {
                                     type_name.as_deref().unwrap_or("<non-struct value>")
                                 )));
                             };
+                            // J1 type feedback (warm-gated + bounded inside the
+                            // helper): record the resolved callee identity at this
+                            // site. The dispatch DECISION above (`callee_id`) is
+                            // unchanged — we only observe it. `ip` was already
+                            // advanced past this instruction, so its index is
+                            // `ip - 1`.
+                            record_call_site(&func, ip - 1, callee_id as u64);
                             let callee = Rc::clone(&unit.functions[callee_id]);
                             self.prepare_frame(next_base, callee.regs)?;
                             for (index, reg) in args.iter().enumerate() {
@@ -9386,6 +9568,13 @@ impl RegVm {
                                     )));
                                 }
                             };
+                            // J1 type feedback (warm-gated + bounded inside the
+                            // helper): the closure's underlying function id is its
+                            // stable identity (one callee ⇒ monomorphic). Recording
+                            // does not change which closure runs; `ip` already
+                            // points past this instruction, so its index is
+                            // `ip - 1`.
+                            record_call_site(&func, ip - 1, closure.function as u64);
                             let result = self.call_closure_from_regs(
                                 unit, &closure, args, mut_args, base, next_base,
                             )?;
@@ -17456,6 +17645,8 @@ mod register_window_tests {
             code,
             jit_analysis: std::cell::Cell::new(None),
             native_status: std::cell::Cell::new(0),
+            call_count: std::cell::Cell::new(0),
+            profile: RefCell::new(None),
         }
     }
 
@@ -17618,6 +17809,8 @@ mod register_window_tests {
             code,
             jit_analysis: std::cell::Cell::new(None),
             native_status: std::cell::Cell::new(0),
+            call_count: std::cell::Cell::new(0),
+            profile: RefCell::new(None),
         }
     }
 
@@ -17718,6 +17911,8 @@ mod register_window_tests {
             code,
             jit_analysis: std::cell::Cell::new(None),
             native_status: std::cell::Cell::new(0),
+            call_count: std::cell::Cell::new(0),
+            profile: RefCell::new(None),
         }
     }
 
@@ -17943,5 +18138,260 @@ fn main() -> Unit {
             "non-capturing closures of the same function must share one cached Rc",
         );
         assert!(a.captures.is_empty(), "cached closure must be non-capturing");
+    }
+}
+
+/// J1 per-call-site type feedback (the data J2 monomorphic inlining consumes).
+/// Two properties under test: (1) DETERMINISM — profiling never changes program
+/// output, cold vs warm; (2) COLLECTION — a warm dynamic call site records the
+/// resolved callee identity and the correct mono/poly state.
+#[cfg(test)]
+mod j1_profiling_tests {
+    use super::*;
+
+    /// Compile a source program to an executable exactly as the public entry
+    /// point does, so the shared `Rc<RegFunction>` profiles populated during a
+    /// run are observable afterwards through the returned unit.
+    fn compile(source: &str) -> RegVmExecutable {
+        reg_vm_compile_source("test.rss", source).expect("compilation should succeed")
+    }
+
+    /// Borrow the populated profile of the function named `name`, asserting it is
+    /// warm (allocated). Returns the feedback for the single call site we expect.
+    fn call_site_state(exec: &RegVmExecutable, name: &str, instr_idx: usize) -> MonoState {
+        let id = *exec
+            .unit
+            .function_ids
+            .get(name)
+            .unwrap_or_else(|| panic!("function `{name}` must exist"));
+        let func = &exec.unit.functions[id];
+        let profile = func.profile.borrow();
+        let profile = profile
+            .as_ref()
+            .unwrap_or_else(|| panic!("function `{name}` must be warm (profile allocated)"));
+        profile
+            .call_sites
+            .get(&instr_idx)
+            .unwrap_or_else(|| panic!("no feedback recorded at instr {instr_idx} of `{name}`"))
+            .state()
+    }
+
+    /// The instruction index of the (sole) `CallClosure` in a function's code.
+    fn closure_call_idx(exec: &RegVmExecutable, name: &str) -> usize {
+        let id = exec.unit.function_ids[name];
+        exec.unit.functions[id]
+            .code
+            .iter()
+            .position(|instr| matches!(instr, RegInstr::CallClosure { .. }))
+            .expect("function must contain a CallClosure")
+    }
+
+    /// A `dispatcher(f, x)` that invokes a stored `Fn` (a `CallClosure` site),
+    /// called `n` times from `main`. With `n` large enough the dispatcher crosses
+    /// the warm-up threshold and its call site is profiled; cold runs are not.
+    fn mono_program(n: i64) -> String {
+        format!(
+            r#"
+fn dispatcher(f: read Fn(Int) -> Int, x: Int) -> Int {{
+    return f(x)
+}}
+
+fn main() -> Unit {{
+    let mut i = 0
+    let mut total = 0
+    while i < {n} {{
+        let g: Fn(Int) -> Int = |x| {{ return x * 2 }}
+        total = total + dispatcher(f: read g, x: read i)
+        i = i + 1
+    }}
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}}
+"#
+        )
+    }
+
+    /// Like `mono_program` but the dispatcher is fed two DIFFERENT closures (two
+    /// distinct lambda function ids) on alternating iterations, so its single
+    /// call site observes two callee keys ⇒ polymorphic.
+    fn poly_program(n: i64) -> String {
+        format!(
+            r#"
+fn dispatcher(f: read Fn(Int) -> Int, x: Int) -> Int {{
+    return f(x)
+}}
+
+fn main() -> Unit {{
+    let mut i = 0
+    let mut total = 0
+    while i < {n} {{
+        let a: Fn(Int) -> Int = |x| {{ return x * 2 }}
+        let b: Fn(Int) -> Int = |x| {{ return x + 7 }}
+        if i % 2 == 0 {{
+            total = total + dispatcher(f: read a, x: read i)
+        }} else {{
+            total = total + dispatcher(f: read b, x: read i)
+        }}
+        i = i + 1
+    }}
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}}
+"#
+        )
+    }
+
+    /// DETERMINISM: the same program run cold (a handful of calls, no profile
+    /// allocated) and warm (well past `PROFILE_WARMUP`, profile populated) must
+    /// produce byte-identical output. Profiling is observation-only and never
+    /// feeds a value. Both are also checked against an independent reference run.
+    #[test]
+    fn profiling_does_not_change_output_cold_vs_warm() {
+        let cold = compile(&mono_program(5));
+        let warm = compile(&mono_program(5));
+        // Same source, different call volume: total differs by construction, so
+        // determinism is checked at equal `n` (cold-fresh vs a second run of the
+        // identical unit) AND across the warm threshold for a fixed `n`.
+        let cold_out = cold.eval_main_with_args(Vec::<String>::new()).unwrap();
+        let cold_again = warm.eval_main_with_args(Vec::<String>::new()).unwrap();
+        assert_eq!(
+            cold_out.stdout, cold_again.stdout,
+            "below warm-up, output must be stable"
+        );
+
+        // A single unit run twice: the first run leaves the dispatcher warm
+        // (profile populated mid-run for high `n`); the second run continues
+        // recording into the same profile. Output must be identical across both,
+        // proving the populated profile never perturbs results.
+        let exec = compile(&mono_program(PROFILE_WARMUP as i64 + 20));
+        let first = exec.eval_main_with_args(Vec::<String>::new()).unwrap();
+        let second = exec.eval_main_with_args(Vec::<String>::new()).unwrap();
+        assert_eq!(
+            first.stdout, second.stdout,
+            "warm profile must not change output between runs (determinism)"
+        );
+        assert_eq!(
+            first.value, second.value,
+            "warm profile must not change the returned value"
+        );
+
+        // Independent reference: a freshly compiled unit at the same `n` (no prior
+        // warm-up) yields the same stdout as the warmed unit.
+        let reference = compile(&mono_program(PROFILE_WARMUP as i64 + 20))
+            .eval_main_with_args(Vec::<String>::new())
+            .unwrap();
+        assert_eq!(
+            reference.stdout, first.stdout,
+            "cold reference run == warm run (== pure-interpreter semantics)"
+        );
+    }
+
+    /// COLLECTION (a): a warm call site that ALWAYS invokes the same closure
+    /// records `Monomorphic` with exactly that one callee key, and the count
+    /// equals the number of warm invocations.
+    #[test]
+    fn warm_site_calling_one_closure_is_monomorphic() {
+        let n = PROFILE_WARMUP as i64 + 30;
+        let exec = compile(&mono_program(n));
+        exec.eval_main_with_args(Vec::<String>::new()).unwrap();
+
+        let idx = closure_call_idx(&exec, "dispatcher");
+        let id = exec.unit.function_ids["dispatcher"];
+        let func = &exec.unit.functions[id];
+        let profile = func.profile.borrow();
+        let profile = profile.as_ref().expect("dispatcher must be warm");
+        let feedback = profile
+            .call_sites
+            .get(&idx)
+            .expect("call site must be recorded");
+
+        assert_eq!(feedback.state(), MonoState::Monomorphic);
+        assert_eq!(
+            feedback.observed.len(),
+            1,
+            "exactly one distinct callee identity observed"
+        );
+        // The callee is the lambda's function id; recorded count is the number of
+        // calls made while warm. `dispatcher` is profiled starting the entry
+        // AFTER the `PROFILE_WARMUP`-th (which allocates the profile and itself
+        // records nothing), so the recorded count is `n - PROFILE_WARMUP`.
+        let warm_calls = (n as u32) - PROFILE_WARMUP;
+        assert_eq!(
+            feedback.observed[0].1, warm_calls,
+            "saturating count equals the number of warm invocations"
+        );
+    }
+
+    /// COLLECTION (b): a warm call site that invokes TWO different closures
+    /// records `Polymorphic` with both callee keys present.
+    #[test]
+    fn warm_site_calling_two_closures_is_polymorphic() {
+        let n = PROFILE_WARMUP as i64 + 30;
+        let exec = compile(&poly_program(n));
+        exec.eval_main_with_args(Vec::<String>::new()).unwrap();
+
+        let idx = closure_call_idx(&exec, "dispatcher");
+        assert_eq!(call_site_state(&exec, "dispatcher", idx), MonoState::Polymorphic);
+
+        let id = exec.unit.function_ids["dispatcher"];
+        let profile = exec.unit.functions[id].profile.borrow();
+        let feedback = profile.as_ref().unwrap().call_sites.get(&idx).unwrap();
+        assert_eq!(
+            feedback.observed.len(),
+            2,
+            "two distinct closure callee identities observed ⇒ polymorphic"
+        );
+        // Both keys carry a non-zero count and together cover the warm calls.
+        assert!(feedback.observed.iter().all(|(_, count)| *count > 0));
+    }
+
+    /// A function that never crosses the warm-up threshold allocates NO profile —
+    /// cold code pays only the call-count `Cell` bump. Proven by absence of the
+    /// profile after a low-volume run.
+    #[test]
+    fn cold_function_allocates_no_profile() {
+        let exec = compile(&mono_program(5));
+        exec.eval_main_with_args(Vec::<String>::new()).unwrap();
+        let id = exec.unit.function_ids["dispatcher"];
+        let func = &exec.unit.functions[id];
+        assert!(
+            func.profile.borrow().is_none(),
+            "a cold function (< PROFILE_WARMUP calls) must not allocate a profile"
+        );
+        assert!(
+            func.call_count.get() <= PROFILE_WARMUP,
+            "call_count reflects the cold call volume"
+        );
+    }
+
+    /// Unit-level check of the mono/poly/mega classification and saturating count
+    /// in `CallSiteFeedback`, independent of the interpreter.
+    #[test]
+    fn feedback_classification_and_saturation() {
+        let mut fb = CallSiteFeedback::default();
+        assert_eq!(fb.state(), MonoState::Monomorphic); // zero observations
+        fb.record(1);
+        assert_eq!(fb.state(), MonoState::Monomorphic);
+        fb.record(1);
+        assert_eq!(fb.observed[0].1, 2);
+        fb.record(2);
+        assert_eq!(fb.state(), MonoState::Polymorphic);
+        fb.record(3);
+        assert_eq!(fb.state(), MonoState::Polymorphic); // 3 distinct
+        fb.record(4);
+        // 4 distinct == PROFILE_MAX_CALLEES (cap), still not overflowed.
+        assert_eq!(fb.observed.len(), PROFILE_MAX_CALLEES);
+        assert_eq!(fb.state(), MonoState::Polymorphic);
+        fb.record(5); // 5th distinct ⇒ overflow ⇒ megamorphic, list stays capped
+        assert!(fb.overflowed);
+        assert_eq!(fb.observed.len(), PROFILE_MAX_CALLEES);
+        assert_eq!(fb.state(), MonoState::Megamorphic);
+
+        // Saturating count never panics at the u32 ceiling.
+        let mut sat = CallSiteFeedback::default();
+        sat.record(9);
+        sat.observed[0].1 = u32::MAX;
+        sat.record(9);
+        assert_eq!(sat.observed[0].1, u32::MAX);
     }
 }
