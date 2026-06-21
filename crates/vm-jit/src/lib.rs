@@ -347,8 +347,19 @@ impl JitFunction {
 /// host-owned `i64` cell into which the generated code *stores* the unique
 /// [`SafepointId`] of the bail site on the bail edge (and only there — the hot
 /// fall-through path never touches it); `0` means no bail was recorded.
-type CompiledAbi =
-    unsafe extern "C" fn(*const i64, usize, *const i64, *mut i64, *const u8, *mut i64) -> u8;
+/// `payload_ptr` points at a host-owned `i64` array of width `n_regs` into which
+/// the generated code *stores* each live register's value on the bail edge only
+/// (slot `reg` ← that register's 8-byte word; an f64 register's bit pattern lands
+/// in its slot). The hot fall-through path never writes it.
+type CompiledAbi = unsafe extern "C" fn(
+    *const i64,
+    usize,
+    *const i64,
+    *mut i64,
+    *const u8,
+    *mut i64,
+    *mut i64,
+) -> u8;
 
 #[derive(Debug)]
 pub struct JitError(pub String);
@@ -502,17 +513,45 @@ pub struct DeoptMap {
     pub sites: Vec<DeoptSite>,
 }
 
+/// The runtime value of a live register captured at a deopt, typed by its storage
+/// class so the caller can reconstruct it faithfully (an `i64` integer/boolean, or
+/// an exact `f64`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DeoptValue {
+    /// An integer (or boolean `0`/`1`) register's value.
+    Int(i64),
+    /// A float register's value (decoded from its captured 8-byte bit pattern).
+    Float(f64),
+}
+
+/// One live register's captured value at a deopt: its register index plus the
+/// decoded [`DeoptValue`]. See [`NativeOutcome::Deopt`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DeoptReg {
+    /// The VM register index.
+    pub reg: u32,
+    /// The register's value at the bail edge.
+    pub value: DeoptValue,
+}
+
 /// Outcome of running a compiled function via [`NativeModule::call`]: either the
 /// function ran to completion with a 64-bit result, or it deopted at a named
 /// safepoint and the interpreter should re-run it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum NativeOutcome {
     /// The function completed; the payload is the result bits (an `i64`, or an
     /// `f64` bit pattern for a float-returning function).
     Completed(i64),
     /// The function deopted at `safepoint_id` (a guard bail or a host-helper bail)
-    /// and the caller must fall back to the interpreter.
-    Deopt { safepoint_id: SafepointId },
+    /// and the caller must fall back to the interpreter. `live` carries each
+    /// register definitely assigned at the resume point with its captured value
+    /// (per the J0.1a state-map); it is empty for a deopt rejected before the call
+    /// (id/length mismatch). The caller currently re-runs from the function top and
+    /// ignores `live`; J0.2 will use it to reconstruct interpreter state.
+    Deopt {
+        safepoint_id: SafepointId,
+        live: Vec<DeoptReg>,
+    },
 }
 
 impl NativeOutcome {
@@ -608,6 +647,7 @@ impl NativeModule {
         self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // out ptr
         self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // bail flag ptr
         self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // safepoint id out ptr
+        self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // deopt payload out ptr
         self.ctx
             .func
             .signature
@@ -681,6 +721,7 @@ impl NativeModule {
         if id.module_id != self.id {
             return NativeOutcome::Deopt {
                 safepoint_id: SafepointId::ANONYMOUS,
+                live: Vec::new(),
             };
         }
         let func = match self.funcs.get(id.index) {
@@ -688,6 +729,7 @@ impl NativeModule {
             None => {
                 return NativeOutcome::Deopt {
                     safepoint_id: SafepointId::ANONYMOUS,
+                    live: Vec::new(),
                 }
             }
         };
@@ -697,45 +739,93 @@ impl NativeModule {
         if args.len() != func.n_params || lens.len() != func.n_params {
             return NativeOutcome::Deopt {
                 safepoint_id: SafepointId::ANONYMOUS,
+                live: Vec::new(),
             };
         }
         let f = func.f;
+        let n_regs = func.n_regs;
+        let deopt_map = &func.deopt_map;
         let mut out: i64 = 0;
         BAIL_FLAG.with(|bail| {
             SAFEPOINT_ID.with(|safepoint| {
-                bail.set(0);
-                safepoint.set(0);
-                let bail_ptr = bail.as_ptr() as *const u8;
-                let safepoint_ptr = safepoint.as_ptr();
-                // SAFETY: `f` was produced by `compile` with the `CompiledAbi`
-                // signature; it reads `args.len()` i64s from `args.as_ptr()` and
-                // `lens.as_ptr()`, writes one i64 to `&mut out`, and only ever loads
-                // (never stores) the `u8` at `bail_ptr` — this thread's `BAIL_FLAG`
-                // cell, valid for the call. It only ever *stores* to the `i64` at
-                // `safepoint_ptr` (the symmetric write-direction-opposite of
-                // `bail_ptr`) — this thread's `SAFEPOINT_ID` cell, also valid for the
-                // call, and only on a bail edge (the hot path never touches it). Any
-                // flat-array data pointer in `args` is read in-bounds (against the
-                // matching `lens` entry) per the caller's borrow-protocol obligation
-                // documented above. The generated code never retains any of the
-                // pointers.
-                let completed = unsafe {
-                    f(
-                        args.as_ptr(),
-                        args.len(),
-                        lens.as_ptr(),
-                        &mut out as *mut i64,
-                        bail_ptr,
-                        safepoint_ptr,
-                    )
-                };
-                if completed != 0 && bail.get() == 0 {
-                    NativeOutcome::Completed(out)
-                } else {
-                    NativeOutcome::Deopt {
-                        safepoint_id: SafepointId(safepoint.get() as u32),
+                DEOPT_PAYLOAD.with(|payload| {
+                    bail.set(0);
+                    safepoint.set(0);
+                    let bail_ptr = bail.as_ptr() as *const u8;
+                    let safepoint_ptr = safepoint.as_ptr();
+                    // Reused per-thread scratch buffer for the deopt payload: a valid
+                    // pointer for every call, but only written on a bail edge. Grow-only
+                    // (no per-call zeroing): the success hot path neither allocates nor
+                    // memsets, and a bail only ever reads slots the generated code just
+                    // wrote (the live-register set), so stale words in other slots are
+                    // never observed.
+                    let payload_ptr = {
+                        let mut buf = payload.borrow_mut();
+                        if buf.len() < n_regs {
+                            buf.resize(n_regs, 0);
+                        }
+                        buf.as_mut_ptr()
+                    };
+                    // SAFETY: `f` was produced by `compile` with the `CompiledAbi`
+                    // signature; it reads `args.len()` i64s from `args.as_ptr()` and
+                    // `lens.as_ptr()`, writes one i64 to `&mut out`, and only ever loads
+                    // (never stores) the `u8` at `bail_ptr` — this thread's `BAIL_FLAG`
+                    // cell, valid for the call. It only ever *stores* to the `i64` at
+                    // `safepoint_ptr` (the symmetric write-direction-opposite of
+                    // `bail_ptr`) — this thread's `SAFEPOINT_ID` cell, also valid for the
+                    // call, and only on a bail edge (the hot path never touches it).
+                    // `payload_ptr` addresses this thread's `DEOPT_PAYLOAD` buffer, sized
+                    // to `n_regs` words above and held borrowed (so it stays valid and
+                    // immovable) for the whole call; the generated code only ever
+                    // *stores* a live register's word into its slot, and only on a bail
+                    // edge (the hot path never touches it). Any flat-array data pointer
+                    // in `args` is read in-bounds (against the matching `lens` entry) per
+                    // the caller's borrow-protocol obligation documented above. The
+                    // generated code never retains any of the pointers.
+                    let completed = unsafe {
+                        f(
+                            args.as_ptr(),
+                            args.len(),
+                            lens.as_ptr(),
+                            &mut out as *mut i64,
+                            bail_ptr,
+                            safepoint_ptr,
+                            payload_ptr,
+                        )
+                    };
+                    if completed != 0 && bail.get() == 0 {
+                        // Success: leave the payload buffer untouched, build no Vec.
+                        NativeOutcome::Completed(out)
+                    } else {
+                        let safepoint_id = SafepointId(safepoint.get() as u32);
+                        // Decode the captured live registers via the J0.1a state-map.
+                        // A real bail site (id >= 1) names a `sites[id - 1]` entry; an
+                        // anonymous bail (id 0, e.g. fell off the end) has no site, so
+                        // `live` is empty.
+                        let buf = payload.borrow();
+                        let live = deopt_map
+                            .sites
+                            .get((safepoint.get() as usize).wrapping_sub(1))
+                            .map(|site| {
+                                site.live
+                                    .iter()
+                                    .filter_map(|&(reg, ty)| {
+                                        buf.get(reg as usize).map(|&bits| {
+                                            let value = match ty {
+                                                JitValueType::Float => {
+                                                    DeoptValue::Float(f64::from_bits(bits as u64))
+                                                }
+                                                _ => DeoptValue::Int(bits),
+                                            };
+                                            DeoptReg { reg, value }
+                                        })
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        NativeOutcome::Deopt { safepoint_id, live }
                     }
-                }
+                })
             })
         })
     }
@@ -774,6 +864,14 @@ std::thread_local! {
     /// means no bail site fired; a non-zero value is the [`SafepointId`] of the site
     /// that bailed.
     static SAFEPOINT_ID: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
+
+    /// Per-thread reused scratch buffer for the deopt payload (one `i64` slot per
+    /// VM register). `call` resizes it to the function's `n_regs` and passes its
+    /// pointer into the compiled function, which *stores* each live register's value
+    /// into its slot on a bail edge only. Reused across calls so the success hot
+    /// path performs no steady-state allocation.
+    static DEOPT_PAYLOAD: std::cell::RefCell<Vec<i64>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Signal from a [`HostHelpers`] callback that the in-flight native call cannot be
@@ -1244,6 +1342,7 @@ fn build_function(
     let out_ptr = params[3];
     let bail_ptr = params[4];
     let safepoint_ptr = params[5];
+    let payload_ptr = params[6];
     // Running per-site bail-id counter. Starts at 1 (0 is reserved = no bail);
     // `bail_if` post-increments it so every guard/bail site gets a stable id.
     let mut next_id: i64 = 1;
@@ -1369,7 +1468,16 @@ fn build_function(
                 } else {
                     let (res, of) = bcx.ins().sadd_overflow(a, b);
                     let cont =
-                        bail_if(&mut bcx, of, fallback, safepoint_ptr, &mut next_id, deopt!(i));
+                        bail_if(
+                        &mut bcx,
+                        of,
+                        fallback,
+                        safepoint_ptr,
+                        payload_ptr,
+                        &vars,
+                        &mut next_id,
+                        deopt!(i),
+                    );
                     bcx.switch_to_block(cont);
                     bcx.def_var(reg(*dst), res);
                 }
@@ -1383,7 +1491,16 @@ fn build_function(
                 } else {
                     let (res, of) = bcx.ins().ssub_overflow(a, b);
                     let cont =
-                        bail_if(&mut bcx, of, fallback, safepoint_ptr, &mut next_id, deopt!(i));
+                        bail_if(
+                        &mut bcx,
+                        of,
+                        fallback,
+                        safepoint_ptr,
+                        payload_ptr,
+                        &vars,
+                        &mut next_id,
+                        deopt!(i),
+                    );
                     bcx.switch_to_block(cont);
                     bcx.def_var(reg(*dst), res);
                 }
@@ -1397,7 +1514,16 @@ fn build_function(
                 } else {
                     let (res, of) = bcx.ins().smul_overflow(a, b);
                     let cont =
-                        bail_if(&mut bcx, of, fallback, safepoint_ptr, &mut next_id, deopt!(i));
+                        bail_if(
+                        &mut bcx,
+                        of,
+                        fallback,
+                        safepoint_ptr,
+                        payload_ptr,
+                        &vars,
+                        &mut next_id,
+                        deopt!(i),
+                    );
                     bcx.switch_to_block(cont);
                     bcx.def_var(reg(*dst), res);
                 }
@@ -1417,6 +1543,8 @@ fn build_function(
                         reg(*rhs),
                         fallback,
                         safepoint_ptr,
+                        payload_ptr,
+                        &vars,
                         &mut next_id,
                         deopt!(i),
                         false,
@@ -1433,6 +1561,8 @@ fn build_function(
                     reg(*rhs),
                     fallback,
                     safepoint_ptr,
+                    payload_ptr,
+                    &vars,
                     &mut next_id,
                     deopt!(i),
                     true,
@@ -1464,6 +1594,8 @@ fn build_function(
                     reg(*rhs),
                     fallback,
                     safepoint_ptr,
+                    payload_ptr,
+                    &vars,
                     &mut next_id,
                     deopt!(i),
                     false,
@@ -1477,6 +1609,8 @@ fn build_function(
                     reg(*rhs),
                     fallback,
                     safepoint_ptr,
+                    payload_ptr,
+                    &vars,
                     &mut next_id,
                     deopt!(i),
                     true,
@@ -1579,6 +1713,8 @@ fn build_function(
                     bail_ptr,
                     fallback,
                     safepoint_ptr,
+                    payload_ptr,
+                    &vars,
                     &mut next_id,
                     deopt!(i),
                 );
@@ -1594,6 +1730,8 @@ fn build_function(
                     bail_ptr,
                     fallback,
                     safepoint_ptr,
+                    payload_ptr,
+                    &vars,
                     &mut next_id,
                     deopt!(i),
                 );
@@ -1610,6 +1748,8 @@ fn build_function(
                     bail_ptr,
                     fallback,
                     safepoint_ptr,
+                    payload_ptr,
+                    &vars,
                     &mut next_id,
                     deopt!(i),
                 );
@@ -1626,6 +1766,8 @@ fn build_function(
                     bail_ptr,
                     fallback,
                     safepoint_ptr,
+                    payload_ptr,
+                    &vars,
                     &mut next_id,
                     deopt!(i),
                 );
@@ -1642,6 +1784,8 @@ fn build_function(
                     bail_ptr,
                     fallback,
                     safepoint_ptr,
+                    payload_ptr,
+                    &vars,
                     &mut next_id,
                     deopt!(i),
                 );
@@ -1654,6 +1798,8 @@ fn build_function(
                     lens_ptr,
                     fallback,
                     safepoint_ptr,
+                    payload_ptr,
+                    &vars,
                     &mut next_id,
                     deopt!(i),
                     reg(*base),
@@ -1669,6 +1815,8 @@ fn build_function(
                     lens_ptr,
                     fallback,
                     safepoint_ptr,
+                    payload_ptr,
+                    &vars,
                     &mut next_id,
                     deopt!(i),
                     reg(*base),
@@ -1726,6 +1874,8 @@ fn emit_direct_get(
     lens_ptr: Value,
     fallback: Block,
     safepoint_ptr: Value,
+    payload_ptr: Value,
+    vars: &[Variable],
     next_id: &mut i64,
     deopt: &mut DeoptCtx,
     base_var: Variable,
@@ -1742,7 +1892,7 @@ fn emit_direct_get(
     let oob = bcx
         .ins()
         .icmp(IntCC::UnsignedGreaterThanOrEqual, index, len);
-    let cont = bail_if(bcx, oob, fallback, safepoint_ptr, next_id, deopt);
+    let cont = bail_if(bcx, oob, fallback, safepoint_ptr, payload_ptr, vars, next_id, deopt);
     bcx.switch_to_block(cont);
     let base_ptr = bcx.use_var(base_var);
     let offset = bcx.ins().imul_imm(index, 8);
@@ -1768,9 +1918,10 @@ struct DeoptCtx<'a> {
 
 impl DeoptCtx<'_> {
     /// Record the site for the safepoint about to be minted: resume at the current
-    /// instruction with its entry-assigned (definitely-live) registers.
-    fn record(&mut self) {
-        let live = match self.assigned_in.get(self.ip as usize) {
+    /// instruction with its entry-assigned (definitely-live) registers. Returns the
+    /// same `live` set so the caller can emit the matching payload-capture stores.
+    fn record(&mut self) -> Vec<(u32, JitValueType)> {
+        let live: Vec<(u32, JitValueType)> = match self.assigned_in.get(self.ip as usize) {
             Some(set) => set
                 .iter()
                 .enumerate()
@@ -1781,8 +1932,9 @@ impl DeoptCtx<'_> {
         };
         self.sites.push(DeoptSite {
             resume_ip: self.ip,
-            live,
+            live: live.clone(),
         });
+        live
     }
 }
 
@@ -1798,24 +1950,38 @@ impl DeoptCtx<'_> {
 /// `deopt` records this site's [`DeoptSite`] (resume_ip + live regs) host-side,
 /// pushed in lock-step with `next_id` so `sites[id - 1]` aligns with the id minted
 /// here. This recording emits no machine code.
+///
+/// On the cold edge — and only there — each live register's current value is also
+/// *stored* into `payload_ptr[reg]` (`vars[reg]` is its Cranelift variable; an f64
+/// var stores its 8-byte bit pattern into the slot). The hot `cont` path emits no
+/// capture store, so non-bailing iterations are unaffected.
 fn bail_if(
     bcx: &mut FunctionBuilder,
     cond: Value,
     fallback: Block,
     safepoint_ptr: Value,
+    payload_ptr: Value,
+    vars: &[Variable],
     next_id: &mut i64,
     deopt: &mut DeoptCtx,
 ) -> Block {
     let site_id = *next_id;
     *next_id += 1;
-    deopt.record();
+    let live = deopt.record();
     let site_block = bcx.create_block();
     let cont = bcx.create_block();
     bcx.ins().brif(cond, site_block, &[], cont, &[]);
-    // Cold path: record this site's id, then fall through to the shared fallback.
+    // Cold path: record this site's id, capture each live register's value into the
+    // payload buffer, then fall through to the shared fallback. None of this is
+    // emitted on the hot `cont` edge below.
     bcx.switch_to_block(site_block);
     let id_v = bcx.ins().iconst(types::I64, site_id);
     bcx.ins().store(MemFlags::trusted(), id_v, safepoint_ptr, 0);
+    for &(reg, _) in &live {
+        let v = bcx.use_var(vars[reg as usize]);
+        bcx.ins()
+            .store(MemFlags::trusted(), v, payload_ptr, (reg as i32) * 8);
+    }
     bcx.ins().jump(fallback, &[]);
     bcx.switch_to_block(cont);
     cont
@@ -1829,11 +1995,13 @@ fn bail_if_helper_failed(
     bail_ptr: Value,
     fallback: Block,
     safepoint_ptr: Value,
+    payload_ptr: Value,
+    vars: &[Variable],
     next_id: &mut i64,
     deopt: &mut DeoptCtx,
 ) -> Block {
     let flag = bcx.ins().load(types::I8, MemFlags::trusted(), bail_ptr, 0);
-    bail_if(bcx, flag, fallback, safepoint_ptr, next_id, deopt)
+    bail_if(bcx, flag, fallback, safepoint_ptr, payload_ptr, vars, next_id, deopt)
 }
 
 /// Checked division / remainder matching the interpreter: bail on divide-by-zero
@@ -1844,6 +2012,8 @@ fn emit_checked_divrem(
     rhs: Variable,
     fallback: Block,
     safepoint_ptr: Value,
+    payload_ptr: Value,
+    vars: &[Variable],
     next_id: &mut i64,
     deopt: &mut DeoptCtx,
     is_rem: bool,
@@ -1852,14 +2022,14 @@ fn emit_checked_divrem(
     let b = bcx.use_var(rhs);
     let zero = bcx.ins().iconst(types::I64, 0);
     let is_zero = bcx.ins().icmp(IntCC::Equal, b, zero);
-    let cont1 = bail_if(bcx, is_zero, fallback, safepoint_ptr, next_id, deopt);
+    let cont1 = bail_if(bcx, is_zero, fallback, safepoint_ptr, payload_ptr, vars, next_id, deopt);
     bcx.switch_to_block(cont1);
     let imin = bcx.ins().iconst(types::I64, i64::MIN);
     let neg1 = bcx.ins().iconst(types::I64, -1);
     let a_is_min = bcx.ins().icmp(IntCC::Equal, a, imin);
     let b_is_neg1 = bcx.ins().icmp(IntCC::Equal, b, neg1);
     let overflow = bcx.ins().band(a_is_min, b_is_neg1);
-    let cont2 = bail_if(bcx, overflow, fallback, safepoint_ptr, next_id, deopt);
+    let cont2 = bail_if(bcx, overflow, fallback, safepoint_ptr, payload_ptr, vars, next_id, deopt);
     bcx.switch_to_block(cont2);
     if is_rem {
         bcx.ins().srem(a, b)
@@ -1876,6 +2046,8 @@ fn emit_checked_shift(
     rhs: Variable,
     fallback: Block,
     safepoint_ptr: Value,
+    payload_ptr: Value,
+    vars: &[Variable],
     next_id: &mut i64,
     deopt: &mut DeoptCtx,
     is_right: bool,
@@ -1887,7 +2059,7 @@ fn emit_checked_shift(
     let oob = bcx
         .ins()
         .icmp(IntCC::UnsignedGreaterThanOrEqual, amt, limit);
-    let cont = bail_if(bcx, oob, fallback, safepoint_ptr, next_id, deopt);
+    let cont = bail_if(bcx, oob, fallback, safepoint_ptr, payload_ptr, vars, next_id, deopt);
     bcx.switch_to_block(cont);
     if is_right {
         bcx.ins().sshr(a, amt)
@@ -2167,20 +2339,22 @@ mod tests {
 
         // Bail at the FIRST site: x + x overflows, so the `Add` guard fires (id 1)
         // before the list read is ever reached.
-        assert_eq!(
+        assert!(matches!(
             m.call(id, &[ints_ptr, i64::MAX, 0], &[ilen, 0, 0]),
             NativeOutcome::Deopt {
-                safepoint_id: SafepointId(1)
+                safepoint_id: SafepointId(1),
+                ..
             }
-        );
+        ));
         // Pass the first guard (small x, no overflow) but bail at the SECOND site:
         // index 5 is out of bounds, so the direct-read OOB guard fires (id 2).
-        assert_eq!(
+        assert!(matches!(
             m.call(id, &[ints_ptr, 1, 5], &[ilen, 0, 0]),
             NativeOutcome::Deopt {
-                safepoint_id: SafepointId(2)
+                safepoint_id: SafepointId(2),
+                ..
             }
-        );
+        ));
         // Both guards pass → completes (id stays 0 = no bail recorded).
         assert!(matches!(
             m.call(id, &[ints_ptr, 1, 2], &[ilen, 0, 0]),
@@ -2419,6 +2593,103 @@ mod tests {
         assert_eq!(m.callt(id, &[20, 5]), Some(4));
         assert_eq!(m.callt(id, &[20, 0]), None);
         assert_eq!(m.callt(id, &[i64::MIN, -1]), None);
+    }
+
+    // --- J0.1b: live-register value capture at deopt --------------------------
+
+    /// Find the captured value of register `reg` in a deopt outcome's `live` set.
+    fn live_value(outcome: &NativeOutcome, reg: u32) -> Option<DeoptValue> {
+        match outcome {
+            NativeOutcome::Deopt { live, .. } => {
+                live.iter().find(|r| r.reg == reg).map(|r| r.value)
+            }
+            NativeOutcome::Completed(_) => None,
+        }
+    }
+
+    #[test]
+    fn deopt_capture_records_live_register_values() {
+        use JitValueType::{FlatInt, Int};
+        let mut m = module();
+        // fn(xs: FlatInt, a: Int, b: Int) -> Int { t = a + b; return xs[t] }
+        // regs 0=xs, 1=a, 2=b, 3=t. The `ListGetIntDirect` OOB guard (ip 1) resumes
+        // with xs(0)/a(1)/b(2)/t(3) all definitely assigned on entry.
+        let id = m
+            .compile(&ft(
+                3,
+                vec![FlatInt, Int, Int, Int],
+                vec![
+                    JitInstr::Add {
+                        dst: 3,
+                        lhs: 1,
+                        rhs: 2,
+                    },
+                    JitInstr::ListGetIntDirect {
+                        dst: 3,
+                        base: 0,
+                        index: 3,
+                    },
+                    JitInstr::Return { src: 3 },
+                ],
+            ))
+            .unwrap();
+        let xs: Vec<i64> = vec![10, 20, 30, 40, 50];
+        let xs_ptr = xs.as_ptr() as i64;
+        let xlen = xs.len() as i64;
+
+        // In range: t = 1 + 2 = 3 → xs[3] = 40.
+        assert_eq!(
+            m.call(id, &[xs_ptr, 1, 2], &[xlen, 0, 0]),
+            NativeOutcome::Completed(40)
+        );
+
+        // Out of range: t = 3 + 4 = 7 >= len 5 → the direct-read OOB guard bails.
+        let out = m.call(id, &[xs_ptr, 3, 4], &[xlen, 0, 0]);
+        assert!(matches!(out, NativeOutcome::Deopt { .. }));
+        // t (reg 3) was computed before the guard fired and is captured.
+        assert_eq!(live_value(&out, 3), Some(DeoptValue::Int(7)));
+        // The params a (reg 1) and b (reg 2) are captured with their passed values.
+        assert_eq!(live_value(&out, 1), Some(DeoptValue::Int(3)));
+        assert_eq!(live_value(&out, 2), Some(DeoptValue::Int(4)));
+    }
+
+    #[test]
+    fn deopt_capture_records_float_register_value() {
+        use JitValueType::{Float, FlatInt, Int};
+        let mut m = module();
+        // fn(xs: FlatInt, i: Int, f: Float) -> Int { g = f + f; return xs[i] }
+        // regs 0=xs, 1=i, 2=f, 3=g. The float `g` is definitely assigned before the
+        // `ListGetIntDirect` OOB guard (ip 2), so it is captured as an exact f64.
+        let id = m
+            .compile(&ft(
+                3,
+                vec![FlatInt, Int, Float, Float],
+                vec![
+                    JitInstr::Add {
+                        dst: 3,
+                        lhs: 2,
+                        rhs: 2,
+                    },
+                    JitInstr::ListGetIntDirect {
+                        dst: 1,
+                        base: 0,
+                        index: 1,
+                    },
+                    JitInstr::Return { src: 1 },
+                ],
+            ))
+            .unwrap();
+        let xs: Vec<i64> = vec![7];
+        let xs_ptr = xs.as_ptr() as i64;
+        let xlen = xs.len() as i64;
+        let f = 1.5_f64;
+
+        // Out of range index 9 → bail; the float g = f + f = 3.0 round-trips exactly.
+        let out = m.call(id, &[xs_ptr, 9, f.to_bits() as i64], &[xlen, 0, 0]);
+        assert!(matches!(out, NativeOutcome::Deopt { .. }));
+        assert_eq!(live_value(&out, 3), Some(DeoptValue::Float(f + f)));
+        // The float param f itself is captured exactly too.
+        assert_eq!(live_value(&out, 2), Some(DeoptValue::Float(f)));
     }
 
     // --- IR validation: malformed public IR must fail cleanly, not panic ---
