@@ -299,3 +299,49 @@ fn main() -> Unit {
         "native tier should not fail compilation: {stats:?}"
     );
 }
+
+/// Regression: a native-eligible function with an *unused* (hence under-typed)
+/// parameter must still reach the native tier. Before the `DeepCopy` lowering fix
+/// the unused param pinned no native type, so the lowerer's `ty[reg]?` bailed and
+/// the whole function silently fell back to the interpreter (`translated == 0`) — a
+/// ~128x slowdown with no error. This locks that it translates and runs natively.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_tier_accepts_unused_under_typed_parameter() {
+    // `unused` is never read in the body, so it acquires no native type. It must be
+    // passed *by value* (not `read`) so the lowerer emits a `DeepCopy` of it — that
+    // `DeepCopy` of an untyped register is the exact shape the fix unblocks (a `read`
+    // / borrowed param gets no copy and would not reproduce the bug).
+    let source = "\
+fn hot(limit: Int, unused: Int) -> Int {
+    let mut total = 0
+    let mut i = 0
+    while i < limit {
+        total = total + i
+        i = i + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: hot(limit: read 256, unused: 999)))
+    return Unit
+}
+";
+    let executable = rsscript::reg_vm_compile_source("jit-native-unused-param.rss", source)
+        .expect("source compiles");
+    let (output, stats) = executable
+        .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
+        .expect("native JIT run should succeed");
+
+    // sum of 0..255 == 32640
+    assert_eq!(output.stdout.trim(), "32640");
+    assert!(
+        stats.translated > 0 && stats.native_calls > 0,
+        "function with an unused/under-typed param must reach native, not fall back: {stats:?}"
+    );
+    assert_eq!(
+        stats.compile_failed, 0,
+        "native tier should not fail compilation: {stats:?}"
+    );
+}
