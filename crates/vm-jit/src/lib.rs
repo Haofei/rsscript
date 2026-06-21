@@ -635,6 +635,32 @@ impl NativeModule {
 
     /// Compile `function` to native code and return a handle to call it.
     pub fn compile(&mut self, function: &JitFunction) -> Result<CompiledId, JitError> {
+        self.compile_inner(function, None)
+    }
+
+    /// Compile `function` while forcing the safepoint with id `force_site` (sites are
+    /// numbered from 1 in emission order) to bail *unconditionally*: any execution
+    /// reaching that site deopts there regardless of its guard condition, capturing
+    /// the same live set the natural bail would. All other sites behave normally.
+    ///
+    /// This is a test/diagnostic hook for exercising the deopt capture + map at every
+    /// safepoint, including ones that never fire under normal inputs. The default
+    /// [`compile`](Self::compile) path passes `None` and emits identical code, so this
+    /// option has zero production cost. An out-of-range `force_site` simply matches no
+    /// site and the function compiles as usual.
+    pub fn compile_forcing_bail(
+        &mut self,
+        function: &JitFunction,
+        force_site: u32,
+    ) -> Result<CompiledId, JitError> {
+        self.compile_inner(function, Some(force_site))
+    }
+
+    fn compile_inner(
+        &mut self,
+        function: &JitFunction,
+        forced: Option<u32>,
+    ) -> Result<CompiledId, JitError> {
         // `JitFunction` is a public, versioned surface: a malformed producer must
         // fail cleanly here, not panic inside `build_function` (out-of-range index)
         // or trip Cranelift's verifier (a type mismatch) deep in codegen.
@@ -660,6 +686,7 @@ impl NativeModule {
             &mut self.module,
             self.imports,
             function,
+            forced,
         );
 
         let name = format!("rss_jit_{}", self.counter);
@@ -1298,6 +1325,7 @@ fn build_function(
     module: &mut JITModule,
     imports: HostFuncs,
     program: &JitFunction,
+    forced: Option<u32>,
 ) -> DeoptMap {
     // Definite-assignment ("must") sets per instruction, computed once up front so
     // each bail site can record its live (entry-assigned) registers. Purely
@@ -1422,6 +1450,7 @@ fn build_function(
                 assigned_in: &assigned_in,
                 reg_types: &program.reg_types,
                 sites: &mut sites,
+                forced,
             }
         };
     }
@@ -1914,6 +1943,10 @@ struct DeoptCtx<'a> {
     reg_types: &'a [JitValueType],
     /// Accumulated sites, in emission (= id) order.
     sites: &'a mut Vec<DeoptSite>,
+    /// Test/diagnostic hook: when `Some(id)`, the site minted with that id bails
+    /// unconditionally (see [`NativeModule::compile_forcing_bail`]). `None` on the
+    /// default [`compile`](NativeModule::compile) path, where every site is guarded.
+    forced: Option<u32>,
 }
 
 impl DeoptCtx<'_> {
@@ -1967,10 +2000,21 @@ fn bail_if(
 ) -> Block {
     let site_id = *next_id;
     *next_id += 1;
+    let forced = deopt.forced == Some(site_id as u32);
     let live = deopt.record();
     let site_block = bcx.create_block();
     let cont = bcx.create_block();
-    bcx.ins().brif(cond, site_block, &[], cont, &[]);
+    if forced {
+        // Forced-bail diagnostic path: deopt at this site unconditionally, ignoring
+        // `cond`. `cont` is still created/sealed (and emitted into) below — it just
+        // becomes unreachable here, which Cranelift's DCE drops. The site_block body
+        // is unchanged, so the forced bail captures the same live set a natural bail
+        // would. The default `compile` path never sets `forced`, so it always takes
+        // the `brif` branch and emits byte-identical guards.
+        bcx.ins().jump(site_block, &[]);
+    } else {
+        bcx.ins().brif(cond, site_block, &[], cont, &[]);
+    }
     // Cold path: record this site's id, capture each live register's value into the
     // payload buffer, then fall through to the shared fallback. None of this is
     // emitted on the hot `cont` edge below.
@@ -2690,6 +2734,241 @@ mod tests {
         assert_eq!(live_value(&out, 3), Some(DeoptValue::Float(f + f)));
         // The float param f itself is captured exactly too.
         assert_eq!(live_value(&out, 2), Some(DeoptValue::Float(f)));
+    }
+
+    // --- J0.3: deopt-at-every-safepoint stress test (master correctness) ------
+
+    /// Force a bail at EVERY safepoint of a few representative functions and verify
+    /// the captured safepoint id + live register values are correct at each — even at
+    /// safepoints that never fire under the (deliberately in-range, non-overflowing)
+    /// inputs. This exercises the J0 capture/map machinery exhaustively: for every
+    /// site `k`, `compile_forcing_bail(f, k)` makes only site `k` bail, and we assert
+    /// the outcome is `Deopt { SafepointId(k) }` whose `live` set is exactly the one
+    /// `deopt_map().sites[k-1]` advertises, each register carrying the value the
+    /// function computes for it. Late sites must capture earlier intermediates.
+    #[test]
+    fn force_bail_at_every_safepoint_captures_correct_state() {
+        use JitValueType::{FlatInt, Float, Int};
+
+        // A representative case: a `JitFunction`, the in-range inputs (args/lens) that
+        // make NO natural bail fire, and a closure giving the value the function
+        // computes for each register at any safepoint, so we can check every capture.
+        struct Case {
+            name: &'static str,
+            func: JitFunction,
+            args: Vec<i64>,
+            lens: Vec<i64>,
+            // reg -> captured DeoptValue, for any reg appearing in a site's live set.
+            expect: Box<dyn Fn(u32) -> DeoptValue>,
+        }
+
+        let ints: Vec<i64> = vec![10, 20, 30, 40, 50];
+        let ints_ptr = ints.as_ptr() as i64;
+        let ilen = ints.len() as i64;
+
+        // Case A: fn(a: FlatInt, x: Int, i: Int) { t = x + x; return a[i] }
+        // Sites: 1 = Add overflow guard (ip 0), 2 = ListGetIntDirect OOB (ip 1).
+        // Site 2 is LATE and captures the earlier-computed t = x + x.
+        let a_ptr = ints_ptr;
+        let case_a = Case {
+            name: "add-then-direct-get",
+            func: ft(
+                3,
+                vec![FlatInt, Int, Int, Int, Int],
+                vec![
+                    JitInstr::Add {
+                        dst: 3,
+                        lhs: 1,
+                        rhs: 1,
+                    },
+                    JitInstr::ListGetIntDirect {
+                        dst: 4,
+                        base: 0,
+                        index: 2,
+                    },
+                    JitInstr::Return { src: 4 },
+                ],
+            ),
+            // a = ptr, x = 7, i = 2 (in range). t = x + x = 14.
+            args: vec![a_ptr, 7, 2],
+            lens: vec![ilen, 0, 0],
+            expect: Box::new(|reg| match reg {
+                0 => DeoptValue::Int(0), // a: ptr value is asserted separately
+                1 => DeoptValue::Int(7),
+                2 => DeoptValue::Int(2),
+                3 => DeoptValue::Int(14),
+                _ => DeoptValue::Int(0),
+            }),
+        };
+
+        // Case B: fn(xs: FlatInt, i: Int, f: Float) { g = f + f; return xs[i] }
+        // The float Add has no guard, so the only site is the ListGetIntDirect OOB
+        // (ip 1). Its live set includes the float register g — checked as exact f64.
+        let xs_ptr = ints_ptr;
+        let fv = 1.25_f64;
+        let case_b = Case {
+            name: "float-reg-direct-get",
+            func: ft(
+                3,
+                vec![FlatInt, Int, Float, Float],
+                vec![
+                    JitInstr::Add {
+                        dst: 3,
+                        lhs: 2,
+                        rhs: 2,
+                    },
+                    JitInstr::ListGetIntDirect {
+                        dst: 1,
+                        base: 0,
+                        index: 1,
+                    },
+                    JitInstr::Return { src: 1 },
+                ],
+            ),
+            // xs = ptr, i = 1 (in range), f = 1.25. g = f + f = 2.5.
+            args: vec![xs_ptr, 1, fv.to_bits() as i64],
+            lens: vec![ilen, 0, 0],
+            expect: Box::new(move |reg| match reg {
+                1 => DeoptValue::Int(1),
+                2 => DeoptValue::Float(fv),
+                3 => DeoptValue::Float(fv + fv),
+                _ => DeoptValue::Int(0),
+            }),
+        };
+
+        // Case C: fn(a: FlatInt, x: Int, y: Int) { p = x + y; q = p * x; return a[y] }
+        // Three sites: 1 = Add (ip 0), 2 = Mul (ip 1), 3 = ListGetIntDirect OOB (ip 2).
+        // The LATE site 3 captures both earlier intermediates p and q.
+        let case_c = Case {
+            name: "add-mul-then-direct-get",
+            func: ft(
+                3,
+                vec![FlatInt, Int, Int, Int, Int, Int],
+                vec![
+                    JitInstr::Add {
+                        dst: 3,
+                        lhs: 1,
+                        rhs: 2,
+                    },
+                    JitInstr::Mul {
+                        dst: 4,
+                        lhs: 3,
+                        rhs: 1,
+                    },
+                    JitInstr::ListGetIntDirect {
+                        dst: 5,
+                        base: 0,
+                        index: 2,
+                    },
+                    JitInstr::Return { src: 5 },
+                ],
+            ),
+            // a = ptr, x = 3, y = 4 (in range). p = 3 + 4 = 7, q = p * x = 21.
+            args: vec![ints_ptr, 3, 4],
+            lens: vec![ilen, 0, 0],
+            expect: Box::new(|reg| match reg {
+                1 => DeoptValue::Int(3),
+                2 => DeoptValue::Int(4),
+                3 => DeoptValue::Int(7),  // p
+                4 => DeoptValue::Int(21), // q
+                _ => DeoptValue::Int(0),
+            }),
+        };
+
+        let cases = [case_a, case_b, case_c];
+        let mut combinations = 0usize;
+        let mut late_intermediate_checks = 0usize;
+
+        for case in &cases {
+            let mut m = module();
+            // Site count from the natural (un-forced) compilation.
+            let base_id = m.compile(&case.func).unwrap();
+            let n = m.deopt_map(base_id).expect("map for valid id").sites.len();
+            assert!(n >= 1, "{}: expected at least one safepoint", case.name);
+
+            for k in 1..=n as u32 {
+                // Force ONLY site k to bail; inputs are chosen so no natural bail fires.
+                let id = m.compile_forcing_bail(&case.func, k).unwrap();
+                let site = m.deopt_map(id).expect("map").sites[(k - 1) as usize].clone();
+                let out = m.call(id, &case.args, &case.lens);
+
+                // The forced site must bail with exactly its id.
+                let live = match &out {
+                    NativeOutcome::Deopt { safepoint_id, live } => {
+                        assert_eq!(
+                            *safepoint_id,
+                            SafepointId(k),
+                            "{}: forced site {} reported wrong safepoint id",
+                            case.name,
+                            k
+                        );
+                        live
+                    }
+                    NativeOutcome::Completed(_) => {
+                        panic!("{}: forced site {} did not bail", case.name, k)
+                    }
+                };
+
+                // The captured live registers must be exactly the map's live set...
+                let mut captured: Vec<u32> = live.iter().map(|r| r.reg).collect();
+                captured.sort_unstable();
+                let mut expected_regs: Vec<u32> = site.live.iter().map(|(r, _)| *r).collect();
+                expected_regs.sort_unstable();
+                assert_eq!(
+                    captured, expected_regs,
+                    "{}: site {} live-reg set mismatch (map vs capture)",
+                    case.name, k
+                );
+
+                // ...and each captured value must match what the function computes,
+                // including FlatInt pointer registers (checked as the raw arg word).
+                for &(reg, _ty) in &site.live {
+                    let got = live_value(&out, reg).expect("captured reg present");
+                    if case.func.reg_types[reg as usize] == FlatInt {
+                        assert_eq!(
+                            got,
+                            DeoptValue::Int(case.args[reg as usize]),
+                            "{}: site {} reg {} (flat ptr) value mismatch",
+                            case.name,
+                            k,
+                            reg
+                        );
+                    } else {
+                        assert_eq!(
+                            got,
+                            (case.expect)(reg),
+                            "{}: site {} reg {} value mismatch",
+                            case.name,
+                            k,
+                            reg
+                        );
+                    }
+                }
+
+                combinations += 1;
+            }
+
+            // Explicit late-site check: the LAST site of a multi-site function must
+            // capture an earlier-computed intermediate with its correct value.
+            if n >= 2 {
+                let id = m.compile_forcing_bail(&case.func, n as u32).unwrap();
+                let out = m.call(id, &case.args, &case.lens);
+                // reg 3 is the first arithmetic result in cases A and C; it is computed
+                // at an earlier site yet must be captured at the final site.
+                assert_eq!(
+                    live_value(&out, 3),
+                    Some((case.expect)(3)),
+                    "{}: late site {} failed to capture earlier intermediate reg 3",
+                    case.name,
+                    n
+                );
+                late_intermediate_checks += 1;
+            }
+        }
+
+        // Sanity: we actually exercised every site of every case plus late checks.
+        assert_eq!(combinations, 2 + 1 + 3, "unexpected (case, site) coverage");
+        assert!(late_intermediate_checks >= 2, "expected late-site checks");
     }
 
     // --- IR validation: malformed public IR must fail cleanly, not panic ---
