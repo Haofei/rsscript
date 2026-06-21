@@ -27,7 +27,7 @@ Created 2026-06-20.
 
 **How it got there (the slices):**
 - **TV1** — `TypedVec { Boxed | Ints | Floats }` behind the `List` `Rc`; kind-agnostic
-  accessor API; construction metadata (`MakeList{elem_kind}`/`ListNew{elem_kind}`);
+  accessor API; dynamic kind selection at construction (`TypedVec::from_values`, no IR change);
   producer audit; per-kind `mem_budget`. *Interpreter-only; was net-negative alone
   (the flat buffer can't be cashed by the interpreter, which re-materializes).*
 - **TV2** — native tier reads the flat array directly (`*const f64/i64` + len,
@@ -109,12 +109,15 @@ element kind. Forcing every producer to specialize is brittle. Instead:
 > (struct fields) when a benchmark shows struct fields are the dominant remaining cost.
 - **[x] TV1 — typed scalar list storage (interpreter). SHIPPED.** (Was the proof slice.)
   `VmValue::List(Rc<RefCell<TypedVec>>)` where `TypedVec = Boxed(Vec<VmValue>) |
-  Ints(Vec<i64>) | Floats(Vec<f64>)`. **Construction needs element-kind metadata that
-  doesn't exist today (Finding 1):** `MakeList { items }` (`mod.rs:1811`) and the
-  `ListNew`/`List.new` intrinsic (`mod.rs:13501`, returns a type-erased `Vec::new()`)
-  carry **no** element type — so TV1 must add it: `MakeList { items, elem_kind }`,
-  `ListNew { elem_kind }` (and pass the kind from the lowerer, which has the static
-  type). All other list ops + eq/hash/display/deep_copy/native-conversion go through
+  Ints(Vec<i64>) | Floats(Vec<f64>)`. **As shipped, the kind is chosen *dynamically*
+  from the element values via `TypedVec::from_values`, not from static bytecode
+  metadata** — `MakeList { dst, items }` is unchanged, and a non-empty homogeneous
+  literal specializes correctly with no IR change (Finding 1's `elem_kind` field was
+  not needed for the win). The one case `from_values` can't see is an *empty*
+  `List<Float>`, which starts `Boxed(vec![])` and specializes on its first scalar
+  `push` — a parity-neutral late-bind. A static `ListNew { elem_kind }` to start empty
+  typed lists pre-specialized remains an **optional** future refinement, not shipped.
+  All other list ops + eq/hash/display/deep_copy/native-conversion go through
   the kind-agnostic accessor API. **Producer audit** every `List(Rc::new(...))` site.
   **Interpreter-only**; measure a `List<Float>`/`List<Int>` sum/scan win.
 - **[x] TV2 — JIT reads flat arrays directly. SHIPPED** (with TV2.1 fast-paths +
@@ -164,11 +167,17 @@ element kind. Forcing every producer to specialize is brittle. Instead:
        there means the checker or a native bridge violated its contract — surface it
        loudly, don't silently corrupt. (In practice this path never fires; it's the
        defensive total-function tail.)
-3. **Construction metadata (Finding 1).** Add `elem_kind` to the constructors that can
-   know it: `MakeList { items, elem_kind }` (the lowerer has the static element type)
-   and `ListNew { elem_kind }` (so an *empty* `List<Float>` starts as `Floats(vec![])`,
-   not type-erased `Boxed`). `elem_kind ∈ {Boxed, Ints, Floats}`. Specialize when known;
-   `Boxed` is always the correct fallback (generic `List<T>`, heap elems, unknown).
+3. **Construction (Finding 1) — shipped as dynamic `from_values`, not static metadata.**
+   The shipped path leaves `MakeList { dst, items }` untouched and picks the kind from
+   the element values at runtime via `TypedVec::from_values` (a non-empty homogeneous
+   `Int`/`Float` literal specializes; anything mixed or heap stays `Boxed`). This needed
+   no IR change and captured the literal-construction win directly. The only gap is an
+   *empty* typed list (`from_values` has nothing to inspect), which starts `Boxed(vec![])`
+   and late-binds its kind on the first scalar `push` — parity-neutral. Threading a static
+   `elem_kind` from the lowerer into `MakeList`/`ListNew` (so empty `List<Float>` starts
+   `Floats(vec![])` pre-specialized) is an **optional** future refinement, deferred until a
+   benchmark shows empty-then-fill lists matter. `elem_kind ∈ {Boxed, Ints, Floats}` would
+   specialize when known; `Boxed` is always the correct fallback.
 4. **Producer audit (Finding 2).** Visit **every** `VmValue::List(Rc::new(...))` site
    (native conversion, `Args.all`, `Map.keys`, string `split`/`lines`, JSON arrays,
    tensor dims, sorted-map entries, stream/channel helpers, `map`/`filter`/`slice`/

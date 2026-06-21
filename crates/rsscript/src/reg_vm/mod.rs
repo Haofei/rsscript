@@ -8459,10 +8459,16 @@ impl RegVm {
         // (handles append-to-self), then extend the receiver's existing buffer so
         // a `mut` param propagates.
         let append_values = expect_list_ref(self.reg(base + values))?.borrow().clone();
-        self.account_bytes(append_values.len() * append_values.elem_bytes())?;
-        expect_list_ref(self.reg(base + list))?
+        // Account against the *destination's* real layout, not the source's: a flat
+        // `Ints`/`Floats` source extended into a `Boxed` receiver stores 16 B
+        // `VmValue` slots, which `extend_accounted` bills correctly (the old
+        // source-`elem_bytes` charge under-counted that mixed-layout case).
+        let grew = expect_list_ref(self.reg(base + list))?
             .borrow_mut()
-            .extend(append_values);
+            .extend_accounted(append_values);
+        if grew != 0 {
+            self.account_bytes(grew)?;
+        }
         self.set_reg(base + dst, VmValue::Unit);
         Ok(())
     }

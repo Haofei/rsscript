@@ -557,6 +557,30 @@ impl TypedVec {
         }
     }
 
+    /// Allocated heap bytes of the backing buffer: `capacity * elem_bytes` for the
+    /// *current* kind. Boxed counts each slot at the full `VmValue` size.
+    fn allocated_bytes(&self) -> usize {
+        match self {
+            TypedVec::Ints(v) => v.capacity() * std::mem::size_of::<i64>(),
+            TypedVec::Floats(v) => v.capacity() * std::mem::size_of::<f64>(),
+            TypedVec::Boxed(v) => v.capacity() * std::mem::size_of::<VmValue>(),
+        }
+    }
+
+    /// `extend`, but accounted against the **destination's** real layout. Charges
+    /// the capacity-growth bytes of *this* buffer (post-extend minus pre-extend),
+    /// so a flat `Ints` source appended into a `Boxed` receiver is billed at the
+    /// 16 B `VmValue` slot it actually occupies — not the source's 8 B. Mirrors the
+    /// amortized capacity-delta model of [`checked_push_accounted`]; never
+    /// under-counts (a kind promotion that shrinks net bytes charges 0, already
+    /// covered by the freed buffer's earlier charge). Returns the bytes to feed to
+    /// `account_bytes`.
+    pub(crate) fn extend_accounted(&mut self, values: impl IntoIterator<Item = VmValue>) -> usize {
+        let before = self.allocated_bytes();
+        self.extend(values);
+        self.allocated_bytes().saturating_sub(before)
+    }
+
     /// Replace the entire contents with a fresh vector of logical values,
     /// re-picking the canonical kind. Mirrors `*borrowed = new_vec`.
     #[allow(dead_code)] // part of the kind-agnostic accessor API (plan §4.2)
@@ -1629,6 +1653,35 @@ mod tests {
         let mut ints = TypedVec::Ints(vec![1]);
         assert!(ints.checked_push_accounted(VmValue::Float(1.0)).is_err());
         assert!(matches!(ints, TypedVec::Ints(ref v) if v == &[1]));
+    }
+
+    #[test]
+    fn extend_accounted_bills_destination_layout() {
+        let vv = std::mem::size_of::<VmValue>();
+        // Mixed layout: a flat `Ints` source appended into a `Boxed` receiver lands
+        // as 16 B `VmValue` slots. Accounting must follow the destination — the old
+        // source-`elem_bytes` charge billed 8 B/elem and under-counted by 2x.
+        let mut dst = TypedVec::Boxed(vec![VmValue::string("x")]); // heterogeneous -> stays Boxed
+        let charged = dst.extend_accounted(TypedVec::Ints(vec![1, 2, 3, 4]));
+        assert!(matches!(dst, TypedVec::Boxed(_)));
+        assert_eq!(dst.len(), 5);
+        assert!(
+            charged >= 4 * vv,
+            "boxed append must bill the VmValue slot ({vv} B), got {charged} for 4 elems"
+        );
+        // The buggy source-based charge would have been 4 * 8 = 32; we are well above it.
+        assert!(charged > 4 * std::mem::size_of::<i64>());
+        // Homogeneous flat-to-flat append stays on the 8 B scalar path and never
+        // under-counts the live length.
+        let mut ints = TypedVec::Ints(vec![1, 2, 3]);
+        let grew = ints.extend_accounted(TypedVec::Ints(vec![4, 5, 6]));
+        assert!(matches!(ints, TypedVec::Ints(_)));
+        assert_eq!(ints.len(), 6);
+        let cap = match &ints {
+            TypedVec::Ints(v) => v.capacity(),
+            _ => unreachable!(),
+        };
+        assert!(grew <= cap * 8 && ints.len() * 8 <= cap * 8);
     }
 
     #[test]
