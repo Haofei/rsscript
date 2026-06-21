@@ -413,9 +413,32 @@ violation). `JitError` MAY be surfaced loudly in diagnostic/test/force-JIT modes
 where a translation bug should be a hard failure rather than a silent fallback.
 
 **Tiering.** A per-function hot-call counter (`tier_up_threshold`) defers native
-compilation until a function is hot. OSR (on-stack replacement) is **not
-applicable**: this is a method-at-a-time JIT — whole functions recompile and
-re-enter fresh; there is no mid-loop replacement to perform.
+compilation until a function is hot.
+
+**OSR (on-stack replacement) — specified, staged.** The method-at-a-time model
+leaves one class unserved: a function called once (or rarely) whose *inner loop*
+is hot never crosses a per-call threshold, so the hot loop stays interpreted (a
+measured cliff — see `vm-jit-perf-plan.md` §3.4). OSR-entry addresses it: when a
+loop backedge is observed hot mid-execution, control transfers from the
+interpreter into native code **at the loop header**, not only at function entry.
+
+OSR-entry is the **dual of deoptimization** (§7.2). Deopt maps a compiled frame's
+state *back* to the interpreter at a safepoint; OSR maps the interpreter's register
+window *forward* into a compiled entry at a loop header. Both use the same
+per-safepoint live-state description (which registers are live, their storage
+classes, the resume `ip`). An OSR-entry compilation begins at the loop-header
+block, loads each live register from the interpreter window into its native
+location, and runs to completion (or deopts back per §7.2 on any guard).
+
+**Parity (normative).** OSR MUST NOT weaken §2: the transferred state is identical
+to the interpreter's at the loop header, the compiled code computes the same values
+(it is the same lowering, entered at a different block), and any guard failure
+deopts into the interpreter (the reference semantics) — so the result is identical
+to running the loop interpreted. Float formatting and `Map` order stay bit-identical.
+The hot-loop backedge counter guides only *whether/when* to OSR, never the values
+computed (determinism, per §2). This section fixes the OSR-entry contract; its
+implementation is staged (`vm-optimizing-jit-plan.md` J5.2) and the
+method-at-a-time entry remains the default until it lands.
 
 ### 7.1 The host-helper ABI (the heap-read boundary)
 
@@ -554,8 +577,10 @@ Normative conventions (part of this contract):
 
 Within the engine (distinct from the language §21 list):
 
-- **OSR / mid-loop on-stack replacement** — not applicable to a method-at-a-time
-  JIT (§7).
+- **OSR / mid-loop on-stack replacement** — **specified, staged** (§7): the
+  OSR-entry contract (dual of deopt) is normative; implementation is staged
+  (`vm-optimizing-jit-plan.md` J5.2), method-at-a-time entry is the default until
+  it lands.
 - **Native side effects before a bail** — forbidden; breaks the §7.2 fallback
   proof.
 - **A `HelperStatus` failure-kind enum** — not until native code reconstructs
@@ -669,8 +694,8 @@ Built verification-first; the governing invariants are §2 (parity) and §7
   runtime value to match its declared register class; `vm-jit::validate`
   independently re-checks the IR before codegen.
 - **Phase 3 — tiering / deopt / fuzz. Done (baseline).** Per-function hot-call
-  counter (`tier_up_threshold`) defers native compilation until hot; OSR is not
-  applicable (§7). Native bails at every arithmetic guard and the interpreter
+  counter (`tier_up_threshold`) defers native compilation until hot; OSR-entry is
+  specified-but-staged (§7). Native bails at every arithmetic guard and the interpreter
   re-runs from the original args; a permanent `force-deopt` backend exercises the
   bail path across the whole corpus. A total `seed(bytes) -> program` decoder
   (`program_from_seed`) drives the differential via proptest seeds and shrinking;
