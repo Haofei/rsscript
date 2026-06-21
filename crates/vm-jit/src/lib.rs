@@ -577,8 +577,11 @@ pub enum NativeOutcome {
     /// and the caller must fall back to the interpreter. `live` carries each
     /// register definitely assigned at the resume point with its captured value
     /// (per the J0.1a state-map); it is empty for a deopt rejected before the call
-    /// (id/length mismatch). The caller currently re-runs from the function top and
-    /// ignores `live`; J0.2 will use it to reconstruct interpreter state.
+    /// (id/length mismatch). The caller's behavior depends on its mode (J0.2): by
+    /// default it re-runs the function from the top and ignores `live` (sound for the
+    /// side-effect-free subset); with precise deopt enabled (`RSS_JIT_PRECISE_DEOPT`)
+    /// it consumes `live` to reconstruct the interpreter window and resumes at the
+    /// safepoint's `resume_ip` instead.
     Deopt {
         safepoint_id: SafepointId,
         live: Vec<DeoptReg>,
