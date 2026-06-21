@@ -70,7 +70,10 @@ fn read_qualified_module_call_parses_as_read_of_call() {
     // call on the module — identical to `read flat()` / `read (m.fn())`.
     let diagnostics = analyze_sources_with_interfaces(
         &[
-            ("m.rss", "module m\n\nfn order_names() -> fresh String { return \"x\" }\n"),
+            (
+                "m.rss",
+                "module m\n\nfn order_names() -> fresh String { return \"x\" }\n",
+            ),
             (
                 "app.rss",
                 concat!(

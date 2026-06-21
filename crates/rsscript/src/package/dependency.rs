@@ -329,8 +329,7 @@ fn resolve_dependency_walk_entry(
     seen.insert(canonical.clone());
     let dependency_manifest = load_package_manifest(&dependency_dir)?;
     let selected_features = resolve_package_features(&dependency_manifest, &spec.features);
-    let package =
-        load_package_with_features(&dependency_dir, Some(&selected_features.selected))?;
+    let package = load_package_with_features(&dependency_dir, Some(&selected_features.selected))?;
     Ok(Some(DependencyWalkEntry {
         dependency_dir,
         canonical,

@@ -26,13 +26,7 @@ pub fn metal_device_name() -> String {
 /// GPU matrix multiply `(m, k) x (k, n) -> (m, n)`, row-major f32. Uploads `a`/`b`
 /// to shared buffers, runs an MSL kernel, and reads the result back. Returns an
 /// error string if no device is available or compilation/dispatch fails.
-pub fn gpu_matmul(
-    a: &[f32],
-    b: &[f32],
-    m: usize,
-    k: usize,
-    n: usize,
-) -> Result<Vec<f32>, String> {
+pub fn gpu_matmul(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Result<Vec<f32>, String> {
     imp::gpu_matmul(a, b, m, k, n)
 }
 

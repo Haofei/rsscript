@@ -104,8 +104,8 @@ fn run_generated_rust_inner(args: &[String], stream_stdio: bool) -> ExitCode {
         && let Some(package_name) = cli_input_package_name(path)
     {
         let cache_dir = run_cache_dir(path, &package_name);
-        let cached_package_present = cache_dir.join("Cargo.toml").is_file()
-            && cache_dir.join("src/main.rs").is_file();
+        let cached_package_present =
+            cache_dir.join("Cargo.toml").is_file() && cache_dir.join("src/main.rs").is_file();
         if cached_package_present
             && let Some(fingerprint) = run_input_fingerprint(path, &runtime_path, options.release)
             && read_cached_fingerprint(&cache_dir).as_deref() == Some(fingerprint.as_str())

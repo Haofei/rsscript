@@ -56,9 +56,8 @@ fn module_isolation_lets_two_modules_share_a_symbol_name() {
             .to_string(),
         ),
     ];
-    let package =
-        lower_sources_to_rust_package_with_options(&sources, "ns-demo", "/rt", &[], &[])
-            .expect("multi-module package with a shared symbol name should lower");
+    let package = lower_sources_to_rust_package_with_options(&sources, "ns-demo", "/rt", &[], &[])
+        .expect("multi-module package with a shared symbol name should lower");
     // Both modules' `count` coexist as distinct, module-qualified Rust symbols.
     assert!(
         package.lib_rs.contains("fn helpers__count("),
@@ -251,9 +250,8 @@ fn aliasing_lets_one_file_import_two_same_leaf_symbols() {
             .to_string(),
         ),
     ];
-    let package =
-        lower_sources_to_rust_package_with_options(&sources, "ns-alias", "/rt", &[], &[])
-            .expect("aliased multi-module package should lower");
+    let package = lower_sources_to_rust_package_with_options(&sources, "ns-alias", "/rt", &[], &[])
+        .expect("aliased multi-module package should lower");
     assert!(
         package.lib_rs.contains("helpers__count()"),
         "the `helpers_count` alias should resolve to helpers__count:\n{}",
@@ -292,9 +290,8 @@ fn qualified_module_calls_disambiguate_same_leaf_symbols() {
             .to_string(),
         ),
     ];
-    let package =
-        lower_sources_to_rust_package_with_options(&sources, "ns-qual", "/rt", &[], &[])
-            .expect("qualified-call multi-module package should lower");
+    let package = lower_sources_to_rust_package_with_options(&sources, "ns-qual", "/rt", &[], &[])
+        .expect("qualified-call multi-module package should lower");
     assert!(
         package.lib_rs.contains("helpers__count()"),
         "`helpers.count()` should resolve to helpers__count:\n{}",

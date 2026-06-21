@@ -1,7 +1,7 @@
-//! N-way differential execution: run one program on every execution backend
-//! (VM interpreter, compiled Rust, and — once it exists — the JIT) and require
-//! they agree. This is the verification-first safety net: a JIT plugs in as a
-//! third `Backend` and is checked against the other two from its first commit.
+//! N-way differential execution: run one program on the configured execution
+//! backend set and require agreement. Default runs stay in-process
+//! (VM interpreter + JIT, plus native tiers when built); full parity mode adds
+//! generated Rust.
 //!
 //! Each `Backend` returns normalized stdout (or an error string). The harness
 //! requires every backend to agree on success+stdout (and, when a divergence is
@@ -112,22 +112,38 @@ impl Backend for NativeJitForceDeopt {
     }
 }
 
-/// The standard set of execution backends to cross-check. With the `native-jit`
-/// feature, the native tier and its force-deopt twin join as additional backends.
-pub fn all_backends() -> Vec<Box<dyn Backend>> {
-    #[cfg(not(feature = "native-jit"))]
-    {
-        vec![Box::new(Interpreter), Box::new(Jit), Box::new(Compiled)]
-    }
+/// The fast default execution backends. These stay in-process, so broad
+/// differential sweeps do not spawn Cargo for every generated program.
+pub fn fast_backends() -> Vec<Box<dyn Backend>> {
     #[cfg(feature = "native-jit")]
     {
-        vec![
-            Box::new(Interpreter),
-            Box::new(Jit),
-            Box::new(NativeJit),
-            Box::new(NativeJitForceDeopt),
-            Box::new(Compiled),
-        ]
+        let mut backends: Vec<Box<dyn Backend>> = vec![Box::new(Interpreter), Box::new(Jit)];
+        backends.push(Box::new(NativeJit));
+        backends.push(Box::new(NativeJitForceDeopt));
+        backends
+    }
+    #[cfg(not(feature = "native-jit"))]
+    {
+        vec![Box::new(Interpreter), Box::new(Jit)]
+    }
+}
+
+/// The full backend set, including the generated Rust backend. Use this for
+/// focused smoke coverage or full parity runs via `RSSCRIPT_FULL_BACKEND_PARITY`.
+pub fn full_backends() -> Vec<Box<dyn Backend>> {
+    let mut backends = fast_backends();
+    backends.push(Box::new(Compiled));
+    backends
+}
+
+/// The standard set of execution backends to cross-check. Default runs use the
+/// fast in-process set; set `RSSCRIPT_FULL_BACKEND_PARITY=1` to include the
+/// generated Rust backend in every differential assertion.
+pub fn all_backends() -> Vec<Box<dyn Backend>> {
+    if super::full_backend_parity_enabled() {
+        full_backends()
+    } else {
+        fast_backends()
     }
 }
 
@@ -135,6 +151,12 @@ pub fn all_backends() -> Vec<Box<dyn Backend>> {
 /// (so proptest shrinks) with the diverging pair on mismatch.
 pub fn assert_backends_agree(file: &str, source: &str, args: &[&str]) {
     assert_backends_agree_on(file, source, args, &all_backends());
+}
+
+/// Run `source` on every backend, including generated Rust, regardless of the
+/// default fast/full parity mode.
+pub fn assert_backends_agree_full(file: &str, source: &str, args: &[&str]) {
+    assert_backends_agree_on(file, source, args, &full_backends());
 }
 
 /// Failure-path differential: assert that **every** backend fails (returns

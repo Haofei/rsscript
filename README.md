@@ -136,7 +136,7 @@ RSScript is the constrained AI codegen target that makes these artifacts reliabl
 PR review story: an AI-style patch adds `Reports.cleanup_old_reports -> S3.delete_object`, but the existing prod IAM role grants only `s3:PutObject`. RSScript package review turns that new external ability into a REIR fact, and deployment reconciliation blocks the PR before deploy.
 
 ```sh
-cargo test --test s3_iam_reir_demo_e2e s3_iam_reir_demo_pr_review -- --nocapture
+cargo test --test soak s3_iam_reir_demo_e2e::s3_iam_reir_demo_pr_review -- --nocapture
 ```
 
 Expected output:
@@ -148,7 +148,7 @@ s3 iam pr review: blocked missing=s3:DeleteObject evidence=src/upload.rss:28
 Fast preflight: RSScript code requires an S3 capability, Terraform/OpenTofu IAM policy grants are reconciled before deploy.
 
 ```sh
-cargo test --test s3_iam_reir_demo_e2e s3_iam_reir_demo_preflight -- --nocapture
+cargo test --test soak s3_iam_reir_demo_e2e::s3_iam_reir_demo_preflight -- --nocapture
 ```
 
 Expected output:
@@ -160,13 +160,13 @@ s3 iam preflight: missing=s3:PutObject fixed=covered excess=s3:DeleteObject
 Reviewer scenario matrix:
 
 ```sh
-cargo test --test s3_iam_reir_demo_e2e s3_iam_reir_demo_scenarios -- --nocapture
+cargo test --test soak s3_iam_reir_demo_e2e::s3_iam_reir_demo_scenarios -- --nocapture
 ```
 
 Release/demo runtime path, including Tokio-backed native async IO and sync comparison:
 
 ```sh
-cargo test --test s3_iam_reir_demo_e2e s3_iam_reir_demo_fails_preflight_then_passes_and_shows_async_io_gain -- --ignored --nocapture
+cargo test --test soak s3_iam_reir_demo_e2e::s3_iam_reir_demo_fails_preflight_then_passes_and_shows_async_io_gain -- --ignored --nocapture
 ```
 
 The demo lives in [`examples/demos/s3-iam-reir`](examples/demos/s3-iam-reir): RSScript source -> package capability binding -> REIR required facts -> Terraform/OpenTofu IAM grants plus runtime grants -> missing/fixed/excess/code-change/native-risk/missing-binding review outcomes.
@@ -484,7 +484,7 @@ rss test     [--all] [--json] [--filter <substring>]
 
 ### Execution backends
 
-These are **not equivalent backends** — they cover different slices of the language. Only Rust lowering executes the full language; it is the semantic reference. The others are progressively narrower fast-feedback/optimization tiers that **fail closed** (or fall back) rather than silently diverging, and the N-way differential (`tests/backend_differential.rs`) gates that they agree on their shared supported subset.
+These are **not equivalent backends** — they cover different slices of the language. Only Rust lowering executes the full language; it is the semantic reference. The others are progressively narrower fast-feedback/optimization tiers that **fail closed** (or fall back) rather than silently diverging, and the N-way differential (`tests/backend_differential.rs`) gates that they agree on their shared supported subset. Default tests keep the broad differential matrix in-process; set `RSSCRIPT_FULL_BACKEND_PARITY=1` to add generated-Rust execution to every parity case.
 
 | Backend | Entry point | Executes | Outside its subset |
 | --- | --- | --- | --- |
@@ -515,7 +515,9 @@ Prefer a containerized toolchain? [DOCKER.md](docs/development/DOCKER.md) gives 
 
 ```sh
 docker compose build
-docker compose run --rm dev cargo run --bin rss -- test --all
+make test-fast
+make test-full
+make test-soak
 ```
 
 ---

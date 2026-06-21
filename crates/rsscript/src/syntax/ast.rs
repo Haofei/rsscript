@@ -551,10 +551,9 @@ impl MatchPattern {
     pub fn constructor_name(&self) -> Option<&str> {
         match self {
             Self::Variant { name, .. } | Self::Struct { name, .. } => Some(name),
-            Self::Binding { .. }
-            | Self::Literal { .. }
-            | Self::List { .. }
-            | Self::Wildcard(_) => None,
+            Self::Binding { .. } | Self::Literal { .. } | Self::List { .. } | Self::Wildcard(_) => {
+                None
+            }
         }
     }
 

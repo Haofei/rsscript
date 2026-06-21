@@ -50,6 +50,14 @@ pub type FieldIntFn = extern "C" fn(i64, i64) -> i64;
 pub type ListLenFn = extern "C" fn(i64) -> i64;
 /// `(list_handle, index) -> i64`: the list element at `index` as an `Int`.
 pub type ListGetIntFn = extern "C" fn(i64, i64) -> i64;
+/// `(struct_handle, slot) -> f64`: the struct's `slot`-th field as a `Float`.
+/// A wrong-type/out-of-range field signals a bail out-of-band (the f64 return
+/// channel needs no tagging — the bail flag is separate), so the returned value
+/// is unused on failure.
+pub type FieldFloatFn = extern "C" fn(i64, i64) -> f64;
+/// `(list_handle, index) -> f64`: the list element at `index` as a `Float`.
+/// Like [`FieldFloatFn`], a wrong-type/out-of-bounds element signals a bail.
+pub type ListGetFloatFn = extern "C" fn(i64, i64) -> f64;
 
 /// Host helper functions the compiled code calls to read heap values (struct
 /// fields, list elements) that don't fit in a scalar register. The `rsscript`
@@ -68,13 +76,15 @@ pub struct HostHelpers {
     pub field_int: FieldIntFn,
     pub list_len: ListLenFn,
     pub list_get_int: ListGetIntFn,
+    pub field_float: FieldFloatFn,
+    pub list_get_float: ListGetFloatFn,
 }
 
 /// Version of the [`JitInstr`]/[`JitFunction`] IR this crate consumes. The
 /// producer (`rsscript`) translates its private bytecode into this stable,
 /// versioned surface, so the two crates are decoupled: a breaking IR change bumps
 /// this and the producer is updated in lock-step.
-pub const IR_VERSION: u32 = 2;
+pub const IR_VERSION: u32 = 4;
 
 /// Signed integer comparison (the four ordered comparisons; equality is its own
 /// instruction so it can also apply to booleans).
@@ -240,6 +250,48 @@ pub enum JitInstr {
         base: u32,
         index: u32,
     },
+    /// `dst = field[slot]` of the struct/variant handle in `base`, read as a
+    /// `Float`. Compiles to a call to [`HostHelpers::field_float`]; a wrong-type
+    /// field makes the helper flag a fallback. `dst` is a Float-class register.
+    FieldFloat {
+        dst: u32,
+        base: u32,
+        slot: u32,
+    },
+    /// `dst = list[index]` (as `Float`) of the list handle in `base`. Calls
+    /// [`HostHelpers::list_get_float`]; an out-of-bounds/non-float element makes
+    /// the helper flag a fallback. `dst` is a Float-class register.
+    ListGetFloat {
+        dst: u32,
+        base: u32,
+        index: u32,
+    },
+    /// TV2 direct read: `dst = base_ptr[index]` where `base` is a **`FlatInt`**
+    /// param register holding the raw `*const i64` of a flat `List<Int>` buffer.
+    /// Bounds-checked against the param's length (the `lens` slot for `base`); an
+    /// out-of-bounds index branches to fallback exactly like the helper's bail —
+    /// no per-element host call. `dst` is an `Int` register.
+    ListGetIntDirect {
+        dst: u32,
+        base: u32,
+        index: u32,
+    },
+    /// TV2 direct read: `dst = base_ptr[index]` where `base` is a **`FlatFloat`**
+    /// param register holding the raw `*const f64` of a flat `List<Float>` buffer.
+    /// Bounds-checked against the param's length; OOB → fallback. `dst` is a
+    /// `Float` register.
+    ListGetFloatDirect {
+        dst: u32,
+        base: u32,
+        index: u32,
+    },
+    /// TV2 direct read: `dst = len` of the flat-array param `base` (a `FlatInt` or
+    /// `FlatFloat` register). Reads the length from the param's `lens` slot — no
+    /// host call. `dst` is an `Int` register.
+    ListLenDirect {
+        dst: u32,
+        base: u32,
+    },
 }
 
 /// Storage class of a register: an unboxed `i64` (integers and booleans) or an
@@ -255,6 +307,13 @@ pub enum JitValueType {
     /// value — a struct/list/etc. — that can't live in a scalar register. Stored
     /// as `i64`; only valid as the `base` of a heap-read instruction.
     Handle,
+    /// TV2: a flat `List<Int>` param passed as a raw `*const i64` data pointer (in
+    /// the args word) plus its element count (in the parallel `lens` word). Stored
+    /// as `i64` (the pointer bits); only valid as the `base` of a `*Direct` read.
+    FlatInt,
+    /// TV2: a flat `List<Float>` param passed as a raw `*const f64` data pointer
+    /// plus its element count. Only valid as the `base` of a `*Direct` read.
+    FlatFloat,
 }
 
 /// A compilable function: register count, per-register storage class, and the
@@ -276,12 +335,16 @@ impl JitFunction {
 }
 
 /// The native ABI of every compiled function:
-/// `(args_ptr, n_args, out_ptr, bail_ptr) -> completed`. Returns `1` and writes
-/// the result to `*out` on success, or `0` (leaving `*out` untouched) to request
-/// fallback. `bail_ptr` points at a `u8` flag the host helpers set when a heap
-/// read can't be satisfied; the generated code loads it after every helper call
-/// and branches to fallback immediately, so a bad read can't keep executing.
-type CompiledAbi = unsafe extern "C" fn(*const i64, usize, *mut i64, *const u8) -> u8;
+/// `(args_ptr, n_args, lens_ptr, out_ptr, bail_ptr) -> completed`. Returns `1` and
+/// writes the result to `*out` on success, or `0` (leaving `*out` untouched) to
+/// request fallback. `lens_ptr` points at an `i64` array parallel to `args`: for a
+/// TV2 flat-array param (`FlatInt`/`FlatFloat`) the args word holds the raw data
+/// pointer and the `lens` word holds the element count (for in-register
+/// bounds-checked direct reads); other params' `lens` words are unused. `bail_ptr`
+/// points at a `u8` flag the host helpers set when a heap read can't be satisfied;
+/// the generated code loads it after every helper call and branches to fallback
+/// immediately, so a bad read can't keep executing.
+type CompiledAbi = unsafe extern "C" fn(*const i64, usize, *const i64, *mut i64, *const u8) -> u8;
 
 #[derive(Debug)]
 pub struct JitError(pub String);
@@ -304,6 +367,24 @@ fn declare_import(module: &mut JITModule, name: &str, n_args: usize) -> Result<F
         sig.params.push(AbiParam::new(types::I64));
     }
     sig.returns.push(AbiParam::new(types::I64));
+    module
+        .declare_function(name, Linkage::Import, &sig)
+        .map_err(|e| err("declare import", e))
+}
+
+/// Declare an imported host helper with `n_args` `i64` params and an `f64` result
+/// (the Float read helpers). The bail signal stays out-of-band (the shared bail
+/// flag), so the f64 return channel carries only the value.
+fn declare_import_f64(
+    module: &mut JITModule,
+    name: &str,
+    n_args: usize,
+) -> Result<FuncId, JitError> {
+    let mut sig = module.make_signature();
+    for _ in 0..n_args {
+        sig.params.push(AbiParam::new(types::I64));
+    }
+    sig.returns.push(AbiParam::new(types::F64));
     module
         .declare_function(name, Linkage::Import, &sig)
         .map_err(|e| err("declare import", e))
@@ -345,6 +426,8 @@ struct HostFuncs {
     field_int: FuncId,
     list_len: FuncId,
     list_get_int: FuncId,
+    field_float: FuncId,
+    list_get_float: FuncId,
 }
 
 /// Handle to a function compiled into a [`NativeModule`]. Carries the minting
@@ -357,9 +440,27 @@ pub struct CompiledId {
 }
 
 impl NativeModule {
+    /// Optimizing native tier (back-compat default): `opt_level="speed"`.
     pub fn new(helpers: HostHelpers) -> Result<Self, JitError> {
+        Self::new_with_opt(helpers, false)
+    }
+
+    /// Build a native module at a selectable optimization level.
+    ///
+    /// `baseline == true` selects the Phase-2 path-B **baseline tier**:
+    /// `opt_level="none"`. Everything else — IR translation, host helpers, the
+    /// bail-flag deopt protocol — is byte-for-byte identical to the optimizing
+    /// path; only the Cranelift ISA `opt_level` flag changes. The win is
+    /// *compile latency* (less codegen work), at the cost of slightly less
+    /// optimized machine code. Because the compiled subset is the
+    /// side-effect-free scalar + read-only-heap set, the interpreter/`run_jit`
+    /// deopt oracle remains valid verbatim regardless of opt level.
+    ///
+    /// `baseline == false` keeps the optimizing hot-path tier (`opt_level="speed"`).
+    pub fn new_with_opt(helpers: HostHelpers, baseline: bool) -> Result<Self, JitError> {
         let mut flags = settings::builder();
-        // Plain JIT: no PIC, and optimize for speed (this is the hot path).
+        // Plain JIT: no PIC. Optimize for speed on the hot path, or skip
+        // optimization entirely in baseline mode to minimize compile latency.
         flags
             .set("use_colocated_libcalls", "false")
             .map_err(|e| err("settings", e))?;
@@ -367,7 +468,7 @@ impl NativeModule {
             .set("is_pic", "false")
             .map_err(|e| err("settings", e))?;
         flags
-            .set("opt_level", "speed")
+            .set("opt_level", if baseline { "none" } else { "speed" })
             .map_err(|e| err("settings", e))?;
         let flags = settings::Flags::new(flags);
         // Build the host ISA with our flags (so `opt_level` actually applies),
@@ -384,11 +485,15 @@ impl NativeModule {
         builder.symbol("rss_jit_field_int", helpers.field_int as *const u8);
         builder.symbol("rss_jit_list_len", helpers.list_len as *const u8);
         builder.symbol("rss_jit_list_get_int", helpers.list_get_int as *const u8);
+        builder.symbol("rss_jit_field_float", helpers.field_float as *const u8);
+        builder.symbol("rss_jit_list_get_float", helpers.list_get_float as *const u8);
         let mut module = JITModule::new(builder);
         let imports = HostFuncs {
             field_int: declare_import(&mut module, "rss_jit_field_int", 2)?,
             list_len: declare_import(&mut module, "rss_jit_list_len", 1)?,
             list_get_int: declare_import(&mut module, "rss_jit_list_get_int", 2)?,
+            field_float: declare_import_f64(&mut module, "rss_jit_field_float", 2)?,
+            list_get_float: declare_import_f64(&mut module, "rss_jit_list_get_float", 2)?,
         };
         let ctx = module.make_context();
         Ok(Self {
@@ -412,6 +517,7 @@ impl NativeModule {
         self.module.clear_context(&mut self.ctx);
         self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // args ptr
         self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // n_args
+        self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // lens ptr (TV2)
         self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // out ptr
         self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // bail flag ptr
         self.ctx
@@ -461,12 +567,22 @@ impl NativeModule {
     /// either a guard bail (overflow/divide-by-zero edge) or a host-helper bail
     /// (an unsatisfiable heap read; see [`signal_bail`]).
     ///
-    /// This is a **fully safe** boundary: it takes no raw pointers. The bail flag
-    /// is a per-thread `u8` owned by this crate; `call` resets it, passes its own
-    /// address into the generated code, and reports a set flag as a fallback. The
-    /// only `unsafe` is the indirect call through a pointer this module emitted with
-    /// the matching ABI, with every pointer it passes derived from owned locals.
-    pub fn call(&self, id: CompiledId, args: &[i64]) -> Option<i64> {
+    /// This is a **fully safe** boundary for scalar/handle args. The bail flag is a
+    /// per-thread `u8` owned by this crate; `call` resets it, passes its own address
+    /// into the generated code, and reports a set flag as a fallback.
+    ///
+    /// `args` and `lens` are parallel slices indexed by param (both length
+    /// `n_params`). For a TV2 flat-array param the caller places the raw data
+    /// pointer (`*const i64`/`*const f64` reinterpreted as `i64`) in `args[i]` and
+    /// the element count in `lens[i]`. **SAFETY (TV2 borrow protocol — caller
+    /// obligation):** any pointer placed in `args` for a flat-array param must point
+    /// at a buffer that stays allocated, immovable, and unmutated for the entire
+    /// duration of this call. The generated code reads at most `lens[i]` consecutive
+    /// elements from it (every index is bounds-checked against `lens[i]` →
+    /// `signal_bail` on OOB) and never writes or retains it. The VM caller satisfies
+    /// this by pinning a shared `Ref` borrow of the backing `RefCell<TypedVec>` for
+    /// the call (so no `borrow_mut`/realloc can occur); see `try_native`.
+    pub fn call(&self, id: CompiledId, args: &[i64], lens: &[i64]) -> Option<i64> {
         // Reject an id from a different module and an out-of-range index: either
         // would invoke the wrong (or no) function. Falling back is always safe.
         if id.module_id != self.id {
@@ -474,9 +590,9 @@ impl NativeModule {
         }
         let func = self.funcs.get(id.index)?;
         // The generated entry block reads exactly `n_params` words from `args_ptr`
-        // without consulting `n_args`, so an args slice shorter than `n_params`
-        // would read out of bounds. Reject any length mismatch and fall back.
-        if args.len() != func.n_params {
+        // (and `lens_ptr`) without consulting `n_args`, so a slice shorter than
+        // `n_params` would read out of bounds. Reject any length mismatch.
+        if args.len() != func.n_params || lens.len() != func.n_params {
             return None;
         }
         let f = func.f;
@@ -485,11 +601,22 @@ impl NativeModule {
             bail.set(0);
             let bail_ptr = bail.as_ptr() as *const u8;
             // SAFETY: `f` was produced by `compile` with the `CompiledAbi`
-            // signature; it reads `args.len()` i64s from `args.as_ptr()`, writes
-            // one i64 to `&mut out`, and only ever loads (never stores) the `u8` at
-            // `bail_ptr` — this thread's `BAIL_FLAG` cell, valid for the call. The
-            // generated code never retains any of the pointers.
-            let completed = unsafe { f(args.as_ptr(), args.len(), &mut out as *mut i64, bail_ptr) };
+            // signature; it reads `args.len()` i64s from `args.as_ptr()` and
+            // `lens.as_ptr()`, writes one i64 to `&mut out`, and only ever loads
+            // (never stores) the `u8` at `bail_ptr` — this thread's `BAIL_FLAG`
+            // cell, valid for the call. Any flat-array data pointer in `args` is
+            // read in-bounds (against the matching `lens` entry) per the caller's
+            // borrow-protocol obligation documented above. The generated code never
+            // retains any of the pointers.
+            let completed = unsafe {
+                f(
+                    args.as_ptr(),
+                    args.len(),
+                    lens.as_ptr(),
+                    &mut out as *mut i64,
+                    bail_ptr,
+                )
+            };
             if completed != 0 && bail.get() == 0 {
                 Some(out)
             } else {
@@ -553,6 +680,14 @@ fn validate(program: &JitFunction) -> Result<(), JitError> {
         }
     };
     let class = |r: u32| program.reg_types[r as usize];
+    // Non-scalar register classes (opaque handle or flat-array pointer): valid only
+    // as the `base` of a heap/direct read, never in scalar/arith/move/return.
+    let is_nonscalar = |r: u32| {
+        matches!(
+            class(r),
+            JitValueType::Handle | JitValueType::FlatInt | JitValueType::FlatFloat
+        )
+    };
     let check_target = |t: u32| -> Result<(), JitError> {
         if (t as usize) < n {
             Ok(())
@@ -568,8 +703,10 @@ fn validate(program: &JitFunction) -> Result<(), JitError> {
     let scalar_pair = |lhs: u32, rhs: u32, op: &str| -> Result<(), JitError> {
         check_reg(lhs)?;
         check_reg(rhs)?;
-        if class(lhs) == JitValueType::Handle || class(rhs) == JitValueType::Handle {
-            return Err(JitError(format!("{op}: operand is a Handle register")));
+        if is_nonscalar(lhs) || is_nonscalar(rhs) {
+            return Err(JitError(format!(
+                "{op}: operand is a non-scalar (Handle/flat) register"
+            )));
         }
         if class(lhs) != class(rhs) {
             return Err(JitError(format!(
@@ -624,6 +761,15 @@ fn validate(program: &JitFunction) -> Result<(), JitError> {
         }
         Ok(())
     };
+    // A flat-array base must be the expected flat class *and* a parameter (flat
+    // pointers only enter via the caller's args/lens, never produced internally).
+    let require_flat_param = |r: u32, want: JitValueType, op: &str| -> Result<(), JitError> {
+        require_class(r, want, op)?;
+        if (r as usize) >= program.n_params as usize {
+            return Err(JitError(format!("{op}: register {r} is not a parameter")));
+        }
+        Ok(())
+    };
 
     for (i, instr) in program.code.iter().enumerate() {
         // Conditional branches fall through to `i + 1` (`build_function` indexes
@@ -647,8 +793,10 @@ fn validate(program: &JitFunction) -> Result<(), JitError> {
             JitInstr::Move { dst, src } => {
                 check_reg(*dst)?;
                 check_reg(*src)?;
-                if class(*src) == JitValueType::Handle || class(*dst) == JitValueType::Handle {
-                    return Err(JitError("Move: Handle registers cannot be moved".into()));
+                if is_nonscalar(*src) || is_nonscalar(*dst) {
+                    return Err(JitError(
+                        "Move: non-scalar (Handle/flat) registers cannot be moved".into(),
+                    ));
                 }
                 if class(*dst) != class(*src) {
                     return Err(JitError(format!(
@@ -686,8 +834,10 @@ fn validate(program: &JitFunction) -> Result<(), JitError> {
             }
             JitInstr::Return { src } => {
                 check_reg(*src)?;
-                if class(*src) == JitValueType::Handle {
-                    return Err(JitError("Return: cannot return a Handle register".into()));
+                if is_nonscalar(*src) {
+                    return Err(JitError(
+                        "Return: cannot return a non-scalar (Handle/flat) register".into(),
+                    ));
                 }
             }
             JitInstr::FieldInt { dst, base, .. } => {
@@ -702,6 +852,40 @@ fn validate(program: &JitFunction) -> Result<(), JitError> {
                 require_class(*base, JitValueType::Handle, "ListGetInt base")?;
                 require_class(*index, JitValueType::Int, "ListGetInt index")?;
                 require_class(*dst, JitValueType::Int, "ListGetInt result")?;
+            }
+            JitInstr::FieldFloat { dst, base, .. } => {
+                require_class(*base, JitValueType::Handle, "FieldFloat base")?;
+                require_class(*dst, JitValueType::Float, "FieldFloat result")?;
+            }
+            JitInstr::ListGetFloat { dst, base, index } => {
+                require_class(*base, JitValueType::Handle, "ListGetFloat base")?;
+                require_class(*index, JitValueType::Int, "ListGetFloat index")?;
+                require_class(*dst, JitValueType::Float, "ListGetFloat result")?;
+            }
+            JitInstr::ListGetIntDirect { dst, base, index } => {
+                require_flat_param(*base, JitValueType::FlatInt, "ListGetIntDirect base")?;
+                require_class(*index, JitValueType::Int, "ListGetIntDirect index")?;
+                require_class(*dst, JitValueType::Int, "ListGetIntDirect result")?;
+            }
+            JitInstr::ListGetFloatDirect { dst, base, index } => {
+                require_flat_param(*base, JitValueType::FlatFloat, "ListGetFloatDirect base")?;
+                require_class(*index, JitValueType::Int, "ListGetFloatDirect index")?;
+                require_class(*dst, JitValueType::Float, "ListGetFloatDirect result")?;
+            }
+            JitInstr::ListLenDirect { dst, base } => {
+                check_reg(*base)?;
+                if !matches!(class(*base), JitValueType::FlatInt | JitValueType::FlatFloat) {
+                    return Err(JitError(format!(
+                        "ListLenDirect base: register {base} is {:?}, expected a flat-array param",
+                        class(*base)
+                    )));
+                }
+                if (*base as usize) >= program.n_params as usize {
+                    return Err(JitError(format!(
+                        "ListLenDirect base: register {base} is not a parameter"
+                    )));
+                }
+                require_class(*dst, JitValueType::Int, "ListLenDirect result")?;
             }
         }
     }
@@ -721,6 +905,8 @@ fn build_function(
     let field_int_ref = module.declare_func_in_func(imports.field_int, bcx.func);
     let list_len_ref = module.declare_func_in_func(imports.list_len, bcx.func);
     let list_get_int_ref = module.declare_func_in_func(imports.list_get_int, bcx.func);
+    let field_float_ref = module.declare_func_in_func(imports.field_float, bcx.func);
+    let list_get_float_ref = module.declare_func_in_func(imports.list_get_float, bcx.func);
 
     let n = program.code.len();
     let n_regs = program.n_regs as usize;
@@ -744,8 +930,9 @@ fn build_function(
     bcx.switch_to_block(entry);
     let params = bcx.block_params(entry).to_vec();
     let args_ptr = params[0];
-    let out_ptr = params[2];
-    let bail_ptr = params[3];
+    let lens_ptr = params[2];
+    let out_ptr = params[3];
+    let bail_ptr = params[4];
     for (i, &var) in vars.iter().take(program.n_params as usize).enumerate() {
         let v = bcx
             .ins()
@@ -1040,6 +1227,47 @@ fn build_function(
                 bcx.switch_to_block(cont);
                 bcx.def_var(reg(*dst), result);
             }
+            JitInstr::FieldFloat { dst, base, slot } => {
+                let handle = bcx.use_var(reg(*base));
+                let slot_v = bcx.ins().iconst(types::I64, i64::from(*slot));
+                let call = bcx.ins().call(field_float_ref, &[handle, slot_v]);
+                let result = bcx.inst_results(call)[0];
+                let cont = bail_if_helper_failed(&mut bcx, bail_ptr, fallback);
+                bcx.switch_to_block(cont);
+                bcx.def_var(reg(*dst), result);
+            }
+            JitInstr::ListGetFloat { dst, base, index } => {
+                let handle = bcx.use_var(reg(*base));
+                let index_v = bcx.use_var(reg(*index));
+                let call = bcx.ins().call(list_get_float_ref, &[handle, index_v]);
+                let result = bcx.inst_results(call)[0];
+                let cont = bail_if_helper_failed(&mut bcx, bail_ptr, fallback);
+                bcx.switch_to_block(cont);
+                bcx.def_var(reg(*dst), result);
+            }
+            JitInstr::ListGetIntDirect { dst, base, index } => {
+                let result = emit_direct_get(
+                    &mut bcx, lens_ptr, fallback, reg(*base), reg(*index), *base, types::I64,
+                );
+                bcx.def_var(reg(*dst), result);
+            }
+            JitInstr::ListGetFloatDirect { dst, base, index } => {
+                let result = emit_direct_get(
+                    &mut bcx, lens_ptr, fallback, reg(*base), reg(*index), *base, types::F64,
+                );
+                bcx.def_var(reg(*dst), result);
+            }
+            JitInstr::ListLenDirect { dst, base } => {
+                // Length lives in the `lens` slot for the base param (param index ==
+                // register index for flat params). No host call, no bail.
+                let len = bcx.ins().load(
+                    types::I64,
+                    MemFlags::trusted(),
+                    lens_ptr,
+                    (*base as i32) * 8,
+                );
+                bcx.def_var(reg(*dst), len);
+            }
         }
     }
     if !terminated {
@@ -1056,6 +1284,44 @@ fn build_function(
 
     bcx.seal_all_blocks();
     bcx.finalize();
+}
+
+/// TV2 direct list read: `cont: dst = base_ptr[index]`, bounds-checked against the
+/// param's `lens` slot. `base_var` holds the raw data pointer (i64); `base_param`
+/// is its param/register index (used to index `lens`); `elem_ty` is `I64` for an
+/// `Ints` list or `F64` for a `Floats` list. An index `< 0` or `>= len` branches to
+/// `fallback` (→ the VM re-runs on the interpreter, matching the helper's OOB bail).
+///
+/// SAFETY (codegen contract): the generated load reads exactly one `elem_ty` at
+/// `base_ptr + index * 8`, only after proving `0 <= index < len`. `base_ptr` and
+/// `len` come from the caller's `args`/`lens` for the same param, which the
+/// `NativeModule::call` borrow protocol guarantees point at a live, immovable,
+/// unmutated buffer of `len` elements for the call's duration. So every in-bounds
+/// element address is valid and the read cannot alias a concurrent mutation.
+fn emit_direct_get(
+    bcx: &mut FunctionBuilder,
+    lens_ptr: Value,
+    fallback: Block,
+    base_var: Variable,
+    index_var: Variable,
+    base_param: u32,
+    elem_ty: types::Type,
+) -> Value {
+    let index = bcx.use_var(index_var);
+    let len = bcx
+        .ins()
+        .load(types::I64, MemFlags::trusted(), lens_ptr, (base_param as i32) * 8);
+    // Single unsigned compare folds "index < 0" (huge unsigned) and "index >= len"
+    // into one OOB test (len is a non-negative element count).
+    let oob = bcx
+        .ins()
+        .icmp(IntCC::UnsignedGreaterThanOrEqual, index, len);
+    let cont = bail_if(bcx, oob, fallback);
+    bcx.switch_to_block(cont);
+    let base_ptr = bcx.use_var(base_var);
+    let offset = bcx.ins().imul_imm(index, 8);
+    let addr = bcx.ins().iadd(base_ptr, offset);
+    bcx.ins().load(elem_ty, MemFlags::trusted(), addr, 0)
 }
 
 /// Emit `brif(cond, fallback, cont)` and return the `cont` block to continue in.
@@ -1131,6 +1397,18 @@ fn emit_checked_shift(
 mod tests {
     use super::*;
 
+    /// Test-only convenience over [`NativeModule::call`]: pass a zeroed `lens`
+    /// (length-matched to `args`) for tests that use no flat-array params.
+    trait CallScalar {
+        fn callt(&self, id: CompiledId, args: &[i64]) -> Option<i64>;
+    }
+    impl CallScalar for NativeModule {
+        fn callt(&self, id: CompiledId, args: &[i64]) -> Option<i64> {
+            let lens = vec![0i64; args.len()];
+            self.call(id, args, &lens)
+        }
+    }
+
     extern "C" fn noop_field_int(_handle: i64, _slot: i64) -> i64 {
         0
     }
@@ -1140,6 +1418,12 @@ mod tests {
     extern "C" fn noop_list_get_int(_handle: i64, _index: i64) -> i64 {
         0
     }
+    extern "C" fn noop_field_float(_handle: i64, _slot: i64) -> f64 {
+        0.0
+    }
+    extern "C" fn noop_list_get_float(_handle: i64, _index: i64) -> f64 {
+        0.0
+    }
 
     /// A module with no-op host helpers (these tests exercise only scalar ops).
     fn module() -> NativeModule {
@@ -1147,6 +1431,8 @@ mod tests {
             field_int: noop_field_int,
             list_len: noop_list_len,
             list_get_int: noop_list_get_int,
+            field_float: noop_field_float,
+            list_get_float: noop_list_get_float,
         })
         .unwrap()
     }
@@ -1196,13 +1482,152 @@ mod tests {
             .unwrap();
         let call = |a: f64, b: f64| {
             f64::from_bits(
-                m.call(id, &[a.to_bits() as i64, b.to_bits() as i64])
+                m.callt(id, &[a.to_bits() as i64, b.to_bits() as i64])
                     .unwrap() as u64,
             )
         };
         assert_eq!(call(2.5, 4.0), 2.5 * 4.0 - 2.5);
         assert_eq!(call(3.0, 0.0), -3.0);
         let _ = Int; // silence unused in case
+    }
+
+    #[test]
+    fn float_read_helpers_compile_and_bail() {
+        use JitValueType::{Float, Handle, Int};
+        // A module whose float helpers return a fixed value or bail by parity of
+        // the slot/index, so we can exercise both the success and bail channels.
+        extern "C" fn field_float(_handle: i64, slot: i64) -> f64 {
+            if slot == 0 {
+                2.5
+            } else {
+                signal_bail();
+                0.0
+            }
+        }
+        extern "C" fn list_get_float(_handle: i64, index: i64) -> f64 {
+            if index >= 0 {
+                index as f64 + 0.5
+            } else {
+                signal_bail();
+                0.0
+            }
+        }
+        let mut m = NativeModule::new(HostHelpers {
+            field_int: noop_field_int,
+            list_len: noop_list_len,
+            list_get_int: noop_list_get_int,
+            field_float,
+            list_get_float,
+        })
+        .unwrap();
+        // fn(h: Handle, idx: Int) -> Float { return list[idx] }  regs 0=h,1=idx,2=res
+        let id = m
+            .compile(&ft(
+                2,
+                vec![Handle, Int, Float],
+                vec![
+                    JitInstr::ListGetFloat {
+                        dst: 2,
+                        base: 0,
+                        index: 1,
+                    },
+                    JitInstr::Return { src: 2 },
+                ],
+            ))
+            .unwrap();
+        // Handle arg is opaque (helper ignores it); index 3 → 3.5.
+        let got = m.callt(id, &[0, 3]).unwrap();
+        assert_eq!(f64::from_bits(got as u64), 3.5);
+        // Negative index → helper signals bail → None.
+        assert_eq!(m.callt(id, &[0, -1]), None);
+
+        // fn(h: Handle) -> Float { return field[1] }  → bails (slot != 0).
+        let id2 = m
+            .compile(&ft(
+                1,
+                vec![Handle, Float],
+                vec![
+                    JitInstr::FieldFloat {
+                        dst: 1,
+                        base: 0,
+                        slot: 1,
+                    },
+                    JitInstr::Return { src: 1 },
+                ],
+            ))
+            .unwrap();
+        assert_eq!(m.callt(id2, &[0]), None);
+        let _ = Int;
+    }
+
+    #[test]
+    fn direct_flat_reads_index_in_register() {
+        use JitValueType::{Float, FlatFloat, FlatInt, Int};
+        let mut m = module();
+
+        // fn(a: FlatInt, i: Int) -> Int { return a[i] }  regs 0=a,1=i,2=res
+        let id_int = m
+            .compile(&ft(
+                2,
+                vec![FlatInt, Int, Int],
+                vec![
+                    JitInstr::ListGetIntDirect {
+                        dst: 2,
+                        base: 0,
+                        index: 1,
+                    },
+                    JitInstr::Return { src: 2 },
+                ],
+            ))
+            .unwrap();
+        let ints: Vec<i64> = vec![10, 20, 30];
+        let ints_ptr = ints.as_ptr() as i64;
+        let ilen = ints.len() as i64;
+        // In-bounds reads index directly out of the flat buffer.
+        assert_eq!(m.call(id_int, &[ints_ptr, 0], &[ilen, 0]), Some(10));
+        assert_eq!(m.call(id_int, &[ints_ptr, 2], &[ilen, 0]), Some(30));
+        // OOB (>= len and < 0) → fallback (None), like the helper's bail.
+        assert_eq!(m.call(id_int, &[ints_ptr, 3], &[ilen, 0]), None);
+        assert_eq!(m.call(id_int, &[ints_ptr, -1], &[ilen, 0]), None);
+
+        // fn(a: FlatFloat, i: Int) -> Float { return a[i] }
+        let id_f = m
+            .compile(&ft(
+                2,
+                vec![FlatFloat, Int, Float],
+                vec![
+                    JitInstr::ListGetFloatDirect {
+                        dst: 2,
+                        base: 0,
+                        index: 1,
+                    },
+                    JitInstr::Return { src: 2 },
+                ],
+            ))
+            .unwrap();
+        let floats: Vec<f64> = vec![1.5, 2.5, 3.5];
+        let fptr = floats.as_ptr() as i64;
+        let flen = floats.len() as i64;
+        let read = |i: i64| {
+            m.call(id_f, &[fptr, i], &[flen, 0])
+                .map(|b| f64::from_bits(b as u64))
+        };
+        assert_eq!(read(1), Some(2.5));
+        assert_eq!(read(0), Some(1.5));
+        assert_eq!(read(3), None);
+
+        // fn(a: FlatInt) -> Int { return len(a) }  via ListLenDirect
+        let id_len = m
+            .compile(&ft(
+                1,
+                vec![FlatInt, Int],
+                vec![
+                    JitInstr::ListLenDirect { dst: 1, base: 0 },
+                    JitInstr::Return { src: 1 },
+                ],
+            ))
+            .unwrap();
+        assert_eq!(m.call(id_len, &[ints_ptr], &[ilen]), Some(3));
     }
 
     #[test]
@@ -1223,10 +1648,10 @@ mod tests {
                 ],
             ))
             .unwrap();
-        assert_eq!(m.call(id, &[3, 4]), Some(7));
-        assert_eq!(m.call(id, &[-10, 4]), Some(-6));
+        assert_eq!(m.callt(id, &[3, 4]), Some(7));
+        assert_eq!(m.callt(id, &[-10, 4]), Some(-6));
         // overflow bails:
-        assert_eq!(m.call(id, &[i64::MAX, 1]), None);
+        assert_eq!(m.callt(id, &[i64::MAX, 1]), None);
     }
 
     #[test]
@@ -1261,9 +1686,9 @@ mod tests {
             JitInstr::Return { src: 1 },  // 8 end
         ];
         let id = m.compile(&f(1, 4, code)).unwrap();
-        assert_eq!(m.call(id, &[10]), Some(55));
-        assert_eq!(m.call(id, &[0]), Some(0));
-        assert_eq!(m.call(id, &[100]), Some(5050));
+        assert_eq!(m.callt(id, &[10]), Some(55));
+        assert_eq!(m.callt(id, &[0]), Some(0));
+        assert_eq!(m.callt(id, &[100]), Some(5050));
     }
 
     #[test]
@@ -1283,9 +1708,9 @@ mod tests {
                 ],
             ))
             .unwrap();
-        assert_eq!(m.call(id, &[20, 5]), Some(4));
-        assert_eq!(m.call(id, &[20, 0]), None);
-        assert_eq!(m.call(id, &[i64::MIN, -1]), None);
+        assert_eq!(m.callt(id, &[20, 5]), Some(4));
+        assert_eq!(m.callt(id, &[20, 0]), None);
+        assert_eq!(m.callt(id, &[i64::MIN, -1]), None);
     }
 
     // --- IR validation: malformed public IR must fail cleanly, not panic ---
@@ -1450,10 +1875,10 @@ mod tests {
         // read). Both too-few and too-many fall back rather than misread memory.
         let mut m = module();
         let id = m.compile(&two_param_add()).unwrap();
-        assert_eq!(m.call(id, &[2, 3]), Some(5));
-        assert_eq!(m.call(id, &[2]), None); // too few — must not read past the slice
-        assert_eq!(m.call(id, &[]), None);
-        assert_eq!(m.call(id, &[2, 3, 4]), None); // too many
+        assert_eq!(m.callt(id, &[2, 3]), Some(5));
+        assert_eq!(m.callt(id, &[2]), None); // too few — must not read past the slice
+        assert_eq!(m.callt(id, &[]), None);
+        assert_eq!(m.callt(id, &[2, 3, 4]), None); // too many
     }
 
     #[test]
@@ -1464,8 +1889,8 @@ mod tests {
         let mut m2 = module();
         let id1 = m1.compile(&two_param_add()).unwrap();
         let _id2 = m2.compile(&two_param_add()).unwrap();
-        assert_eq!(m1.call(id1, &[2, 3]), Some(5));
-        assert_eq!(m2.call(id1, &[2, 3]), None); // foreign id → fallback, no panic
+        assert_eq!(m1.callt(id1, &[2, 3]), Some(5));
+        assert_eq!(m2.callt(id1, &[2, 3]), None); // foreign id → fallback, no panic
     }
 
     // --- Structured fuzz: validate/compile robustness (execution spec §7) ------
@@ -1493,7 +1918,11 @@ mod tests {
             x.wrapping_mul(0x2545_F491_4F6C_DD1D)
         }
         fn below(&mut self, n: u32) -> u32 {
-            if n == 0 { 0 } else { (self.next() % n as u64) as u32 }
+            if n == 0 {
+                0
+            } else {
+                (self.next() % n as u64) as u32
+            }
         }
         /// A register index: usually in `0..n_regs`, occasionally out of range so
         /// `validate`'s bounds checks are exercised.
@@ -1505,9 +1934,11 @@ mod tests {
             }
         }
         fn vty(&mut self) -> JitValueType {
-            match self.below(3) {
+            match self.below(5) {
                 0 => JitValueType::Int,
                 1 => JitValueType::Float,
+                2 => JitValueType::FlatInt,
+                3 => JitValueType::FlatFloat,
                 _ => JitValueType::Handle,
             }
         }
@@ -1518,22 +1949,94 @@ mod tests {
     fn random_instr(rng: &mut Rng, n_regs: u32, n: u32) -> JitInstr {
         let r = |rng: &mut Rng| rng.reg(n_regs);
         let t = |rng: &mut Rng| rng.below(n.saturating_add(2));
-        match rng.below(22) {
+        match rng.below(27) {
+            22 => JitInstr::FieldFloat {
+                dst: r(rng),
+                base: r(rng),
+                slot: rng.below(8),
+            },
+            23 => JitInstr::ListGetFloat {
+                dst: r(rng),
+                base: r(rng),
+                index: r(rng),
+            },
+            24 => JitInstr::ListGetIntDirect {
+                dst: r(rng),
+                base: r(rng),
+                index: r(rng),
+            },
+            25 => JitInstr::ListGetFloatDirect {
+                dst: r(rng),
+                base: r(rng),
+                index: r(rng),
+            },
+            26 => JitInstr::ListLenDirect {
+                dst: r(rng),
+                base: r(rng),
+            },
             0 => JitInstr::Nop,
             1 => JitInstr::Bail,
-            2 => JitInstr::LoadInt { dst: r(rng), value: rng.next() as i64 },
-            3 => JitInstr::LoadFloat { dst: r(rng), value: f64::from_bits(rng.next()) },
-            4 => JitInstr::LoadBool { dst: r(rng), value: rng.next() & 1 == 0 },
-            5 => JitInstr::Move { dst: r(rng), src: r(rng) },
-            6 => JitInstr::Add { dst: r(rng), lhs: r(rng), rhs: r(rng) },
-            7 => JitInstr::Sub { dst: r(rng), lhs: r(rng), rhs: r(rng) },
-            8 => JitInstr::Mul { dst: r(rng), lhs: r(rng), rhs: r(rng) },
-            9 => JitInstr::Div { dst: r(rng), lhs: r(rng), rhs: r(rng) },
-            10 => JitInstr::Mod { dst: r(rng), lhs: r(rng), rhs: r(rng) },
-            11 => JitInstr::BitAnd { dst: r(rng), lhs: r(rng), rhs: r(rng) },
-            12 => JitInstr::Shl { dst: r(rng), lhs: r(rng), rhs: r(rng) },
-            13 => JitInstr::Shr { dst: r(rng), lhs: r(rng), rhs: r(rng) },
-            14 => JitInstr::Equal { dst: r(rng), lhs: r(rng), rhs: r(rng) },
+            2 => JitInstr::LoadInt {
+                dst: r(rng),
+                value: rng.next() as i64,
+            },
+            3 => JitInstr::LoadFloat {
+                dst: r(rng),
+                value: f64::from_bits(rng.next()),
+            },
+            4 => JitInstr::LoadBool {
+                dst: r(rng),
+                value: rng.next() & 1 == 0,
+            },
+            5 => JitInstr::Move {
+                dst: r(rng),
+                src: r(rng),
+            },
+            6 => JitInstr::Add {
+                dst: r(rng),
+                lhs: r(rng),
+                rhs: r(rng),
+            },
+            7 => JitInstr::Sub {
+                dst: r(rng),
+                lhs: r(rng),
+                rhs: r(rng),
+            },
+            8 => JitInstr::Mul {
+                dst: r(rng),
+                lhs: r(rng),
+                rhs: r(rng),
+            },
+            9 => JitInstr::Div {
+                dst: r(rng),
+                lhs: r(rng),
+                rhs: r(rng),
+            },
+            10 => JitInstr::Mod {
+                dst: r(rng),
+                lhs: r(rng),
+                rhs: r(rng),
+            },
+            11 => JitInstr::BitAnd {
+                dst: r(rng),
+                lhs: r(rng),
+                rhs: r(rng),
+            },
+            12 => JitInstr::Shl {
+                dst: r(rng),
+                lhs: r(rng),
+                rhs: r(rng),
+            },
+            13 => JitInstr::Shr {
+                dst: r(rng),
+                lhs: r(rng),
+                rhs: r(rng),
+            },
+            14 => JitInstr::Equal {
+                dst: r(rng),
+                lhs: r(rng),
+                rhs: r(rng),
+            },
             15 => JitInstr::Compare {
                 dst: r(rng),
                 lhs: r(rng),
@@ -1552,19 +2055,39 @@ mod tests {
                 target: t(rng),
             },
             18 => JitInstr::Return { src: r(rng) },
-            19 => JitInstr::FieldInt { dst: r(rng), base: r(rng), slot: rng.below(8) },
-            20 => JitInstr::ListLen { dst: r(rng), base: r(rng) },
-            _ => JitInstr::ListGetInt { dst: r(rng), base: r(rng), index: r(rng) },
+            19 => JitInstr::FieldInt {
+                dst: r(rng),
+                base: r(rng),
+                slot: rng.below(8),
+            },
+            20 => JitInstr::ListLen {
+                dst: r(rng),
+                base: r(rng),
+            },
+            _ => JitInstr::ListGetInt {
+                dst: r(rng),
+                base: r(rng),
+                index: r(rng),
+            },
         }
     }
 
     fn random_program(rng: &mut Rng) -> JitFunction {
         let n_regs = rng.below(6); // 0..=5, includes the empty-window edge case
-        let n_params = if n_regs == 0 { 0 } else { rng.below(n_regs + 1) };
+        let n_params = if n_regs == 0 {
+            0
+        } else {
+            rng.below(n_regs + 1)
+        };
         let len = rng.below(14);
         let reg_types = (0..n_regs).map(|_| rng.vty()).collect();
         let code = (0..len).map(|_| random_instr(rng, n_regs, len)).collect();
-        JitFunction { n_params, n_regs, reg_types, code }
+        JitFunction {
+            n_params,
+            n_regs,
+            reg_types,
+            code,
+        }
     }
 
     #[test]
@@ -1592,7 +2115,11 @@ mod tests {
             2,
             3,
             vec![
-                JitInstr::Add { dst: 2, lhs: 0, rhs: 1 },
+                JitInstr::Add {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
                 JitInstr::Return { src: 2 },
             ],
         );
@@ -1604,10 +2131,13 @@ mod tests {
                 2 => {
                     if !prog.code.is_empty() {
                         let idx = rng.below(prog.code.len() as u32) as usize;
-                        prog.code[idx] = random_instr(&mut rng, prog.n_regs.max(1), prog.code.len() as u32);
+                        prog.code[idx] =
+                            random_instr(&mut rng, prog.n_regs.max(1), prog.code.len() as u32);
                     }
                 }
-                3 => prog.code.truncate(rng.below(prog.code.len() as u32 + 1) as usize),
+                3 => prog
+                    .code
+                    .truncate(rng.below(prog.code.len() as u32 + 1) as usize),
                 _ => {
                     if !prog.reg_types.is_empty() {
                         let idx = rng.below(prog.reg_types.len() as u32) as usize;
@@ -1654,12 +2184,19 @@ mod tests {
                 code.push(instr);
             }
             // Guarantee a terminating tail so a validated function returns.
-            code.push(JitInstr::Return { src: rng.below(n_regs) });
-            let prog = JitFunction { n_params, n_regs, reg_types, code };
+            code.push(JitInstr::Return {
+                src: rng.below(n_regs),
+            });
+            let prog = JitFunction {
+                n_params,
+                n_regs,
+                reg_types,
+                code,
+            };
             if let Ok(id) = m.compile(&prog) {
                 let args: Vec<i64> = (0..n_params).map(|_| rng.next() as i64).collect();
                 // Must return without UB/hang; value or bail are both fine.
-                let _ = m.call(id, &args);
+                let _ = m.callt(id, &args);
             }
         }
     }

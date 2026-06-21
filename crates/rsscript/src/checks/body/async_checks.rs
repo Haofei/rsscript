@@ -1,6 +1,10 @@
 use super::*;
 
-pub(super) fn check_await_placement(analyzer: &mut Analyzer<'_>, block: &HirBlock, function_is_async: bool) {
+pub(super) fn check_await_placement(
+    analyzer: &mut Analyzer<'_>,
+    block: &HirBlock,
+    function_is_async: bool,
+) {
     // A `task_group` body is flattened into its parent block, recognizable by its
     // `async let` bindings; awaits of those handles are a structured-concurrency
     // boundary and are valid even in a synchronous enclosing function.
@@ -157,7 +161,11 @@ pub(super) fn check_await_placement_expr(
     }
 }
 
-pub(super) fn check_await_operand(analyzer: &mut Analyzer<'_>, value: &HirExpr, await_expr: &HirExpr) {
+pub(super) fn check_await_operand(
+    analyzer: &mut Analyzer<'_>,
+    value: &HirExpr,
+    await_expr: &HirExpr,
+) {
     if await_expr_targets_async_call(value) {
         return;
     }
@@ -231,7 +239,12 @@ pub(super) fn check_await_live_values(
     }
 }
 
-pub(super) fn await_live_value_diagnostic(analyzer: &mut Analyzer<'_>, kind: &str, name: &str, span: &Span) {
+pub(super) fn await_live_value_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    kind: &str,
+    name: &str,
+    span: &Span,
+) {
     analyzer.diagnostics.push(
         Diagnostic::error(
             code::AWAIT_LIVE_LOCAL,
@@ -338,4 +351,3 @@ pub(super) fn check_weak_field_requires_upgrade(analyzer: &mut Analyzer<'_>, val
         ),
     );
 }
-

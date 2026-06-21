@@ -17,12 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///
 /// Helper: eval `source`'s `main` under `limits`, returning the result.
 fn eval_limited(source: &str, limits: VmLimits) -> Result<rsscript::EvalOutput, EvalError> {
-    reg_vm_eval_source_main_with_limits(
-        "hostile.rss",
-        source,
-        std::iter::empty::<String>(),
-        limits,
-    )
+    reg_vm_eval_source_main_with_limits("hostile.rss", source, std::iter::empty::<String>(), limits)
 }
 
 /// A1: unbounded self-recursion hits the default-on depth cap and returns a

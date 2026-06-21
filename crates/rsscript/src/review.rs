@@ -1245,12 +1245,20 @@ fn collect_review_map_facts_stmt(
     }
 
     walk_ast_stmt_children(statement, &mut |child| match child {
-        AstChild::Expr(value) => {
-            collect_review_map_facts_expr(value, hir, callback_params, local_closure_bindings, facts)
-        }
-        AstChild::Block(block) => {
-            collect_review_map_facts_block(block, hir, callback_params, local_closure_bindings, facts)
-        }
+        AstChild::Expr(value) => collect_review_map_facts_expr(
+            value,
+            hir,
+            callback_params,
+            local_closure_bindings,
+            facts,
+        ),
+        AstChild::Block(block) => collect_review_map_facts_block(
+            block,
+            hir,
+            callback_params,
+            local_closure_bindings,
+            facts,
+        ),
     });
 }
 
@@ -1336,11 +1344,17 @@ fn collect_review_map_facts_expr(
                             facts.receiver_calls.push(ReviewMapReceiverCall {
                                 line: span.line,
                                 column: span.column,
-                                source: format!("{} {receiver_label}.{method}", (*effect).map(|e| e.as_str()).unwrap_or("read")),
+                                source: format!(
+                                    "{} {receiver_label}.{method}",
+                                    (*effect).map(|e| e.as_str()).unwrap_or("read")
+                                ),
                                 canonical_callee: namespace
                                     .map(|namespace| format!("{namespace}.{method}"))
                                     .unwrap_or_else(|| format!("<unresolved>.{method}")),
-                                self_effect: (*effect).map(|e| e.as_str()).unwrap_or("read").to_string(),
+                                self_effect: (*effect)
+                                    .map(|e| e.as_str())
+                                    .unwrap_or("read")
+                                    .to_string(),
                                 resolution: receiver_call_resolution_label(&resolution).to_string(),
                             });
                             resolution
@@ -1348,9 +1362,15 @@ fn collect_review_map_facts_expr(
                             facts.receiver_calls.push(ReviewMapReceiverCall {
                                 line: span.line,
                                 column: span.column,
-                                source: format!("{} {receiver_label}.{method}", (*effect).map(|e| e.as_str()).unwrap_or("read")),
+                                source: format!(
+                                    "{} {receiver_label}.{method}",
+                                    (*effect).map(|e| e.as_str()).unwrap_or("read")
+                                ),
                                 canonical_callee: format!("<unresolved>.{method}"),
-                                self_effect: (*effect).map(|e| e.as_str()).unwrap_or("read").to_string(),
+                                self_effect: (*effect)
+                                    .map(|e| e.as_str())
+                                    .unwrap_or("read")
+                                    .to_string(),
                                 resolution: "unknown".to_string(),
                             });
                             CallResolution::Unknown
@@ -1423,12 +1443,20 @@ fn collect_review_map_facts_expr(
     }
 
     walk_ast_expr_children(expr, &mut |child| match child {
-        AstChild::Expr(value) => {
-            collect_review_map_facts_expr(value, hir, callback_params, local_closure_bindings, facts)
-        }
-        AstChild::Block(block) => {
-            collect_review_map_facts_block(block, hir, callback_params, local_closure_bindings, facts)
-        }
+        AstChild::Expr(value) => collect_review_map_facts_expr(
+            value,
+            hir,
+            callback_params,
+            local_closure_bindings,
+            facts,
+        ),
+        AstChild::Block(block) => collect_review_map_facts_block(
+            block,
+            hir,
+            callback_params,
+            local_closure_bindings,
+            facts,
+        ),
     });
 }
 
@@ -1788,7 +1816,9 @@ fn collect_review_map_hir_facts_stmt(
             collect_review_map_hir_facts_block(body, local_bindings, facts);
         }
         _ => walk_hir_stmt_children(statement, &mut |child| match child {
-            HirChild::Expr(value) => collect_review_map_hir_facts_expr(value, local_bindings, facts),
+            HirChild::Expr(value) => {
+                collect_review_map_hir_facts_expr(value, local_bindings, facts)
+            }
             HirChild::Block(block) => {
                 collect_review_map_hir_facts_block(block, local_bindings, facts)
             }
@@ -1830,7 +1860,9 @@ fn collect_review_map_hir_facts_expr(
             collect_review_map_hir_facts_block(body, local_bindings, facts);
         }
         _ => walk_hir_expr_children(expr, &mut |child| match child {
-            HirChild::Expr(value) => collect_review_map_hir_facts_expr(value, local_bindings, facts),
+            HirChild::Expr(value) => {
+                collect_review_map_hir_facts_expr(value, local_bindings, facts)
+            }
             HirChild::Block(block) => {
                 collect_review_map_hir_facts_block(block, local_bindings, facts)
             }

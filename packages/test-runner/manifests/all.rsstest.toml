@@ -30,9 +30,10 @@ paths = [
 
 [[tests]]
 # Run every workspace crate's tests in one global parallel pool (all cores).
-# Includes the rsscript unit/integration tests, the differential corpus + property
-# suites (which build the compiled backend for parity fixtures), the runtime and
-# native-abi crates, and the native adapter crates.
+# Includes the rsscript unit/integration tests, the fast in-process
+# differential/property suites, the runtime and native-abi crates, and the native
+# adapter crates. Run with RSSCRIPT_FULL_BACKEND_PARITY=1 when generated-Rust
+# execution must join every parity case.
 name = "workspace tests pass (nextest)"
 kind = "command_success"
 command = "cargo"
@@ -74,8 +75,8 @@ args = [
   "test",
   "-q",
   "--test",
-  "checker_frontend",
-  "core_interface_files_have_no_diagnostics",
+  "static",
+  "checker_frontend::misc::core_interface_files_have_no_diagnostics",
   "--",
   "--exact",
 ]
@@ -118,8 +119,8 @@ args = [
   "test",
   "-q",
   "--test",
-  "checker_frontend",
-  "pass_fixtures_have_no_diagnostics",
+  "static",
+  "checker_frontend::misc::pass_fixtures_have_no_diagnostics",
   "--",
   "--exact",
 ]

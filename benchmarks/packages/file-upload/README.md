@@ -13,7 +13,7 @@ one Tokio mock upload server:
 Run it through the Rust test runner:
 
 ```sh
-cargo test --test file_upload_benchmark_e2e -- --ignored --nocapture
+cargo test --test soak file_upload_benchmark_e2e -- --ignored --nocapture
 ```
 
 The test runner starts the server, builds the native benchmark helpers, lowers and
@@ -37,7 +37,7 @@ RSS_FILE_UPLOAD_PAYLOAD_BYTES=1048576 \
 RSS_FILE_UPLOAD_CONCURRENCY=32 \
 RSS_FILE_UPLOAD_AWAITS_PER_UPLOAD=8 \
 RSS_FILE_UPLOAD_DELAY_MS=5 \
-cargo test --test file_upload_benchmark_e2e -- --ignored --nocapture
+cargo test --test soak file_upload_benchmark_e2e -- --ignored --nocapture
 ```
 
 Enable phase tracing when you need to see where RSS async differs from the
@@ -45,7 +45,7 @@ hand-written Rust async client:
 
 ```sh
 RSS_FILE_UPLOAD_TRACE=1 \
-cargo test --test file_upload_benchmark_e2e -- --ignored --nocapture
+cargo test --test soak file_upload_benchmark_e2e -- --ignored --nocapture
 ```
 
 With tracing enabled, the benchmark prints per-phase RSS-vs-Rust averages for

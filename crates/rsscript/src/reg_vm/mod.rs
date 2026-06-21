@@ -36,7 +36,17 @@ use crate::text_util::{
     decode_string_token, string_format, string_pad, string_slice_range, type_arg_names,
     type_root_name,
 };
-use crate::vm_value::{ValueMap, VmClosure, VmMapKey, VmNative, VmStruct, VmValue};
+use crate::vm_value::{
+    intern_layout, TypeLayout, TypedVec, ValueMap, VmClosure, VmMapKey, VmNative, VmStruct, VmValue,
+};
+
+/// Intern the layout for a struct/variant whose canonical field order is given by
+/// `fields` (slot order). Used at lowering time so `MakeStruct`/`MakeVariant` carry
+/// a precomputed `Rc<TypeLayout>` and never re-hash per construction (V2.0).
+fn intern_struct_layout(name: &str, fields: &[(String, Reg)]) -> Rc<TypeLayout> {
+    let field_names: Vec<Rc<str>> = fields.iter().map(|(name, _)| Rc::from(name.as_str())).collect();
+    intern_layout(Rc::from(name), field_names)
+}
 
 mod runtime_values;
 mod value_access;
@@ -327,6 +337,15 @@ enum NativeTy {
     /// An opaque handle to a heap value (struct/list) passed as a parameter, used
     /// only as the base of a heap-read instruction. Stored as `i64` (a table index).
     Handle,
+    /// TV2: a flat `List<Int>` param read directly in-register (no per-element host
+    /// call). Marshalled as a raw `*const i64` + element count; only assigned when
+    /// every use of the param is a list read with a consistent `Int` element kind
+    /// (`flatten_list_params`). Marshalling falls back if the runtime list isn't the
+    /// flat `Ints` kind (TV1 is non-canonical).
+    FlatInt,
+    /// TV2: a flat `List<Float>` param read directly in-register. Marshalled as a raw
+    /// `*const f64` + element count; falls back if the runtime list isn't `Floats`.
+    FlatFloat,
 }
 
 #[cfg(feature = "native-jit")]
@@ -337,6 +356,8 @@ impl NativeTy {
             NativeTy::Int | NativeTy::Bool => vm_jit::JitValueType::Int,
             NativeTy::Float => vm_jit::JitValueType::Float,
             NativeTy::Handle => vm_jit::JitValueType::Handle,
+            NativeTy::FlatInt => vm_jit::JitValueType::FlatInt,
+            NativeTy::FlatFloat => vm_jit::JitValueType::FlatFloat,
         }
     }
 }
@@ -564,6 +585,48 @@ fn native_callee_inlinable(callee: &RegFunction, n_args: usize) -> bool {
             )
             || native_offset_regs(instr, 0).is_some()
     })
+}
+
+/// A cheap structural prefilter for native eligibility. It is deliberately a
+/// necessary condition, not a full duplicate of [`translate_to_native_jit`]: false
+/// means translation cannot currently succeed, true means "try the real translator".
+#[cfg(feature = "native-jit")]
+fn native_may_translate_structurally(functions: &[RegFunction], func: &RegFunction) -> bool {
+    if func.captures != 0 || func.params > func.regs {
+        return false;
+    }
+    let reachable = native_reachable_instructions(&func.code);
+    func.code.iter().enumerate().all(|(i, instr)| {
+        if !reachable[i] || native_subset_instruction(instr) {
+            return true;
+        }
+        match instr {
+            RegInstr::CallKnown {
+                function,
+                args,
+                mut_args,
+                ..
+            } => {
+                mut_args.is_empty()
+                    && functions
+                        .get(*function)
+                        .is_some_and(|callee| native_callee_inlinable(callee, args.len()))
+            }
+            _ => false,
+        }
+    })
+}
+
+/// Cache functions that are predictably outside the native subset before the VM
+/// starts running, so hot ineligible functions skip native tiering/translation on
+/// their first call instead of after one failed translation attempt.
+#[cfg(feature = "native-jit")]
+fn mark_predictably_native_ineligible(functions: &[RegFunction]) {
+    for func in functions {
+        if !native_may_translate_structurally(functions, func) {
+            func.native_status.set(NATIVE_STATUS_NOT_ELIGIBLE);
+        }
+    }
 }
 
 /// Inline `CallKnown`s to [`native_callee_inlinable`] callees into `func`,
@@ -813,20 +876,22 @@ fn translate_to_native_jit(
                 RegInstr::Move { dst, src } => native_unify(ty, *dst, *src, c),
                 RegInstr::JumpIfBool { cond, .. } => native_set_ty(ty, *cond, NativeTy::Bool, c),
                 RegInstr::JumpIfIntCompare { lhs, rhs, .. } => native_unify(ty, *lhs, *rhs, c),
-                // Heap reads: the base is a handle, the result an Int (the list
-                // index is also an Int).
-                RegInstr::GetFieldSlot { dst, base, .. } => {
+                // Heap reads: the base is a handle, the list index an Int. The
+                // read *result* (`dst`) is left to flow from its uses — an `Int`
+                // result picks the Int helper, a `Float` result the Float helper.
+                // We do not force `dst` to `Int` here (that would reject float
+                // reads); lowering admits only a provably-Int-or-Float `dst` and
+                // bails otherwise.
+                RegInstr::GetFieldSlot { dst: _, base, .. } => {
                     native_set_ty(ty, *base, NativeTy::Handle, c)
-                        && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
                 RegInstr::ListLen { dst, list } => {
                     native_set_ty(ty, *list, NativeTy::Handle, c)
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
-                RegInstr::ListGet { dst, list, index } => {
+                RegInstr::ListGet { dst: _, list, index } => {
                     native_set_ty(ty, *list, NativeTy::Handle, c)
                         && native_set_ty(ty, *index, NativeTy::Int, c)
-                        && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
                 _ => true,
             };
@@ -836,7 +901,68 @@ fn translate_to_native_jit(
         }
     }
 
+    // TV2 flat-array classification. A `Handle` *parameter* whose every use is a
+    // list read (`ListGet`/`ListLen`, never a `GetFieldSlot` struct read) with a
+    // *consistent* element kind is reclassified `FlatInt`/`FlatFloat`, so its
+    // `ListGet`/`ListLen` lower to direct in-register loads (no per-element host
+    // call). Mixed-kind reads, or a handle also used as a struct base, stay
+    // `Handle` (the helper path). Marshalling (`try_native`) honors the chosen kind
+    // at call time and falls back if the runtime list isn't the flat kind.
+    let flat_param_kind: Vec<Option<NativeTy>> = {
+        #[derive(Clone, Copy, PartialEq)]
+        enum S {
+            Unseen,
+            Flat(NativeTy),
+            Disq,
+        }
+        let mut st = vec![S::Unseen; n_regs];
+        let is_handle_param =
+            |reg: usize| ty[reg] == Some(NativeTy::Handle) && reg < func.params;
+        for (i, instr) in code.iter().enumerate() {
+            if !reachable[i] {
+                continue;
+            }
+            match instr {
+                RegInstr::GetFieldSlot { base, .. } if is_handle_param(*base) => {
+                    st[*base] = S::Disq;
+                }
+                RegInstr::ListGet { dst, list, .. } if is_handle_param(*list) => {
+                    let kind = if ty[*dst] == Some(NativeTy::Float) {
+                        NativeTy::FlatFloat
+                    } else {
+                        NativeTy::FlatInt
+                    };
+                    st[*list] = match st[*list] {
+                        S::Unseen => S::Flat(kind),
+                        S::Flat(k) if k == kind => S::Flat(kind),
+                        _ => S::Disq,
+                    };
+                }
+                // `ListLen` is kind-neutral — neither pins nor disqualifies.
+                _ => {}
+            }
+        }
+        st.into_iter()
+            .map(|s| match s {
+                S::Flat(k) => Some(k),
+                _ => None,
+            })
+            .collect()
+    };
+    for reg in 0..func.params {
+        if let Some(kind) = flat_param_kind[reg] {
+            ty[reg] = Some(kind);
+        }
+    }
+
     let int = |reg: usize| ty[reg] == Some(NativeTy::Int);
+    let float = |reg: usize| ty[reg] == Some(NativeTy::Float);
+    // A heap-read result register that is either provably `Int` or fully
+    // unconstrained (no use pins its type) — both lower via the Int read helper
+    // (an unconstrained register defaults to `Int` everywhere else too). This
+    // keeps the "ambiguous must not silently pick Float" rule: Float is emitted
+    // only when `float(dst)` is provably true.
+    let int_or_free = |reg: usize| matches!(ty[reg], None | Some(NativeTy::Int));
     let bool_ty = |reg: usize| ty[reg] == Some(NativeTy::Bool);
     // Numeric = Int or Float; `same` = both operands typed and identical (so a
     // polymorphic op lowers consistently and native equality matches `VmValue`).
@@ -845,6 +971,10 @@ fn translate_to_native_jit(
     // A handle register must be a *parameter*: handles only enter via the caller's
     // heap args (`try_native`), never produced by a native instruction.
     let handle_param = |reg: usize| ty[reg] == Some(NativeTy::Handle) && reg < func.params;
+    // A TV2 flat-array param (pointer + length, read directly in-register).
+    let flat_param = |reg: usize| {
+        matches!(ty[reg], Some(NativeTy::FlatInt | NativeTy::FlatFloat)) && reg < func.params
+    };
     let r = |reg: usize| reg as u32;
     let cmp = |op: &RegIntCompare| match op {
         RegIntCompare::Less => JitCompare::Lt,
@@ -1038,26 +1168,71 @@ fn translate_to_native_jit(
             }
             RegInstr::RuntimeError { .. } => JitInstr::Bail,
             RegInstr::GetFieldSlot { dst, base, slot } => {
-                require(handle_param(*base) && int(*dst))?;
-                JitInstr::FieldInt {
-                    dst: r(*dst),
-                    base: r(*base),
-                    slot: *slot as u32,
+                require(handle_param(*base))?;
+                if float(*dst) {
+                    JitInstr::FieldFloat {
+                        dst: r(*dst),
+                        base: r(*base),
+                        slot: *slot as u32,
+                    }
+                } else {
+                    // Int or unconstrained → Int helper (a non-Int field then
+                    // bails at the helper). A heap/Bool dst is rejected here.
+                    require(int_or_free(*dst))?;
+                    JitInstr::FieldInt {
+                        dst: r(*dst),
+                        base: r(*base),
+                        slot: *slot as u32,
+                    }
                 }
             }
             RegInstr::ListLen { dst, list } => {
-                require(handle_param(*list) && int(*dst))?;
-                JitInstr::ListLen {
-                    dst: r(*dst),
-                    base: r(*list),
+                require(int(*dst))?;
+                if flat_param(*list) {
+                    JitInstr::ListLenDirect {
+                        dst: r(*dst),
+                        base: r(*list),
+                    }
+                } else {
+                    require(handle_param(*list))?;
+                    JitInstr::ListLen {
+                        dst: r(*dst),
+                        base: r(*list),
+                    }
                 }
             }
             RegInstr::ListGet { dst, list, index } => {
-                require(handle_param(*list) && int(*index) && int(*dst))?;
-                JitInstr::ListGetInt {
-                    dst: r(*dst),
-                    base: r(*list),
-                    index: r(*index),
+                require(int(*index))?;
+                // TV2 flat params lower to direct in-register reads; the flat kind
+                // (set by classification) matches the dst kind by construction.
+                if ty[*list] == Some(NativeTy::FlatFloat) {
+                    require(float(*dst))?;
+                    JitInstr::ListGetFloatDirect {
+                        dst: r(*dst),
+                        base: r(*list),
+                        index: r(*index),
+                    }
+                } else if ty[*list] == Some(NativeTy::FlatInt) {
+                    require(int_or_free(*dst))?;
+                    JitInstr::ListGetIntDirect {
+                        dst: r(*dst),
+                        base: r(*list),
+                        index: r(*index),
+                    }
+                } else if float(*dst) {
+                    require(handle_param(*list))?;
+                    JitInstr::ListGetFloat {
+                        dst: r(*dst),
+                        base: r(*list),
+                        index: r(*index),
+                    }
+                } else {
+                    require(handle_param(*list) && int_or_free(*dst))?;
+                    JitInstr::ListGetInt {
+                        dst: r(*dst),
+                        base: r(*list),
+                        index: r(*index),
+                    }
                 }
             }
             // `native_subset_instruction` already rejected everything else.
@@ -1161,11 +1336,10 @@ pub fn reg_vm_eval_source_main_with_args_streaming_stdout(
     source: &str,
     args: impl IntoIterator<Item = impl Into<String>>,
 ) -> Result<EvalOutput, EvalError> {
-    reg_vm_compile_source(file, source)?
-        .eval_main_with_args_and_native_bindings_streaming_stdout(
-            args,
-            std::iter::empty::<(String, NativeInterpreterFn)>(),
-        )
+    reg_vm_compile_source(file, source)?.eval_main_with_args_and_native_bindings_streaming_stdout(
+        args,
+        std::iter::empty::<(String, NativeInterpreterFn)>(),
+    )
 }
 
 /// Streaming-stdout package entry point for `rss dev --run`. See
@@ -1324,14 +1498,26 @@ impl RegVmExecutable {
     /// `eval_main_with_args` (verified by the N-way differential). Compiles
     /// eligible functions on first call (threshold 0) so the differential
     /// exercises them.
+    ///
+    /// The default tier-up threshold is 0 (compile on first call), which keeps
+    /// the differential's full coverage. The `RSS_JIT_TIER_THRESHOLD` env var
+    /// overrides it with any valid `u32`: a function then only compiles to
+    /// native after being called more than that many times. This is the runtime
+    /// knob for tuning/measuring tier-up (see plan §3.4) and for production
+    /// deployments that want to defer native compilation for cold functions.
+    /// The differential never sets it, so its behavior is unchanged.
     #[cfg(feature = "native-jit")]
     pub fn eval_main_with_args_native(
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<EvalOutput, EvalError> {
+        let tier_up_threshold = std::env::var("RSS_JIT_TIER_THRESHOLD")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(0);
         self.eval_main_with_args_native_inner(
             args,
-            0,
+            tier_up_threshold,
             false,
             std::env::var_os("RSS_JIT_STATS").is_some(),
         )
@@ -1380,10 +1566,17 @@ impl RegVmExecutable {
             std::iter::empty::<(String, NativeInterpreterFn)>().collect(),
         );
         // Native first, then tier-0, then interpreter.
-        vm.native = Some(NativeState::new(
+        // `RSS_JIT_BASELINE=1` selects the Phase-2 path-B baseline tier
+        // (`opt_level="none"`); default (unset) keeps the optimizing tier
+        // (`opt_level="speed"`). Only the Cranelift opt flag changes — the
+        // compiled subset, host helpers, and deopt oracle are identical, so the
+        // differential (which never sets this var) is undisturbed.
+        let baseline = std::env::var_os("RSS_JIT_BASELINE").is_some();
+        vm.native = Some(NativeState::new_with_opt(
             tier_up_threshold,
             force_bail,
             collect_stats,
+            baseline,
         )?);
         vm.jit_enabled = true;
         vm.jit_force_all = true;
@@ -1553,11 +1746,38 @@ struct RegUnit {
     function_ids: HashMap<String, usize>,
     resource_drop_functions: HashMap<String, usize>,
     types: HashMap<String, TypeInfo>,
+    /// Whether the program can ever *observe closure identity* — i.e. whether any
+    /// user-source `==`/`!=` could compare operands whose static type is, or
+    /// transitively contains, a `Fn`/closure value. Computed conservatively at
+    /// lower time (see [`type_name_may_contain_fn`]): `true` whenever closure
+    /// identity *might* leak, `false` only when it provably cannot.
+    ///
+    /// When `false`, the VM may share one cached `Rc<VmClosure>` for repeated
+    /// `MakeClosure` of the same non-capturing function (a refcount bump instead
+    /// of a heap allocation per iteration). That share is unobservable precisely
+    /// because the sole remaining identity observer is `==`/`!=` → structural
+    /// `PartialEq` → `Rc::ptr_eq` (closures are not `Hashable`, so they can never
+    /// be `Map`/`Set` keys — see `is_hashable`), and this flag certifies no such
+    /// comparison can reach a closure. When `true`, caching is disabled and every
+    /// `MakeClosure` allocates a fresh `Rc`, exactly as the compiled backend does.
+    closure_identity_observable: bool,
 }
 
 /// `RegFunction::native_status` value: the function is known not native-eligible.
 #[cfg(feature = "native-jit")]
 const NATIVE_STATUS_NOT_ELIGIBLE: u8 = 1;
+
+/// Consecutive runtime-bail count at which the native tier gives up on a
+/// structurally-eligible function (predict-and-skip, like a JSC/V8 deopt count).
+/// A function that passes the structural predictor but bails on *every* call
+/// (arg-type mismatch or a runtime guard) otherwise re-compiles/marshals/bails
+/// forever; after this many consecutive bails we mark it `NOT_ELIGIBLE` so the
+/// cheap-negative early-return in `try_native` short-circuits all future calls.
+/// Counter resets on any successful native completion, so a hot function that
+/// bails only on a rare data edge keeps its fast path. Candidate for the
+/// data-driven tuning in vm-jit-perf-plan §3.4.
+#[cfg(feature = "native-jit")]
+const NATIVE_BAIL_GIVEUP_THRESHOLD: u32 = 3;
 
 #[derive(Debug, Clone)]
 struct RegFunction {
@@ -1666,7 +1886,10 @@ enum RegInstr {
     },
     MakeStruct {
         dst: Reg,
-        name: String,
+        /// The interned shared layout (V2.0), precomputed at lowering time from the
+        /// canonical `(name, field_names)` so the hot construction path is a single
+        /// refcount bump — no per-construction `(name, field_names)` re-hash.
+        layout: Rc<crate::vm_value::TypeLayout>,
         fields: Vec<(String, Reg)>,
     },
     ResourceDrop {
@@ -1674,7 +1897,9 @@ enum RegInstr {
     },
     MakeVariant {
         dst: Reg,
-        name: String,
+        /// Interned shared layout (V2.0), precomputed at lowering time (see
+        /// `MakeStruct::layout`).
+        layout: Rc<crate::vm_value::TypeLayout>,
         fields: Vec<(String, Reg)>,
     },
     MakeList {
@@ -2802,6 +3027,9 @@ impl RegUnit {
             .cloned()
             .map(RegFunction::placeholder)
             .collect::<Vec<_>>();
+        // Whole-program closure-identity gate, OR-accumulated across every
+        // function (and drop-body) lowering below.
+        let closure_identity_observable = std::cell::Cell::new(false);
         for (function_id, name) in names.into_iter().enumerate() {
             let body = hir
                 .function_body(&name)
@@ -2828,6 +3056,7 @@ impl RegUnit {
                 },
                 loop_stack: Vec::new(),
                 cleanup_stack: Vec::new(),
+                closure_identity_observable: &closure_identity_observable,
             };
             for param in &signature.params {
                 let reg = lowerer.local(&param.name);
@@ -2864,6 +3093,7 @@ impl RegUnit {
                 },
                 loop_stack: Vec::new(),
                 cleanup_stack: Vec::new(),
+                closure_identity_observable: &closure_identity_observable,
             };
             if let Some(info) = hir.type_info(type_name) {
                 for field in &info.fields_ordered {
@@ -2886,6 +3116,8 @@ impl RegUnit {
             let has_loop = jit_function_has_loop(&function.code);
             function.jit_analysis.set(Some((eligible, has_loop)));
         }
+        #[cfg(feature = "native-jit")]
+        mark_predictably_native_ineligible(&functions);
         Ok(Self {
             functions: functions.into_iter().map(Rc::new).collect(),
             function_ids,
@@ -2894,8 +3126,98 @@ impl RegUnit {
                 .types()
                 .map(|type_info| (type_info.name.clone(), type_info.clone()))
                 .collect(),
+            closure_identity_observable: closure_identity_observable.get(),
         })
     }
+}
+
+/// The static type of an HIR expression, for the closure-identity gate. `None`
+/// (unknown) is treated conservatively (observable) by callers. Mirrors the
+/// analyzer's `hir_expr_type_name`; kept local so the gate has no cross-module
+/// dependency. A `Closure` literal operand has no `type_name`, so it returns
+/// `None` and is (correctly) treated as observable.
+fn reg_expr_type_name(expr: &HirExpr) -> Option<&str> {
+    match expr {
+        HirExpr::Ident { type_name, .. }
+        | HirExpr::Call { type_name, .. }
+        | HirExpr::Effect { type_name, .. }
+        | HirExpr::Manage { type_name, .. }
+        | HirExpr::Spawn { type_name, .. }
+        | HirExpr::Await { type_name, .. }
+        | HirExpr::Try { type_name, .. }
+        | HirExpr::Match { type_name, .. }
+        | HirExpr::MapLiteral { type_name, .. } => type_name.as_deref(),
+        HirExpr::Field { access, .. } => access.type_name.as_deref(),
+        HirExpr::Number { value, .. } => Some(crate::hir::number_literal_type_name(value)),
+        HirExpr::String { .. } => Some("String"),
+        HirExpr::ObjectLiteral { type_name, .. } | HirExpr::ArrayLiteral { type_name, .. } => {
+            type_name.as_deref()
+        }
+        HirExpr::Binary { .. }
+        | HirExpr::Index { .. }
+        | HirExpr::Closure { .. }
+        | HirExpr::Unknown(_) => None,
+    }
+}
+
+/// Conservatively decide whether a static type *might* be, or transitively
+/// contain, a `Fn`/closure value. Returns `true` (observable) whenever it cannot
+/// *prove* the type is closure-free. Soundness rests on these facts:
+///   * A function type is always spelled with the substring `"Fn("` (e.g.
+///     `Fn(Int) -> Int`, `noescape Fn(...)`), and generic instantiations print
+///     their argument types, so `List<Fn(...)>`, `Option<Fn(...)>`, `Map<K, Fn>`
+///     etc. all contain that substring — one substring test catches every type
+///     whose *spelling* exposes a function type.
+///   * A named user struct/sum can hide a function field behind its name; we
+///     resolve it via `types` and recurse through `fields_ordered` (with a
+///     visited set to terminate on recursive types). A generic struct field
+///     instantiated to a function type is rejected by the equality checker
+///     (Fn is not `Eq`) and, where the instantiation is visible, is spelled with
+///     `"Fn("`; an uninstantiated type parameter (`"T"`) is unresolved and so
+///     falls through to the conservative `true`.
+///   * Anything unresolved/unknown → `true`.
+fn type_name_may_contain_fn(type_name: &str, hir: &Hir) -> bool {
+    fn go(name: &str, hir: &Hir, visited: &mut Vec<String>) -> bool {
+        let name = name.trim();
+        // Any spelled function type anywhere in the (possibly generic) type.
+        if name.contains("Fn(") {
+            return true;
+        }
+        // Scalars and known closure-free builtins: provably closure-free.
+        match type_name_root(name) {
+            "Int" | "Float" | "Bool" | "Char" | "String" | "Bytes" | "Unit" | "Json"
+            | "JsonLiteral" => return false,
+            _ => {}
+        }
+        // A resolved user type: recurse into its fields. The `Fn(` test above
+        // already covered any generic argument spelled in `name`.
+        if let Some(info) = hir.type_info(type_name_root(name)) {
+            if visited.iter().any(|seen| seen == &info.name) {
+                return false; // already being inspected on this path
+            }
+            visited.push(info.name.clone());
+            let result = info
+                .fields_ordered
+                .iter()
+                .any(|field| go(&field.type_name, hir, visited));
+            visited.pop();
+            return result;
+        }
+        // Unresolved / unknown type: conservatively assume it may contain a Fn.
+        true
+    }
+    go(type_name, hir, &mut Vec::new())
+}
+
+/// The leading identifier of a (possibly generic) type spelling, e.g. the `List`
+/// of `List<Fn(Int) -> Int>` or the bare name otherwise. Used only to classify
+/// scalars and to look named user types up in the `types` table.
+fn type_name_root(type_name: &str) -> &str {
+    let name = type_name.trim();
+    let end = name
+        .find(|c: char| c == '<' || c == '(' || c == ' ')
+        .unwrap_or(name.len());
+    name[..end].trim()
 }
 
 struct RegLowerer<'a> {
@@ -2905,6 +3227,11 @@ struct RegLowerer<'a> {
     function: RegFunction,
     loop_stack: Vec<LoopPatch>,
     cleanup_stack: Vec<Reg>,
+    /// Accumulator for the unit-wide closure-identity gate (see
+    /// [`RegUnit::closure_identity_observable`]). OR-set whenever a user
+    /// `==`/`!=` could compare a closure-containing operand. Shared across all
+    /// function lowerings so it summarizes the whole program.
+    closure_identity_observable: &'a std::cell::Cell<bool>,
 }
 
 impl RegLowerer<'_> {
@@ -2945,6 +3272,29 @@ impl RegLowerer<'_> {
                     .position(|f| &f.name == name)
                     .unwrap_or(usize::MAX)
             });
+        }
+    }
+
+    /// Build a `MakeStruct` instruction with its layout interned once at lowering
+    /// time (V2.0), so the runtime construction path never re-hashes
+    /// `(name, field_names)`. `fields` must already be in canonical slot order.
+    fn make_struct_instr(&self, dst: Reg, name: String, fields: Vec<(String, Reg)>) -> RegInstr {
+        let layout = intern_struct_layout(&name, &fields);
+        RegInstr::MakeStruct {
+            dst,
+            layout,
+            fields,
+        }
+    }
+
+    /// Build a `MakeVariant` instruction with its layout interned at lowering time
+    /// (V2.0). See [`Self::make_struct_instr`].
+    fn make_variant_instr(&self, dst: Reg, name: String, fields: Vec<(String, Reg)>) -> RegInstr {
+        let layout = intern_struct_layout(&name, &fields);
+        RegInstr::MakeVariant {
+            dst,
+            layout,
+            fields,
         }
     }
 
@@ -3586,11 +3936,8 @@ impl RegLowerer<'_> {
                     )));
                 }
                 let dst = self.temp();
-                self.emit(RegInstr::MakeVariant {
-                    dst,
-                    name: name.clone(),
-                    fields: Vec::new(),
-                });
+                let instr = self.make_variant_instr(dst, name.clone(), Vec::new());
+                self.emit(instr);
                 Ok(dst)
             }
             HirExpr::Ident { name, .. } => self.lookup_local(name),
@@ -3649,6 +3996,26 @@ impl RegLowerer<'_> {
             } => {
                 if matches!(op, BinaryOp::LogicalAnd | BinaryOp::LogicalOr) {
                     return self.logical_binary(*op, left, right);
+                }
+                // Closure-identity gate: a user `==`/`!=` is the only observer of
+                // closure pointer identity. If either operand's static type might
+                // be, or transitively contain, a `Fn`, sharing cached closures
+                // would make distinct allocations compare equal — so flag the
+                // program as identity-observable (disabling the cache). Unknown
+                // operand types are treated conservatively as observable.
+                if matches!(op, BinaryOp::Equal | BinaryOp::NotEqual)
+                    && !self.closure_identity_observable.get()
+                {
+                    let observable =
+                        [left.as_ref(), right.as_ref()].iter().any(|operand| {
+                            match reg_expr_type_name(operand) {
+                                Some(type_name) => type_name_may_contain_fn(type_name, self.hir),
+                                None => true,
+                            }
+                        });
+                    if observable {
+                        self.closure_identity_observable.set(true);
+                    }
                 }
                 let lhs = self.expr(left)?;
                 let rhs = self.expr(right)?;
@@ -3761,6 +4128,7 @@ impl RegLowerer<'_> {
                         },
                         loop_stack: Vec::new(),
                         cleanup_stack: Vec::new(),
+                        closure_identity_observable: self.closure_identity_observable,
                     };
                     for capture in &capture_names {
                         lowerer.local(capture);
@@ -3916,11 +4284,12 @@ impl RegLowerer<'_> {
                             arg_regs.len()
                         )));
                     }
-                    self.emit(RegInstr::MakeVariant {
+                    let instr = self.make_variant_instr(
                         dst,
-                        name: type_root_name(name).to_string(),
-                        fields: vec![("value".to_string(), arg_regs[0])],
-                    });
+                        type_root_name(name).to_string(),
+                        vec![("value".to_string(), arg_regs[0])],
+                    );
+                    self.emit(instr);
                 } else if self
                     .hir
                     .sum_type_for_variant(type_root_name(name))
@@ -3930,18 +4299,17 @@ impl RegLowerer<'_> {
                     let fields = self.hir.sum_variant_fields(variant_name).unwrap_or(&[]);
                     match fields.len() {
                         0 if arg_regs.is_empty() => {
-                            self.emit(RegInstr::MakeVariant {
-                                dst,
-                                name: variant_name.to_string(),
-                                fields: Vec::new(),
-                            });
+                            let instr =
+                                self.make_variant_instr(dst, variant_name.to_string(), Vec::new());
+                            self.emit(instr);
                         }
                         1 if arg_regs.len() == 1 => {
-                            self.emit(RegInstr::MakeVariant {
+                            let instr = self.make_variant_instr(
                                 dst,
-                                name: variant_name.to_string(),
-                                fields: vec![(fields[0].name.clone(), arg_regs[0])],
-                            });
+                                variant_name.to_string(),
+                                vec![(fields[0].name.clone(), arg_regs[0])],
+                            );
+                            self.emit(instr);
                         }
                         field_count if field_count == arg_regs.len() => {
                             let fields = args
@@ -3956,11 +4324,9 @@ impl RegLowerer<'_> {
                                     (name, reg)
                                 })
                                 .collect::<Vec<_>>();
-                            self.emit(RegInstr::MakeVariant {
-                                dst,
-                                name: variant_name.to_string(),
-                                fields,
-                            });
+                            let instr =
+                                self.make_variant_instr(dst, variant_name.to_string(), fields);
+                            self.emit(instr);
                         }
                         field_count => {
                             return Err(EvalError::Runtime(format!(
@@ -3984,11 +4350,8 @@ impl RegLowerer<'_> {
                         .collect::<Result<Vec<_>, _>>()?;
                     let type_name = type_root_name(name).to_string();
                     self.canonicalize_field_order(&type_name, &mut fields);
-                    self.emit(RegInstr::MakeStruct {
-                        dst,
-                        name: type_name,
-                        fields,
-                    });
+                    let instr = self.make_struct_instr(dst, type_name, fields);
+                    self.emit(instr);
                 }
             }
             Callee::Qualified { namespace, name } => {
@@ -4714,6 +5077,22 @@ impl RegLowerer<'_> {
                             dst,
                             intrinsic,
                             type_arg: type_root_name(type_arg).to_string(),
+                            args: arg_regs,
+                        });
+                    }
+                    // `List<T>.new()` — TV1 construction metadata. Carry the static
+                    // element type so an empty `List<Int>`/`List<Float>` starts in
+                    // the matching flat typed kind. The type arg is optional (a bare
+                    // `List.new()` with no annotation falls back to `Boxed`).
+                    RegIntrinsic::ListNew => {
+                        let type_arg = type_arg_names(name)
+                            .and_then(|args| args.first().copied())
+                            .map(|arg| type_root_name(arg).to_string())
+                            .unwrap_or_default();
+                        self.emit(RegInstr::CallTypedIntrinsic {
+                            dst,
+                            intrinsic,
+                            type_arg,
                             args: arg_regs,
                         });
                     }
@@ -6478,13 +6857,6 @@ const DEFAULT_MAX_DEPTH: usize = 16_384;
 /// the relaxed atomic load is negligible amortized over real work.
 const CANCEL_POLL_INTERVAL: u64 = 1024;
 
-/// Estimated bytes charged per list element for the best-effort memory ceiling.
-/// Each list slot stores one `VmValue` inline (the heap pointed at by `Rc`
-/// containers is counted again when *those* grow, so this under-counts deeply
-/// nested structures — acceptable for a best-effort ceiling whose only job is to
-/// catch runaway growth before the host OOMs).
-const LIST_ELEM_BYTES: usize = std::mem::size_of::<VmValue>();
-
 /// Estimated bytes charged per map entry: a key plus a `VmValue`, with hashmap
 /// bookkeeping folded into the key term as a rough fudge factor.
 const MAP_ENTRY_BYTES: usize = std::mem::size_of::<VmValue>() * 2;
@@ -6577,6 +6949,22 @@ struct RegVm {
     /// back to tier-0 / the interpreter.
     #[cfg(feature = "native-jit")]
     native: Option<NativeState>,
+    /// Cache of canonical non-capturing closures, indexed by function id. A
+    /// `MakeClosure` with no captures builds `VmClosure { function, captures: [] }`
+    /// — a value that is *identical* for a given function on every execution — so
+    /// after the first allocation we hand out clones of the same `Rc` (a refcount
+    /// bump) instead of allocating a fresh one each loop iteration.
+    ///
+    /// SOUNDNESS: sharing one `Rc` makes previously-distinct allocations compare
+    /// equal under `Rc::ptr_eq`, which is observable ONLY through `==`/`!=` on a
+    /// closure (closures are not `Hashable`, so never `Map`/`Set` keys). The cache
+    /// is therefore populated only when `unit.closure_identity_observable` is
+    /// `false`, i.e. the whole program provably never compares a closure-bearing
+    /// value. When it is `true` the cache stays empty and every `MakeClosure`
+    /// allocates fresh, matching the compiled backend bit-for-bit. `VmClosure` is
+    /// immutable after construction (its `captures` Vec is never mutated in
+    /// place — verified by grep), so a shared `Rc` can never diverge.
+    noncapturing_closure_cache: Vec<Option<Rc<VmClosure>>>,
 }
 
 /// State for the native JIT tier: the Cranelift module owning the compiled code,
@@ -6594,6 +6982,13 @@ struct NativeState {
     /// natively only once it has been entered more than `tier_up_threshold` times
     /// (a hot-function heuristic). `0` means "compile on first call" (force-all).
     counts: HashMap<usize, u32>,
+    /// Per-function *consecutive* runtime-bail counts, keyed like `counts`/`cache`.
+    /// Incremented on every bail after native was chosen (arg mismatch or runtime
+    /// guard), reset to 0 on a successful native completion. At
+    /// `NATIVE_BAIL_GIVEUP_THRESHOLD` the function is demoted to `NOT_ELIGIBLE` and
+    /// dropped from `cache`, so the predict-and-skip path stops the wasted
+    /// compile-marshal-bail churn (vm-jit-perf-plan §3.0).
+    bail_counts: HashMap<usize, u32>,
     tier_up_threshold: u32,
     /// Deopt stress mode: when set, the native tier always bails, so every
     /// native-eligible function exercises the fallback path. Used to verify
@@ -6712,6 +7107,8 @@ fn jit_host_helpers() -> vm_jit::HostHelpers {
         field_int: rss_jit_field_int,
         list_len: rss_jit_list_len,
         list_get_int: rss_jit_list_get_int,
+        field_float: rss_jit_field_float,
+        list_get_float: rss_jit_list_get_float,
     }
 }
 
@@ -6750,11 +7147,38 @@ fn jit_list_get_int(value: &VmValue, index: i64) -> Option<i64> {
         VmValue::List(list) => {
             let index = usize::try_from(index).ok()?;
             match list.borrow().get(index)? {
-                VmValue::Int(v) => Some(*v),
+                VmValue::Int(v) => Some(v),
                 _ => None,
             }
         }
         VmValue::Managed(inner) => jit_list_get_int(&inner.borrow(), index),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_struct_field_float(value: &VmValue, slot: usize) -> Option<f64> {
+    match value {
+        VmValue::Struct(data) | VmValue::Variant(data) => match data.fields.get(slot)? {
+            VmValue::Float(v) => Some(*v),
+            _ => None,
+        },
+        VmValue::Managed(inner) => jit_struct_field_float(&inner.borrow(), slot),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_list_get_float(value: &VmValue, index: i64) -> Option<f64> {
+    match value {
+        VmValue::List(list) => {
+            let index = usize::try_from(index).ok()?;
+            match list.borrow().get(index)? {
+                VmValue::Float(v) => Some(v),
+                _ => None,
+            }
+        }
+        VmValue::Managed(inner) => jit_list_get_float(&inner.borrow(), index),
         _ => None,
     }
 }
@@ -6796,22 +7220,85 @@ extern "C" fn rss_jit_list_get_int(handle: i64, index: i64) -> i64 {
 }
 
 #[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_field_float(handle: i64, slot: i64) -> f64 {
+    match usize::try_from(slot)
+        .ok()
+        .and_then(|slot| jit_heap_read(handle, |value| jit_struct_field_float(value, slot)))
+    {
+        Some(value) => value,
+        None => {
+            vm_jit::signal_bail();
+            0.0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_list_get_float(handle: i64, index: i64) -> f64 {
+    match jit_heap_read(handle, |value| jit_list_get_float(value, index)) {
+        Some(value) => value,
+        None => {
+            vm_jit::signal_bail();
+            0.0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
 impl NativeState {
+    // Used by the in-crate `#[cfg(test)]` unit tests; the optimizing/baseline
+    // production paths go through `new_with_opt`, so the lib-only build sees no
+    // caller. Keep the back-compat 3-arg constructor without a dead-code warning.
+    #[allow(dead_code)]
     fn new(
         tier_up_threshold: u32,
         force_bail: bool,
         collect_stats: bool,
     ) -> Result<Self, EvalError> {
+        Self::new_with_opt(tier_up_threshold, force_bail, collect_stats, false)
+    }
+
+    /// Build the native state at a selectable optimization level. `baseline ==
+    /// true` selects the Phase-2 path-B baseline tier (`opt_level="none"`):
+    /// faster compiles, identical observable behavior (same IR, same host
+    /// helpers, same deopt protocol — only the Cranelift opt flag differs). The
+    /// compiled subset is unchanged (side-effect-free scalar + read-only heap),
+    /// so the interpreter/`run_jit` deopt oracle stays valid verbatim.
+    fn new_with_opt(
+        tier_up_threshold: u32,
+        force_bail: bool,
+        collect_stats: bool,
+        baseline: bool,
+    ) -> Result<Self, EvalError> {
         Ok(Self {
-            module: vm_jit::NativeModule::new(jit_host_helpers())
+            module: vm_jit::NativeModule::new_with_opt(jit_host_helpers(), baseline)
                 .map_err(|e| EvalError::Runtime(e.to_string()))?,
             cache: HashMap::new(),
             counts: HashMap::new(),
+            bail_counts: HashMap::new(),
             tier_up_threshold,
             force_bail,
             stats: NativeStats::default(),
             collect_stats,
         })
+    }
+
+    /// Records a consecutive runtime bail for a structurally-eligible function
+    /// (called after native was chosen, on either an arg-type mismatch or a guard
+    /// bail). At [`NATIVE_BAIL_GIVEUP_THRESHOLD`] consecutive bails the function is
+    /// permanently demoted: `native_status` is set to `NOT_ELIGIBLE` (so the
+    /// cheap-negative early-return in `try_native` short-circuits all future calls)
+    /// and its compiled entry is dropped from the cache to free the code. Reusing
+    /// `NOT_ELIGIBLE` is correct here: its only meaning is "don't attempt native",
+    /// which is exactly the give-up verdict.
+    fn record_bail(&mut self, native_key: usize, func: &RegFunction) {
+        let count = self.bail_counts.entry(native_key).or_insert(0);
+        *count += 1;
+        if *count >= NATIVE_BAIL_GIVEUP_THRESHOLD {
+            func.native_status.set(NATIVE_STATUS_NOT_ELIGIBLE);
+            self.cache.remove(&native_key);
+            self.bail_counts.remove(&native_key);
+        }
     }
 }
 
@@ -6894,7 +7381,28 @@ impl RegVm {
             host_calls: 0,
             #[cfg(feature = "native-jit")]
             native: None,
+            noncapturing_closure_cache: Vec::new(),
         }
+    }
+
+    /// Return the canonical non-capturing `Rc<VmClosure>` for `function`,
+    /// allocating it once on first use and cloning the `Rc` (refcount bump)
+    /// thereafter. Only called when `unit.closure_identity_observable` is `false`,
+    /// so the resulting pointer-sharing is unobservable (see the field doc on
+    /// `noncapturing_closure_cache`).
+    fn cached_noncapturing_closure(&mut self, function: usize) -> Rc<VmClosure> {
+        if function >= self.noncapturing_closure_cache.len() {
+            self.noncapturing_closure_cache.resize(function + 1, None);
+        }
+        if let Some(existing) = &self.noncapturing_closure_cache[function] {
+            return Rc::clone(existing);
+        }
+        let closure = Rc::new(VmClosure {
+            function,
+            captures: Vec::new(),
+        });
+        self.noncapturing_closure_cache[function] = Some(Rc::clone(&closure));
+        closure
     }
 
     /// Apply sandbox resource limits to this VM before it runs. Replaces the
@@ -7164,13 +7672,27 @@ impl RegVm {
         // the (possibly large) heap table on every exit path so cloned args aren't
         // retained after the call.
         let _heap_guard = JitHeapArgsGuard;
-        let mut inline_args = [0i64; 8];
-        let mut heap_args = Vec::new();
-        let use_inline_args = param_types.len() <= inline_args.len();
-        if !use_inline_args {
-            heap_args.reserve(param_types.len());
-        }
-        for (index, param_type) in param_types.iter().enumerate() {
+        // `args[i]` and `lens[i]` are parallel per-param words (TV2 ABI). A scalar
+        // unboxes into `args[i]` (with `lens[i] = 0`); a `Handle` is a heap-table
+        // index; a `FlatInt`/`FlatFloat` puts the raw buffer pointer in `args[i]`
+        // and the element count in `lens[i]`.
+        let n = param_types.len();
+        let mut args = vec![0i64; n];
+        let mut lens = vec![0i64; n];
+        // TV2 borrow protocol: owned `Rc`s of every flat list arg, kept alive for
+        // the whole call; we then pin a shared `Ref` borrow of each so no
+        // `borrow_mut`/realloc can occur while native code holds the raw pointer.
+        let mut flat_owned: Vec<Rc<RefCell<TypedVec>>> = Vec::new();
+        let bail_marshal = |this: &mut Self| {
+            if let Some(native) = this.native.as_mut() {
+                if native.collect_stats {
+                    native.stats.arg_mismatch += 1;
+                }
+                native.record_bail(native_key, func);
+            }
+        };
+        for index in 0..n {
+            let param_type = param_types[index];
             let value = self.reg(base + index);
             let bits = match param_type {
                 NativeTy::Int => match value {
@@ -7190,37 +7712,86 @@ impl RegVm {
                     table.push(value.clone());
                     (table.len() - 1) as i64
                 })),
-            };
-            match bits {
-                Some(bits) => {
-                    if use_inline_args {
-                        inline_args[index] = bits;
-                    } else {
-                        heap_args.push(bits);
-                    }
-                }
-                None => {
-                    if let Some(native) = self.native.as_mut() {
-                        if native.collect_stats {
-                            native.stats.arg_mismatch += 1;
+                // TV2 flat marshalling. The compiled code expects a flat buffer of
+                // the param's kind; if the *runtime* list is that kind, clone its
+                // `Rc` (to keep it alive) for the pin pass below. Otherwise (a
+                // `Boxed` list — TV1 is non-canonical — or a non-list) fall back to
+                // the interpreter, which is always correct.
+                NativeTy::FlatInt | NativeTy::FlatFloat => match value {
+                    VmValue::List(list) => {
+                        let want_int = param_type == NativeTy::FlatInt;
+                        let ok = {
+                            let borrowed = list.borrow();
+                            if want_int {
+                                borrowed.as_ints_slice().is_some()
+                            } else {
+                                borrowed.as_floats_slice().is_some()
+                            }
+                        };
+                        if ok {
+                            flat_owned.push(Rc::clone(list));
+                            // Placeholder; ptr+len filled in the pin pass once all
+                            // borrows are held simultaneously.
+                            Some(0)
+                        } else {
+                            None
                         }
                     }
+                    _ => None,
+                },
+            };
+            match bits {
+                Some(bits) => args[index] = bits,
+                None => {
+                    bail_marshal(self);
                     return None;
                 }
             }
         }
-        let args: &[i64] = if use_inline_args {
-            &inline_args[..param_types.len()]
-        } else {
-            &heap_args
-        };
+        // SAFETY (TV2 borrow protocol — the unsafe core, audited here in one place):
+        // We pin a shared `Ref` borrow of every flat list arg's `RefCell<TypedVec>`
+        // for the entire `module.call(...)` below. `flat_guards` holds those `Ref`s;
+        // it borrows `flat_owned` (declared above, never moved/dropped before the
+        // call), and the `Rc`s in `flat_owned` keep the `RefCell`s alive. While these
+        // shared borrows are held, no `borrow_mut` can succeed, so the backing `Vec`
+        // cannot reallocate or mutate — hence the raw `as_ptr()` we hand to native
+        // code stays valid and immovable for the call's duration. Native-eligible
+        // functions are side-effect-free (§7.2), so they never even attempt a write;
+        // the pinned borrow is the belt-and-suspenders that makes the raw read sound
+        // regardless. Every index the native code computes is bounds-checked against
+        // the matching `lens` entry (→ fallback on OOB), so it never reads past the
+        // buffer. The pointers are not retained past the call (the generated code
+        // never stores them), and `flat_guards`/`flat_owned` drop right after.
+        let flat_guards: Vec<std::cell::Ref<'_, TypedVec>> =
+            flat_owned.iter().map(|rc| rc.borrow()).collect();
+        {
+            let mut next = 0usize;
+            for index in 0..n {
+                match param_types[index] {
+                    NativeTy::FlatInt => {
+                        let (ptr, len) = flat_guards[next].as_ints_slice().expect("Ints pinned");
+                        next += 1;
+                        args[index] = ptr as i64;
+                        lens[index] = len as i64;
+                    }
+                    NativeTy::FlatFloat => {
+                        let (ptr, len) =
+                            flat_guards[next].as_floats_slice().expect("Floats pinned");
+                        next += 1;
+                        args[index] = ptr as i64;
+                        lens[index] = len as i64;
+                    }
+                    _ => {}
+                }
+            }
+        }
         // Phase 3: call. `call` returns `None` if the native code bailed at a guard
         // *or* a host helper flagged an unsatisfiable heap read; either way the
         // interpreter re-runs the function. A clean result is boxed per the
         // function's return type (a float register stored its `f64` bit pattern).
         let collect_stats = self.native.as_ref()?.collect_stats;
         let started = collect_stats.then(std::time::Instant::now);
-        let result = self.native.as_ref()?.module.call(id, args);
+        let result = self.native.as_ref()?.module.call(id, &args, &lens);
         let elapsed = started.map(|started| started.elapsed().as_nanos());
         let native = self.native.as_mut()?;
         if let Some(elapsed) = elapsed {
@@ -7231,6 +7802,9 @@ impl RegVm {
                 if native.collect_stats {
                     native.stats.native_calls += 1;
                 }
+                // Consecutive-bail semantics: a clean completion clears the
+                // give-up counter, so only *sustained* failure demotes a function.
+                native.bail_counts.insert(native_key, 0);
                 Some(match ret_type {
                     NativeTy::Float => VmValue::Float(f64::from_bits(bits as u64)),
                     _ => VmValue::Int(bits),
@@ -7240,6 +7814,7 @@ impl RegVm {
                 if native.collect_stats {
                     native.stats.native_bails += 1;
                 }
+                native.record_bail(native_key, func);
                 None
             }
         }
@@ -7316,6 +7891,13 @@ impl RegVm {
     // but `Map.insert`'s `retains(key)` effect makes mutating a live key
     // unreachable in well-typed RSScript, so the lint's hazard cannot occur.
     #[allow(clippy::mutable_key_type)]
+    // perf-plan §1.1 (interpreter dispatch — inline the match, minimal form):
+    // force this single-instruction executor to expand into BOTH callers
+    // (`drive`'s hot loop and `run_jit`), so VM state (ip/base/register ptr)
+    // stays in registers across the hot arms without a manual match rewrite.
+    // This is an empirical probe; §1.1 may not pay off until the §1.3 hot/cold
+    // split, so the win (if any) is judged against run-to-run spread per §0.4.
+    #[inline(always)]
     fn try_exec_pure(
         &mut self,
         instr: &RegInstr,
@@ -7398,39 +7980,40 @@ impl RegVm {
                 self.set_reg(obj_reg, updated);
                 self.set_reg(base + *dst, VmValue::Unit);
             }
-            RegInstr::MakeStruct { dst, name, fields } => {
-                let mut field_values: Vec<(String, VmValue)> = Vec::with_capacity(fields.len());
-                for (field, reg) in fields {
-                    field_values.push((field.clone(), self.reg(base + *reg).clone()));
+            RegInstr::MakeStruct { dst, layout, fields } => {
+                // Hot path: the layout is interned once at lowering time, so this is
+                // a refcount bump + a field-value gather — no per-construction
+                // `(name, field_names)` hashing. Field values are in canonical slot
+                // order (the lowerer canonicalized them to match the layout).
+                let mut values: Vec<VmValue> = Vec::with_capacity(fields.len());
+                for (_field, reg) in fields {
+                    values.push(self.reg(base + *reg).clone());
                 }
                 self.set_reg(
                     base + *dst,
-                    VmValue::Struct(Rc::new(VmStruct::from_named(
-                        Rc::from(name.as_str()),
-                        field_values,
-                    ))),
+                    VmValue::Struct(Rc::new(VmStruct::with_layout(Rc::clone(layout), values))),
                 );
             }
-            RegInstr::MakeVariant { dst, name, fields } => {
-                let mut field_values: Vec<(String, VmValue)> = Vec::with_capacity(fields.len());
-                for (field, reg) in fields {
-                    field_values.push((field.clone(), self.reg(base + *reg).clone()));
+            RegInstr::MakeVariant { dst, layout, fields } => {
+                let mut values: Vec<VmValue> = Vec::with_capacity(fields.len());
+                for (_field, reg) in fields {
+                    values.push(self.reg(base + *reg).clone());
                 }
                 self.set_reg(
                     base + *dst,
-                    VmValue::Variant(Rc::new(VmStruct::from_named(
-                        Rc::from(name.as_str()),
-                        field_values,
-                    ))),
+                    VmValue::Variant(Rc::new(VmStruct::with_layout(Rc::clone(layout), values))),
                 );
             }
             RegInstr::MakeList { dst, items } => {
-                self.account_bytes(items.len() * LIST_ELEM_BYTES)?;
                 let mut list = Vec::with_capacity(items.len());
                 for reg in items {
                     list.push(self.reg(base + *reg).clone());
                 }
-                self.set_reg(base + *dst, VmValue::List(Rc::new(RefCell::new(list))));
+                let typed = TypedVec::from_values(list);
+                // Per-kind accounting (TV1): charge the flat buffer cost of the kind
+                // the literal specialized to (8 B/elem for a scalar list).
+                self.account_bytes(typed.len() * typed.elem_bytes())?;
+                self.set_reg(base + *dst, VmValue::List(Rc::new(RefCell::new(typed))));
             }
             RegInstr::MakeObject { dst, fields } => {
                 let mut object = serde_json::Map::new();
@@ -7582,7 +8165,7 @@ impl RegVm {
             }
             RegInstr::MakeSome { dst, value } => {
                 let value = self.reg(base + *value).clone();
-                self.set_reg(base + *dst, VmValue::OptionSome(Box::new(value)));
+                self.set_reg(base + *dst, VmValue::some(value));
             }
             RegInstr::LoadNone { dst } => {
                 self.set_reg(base + *dst, VmValue::OptionNone);
@@ -7592,24 +8175,30 @@ impl RegVm {
                 function: callee,
                 captures,
             } => {
-                let mut captured = Vec::with_capacity(captures.len());
-                for reg in captures {
-                    captured.push(self.reg(base + *reg).clone());
-                }
-                self.set_reg(
-                    base + *dst,
-                    VmValue::Closure(Rc::new(VmClosure {
+                // Non-capturing closures of the same function are value-identical
+                // every time, so when closure identity is provably unobservable
+                // (see `noncapturing_closure_cache`) we reuse one cached `Rc`
+                // instead of heap-allocating a fresh one each iteration.
+                let closure = if captures.is_empty() && !self.unit.closure_identity_observable {
+                    self.cached_noncapturing_closure(*callee)
+                } else {
+                    let mut captured = Vec::with_capacity(captures.len());
+                    for reg in captures {
+                        captured.push(self.reg(base + *reg).clone());
+                    }
+                    Rc::new(VmClosure {
                         function: *callee,
                         captures: captured,
-                    })),
-                );
+                    })
+                };
+                self.set_reg(base + *dst, VmValue::Closure(closure));
             }
             RegInstr::MatchOption {
                 src,
                 some_ip,
                 none_ip,
             } => match self.reg(base + *src) {
-                VmValue::OptionSome(_) => *ip = *some_ip,
+                VmValue::OptionSomeScalar(_) | VmValue::OptionSomeHeap(_) => *ip = *some_ip,
                 VmValue::OptionNone => *ip = *none_ip,
                 other => {
                     return Err(EvalError::Runtime(format!(
@@ -7619,8 +8208,8 @@ impl RegVm {
                 }
             },
             RegInstr::MatchResult { src, ok_ip, err_ip } => match self.reg(base + *src) {
-                VmValue::Variant(data) if data.name.as_ref() == "Ok" => *ip = *ok_ip,
-                VmValue::Variant(data) if data.name.as_ref() == "Err" => *ip = *err_ip,
+                VmValue::Variant(data) if data.name().as_ref() == "Ok" => *ip = *ok_ip,
+                VmValue::Variant(data) if data.name().as_ref() == "Err" => *ip = *err_ip,
                 other => {
                     return Err(EvalError::Runtime(format!(
                         "reg VM Result match expected Result, got `{}`.",
@@ -7634,7 +8223,7 @@ impl RegVm {
                 match_ip,
                 else_ip,
             } => match self.reg(base + *src) {
-                VmValue::Variant(data) if data.name.as_ref() == expected.as_str() => {
+                VmValue::Variant(data) if data.name().as_ref() == expected.as_str() => {
                     *ip = *match_ip
                 }
                 VmValue::Variant(_) => *ip = *else_ip,
@@ -7663,7 +8252,9 @@ impl RegVm {
             }
             RegInstr::UnwrapSome { dst, src } => {
                 let value = match self.reg(base + *src) {
-                    VmValue::OptionSome(value) => (**value).clone(),
+                    some @ (VmValue::OptionSomeScalar(_) | VmValue::OptionSomeHeap(_)) => {
+                        some.unwrap_some().expect("Some arm yields a payload")
+                    }
                     other => {
                         return Err(EvalError::Runtime(format!(
                             "reg VM Some binding expected Some, got `{}`.",
@@ -7675,7 +8266,7 @@ impl RegVm {
             }
             RegInstr::UnwrapVariantValue { dst, src, expected } => {
                 let value = match self.reg(base + *src) {
-                    VmValue::Variant(data) if data.name.as_ref() == expected.as_str() => data
+                    VmValue::Variant(data) if data.name().as_ref() == expected.as_str() => data
                         .get("value")
                         .cloned()
                         .or_else(|| {
@@ -7703,85 +8294,34 @@ impl RegVm {
             // Collection get/set/index ops: pure (no frame push, no closure
             // call), so they belong to the tier-0 subset. Closure-driven
             // collection ops (map/filter/fold/sort-by) stay on the interpreter.
+            // TV2.2 hot/cold split (perf-plan §1.3): `try_exec_pure` is
+            // `#[inline(always)]` and inlines into `drive()`'s hot dispatch loop.
+            // TV1+TV2 enlarged these list arms (TypedVec dispatch + accounting),
+            // which bloated the inlined loop and taxed I-cache/regalloc on EVERY
+            // kernel — including non-list scalar ones. Each heavy list arm is now a
+            // thin call into an `#[inline(never)]` cold helper so the inlined hot
+            // loop shrinks back to its scalar core (arith/compare/branch/move/load).
             RegInstr::ListGet { dst, list, index } => {
-                let list = expect_list_ref(self.reg(base + *list))?;
-                let index = expect_usize_ref(self.reg(base + *index))?;
-                let value = list.borrow().get(index).cloned().ok_or_else(|| {
-                    EvalError::Runtime(format!("reg VM List.get index {index} out of bounds."))
-                })?;
-                self.set_reg(base + *dst, value);
+                self.exec_list_get(base, *dst, *list, *index)?
             }
-            RegInstr::ListLen { dst, list } => {
-                let len = expect_list_ref(self.reg(base + *list))?.borrow().len();
-                self.set_reg(base + *dst, VmValue::Int(len as i64));
-            }
+            RegInstr::ListLen { dst, list } => self.exec_list_len(base, *dst, *list)?,
             RegInstr::ListPush { dst, list, value } => {
-                // Account one element of growth before the push: this is the
-                // dominant adversarial blow-up (`while true { list.push(x) }`),
-                // so the memory ceiling trips here.
-                self.account_bytes(LIST_ELEM_BYTES)?;
-                let list = expect_list_ref(self.reg(base + *list))?;
-                let value = self.reg(base + *value).clone();
-                list.borrow_mut().push(value);
-                self.set_reg(base + *dst, VmValue::Unit);
+                self.exec_list_push(base, *dst, *list, *value)?
             }
             RegInstr::ListAppend { dst, list, values } => {
-                // In-place to mirror `List.append(mut list, ...)`: clone the
-                // source first (handles append-to-self), then extend the
-                // receiver's existing buffer so a `mut` param propagates.
-                let append_values = expect_list_ref(self.reg(base + *values))?.borrow().clone();
-                self.account_bytes(append_values.len() * LIST_ELEM_BYTES)?;
-                expect_list_ref(self.reg(base + *list))?
-                    .borrow_mut()
-                    .extend(append_values);
-                self.set_reg(base + *dst, VmValue::Unit);
+                self.exec_list_append(base, *dst, *list, *values)?
             }
-            RegInstr::ListClear { dst, list } => {
-                expect_list_ref(self.reg(base + *list))?
-                    .borrow_mut()
-                    .clear();
-                self.set_reg(base + *dst, VmValue::Unit);
-            }
-            RegInstr::ListPop { dst, list } => {
-                let value = expect_list_ref(self.reg(base + *list))?
-                    .borrow_mut()
-                    .pop()
-                    .map(|value| VmValue::OptionSome(Box::new(value)))
-                    .unwrap_or(VmValue::OptionNone);
-                self.set_reg(base + *dst, value);
-            }
+            RegInstr::ListClear { dst, list } => self.exec_list_clear(base, *dst, *list)?,
+            RegInstr::ListPop { dst, list } => self.exec_list_pop(base, *dst, *list)?,
             RegInstr::ListRemoveAt { dst, list, index } => {
-                let index = expect_int_ref(self.reg(base + *index))?;
-                let list = expect_list_ref(self.reg(base + *list))?.clone();
-                let mut borrowed = list.borrow_mut();
-                let value = if index < 0 || index as usize >= borrowed.len() {
-                    VmValue::OptionNone
-                } else {
-                    VmValue::OptionSome(Box::new(borrowed.remove(index as usize)))
-                };
-                drop(borrowed);
-                self.set_reg(base + *dst, value);
+                self.exec_list_remove_at(base, *dst, *list, *index)?
             }
             RegInstr::ListSet {
                 dst,
                 list,
                 index,
                 value,
-            } => {
-                let index = expect_int_ref(self.reg(base + *index))?;
-                let new_value = self.reg(base + *value).clone();
-                let list = expect_list_ref(self.reg(base + *list))?.clone();
-                let mut borrowed = list.borrow_mut();
-                if index < 0 || index as usize >= borrowed.len() {
-                    return Err(EvalError::Runtime(format!(
-                        "reg VM List.set index {index} out of bounds for length {}.",
-                        borrowed.len()
-                    )));
-                }
-                borrowed[index as usize] = new_value;
-                drop(borrowed);
-                self.set_reg(base + *dst, VmValue::Unit);
-            }
+            } => self.exec_list_set(base, *dst, *list, *index, *value)?,
             RegInstr::MapGet { dst, map, key } => {
                 let map = expect_map_ref(self.reg(base + *map))?;
                 let key = map_key_from_value(self.reg(base + *key))?;
@@ -7789,7 +8329,7 @@ impl RegVm {
                     .borrow()
                     .get(&key)
                     .cloned()
-                    .map(|value| VmValue::OptionSome(Box::new(value)))
+                    .map(|value| VmValue::some(value))
                     .unwrap_or(VmValue::OptionNone);
                 self.set_reg(base + *dst, value);
             }
@@ -7821,7 +8361,7 @@ impl RegVm {
                 let old = map.borrow_mut().insert(key, value);
                 self.set_reg(
                     base + *dst,
-                    old.map(|value| VmValue::OptionSome(Box::new(value)))
+                    old.map(|value| VmValue::some(value))
                         .unwrap_or(VmValue::OptionNone),
                 );
             }
@@ -7831,7 +8371,7 @@ impl RegVm {
                 let old = map.borrow_mut().remove(&key);
                 self.set_reg(
                     base + *dst,
-                    old.map(|value| VmValue::OptionSome(Box::new(value)))
+                    old.map(|value| VmValue::some(value))
                         .unwrap_or(VmValue::OptionNone),
                 );
             }
@@ -7842,6 +8382,158 @@ impl RegVm {
             _ => return Ok(PureStep::NotPure),
         }
         Ok(PureStep::Next)
+    }
+
+    // ── TV2.2 cold list-opcode bodies (perf-plan §1.3 hot/cold split) ──
+    // These are the heavy/cold bodies the TV1+TV2 TypedVec work added to the
+    // `try_exec_pure` list arms. `try_exec_pure` is `#[inline(always)]` and
+    // inlines into `drive()`'s hot dispatch loop; keeping these bodies inline
+    // bloated the loop and taxed I-cache/regalloc on every kernel (including
+    // non-list scalar ones). Marked `#[inline(never)]` so each arm is a thin
+    // call and the inlined hot loop stays at its scalar core. Semantics are
+    // byte-for-byte identical to the previous inline arms.
+
+    #[inline(never)]
+    fn exec_list_get(
+        &mut self,
+        base: usize,
+        dst: usize,
+        list: usize,
+        index: usize,
+    ) -> Result<(), EvalError> {
+        let list = expect_list_ref(self.reg(base + list))?;
+        let index = expect_usize_ref(self.reg(base + index))?;
+        let value = list.borrow().get(index).ok_or_else(|| {
+            EvalError::Runtime(format!("reg VM List.get index {index} out of bounds."))
+        })?;
+        self.set_reg(base + dst, value);
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn exec_list_len(&mut self, base: usize, dst: usize, list: usize) -> Result<(), EvalError> {
+        let len = expect_list_ref(self.reg(base + list))?.borrow().len();
+        self.set_reg(base + dst, VmValue::Int(len as i64));
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn exec_list_push(
+        &mut self,
+        base: usize,
+        dst: usize,
+        list: usize,
+        value: usize,
+    ) -> Result<(), EvalError> {
+        // TV2.1 hot path: a single mutable borrow that fuses the typed direct
+        // push with amortized capacity-growth accounting. The push operates
+        // straight on the flat `i64`/`f64` buffer with no intermediate `VmValue`
+        // materialization, and `account_bytes` is only reached on the (geometric,
+        // amortized O(1)) reallocations — not once per element. The adversarial
+        // `while true { list.push(x) }` still trips the ceiling: capacity (>= len)
+        // growth is charged, so the bound is conservative.
+        let list = expect_list_ref(self.reg(base + list))?;
+        let value = self.reg(base + value).clone();
+        let grew = list.borrow_mut().checked_push_accounted(value).map_err(|v| {
+            EvalError::Runtime(format!(
+                "reg VM List.push element kind mismatch (got `{}`).",
+                v.display()
+            ))
+        })?;
+        if grew != 0 {
+            self.account_bytes(grew)?;
+        }
+        self.set_reg(base + dst, VmValue::Unit);
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn exec_list_append(
+        &mut self,
+        base: usize,
+        dst: usize,
+        list: usize,
+        values: usize,
+    ) -> Result<(), EvalError> {
+        // In-place to mirror `List.append(mut list, ...)`: clone the source first
+        // (handles append-to-self), then extend the receiver's existing buffer so
+        // a `mut` param propagates.
+        let append_values = expect_list_ref(self.reg(base + values))?.borrow().clone();
+        self.account_bytes(append_values.len() * append_values.elem_bytes())?;
+        expect_list_ref(self.reg(base + list))?
+            .borrow_mut()
+            .extend(append_values);
+        self.set_reg(base + dst, VmValue::Unit);
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn exec_list_clear(&mut self, base: usize, dst: usize, list: usize) -> Result<(), EvalError> {
+        expect_list_ref(self.reg(base + list))?.borrow_mut().clear();
+        self.set_reg(base + dst, VmValue::Unit);
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn exec_list_pop(&mut self, base: usize, dst: usize, list: usize) -> Result<(), EvalError> {
+        let value = expect_list_ref(self.reg(base + list))?
+            .borrow_mut()
+            .pop()
+            .map(|value| VmValue::some(value))
+            .unwrap_or(VmValue::OptionNone);
+        self.set_reg(base + dst, value);
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn exec_list_remove_at(
+        &mut self,
+        base: usize,
+        dst: usize,
+        list: usize,
+        index: usize,
+    ) -> Result<(), EvalError> {
+        let index = expect_int_ref(self.reg(base + index))?;
+        let list = expect_list_ref(self.reg(base + list))?.clone();
+        let mut borrowed = list.borrow_mut();
+        let value = if index < 0 || index as usize >= borrowed.len() {
+            VmValue::OptionNone
+        } else {
+            VmValue::some(borrowed.remove(index as usize))
+        };
+        drop(borrowed);
+        self.set_reg(base + dst, value);
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn exec_list_set(
+        &mut self,
+        base: usize,
+        dst: usize,
+        list: usize,
+        index: usize,
+        value: usize,
+    ) -> Result<(), EvalError> {
+        let index = expect_int_ref(self.reg(base + index))?;
+        let new_value = self.reg(base + value).clone();
+        let list = expect_list_ref(self.reg(base + list))?.clone();
+        let mut borrowed = list.borrow_mut();
+        if index < 0 || index as usize >= borrowed.len() {
+            return Err(EvalError::Runtime(format!(
+                "reg VM List.set index {index} out of bounds for length {}.",
+                borrowed.len()
+            )));
+        }
+        borrowed.checked_set(index as usize, new_value).map_err(|v| {
+            EvalError::Runtime(format!(
+                "reg VM List.set element kind mismatch (got `{}`).",
+                v.display()
+            ))
+        })?;
+        drop(borrowed);
+        self.set_reg(base + dst, VmValue::Unit);
+        Ok(())
     }
 
     /// Grow the shared register stack so that `stack[..upto]` is addressable.
@@ -8397,7 +9089,7 @@ impl RegVm {
                             // the receiver (args[0]), then call it like `CallKnown`.
                             let receiver = self.reg(base + args[0]).clone();
                             let type_name = match &receiver {
-                                VmValue::Struct(data) => Some(data.name.clone()),
+                                VmValue::Struct(data) => Some(data.name().clone()),
                                 _ => None,
                             };
                             let callee_id = type_name.as_ref().and_then(|name| {
@@ -8579,7 +9271,14 @@ impl RegVm {
                         RegInstr::ListSort { dst, list } => {
                             let list = expect_list_ref(self.reg(base + *list))?.clone();
                             let mut borrowed = list.borrow_mut();
-                            sort_vm_values(&mut borrowed)?;
+                            // Sort a flat `Ints` list in place (kind-preserving); any
+                            // other kind promotes to the boxed view and sorts via the
+                            // shared `VmValue` comparator (parity-identical).
+                            if let TypedVec::Ints(values) = &mut *borrowed {
+                                values.sort_unstable();
+                            } else {
+                                sort_vm_values(borrowed.as_boxed_mut())?;
+                            }
                             drop(borrowed);
                             self.set_reg(base + *dst, VmValue::Unit);
                         }
@@ -8589,22 +9288,23 @@ impl RegVm {
                             key,
                             compare,
                         } => {
-                            let values = expect_list_ref(self.reg(base + *list))?.borrow().clone();
+                            let values = expect_list_ref(self.reg(base + *list))?.borrow().to_vec();
                             let key = expect_closure_rc(self.reg(base + *key))?;
                             let compare = expect_closure_rc(self.reg(base + *compare))?;
                             let sorted =
                                 self.sort_list_by_closure(unit, values, &key, &compare, next_base)?;
-                            self.set_reg(base + *dst, VmValue::List(Rc::new(RefCell::new(sorted))));
+                            self.set_reg(base + *dst, VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(sorted)))));
                         }
                         RegInstr::ListSortWith { dst, list, compare } => {
                             // Sort a detached copy first so the comparator closure can read
                             // the list without a RefCell double-borrow, then overwrite the
                             // receiver's buffer in place so `mut list` propagates.
                             let mut values =
-                                expect_list_ref(self.reg(base + *list))?.borrow().clone();
+                                expect_list_ref(self.reg(base + *list))?.borrow().to_vec();
                             let compare = expect_closure_rc(self.reg(base + *compare))?;
                             self.sort_list_with_closure(unit, &mut values, &compare, next_base)?;
-                            *expect_list_ref(self.reg(base + *list))?.borrow_mut() = values;
+                            *expect_list_ref(self.reg(base + *list))?.borrow_mut() =
+                                TypedVec::from_values(values);
                             self.set_reg(base + *dst, VmValue::Unit);
                         }
                         RegInstr::DequeClear { dst, deque } => {
@@ -8617,7 +9317,7 @@ impl RegVm {
                             let value = expect_deque_ref(self.reg(base + *deque))?
                                 .borrow_mut()
                                 .pop_back()
-                                .map(|value| VmValue::OptionSome(Box::new(value)))
+                                .map(|value| VmValue::some(value))
                                 .unwrap_or(VmValue::OptionNone);
                             self.set_reg(base + *dst, value);
                         }
@@ -8625,7 +9325,7 @@ impl RegVm {
                             let value = expect_deque_ref(self.reg(base + *deque))?
                                 .borrow_mut()
                                 .pop_front() // O(1), unlike the old `Vec::remove(0)`
-                                .map(|value| VmValue::OptionSome(Box::new(value)))
+                                .map(|value| VmValue::some(value))
                                 .unwrap_or(VmValue::OptionNone);
                             self.set_reg(base + *dst, value);
                         }
@@ -8663,8 +9363,7 @@ impl RegVm {
                         RegInstr::SetInsert { dst, set, value } => {
                             let key = map_key_from_value(self.reg(base + *value))?;
                             let map = expect_map_ref(self.reg(base + *set))?;
-                            let inserted =
-                                map.borrow_mut().insert(key, VmValue::Unit).is_none();
+                            let inserted = map.borrow_mut().insert(key, VmValue::Unit).is_none();
                             self.set_reg(base + *dst, VmValue::Bool(inserted));
                         }
                         RegInstr::SetRemove { dst, set, value } => {
@@ -8680,13 +9379,13 @@ impl RegVm {
                         RegInstr::SortedSetInsert { dst, set, value } => {
                             let value = self.reg(base + *value).clone();
                             let list = expect_list_ref(self.reg(base + *set))?;
-                            let inserted = sorted_insert_vm(&mut list.borrow_mut(), value)?;
+                            let inserted = sorted_insert_vm(list.borrow_mut().as_boxed_mut(), value)?;
                             self.set_reg(base + *dst, VmValue::Bool(inserted));
                         }
                         RegInstr::SortedSetRemove { dst, set, value } => {
                             let value = self.reg(base + *value).clone();
                             let list = expect_list_ref(self.reg(base + *set))?;
-                            let removed = sorted_remove_vm(&mut list.borrow_mut(), &value)?;
+                            let removed = sorted_remove_vm(list.borrow_mut().as_boxed_mut(), &value)?;
                             self.set_reg(base + *dst, VmValue::Bool(removed));
                         }
                         RegInstr::SortedMapClear { dst, map } => {
@@ -8702,17 +9401,17 @@ impl RegVm {
                             let key = self.reg(base + *key).clone();
                             let value = self.reg(base + *value).clone();
                             let list = expect_list_ref(self.reg(base + *map))?;
-                            sorted_map_insert_in_place(&mut list.borrow_mut(), key, value)?;
+                            sorted_map_insert_in_place(list.borrow_mut().as_boxed_mut(), key, value)?;
                             self.set_reg(base + *dst, VmValue::Unit);
                         }
                         RegInstr::SortedMapRemove { dst, map, key } => {
                             let key = self.reg(base + *key).clone();
                             let list = expect_list_ref(self.reg(base + *map))?;
-                            let removed = sorted_map_remove_in_place(&mut list.borrow_mut(), &key)?;
+                            let removed = sorted_map_remove_in_place(list.borrow_mut().as_boxed_mut(), &key)?;
                             self.set_reg(
                                 base + *dst,
                                 removed
-                                    .map(|value| VmValue::OptionSome(Box::new(value)))
+                                    .map(|value| VmValue::some(value))
                                     .unwrap_or(VmValue::OptionNone),
                             );
                         }
@@ -8800,8 +9499,11 @@ impl RegVm {
                             // that failure from the current frame. Option support
                             // mirrors Result so `?` works in `Option`-returning fns.
                             let short_circuit = match &value {
-                                VmValue::OptionSome(inner) => {
-                                    self.set_reg(base + *dst, (**inner).clone());
+                                VmValue::OptionSomeScalar(_) | VmValue::OptionSomeHeap(_) => {
+                                    self.set_reg(
+                                        base + *dst,
+                                        value.unwrap_some().expect("Some arm yields a payload"),
+                                    );
                                     None
                                 }
                                 VmValue::OptionNone => Some(VmValue::OptionNone),
@@ -8872,7 +9574,7 @@ impl RegVm {
         };
         let Some(function_id) = unit
             .resource_drop_functions
-            .get(data.name.as_ref())
+            .get(data.name().as_ref())
             .copied()
         else {
             return Ok(());
@@ -8890,7 +9592,7 @@ impl RegVm {
         } else {
             Err(EvalError::Runtime(format!(
                 "resource drop for `{}` returned unsupported value `{}`.",
-                data.name,
+                data.name(),
                 result.display()
             )))
         }
@@ -9370,10 +10072,7 @@ impl RegVm {
 
     /// Resolve a `Tensor` handle to the stored `RssTensor` (cloned — the buffer is
     /// `Rc`-shared, so this is a cheap pointer bump, not a data copy).
-    fn expect_tensor_ref(
-        &self,
-        value: &VmValue,
-    ) -> Result<rsscript_runtime::RssTensor, EvalError> {
+    fn expect_tensor_ref(&self, value: &VmValue) -> Result<rsscript_runtime::RssTensor, EvalError> {
         let id = match value {
             VmValue::Native(native) if native.type_name.as_ref() == "Tensor" => native.id,
             VmValue::Managed(inner) => return self.expect_tensor_ref(&inner.borrow()),
@@ -9415,7 +10114,7 @@ impl RegVm {
             .get_mut(&channel_id)
             .ok_or_else(|| channel_error_value(format!("unknown channel id `{channel_id}`")))?;
         if let Some(value) = state.queue.pop_front() {
-            return Ok(VmValue::OptionSome(Box::new(value)));
+            return Ok(VmValue::some(value));
         }
         if state.senders == 0 {
             return Ok(VmValue::OptionNone);
@@ -9428,7 +10127,7 @@ impl RegVm {
     fn filter_list(
         &mut self,
         unit: &RegUnit,
-        list: Rc<RefCell<Vec<VmValue>>>,
+        list: Rc<RefCell<TypedVec>>,
         predicate: &VmClosure,
         base: usize,
     ) -> Result<VmValue, EvalError> {
@@ -9441,13 +10140,13 @@ impl RegVm {
                 filtered.push(item);
             }
         }
-        Ok(VmValue::List(Rc::new(RefCell::new(filtered))))
+        Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(filtered)))))
     }
 
     fn fold_list(
         &mut self,
         unit: &RegUnit,
-        list: Rc<RefCell<Vec<VmValue>>>,
+        list: Rc<RefCell<TypedVec>>,
         mut state: VmValue,
         folder: &VmClosure,
         base: usize,
@@ -9474,9 +10173,9 @@ impl RegVm {
                         // and `item` are placed at the two param registers, so
                         // whichever param the lhs/rhs reads determines the order.
                         let (lhs, rhs) = if form.lhs_is_state {
-                            (&state, item)
+                            (&state, &item)
                         } else {
-                            (item, &state)
+                            (&item, &state)
                         };
                         state = eval_numeric_binary(form.op, lhs, rhs)?;
                     }
@@ -9495,7 +10194,7 @@ impl RegVm {
     fn map_list(
         &mut self,
         unit: &RegUnit,
-        list: Rc<RefCell<Vec<VmValue>>>,
+        list: Rc<RefCell<TypedVec>>,
         mapper: &VmClosure,
         base: usize,
     ) -> Result<VmValue, EvalError> {
@@ -9505,7 +10204,7 @@ impl RegVm {
             let item = list_item_at(&list, index, "List.map")?;
             mapped.push(self.call_closure_one(unit, mapper, item, base)?);
         }
-        Ok(VmValue::List(Rc::new(RefCell::new(mapped))))
+        Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(mapped)))))
     }
 
     fn sort_list_with_closure(
@@ -9579,6 +10278,12 @@ impl RegVm {
                     json_decode_struct_value(unit, type_arg, &value)
                 })))
             }
+            RegIntrinsic::ListNew => {
+                // TV1: an empty list starts in its static element kind so a
+                // homogeneous scalar list never pays the boxed buffer.
+                let kind = crate::vm_value::ElemKind::from_type_name(type_arg);
+                Ok(VmValue::List(Rc::new(RefCell::new(kind.empty()))))
+            }
             other => Err(EvalError::Runtime(format!(
                 "reg VM typed intrinsic `{other:?}` is not implemented."
             ))),
@@ -9607,7 +10312,7 @@ impl RegVm {
                 Ok(usize::try_from(index)
                     .ok()
                     .and_then(|index| self.args.get(index).cloned())
-                    .map(|value| VmValue::OptionSome(Box::new(VmValue::string(value))))
+                    .map(|value| VmValue::some(VmValue::string(value)))
                     .unwrap_or(VmValue::OptionNone))
             }
             RegIntrinsic::ArgsGetOrDefault => {
@@ -9689,7 +10394,19 @@ impl RegVm {
                     base64::engine::general_purpose::STANDARD.encode(value),
                 ))
             }
-            RegIntrinsic::BytesConcat | RegIntrinsic::BytesConsume | RegIntrinsic::BytesFromString | RegIntrinsic::BytesFromUints | RegIntrinsic::BytesIsEmpty | RegIntrinsic::BytesLen | RegIntrinsic::BytesSlice | RegIntrinsic::BytesToString | RegIntrinsic::BytesToUints | RegIntrinsic::BytesViewStartsWith | RegIntrinsic::BytesViewToBytes => self.exec_bytes_intrinsics(unit, intrinsic, args, base, next_base),
+            RegIntrinsic::BytesConcat
+            | RegIntrinsic::BytesConsume
+            | RegIntrinsic::BytesFromString
+            | RegIntrinsic::BytesFromUints
+            | RegIntrinsic::BytesIsEmpty
+            | RegIntrinsic::BytesLen
+            | RegIntrinsic::BytesSlice
+            | RegIntrinsic::BytesToString
+            | RegIntrinsic::BytesToUints
+            | RegIntrinsic::BytesViewStartsWith
+            | RegIntrinsic::BytesViewToBytes => {
+                self.exec_bytes_intrinsics(unit, intrinsic, args, base, next_base)
+            }
             RegIntrinsic::BufferNew => {
                 let size = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::Bytes(Rc::new(Vec::with_capacity(
@@ -9833,9 +10550,9 @@ impl RegVm {
                     Ok(dims) => Ok(VmValue::List(Rc::new(RefCell::new(
                         dims.into_iter().map(VmValue::Int).collect(),
                     )))),
-                    Err(error) => Err(tensor_error_value(
-                        rsscript_runtime::tensor_error_message(&error),
-                    )),
+                    Err(error) => Err(tensor_error_value(rsscript_runtime::tensor_error_message(
+                        &error,
+                    ))),
                 }))
             }
             RegIntrinsic::TensorRank => {
@@ -9867,20 +10584,22 @@ impl RegVm {
                 let b = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 Ok(json_result(match rsscript_runtime::tensor_matmul(&a, &b) {
                     Ok(tensor) => Ok(self.store_tensor(tensor)),
-                    Err(error) => Err(tensor_error_value(
-                        rsscript_runtime::tensor_error_message(&error),
-                    )),
+                    Err(error) => Err(tensor_error_value(rsscript_runtime::tensor_error_message(
+                        &error,
+                    ))),
                 }))
             }
             RegIntrinsic::TensorMatmulMetal => {
                 let a = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let b = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(json_result(match rsscript_runtime::tensor_matmul_metal(&a, &b) {
-                    Ok(tensor) => Ok(self.store_tensor(tensor)),
-                    Err(error) => Err(tensor_error_value(
-                        rsscript_runtime::tensor_error_message(&error),
-                    )),
-                }))
+                Ok(json_result(
+                    match rsscript_runtime::tensor_matmul_metal(&a, &b) {
+                        Ok(tensor) => Ok(self.store_tensor(tensor)),
+                        Err(error) => Err(tensor_error_value(
+                            rsscript_runtime::tensor_error_message(&error),
+                        )),
+                    },
+                ))
             }
             RegIntrinsic::TensorMetalAvailable => {
                 Ok(VmValue::Bool(rsscript_runtime::tensor_metal_available()))
@@ -9898,7 +10617,7 @@ impl RegVm {
                 let inputs: Vec<Vec<f64>> = inputs_list
                     .borrow()
                     .iter()
-                    .map(expect_float_list_ref)
+                    .map(|v| expect_float_list_ref(&v))
                     .collect::<Result<_, _>>()?;
                 let out_len = expect_int_ref(intrinsic_arg(&self.stack, base, args, 3)?)?;
                 let threads = expect_int_ref(intrinsic_arg(&self.stack, base, args, 4)?)?;
@@ -9929,9 +10648,9 @@ impl RegVm {
                 };
                 Ok(json_result(match result {
                     Ok(tensor) => Ok(self.store_tensor(tensor)),
-                    Err(error) => Err(tensor_error_value(
-                        rsscript_runtime::tensor_error_message(&error),
-                    )),
+                    Err(error) => Err(tensor_error_value(rsscript_runtime::tensor_error_message(
+                        &error,
+                    ))),
                 }))
             }
             RegIntrinsic::TensorNeg
@@ -9967,9 +10686,9 @@ impl RegVm {
                 };
                 Ok(json_result(match result {
                     Ok(tensor) => Ok(self.store_tensor(tensor)),
-                    Err(error) => Err(tensor_error_value(
-                        rsscript_runtime::tensor_error_message(&error),
-                    )),
+                    Err(error) => Err(tensor_error_value(rsscript_runtime::tensor_error_message(
+                        &error,
+                    ))),
                 }))
             }
             RegIntrinsic::TensorReshape => {
@@ -9988,9 +10707,9 @@ impl RegVm {
                 let t = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(json_result(match rsscript_runtime::tensor_transpose(&t) {
                     Ok(tensor) => Ok(self.store_tensor(tensor)),
-                    Err(error) => Err(tensor_error_value(
-                        rsscript_runtime::tensor_error_message(&error),
-                    )),
+                    Err(error) => Err(tensor_error_value(rsscript_runtime::tensor_error_message(
+                        &error,
+                    ))),
                 }))
             }
             RegIntrinsic::TensorPermute => {
@@ -10033,9 +10752,9 @@ impl RegVm {
                 };
                 Ok(json_result(match result {
                     Ok(tensor) => Ok(self.store_tensor(tensor)),
-                    Err(error) => Err(tensor_error_value(
-                        rsscript_runtime::tensor_error_message(&error),
-                    )),
+                    Err(error) => Err(tensor_error_value(rsscript_runtime::tensor_error_message(
+                        &error,
+                    ))),
                 }))
             }
             RegIntrinsic::TensorSelect => {
@@ -10067,9 +10786,7 @@ impl RegVm {
                 Ok(VmValue::Int(rsscript_runtime::tensor_dtype_code(&t)))
             }
             // movement+gather (ops B)
-            RegIntrinsic::TensorPad
-            | RegIntrinsic::TensorShrink
-            | RegIntrinsic::TensorFlip => {
+            RegIntrinsic::TensorPad | RegIntrinsic::TensorShrink | RegIntrinsic::TensorFlip => {
                 let t = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let amounts = expect_int_list_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 let result = match intrinsic {
@@ -10079,9 +10796,9 @@ impl RegVm {
                 };
                 Ok(json_result(match result {
                     Ok(tensor) => Ok(self.store_tensor(tensor)),
-                    Err(error) => Err(tensor_error_value(
-                        rsscript_runtime::tensor_error_message(&error),
-                    )),
+                    Err(error) => Err(tensor_error_value(rsscript_runtime::tensor_error_message(
+                        &error,
+                    ))),
                 }))
             }
             RegIntrinsic::TensorGather => {
@@ -10122,9 +10839,9 @@ impl RegVm {
                 };
                 Ok(json_result(match result {
                     Ok(tensor) => Ok(self.store_tensor(tensor)),
-                    Err(error) => Err(tensor_error_value(
-                        rsscript_runtime::tensor_error_message(&error),
-                    )),
+                    Err(error) => Err(tensor_error_value(rsscript_runtime::tensor_error_message(
+                        &error,
+                    ))),
                 }))
             }
             RegIntrinsic::TensorSumAxes
@@ -10143,9 +10860,9 @@ impl RegVm {
                 };
                 Ok(json_result(match result {
                     Ok(tensor) => Ok(self.store_tensor(tensor)),
-                    Err(error) => Err(tensor_error_value(
-                        rsscript_runtime::tensor_error_message(&error),
-                    )),
+                    Err(error) => Err(tensor_error_value(rsscript_runtime::tensor_error_message(
+                        &error,
+                    ))),
                 }))
             }
             RegIntrinsic::TensorReciprocal
@@ -10170,9 +10887,9 @@ impl RegVm {
                 let b = self.expect_tensor_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 Ok(json_result(match rsscript_runtime::tensor_pow(&a, &b) {
                     Ok(tensor) => Ok(self.store_tensor(tensor)),
-                    Err(error) => Err(tensor_error_value(
-                        rsscript_runtime::tensor_error_message(&error),
-                    )),
+                    Err(error) => Err(tensor_error_value(rsscript_runtime::tensor_error_message(
+                        &error,
+                    ))),
                 }))
             }
             // bmm+int/bit (ops D)
@@ -10202,9 +10919,9 @@ impl RegVm {
                 };
                 Ok(json_result(match result {
                     Ok(tensor) => Ok(self.store_tensor(tensor)),
-                    Err(error) => Err(tensor_error_value(
-                        rsscript_runtime::tensor_error_message(&error),
-                    )),
+                    Err(error) => Err(tensor_error_value(rsscript_runtime::tensor_error_message(
+                        &error,
+                    ))),
                 }))
             }
             RegIntrinsic::TensorBitcastF32ToI32 | RegIntrinsic::TensorBitcastI32ToF32 => {
@@ -10264,9 +10981,9 @@ impl RegVm {
                 let n = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(json_result(match rsscript_runtime::tensor_iota(n) {
                     Ok(tensor) => Ok(self.store_tensor(tensor)),
-                    Err(error) => Err(tensor_error_value(
-                        rsscript_runtime::tensor_error_message(&error),
-                    )),
+                    Err(error) => Err(tensor_error_value(rsscript_runtime::tensor_error_message(
+                        &error,
+                    ))),
                 }))
             }
             RegIntrinsic::TensorOneHot => {
@@ -10290,9 +11007,9 @@ impl RegVm {
                 };
                 Ok(json_result(match result {
                     Ok(tensor) => Ok(self.store_tensor(tensor)),
-                    Err(error) => Err(tensor_error_value(
-                        rsscript_runtime::tensor_error_message(&error),
-                    )),
+                    Err(error) => Err(tensor_error_value(rsscript_runtime::tensor_error_message(
+                        &error,
+                    ))),
                 }))
             }
             RegIntrinsic::TensorCrossEntropy => {
@@ -10335,12 +11052,25 @@ impl RegVm {
                 };
                 Ok(json_result(match result {
                     Ok(tensor) => Ok(self.store_tensor(tensor)),
-                    Err(error) => Err(tensor_error_value(
-                        rsscript_runtime::tensor_error_message(&error),
-                    )),
+                    Err(error) => Err(tensor_error_value(rsscript_runtime::tensor_error_message(
+                        &error,
+                    ))),
                 }))
             }
-            RegIntrinsic::CharCompare | RegIntrinsic::CharFromCode | RegIntrinsic::CharIsAlphanumeric | RegIntrinsic::CharIsAlpha | RegIntrinsic::CharIsDigit | RegIntrinsic::CharIsLower | RegIntrinsic::CharIsUpper | RegIntrinsic::CharIsWhitespace | RegIntrinsic::CharToCode | RegIntrinsic::CharToLower | RegIntrinsic::CharToString | RegIntrinsic::CharToUpper => self.exec_char_intrinsics(unit, intrinsic, args, base, next_base),
+            RegIntrinsic::CharCompare
+            | RegIntrinsic::CharFromCode
+            | RegIntrinsic::CharIsAlphanumeric
+            | RegIntrinsic::CharIsAlpha
+            | RegIntrinsic::CharIsDigit
+            | RegIntrinsic::CharIsLower
+            | RegIntrinsic::CharIsUpper
+            | RegIntrinsic::CharIsWhitespace
+            | RegIntrinsic::CharToCode
+            | RegIntrinsic::CharToLower
+            | RegIntrinsic::CharToString
+            | RegIntrinsic::CharToUpper => {
+                self.exec_char_intrinsics(unit, intrinsic, args, base, next_base)
+            }
             RegIntrinsic::ClockNow => Ok(instant_value(clock_system_unix_ms())),
             RegIntrinsic::ClockSystemUnixMs => Ok(VmValue::Int(clock_system_unix_ms())),
             RegIntrinsic::ConfigLoad => {
@@ -10372,7 +11102,25 @@ impl RegVm {
                 let value = intrinsic_arg(&self.stack, base, args, 0)?;
                 Ok(config_store_value(expect_config_value_name(value)?))
             }
-            RegIntrinsic::DateAddDays | RegIntrinsic::DateAddMs | RegIntrinsic::DateDay | RegIntrinsic::DateDaysBetween | RegIntrinsic::DateDaysInMonth | RegIntrinsic::DateFormatIso | RegIntrinsic::DateFormatYmd | RegIntrinsic::DateHour | RegIntrinsic::DateIsLeapYear | RegIntrinsic::DateMinute | RegIntrinsic::DateMonth | RegIntrinsic::DateParseIso | RegIntrinsic::DateParseYmd | RegIntrinsic::DateSecond | RegIntrinsic::DateStartOfDay | RegIntrinsic::DateWeekday | RegIntrinsic::DateYear => self.exec_date_intrinsics(unit, intrinsic, args, base, next_base),
+            RegIntrinsic::DateAddDays
+            | RegIntrinsic::DateAddMs
+            | RegIntrinsic::DateDay
+            | RegIntrinsic::DateDaysBetween
+            | RegIntrinsic::DateDaysInMonth
+            | RegIntrinsic::DateFormatIso
+            | RegIntrinsic::DateFormatYmd
+            | RegIntrinsic::DateHour
+            | RegIntrinsic::DateIsLeapYear
+            | RegIntrinsic::DateMinute
+            | RegIntrinsic::DateMonth
+            | RegIntrinsic::DateParseIso
+            | RegIntrinsic::DateParseYmd
+            | RegIntrinsic::DateSecond
+            | RegIntrinsic::DateStartOfDay
+            | RegIntrinsic::DateWeekday
+            | RegIntrinsic::DateYear => {
+                self.exec_date_intrinsics(unit, intrinsic, args, base, next_base)
+            }
             RegIntrinsic::CounterNew => {
                 let value = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(counter_value(value))
@@ -10618,7 +11366,7 @@ impl RegVm {
                 Ok(std::env::var(name)
                     .ok()
                     .map(VmValue::string)
-                    .map(|value| VmValue::OptionSome(Box::new(value)))
+                    .map(|value| VmValue::some(value))
                     .unwrap_or(VmValue::OptionNone))
             }
             RegIntrinsic::EnvGetOrDefault => {
@@ -10632,7 +11380,7 @@ impl RegVm {
                 .ok()
                 .filter(|value| !value.is_empty())
                 .map(VmValue::string)
-                .map(|value| VmValue::OptionSome(Box::new(value)))
+                .map(|value| VmValue::some(value))
                 .unwrap_or(VmValue::OptionNone)),
             RegIntrinsic::EnvRunWorkspaceRoot => Ok(VmValue::string(
                 std::env::var("RSS_RUN_WORKSPACE_ROOT")
@@ -10847,10 +11595,10 @@ impl RegVm {
                         let len = items.borrow().len();
                         let mut mapped = Vec::with_capacity(len);
                         for index in 0..len {
-                            let value = items.borrow()[index].clone();
+                            let value = items.borrow().get(index).expect("index in bounds");
                             mapped.push(self.call_closure_one(unit, &mapper, value, next_base)?);
                         }
-                        value_ok(VmValue::List(Rc::new(RefCell::new(mapped))))
+                        value_ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(mapped)))))
                     }
                     Err(error) => value_err(error),
                 })
@@ -10864,14 +11612,14 @@ impl RegVm {
                         let len = items.borrow().len();
                         let mut filtered = Vec::new();
                         for index in 0..len {
-                            let value = items.borrow()[index].clone();
+                            let value = items.borrow().get(index).expect("index in bounds");
                             let keep =
                                 self.call_closure_one(unit, &predicate, value.clone(), next_base)?;
                             if expect_bool_ref(&keep)? {
                                 filtered.push(value);
                             }
                         }
-                        value_ok(VmValue::List(Rc::new(RefCell::new(filtered))))
+                        value_ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(filtered)))))
                     }
                     Err(error) => value_err(error),
                 })
@@ -10883,7 +11631,7 @@ impl RegVm {
                     Ok(items) => {
                         let items = expect_list_ref(&items)?;
                         let values = items.borrow().clone();
-                        for value in values.iter().cloned() {
+                        for value in values.iter() {
                             let _ = self.call_closure_one(unit, &action, value, next_base)?;
                         }
                         value_ok(VmValue::List(Rc::new(RefCell::new(values))))
@@ -10900,7 +11648,7 @@ impl RegVm {
                         let len = items.borrow().len();
                         let mut mapped = Vec::with_capacity(len);
                         for index in 0..len {
-                            let value = items.borrow()[index].clone();
+                            let value = items.borrow().get(index).expect("index in bounds");
                             match result_variant_payload(
                                 &self.call_closure_one(unit, &mapper, value, next_base)?,
                             )? {
@@ -10908,7 +11656,7 @@ impl RegVm {
                                 Err(error) => return Ok(value_err(error)),
                             }
                         }
-                        value_ok(VmValue::List(Rc::new(RefCell::new(mapped))))
+                        value_ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(mapped)))))
                     }
                     Err(error) => value_err(error),
                 })
@@ -10983,9 +11731,7 @@ impl RegVm {
                         .map_err(|error| decode_error_value(error.to_string())),
                 ))
             }
-            RegIntrinsic::HexDecode
-            | RegIntrinsic::HexEncode
-            | RegIntrinsic::HexEncodeString => {
+            RegIntrinsic::HexDecode | RegIntrinsic::HexEncode | RegIntrinsic::HexEncodeString => {
                 self.exec_hex_intrinsics(unit, intrinsic, args, base, next_base)
             }
             RegIntrinsic::HttpGet => {
@@ -11198,9 +11944,137 @@ impl RegVm {
             | RegIntrinsic::FloatIsNan => {
                 self.exec_scalar_intrinsics(unit, intrinsic, args, base, next_base)
             }
-            RegIntrinsic::MathAbs | RegIntrinsic::MathAbsFloat | RegIntrinsic::MathCeil | RegIntrinsic::MathClamp | RegIntrinsic::MathClampFloat | RegIntrinsic::MathCos | RegIntrinsic::MathExp | RegIntrinsic::MathExp2 | RegIntrinsic::MathFloor | RegIntrinsic::MathLog | RegIntrinsic::MathLog2 | RegIntrinsic::MathMax | RegIntrinsic::MathMaxFloat | RegIntrinsic::MathMin | RegIntrinsic::MathMinFloat | RegIntrinsic::MathPow | RegIntrinsic::MathPowFloat | RegIntrinsic::MathRound | RegIntrinsic::MathSaturatingAdd | RegIntrinsic::MathSaturatingMul | RegIntrinsic::MathSaturatingSub | RegIntrinsic::MathSin | RegIntrinsic::MathSqrt | RegIntrinsic::MathTanh | RegIntrinsic::MathTruncFloat | RegIntrinsic::MathWrappingAdd | RegIntrinsic::MathWrappingMul | RegIntrinsic::MathWrappingSub => self.exec_math_intrinsics(unit, intrinsic, args, base, next_base),
-            RegIntrinsic::JsonArray | RegIntrinsic::JsonArrayBools | RegIntrinsic::JsonArrayContainsPrefix | RegIntrinsic::JsonArrayContainsString | RegIntrinsic::JsonArrayContainsSubstring | RegIntrinsic::JsonArrayCountWhere | RegIntrinsic::JsonArrayFold | RegIntrinsic::JsonArrayGet | RegIntrinsic::JsonArrayInts | RegIntrinsic::JsonArrayLen | RegIntrinsic::JsonArrayStrings | RegIntrinsic::JsonAt | RegIntrinsic::JsonAtBool | RegIntrinsic::JsonAtBoolOr | RegIntrinsic::JsonAtInt | RegIntrinsic::JsonAtIntOr | RegIntrinsic::JsonAtOptional | RegIntrinsic::JsonAtOptionalBool | RegIntrinsic::JsonAtOptionalInt | RegIntrinsic::JsonAtOptionalString | RegIntrinsic::JsonAtOr | RegIntrinsic::JsonAtString | RegIntrinsic::JsonAtStringOr | RegIntrinsic::JsonAtToString | RegIntrinsic::JsonAtToStringOr | RegIntrinsic::JsonAsBool | RegIntrinsic::JsonAsInt | RegIntrinsic::JsonAsString | RegIntrinsic::JsonBoolAt | RegIntrinsic::JsonBoolAtOr | RegIntrinsic::JsonBoolField | RegIntrinsic::JsonClone | RegIntrinsic::JsonDecode | RegIntrinsic::JsonDecodeText | RegIntrinsic::JsonEncode | RegIntrinsic::JsonErrorMessage | RegIntrinsic::JsonField | RegIntrinsic::JsonFieldBool | RegIntrinsic::JsonFieldInt | RegIntrinsic::JsonFieldOptional | RegIntrinsic::JsonFieldOptionalBool | RegIntrinsic::JsonFieldOptionalInt | RegIntrinsic::JsonFieldOptionalString | RegIntrinsic::JsonFieldString | RegIntrinsic::JsonIntAt | RegIntrinsic::JsonIntAtOr | RegIntrinsic::JsonIsArray | RegIntrinsic::JsonIsNull | RegIntrinsic::JsonIsObject | RegIntrinsic::JsonIntField | RegIntrinsic::JsonKind | RegIntrinsic::JsonObject | RegIntrinsic::JsonObjectKeys | RegIntrinsic::JsonObjectLen | RegIntrinsic::JsonParse | RegIntrinsic::JsonParseFile | RegIntrinsic::JsonQuoteString | RegIntrinsic::JsonRawField | RegIntrinsic::JsonStringAt | RegIntrinsic::JsonStringAtOr | RegIntrinsic::JsonStringArray | RegIntrinsic::JsonStringField | RegIntrinsic::JsonStrings | RegIntrinsic::JsonToStringAt | RegIntrinsic::JsonToStringAtOr | RegIntrinsic::JsonToString | RegIntrinsic::JsonValue | RegIntrinsic::JsonValues => self.exec_json_intrinsics(unit, intrinsic, args, base, next_base),
-            RegIntrinsic::ListAll | RegIntrinsic::ListAny | RegIntrinsic::ListContains | RegIntrinsic::ListContainsValue | RegIntrinsic::ListCountWhere | RegIntrinsic::ListConsume | RegIntrinsic::ListFind | RegIntrinsic::ListFirst | RegIntrinsic::ListFlatMap | RegIntrinsic::ListFlatten | RegIntrinsic::ListGroupBy | RegIntrinsic::ListIsEmpty | RegIntrinsic::ListJoin | RegIntrinsic::ListLast | RegIntrinsic::ListDedup | RegIntrinsic::ListEnumerate | RegIntrinsic::ListMax | RegIntrinsic::ListMin | RegIntrinsic::ListNew | RegIntrinsic::ListPartition | RegIntrinsic::ListReverse | RegIntrinsic::ListSkip | RegIntrinsic::ListSlice | RegIntrinsic::ListSum | RegIntrinsic::ListZip | RegIntrinsic::ListTryFold | RegIntrinsic::ListTake | RegIntrinsic::ListToJsonStrings | RegIntrinsic::ListToJsonValues => self.exec_list_intrinsics(unit, intrinsic, args, base, next_base),
+            RegIntrinsic::MathAbs
+            | RegIntrinsic::MathAbsFloat
+            | RegIntrinsic::MathCeil
+            | RegIntrinsic::MathClamp
+            | RegIntrinsic::MathClampFloat
+            | RegIntrinsic::MathCos
+            | RegIntrinsic::MathExp
+            | RegIntrinsic::MathExp2
+            | RegIntrinsic::MathFloor
+            | RegIntrinsic::MathLog
+            | RegIntrinsic::MathLog2
+            | RegIntrinsic::MathMax
+            | RegIntrinsic::MathMaxFloat
+            | RegIntrinsic::MathMin
+            | RegIntrinsic::MathMinFloat
+            | RegIntrinsic::MathPow
+            | RegIntrinsic::MathPowFloat
+            | RegIntrinsic::MathRound
+            | RegIntrinsic::MathSaturatingAdd
+            | RegIntrinsic::MathSaturatingMul
+            | RegIntrinsic::MathSaturatingSub
+            | RegIntrinsic::MathSin
+            | RegIntrinsic::MathSqrt
+            | RegIntrinsic::MathTanh
+            | RegIntrinsic::MathTruncFloat
+            | RegIntrinsic::MathWrappingAdd
+            | RegIntrinsic::MathWrappingMul
+            | RegIntrinsic::MathWrappingSub => {
+                self.exec_math_intrinsics(unit, intrinsic, args, base, next_base)
+            }
+            RegIntrinsic::JsonArray
+            | RegIntrinsic::JsonArrayBools
+            | RegIntrinsic::JsonArrayContainsPrefix
+            | RegIntrinsic::JsonArrayContainsString
+            | RegIntrinsic::JsonArrayContainsSubstring
+            | RegIntrinsic::JsonArrayCountWhere
+            | RegIntrinsic::JsonArrayFold
+            | RegIntrinsic::JsonArrayGet
+            | RegIntrinsic::JsonArrayInts
+            | RegIntrinsic::JsonArrayLen
+            | RegIntrinsic::JsonArrayStrings
+            | RegIntrinsic::JsonAt
+            | RegIntrinsic::JsonAtBool
+            | RegIntrinsic::JsonAtBoolOr
+            | RegIntrinsic::JsonAtInt
+            | RegIntrinsic::JsonAtIntOr
+            | RegIntrinsic::JsonAtOptional
+            | RegIntrinsic::JsonAtOptionalBool
+            | RegIntrinsic::JsonAtOptionalInt
+            | RegIntrinsic::JsonAtOptionalString
+            | RegIntrinsic::JsonAtOr
+            | RegIntrinsic::JsonAtString
+            | RegIntrinsic::JsonAtStringOr
+            | RegIntrinsic::JsonAtToString
+            | RegIntrinsic::JsonAtToStringOr
+            | RegIntrinsic::JsonAsBool
+            | RegIntrinsic::JsonAsInt
+            | RegIntrinsic::JsonAsString
+            | RegIntrinsic::JsonBoolAt
+            | RegIntrinsic::JsonBoolAtOr
+            | RegIntrinsic::JsonBoolField
+            | RegIntrinsic::JsonClone
+            | RegIntrinsic::JsonDecode
+            | RegIntrinsic::JsonDecodeText
+            | RegIntrinsic::JsonEncode
+            | RegIntrinsic::JsonErrorMessage
+            | RegIntrinsic::JsonField
+            | RegIntrinsic::JsonFieldBool
+            | RegIntrinsic::JsonFieldInt
+            | RegIntrinsic::JsonFieldOptional
+            | RegIntrinsic::JsonFieldOptionalBool
+            | RegIntrinsic::JsonFieldOptionalInt
+            | RegIntrinsic::JsonFieldOptionalString
+            | RegIntrinsic::JsonFieldString
+            | RegIntrinsic::JsonIntAt
+            | RegIntrinsic::JsonIntAtOr
+            | RegIntrinsic::JsonIsArray
+            | RegIntrinsic::JsonIsNull
+            | RegIntrinsic::JsonIsObject
+            | RegIntrinsic::JsonIntField
+            | RegIntrinsic::JsonKind
+            | RegIntrinsic::JsonObject
+            | RegIntrinsic::JsonObjectKeys
+            | RegIntrinsic::JsonObjectLen
+            | RegIntrinsic::JsonParse
+            | RegIntrinsic::JsonParseFile
+            | RegIntrinsic::JsonQuoteString
+            | RegIntrinsic::JsonRawField
+            | RegIntrinsic::JsonStringAt
+            | RegIntrinsic::JsonStringAtOr
+            | RegIntrinsic::JsonStringArray
+            | RegIntrinsic::JsonStringField
+            | RegIntrinsic::JsonStrings
+            | RegIntrinsic::JsonToStringAt
+            | RegIntrinsic::JsonToStringAtOr
+            | RegIntrinsic::JsonToString
+            | RegIntrinsic::JsonValue
+            | RegIntrinsic::JsonValues => {
+                self.exec_json_intrinsics(unit, intrinsic, args, base, next_base)
+            }
+            RegIntrinsic::ListAll
+            | RegIntrinsic::ListAny
+            | RegIntrinsic::ListContains
+            | RegIntrinsic::ListContainsValue
+            | RegIntrinsic::ListCountWhere
+            | RegIntrinsic::ListConsume
+            | RegIntrinsic::ListFind
+            | RegIntrinsic::ListFirst
+            | RegIntrinsic::ListFlatMap
+            | RegIntrinsic::ListFlatten
+            | RegIntrinsic::ListGroupBy
+            | RegIntrinsic::ListIsEmpty
+            | RegIntrinsic::ListJoin
+            | RegIntrinsic::ListLast
+            | RegIntrinsic::ListDedup
+            | RegIntrinsic::ListEnumerate
+            | RegIntrinsic::ListMax
+            | RegIntrinsic::ListMin
+            | RegIntrinsic::ListNew
+            | RegIntrinsic::ListPartition
+            | RegIntrinsic::ListReverse
+            | RegIntrinsic::ListSkip
+            | RegIntrinsic::ListSlice
+            | RegIntrinsic::ListSum
+            | RegIntrinsic::ListZip
+            | RegIntrinsic::ListTryFold
+            | RegIntrinsic::ListTake
+            | RegIntrinsic::ListToJsonStrings
+            | RegIntrinsic::ListToJsonValues => {
+                self.exec_list_intrinsics(unit, intrinsic, args, base, next_base)
+            }
             RegIntrinsic::ListPipeline | RegIntrinsic::PipelineCollect => {
                 Ok(intrinsic_arg(&self.stack, base, args, 0)?.clone())
             }
@@ -11208,7 +12082,7 @@ impl RegVm {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let action = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 let values = list.borrow().clone();
-                for value in values.iter().cloned() {
+                for value in values.iter() {
                     let _ = self.call_closure_one(unit, &action, value, next_base)?;
                 }
                 Ok(VmValue::List(Rc::new(RefCell::new(values))))
@@ -11219,7 +12093,7 @@ impl RegVm {
                 let len = list.borrow().len();
                 let mut mapped = Vec::with_capacity(len);
                 for index in 0..len {
-                    let value = list.borrow()[index].clone();
+                    let value = list.borrow().get(index).expect("index in bounds");
                     match result_variant_payload(
                         &self.call_closure_one(unit, &mapper, value, next_base)?,
                     )? {
@@ -11227,7 +12101,7 @@ impl RegVm {
                         Err(error) => return Ok(value_err(error)),
                     }
                 }
-                Ok(value_ok(VmValue::List(Rc::new(RefCell::new(mapped)))))
+                Ok(value_ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(mapped))))))
             }
             RegIntrinsic::LogError => {
                 let line =
@@ -11263,7 +12137,21 @@ impl RegVm {
                 self.push_stdout("\n")?;
                 Ok(VmValue::Unit)
             }
-            RegIntrinsic::MapContainsKey | RegIntrinsic::MapFilter | RegIntrinsic::MapFold | RegIntrinsic::MapForEach | RegIntrinsic::MapGetOrDefault | RegIntrinsic::MapIsEmpty | RegIntrinsic::MapKeys | RegIntrinsic::MapLen | RegIntrinsic::MapMapValues | RegIntrinsic::MapMerge | RegIntrinsic::MapNew | RegIntrinsic::MapTryFold | RegIntrinsic::MapValues => self.exec_map_intrinsics(unit, intrinsic, args, base, next_base),
+            RegIntrinsic::MapContainsKey
+            | RegIntrinsic::MapFilter
+            | RegIntrinsic::MapFold
+            | RegIntrinsic::MapForEach
+            | RegIntrinsic::MapGetOrDefault
+            | RegIntrinsic::MapIsEmpty
+            | RegIntrinsic::MapKeys
+            | RegIntrinsic::MapLen
+            | RegIntrinsic::MapMapValues
+            | RegIntrinsic::MapMerge
+            | RegIntrinsic::MapNew
+            | RegIntrinsic::MapTryFold
+            | RegIntrinsic::MapValues => {
+                self.exec_map_intrinsics(unit, intrinsic, args, base, next_base)
+            }
             RegIntrinsic::OptionAndThen
             | RegIntrinsic::OptionFilter
             | RegIntrinsic::OptionIsNone
@@ -11413,7 +12301,27 @@ impl RegVm {
             | RegIntrinsic::SortedMapValues => {
                 self.exec_set_intrinsics(unit, intrinsic, args, base, next_base)
             }
-            RegIntrinsic::PathExists | RegIntrinsic::PathExtension | RegIntrinsic::PathFileName | RegIntrinsic::PathFromString | RegIntrinsic::PathToString | RegIntrinsic::PathIsAbsolute | RegIntrinsic::PathIsDir | RegIntrinsic::PathIsFile | RegIntrinsic::PathJoin | RegIntrinsic::PathListFiles | RegIntrinsic::PathListPaths | RegIntrinsic::PathNormalize | RegIntrinsic::PathParent | RegIntrinsic::PathReadString | RegIntrinsic::PathResolveRelative | RegIntrinsic::PathSafeRelative | RegIntrinsic::PathStartsWith | RegIntrinsic::PathWithExtension | RegIntrinsic::PathWriteString => self.exec_path_intrinsics(unit, intrinsic, args, base, next_base),
+            RegIntrinsic::PathExists
+            | RegIntrinsic::PathExtension
+            | RegIntrinsic::PathFileName
+            | RegIntrinsic::PathFromString
+            | RegIntrinsic::PathToString
+            | RegIntrinsic::PathIsAbsolute
+            | RegIntrinsic::PathIsDir
+            | RegIntrinsic::PathIsFile
+            | RegIntrinsic::PathJoin
+            | RegIntrinsic::PathListFiles
+            | RegIntrinsic::PathListPaths
+            | RegIntrinsic::PathNormalize
+            | RegIntrinsic::PathParent
+            | RegIntrinsic::PathReadString
+            | RegIntrinsic::PathResolveRelative
+            | RegIntrinsic::PathSafeRelative
+            | RegIntrinsic::PathStartsWith
+            | RegIntrinsic::PathWithExtension
+            | RegIntrinsic::PathWriteString => {
+                self.exec_path_intrinsics(unit, intrinsic, args, base, next_base)
+            }
             RegIntrinsic::PersistentMapClear => Ok(sorted_map_value(Vec::new())),
             RegIntrinsic::PersistentMapContainsKey => {
                 let entries =
@@ -11426,7 +12334,7 @@ impl RegVm {
                     expect_sorted_map_entries(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let key = intrinsic_arg(&self.stack, base, args, 1)?;
                 Ok(sorted_map_get(&entries, key)
-                    .map(|value| VmValue::OptionSome(Box::new(value)))
+                    .map(|value| VmValue::some(value))
                     .unwrap_or(VmValue::OptionNone))
             }
             RegIntrinsic::PersistentMapInsert => {
@@ -11657,11 +12565,47 @@ impl RegVm {
                 let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(json_result(
                     std::fs::read_to_string(path)
-                        .map(|text| VmValue::List(Rc::new(RefCell::new(rules_from_text(&text)))))
+                        .map(|text| VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(rules_from_text(&text))))))
                         .map_err(|error| config_error_value(error.to_string())),
                 ))
             }
-            RegIntrinsic::StringAfter | RegIntrinsic::StringBefore | RegIntrinsic::StringBuilderNew | RegIntrinsic::StringCharAt | RegIntrinsic::StringChars | RegIntrinsic::StringContains | RegIntrinsic::StringCount | RegIntrinsic::StringCopy | RegIntrinsic::StringEndsWith | RegIntrinsic::StringFormat | RegIntrinsic::StringFromBool | RegIntrinsic::StringFromFloat | RegIntrinsic::StringFromInt | RegIntrinsic::StringIndexOf | RegIntrinsic::StringIsEmpty | RegIntrinsic::StringJoin | RegIntrinsic::StringLines | RegIntrinsic::StringLen | RegIntrinsic::StringPadLeft | RegIntrinsic::StringPadRight | RegIntrinsic::StringParseFloat | RegIntrinsic::StringParseInt | RegIntrinsic::StringRepeat | RegIntrinsic::StringReplace | RegIntrinsic::StringReplaceFirst | RegIntrinsic::StringReverse | RegIntrinsic::StringSlice | RegIntrinsic::StringSplit | RegIntrinsic::StringStartsWith | RegIntrinsic::StringStripPrefix | RegIntrinsic::StringToLowercase | RegIntrinsic::StringToUppercase | RegIntrinsic::StringTrim | RegIntrinsic::StringTrimEnd | RegIntrinsic::StringTrimStart => self.exec_string_intrinsics(unit, intrinsic, args, base, next_base),
+            RegIntrinsic::StringAfter
+            | RegIntrinsic::StringBefore
+            | RegIntrinsic::StringBuilderNew
+            | RegIntrinsic::StringCharAt
+            | RegIntrinsic::StringChars
+            | RegIntrinsic::StringContains
+            | RegIntrinsic::StringCount
+            | RegIntrinsic::StringCopy
+            | RegIntrinsic::StringEndsWith
+            | RegIntrinsic::StringFormat
+            | RegIntrinsic::StringFromBool
+            | RegIntrinsic::StringFromFloat
+            | RegIntrinsic::StringFromInt
+            | RegIntrinsic::StringIndexOf
+            | RegIntrinsic::StringIsEmpty
+            | RegIntrinsic::StringJoin
+            | RegIntrinsic::StringLines
+            | RegIntrinsic::StringLen
+            | RegIntrinsic::StringPadLeft
+            | RegIntrinsic::StringPadRight
+            | RegIntrinsic::StringParseFloat
+            | RegIntrinsic::StringParseInt
+            | RegIntrinsic::StringRepeat
+            | RegIntrinsic::StringReplace
+            | RegIntrinsic::StringReplaceFirst
+            | RegIntrinsic::StringReverse
+            | RegIntrinsic::StringSlice
+            | RegIntrinsic::StringSplit
+            | RegIntrinsic::StringStartsWith
+            | RegIntrinsic::StringStripPrefix
+            | RegIntrinsic::StringToLowercase
+            | RegIntrinsic::StringToUppercase
+            | RegIntrinsic::StringTrim
+            | RegIntrinsic::StringTrimEnd
+            | RegIntrinsic::StringTrimStart => {
+                self.exec_string_intrinsics(unit, intrinsic, args, base, next_base)
+            }
             RegIntrinsic::StreamCollectList => {
                 let stream = expect_stream_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 if let Some(message) = stream.collect_error {
@@ -11671,19 +12615,19 @@ impl RegVm {
                     let state = self.channel_state_mut(channel_id)?;
                     let values = state.queue.drain(..).collect::<Vec<_>>();
                     if state.senders == 0 {
-                        return Ok(value_ok(VmValue::List(Rc::new(RefCell::new(values)))));
+                        return Ok(value_ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(values))))));
                     }
                     return Ok(value_err(channel_error_value(
                         "stream collect_list would block on an open channel stream",
                     )));
                 }
                 let values = stream.items.borrow_mut().drain(..).collect::<Vec<_>>();
-                Ok(value_ok(VmValue::List(Rc::new(RefCell::new(values)))))
+                Ok(value_ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(values))))))
             }
             RegIntrinsic::StreamFromList => {
                 let items = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?
                     .borrow()
-                    .clone();
+                    .to_vec();
                 Ok(stream_value(items))
             }
             RegIntrinsic::StreamNext => {
@@ -11697,7 +12641,7 @@ impl RegVm {
                 let value = if stream.items.borrow().is_empty() {
                     VmValue::OptionNone
                 } else {
-                    VmValue::OptionSome(Box::new(stream.items.borrow_mut().remove(0)))
+                    VmValue::some(stream.items.borrow_mut().remove(0))
                 };
                 Ok(value_ok(value))
             }
@@ -11889,9 +12833,9 @@ impl RegVm {
             RegIntrinsic::WeakDowngrade | RegIntrinsic::WeakFrom => {
                 Ok(intrinsic_arg(&self.stack, base, args, 0)?.clone())
             }
-            RegIntrinsic::WeakUpgrade => Ok(VmValue::OptionSome(Box::new(
+            RegIntrinsic::WeakUpgrade => Ok(VmValue::some(
                 intrinsic_arg(&self.stack, base, args, 0)?.clone(),
-            ))),
+            )),
         }
     }
 
@@ -12303,7 +13247,7 @@ impl RegVm {
                     .map(|fields| {
                         let mut keys = fields.keys().map(VmValue::string).collect::<Vec<_>>();
                         keys.sort_by_key(VmValue::display);
-                        VmValue::List(Rc::new(RefCell::new(keys)))
+                        VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(keys))))
                     })
                     .ok_or_else(|| json_error_value("JSON value is not an object"));
                 Ok(json_result(result))
@@ -12423,13 +13367,11 @@ impl RegVm {
                 let values = list
                     .borrow()
                     .iter()
-                    .map(|value| expect_json_ref(value).cloned())
+                    .map(|value| expect_json_ref(&value).cloned())
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(VmValue::Json(Rc::new(serde_json::Value::Array(values))))
             }
-            other => unreachable!(
-                "exec_json_intrinsics called with non-json intrinsic: {other:?}"
-            ),
+            other => unreachable!("exec_json_intrinsics called with non-json intrinsic: {other:?}"),
         }
     }
 
@@ -12450,7 +13392,7 @@ impl RegVm {
                 let delimiter = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 Ok(value
                     .split_once(delimiter)
-                    .map(|(_, right)| VmValue::OptionSome(Box::new(VmValue::string(right))))
+                    .map(|(_, right)| VmValue::some(VmValue::string(right)))
                     .unwrap_or(VmValue::OptionNone))
             }
             RegIntrinsic::StringBefore => {
@@ -12458,7 +13400,7 @@ impl RegVm {
                 let delimiter = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 Ok(value
                     .find(delimiter)
-                    .map(|index| VmValue::OptionSome(Box::new(VmValue::string(&value[..index]))))
+                    .map(|index| VmValue::some(VmValue::string(&value[..index])))
                     .unwrap_or(VmValue::OptionNone))
             }
             RegIntrinsic::StringBuilderNew => Ok(VmValue::string("")),
@@ -12468,7 +13410,7 @@ impl RegVm {
                 Ok(usize::try_from(index)
                     .ok()
                     .and_then(|index| value.chars().nth(index))
-                    .map(|value| VmValue::OptionSome(Box::new(VmValue::Char(value))))
+                    .map(|value| VmValue::some(VmValue::Char(value)))
                     .unwrap_or(VmValue::OptionNone))
             }
             RegIntrinsic::StringChars => {
@@ -12516,7 +13458,7 @@ impl RegVm {
                 let needle = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 Ok(value
                     .find(needle)
-                    .map(|index| VmValue::OptionSome(Box::new(VmValue::Int(index as i64))))
+                    .map(|index| VmValue::some(VmValue::Int(index as i64)))
                     .unwrap_or(VmValue::OptionNone))
             }
             RegIntrinsic::StringIsEmpty => {
@@ -12535,7 +13477,7 @@ impl RegVm {
             RegIntrinsic::StringLines => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let lines = value.lines().map(VmValue::string).collect::<Vec<VmValue>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(lines))))
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(lines)))))
             }
             RegIntrinsic::StringLen => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -12556,14 +13498,14 @@ impl RegVm {
             RegIntrinsic::StringParseFloat => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(match value.parse::<f64>() {
-                    Ok(value) => VmValue::OptionSome(Box::new(VmValue::Float(value))),
+                    Ok(value) => VmValue::some(VmValue::Float(value)),
                     Err(_) => VmValue::OptionNone,
                 })
             }
             RegIntrinsic::StringParseInt => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(match value.parse::<i64>() {
-                    Ok(value) => VmValue::OptionSome(Box::new(VmValue::Int(value))),
+                    Ok(value) => VmValue::some(VmValue::Int(value)),
                     Err(_) => VmValue::OptionNone,
                 })
             }
@@ -12601,7 +13543,7 @@ impl RegVm {
                     .split(delimiter)
                     .map(VmValue::string)
                     .collect::<Vec<VmValue>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(parts))))
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(parts)))))
             }
             RegIntrinsic::StringStartsWith => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -12613,7 +13555,7 @@ impl RegVm {
                 let prefix = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 Ok(value
                     .strip_prefix(prefix)
-                    .map(|rest| VmValue::OptionSome(Box::new(VmValue::string(rest))))
+                    .map(|rest| VmValue::some(VmValue::string(rest)))
                     .unwrap_or(VmValue::OptionNone))
             }
             RegIntrinsic::StringToLowercase => {
@@ -12636,9 +13578,9 @@ impl RegVm {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::string(value.trim_start()))
             }
-            other => unreachable!(
-                "exec_string_intrinsics called with non-string intrinsic: {other:?}"
-            ),
+            other => {
+                unreachable!("exec_string_intrinsics called with non-string intrinsic: {other:?}")
+            }
         }
     }
 
@@ -12681,7 +13623,7 @@ impl RegVm {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let value = intrinsic_arg(&self.stack, base, args, 1)?;
                 Ok(VmValue::Bool(
-                    list.borrow().iter().any(|item| item == value),
+                    list.borrow().iter().any(|item| &item == value),
                 ))
             }
             RegIntrinsic::ListCountWhere => {
@@ -12709,7 +13651,7 @@ impl RegVm {
                     let matched =
                         self.call_closure_one(unit, &predicate, value.clone(), next_base)?;
                     if expect_bool_ref(&matched)? {
-                        return Ok(VmValue::OptionSome(Box::new(value)));
+                        return Ok(VmValue::some(value));
                     }
                 }
                 Ok(VmValue::OptionNone)
@@ -12719,8 +13661,7 @@ impl RegVm {
                 Ok(list
                     .borrow()
                     .first()
-                    .cloned()
-                    .map(|value| VmValue::OptionSome(Box::new(value)))
+                    .map(|value| VmValue::some(value))
                     .unwrap_or(VmValue::OptionNone))
             }
             RegIntrinsic::ListFlatMap => {
@@ -12731,18 +13672,18 @@ impl RegVm {
                 for value in values {
                     let mapped = self.call_closure_one(unit, &mapper, value, next_base)?;
                     let mapped = expect_list_ref(&mapped)?;
-                    flattened.extend(mapped.borrow().iter().cloned());
+                    flattened.extend(mapped.borrow().iter());
                 }
-                Ok(VmValue::List(Rc::new(RefCell::new(flattened))))
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(flattened)))))
             }
             RegIntrinsic::ListFlatten => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let mut flattened = Vec::new();
                 for value in list.borrow().iter() {
-                    let nested = expect_list_ref(value)?;
-                    flattened.extend(nested.borrow().iter().cloned());
+                    let nested = expect_list_ref(&value)?;
+                    flattened.extend(nested.borrow().iter());
                 }
-                Ok(VmValue::List(Rc::new(RefCell::new(flattened))))
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(flattened)))))
             }
             RegIntrinsic::ListGroupBy => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -12764,7 +13705,7 @@ impl RegVm {
                             )));
                         }
                         None => {
-                            groups.insert(key, VmValue::List(Rc::new(RefCell::new(vec![value]))));
+                            groups.insert(key, VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(vec![value])))));
                         }
                     }
                 }
@@ -12788,42 +13729,40 @@ impl RegVm {
                 Ok(list
                     .borrow()
                     .last()
-                    .cloned()
-                    .map(|value| VmValue::OptionSome(Box::new(value)))
+                    .map(|value| VmValue::some(value))
                     .unwrap_or(VmValue::OptionNone))
             }
             RegIntrinsic::ListDedup => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let mut values = Vec::new();
                 for value in list.borrow().iter() {
-                    if !values.contains(value) {
-                        values.push(value.clone());
+                    if !values.contains(&value) {
+                        values.push(value);
                     }
                 }
-                Ok(VmValue::List(Rc::new(RefCell::new(values))))
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(values)))))
             }
             RegIntrinsic::ListEnumerate => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let mut values = Vec::new();
                 for (index, value) in list.borrow().iter().enumerate() {
-                    values.push(VmValue::List(Rc::new(RefCell::new(vec![
-                        VmValue::Int(index as i64),
-                        VmValue::Int(expect_int_ref(value)?),
-                    ]))));
+                    values.push(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
+                        vec![VmValue::Int(index as i64), VmValue::Int(expect_int_ref(&value)?)],
+                    )))));
                 }
-                Ok(VmValue::List(Rc::new(RefCell::new(values))))
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(values)))))
             }
             RegIntrinsic::ListMax => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let max = list
                     .borrow()
                     .iter()
-                    .map(expect_int_ref)
+                      .map(|v| expect_int_ref(&v))
                     .collect::<Result<Vec<_>, _>>()?
                     .into_iter()
                     .max();
                 Ok(max
-                    .map(|value| VmValue::OptionSome(Box::new(VmValue::Int(value))))
+                    .map(|value| VmValue::some(VmValue::Int(value)))
                     .unwrap_or(VmValue::OptionNone))
             }
             RegIntrinsic::ListMin => {
@@ -12831,15 +13770,15 @@ impl RegVm {
                 let min = list
                     .borrow()
                     .iter()
-                    .map(expect_int_ref)
+                      .map(|v| expect_int_ref(&v))
                     .collect::<Result<Vec<_>, _>>()?
                     .into_iter()
                     .min();
                 Ok(min
-                    .map(|value| VmValue::OptionSome(Box::new(VmValue::Int(value))))
+                    .map(|value| VmValue::some(VmValue::Int(value)))
                     .unwrap_or(VmValue::OptionNone))
             }
-            RegIntrinsic::ListNew => Ok(VmValue::List(Rc::new(RefCell::new(Vec::new())))),
+            RegIntrinsic::ListNew => Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::new())))),
             RegIntrinsic::ListPartition => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let predicate = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
@@ -12854,10 +13793,10 @@ impl RegVm {
                         unmatched.push(value);
                     }
                 }
-                Ok(VmValue::List(Rc::new(RefCell::new(vec![
-                    VmValue::List(Rc::new(RefCell::new(matched))),
-                    VmValue::List(Rc::new(RefCell::new(unmatched))),
-                ]))))
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(vec![
+                    VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(matched)))),
+                    VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(unmatched)))),
+                ])))))
             }
             RegIntrinsic::ListReverse => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -12868,8 +13807,8 @@ impl RegVm {
             RegIntrinsic::ListSkip => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let count = nonnegative_count(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let values = list.borrow().iter().skip(count).cloned().collect();
-                Ok(VmValue::List(Rc::new(RefCell::new(values))))
+                let values = list.borrow().iter().skip(count).collect();
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(values)))))
             }
             RegIntrinsic::ListSlice => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -12877,19 +13816,19 @@ impl RegVm {
                 let len = nonnegative_count(intrinsic_arg(&self.stack, base, args, 2)?)?;
                 let borrowed = list.borrow();
                 if start >= borrowed.len() {
-                    return Ok(VmValue::List(Rc::new(RefCell::new(Vec::new()))));
+                    return Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::new()))));
                 }
                 let end = start.saturating_add(len).min(borrowed.len());
-                Ok(VmValue::List(Rc::new(RefCell::new(
-                    borrowed[start..end].to_vec(),
-                ))))
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
+                    borrowed.slice_to_vec(start, end),
+                )))))
             }
             RegIntrinsic::ListSum => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let total = list
                     .borrow()
                     .iter()
-                    .map(expect_int_ref)
+                      .map(|v| expect_int_ref(&v))
                     .try_fold(0_i64, |total, value| value.map(|value| total + value))?;
                 Ok(VmValue::Int(total))
             }
@@ -12902,10 +13841,10 @@ impl RegVm {
                     .iter()
                     .zip(right.iter())
                     .map(|(left, right)| {
-                        VmValue::List(Rc::new(RefCell::new(vec![left.clone(), right.clone()])))
+                        VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(vec![left.clone(), right.clone()]))))
                     })
                     .collect();
-                Ok(VmValue::List(Rc::new(RefCell::new(values))))
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(values)))))
             }
             RegIntrinsic::ListTryFold => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -12924,15 +13863,15 @@ impl RegVm {
             RegIntrinsic::ListTake => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let count = nonnegative_count(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let values = list.borrow().iter().take(count).cloned().collect();
-                Ok(VmValue::List(Rc::new(RefCell::new(values))))
+                let values = list.borrow().iter().take(count).collect();
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(values)))))
             }
             RegIntrinsic::ListToJsonStrings => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let values = list
                     .borrow()
                     .iter()
-                    .map(|value| expect_string_ref(value).map(|value| value.to_string()))
+                    .map(|value| expect_string_ref(&value).map(|value| value.to_string()))
                     .map(|value| value.map(serde_json::Value::String))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(VmValue::Json(Rc::new(serde_json::Value::Array(values))))
@@ -12942,13 +13881,11 @@ impl RegVm {
                 let values = list
                     .borrow()
                     .iter()
-                    .map(|value| expect_json_ref(value).cloned())
+                    .map(|value| expect_json_ref(&value).cloned())
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(VmValue::Json(Rc::new(serde_json::Value::Array(values))))
             }
-            other => unreachable!(
-                "exec_list_intrinsics called with non-list intrinsic: {other:?}"
-            ),
+            other => unreachable!("exec_list_intrinsics called with non-list intrinsic: {other:?}"),
         }
     }
 
@@ -13048,7 +13985,7 @@ impl RegVm {
                     .keys()
                     .map(vm_value_from_map_key)
                     .collect::<Vec<_>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(keys))))
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(keys)))))
             }
             RegIntrinsic::MapLen => {
                 let map = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -13123,11 +14060,9 @@ impl RegVm {
             RegIntrinsic::MapValues => {
                 let map = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let values = map.borrow().values().cloned().collect::<Vec<_>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(values))))
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(values)))))
             }
-            other => unreachable!(
-                "exec_map_intrinsics called with non-map intrinsic: {other:?}"
-            ),
+            other => unreachable!("exec_map_intrinsics called with non-map intrinsic: {other:?}"),
         }
     }
 
@@ -13164,7 +14099,7 @@ impl RegVm {
                 let bytes = values
                     .borrow()
                     .iter()
-                    .map(|value| expect_int_ref(value).map(|v| v as u8))
+                    .map(|value| expect_int_ref(&value).map(|v| v as u8))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(VmValue::Bytes(Rc::new(bytes)))
             }
@@ -13204,9 +14139,9 @@ impl RegVm {
                 let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::Bytes(Rc::new(value.to_vec())))
             }
-            other => unreachable!(
-                "exec_bytes_intrinsics called with non-bytes intrinsic: {other:?}"
-            ),
+            other => {
+                unreachable!("exec_bytes_intrinsics called with non-bytes intrinsic: {other:?}")
+            }
         }
     }
 
@@ -13281,13 +14216,13 @@ impl RegVm {
             RegIntrinsic::DateParseIso => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(date_parse_iso(value)
-                    .map(|value| VmValue::OptionSome(Box::new(VmValue::Int(value))))
+                    .map(|value| VmValue::some(VmValue::Int(value)))
                     .unwrap_or(VmValue::OptionNone))
             }
             RegIntrinsic::DateParseYmd => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(date_parse_ymd(value)
-                    .map(|value| VmValue::OptionSome(Box::new(VmValue::Int(value))))
+                    .map(|value| VmValue::some(VmValue::Int(value)))
                     .unwrap_or(VmValue::OptionNone))
             }
             RegIntrinsic::DateSecond => {
@@ -13314,9 +14249,7 @@ impl RegVm {
                 let unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::Int(utc_datetime(unix_ms).year() as i64))
             }
-            other => unreachable!(
-                "exec_date_intrinsics called with non-date intrinsic: {other:?}"
-            ),
+            other => unreachable!("exec_date_intrinsics called with non-date intrinsic: {other:?}"),
         }
     }
 
@@ -13463,9 +14396,7 @@ impl RegVm {
             RegIntrinsic::MathTruncFloat => Ok(VmValue::Float(
                 expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.trunc(),
             )),
-            other => unreachable!(
-                "exec_math_intrinsics called with non-math intrinsic: {other:?}"
-            ),
+            other => unreachable!("exec_math_intrinsics called with non-math intrinsic: {other:?}"),
         }
     }
 
@@ -13497,7 +14428,7 @@ impl RegVm {
                     .ok()
                     .and_then(char::from_u32)
                     .map(VmValue::Char)
-                    .map(|value| VmValue::OptionSome(Box::new(value)))
+                    .map(|value| VmValue::some(value))
                     .unwrap_or(VmValue::OptionNone))
             }
             RegIntrinsic::CharIsAlphanumeric => {
@@ -13540,9 +14471,7 @@ impl RegVm {
                 let value = expect_char_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::Char(value.to_uppercase().next().unwrap_or(value)))
             }
-            other => unreachable!(
-                "exec_char_intrinsics called with non-char intrinsic: {other:?}"
-            ),
+            other => unreachable!("exec_char_intrinsics called with non-char intrinsic: {other:?}"),
         }
     }
 
@@ -13567,7 +14496,7 @@ impl RegVm {
                 Ok(Path::new(path)
                     .extension()
                     .map(|extension| {
-                        VmValue::OptionSome(Box::new(VmValue::string(extension.to_string_lossy())))
+                        VmValue::some(VmValue::string(extension.to_string_lossy()))
                     })
                     .unwrap_or(VmValue::OptionNone))
             }
@@ -13576,7 +14505,7 @@ impl RegVm {
                 Ok(Path::new(path)
                     .file_name()
                     .map(|name| {
-                        VmValue::OptionSome(Box::new(VmValue::string(name.to_string_lossy())))
+                        VmValue::some(VmValue::string(name.to_string_lossy()))
                     })
                     .unwrap_or(VmValue::OptionNone))
             }
@@ -13637,7 +14566,7 @@ impl RegVm {
                 Ok(Path::new(path)
                     .parent()
                     .map(|parent| {
-                        VmValue::OptionSome(Box::new(VmValue::string(parent.to_string_lossy())))
+                        VmValue::some(VmValue::string(parent.to_string_lossy()))
                     })
                     .unwrap_or(VmValue::OptionNone))
             }
@@ -13685,9 +14614,7 @@ impl RegVm {
                 let text = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 Ok(file_result_unit(std::fs::write(path, text)))
             }
-            other => unreachable!(
-                "exec_path_intrinsics called with non-path intrinsic: {other:?}"
-            ),
+            other => unreachable!("exec_path_intrinsics called with non-path intrinsic: {other:?}"),
         }
     }
 
@@ -13704,12 +14631,14 @@ impl RegVm {
                 let option = intrinsic_arg(&self.stack, base, args, 0)?;
                 let mapper = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 match option {
-                    VmValue::OptionSome(value) => ensure_option_value(self.call_closure_one(
-                        unit,
-                        &mapper,
-                        (**value).clone(),
-                        next_base,
-                    )?),
+                    VmValue::OptionSomeScalar(_) | VmValue::OptionSomeHeap(_) => {
+                        ensure_option_value(self.call_closure_one(
+                            unit,
+                            &mapper,
+                            option.unwrap_some().expect("Some arm yields a payload"),
+                            next_base,
+                        )?)
+                    }
                     VmValue::OptionNone => Ok(VmValue::OptionNone),
                     other => Err(EvalError::Runtime(format!(
                         "reg VM Option.and_then expected Option, got `{}`.",
@@ -13721,12 +14650,12 @@ impl RegVm {
                 let option = intrinsic_arg(&self.stack, base, args, 0)?;
                 let predicate = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 match option {
-                    VmValue::OptionSome(value) => {
-                        let value = (**value).clone();
+                    VmValue::OptionSomeScalar(_) | VmValue::OptionSomeHeap(_) => {
+                        let value = option.unwrap_some().expect("Some arm yields a payload");
                         let keep =
                             self.call_closure_one(unit, &predicate, value.clone(), next_base)?;
                         if expect_bool_ref(&keep)? {
-                            Ok(VmValue::OptionSome(Box::new(value)))
+                            Ok(VmValue::some(value))
                         } else {
                             Ok(VmValue::OptionNone)
                         }
@@ -13744,15 +14673,20 @@ impl RegVm {
             ))),
             RegIntrinsic::OptionIsSome => Ok(VmValue::Bool(matches!(
                 intrinsic_arg(&self.stack, base, args, 0)?,
-                VmValue::OptionSome(_)
+                VmValue::OptionSomeScalar(_) | VmValue::OptionSomeHeap(_)
             ))),
             RegIntrinsic::OptionMap => {
                 let option = intrinsic_arg(&self.stack, base, args, 0)?;
                 let mapper = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 match option {
-                    VmValue::OptionSome(value) => Ok(VmValue::OptionSome(Box::new(
-                        self.call_closure_one(unit, &mapper, (**value).clone(), next_base)?,
-                    ))),
+                    VmValue::OptionSomeScalar(_) | VmValue::OptionSomeHeap(_) => {
+                        Ok(VmValue::some(self.call_closure_one(
+                            unit,
+                            &mapper,
+                            option.unwrap_some().expect("Some arm yields a payload"),
+                            next_base,
+                        )?))
+                    }
                     VmValue::OptionNone => Ok(VmValue::OptionNone),
                     other => Err(EvalError::Runtime(format!(
                         "reg VM Option.map expected Option, got `{}`.",
@@ -13764,7 +14698,9 @@ impl RegVm {
                 let option = intrinsic_arg(&self.stack, base, args, 0)?;
                 let error = intrinsic_arg(&self.stack, base, args, 1)?.clone();
                 match option {
-                    VmValue::OptionSome(value) => Ok(value_ok((**value).clone())),
+                    VmValue::OptionSomeScalar(_) | VmValue::OptionSomeHeap(_) => Ok(value_ok(
+                        option.unwrap_some().expect("Some arm yields a payload"),
+                    )),
                     VmValue::OptionNone => Ok(value_err(error)),
                     other => Err(EvalError::Runtime(format!(
                         "reg VM Option.ok_or expected Option, got `{}`.",
@@ -13776,7 +14712,7 @@ impl RegVm {
                 let option = intrinsic_arg(&self.stack, base, args, 0)?;
                 let fallback = intrinsic_arg(&self.stack, base, args, 1)?.clone();
                 match option {
-                    VmValue::OptionSome(_) => Ok(option.clone()),
+                    VmValue::OptionSomeScalar(_) | VmValue::OptionSomeHeap(_) => Ok(option.clone()),
                     VmValue::OptionNone => Ok(fallback),
                     other => Err(EvalError::Runtime(format!(
                         "reg VM Option.or expected Option, got `{}`.",
@@ -13788,7 +14724,9 @@ impl RegVm {
                 let option = intrinsic_arg(&self.stack, base, args, 0)?;
                 let default = intrinsic_arg(&self.stack, base, args, 1)?.clone();
                 match option {
-                    VmValue::OptionSome(value) => Ok((**value).clone()),
+                    VmValue::OptionSomeScalar(_) | VmValue::OptionSomeHeap(_) => {
+                        Ok(option.unwrap_some().expect("Some arm yields a payload"))
+                    }
                     VmValue::OptionNone => Ok(default),
                     other => Err(EvalError::Runtime(format!(
                         "reg VM Option.unwrap_or expected Option, got `{}`.",
@@ -13800,7 +14738,9 @@ impl RegVm {
                 let option = intrinsic_arg(&self.stack, base, args, 0)?;
                 let fallback = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 match option {
-                    VmValue::OptionSome(value) => Ok((**value).clone()),
+                    VmValue::OptionSomeScalar(_) | VmValue::OptionSomeHeap(_) => {
+                        Ok(option.unwrap_some().expect("Some arm yields a payload"))
+                    }
                     VmValue::OptionNone => self.call_closure_zero(unit, &fallback, next_base),
                     other => Err(EvalError::Runtime(format!(
                         "reg VM Option.unwrap_or_else expected Option, got `{}`.",
@@ -13808,9 +14748,9 @@ impl RegVm {
                     ))),
                 }
             }
-            other => unreachable!(
-                "exec_option_intrinsics called with non-option intrinsic: {other:?}"
-            ),
+            other => {
+                unreachable!("exec_option_intrinsics called with non-option intrinsic: {other:?}")
+            }
         }
     }
 
@@ -13827,14 +14767,14 @@ impl RegVm {
                 let result = result_variant_payload(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(match result {
                     Ok(_) => VmValue::OptionNone,
-                    Err(error) => VmValue::OptionSome(Box::new(error)),
+                    Err(error) => VmValue::some(error),
                 })
             }
             RegIntrinsic::ResultErrMessage => {
                 let result = result_variant_payload(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(match result {
                     Ok(_) => VmValue::OptionNone,
-                    Err(error) => VmValue::OptionSome(Box::new(VmValue::string(error.display()))),
+                    Err(error) => VmValue::some(VmValue::string(error.display())),
                 })
             }
             RegIntrinsic::ResultIsErr => {
@@ -13848,7 +14788,7 @@ impl RegVm {
             RegIntrinsic::ResultOk => {
                 let result = result_variant_payload(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(match result {
-                    Ok(value) => VmValue::OptionSome(Box::new(value)),
+                    Ok(value) => VmValue::some(value),
                     Err(_) => VmValue::OptionNone,
                 })
             }
@@ -13900,12 +14840,13 @@ impl RegVm {
                     Err(error) => self.call_closure_one(unit, &fallback, error, next_base),
                 }
             }
-            other => unreachable!(
-                "exec_result_intrinsics called with non-result intrinsic: {other:?}"
-            ),
+            other => {
+                unreachable!("exec_result_intrinsics called with non-result intrinsic: {other:?}")
+            }
         }
     }
 
+    #[allow(clippy::mutable_key_type)]
     fn exec_set_intrinsics(
         &mut self,
         unit: &RegUnit,
@@ -13962,9 +14903,7 @@ impl RegVm {
                 let set = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::Int(set.borrow().len() as i64))
             }
-            RegIntrinsic::SetNew => {
-                Ok(VmValue::Map(Rc::new(RefCell::new(ValueMap::default()))))
-            }
+            RegIntrinsic::SetNew => Ok(VmValue::Map(Rc::new(RefCell::new(ValueMap::default())))),
             RegIntrinsic::SetToList => {
                 let set = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let values = set
@@ -13972,7 +14911,7 @@ impl RegVm {
                     .keys()
                     .map(vm_value_from_map_key)
                     .collect::<Vec<_>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(values))))
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(values)))))
             }
             RegIntrinsic::SetUnion => {
                 let left = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -13996,7 +14935,7 @@ impl RegVm {
                 let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::Int(set.borrow().len() as i64))
             }
-            RegIntrinsic::SortedSetNew => Ok(VmValue::List(Rc::new(RefCell::new(Vec::new())))),
+            RegIntrinsic::SortedSetNew => Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::new())))),
             RegIntrinsic::SortedSetToList => {
                 let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::List(Rc::new(RefCell::new(set.borrow().clone()))))
@@ -14012,7 +14951,7 @@ impl RegVm {
                 let map = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let key = intrinsic_arg(&self.stack, base, args, 1)?;
                 Ok(sorted_map_get_in_place(&map.borrow(), key)?
-                    .map(|value| VmValue::OptionSome(Box::new(value)))
+                    .map(|value| VmValue::some(value))
                     .unwrap_or(VmValue::OptionNone))
             }
             RegIntrinsic::SortedMapIsEmpty => {
@@ -14024,7 +14963,7 @@ impl RegVm {
                 let entries =
                     expect_sorted_map_entries(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let keys = entries.into_iter().map(|(key, _)| key).collect::<Vec<_>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(keys))))
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(keys)))))
             }
             RegIntrinsic::SortedMapLen => {
                 let entries =
@@ -14039,11 +14978,9 @@ impl RegVm {
                     .into_iter()
                     .map(|(_, value)| value)
                     .collect::<Vec<_>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(values))))
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(values)))))
             }
-            other => unreachable!(
-                "exec_set_intrinsics called with non-set intrinsic: {other:?}"
-            ),
+            other => unreachable!("exec_set_intrinsics called with non-set intrinsic: {other:?}"),
         }
     }
 
@@ -14072,11 +15009,11 @@ impl RegVm {
             RegIntrinsic::DequeToList => {
                 let deque = expect_deque_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let list = deque.borrow().iter().cloned().collect::<Vec<_>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(list))))
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(list)))))
             }
-            other => unreachable!(
-                "exec_deque_intrinsics called with non-deque intrinsic: {other:?}"
-            ),
+            other => {
+                unreachable!("exec_deque_intrinsics called with non-deque intrinsic: {other:?}")
+            }
         }
     }
 
@@ -14105,7 +15042,7 @@ impl RegVm {
                             .collect::<Vec<_>>()
                     })
                     .unwrap_or_default();
-                Ok(VmValue::List(Rc::new(RefCell::new(captures))))
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(captures)))))
             }
             RegIntrinsic::RegexCompile => {
                 let pattern = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -14122,7 +15059,7 @@ impl RegVm {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 Ok(regex
                     .find(value)
-                    .map(|matched| VmValue::OptionSome(Box::new(VmValue::string(matched.as_str()))))
+                    .map(|matched| VmValue::some(VmValue::string(matched.as_str())))
                     .unwrap_or(VmValue::OptionNone))
             }
             RegIntrinsic::RegexIsMatch => {
@@ -14142,11 +15079,11 @@ impl RegVm {
                 let regex = expect_regex_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 let parts = regex.split(value).map(VmValue::string).collect::<Vec<_>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(parts))))
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(parts)))))
             }
-            other => unreachable!(
-                "exec_regex_intrinsics called with non-regex intrinsic: {other:?}"
-            ),
+            other => {
+                unreachable!("exec_regex_intrinsics called with non-regex intrinsic: {other:?}")
+            }
         }
     }
 
@@ -14177,9 +15114,7 @@ impl RegVm {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::string(hex::encode(value.as_bytes())))
             }
-            other => unreachable!(
-                "exec_hex_intrinsics called with non-hex intrinsic: {other:?}"
-            ),
+            other => unreachable!("exec_hex_intrinsics called with non-hex intrinsic: {other:?}"),
         }
     }
 
@@ -14213,9 +15148,7 @@ impl RegVm {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::string(value))
             }
-            other => unreachable!(
-                "exec_url_intrinsics called with non-url intrinsic: {other:?}"
-            ),
+            other => unreachable!("exec_url_intrinsics called with non-url intrinsic: {other:?}"),
         }
     }
 
@@ -14279,9 +15212,9 @@ impl RegVm {
             RegIntrinsic::FloatIsNan => Ok(VmValue::Bool(
                 expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.is_nan(),
             )),
-            other => unreachable!(
-                "exec_scalar_intrinsics called with non-scalar intrinsic: {other:?}"
-            ),
+            other => {
+                unreachable!("exec_scalar_intrinsics called with non-scalar intrinsic: {other:?}")
+            }
         }
     }
 }
@@ -14655,12 +15588,13 @@ fn sorted_remove_vm(items: &mut Vec<VmValue>, value: &VmValue) -> Result<bool, E
 
 /// Binary-search a sorted `Vec` for `value` (O(log n)) — used by `SortedSet`'s
 /// membership test in place of a linear scan.
-fn sorted_contains_vm(items: &[VmValue], value: &VmValue) -> Result<bool, EvalError> {
+fn sorted_contains_vm(items: &TypedVec, value: &VmValue) -> Result<bool, EvalError> {
     let mut lo = 0;
     let mut hi = items.len();
     while lo < hi {
         let mid = lo + (hi - lo) / 2;
-        match vm_value_cmp(&items[mid], value)? {
+        let item = items.get(mid).expect("binary-search index in bounds");
+        match vm_value_cmp(&item, value)? {
             Ordering::Less => lo = mid + 1,
             Ordering::Greater => hi = mid,
             Ordering::Equal => return Ok(true),
@@ -14672,22 +15606,23 @@ fn sorted_contains_vm(items: &[VmValue], value: &VmValue) -> Result<bool, EvalEr
 /// Binary-search a sorted-map backing by key and return the value if present —
 /// O(log n), cloning only the matched value (not the whole backing).
 fn sorted_map_get_in_place(
-    backing: &[VmValue],
+    backing: &TypedVec,
     key: &VmValue,
 ) -> Result<Option<VmValue>, EvalError> {
     let mut lo = 0;
     let mut hi = backing.len();
     while lo < hi {
         let mid = lo + (hi - lo) / 2;
-        let pair = expect_list_ref(&backing[mid])?;
+        let entry = backing.get(mid).expect("binary-search index in bounds");
+        let pair = expect_list_ref(&entry)?;
         let pair = pair.borrow();
         let entry_key = pair
             .first()
             .ok_or_else(|| EvalError::Runtime("reg VM SortedMap entry missing key.".to_string()))?;
-        match vm_value_cmp(entry_key, key)? {
+        match vm_value_cmp(&entry_key, key)? {
             Ordering::Less => lo = mid + 1,
             Ordering::Greater => hi = mid,
-            Ordering::Equal => return Ok(pair.get(1).cloned()),
+            Ordering::Equal => return Ok(pair.get(1)),
         }
     }
     Ok(None)
@@ -14711,7 +15646,7 @@ fn sorted_map_insert_in_place(
             let entry_key = pair.first().ok_or_else(|| {
                 EvalError::Runtime("reg VM SortedMap entry missing key.".to_string())
             })?;
-            vm_value_cmp(entry_key, &key)?
+            vm_value_cmp(&entry_key, &key)?
         };
         match ordering {
             Ordering::Less => lo = mid + 1,
@@ -14719,8 +15654,10 @@ fn sorted_map_insert_in_place(
             Ordering::Equal => {
                 let pair = expect_list_ref(&backing[mid])?;
                 let mut pair = pair.borrow_mut();
-                if let Some(slot) = pair.get_mut(1) {
-                    *slot = value;
+                if pair.len() > 1 {
+                    // Total mutation helper: a pair-list update promotes on a
+                    // kind mismatch rather than erroring (construction-path rule).
+                    pair.set(1, value);
                 } else {
                     pair.push(value);
                 }
@@ -14728,7 +15665,7 @@ fn sorted_map_insert_in_place(
             }
         }
     }
-    backing.insert(lo, VmValue::List(Rc::new(RefCell::new(vec![key, value]))));
+    backing.insert(lo, VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(vec![key, value])))));
     Ok(())
 }
 
@@ -14748,7 +15685,7 @@ fn sorted_map_remove_in_place(
             let entry_key = pair.first().ok_or_else(|| {
                 EvalError::Runtime("reg VM SortedMap entry missing key.".to_string())
             })?;
-            vm_value_cmp(entry_key, key)?
+            vm_value_cmp(&entry_key, key)?
         };
         match ordering {
             Ordering::Less => lo = mid + 1,
@@ -14756,7 +15693,7 @@ fn sorted_map_remove_in_place(
             Ordering::Equal => {
                 let removed = backing.remove(mid);
                 let pair = expect_list_ref(&removed)?;
-                let value = pair.borrow().get(1).cloned();
+                let value = pair.borrow().get(1);
                 return Ok(value);
             }
         }
@@ -14797,27 +15734,29 @@ fn expect_sorted_map_entries(value: &VmValue) -> Result<Vec<(VmValue, VmValue)>,
         .borrow()
         .iter()
         .map(|entry| {
-            let pair = expect_list_ref(entry)?;
+            let pair = expect_list_ref(&entry)?;
             let pair = pair.borrow();
-            let [key, value] = pair.as_slice() else {
+            if pair.len() != 2 {
                 return Err(EvalError::Runtime(format!(
                     "reg VM expected SortedMap entry, got `{}`.",
                     entry.display()
                 )));
-            };
-            Ok((key.clone(), value.clone()))
+            }
+            Ok((pair.get(0).unwrap(), pair.get(1).unwrap()))
         })
         .collect()
 }
 
 fn sorted_map_value(entries: Vec<(VmValue, VmValue)>) -> VmValue {
-    VmValue::List(Rc::new(RefCell::new(sorted_map_entry_values(entries))))
+    VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
+        sorted_map_entry_values(entries),
+    ))))
 }
 
 fn sorted_map_entry_values(entries: Vec<(VmValue, VmValue)>) -> Vec<VmValue> {
     entries
         .into_iter()
-        .map(|(key, value)| VmValue::List(Rc::new(RefCell::new(vec![key, value]))))
+        .map(|(key, value)| VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(vec![key, value])))))
         .collect()
 }
 
@@ -14896,10 +15835,10 @@ fn path_resolve_relative_string(root: &str, relative: &str) -> Result<String, St
     Ok(resolved)
 }
 
-fn join_string_values(values: &[VmValue], separator: &str) -> Result<String, EvalError> {
+fn join_string_values(values: &TypedVec, separator: &str) -> Result<String, EvalError> {
     Ok(values
         .iter()
-        .map(|value| expect_string_ref(value).map(str::to_string))
+        .map(|value| expect_string_ref(&value).map(str::to_string))
         .collect::<Result<Vec<_>, _>>()?
         .join(separator))
 }
@@ -14908,18 +15847,18 @@ fn expect_string_list_ref(value: &VmValue) -> Result<Vec<String>, EvalError> {
     let list = expect_list_ref(value)?;
     list.borrow()
         .iter()
-        .map(|value| expect_string_ref(value).map(str::to_string))
+        .map(|value| expect_string_ref(&value).map(str::to_string))
         .collect()
 }
 
 fn expect_float_list_ref(value: &VmValue) -> Result<Vec<f64>, EvalError> {
     let list = expect_list_ref(value)?;
-    list.borrow().iter().map(expect_float_ref).collect()
+    list.borrow().iter().map(|v| expect_float_ref(&v)).collect()
 }
 
 fn expect_int_list_ref(value: &VmValue) -> Result<Vec<i64>, EvalError> {
     let list = expect_list_ref(value)?;
-    list.borrow().iter().map(expect_int_ref).collect()
+    list.borrow().iter().map(|v| expect_int_ref(&v)).collect()
 }
 
 fn expect_bool_ref(value: &VmValue) -> Result<bool, EvalError> {
@@ -14933,7 +15872,7 @@ fn expect_bool_ref(value: &VmValue) -> Result<bool, EvalError> {
     }
 }
 
-fn expect_list_ref(value: &VmValue) -> Result<Rc<RefCell<Vec<VmValue>>>, EvalError> {
+fn expect_list_ref(value: &VmValue) -> Result<Rc<RefCell<TypedVec>>, EvalError> {
     match value {
         VmValue::List(value) => Ok(Rc::clone(value)),
         VmValue::Managed(inner) => expect_list_ref(&inner.borrow()),
@@ -14958,12 +15897,12 @@ fn expect_deque_ref(
 }
 
 fn list_item_at(
-    list: &Rc<RefCell<Vec<VmValue>>>,
+    list: &Rc<RefCell<TypedVec>>,
     index: usize,
     operation: &str,
 ) -> Result<VmValue, EvalError> {
     let values = list.borrow();
-    values.get(index).cloned().ok_or_else(|| {
+    values.get(index).ok_or_else(|| {
         EvalError::Runtime(format!(
             "reg VM {operation} observed list length change at index {index}."
         ))
@@ -15004,7 +15943,9 @@ fn expect_closure_rc(value: &VmValue) -> Result<Rc<VmClosure>, EvalError> {
 
 fn ensure_option_value(value: VmValue) -> Result<VmValue, EvalError> {
     match value {
-        VmValue::OptionSome(_) | VmValue::OptionNone => Ok(value),
+        VmValue::OptionSomeScalar(_) | VmValue::OptionSomeHeap(_) | VmValue::OptionNone => {
+            Ok(value)
+        }
         other => Err(EvalError::Runtime(format!(
             "reg VM expected Option, got `{}`.",
             other.display()
@@ -15029,8 +15970,12 @@ fn map_key_from_value(value: &VmValue) -> Result<VmMapKey, EvalError> {
             | VmValue::Bytes(_)
             | VmValue::Native(_)
             | VmValue::OptionNone => true,
-            VmValue::OptionSome(inner) => is_hashable(inner),
-            VmValue::List(items) => items.borrow().iter().all(is_hashable),
+            VmValue::OptionSomeHeap(inner) => is_hashable(inner),
+            // The inline payload is a scalar; recurse on the materialized value so
+            // the hashability rule is identical to the heap arm (e.g. a
+            // `Some(Float)` is inline yet still unhashable).
+            VmValue::OptionSomeScalar(scalar) => is_hashable(&scalar.to_value()),
+            VmValue::List(items) => items.borrow().iter().all(|v| is_hashable(&v)),
             VmValue::Deque(items) => items.borrow().iter().all(is_hashable),
             VmValue::Struct(data) | VmValue::Variant(data) => data.fields.iter().all(is_hashable),
             VmValue::Managed(inner) => is_hashable(&inner.borrow()),
@@ -15101,7 +16046,7 @@ fn json_array_bools_value(value: &serde_json::Value) -> Result<VmValue, VmValue>
         };
         flags.push(VmValue::Bool(flag));
     }
-    Ok(VmValue::List(Rc::new(RefCell::new(flags))))
+    Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(flags)))))
 }
 
 fn json_array_ints_value(value: &serde_json::Value) -> Result<VmValue, VmValue> {
@@ -15115,7 +16060,7 @@ fn json_array_ints_value(value: &serde_json::Value) -> Result<VmValue, VmValue> 
         };
         numbers.push(VmValue::Int(number));
     }
-    Ok(VmValue::List(Rc::new(RefCell::new(numbers))))
+    Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(numbers)))))
 }
 
 fn json_array_strings_value(value: &serde_json::Value) -> Result<VmValue, VmValue> {
@@ -15129,7 +16074,7 @@ fn json_array_strings_value(value: &serde_json::Value) -> Result<VmValue, VmValu
         };
         strings.push(VmValue::string(text));
     }
-    Ok(VmValue::List(Rc::new(RefCell::new(strings))))
+    Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(strings)))))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -15265,7 +16210,7 @@ fn pool_error_value(message: impl Into<String>) -> VmValue {
 
 fn pool_error_message(value: &VmValue) -> Option<String> {
     match value {
-        VmValue::Struct(data) if data.name.as_ref() == "PoolError" => data
+        VmValue::Struct(data) if data.name().as_ref() == "PoolError" => data
             .get("message")
             .and_then(|value| expect_string_ref(value).ok())
             .map(str::to_string),
@@ -15287,7 +16232,7 @@ fn mark_pool_lease(value: VmValue, pool_id: i64) -> Result<VmValue, String> {
     fields.push((Rc::from(POOL_LEASE_ID_FIELD), VmValue::Int(pool_id)));
     fields.push((Rc::from(POOL_LEASE_DISCARDED_FIELD), VmValue::Bool(false)));
     Ok(VmValue::Struct(Rc::new(VmStruct::from_named(
-        Rc::clone(&data.name),
+        Rc::clone(data.name()),
         fields,
     ))))
 }
@@ -15316,7 +16261,7 @@ fn mark_pool_lease_discarded(value: VmValue) -> Result<VmValue, EvalError> {
         })
         .collect();
     Ok(VmValue::Struct(Rc::new(VmStruct::from_named(
-        Rc::clone(&data.name),
+        Rc::clone(data.name()),
         fields,
     ))))
 }
@@ -15344,7 +16289,7 @@ fn split_pool_lease(value: VmValue) -> Result<Option<VmResourcePoolLease>, EvalE
     Ok(Some(VmResourcePoolLease {
         pool_id: expect_int_ref(&pool_id)?,
         discarded,
-        value: VmValue::Struct(Rc::new(VmStruct::from_named(Rc::clone(&data.name), fields))),
+        value: VmValue::Struct(Rc::new(VmStruct::from_named(Rc::clone(data.name()), fields))),
     }))
 }
 
@@ -16236,7 +17181,7 @@ fn cancellation_handle_value(name: &'static str, id: i64) -> VmValue {
 fn stream_value(items: Vec<VmValue>) -> VmValue {
     let mut fields: Vec<(String, VmValue)> = vec![(
         "items".to_string(),
-        VmValue::List(Rc::new(RefCell::new(items))),
+        VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(items)))),
     )];
     fields.push(("collect_error".to_string(), VmValue::OptionNone));
     fields.push(("channel_id".to_string(), VmValue::OptionNone));
@@ -16247,12 +17192,12 @@ fn stream_value(items: Vec<VmValue>) -> VmValue {
 fn stream_channel_value(channel_id: i64) -> VmValue {
     let mut fields: Vec<(String, VmValue)> = vec![(
         "items".to_string(),
-        VmValue::List(Rc::new(RefCell::new(Vec::new()))),
+        VmValue::List(Rc::new(RefCell::new(TypedVec::new()))),
     )];
     fields.push(("collect_error".to_string(), VmValue::OptionNone));
     fields.push((
         "channel_id".to_string(),
-        VmValue::OptionSome(Box::new(VmValue::Int(channel_id))),
+        VmValue::some(VmValue::Int(channel_id)),
     ));
     fields.push(("stream_id".to_string(), VmValue::OptionNone));
     VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Stream"), fields)))
@@ -16261,11 +17206,11 @@ fn stream_channel_value(channel_id: i64) -> VmValue {
 fn stream_collect_error_value(message: impl Into<String>) -> VmValue {
     let mut fields: Vec<(String, VmValue)> = vec![(
         "items".to_string(),
-        VmValue::List(Rc::new(RefCell::new(Vec::new()))),
+        VmValue::List(Rc::new(RefCell::new(TypedVec::new()))),
     )];
     fields.push((
         "collect_error".to_string(),
-        VmValue::OptionSome(Box::new(VmValue::string(message.into()))),
+        VmValue::some(VmValue::string(message.into())),
     ));
     fields.push(("channel_id".to_string(), VmValue::OptionNone));
     fields.push(("stream_id".to_string(), VmValue::OptionNone));
@@ -16292,6 +17237,7 @@ mod register_window_tests {
             function_ids: HashMap::new(),
             resource_drop_functions: HashMap::new(),
             types: HashMap::new(),
+            closure_identity_observable: true,
         };
         RegVm::new(Rc::new(unit), Vec::new(), HashMap::new())
     }
@@ -16308,7 +17254,8 @@ mod register_window_tests {
         vm.ensure_regs(8).expect("grow stack");
 
         // Simulate a prior frame allocating a large list into its window.
-        let big: Rc<RefCell<Vec<VmValue>>> = Rc::new(RefCell::new(vec![VmValue::Int(0); 4096]));
+        let big: Rc<RefCell<TypedVec>> =
+            Rc::new(RefCell::new(TypedVec::from_values(vec![VmValue::Int(0); 4096])));
         vm.set_reg(3, VmValue::List(Rc::clone(&big)));
         assert_eq!(
             Rc::strong_count(&big),
@@ -16340,6 +17287,110 @@ mod register_window_tests {
             assert!(matches!(vm.stack[index], VmValue::Unit));
             assert!(!vm.written[index]);
         }
+    }
+
+    #[cfg(feature = "native-jit")]
+    fn native_test_function(
+        name: &str,
+        params: usize,
+        regs: usize,
+        code: Vec<RegInstr>,
+    ) -> RegFunction {
+        RegFunction {
+            name: name.to_string(),
+            params,
+            captures: 0,
+            regs,
+            local_regs: HashMap::new(),
+            code,
+            jit_analysis: std::cell::Cell::new(None),
+            native_status: std::cell::Cell::new(0),
+        }
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_prefilter_marks_structurally_unsupported_functions_not_eligible() {
+        let functions = vec![native_test_function(
+            "build_list",
+            0,
+            2,
+            vec![
+                RegInstr::LoadInt { dst: 0, value: 1 },
+                RegInstr::MakeList {
+                    dst: 1,
+                    items: vec![0],
+                },
+                RegInstr::Return { src: 0 },
+            ],
+        )];
+
+        mark_predictably_native_ineligible(&functions);
+
+        assert_eq!(
+            functions[0].native_status.get(),
+            NATIVE_STATUS_NOT_ELIGIBLE,
+            "reachable heap construction cannot translate to the native read-only subset",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_prefilter_keeps_inlinable_callers_for_translation() {
+        let callee = native_test_function(
+            "clampish",
+            3,
+            3,
+            vec![
+                RegInstr::JumpIfIntCompare {
+                    lhs: 0,
+                    rhs: 1,
+                    op: RegIntCompare::Less,
+                    expected: true,
+                    target: 3,
+                },
+                RegInstr::JumpIfIntCompare {
+                    lhs: 0,
+                    rhs: 2,
+                    op: RegIntCompare::Greater,
+                    expected: true,
+                    target: 4,
+                },
+                RegInstr::Return { src: 0 },
+                RegInstr::Return { src: 1 },
+                RegInstr::Return { src: 2 },
+            ],
+        );
+        let caller = native_test_function(
+            "caller",
+            1,
+            4,
+            vec![
+                RegInstr::LoadInt { dst: 1, value: 0 },
+                RegInstr::LoadInt { dst: 2, value: 10 },
+                RegInstr::CallKnown {
+                    dst: 3,
+                    function: 0,
+                    args: vec![0, 1, 2],
+                    mut_args: Vec::new(),
+                },
+                RegInstr::Return { src: 3 },
+            ],
+        );
+        let functions = vec![callee, caller];
+
+        mark_predictably_native_ineligible(&functions);
+
+        assert_eq!(
+            functions[0].native_status.get(),
+            0,
+            "branchy scalar callees are still native-inlinable",
+        );
+        assert_eq!(
+            functions[1].native_status.get(),
+            0,
+            "callers that only leave the subset through an inlinable CallKnown must still reach the translator",
+        );
     }
 
     /// Execution spec §6.2 (Model A): native (Cranelift) code polls neither the
@@ -16388,5 +17439,229 @@ mod register_window_tests {
             "a present cancel hook must make native dispatch refuse",
         );
         assert_eq!(vm.native.as_ref().unwrap().stats.considered, 0);
+    }
+
+    /// Builds a structurally native-eligible unary function `f(x) = x + 1`. The
+    /// native type-predictor sees `x` combined with an `Int` via `AddInt`, so it
+    /// infers the parameter as `Int` and the function compiles. Calling it with a
+    /// non-`Int` (heap) argument therefore bails at the arg-marshal site on *every*
+    /// call. Used to exercise the predict-and-skip give-up path.
+    #[cfg(feature = "native-jit")]
+    fn always_arg_mismatch_func() -> RegFunction {
+        // reg 0 = param `x`; reg 1 = constant 1.
+        let code = vec![
+            RegInstr::LoadInt { dst: 1, value: 1 },
+            RegInstr::AddInt {
+                dst: 0,
+                lhs: 0,
+                rhs: 1,
+            },
+            RegInstr::Return { src: 0 },
+        ];
+        RegFunction {
+            name: "f".to_string(),
+            params: 1,
+            captures: 0,
+            regs: 2,
+            local_regs: HashMap::new(),
+            code,
+            jit_analysis: std::cell::Cell::new(None),
+            native_status: std::cell::Cell::new(0),
+        }
+    }
+
+    /// vm-jit-perf-plan §3.0 (predict-and-skip bail): a function that PASSES the
+    /// structural predictor (it compiles) but bails at runtime on *every* call must
+    /// not re-compile/marshal/bail forever. After `NATIVE_BAIL_GIVEUP_THRESHOLD`
+    /// consecutive bails the native tier gives up — it demotes the function to
+    /// `NOT_ELIGIBLE` and the cheap-negative early-return in `try_native`
+    /// short-circuits all further calls. So the count of native *attempts*
+    /// (`considered`) must PLATEAU at the threshold rather than scale with the call
+    /// count. Here the bail is an arg-type mismatch (Int param, heap argument).
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_gives_up_after_consecutive_bails() {
+        let mut vm = empty_vm();
+        // threshold 0 => compile/attempt on the very first call; collect_stats so we
+        // can observe the attempt count.
+        vm.native = Some(NativeState::new(0, false, true).expect("native module"));
+        let func = always_arg_mismatch_func();
+
+        // Place a heap (List) value in the function's single parameter register, so
+        // marshalling the `Int`-typed param fails on every native attempt.
+        vm.prepare_frame(0, func.regs).expect("frame");
+        vm.set_reg(0, VmValue::List(Rc::new(RefCell::new(TypedVec::new()))));
+
+        const CALLS: usize = 50;
+        let mut first_demoted_at: Option<usize> = None;
+        for call in 1..=CALLS {
+            // Native is never chosen (it bails), so the result is always `None`
+            // (fall back to the interpreter).
+            assert!(
+                vm.try_native(&func, 0).is_none(),
+                "always-mismatching native call must bail to the interpreter",
+            );
+            if func.native_status.get() == NATIVE_STATUS_NOT_ELIGIBLE
+                && first_demoted_at.is_none()
+            {
+                first_demoted_at = Some(call);
+            }
+        }
+
+        // Give-up fired exactly at the threshold (the Nth consecutive bail demotes).
+        assert_eq!(
+            first_demoted_at,
+            Some(NATIVE_BAIL_GIVEUP_THRESHOLD as usize),
+            "function must be demoted on the {NATIVE_BAIL_GIVEUP_THRESHOLD}th bail",
+        );
+
+        let stats = &vm.native.as_ref().unwrap().stats;
+        // The decisive assertion: native attempts PLATEAU at the threshold instead
+        // of scaling with CALLS. Without give-up, `considered` and `arg_mismatch`
+        // would both equal CALLS (50).
+        assert_eq!(
+            stats.considered, NATIVE_BAIL_GIVEUP_THRESHOLD as u64,
+            "native attempts must plateau at the give-up threshold, not scale with calls",
+        );
+        assert_eq!(
+            stats.arg_mismatch, NATIVE_BAIL_GIVEUP_THRESHOLD as u64,
+            "bail count must plateau at the give-up threshold",
+        );
+        // The compiled entry was dropped from the cache on give-up.
+        assert!(
+            !vm.native.as_ref().unwrap().cache.contains_key(
+                &(&func as *const RegFunction as usize)
+            ),
+            "compiled code must be evicted on give-up",
+        );
+    }
+
+    /// Consecutive (not cumulative) semantics: a single successful native
+    /// completion RESETS the bail counter, so a function that bails only
+    /// intermittently keeps its native fast path. We drive `record_bail` /
+    /// reset-on-success directly on the `NativeState` to prove the counter logic in
+    /// isolation, since constructing an intermittently-bailing compiled function
+    /// from scratch is far more fragile.
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_bail_counter_resets_on_success() {
+        let mut native = NativeState::new(0, false, true).expect("native module");
+        let func = always_arg_mismatch_func();
+        let key = &func as *const RegFunction as usize;
+
+        // Two consecutive bails — one short of the give-up threshold (3).
+        native.record_bail(key, &func);
+        native.record_bail(key, &func);
+        assert_eq!(native.bail_counts.get(&key), Some(&2));
+        assert_ne!(
+            func.native_status.get(),
+            NATIVE_STATUS_NOT_ELIGIBLE,
+            "must not give up before the threshold",
+        );
+
+        // A success resets the counter (mirrors the `Some(bits)` arm in try_native).
+        native.bail_counts.insert(key, 0);
+        assert_eq!(native.bail_counts.get(&key), Some(&0));
+
+        // It now takes a full fresh run of `threshold` bails to demote — proving the
+        // semantics are consecutive, not cumulative.
+        for _ in 0..NATIVE_BAIL_GIVEUP_THRESHOLD {
+            native.record_bail(key, &func);
+        }
+        assert_eq!(
+            func.native_status.get(),
+            NATIVE_STATUS_NOT_ELIGIBLE,
+            "must give up after a fresh run of consecutive bails",
+        );
+    }
+}
+
+#[cfg(test)]
+mod closure_cache_tests {
+    use super::*;
+
+    /// Lower a source program to a `RegUnit`, exactly as `reg_vm_compile_source`
+    /// does, so tests can inspect the closure-identity gate and the cache.
+    fn unit(source: &str) -> RegUnit {
+        let mut program = parse_source("test.rss", source);
+        crate::syntax::isolate_module_namespaces(&mut program);
+        let hir = Hir::from_syntax_with_standard_package_interfaces(&program);
+        RegUnit::lower(&hir).expect("lowering should succeed")
+    }
+
+    /// A program that never compares closures must leave the gate OFF, so the
+    /// non-capturing-closure cache is permitted to share one `Rc`.
+    #[test]
+    fn gate_off_when_no_closure_equality() {
+        let source = r#"
+fn apply(f: noescape Fn(Int) -> Int, x: Int) -> Int {
+    return f(x)
+}
+
+fn main() -> Unit {
+    let mut i = 0
+    let mut total = 0
+    while i < 3 {
+        let g = |x| { return x * 2 + 1 }
+        total = total + apply(f: read g, x: read i)
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+"#;
+        assert!(
+            !unit(source).closure_identity_observable,
+            "no `==`/`!=` over a closure ⇒ identity is unobservable ⇒ gate off",
+        );
+    }
+
+    /// Comparing two closure-typed values with `==` makes pointer identity
+    /// observable, so the gate must turn ON (disabling the cache). The RSScript
+    /// analyzer permits this expression (the compiled backend later rejects bare
+    /// `Fn ==`), so the gate is what keeps the VM bit-identical to that backend's
+    /// distinct-allocation semantics when the program *does* reach an equality.
+    #[test]
+    fn gate_on_when_closure_compared() {
+        let source = r#"
+fn main() -> Unit {
+    let f: Fn(Int) -> Int = |x| { return x + 1 }
+    let g: Fn(Int) -> Int = |x| { return x + 1 }
+    if f == g {
+        Log.write(message: read String.from_int(value: 1))
+    }
+    return Unit
+}
+"#;
+        assert!(
+            unit(source).closure_identity_observable,
+            "a user `==` over closure-typed operands ⇒ identity observable ⇒ gate on",
+        );
+    }
+
+    /// With the gate off, repeated `MakeClosure` of the same non-capturing
+    /// function shares ONE `Rc` (pointer-identical), proving the allocation was
+    /// eliminated. We drive the handler directly so we can read back the register.
+    #[test]
+    fn cache_shares_one_rc_when_gate_off() {
+        // Hand-build a unit whose closure-identity gate is off and a function 0
+        // that the closure refers to (its body is irrelevant for this test).
+        let func = RegFunction::placeholder("noop".into());
+        let unit = RegUnit {
+            functions: vec![Rc::new(func)],
+            function_ids: HashMap::new(),
+            resource_drop_functions: HashMap::new(),
+            types: HashMap::new(),
+            closure_identity_observable: false,
+        };
+        let mut vm = RegVm::new(Rc::new(unit), Vec::new(), HashMap::new());
+
+        let a = vm.cached_noncapturing_closure(0);
+        let b = vm.cached_noncapturing_closure(0);
+        assert!(
+            Rc::ptr_eq(&a, &b),
+            "non-capturing closures of the same function must share one cached Rc",
+        );
+        assert!(a.captures.is_empty(), "cached closure must be non-capturing");
     }
 }

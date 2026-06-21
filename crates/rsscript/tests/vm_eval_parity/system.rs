@@ -180,7 +180,7 @@ fn main() -> Result<Unit, ImageError> {
     return Ok(Unit)
 }
 "#;
-    common::assert_vm_eval_matches_backend_with_distinct_args(
+    common::assert_vm_eval_matches_compiled_backend_with_distinct_args(
         "parity-image.rss",
         "rsscript_parity_image",
         source,

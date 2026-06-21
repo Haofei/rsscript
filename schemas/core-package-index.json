@@ -712,10 +712,16 @@
         "Math.pow",
         "Math.pow_float",
         "Math.round",
+        "Math.saturating_add",
+        "Math.saturating_mul",
+        "Math.saturating_sub",
         "Math.sin",
         "Math.sqrt",
         "Math.tanh",
-        "Math.trunc_float"
+        "Math.trunc_float",
+        "Math.wrapping_add",
+        "Math.wrapping_mul",
+        "Math.wrapping_sub"
       ],
       "types": []
     },

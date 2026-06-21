@@ -40,6 +40,61 @@ bails on heap-heavy code) — gaps are shown, never hidden. The run also writes 
 machine-readable `baseline/baseline-<date>.json`; **commit that file** as the
 reference point for the plan's Phase 0.
 
+### Baseline JSON schema (median + spread)
+
+Each case row keeps the legacy mean fields **unchanged** — `reg_vm_ms`, `jit_ms`,
+`native_ms`, `rust_ms` are still that mode's mean ms (or `null` for an
+unsupported tier) — so anything reading the old schema keeps working. In
+addition, each mode now carries a nested object with the noise statistics
+computed from the N per-run samples the `rss bench --json` output exposes
+(`samples_ms`); the runner only **reshapes** that already-measured data, it never
+re-times anything:
+
+```json
+"native": {
+  "mean":   29.6, "median": 29.4,
+  "min":    28.9, "max":    31.2,
+  "p25":    29.1, "p75":    29.8,
+  "samples": [28.9, 29.1, 29.4, 29.8, 31.2]
+}
+```
+
+`median` is the §0.4 comparison statistic; `min`/`max` and the `p25`/`p75` IQR
+give the per-kernel **spread band** the comparator uses to tell a real
+regression from run-to-run noise. (`row_stats.py` is the small `python3` helper
+the runner shells out to for this assembly.)
+
+### Comparing two baselines (plan §0.4 — the win metric / CI gate)
+
+`compare-baselines.py` implements the §0.4 regression rule and is the PR/CI gate:
+
+```sh
+python3 benchmarks/vm-jit/compare-baselines.py REF.json CUR.json \
+    [--threshold-pct 10] [--mode reg_vm|jit|native|rust|all] \
+    [--cohort CATEGORY] [--json]
+```
+
+For each kernel in both files, for each requested mode, it compares on the
+**median** (falling back to the mean / `*_ms` against the old schema) and applies:
+
+> A kernel **regresses** iff `delta% > threshold` (default 10%) **AND**
+> `delta% > spread-band%`, where `delta% = (cur − ref) / ref · 100` and the
+> spread band is the current run's relative spread,
+> `max((max−min)/median, IQR/median) · 100`.
+> A delta over the threshold but **inside** the spread band is `within-noise`,
+> not a regression. Improvements (negative delta) are reported, never fail. If a
+> run carries no spread fields (old schema) the band is 0, so the rule collapses
+> to the bare `>threshold` check — conservative, never hiding a regression.
+
+Verdicts: `OK`, `REGRESSION`, `improved`, `within-noise` (or `n/a` when a mode is
+absent in either file). Output is grouped per cohort (category) with a per-cohort
+and overall summary; `--json` emits machine-readable results.
+
+**Exit code:** non-zero iff any `REGRESSION` in the requested mode/cohort, zero
+otherwise — this is what wires it as a CI/PR gate. Use `--mode native` to check
+the Phase-3.0 criterion specifically (known native-bail kernels must not get
+slower under jit-native).
+
 ## Coverage matrix (slow paths)
 
 The native tier covers only Int/Bool/Float **scalar** arithmetic + control flow +

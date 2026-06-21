@@ -6,7 +6,8 @@
 //! applies a transform that is supposed to preserve meaning, then asserts the
 //! transformed program still:
 //!
-//!   1. type-checks and runs on **every** backend (VM / JIT / native / compiled),
+//!   1. type-checks and runs on every enabled backend (VM / JIT / native, plus
+//!      compiled in full parity mode),
 //!   2. produces the **same** observable output as the original, and
 //!   3. (for structure-preserving transforms) reports the **same** review
 //!      classification.
@@ -169,7 +170,8 @@ fn transforms() -> Vec<Transform> {
 }
 
 /// Known-valid base programs spanning the executable subset. Each is proven to
-/// run identically on every backend (the shapes mirror `backend_differential`).
+/// run identically on the default parity backends; full mode adds generated
+/// Rust execution.
 fn base_programs() -> Vec<(&'static str, &'static str)> {
     vec![
         (

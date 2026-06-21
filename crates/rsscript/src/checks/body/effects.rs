@@ -215,25 +215,37 @@ pub(super) fn check_moved_uses(analyzer: &mut Analyzer<'_>, local_analysis: &Loc
     }
 }
 
-pub(super) fn check_managed_to_local_uses(analyzer: &mut Analyzer<'_>, local_analysis: &LocalAnalysis) {
+pub(super) fn check_managed_to_local_uses(
+    analyzer: &mut Analyzer<'_>,
+    local_analysis: &LocalAnalysis,
+) {
     for managed_to_local in local_analysis.managed_to_local_uses() {
         managed_to_local_diagnostic(analyzer, managed_to_local);
     }
 }
 
-pub(super) fn check_retained_local_uses(analyzer: &mut Analyzer<'_>, local_analysis: &LocalAnalysis) {
+pub(super) fn check_retained_local_uses(
+    analyzer: &mut Analyzer<'_>,
+    local_analysis: &LocalAnalysis,
+) {
     for retained in local_analysis.retained_local_uses() {
         retained_local_diagnostic(analyzer, retained);
     }
 }
 
-pub(super) fn check_retained_closure_captures(analyzer: &mut Analyzer<'_>, local_analysis: &LocalAnalysis) {
+pub(super) fn check_retained_closure_captures(
+    analyzer: &mut Analyzer<'_>,
+    local_analysis: &LocalAnalysis,
+) {
     for capture in local_analysis.retained_closure_captures() {
         retained_closure_capture_diagnostic(analyzer, capture);
     }
 }
 
-pub(super) fn check_take_handle_fields(analyzer: &mut Analyzer<'_>, local_analysis: &LocalAnalysis) {
+pub(super) fn check_take_handle_fields(
+    analyzer: &mut Analyzer<'_>,
+    local_analysis: &LocalAnalysis,
+) {
     for field in local_analysis.take_handle_fields() {
         take_handle_field_diagnostic(analyzer, field);
     }
@@ -283,7 +295,10 @@ pub(super) fn fresh_return_target_type(return_ty: &TypeRef) -> &TypeRef {
     return_ty
 }
 
-pub(super) fn managed_to_local_diagnostic(analyzer: &mut Analyzer<'_>, managed_to_local: ManagedToLocalUse) {
+pub(super) fn managed_to_local_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    managed_to_local: ManagedToLocalUse,
+) {
     analyzer.diagnostics.push(error_cause_manual_fix(
         code::MANAGED_TO_LOCAL,
         format!(
@@ -366,7 +381,10 @@ pub(super) fn retained_closure_capture_diagnostic(
     );
 }
 
-pub(super) fn noescape_consumes_capture_diagnostic(analyzer: &mut Analyzer<'_>, access: &CallPlaceAccess) {
+pub(super) fn noescape_consumes_capture_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    access: &CallPlaceAccess,
+) {
     analyzer.diagnostics.push(
         Diagnostic::error(
             code::NOESCAPE_CONSUMES_CAPTURE,
@@ -414,7 +432,11 @@ pub(super) fn explicit_closure_missing_capture_diagnostic(
     );
 }
 
-pub(super) fn explicit_closure_unused_capture_diagnostic(analyzer: &mut Analyzer<'_>, name: &str, span: Span) {
+pub(super) fn explicit_closure_unused_capture_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    name: &str,
+    span: Span,
+) {
     analyzer.diagnostics.push(
         Diagnostic::error(
             code::CLOSURE_CAPTURE_CONTRACT,
@@ -497,4 +519,3 @@ pub(super) fn moved_use_diagnostic(analyzer: &mut Analyzer<'_>, moved_use: Moved
         format!("Move this use before `manage {}`.", moved_use.name),
     ));
 }
-

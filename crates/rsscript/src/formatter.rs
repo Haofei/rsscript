@@ -265,7 +265,8 @@ impl Formatter {
 
     fn function_decl(&mut self, function: &FunctionDecl) {
         if let Some(lower_name) = &function.lower_name {
-            self.out.push_str(&format!("#lower_name({})\n", quoted_string(lower_name)));
+            self.out
+                .push_str(&format!("#lower_name({})\n", quoted_string(lower_name)));
         }
         let mut prefix = String::new();
         if function.is_public {
@@ -988,7 +989,8 @@ impl Formatter {
                 effect,
             } => {
                 if (*effect).unwrap_or(DataEffect::Read) != DataEffect::Read {
-                    self.out.push_str((*effect).unwrap_or(DataEffect::Read).as_str());
+                    self.out
+                        .push_str((*effect).unwrap_or(DataEffect::Read).as_str());
                     self.out.push(' ');
                 }
                 self.expr_at(receiver, 0, indent);

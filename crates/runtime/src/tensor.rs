@@ -231,7 +231,12 @@ pub fn tensor_f32_from_le_bytes(bytes: &[i64]) -> Result<Vec<f64>, TensorError> 
     }
     let mut out = Vec::with_capacity(bytes.len() / 4);
     for chunk in bytes.chunks_exact(4) {
-        let raw = [chunk[0] as u8, chunk[1] as u8, chunk[2] as u8, chunk[3] as u8];
+        let raw = [
+            chunk[0] as u8,
+            chunk[1] as u8,
+            chunk[2] as u8,
+            chunk[3] as u8,
+        ];
         out.push(f32::from_le_bytes(raw) as f64);
     }
     Ok(out)
@@ -437,32 +442,48 @@ fn tensor_unary_elementwise(t: &RssTensor, out_dtype: DType, op: impl Fn(f32) ->
 /// Elementwise addition with broadcasting. Output dtype: F32 if either operand is
 /// F32, else I32 (Bool treated as int).
 pub fn tensor_add(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
-    tensor_broadcast_binary(a, b, "add", DType::promote_arith(a.dtype, b.dtype), |x, y| {
-        x + y
-    })
+    tensor_broadcast_binary(
+        a,
+        b,
+        "add",
+        DType::promote_arith(a.dtype, b.dtype),
+        |x, y| x + y,
+    )
 }
 
 /// Elementwise subtraction (`a - b`) with broadcasting. Output dtype per arith
 /// promotion.
 pub fn tensor_sub(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
-    tensor_broadcast_binary(a, b, "sub", DType::promote_arith(a.dtype, b.dtype), |x, y| {
-        x - y
-    })
+    tensor_broadcast_binary(
+        a,
+        b,
+        "sub",
+        DType::promote_arith(a.dtype, b.dtype),
+        |x, y| x - y,
+    )
 }
 
 /// Elementwise multiplication with broadcasting. Output dtype per arith promotion.
 pub fn tensor_mul(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
-    tensor_broadcast_binary(a, b, "mul", DType::promote_arith(a.dtype, b.dtype), |x, y| {
-        x * y
-    })
+    tensor_broadcast_binary(
+        a,
+        b,
+        "mul",
+        DType::promote_arith(a.dtype, b.dtype),
+        |x, y| x * y,
+    )
 }
 
 /// Elementwise division (`a / b`) with broadcasting. Output dtype per arith
 /// promotion.
 pub fn tensor_div(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
-    tensor_broadcast_binary(a, b, "div", DType::promote_arith(a.dtype, b.dtype), |x, y| {
-        x / y
-    })
+    tensor_broadcast_binary(
+        a,
+        b,
+        "div",
+        DType::promote_arith(a.dtype, b.dtype),
+        |x, y| x / y,
+    )
 }
 
 /// Elementwise maximum with broadcasting. Output dtype per arith promotion.
@@ -489,35 +510,41 @@ pub fn tensor_minimum(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorE
 
 /// Elementwise `a < b` with broadcasting; output dtype Bool (1.0/0.0).
 pub fn tensor_cmplt(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
-    tensor_broadcast_binary(a, b, "cmplt", DType::Bool, |x, y| {
-        if x < y {
-            1.0
-        } else {
-            0.0
-        }
-    })
+    tensor_broadcast_binary(
+        a,
+        b,
+        "cmplt",
+        DType::Bool,
+        |x, y| {
+            if x < y { 1.0 } else { 0.0 }
+        },
+    )
 }
 
 /// Elementwise `a != b` with broadcasting; output dtype Bool (1.0/0.0).
 pub fn tensor_cmpne(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
-    tensor_broadcast_binary(a, b, "cmpne", DType::Bool, |x, y| {
-        if x != y {
-            1.0
-        } else {
-            0.0
-        }
-    })
+    tensor_broadcast_binary(
+        a,
+        b,
+        "cmpne",
+        DType::Bool,
+        |x, y| {
+            if x != y { 1.0 } else { 0.0 }
+        },
+    )
 }
 
 /// Elementwise `a == b` with broadcasting; output dtype Bool (1.0/0.0).
 pub fn tensor_cmpeq(a: &RssTensor, b: &RssTensor) -> Result<RssTensor, TensorError> {
-    tensor_broadcast_binary(a, b, "cmpeq", DType::Bool, |x, y| {
-        if x == y {
-            1.0
-        } else {
-            0.0
-        }
-    })
+    tensor_broadcast_binary(
+        a,
+        b,
+        "cmpeq",
+        DType::Bool,
+        |x, y| {
+            if x == y { 1.0 } else { 0.0 }
+        },
+    )
 }
 
 /// Elementwise select (tinygrad's `where`): pick `a` where `cond` is nonzero, else
@@ -1900,7 +1927,6 @@ pub fn tensor_randn(shape: &[i64], seed: i64, counter: i64) -> Result<RssTensor,
     })
 }
 
-
 // ---------------------------------------------------------------------------
 // nn primitives (slice F).
 //
@@ -2123,12 +2149,7 @@ pub fn tensor_cross_entropy(
 /// Compute a conv/pool output dim by the floor formula, erroring if non-positive.
 /// `in_dim` is the (already-padded, for conv) input length, `window` the kernel
 /// extent and `stride` the step. Output = `(in_dim - window) / stride + 1`.
-fn conv_out_dim(
-    in_dim: i64,
-    window: i64,
-    stride: i64,
-    label: &str,
-) -> Result<usize, TensorError> {
+fn conv_out_dim(in_dim: i64, window: i64, stride: i64, label: &str) -> Result<usize, TensorError> {
     if stride <= 0 {
         return Err(TensorError::new(format!(
             "{label}: stride must be positive, got {stride}"
@@ -2373,7 +2394,10 @@ mod tests {
         let tensor = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
         assert_eq!(tensor_rank(&tensor), 2);
         assert_eq!(tensor_shape(&tensor).unwrap(), vec![2, 2]);
-        assert_eq!(tensor_to_f32_slice(&tensor).unwrap(), vec![1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(
+            tensor_to_f32_slice(&tensor).unwrap(),
+            vec![1.0, 2.0, 3.0, 4.0]
+        );
     }
 
     #[test]
@@ -2410,7 +2434,10 @@ kernel void add(device const float* a [[buffer(0)]],
         let c = tensor_matmul(&a, &b).unwrap();
         assert_eq!(tensor_shape(&c).unwrap(), vec![2, 2]);
         // [[1*5+2*7, 1*6+2*8],[3*5+4*7, 3*6+4*8]] = [[19,22],[43,50]]
-        assert_eq!(tensor_to_f32_slice(&c).unwrap(), vec![19.0, 22.0, 43.0, 50.0]);
+        assert_eq!(
+            tensor_to_f32_slice(&c).unwrap(),
+            vec![19.0, 22.0, 43.0, 50.0]
+        );
     }
 
     #[test]
@@ -2642,8 +2669,10 @@ kernel void add(device const float* a [[buffer(0)]],
         );
         // incompatible select shapes error.
         let bad = tensor_from_f32_slice(&[1.0, 2.0], &[2]).unwrap();
-        assert!(tensor_error_message(&tensor_select(&lt, &a, &bad).unwrap_err())
-            .contains("not broadcast-compatible"));
+        assert!(
+            tensor_error_message(&tensor_select(&lt, &a, &bad).unwrap_err())
+                .contains("not broadcast-compatible")
+        );
     }
 
     #[test]
@@ -2735,7 +2764,9 @@ kernel void add(device const float* a [[buffer(0)]],
     #[test]
     fn reduce_axis_rejects_out_of_range() {
         let t = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
-        assert!(tensor_error_message(&tensor_sum_axis(&t, 2).unwrap_err()).contains("out of range"));
+        assert!(
+            tensor_error_message(&tensor_sum_axis(&t, 2).unwrap_err()).contains("out of range")
+        );
         assert!(
             tensor_error_message(&tensor_max_axis(&t, -1).unwrap_err()).contains("out of range")
         );
@@ -2805,8 +2836,7 @@ kernel void add(device const float* a [[buffer(0)]],
     #[test]
     fn permute_3d() {
         // shape [2,1,3], values 0..6 row-major.
-        let t =
-            tensor_from_f32_slice(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0], &[2, 1, 3]).unwrap();
+        let t = tensor_from_f32_slice(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0], &[2, 1, 3]).unwrap();
         // permute axes [2,0,1] -> shape [3,2,1].
         let p = tensor_permute(&t, &[2, 0, 1]).unwrap();
         assert_eq!(tensor_shape(&p).unwrap(), vec![3, 2, 1]);
@@ -2821,12 +2851,17 @@ kernel void add(device const float* a [[buffer(0)]],
     #[test]
     fn permute_rejects_bad_axes() {
         let t = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
-        assert!(tensor_error_message(&tensor_permute(&t, &[0, 0]).unwrap_err())
-            .contains("permutation"));
-        assert!(tensor_error_message(&tensor_permute(&t, &[0]).unwrap_err())
-            .contains("does not match tensor rank"));
-        assert!(tensor_error_message(&tensor_permute(&t, &[0, 5]).unwrap_err())
-            .contains("out of range"));
+        assert!(
+            tensor_error_message(&tensor_permute(&t, &[0, 0]).unwrap_err()).contains("permutation")
+        );
+        assert!(
+            tensor_error_message(&tensor_permute(&t, &[0]).unwrap_err())
+                .contains("does not match tensor rank")
+        );
+        assert!(
+            tensor_error_message(&tensor_permute(&t, &[0, 5]).unwrap_err())
+                .contains("out of range")
+        );
     }
 
     #[test]
@@ -2851,11 +2886,15 @@ kernel void add(device const float* a [[buffer(0)]],
     #[test]
     fn broadcast_to_rejects_incompatible() {
         let t = tensor_from_f32_slice(&[1.0, 2.0, 3.0], &[3]).unwrap();
-        assert!(tensor_error_message(&tensor_broadcast_to(&t, &[2, 4]).unwrap_err())
-            .contains("not broadcastable"));
+        assert!(
+            tensor_error_message(&tensor_broadcast_to(&t, &[2, 4]).unwrap_err())
+                .contains("not broadcastable")
+        );
         let r = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
-        assert!(tensor_error_message(&tensor_broadcast_to(&r, &[2]).unwrap_err())
-            .contains("cannot reduce rank"));
+        assert!(
+            tensor_error_message(&tensor_broadcast_to(&r, &[2]).unwrap_err())
+                .contains("cannot reduce rank")
+        );
     }
 
     #[test]
@@ -2873,7 +2912,10 @@ kernel void add(device const float* a [[buffer(0)]],
             ]
         );
         // dtype preserved.
-        assert_eq!(tensor_dtype_code(&tensor_pad(&tensor_cast_i32(&t), &[0, 0, 0, 0]).unwrap()), 1);
+        assert_eq!(
+            tensor_dtype_code(&tensor_pad(&tensor_cast_i32(&t), &[0, 0, 0, 0]).unwrap()),
+            1
+        );
     }
 
     #[test]
@@ -2919,7 +2961,10 @@ kernel void add(device const float* a [[buffer(0)]],
         let t = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]).unwrap();
         let f1 = tensor_flip(&t, &[1]).unwrap();
         assert_eq!(tensor_shape(&f1).unwrap(), vec![2, 3]);
-        assert_eq!(tensor_to_f32_slice(&f1).unwrap(), vec![3.0, 2.0, 1.0, 6.0, 5.0, 4.0]);
+        assert_eq!(
+            tensor_to_f32_slice(&f1).unwrap(),
+            vec![3.0, 2.0, 1.0, 6.0, 5.0, 4.0]
+        );
         // flip both axes -> reverse the whole buffer.
         let fb = tensor_flip(&t, &[0, 1]).unwrap();
         assert_eq!(
@@ -2960,7 +3005,10 @@ kernel void add(device const float* a [[buffer(0)]],
         assert_eq!(tensor_to_f32_slice(&g1).unwrap(), vec![3.0, 1.0, 6.0, 4.0]);
         // output dtype = data dtype.
         assert_eq!(tensor_dtype_code(&g0), 0);
-        assert_eq!(tensor_dtype_code(&tensor_gather(&tensor_cast_i32(&t), 0, &idx).unwrap()), 1);
+        assert_eq!(
+            tensor_dtype_code(&tensor_gather(&tensor_cast_i32(&t), 0, &idx).unwrap()),
+            1
+        );
     }
 
     #[test]
@@ -2977,9 +3025,7 @@ kernel void add(device const float* a [[buffer(0)]],
         );
         // rank-2 index tensor rejected.
         let idx2 = tensor_cast_i32(&tensor_from_f32_slice(&[0.0, 1.0], &[1, 2]).unwrap());
-        assert!(
-            tensor_error_message(&tensor_gather(&t, 0, &idx2).unwrap_err()).contains("rank-1")
-        );
+        assert!(tensor_error_message(&tensor_gather(&t, 0, &idx2).unwrap_err()).contains("rank-1"));
     }
 
     #[test]
@@ -3030,23 +3076,33 @@ kernel void add(device const float* a [[buffer(0)]],
         let upd = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
         let idx = tensor_cast_i32(&tensor_from_f32_slice(&[0.0, 1.0], &[2]).unwrap());
         // axis out of range.
-        assert!(tensor_error_message(&tensor_scatter_add(&upd, 5, &idx, 3).unwrap_err())
-            .contains("out of range"));
+        assert!(
+            tensor_error_message(&tensor_scatter_add(&upd, 5, &idx, 3).unwrap_err())
+                .contains("out of range")
+        );
         // dim_size non-positive.
-        assert!(tensor_error_message(&tensor_scatter_add(&upd, 0, &idx, 0).unwrap_err())
-            .contains("positive"));
+        assert!(
+            tensor_error_message(&tensor_scatter_add(&upd, 0, &idx, 0).unwrap_err())
+                .contains("positive")
+        );
         // index out of [0, dim_size).
         let big = tensor_cast_i32(&tensor_from_f32_slice(&[0.0, 5.0], &[2]).unwrap());
-        assert!(tensor_error_message(&tensor_scatter_add(&upd, 0, &big, 3).unwrap_err())
-            .contains("out of range"));
+        assert!(
+            tensor_error_message(&tensor_scatter_add(&upd, 0, &big, 3).unwrap_err())
+                .contains("out of range")
+        );
         // wrong indices length (updates.shape[axis] == 2, give 3).
         let wrong = tensor_cast_i32(&tensor_from_f32_slice(&[0.0, 1.0, 0.0], &[3]).unwrap());
-        assert!(tensor_error_message(&tensor_scatter_add(&upd, 0, &wrong, 3).unwrap_err())
-            .contains("must equal"));
+        assert!(
+            tensor_error_message(&tensor_scatter_add(&upd, 0, &wrong, 3).unwrap_err())
+                .contains("must equal")
+        );
         // rank-2 indices rejected.
         let idx2 = tensor_cast_i32(&tensor_from_f32_slice(&[0.0, 1.0], &[1, 2]).unwrap());
-        assert!(tensor_error_message(&tensor_scatter_add(&upd, 0, &idx2, 3).unwrap_err())
-            .contains("rank-1"));
+        assert!(
+            tensor_error_message(&tensor_scatter_add(&upd, 0, &idx2, 3).unwrap_err())
+                .contains("rank-1")
+        );
     }
 
     // reductions+math (ops C)
@@ -3151,10 +3207,7 @@ kernel void add(device const float* a [[buffer(0)]],
         let t = tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
         let id = tensor_sum_axes(&t, &[]).unwrap();
         assert_eq!(tensor_shape(&id).unwrap(), vec![2, 2]);
-        assert_eq!(
-            tensor_to_f32_slice(&id).unwrap(),
-            vec![1.0, 2.0, 3.0, 4.0]
-        );
+        assert_eq!(tensor_to_f32_slice(&id).unwrap(), vec![1.0, 2.0, 3.0, 4.0]);
         // max_axes identity preserves input dtype.
         let ii = tensor_cast_i32(&t);
         assert_eq!(tensor_dtype_code(&tensor_max_axes(&ii, &[]).unwrap()), 1);
@@ -3215,8 +3268,10 @@ kernel void add(device const float* a [[buffer(0)]],
         );
         // incompatible shapes error.
         let bad = tensor_from_f32_slice(&[1.0, 2.0], &[2]).unwrap();
-        assert!(tensor_error_message(&tensor_pow(&a, &bad).unwrap_err())
-            .contains("not broadcast-compatible"));
+        assert!(
+            tensor_error_message(&tensor_pow(&a, &bad).unwrap_err())
+                .contains("not broadcast-compatible")
+        );
     }
 
     // --- bmm+int/bit (ops D) ---
@@ -3224,16 +3279,10 @@ kernel void add(device const float* a [[buffer(0)]],
     #[test]
     fn bmm_two_batches_match_two_matmuls() {
         // shape [2,2,2]: two stacked 2x2 matrices.
-        let a = tensor_from_f32_slice(
-            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
-            &[2, 2, 2],
-        )
-        .unwrap();
-        let b = tensor_from_f32_slice(
-            &[1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0],
-            &[2, 2, 2],
-        )
-        .unwrap();
+        let a =
+            tensor_from_f32_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 2, 2]).unwrap();
+        let b =
+            tensor_from_f32_slice(&[1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0], &[2, 2, 2]).unwrap();
         let c = tensor_bmm(&a, &b).unwrap();
         assert_eq!(tensor_shape(&c).unwrap(), vec![2, 2, 2]);
         // Verify each batch equals the rank-2 matmul of its slices.
@@ -3250,16 +3299,9 @@ kernel void add(device const float* a [[buffer(0)]],
     #[test]
     fn bmm_broadcasts_batch_dim() {
         // a: [2,2,3] (two matrices), b: [1,3,2] (one matrix, broadcast over batch).
-        let a = tensor_from_f32_slice(
-            &(0..12).map(|x| x as f64).collect::<Vec<_>>(),
-            &[2, 2, 3],
-        )
-        .unwrap();
-        let b = tensor_from_f32_slice(
-            &[1.0, 0.0, 0.0, 1.0, 1.0, 1.0],
-            &[1, 3, 2],
-        )
-        .unwrap();
+        let a = tensor_from_f32_slice(&(0..12).map(|x| x as f64).collect::<Vec<_>>(), &[2, 2, 3])
+            .unwrap();
+        let b = tensor_from_f32_slice(&[1.0, 0.0, 0.0, 1.0, 1.0, 1.0], &[1, 3, 2]).unwrap();
         let c = tensor_bmm(&a, &b).unwrap();
         assert_eq!(tensor_shape(&c).unwrap(), vec![2, 2, 2]);
         let bm = tensor_reshape(&b, &[3, 2]).unwrap();
@@ -3287,13 +3329,17 @@ kernel void add(device const float* a [[buffer(0)]],
             .unwrap();
         let bad = tensor_from_f32_slice(&(0..18).map(|x| x as f64).collect::<Vec<_>>(), &[2, 3, 3])
             .unwrap();
-        assert!(tensor_error_message(&tensor_bmm(&a, &bad).unwrap_err())
-            .contains("inner dimensions disagree"));
+        assert!(
+            tensor_error_message(&tensor_bmm(&a, &bad).unwrap_err())
+                .contains("inner dimensions disagree")
+        );
         // Non-broadcastable batch dims (2 vs 3).
         let a3 = tensor_from_f32_slice(&(0..12).map(|x| x as f64).collect::<Vec<_>>(), &[3, 2, 2])
             .unwrap();
-        assert!(tensor_error_message(&tensor_bmm(&a, &a3).unwrap_err())
-            .contains("not broadcast-compatible"));
+        assert!(
+            tensor_error_message(&tensor_bmm(&a, &a3).unwrap_err())
+                .contains("not broadcast-compatible")
+        );
     }
 
     #[test]
@@ -3340,9 +3386,8 @@ kernel void add(device const float* a [[buffer(0)]],
     #[test]
     fn int_ops_broadcast_and_dtype() {
         // [2,2] op [2] broadcasts the row; output dtype I32.
-        let a = tensor_cast_i32(
-            &tensor_from_f32_slice(&[10.0, 20.0, 30.0, 40.0], &[2, 2]).unwrap(),
-        );
+        let a =
+            tensor_cast_i32(&tensor_from_f32_slice(&[10.0, 20.0, 30.0, 40.0], &[2, 2]).unwrap());
         let row = tensor_cast_i32(&tensor_from_f32_slice(&[3.0, 7.0], &[2]).unwrap());
         let m = tensor_mod(&a, &row).unwrap();
         assert_eq!(tensor_shape(&m).unwrap(), vec![2, 2]);
@@ -3459,7 +3504,10 @@ kernel void add(device const float* a [[buffer(0)]],
     fn rand_is_deterministic_and_in_range() {
         let a = tensor_rand(&[2, 3], 42, 0).unwrap();
         let b = tensor_rand(&[2, 3], 42, 0).unwrap();
-        assert_eq!(tensor_to_f32_slice(&a).unwrap(), tensor_to_f32_slice(&b).unwrap());
+        assert_eq!(
+            tensor_to_f32_slice(&a).unwrap(),
+            tensor_to_f32_slice(&b).unwrap()
+        );
         assert_eq!(tensor_shape(&a).unwrap(), vec![2, 3]);
         assert_eq!(tensor_dtype_code(&a), 0);
         for v in tensor_to_f32_slice(&a).unwrap() {
@@ -3467,14 +3515,20 @@ kernel void add(device const float* a [[buffer(0)]],
         }
         // A different counter gives different output.
         let c = tensor_rand(&[2, 3], 42, 1).unwrap();
-        assert_ne!(tensor_to_f32_slice(&a).unwrap(), tensor_to_f32_slice(&c).unwrap());
+        assert_ne!(
+            tensor_to_f32_slice(&a).unwrap(),
+            tensor_to_f32_slice(&c).unwrap()
+        );
     }
 
     #[test]
     fn randint_is_deterministic_and_in_range() {
         let a = tensor_randint(&[100], 5, 10, 7, 0).unwrap();
         let b = tensor_randint(&[100], 5, 10, 7, 0).unwrap();
-        assert_eq!(tensor_to_f32_slice(&a).unwrap(), tensor_to_f32_slice(&b).unwrap());
+        assert_eq!(
+            tensor_to_f32_slice(&a).unwrap(),
+            tensor_to_f32_slice(&b).unwrap()
+        );
         assert_eq!(tensor_dtype_code(&a), 1);
         for v in tensor_to_f32_slice(&a).unwrap() {
             assert!((5.0..10.0).contains(&v), "value {v} out of [5,10)");
@@ -3492,7 +3546,10 @@ kernel void add(device const float* a [[buffer(0)]],
     fn randn_is_deterministic_with_rough_moments() {
         let a = tensor_randn(&[5000], 123, 0).unwrap();
         let b = tensor_randn(&[5000], 123, 0).unwrap();
-        assert_eq!(tensor_to_f32_slice(&a).unwrap(), tensor_to_f32_slice(&b).unwrap());
+        assert_eq!(
+            tensor_to_f32_slice(&a).unwrap(),
+            tensor_to_f32_slice(&b).unwrap()
+        );
         assert_eq!(tensor_dtype_code(&a), 0);
         let data = tensor_to_f32_slice(&a).unwrap();
         let n = data.len() as f64;
@@ -3513,29 +3570,29 @@ kernel void add(device const float* a [[buffer(0)]],
             (
                 0,
                 [
-                    0.584_557, 0.177_917, 0.379_769, -1.321_681, 1.691_838, 0.381_049,
-                    -0.403_509, 1.159_926,
+                    0.584_557, 0.177_917, 0.379_769, -1.321_681, 1.691_838, 0.381_049, -0.403_509,
+                    1.159_926,
                 ],
             ),
             (
                 42,
                 [
-                    0.991_906, 1.591_51, 0.879_765, 0.444_388, 1.455_374, -1.535_073,
-                    0.489_513, 0.618_576,
+                    0.991_906, 1.591_51, 0.879_765, 0.444_388, 1.455_374, -1.535_073, 0.489_513,
+                    0.618_576,
                 ],
             ),
             (
                 123,
                 [
-                    -1.200_55, 2.083_955, -0.281_694, -0.272_154, 0.439_678, -0.784_856,
-                    1.007_717, -1.064_269,
+                    -1.200_55, 2.083_955, -0.281_694, -0.272_154, 0.439_678, -0.784_856, 1.007_717,
+                    -1.064_269,
                 ],
             ),
             (
                 1337,
                 [
-                    -1.395_279, 0.317_524, -0.684_533, 0.516_59, -1.281_658, 0.168_111,
-                    -1.159_221, -0.858_989,
+                    -1.395_279, 0.317_524, -0.684_533, 0.516_59, -1.281_658, 0.168_111, -1.159_221,
+                    -0.858_989,
                 ],
             ),
         ];
@@ -3580,7 +3637,10 @@ kernel void add(device const float* a [[buffer(0)]],
         assert_eq!(tensor_shape(&r).unwrap(), vec![4]);
         assert_eq!(tensor_dtype_code(&r), 1); // I32
         assert_eq!(tensor_to_f32_slice(&r).unwrap(), vec![0.0, 1.0, 2.0, 3.0]);
-        assert_eq!(tensor_to_f32_slice(&tensor_iota(0).unwrap()).unwrap(), Vec::<f64>::new());
+        assert_eq!(
+            tensor_to_f32_slice(&tensor_iota(0).unwrap()).unwrap(),
+            Vec::<f64>::new()
+        );
         assert!(tensor_error_message(&tensor_iota(-1).unwrap_err()).contains("non-negative"));
     }
 
@@ -3605,7 +3665,9 @@ kernel void add(device const float* a [[buffer(0)]],
         );
         // Out-of-range index errors.
         let bad = tensor_cast_i32(&tensor_from_f32_slice(&[0.0, 3.0], &[2]).unwrap());
-        assert!(tensor_error_message(&tensor_one_hot(&bad, 3).unwrap_err()).contains("out of range"));
+        assert!(
+            tensor_error_message(&tensor_one_hot(&bad, 3).unwrap_err()).contains("out of range")
+        );
         // num_classes <= 0 errors.
         assert!(tensor_error_message(&tensor_one_hot(&idx, 0).unwrap_err()).contains("positive"));
     }
@@ -3675,24 +3737,33 @@ kernel void add(device const float* a [[buffer(0)]],
         let logits = tensor_from_f32_slice(&[1.0, 2.0, 3.0], &[1, 3]).unwrap();
         let t = tensor_cast_i32(&tensor_from_f32_slice(&[0.0], &[1]).unwrap());
         // wrong axis.
-        assert!(tensor_error_message(&tensor_cross_entropy(&logits, &t, 0).unwrap_err())
-            .contains("class axis must be 1"));
+        assert!(
+            tensor_error_message(&tensor_cross_entropy(&logits, &t, 0).unwrap_err())
+                .contains("class axis must be 1")
+        );
         // non-rank-2 logits.
         let v = tensor_from_f32_slice(&[1.0, 2.0, 3.0], &[3]).unwrap();
-        assert!(tensor_error_message(&tensor_cross_entropy(&v, &t, 1).unwrap_err())
-            .contains("rank-2"));
+        assert!(
+            tensor_error_message(&tensor_cross_entropy(&v, &t, 1).unwrap_err()).contains("rank-2")
+        );
         // targets length mismatch.
         let t2 = tensor_cast_i32(&tensor_from_f32_slice(&[0.0, 1.0], &[2]).unwrap());
-        assert!(tensor_error_message(&tensor_cross_entropy(&logits, &t2, 1).unwrap_err())
-            .contains("does not match logits batch"));
+        assert!(
+            tensor_error_message(&tensor_cross_entropy(&logits, &t2, 1).unwrap_err())
+                .contains("does not match logits batch")
+        );
         // out-of-range target.
         let bad = tensor_cast_i32(&tensor_from_f32_slice(&[5.0], &[1]).unwrap());
-        assert!(tensor_error_message(&tensor_cross_entropy(&logits, &bad, 1).unwrap_err())
-            .contains("out of range"));
+        assert!(
+            tensor_error_message(&tensor_cross_entropy(&logits, &bad, 1).unwrap_err())
+                .contains("out of range")
+        );
         // rank-2 targets rejected.
         let t3 = tensor_cast_i32(&tensor_from_f32_slice(&[0.0], &[1, 1]).unwrap());
-        assert!(tensor_error_message(&tensor_cross_entropy(&logits, &t3, 1).unwrap_err())
-            .contains("rank-1"));
+        assert!(
+            tensor_error_message(&tensor_cross_entropy(&logits, &t3, 1).unwrap_err())
+                .contains("rank-1")
+        );
     }
 
     // conv (slice G)
@@ -3710,7 +3781,10 @@ kernel void add(device const float* a [[buffer(0)]],
         assert_eq!(tensor_shape(&out).unwrap(), vec![1, 1, 2, 2]);
         // out[i,j] = in[i,j]*1 + in[i+1,j+1]*1.
         // [1+5, 2+6, 4+8, 5+9] = [6, 8, 12, 14].
-        assert_eq!(tensor_to_f32_slice(&out).unwrap(), vec![6.0, 8.0, 12.0, 14.0]);
+        assert_eq!(
+            tensor_to_f32_slice(&out).unwrap(),
+            vec![6.0, 8.0, 12.0, 14.0]
+        );
         assert_eq!(tensor_dtype_code(&out), 0);
     }
 
@@ -3730,7 +3804,10 @@ kernel void add(device const float* a [[buffer(0)]],
         assert_eq!(tensor_shape(&out).unwrap(), vec![1, 1, 2, 2]);
         // Sum of each non-overlapping 2x2 block:
         // [1+2+5+6, 3+4+7+8, 9+10+13+14, 11+12+15+16] = [14, 22, 46, 54].
-        assert_eq!(tensor_to_f32_slice(&out).unwrap(), vec![14.0, 22.0, 46.0, 54.0]);
+        assert_eq!(
+            tensor_to_f32_slice(&out).unwrap(),
+            vec![14.0, 22.0, 46.0, 54.0]
+        );
     }
 
     #[test]
@@ -3772,7 +3849,10 @@ kernel void add(device const float* a [[buffer(0)]],
         let out = tensor_max_pool2d(&input, 2, 2).unwrap();
         assert_eq!(tensor_shape(&out).unwrap(), vec![1, 1, 2, 2]);
         // Max of each non-overlapping 2x2 block: [6, 8, 14, 16].
-        assert_eq!(tensor_to_f32_slice(&out).unwrap(), vec![6.0, 8.0, 14.0, 16.0]);
+        assert_eq!(
+            tensor_to_f32_slice(&out).unwrap(),
+            vec![6.0, 8.0, 14.0, 16.0]
+        );
     }
 
     #[test]
@@ -3788,7 +3868,10 @@ kernel void add(device const float* a [[buffer(0)]],
         let out = tensor_avg_pool2d(&input, 2, 2).unwrap();
         assert_eq!(tensor_shape(&out).unwrap(), vec![1, 1, 2, 2]);
         // Mean of each block: [(1+2+5+6)/4, (3+4+7+8)/4, ...] = [3.5, 5.5, 11.5, 13.5].
-        assert_eq!(tensor_to_f32_slice(&out).unwrap(), vec![3.5, 5.5, 11.5, 13.5]);
+        assert_eq!(
+            tensor_to_f32_slice(&out).unwrap(),
+            vec![3.5, 5.5, 11.5, 13.5]
+        );
     }
 
     #[test]

@@ -176,7 +176,9 @@ pub(super) fn check_one_explicit_closure_capture_contract(
             // repeatedly-called stored closure owns its capture and reads it
             // each call). Only flag when the body needs STRONGER access than the
             // declared capture provides.
-            Some((declared_effect, span)) if capture_effect_rank(*effect) > capture_effect_rank(*declared_effect) => {
+            Some((declared_effect, span))
+                if capture_effect_rank(*effect) > capture_effect_rank(*declared_effect) =>
+            {
                 explicit_closure_capture_contract_diagnostic(
                     analyzer,
                     name,
@@ -327,7 +329,10 @@ pub(super) fn strongest_capture_effect(left: ParamEffect, right: ParamEffect) ->
     }
 }
 
-pub(super) fn check_local_class_bindings(analyzer: &mut Analyzer<'_>, body: &crate::hir::HirFunctionBody) {
+pub(super) fn check_local_class_bindings(
+    analyzer: &mut Analyzer<'_>,
+    body: &crate::hir::HirFunctionBody,
+) {
     for binding in &body.bindings {
         if binding.kind == HirBindingKind::LocalLet
             && binding.type_name.as_deref().is_some_and(|type_name| {
@@ -942,4 +947,3 @@ pub(super) fn param_effect_from_data_effect_syntax(effect: DataEffect) -> ParamE
         DataEffect::Take => ParamEffect::Take,
     }
 }
-

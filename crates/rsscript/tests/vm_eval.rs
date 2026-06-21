@@ -1017,6 +1017,9 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:Math.pow_float runtime:Math.round runtime:Math.sqrt
 // parity: runtime:Math.cos runtime:Math.exp runtime:Math.exp2 runtime:Math.log
 // parity: runtime:Math.log2 runtime:Math.sin runtime:Math.tanh runtime:Math.trunc_float
+// parity: runtime:Math.saturating_add runtime:Math.saturating_mul runtime:Math.saturating_sub
+// parity: runtime:Math.wrapping_add runtime:Math.wrapping_mul runtime:Math.wrapping_sub
+// parity: runtime:Metal.available runtime:Metal.device_name runtime:Metal.gpu_run_msl
 // parity: runtime:Option.and_then runtime:Option.filter runtime:Option.is_none
 // parity: runtime:Option.is_some runtime:Option.map runtime:Option.ok_or
 // parity: runtime:Option.or runtime:Option.unwrap_or runtime:Option.unwrap_or_else
@@ -1076,6 +1079,7 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:Tensor.pad runtime:Tensor.shrink runtime:Tensor.flip runtime:Tensor.gather
 // parity: runtime:Tensor.prod_axis runtime:Tensor.min_axis runtime:Tensor.sum_axes runtime:Tensor.prod_axes runtime:Tensor.max_axes runtime:Tensor.min_axes runtime:Tensor.mean_axes runtime:Tensor.reciprocal runtime:Tensor.exp2 runtime:Tensor.log2 runtime:Tensor.rsqrt runtime:Tensor.pow
 // parity: runtime:Tensor.bmm runtime:Tensor.idiv runtime:Tensor.modulo runtime:Tensor.shl runtime:Tensor.shr runtime:Tensor.bit_and runtime:Tensor.bit_or runtime:Tensor.bit_xor runtime:Tensor.bitcast_f32_to_i32 runtime:Tensor.bitcast_i32_to_f32
+// parity: runtime:Tensor.f32_from_le_bytes runtime:Tensor.f32_to_le_bytes runtime:Tensor.floordiv runtime:Tensor.floormod runtime:Tensor.gpu_run_msl runtime:Tensor.matmul_metal runtime:Tensor.metal_available runtime:Tensor.metal_device_name runtime:Tensor.sin runtime:Tensor.trunc
 // parity: runtime:Tensor.rand runtime:Tensor.randint runtime:Tensor.randn
 // parity: runtime:Tensor.iota runtime:Tensor.one_hot runtime:Tensor.softmax runtime:Tensor.log_softmax runtime:Tensor.cross_entropy
 // parity: runtime:Tensor.conv2d runtime:Tensor.max_pool2d runtime:Tensor.avg_pool2d

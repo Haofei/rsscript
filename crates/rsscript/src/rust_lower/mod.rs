@@ -18,8 +18,8 @@ mod runtime_diagnostics;
 mod source_map;
 mod types;
 
-pub(crate) use helpers::{is_rust_keyword, set_lower_name_overrides};
 pub use backend_check::check_generated_rust_package;
+pub(crate) use helpers::{is_rust_keyword, set_lower_name_overrides};
 pub use runtime_diagnostics::parse_runtime_diagnostics;
 pub use source_map::{
     parse_source_map_json, remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines,

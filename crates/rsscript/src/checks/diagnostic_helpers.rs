@@ -42,13 +42,6 @@ pub(crate) fn error_cause_manual_fix(
     fix_title: impl Into<String>,
 ) -> Diagnostic {
     error_cause_fix(
-        code,
-        summary,
-        span,
-        label,
-        cause,
-        fix_kind,
-        fix_title,
-        "manual",
+        code, summary, span, label, cause, fix_kind, fix_title, "manual",
     )
 }

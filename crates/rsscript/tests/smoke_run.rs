@@ -58,12 +58,11 @@ fn smoke_program_evaluates_on_reg_vm() {
 }
 
 /// Tier 1 + 2: the SAME program must run identically on the register VM AND the
-/// compiled (AOT) backend. `assert_vm_eval_matches_backend` evals (interpreter +
-/// JIT) and compiles+runs the program, asserting all tiers agree — proving it
-/// genuinely executes end-to-end, not just type-checks.
+/// compiled (AOT) backend. This intentionally forces the compiled backend even
+/// when the broader parity suite is in its fast default mode.
 #[test]
 fn smoke_program_runs_on_vm_and_aot() {
-    common::assert_vm_eval_matches_backend(
+    common::assert_vm_eval_matches_compiled_backend(
         "smoke_run.rss",
         "rsscript_smoke_run",
         SMOKE_PROGRAM,

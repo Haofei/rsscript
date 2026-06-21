@@ -18,6 +18,9 @@ fn assert_reg_vm_matches_compiled_backend<'a>(
     let args = args.into_iter().collect::<Vec<_>>();
     let reg = reg_vm_eval_source_main_with_args(file, source, args.iter().copied())
         .expect("reg vm should run");
+    if !common::full_backend_parity_enabled() {
+        return;
+    }
     let runtime_path = common::runtime_path();
     let cache_dir = common::workspace_root().join("target/rsscript-vm-compiled-output-cache");
     fs::create_dir_all(&cache_dir).expect("compiled parity cache dir should create");
@@ -132,6 +135,9 @@ fn assert_reg_vm_matches_compiled_backend_return<'a>(
     let args = args.into_iter().collect::<Vec<_>>();
     let reg = reg_vm_eval_source_main_with_args(file, source, args.iter().copied())
         .expect("reg vm should run");
+    if !common::full_backend_parity_enabled() {
+        return;
+    }
     let runtime_path = common::runtime_path();
     let cache_dir = common::workspace_root().join("target/rsscript-vm-compiled-output-cache");
     fs::create_dir_all(&cache_dir).expect("compiled parity cache dir should create");

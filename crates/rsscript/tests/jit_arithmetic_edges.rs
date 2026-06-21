@@ -8,9 +8,10 @@
 //! out-of-range shift, and reproduce IEEE-754 NaN / signed-zero semantics — or
 //! correctly bail to the interpreter at the guard.
 //!
-//! Each case runs through every backend (`vm-interpreter`, `vm-jit`, the native
-//! tier and its force-deopt twin when built, and `rust-compiled`) and asserts
-//! one of two contracts:
+//! Each case runs through the default parity backends (`vm-interpreter`,
+//! `vm-jit`, and the native tier plus its force-deopt twin when built). Set
+//! `RSSCRIPT_FULL_BACKEND_PARITY=1` to add `rust-compiled` to every case. The
+//! assertions cover one of two contracts:
 //!
 //!   * **trap edges** — every backend fails with a clean RSScript runtime error
 //!     (no host panic, no garbage), via [`assert_backends_all_fail`]; and

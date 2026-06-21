@@ -439,13 +439,21 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     // `Metal.*` aliases: same native functions under a namespace that does NOT
     // collide with a host program's own `Tensor` type (the tinygrad port defines
     // `struct Tensor`, which shadows the native `Tensor.*` methods).
-    runtime_intrinsic("Metal", "available", "rsscript_runtime::tensor_metal_available"),
+    runtime_intrinsic(
+        "Metal",
+        "available",
+        "rsscript_runtime::tensor_metal_available",
+    ),
     runtime_intrinsic(
         "Metal",
         "device_name",
         "rsscript_runtime::tensor_metal_device_name",
     ),
-    runtime_intrinsic("Metal", "gpu_run_msl", "rsscript_runtime::tensor_gpu_run_msl"),
+    runtime_intrinsic(
+        "Metal",
+        "gpu_run_msl",
+        "rsscript_runtime::tensor_gpu_run_msl",
+    ),
     runtime_intrinsic("Tensor", "add", "rsscript_runtime::tensor_add"),
     runtime_intrinsic("Tensor", "sub", "rsscript_runtime::tensor_sub"),
     runtime_intrinsic("Tensor", "mul", "rsscript_runtime::tensor_mul"),
@@ -465,11 +473,7 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "rsscript_runtime::tensor_argmax_axis",
     ),
     runtime_intrinsic("Tensor", "reshape", "rsscript_runtime::tensor_reshape"),
-    runtime_intrinsic(
-        "Tensor",
-        "transpose",
-        "rsscript_runtime::tensor_transpose",
-    ),
+    runtime_intrinsic("Tensor", "transpose", "rsscript_runtime::tensor_transpose"),
     runtime_intrinsic("Tensor", "permute", "rsscript_runtime::tensor_permute"),
     runtime_intrinsic(
         "Tensor",
@@ -482,21 +486,9 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("Tensor", "select", "rsscript_runtime::tensor_select"),
     runtime_intrinsic("Tensor", "maximum", "rsscript_runtime::tensor_maximum"),
     runtime_intrinsic("Tensor", "minimum", "rsscript_runtime::tensor_minimum"),
-    runtime_intrinsic(
-        "Tensor",
-        "cast_f32",
-        "rsscript_runtime::tensor_cast_f32",
-    ),
-    runtime_intrinsic(
-        "Tensor",
-        "cast_i32",
-        "rsscript_runtime::tensor_cast_i32",
-    ),
-    runtime_intrinsic(
-        "Tensor",
-        "cast_bool",
-        "rsscript_runtime::tensor_cast_bool",
-    ),
+    runtime_intrinsic("Tensor", "cast_f32", "rsscript_runtime::tensor_cast_f32"),
+    runtime_intrinsic("Tensor", "cast_i32", "rsscript_runtime::tensor_cast_i32"),
+    runtime_intrinsic("Tensor", "cast_bool", "rsscript_runtime::tensor_cast_bool"),
     runtime_intrinsic(
         "Tensor",
         "dtype_code",
@@ -508,25 +500,13 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("Tensor", "flip", "rsscript_runtime::tensor_flip"),
     runtime_intrinsic("Tensor", "gather", "rsscript_runtime::tensor_gather"),
     // reductions+math (ops C)
-    runtime_intrinsic(
-        "Tensor",
-        "prod_axis",
-        "rsscript_runtime::tensor_prod_axis",
-    ),
+    runtime_intrinsic("Tensor", "prod_axis", "rsscript_runtime::tensor_prod_axis"),
     runtime_intrinsic("Tensor", "min_axis", "rsscript_runtime::tensor_min_axis"),
     runtime_intrinsic("Tensor", "sum_axes", "rsscript_runtime::tensor_sum_axes"),
-    runtime_intrinsic(
-        "Tensor",
-        "prod_axes",
-        "rsscript_runtime::tensor_prod_axes",
-    ),
+    runtime_intrinsic("Tensor", "prod_axes", "rsscript_runtime::tensor_prod_axes"),
     runtime_intrinsic("Tensor", "max_axes", "rsscript_runtime::tensor_max_axes"),
     runtime_intrinsic("Tensor", "min_axes", "rsscript_runtime::tensor_min_axes"),
-    runtime_intrinsic(
-        "Tensor",
-        "mean_axes",
-        "rsscript_runtime::tensor_mean_axes",
-    ),
+    runtime_intrinsic("Tensor", "mean_axes", "rsscript_runtime::tensor_mean_axes"),
     runtime_intrinsic(
         "Tensor",
         "reciprocal",
@@ -1603,16 +1583,40 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("Math", "pow", "rsscript_runtime::math_pow"),
     runtime_intrinsic("Math", "pow_float", "rsscript_runtime::math_pow_float"),
     runtime_intrinsic("Math", "round", "rsscript_runtime::math_round"),
-    runtime_intrinsic("Math", "saturating_add", "rsscript_runtime::math_saturating_add"),
-    runtime_intrinsic("Math", "saturating_mul", "rsscript_runtime::math_saturating_mul"),
-    runtime_intrinsic("Math", "saturating_sub", "rsscript_runtime::math_saturating_sub"),
+    runtime_intrinsic(
+        "Math",
+        "saturating_add",
+        "rsscript_runtime::math_saturating_add",
+    ),
+    runtime_intrinsic(
+        "Math",
+        "saturating_mul",
+        "rsscript_runtime::math_saturating_mul",
+    ),
+    runtime_intrinsic(
+        "Math",
+        "saturating_sub",
+        "rsscript_runtime::math_saturating_sub",
+    ),
     runtime_intrinsic("Math", "sin", "rsscript_runtime::math_sin"),
     runtime_intrinsic("Math", "sqrt", "rsscript_runtime::math_sqrt"),
     runtime_intrinsic("Math", "tanh", "rsscript_runtime::math_tanh"),
     runtime_intrinsic("Math", "trunc_float", "rsscript_runtime::math_trunc_float"),
-    runtime_intrinsic("Math", "wrapping_add", "rsscript_runtime::math_wrapping_add"),
-    runtime_intrinsic("Math", "wrapping_mul", "rsscript_runtime::math_wrapping_mul"),
-    runtime_intrinsic("Math", "wrapping_sub", "rsscript_runtime::math_wrapping_sub"),
+    runtime_intrinsic(
+        "Math",
+        "wrapping_add",
+        "rsscript_runtime::math_wrapping_add",
+    ),
+    runtime_intrinsic(
+        "Math",
+        "wrapping_mul",
+        "rsscript_runtime::math_wrapping_mul",
+    ),
+    runtime_intrinsic(
+        "Math",
+        "wrapping_sub",
+        "rsscript_runtime::math_wrapping_sub",
+    ),
     runtime_intrinsic("String", "after", "rsscript_runtime::string_after"),
     runtime_intrinsic("String", "char_at", "rsscript_runtime::string_char_at"),
     runtime_intrinsic("String", "contains", "rsscript_runtime::string_contains"),

@@ -22,11 +22,11 @@ const PAYLOAD_BYTES: usize = 256 * 1024;
 const SERVER_DELAY_MS: u64 = 200;
 
 #[test]
-#[ignore = "release/demo e2e; run from packages/test-runner/manifests/demo-e2e.rsstest.toml"]
+#[ignore = "release/soak; run from packages/test-runner/manifests/soak.rsstest.toml"]
 fn s3_iam_reir_demo_fails_preflight_then_passes_and_shows_async_io_gain() {
     let repo = common::workspace_root();
     let demo_dir = repo.join("examples/demos/s3-iam-reir");
-    let temp_dir = common::unique_temp_dir("rsscript-s3-iam-demo-e2e");
+    let temp_dir = common::unique_temp_dir("rsscript-s3-iam-soak");
     fs::create_dir_all(&temp_dir).expect("e2e temp dir should be created");
 
     let required_facts = required_facts_for_demo(&demo_dir);
@@ -150,7 +150,7 @@ fn s3_iam_reir_demo_fails_preflight_then_passes_and_shows_async_io_gain() {
     );
 
     println!(
-        "s3 iam demo e2e: async={}ms sync={}ms async_max_in_flight={} sync_max_in_flight={}",
+        "s3 iam soak: async={}ms sync={}ms async_max_in_flight={} sync_max_in_flight={}",
         async_elapsed.as_millis(),
         sync_elapsed.as_millis(),
         async_max_in_flight,

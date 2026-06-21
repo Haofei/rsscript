@@ -292,4 +292,3 @@ pub(super) fn type_ref_name(ty: &TypeRef) -> String {
         name
     }
 }
-

@@ -122,7 +122,8 @@ pub fn symbol_inventory(file: &str, source: &str) -> Vec<SymbolInventoryEntry> {
         .to_string();
     // Install this file's `#lower_name(...)` pins so the reported `lowered_name`
     // matches the symbol the backend actually emits.
-    let overrides = crate::rust_lower::collect_lower_name_overrides(&parse_source_raw(file, source));
+    let overrides =
+        crate::rust_lower::collect_lower_name_overrides(&parse_source_raw(file, source));
     let previous = crate::rust_lower::set_lower_name_overrides(overrides);
     let index = symbol_index(file, source);
     let entries = index

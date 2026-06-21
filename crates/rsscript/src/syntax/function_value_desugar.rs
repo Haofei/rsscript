@@ -19,9 +19,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::ast::{
-    Block, Callee, CallArg, DataEffect, Expr, Item, MatchArm, Program, Stmt,
-};
+use super::ast::{Block, CallArg, Callee, DataEffect, Expr, Item, MatchArm, Program, Stmt};
 
 /// A free function's parameters: `(name, effect)` in declared order, used to
 /// build the forwarding closure's parameter list and forwarding call arguments.
@@ -64,7 +62,11 @@ fn collect_free_functions(program: &Program) -> HashMap<String, FunctionParams> 
     functions
 }
 
-fn walk_block(block: &mut Block, functions: &HashMap<String, FunctionParams>, scope: &mut HashSet<String>) {
+fn walk_block(
+    block: &mut Block,
+    functions: &HashMap<String, FunctionParams>,
+    scope: &mut HashSet<String>,
+) {
     let saved: Vec<String> = scope.iter().cloned().collect();
     for statement in &mut block.statements {
         walk_stmt(statement, functions, scope);
@@ -73,7 +75,11 @@ fn walk_block(block: &mut Block, functions: &HashMap<String, FunctionParams>, sc
     scope.extend(saved);
 }
 
-fn walk_stmt(stmt: &mut Stmt, functions: &HashMap<String, FunctionParams>, scope: &mut HashSet<String>) {
+fn walk_stmt(
+    stmt: &mut Stmt,
+    functions: &HashMap<String, FunctionParams>,
+    scope: &mut HashSet<String>,
+) {
     match stmt {
         Stmt::Let(let_stmt) => {
             if let Some(value) = &mut let_stmt.value {
@@ -154,7 +160,11 @@ fn walk_stmt(stmt: &mut Stmt, functions: &HashMap<String, FunctionParams>, scope
     }
 }
 
-fn walk_match_arm(arm: &mut MatchArm, functions: &HashMap<String, FunctionParams>, scope: &mut HashSet<String>) {
+fn walk_match_arm(
+    arm: &mut MatchArm,
+    functions: &HashMap<String, FunctionParams>,
+    scope: &mut HashSet<String>,
+) {
     let mut inner = scope.clone();
     for name in arm.pattern.binding_names() {
         inner.insert(name.to_string());
@@ -165,7 +175,11 @@ fn walk_match_arm(arm: &mut MatchArm, functions: &HashMap<String, FunctionParams
     walk_block(&mut arm.body, functions, &mut inner);
 }
 
-fn walk_expr(expr: &mut Expr, functions: &HashMap<String, FunctionParams>, scope: &mut HashSet<String>) {
+fn walk_expr(
+    expr: &mut Expr,
+    functions: &HashMap<String, FunctionParams>,
+    scope: &mut HashSet<String>,
+) {
     match expr {
         Expr::Call { callee, args, .. } => {
             if let Callee::ReceiverCall { receiver, .. } = callee {

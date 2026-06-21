@@ -62,7 +62,7 @@ cargo run --bin gen-grammar
 A guard test fails if the committed grammar is stale, so you cannot forget:
 
 ```sh
-cargo test --test vscode_grammar
+cargo test --test static vscode_grammar
 # vscode_grammar_is_up_to_date ... FAILED  ->  run `cargo run --bin gen-grammar`
 ```
 

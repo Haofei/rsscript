@@ -6,8 +6,8 @@ timeout_ms = 120000
 args = [
   "test",
   "--test",
-  "s3_iam_reir_demo_e2e",
-  "s3_iam_reir_demo_fails_preflight_then_passes_and_shows_async_io_gain",
+  "soak",
+  "s3_iam_reir_demo_e2e::s3_iam_reir_demo_fails_preflight_then_passes_and_shows_async_io_gain",
   "--",
   "--ignored",
   "--nocapture",
@@ -21,8 +21,8 @@ timeout_ms = 120000
 args = [
   "test",
   "--test",
-  "file_upload_benchmark_e2e",
-  "file_upload_benchmark_reports_async_and_sync_requests_per_second",
+  "soak",
+  "file_upload_benchmark_e2e::file_upload_benchmark_reports_async_and_sync_requests_per_second",
   "--",
   "--ignored",
   "--nocapture",

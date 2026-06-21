@@ -629,6 +629,45 @@ fn load(id: read Int) -> Result<String, NetworkError> {
 }
 
 #[test]
+fn task_group_async_let_materializes_borrowed_temporaries() {
+    let source = r#"
+features: async
+
+struct NetworkError { message: String }
+
+async fn upload(key: read String) -> Result<Unit, NetworkError> {
+    return Ok(Unit)
+}
+
+fn run() -> Result<Unit, NetworkError> {
+    task_group {
+        async let summary = upload(key: read "reports/summary.json")
+        await summary?
+    }
+    return Ok(Unit)
+}
+"#;
+    let lowered = lower_source_to_rust("task-group-temp.rss", source)
+        .expect("task_group with borrowed temporary should lower");
+
+    assert!(
+        lowered
+            .contains("let __rsscript_async_arg_summary_0 = \"reports/summary.json\".to_string();"),
+        "async let should materialize borrowed temporaries before constructing a pending, got:\n{lowered}"
+    );
+    assert!(
+        lowered.contains(
+            "let mut __rsscript_pending_summary = upload(&(__rsscript_async_arg_summary_0));"
+        ),
+        "async let should borrow the materialized local, got:\n{lowered}"
+    );
+    assert!(
+        !lowered.contains("upload(&(\"reports/summary.json\".to_string()))"),
+        "async let should not store a pending that borrows a temporary, got:\n{lowered}"
+    );
+}
+
+#[test]
 fn async_fn_with_task_group_lowers_to_pending_boundary() {
     let source = r#"
 features: async

@@ -57,10 +57,14 @@ may exercise the language, but it must not redefine language semantics.
 These files are intentionally tracked as refactoring targets:
 
 ```text
-tests/checker_frontend.rs   frontend checker, parser, diagnostics, and fixtures
-tests/checker_lowering.rs   Rust lowering, source maps, runtime diagnostics
-tests/checker_package.rs    package review, package manager, REIR adapters
-tests/checker_review.rs     review map and semantic diff behavior
+tests/static.rs          non-executing frontend/lowering/package checks
+tests/runtime.rs         fast VM/runtime/JIT behavior checks
+tests/differential.rs    backend agreement, corpus, generative, metamorphic checks
+tests/soak.rs            slow demo, benchmark, release-shaped checks
+tests/checker_frontend.rs   frontend checker, parser, diagnostics, and fixtures module
+tests/checker_lowering.rs   Rust lowering, source maps, runtime diagnostics module
+tests/checker_package.rs    package review, package manager, REIR adapters module
+tests/checker_review.rs     review map and semantic diff behavior module
 src/package.rs         package domain model, graph, review, lock, publish, vendor
 src/rust_lower.rs      lowering, backend checks, source maps, remapping, intrinsics
 src/analyzer.rs        frontend orchestration
@@ -116,7 +120,16 @@ src/checks/*.rs        large semantic checker implementations
    src/lower/intrinsics.rs
    ```
 
-4. Integration tests have been split by semantic area:
+4. Integration tests use exactly four Cargo-facing targets:
+
+   ```text
+   tests/static.rs
+   tests/runtime.rs
+   tests/differential.rs
+   tests/soak.rs
+   ```
+
+   Internal module files are implementation detail under those four targets:
 
    ```text
    tests/checker_frontend.rs

@@ -4,7 +4,7 @@
 
 use std::rc::Rc;
 
-use crate::vm_value::{ValueMap, VmStruct, VmValue};
+use crate::vm_value::{TypedVec, ValueMap, VmStruct, VmValue};
 
 use super::value_access::{value_none, value_some};
 use super::*;
@@ -104,7 +104,7 @@ pub(super) fn json_value_at(
 pub(super) fn json_optional_path_value(value: &serde_json::Value, path: &str) -> VmValue {
     match json_value_at(value, path) {
         Ok(value) if value.is_null() => VmValue::OptionNone,
-        Ok(value) => VmValue::OptionSome(Box::new(VmValue::Json(Rc::new(value)))),
+        Ok(value) => VmValue::some(VmValue::Json(Rc::new(value))),
         Err(_) => VmValue::OptionNone,
     }
 }
@@ -116,7 +116,7 @@ pub(super) fn json_optional_typed_path_value(
 ) -> Result<VmValue, VmValue> {
     match json_value_at(value, path) {
         Ok(value) if value.is_null() => Ok(VmValue::OptionNone),
-        Ok(value) => convert(value).map(|value| VmValue::OptionSome(Box::new(value))),
+        Ok(value) => convert(value).map(|value| VmValue::some(value)),
         Err(_) => Ok(VmValue::OptionNone),
     }
 }
@@ -189,7 +189,7 @@ pub(super) fn json_as_string_value(value: serde_json::Value) -> Result<VmValue, 
 pub(super) fn json_optional_field_value(value: &serde_json::Value, name: &str) -> VmValue {
     match value.get(name) {
         Some(value) if value.is_null() => VmValue::OptionNone,
-        Some(value) => VmValue::OptionSome(Box::new(VmValue::Json(Rc::new(value.clone())))),
+        Some(value) => VmValue::some(VmValue::Json(Rc::new(value.clone()))),
         None => VmValue::OptionNone,
     }
 }
@@ -203,7 +203,7 @@ pub(super) fn json_optional_typed_field_value(
     match value.get(name) {
         Some(value) if value.is_null() => Ok(VmValue::OptionNone),
         Some(value) => convert(value)
-            .map(|value| VmValue::OptionSome(Box::new(value)))
+            .map(|value| VmValue::some(value))
             .ok_or_else(|| {
                 json_error_value(format!(
                     "JSON field `{name}` is not {} {type_name}",
@@ -325,7 +325,9 @@ pub(super) fn json_decode_field_value(
                 .iter()
                 .map(|item| json_decode_field_value(unit, inner, item))
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok(VmValue::List(Rc::new(RefCell::new(decoded))))
+            Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
+                decoded,
+            )))))
         }
         "Map" => {
             let args = type_arg_names(type_name).unwrap_or_default();
@@ -397,7 +399,10 @@ pub(super) fn channel_error_value(message: impl Into<String>) -> VmValue {
 pub(super) fn tensor_error_value(message: impl Into<String>) -> VmValue {
     let fields: Vec<(String, VmValue)> =
         vec![("message".to_string(), VmValue::string(message.into()))];
-    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("TensorError"), fields)))
+    VmValue::Struct(Rc::new(VmStruct::from_named(
+        Rc::from("TensorError"),
+        fields,
+    )))
 }
 
 pub(super) fn http_error_value(message: impl Into<String>) -> VmValue {

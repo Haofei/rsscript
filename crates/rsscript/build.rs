@@ -212,7 +212,8 @@ fn collect_reg_vm_resolver_signatures(source: &str) -> Result<Vec<String>, Strin
     // complete regardless of which region a signature lives in.
     let mut signatures = BTreeMap::<String, ()>::new();
 
-    let pure_marker = "fn qualified_intrinsic(namespace: &str, name: &str) -> Option<RegIntrinsic> {";
+    let pure_marker =
+        "fn qualified_intrinsic(namespace: &str, name: &str) -> Option<RegIntrinsic> {";
     let pure_start = source
         .find(pure_marker)
         .ok_or_else(|| "reg VM intrinsic resolver helper was not found".to_string())?;

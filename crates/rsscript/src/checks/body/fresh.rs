@@ -87,7 +87,11 @@ pub(super) fn body_callee_display(callee: &Callee) -> String {
             receiver,
             method,
             effect,
-        } => format!("{} {}.{method}", (*effect).unwrap_or(DataEffect::Read).as_str(), body_expr_label(receiver)),
+        } => format!(
+            "{} {}.{method}",
+            (*effect).unwrap_or(DataEffect::Read).as_str(),
+            body_expr_label(receiver)
+        ),
     }
 }
 
@@ -105,7 +109,9 @@ pub(super) fn body_expr_label(expr: &Expr) -> String {
     }
 }
 
-pub(super) fn weak_field_access_requiring_upgrade(expr: &HirExpr) -> Option<&crate::hir::HirFieldAccess> {
+pub(super) fn weak_field_access_requiring_upgrade(
+    expr: &HirExpr,
+) -> Option<&crate::hir::HirFieldAccess> {
     match expr {
         HirExpr::Field { base, access, .. } => {
             if access.is_weak {
@@ -513,7 +519,11 @@ pub(super) fn managed_inline_constructor_field_diagnostic(
     ));
 }
 
-pub(super) fn check_spawn_captures(analyzer: &mut Analyzer<'_>, value: &HirExpr, state: &BodyState) {
+pub(super) fn check_spawn_captures(
+    analyzer: &mut Analyzer<'_>,
+    value: &HirExpr,
+    state: &BodyState,
+) {
     let mut captures = Vec::new();
     collect_spawn_capture_idents(value, &mut captures);
     for (name, span) in captures {
@@ -593,7 +603,10 @@ pub(super) fn collect_spawn_capture_idents(expr: &HirExpr, captures: &mut Vec<(S
     }
 }
 
-pub(super) fn collect_spawn_capture_idents_from_stmt(statement: &HirStmt, captures: &mut Vec<(String, Span)>) {
+pub(super) fn collect_spawn_capture_idents_from_stmt(
+    statement: &HirStmt,
+    captures: &mut Vec<(String, Span)>,
+) {
     match statement {
         HirStmt::Let {
             value: Some(value), ..
@@ -669,4 +682,3 @@ pub(super) fn collect_spawn_capture_idents_from_stmt(statement: &HirStmt, captur
         | HirStmt::Unknown(_) => {}
     }
 }
-

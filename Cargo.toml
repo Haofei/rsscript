@@ -34,3 +34,10 @@ codegen-units = 1
 # runs the dev profile (still unwind), so normal testing is unaffected. The fuzz
 # crate sets its own profile.
 panic = "abort"
+
+# Test builds are used as a fast feedback loop, not for debugger sessions. Full
+# debuginfo for the monolithic `rsscript` crate makes test compiles/linking much
+# slower and bloats rustc incremental state, so keep test artifacts lean.
+[profile.test]
+debug = 0
+incremental = false

@@ -1,8 +1,8 @@
-//! Differential test corpus runner.
+//! Differential fixture corpus.
 //!
 //! Each fixture is a `.rss` program plus a `.toml` sidecar declaring what to
-//! expect. One libtest-mimic trial is generated per fixture, so failures name
-//! the file and `cargo test --test corpus -- <substring>` filters them.
+//! expect. The whole corpus runs inside the `differential` harness so Cargo
+//! exposes one differential test type instead of a separate corpus runner.
 //!
 //! Two fixture kinds:
 //! * `execution` -- run the program and check output. By default it runs on
@@ -19,12 +19,12 @@
 //!   value    = "..."                # expected `main` return display (optional)
 //!   codes    = ["RS0206"]           # diagnostics: expected error codes
 //!   tags     = ["arithmetic"]       # capability tags (feed the coverage gate)
+#![allow(clippy::duplicate_mod)]
 
 mod common;
 
 use std::path::{Path, PathBuf};
 
-use libtest_mimic::{Arguments, Failed, Trial};
 use serde::Deserialize;
 
 const CORPUS_DIR: &str = "tests/corpus";
@@ -53,12 +53,6 @@ struct FixtureSpec {
     tags: Vec<String>,
 }
 
-fn main() {
-    let args = Arguments::from_args();
-    let trials = collect_trials();
-    libtest_mimic::run(&args, trials).exit();
-}
-
 /// Capability tags the corpus must always cover, so "test all aspects" is an
 /// enforced invariant rather than an aspiration. Adding a feature should add a
 /// fixture (and, when it's a new capability, a tag here).
@@ -72,26 +66,24 @@ const REQUIRED_TAGS: &[&str] = &[
     "diagnostics",
 ];
 
-fn collect_trials() -> Vec<Trial> {
+#[test]
+fn corpus_fixtures_pass() {
+    let paths = collect_fixture_paths();
+    for path in &paths {
+        run_fixture(path).unwrap_or_else(|error| panic!("{}: {error}", trial_name(path)));
+    }
+    coverage_gate(&paths).unwrap_or_else(|error| panic!("coverage::required_tags: {error}"));
+}
+
+fn collect_fixture_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
     collect_rss(Path::new(CORPUS_DIR), &mut paths);
     paths.sort();
-    let mut trials: Vec<Trial> = paths
-        .iter()
-        .cloned()
-        .map(|path| {
-            let name = trial_name(&path);
-            Trial::test(name, move || run_fixture(&path))
-        })
-        .collect();
-    trials.push(Trial::test("coverage::required_tags", move || {
-        coverage_gate(&paths)
-    }));
-    trials
+    paths
 }
 
 /// Fail if any required capability tag has no fixture covering it.
-fn coverage_gate(paths: &[PathBuf]) -> Result<(), Failed> {
+fn coverage_gate(paths: &[PathBuf]) -> Result<(), String> {
     let mut covered = std::collections::BTreeSet::new();
     for path in paths {
         if let Ok(spec) = load_spec(path) {
@@ -104,16 +96,18 @@ fn coverage_gate(paths: &[PathBuf]) -> Result<(), Failed> {
         .filter(|tag| !covered.contains(*tag))
         .collect();
     if !missing.is_empty() {
-        return Err(format!("corpus is missing fixtures for capabilities: {missing:?}").into());
+        return Err(format!(
+            "corpus is missing fixtures for capabilities: {missing:?}"
+        ));
     }
     Ok(())
 }
 
-fn load_spec(path: &Path) -> Result<FixtureSpec, Failed> {
+fn load_spec(path: &Path) -> Result<FixtureSpec, String> {
     let spec_path = path.with_extension("toml");
     let spec_text = std::fs::read_to_string(&spec_path)
         .map_err(|e| format!("missing sidecar {spec_path:?}: {e}"))?;
-    toml::from_str(&spec_text).map_err(|e| format!("bad sidecar {spec_path:?}: {e}").into())
+    toml::from_str(&spec_text).map_err(|e| format!("bad sidecar {spec_path:?}: {e}"))
 }
 
 fn collect_rss(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -138,7 +132,7 @@ fn trial_name(path: &Path) -> String {
         .replace(['/', '\\'], "::")
 }
 
-fn run_fixture(path: &Path) -> Result<(), Failed> {
+fn run_fixture(path: &Path) -> Result<(), String> {
     let source = std::fs::read_to_string(path).map_err(|e| format!("read {path:?}: {e}"))?;
     let spec = load_spec(path)?;
     if spec.tags.is_empty() {
@@ -158,7 +152,7 @@ fn run_execution(
     source: &str,
     args: &[&str],
     spec: &FixtureSpec,
-) -> Result<(), Failed> {
+) -> Result<(), String> {
     let vm = common::run_vm_source(file, source, args)
         .map_err(|error| format!("VM evaluation failed: {error:?}"))?;
 
@@ -168,8 +162,7 @@ fn run_execution(
         return Err(format!(
             "VM stdout mismatch\n expected: {expected:?}\n   actual: {:?}",
             vm.stdout
-        )
-        .into());
+        ));
     }
     if let Some(expected) = &spec.value
         && &vm.display_value != expected
@@ -177,8 +170,7 @@ fn run_execution(
         return Err(format!(
             "VM return mismatch\n expected: {expected:?}\n   actual: {:?}",
             vm.display_value
-        )
-        .into());
+        ));
     }
 
     let backends = if spec.backends.is_empty() {
@@ -193,17 +185,16 @@ fn run_execution(
             return Err(format!(
                 "backend parity: stdout differs\n      vm: {:?}\ncompiled: {:?}",
                 vm.stdout, stdout
-            )
-            .into());
+            ));
         }
         if !stderr.is_empty() {
-            return Err(format!("compiled backend wrote to stderr:\n{stderr}").into());
+            return Err(format!("compiled backend wrote to stderr:\n{stderr}"));
         }
     }
     Ok(())
 }
 
-fn run_diagnostics(file: &str, source: &str, spec: &FixtureSpec) -> Result<(), Failed> {
+fn run_diagnostics(file: &str, source: &str, spec: &FixtureSpec) -> Result<(), String> {
     let mut expected = spec.codes.clone();
     expected.sort();
     expected.dedup();
@@ -211,8 +202,7 @@ fn run_diagnostics(file: &str, source: &str, spec: &FixtureSpec) -> Result<(), F
     if actual != expected {
         return Err(format!(
             "diagnostic codes mismatch\n expected: {expected:?}\n   actual: {actual:?}"
-        )
-        .into());
+        ));
     }
     Ok(())
 }

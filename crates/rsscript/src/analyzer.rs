@@ -1027,7 +1027,11 @@ impl Analyzer<'_> {
             let Some(target) = self.type_aliases.get(root) else {
                 break;
             };
-            let params = self.type_alias_params.get(root).cloned().unwrap_or_default();
+            let params = self
+                .type_alias_params
+                .get(root)
+                .cloned()
+                .unwrap_or_default();
             if params.is_empty() {
                 current = target.clone();
             } else {
@@ -2942,9 +2946,11 @@ impl Analyzer<'_> {
             );
         }
 
-        for param in function.params.iter().filter(|param| {
-            matches!(param.effect, Some(DataEffect::Mut | DataEffect::Take))
-        }) {
+        for param in function
+            .params
+            .iter()
+            .filter(|param| matches!(param.effect, Some(DataEffect::Mut | DataEffect::Take)))
+        {
             let (label, cause, fix) = match param.effect {
                 Some(DataEffect::Take) => (
                     "taking parameter in pure function",
@@ -2957,20 +2963,21 @@ impl Analyzer<'_> {
                     "Remove `pure`, or change the parameter to `read` if the function does not mutate it.",
                 ),
             };
-            self.diagnostics.push(checks::diagnostic_helpers::error_cause_manual_fix(
-                code::INVALID_PURE_EFFECT,
-                format!(
-                    "`{}` is declared pure but parameter `{}` uses `{}`.",
-                    function.name,
-                    param.name,
-                    param.effect.map_or("unknown", data_effect_name)
-                ),
-                param.span.clone(),
-                label,
-                cause,
-                "remove_pure_or_use_read",
-                fix,
-            ));
+            self.diagnostics
+                .push(checks::diagnostic_helpers::error_cause_manual_fix(
+                    code::INVALID_PURE_EFFECT,
+                    format!(
+                        "`{}` is declared pure but parameter `{}` uses `{}`.",
+                        function.name,
+                        param.name,
+                        param.effect.map_or("unknown", data_effect_name)
+                    ),
+                    param.span.clone(),
+                    label,
+                    cause,
+                    "remove_pure_or_use_read",
+                    fix,
+                ));
         }
 
         for effect in function
@@ -2978,18 +2985,19 @@ impl Analyzer<'_> {
             .iter()
             .filter(|effect| matches!(effect, EffectDecl::Retains(_)))
         {
-            self.diagnostics.push(checks::diagnostic_helpers::error_cause_manual_fix(
-                code::INVALID_PURE_EFFECT,
-                format!(
-                    "`{}` is declared pure but also retains a parameter.",
-                    function.name
-                ),
-                function.span.clone(),
-                "retention in pure function",
-                "A `pure` function must not retain parameters after returning.",
-                "remove_pure_or_retains",
-                format!("Remove `pure` or remove `{}`.", effect_display(effect)),
-            ));
+            self.diagnostics
+                .push(checks::diagnostic_helpers::error_cause_manual_fix(
+                    code::INVALID_PURE_EFFECT,
+                    format!(
+                        "`{}` is declared pure but also retains a parameter.",
+                        function.name
+                    ),
+                    function.span.clone(),
+                    "retention in pure function",
+                    "A `pure` function must not retain parameters after returning.",
+                    "remove_pure_or_retains",
+                    format!("Remove `pure` or remove `{}`.", effect_display(effect)),
+                ));
         }
     }
 
@@ -5508,7 +5516,9 @@ impl<'a> AssignChecker<'a> {
     /// rule's `mut Ctx` parameter). The parameter binding itself stays
     /// non-rebindable, exactly like a `mut` function parameter.
     fn closure(&mut self, params: &[String], body: &Block, expected_fn_type: Option<&str>) {
-        let param_effects = expected_fn_type.map(fn_type_param_effects).unwrap_or_default();
+        let param_effects = expected_fn_type
+            .map(fn_type_param_effects)
+            .unwrap_or_default();
         self.push_scope();
         for (index, param) in params.iter().enumerate() {
             let binding = if matches!(param_effects.get(index), Some(Some(DataEffect::Mut))) {

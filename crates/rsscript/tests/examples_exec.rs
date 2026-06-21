@@ -3,11 +3,11 @@
 //! `checker_frontend::misc::examples_have_no_diagnostics_and_lower_to_runnable_packages`
 //! already proves every `examples/scripts/**/*.rss` type-checks and lowers to a
 //! `todo!`-free Rust package. That is the *static* half. This is the *dynamic*
-//! half: the synchronous, side-effect-free example scripts are run through every
-//! executable backend (VM interpreter, JIT, native tier when built, and the
-//! compiled-Rust path) and required to agree. It catches the "valid example,
-//! divergent backend" / doc-drift class without per-example expected-output
-//! files.
+//! half: the synchronous, side-effect-free example scripts are run through the
+//! executable parity set (VM interpreter, JIT, native tier when built, and the
+//! compiled-Rust path when `RSSCRIPT_FULL_BACKEND_PARITY=1`) and required to
+//! agree. It catches the "valid example, divergent backend" / doc-drift class
+//! without per-example expected-output files.
 //!
 //! Scripts that need real runtime resources (files, network, env, the clock) or
 //! that exercise the async scheduler are skipped here — they are non-trivial to

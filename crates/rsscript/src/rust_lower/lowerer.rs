@@ -4,8 +4,7 @@ use crate::diagnostic::Span;
 use crate::syntax::ast::{
     BinaryOp, Block, CallArg, Callee, ConstDecl, DataEffect, EffectDecl, Expr, FieldDecl, ForStmt,
     FunctionDecl, GenericBound, GenericParam, Item, LetStmt, MatchPattern, MatchStmt, Param,
-    Program, Stmt,
-    SumTypeDecl, TypeAliasDecl, TypeDecl, TypeKind, TypeRef,
+    Program, Stmt, SumTypeDecl, TypeAliasDecl, TypeDecl, TypeKind, TypeRef,
 };
 
 use super::helpers::*;
@@ -411,7 +410,10 @@ impl<'a> RustLowerer<'a> {
         if ty.kind == TypeKind::Resource {
             out.push_str("#[must_use]\n");
         }
-        let has_closure_field = ty.fields.iter().any(|field| type_ref_holds_closure(&field.ty));
+        let has_closure_field = ty
+            .fields
+            .iter()
+            .any(|field| type_ref_holds_closure(&field.ty));
         let derive_str = self.compute_derive_attr(
             &ty.derives,
             ty.kind == TypeKind::Resource,
@@ -872,12 +874,12 @@ impl<'a> RustLowerer<'a> {
             match statement {
                 Stmt::Let(stmt) if stmt.is_async => {
                     if let Some(value) = &stmt.value {
-                        let lowered = self.lower_expr(value);
                         let name = if stmt.name == "_" {
                             format!("discard_{statement_index}")
                         } else {
                             rust_ident(&stmt.name)
                         };
+                        let lowered = self.lower_async_let_pending(value, out, &pad, &name);
                         out.push_str(&format!(
                             "{pad}let __rsscript_key_{name} = {statement_index}usize;\n"
                         ));
@@ -952,6 +954,66 @@ impl<'a> RustLowerer<'a> {
         out.push_str(&format!("{pad});\n"));
 
         self.current_task_group_token = previous_task_group_token;
+    }
+
+    fn lower_async_let_pending(
+        &mut self,
+        expr: &Expr,
+        out: &mut String,
+        pad: &str,
+        pending_name: &str,
+    ) -> String {
+        let Expr::Call { callee, args, span } = expr else {
+            return self.lower_expr(expr);
+        };
+
+        let mut rewritten_args = args.clone();
+        let mut temp_index = 0usize;
+        for (arg_index, arg) in rewritten_args.iter_mut().enumerate() {
+            let Expr::Effect {
+                effect: DataEffect::Read,
+                value,
+                span: effect_span,
+            } = &arg.value
+            else {
+                continue;
+            };
+            if Self::expr_is_stable_borrow_place(value) {
+                continue;
+            }
+
+            let temp_name = format!("__rsscript_async_arg_{pending_name}_{temp_index}");
+            temp_index += 1;
+            let lowered_value =
+                if let Some(expected) = self.expected_call_arg_type(callee, arg, arg_index) {
+                    self.lower_expr_for_expected_type(value, &expected)
+                } else {
+                    self.lower_owned_expr(value)
+                };
+            out.push_str(&format!("{pad}let {temp_name} = {lowered_value};\n"));
+            arg.value = Expr::Effect {
+                effect: DataEffect::Read,
+                value: Box::new(Expr::Ident(temp_name, effect_span.clone())),
+                span: effect_span.clone(),
+            };
+        }
+
+        let rewritten = Expr::Call {
+            callee: callee.clone(),
+            args: rewritten_args,
+            span: span.clone(),
+        };
+        self.lower_expr(&rewritten)
+    }
+
+    fn expr_is_stable_borrow_place(expr: &Expr) -> bool {
+        match expr {
+            Expr::Ident(..) => true,
+            Expr::Field { base, .. } | Expr::Index { base, .. } => {
+                Self::expr_is_stable_borrow_place(base)
+            }
+            _ => false,
+        }
     }
 
     /// Emit a cooperative poll loop that drives every currently-active async-let
@@ -3184,7 +3246,8 @@ impl<'a> RustLowerer<'a> {
             // `Rc<dyn Fn>`, so the closure literal is wrapped in `Rc::new`. The
             // sole non-storable (direct parameter) case is handled separately in
             // `lower_call_arg_for_expected_type`.
-            return self.lower_closure_for_expected_fn(params, body, expected, /* storable */ true);
+            return self
+                .lower_closure_for_expected_fn(params, body, expected, /* storable */ true);
         }
         if let Expr::Call {
             callee: Callee::Name(name),

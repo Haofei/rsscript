@@ -21,8 +21,10 @@ reproducible across platforms.
 # Build the dev image (first run downloads the toolchain; later runs are cached).
 docker compose build
 
-# Run the full test suite exactly as CI does.
-docker compose run --rm dev cargo run --bin rss -- test --all
+# Run the normal Docker-backed test targets from the host.
+make test-fast
+make test-full
+make test-soak
 
 # Open an interactive shell in the toolchain.
 docker compose run --rm dev bash
@@ -32,9 +34,10 @@ Inside the shell (or via `docker compose run --rm dev <cmd>`) every normal
 workflow is available:
 
 ```sh
-cargo run --bin rss -- test --all          # project test runner (nextest-backed)
-cargo nextest run -p rsscript              # run one crate's tests
-cargo nextest run -p rsscript --features native-jit   # Cranelift JIT tier
+make test-compile                          # compile rsscript tests only
+make test-fast                             # normal edit loop
+make test-full                             # pre-commit local gate
+make test-soak                             # slow parity/demo/release checks
 cargo clippy --all-targets                 # lints
 cargo fmt --all                            # format
 cargo run --bin rss -- <args>              # drive the rss CLI

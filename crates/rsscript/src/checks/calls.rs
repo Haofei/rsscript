@@ -349,7 +349,12 @@ fn check_binding_type(
     if unresolved_generic_type(expected) {
         return;
     }
-    if check_variant_payload_type(analyzer, &PayloadCheckSite::Binding { name }, expected, value) {
+    if check_variant_payload_type(
+        analyzer,
+        &PayloadCheckSite::Binding { name },
+        expected,
+        value,
+    ) {
         return;
     }
     let Some(actual) = actual.as_deref() else {

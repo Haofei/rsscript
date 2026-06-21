@@ -605,8 +605,7 @@ pub(super) fn check_match_pattern_matches_type(
                         .iter()
                         .find(|candidate| candidate.name == field.name)
                 {
-                    let field_type =
-                        substitute_type_args(&field_info.type_name, &substitutions);
+                    let field_type = substitute_type_args(&field_info.type_name, &substitutions);
                     check_match_pattern_matches_type(analyzer, pattern, &field_type);
                 }
             }
@@ -698,7 +697,10 @@ pub(super) fn allowed_sum_variant_names(analyzer: &Analyzer<'_>, root: &str) -> 
 /// Build a map from a type's declared generic parameters to the concrete
 /// arguments named in `type_name`, e.g. params `[A, B]` against
 /// `__Tuple2<Int, String>` → `{A: Int, B: String}`.
-pub(super) fn generic_substitutions(type_params: &[String], type_name: &str) -> HashMap<String, String> {
+pub(super) fn generic_substitutions(
+    type_params: &[String],
+    type_name: &str,
+) -> HashMap<String, String> {
     let Some(args) = type_arg_names(type_name) else {
         return HashMap::new();
     };
@@ -978,7 +980,9 @@ pub(super) fn declared_pattern_fields(
     None
 }
 
-pub(super) fn first_mutating_effect_expr(expr: &HirExpr) -> Option<(DataEffect, &crate::diagnostic::Span)> {
+pub(super) fn first_mutating_effect_expr(
+    expr: &HirExpr,
+) -> Option<(DataEffect, &crate::diagnostic::Span)> {
     match expr {
         HirExpr::Effect {
             effect: ParamEffect::Mut,
@@ -1031,11 +1035,15 @@ pub(super) fn first_mutating_effect_expr(expr: &HirExpr) -> Option<(DataEffect, 
     }
 }
 
-pub(super) fn first_mutating_effect_block(block: &HirBlock) -> Option<(DataEffect, &crate::diagnostic::Span)> {
+pub(super) fn first_mutating_effect_block(
+    block: &HirBlock,
+) -> Option<(DataEffect, &crate::diagnostic::Span)> {
     block.statements.iter().find_map(first_mutating_effect_stmt)
 }
 
-pub(super) fn first_mutating_effect_stmt(stmt: &HirStmt) -> Option<(DataEffect, &crate::diagnostic::Span)> {
+pub(super) fn first_mutating_effect_stmt(
+    stmt: &HirStmt,
+) -> Option<(DataEffect, &crate::diagnostic::Span)> {
     match stmt {
         HirStmt::Let { value, .. } => value.as_ref().and_then(first_mutating_effect_expr),
         HirStmt::Return { value, .. } => value.as_ref().and_then(first_mutating_effect_expr),
@@ -1418,4 +1426,3 @@ pub(super) fn match_arm_value_type(block: &HirBlock) -> Option<&str> {
         _ => None,
     }
 }
-

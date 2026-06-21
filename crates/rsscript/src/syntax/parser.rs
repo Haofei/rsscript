@@ -2929,9 +2929,7 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
         return Some(object);
     }
 
-    if let Some(receiver_call) =
-        parse_receiver_call_expr_from_receiver(tokens, start, end, None)
-    {
+    if let Some(receiver_call) = parse_receiver_call_expr_from_receiver(tokens, start, end, None) {
         return Some(receiver_call);
     }
 
@@ -4094,14 +4092,15 @@ fn parse_type_ref(tokens: &[Token], start: usize, end: usize) -> Option<TypeRef>
             // Capture it positionally (parallel to `fn_params`) so the checker,
             // VM and AOT lowerer can honor it; `parse_type_ref` strips the
             // keyword while parsing the bare parameter type.
-            let effect = tokens.get(range.start).and_then(ident_name).and_then(|n| {
-                match n {
+            let effect = tokens
+                .get(range.start)
+                .and_then(ident_name)
+                .and_then(|n| match n {
                     "read" => Some(DataEffect::Read),
                     "mut" => Some(DataEffect::Mut),
                     "take" => Some(DataEffect::Take),
                     _ => None,
-                }
-            });
+                });
             let Some(param) = parse_type_ref(tokens, range.start, range.end) else {
                 if let Some(token) = tokens.get(range.start) {
                     malformed_arg_spans.push(token.span.clone());

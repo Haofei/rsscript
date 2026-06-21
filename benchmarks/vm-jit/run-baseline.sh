@@ -55,7 +55,11 @@ json_field() {
     'my $d = decode_json($ENV{JSON}); print $d->{$ENV{FIELD}} // "";'
 }
 # Mean ms from a bench JSON blob, or "n/a" if the mode was unsupported/failed.
+# The human-readable table still reports the mean (`*_ms`), but the JSON also
+# carries the median/min/max/IQR computed from the per-run samples (see
+# row_stats.py) so the §0.4 comparator can be noise-aware.
 ms_of() { if [[ "$1" == \{* ]]; then json_field "$1" mean_ms; else echo "n/a"; fi; }
+stats_helper="$script_dir/row_stats.py"
 ratio_of() {
   if [[ "$1" =~ ^[0-9.]+$ && "$2" =~ ^[0-9.]+$ && "$2" != "0" ]]; then
     NUM="$1" DEN="$2" perl -e 'printf "%.2f", $ENV{NUM} / $ENV{DEN};'
@@ -102,9 +106,13 @@ while read -r category path size _tag; do
     "$(ratio_of "$jit_ms" "$reg_ms")" \
     "$(ratio_of "$native_ms" "$reg_ms")"
 
-  json_rows+=("$(printf '{"category":"%s","case":"%s","size":"%s","reg_vm_ms":%s,"jit_ms":%s,"native_ms":%s,"rust_ms":%s}' \
-    "$category" "$case_file" "$size" \
-    "$(jnum "$reg_ms")" "$(jnum "$jit_ms")" "$(jnum "$native_ms")" "$(jnum "$rust_ms")")")
+  # The python helper assembles the row: it keeps the legacy `*_ms` mean fields
+  # for back-compat AND adds a nested per-mode object with median/min/max/IQR
+  # derived from the per-run samples each bench blob carries. It NEVER recomputes
+  # the timings — it only reshapes already-measured data.
+  json_rows+=("$(python3 "$stats_helper" \
+    --category "$category" --case "$case_file" --size "$size" \
+    --reg "$reg_json" --jit "$jit_json" --native "$nat_json" --rust "$release_json")")
 done < "$cases_file"
 
 {

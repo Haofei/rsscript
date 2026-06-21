@@ -1229,8 +1229,9 @@ fn mvp_cross_layer_capability_reconciliation() {
 
 #[test]
 fn reir_spec_lists_implemented_core_slice_kinds() {
-    let spec = fs::read_to_string(workspace_root().join("docs/spec/Review_Evidence_IR_Spec_v0.2.md"))
-        .expect("REIR spec should be readable");
+    let spec =
+        fs::read_to_string(workspace_root().join("docs/spec/Review_Evidence_IR_Spec_v0.2.md"))
+            .expect("REIR spec should be readable");
     for kind in [
         "missing_capability_slice",
         "excess_capability_slice",
@@ -1271,8 +1272,9 @@ fn reir_spec_lists_implemented_core_slice_kinds() {
 
 #[test]
 fn reir_spec_lists_implemented_core_capability_categories() {
-    let spec = fs::read_to_string(workspace_root().join("docs/spec/Review_Evidence_IR_Spec_v0.2.md"))
-        .expect("REIR spec should be readable");
+    let spec =
+        fs::read_to_string(workspace_root().join("docs/spec/Review_Evidence_IR_Spec_v0.2.md"))
+            .expect("REIR spec should be readable");
     for category in [
         "network.client",
         "network.server",
@@ -1320,8 +1322,9 @@ fn reir_spec_lists_implemented_core_capability_categories() {
 
 #[test]
 fn reir_spec_lists_implemented_core_fact_and_edge_kinds() {
-    let spec = fs::read_to_string(workspace_root().join("docs/spec/Review_Evidence_IR_Spec_v0.2.md"))
-        .expect("REIR spec should be readable");
+    let spec =
+        fs::read_to_string(workspace_root().join("docs/spec/Review_Evidence_IR_Spec_v0.2.md"))
+            .expect("REIR spec should be readable");
     for kind in [
         "capability",
         "resource",
@@ -1402,8 +1405,9 @@ fn reir_spec_lists_implemented_core_fact_and_edge_kinds() {
 
 #[test]
 fn reir_spec_lists_implemented_core_subject_kinds() {
-    let spec = fs::read_to_string(workspace_root().join("docs/spec/Review_Evidence_IR_Spec_v0.2.md"))
-        .expect("REIR spec should be readable");
+    let spec =
+        fs::read_to_string(workspace_root().join("docs/spec/Review_Evidence_IR_Spec_v0.2.md"))
+            .expect("REIR spec should be readable");
     for kind in [
         "application",
         "service",

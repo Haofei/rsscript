@@ -1,7 +1,10 @@
 use super::*;
 use crate::checks::diagnostic_helpers::{error_cause_fix, error_cause_manual_fix};
 
-pub(super) fn check_resource_pool_bindings(analyzer: &mut Analyzer<'_>, body: &crate::hir::HirFunctionBody) {
+pub(super) fn check_resource_pool_bindings(
+    analyzer: &mut Analyzer<'_>,
+    body: &crate::hir::HirFunctionBody,
+) {
     for binding in &body.bindings {
         if !binding
             .type_name
@@ -397,7 +400,10 @@ pub(super) fn check_resource_pool_constructor_max_size_contract(
 
 /// Resolve `expr` to a statically known positive `i64`: a positive `Int` literal,
 /// or an `Ident` naming a `const` whose value is a positive `Int` literal.
-pub(super) fn resource_pool_static_positive_int(analyzer: &Analyzer<'_>, expr: &HirExpr) -> Option<i64> {
+pub(super) fn resource_pool_static_positive_int(
+    analyzer: &Analyzer<'_>,
+    expr: &HirExpr,
+) -> Option<i64> {
     match expr {
         HirExpr::Number { value, .. } => value.parse::<i64>().ok().filter(|value| *value > 0),
         HirExpr::Ident { name, .. } => analyzer.syntax_program.items.iter().find_map(|item| {

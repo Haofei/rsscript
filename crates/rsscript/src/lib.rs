@@ -88,22 +88,24 @@ pub use package::{
     vendor_package_dir,
 };
 pub use reg_vm::{
-    JitPlan, RegVmExecutable, RegVmExecutable as VmExecutable, VmLimits,
-    reg_vm_compile_package, reg_vm_eval_source_main_with_limits,
+    JitPlan, RegVmExecutable, RegVmExecutable as VmExecutable, VmLimits, reg_vm_compile_package,
     reg_vm_compile_source as vm_compile_source, reg_vm_compile_source,
     reg_vm_eval_package_main_with_args as eval_package_main_with_args,
     reg_vm_eval_package_main_with_args_and_native_bindings as eval_package_main_with_args_and_native_bindings,
     reg_vm_eval_package_main_with_args_and_native_bindings_streaming_stdout as eval_package_main_with_args_and_native_bindings_streaming_stdout,
     reg_vm_eval_source_main as eval_source_main, reg_vm_eval_source_main_jit,
-    reg_vm_eval_source_main_with_args_streaming_stdout as eval_source_main_with_args_streaming_stdout,
     reg_vm_eval_source_main_with_args,
     reg_vm_eval_source_main_with_args as eval_source_main_with_args,
     reg_vm_eval_source_main_with_args as vm_eval_source_main_with_args,
     reg_vm_eval_source_main_with_args_and_native_bindings as eval_source_main_with_args_and_native_bindings,
     reg_vm_eval_source_main_with_args_and_native_bindings,
+    reg_vm_eval_source_main_with_args_streaming_stdout as eval_source_main_with_args_streaming_stdout,
+    reg_vm_eval_source_main_with_limits,
 };
 #[cfg(feature = "native-jit")]
-pub use reg_vm::{reg_vm_eval_source_main_native, reg_vm_eval_source_main_native_force_deopt};
+pub use reg_vm::{
+    NativeStats, reg_vm_eval_source_main_native, reg_vm_eval_source_main_native_force_deopt,
+};
 pub use review::{
     ReviewFinding, ReviewFix, ReviewMap, ReviewMapCategorySummary, ReviewMapClassification,
     ReviewMapFile, ReviewMapFileRisk, ReviewMapRegion, ReviewMapSummary, ReviewRisk,

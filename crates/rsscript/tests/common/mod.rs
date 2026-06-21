@@ -21,7 +21,15 @@ use rsscript::{
     reg_vm_eval_source_main_with_args, write_generated_rust_package,
 };
 
+pub const FULL_BACKEND_PARITY_ENV: &str = "RSSCRIPT_FULL_BACKEND_PARITY";
+
 static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+pub fn full_backend_parity_enabled() -> bool {
+    std::env::var(FULL_BACKEND_PARITY_ENV)
+        .ok()
+        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
+}
 
 pub fn crate_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -387,12 +395,35 @@ pub fn source_map_summary(entries: &[rsscript::RustSourceMapEntry]) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// VM<->compiled parity helpers + network test servers, shared by the split
-// vm_eval_*.rs files. (Moved here so those files stay small.)
+// VM/backend parity helpers + network test servers, shared by the split
+// vm_eval_*.rs files. Generated-Rust parity is opt-in for broad sweeps because
+// each unique program becomes a Cargo build.
 // ---------------------------------------------------------------------------
 
 pub fn assert_vm_eval_matches_backend(name: &str, package: &str, source: &str) {
     assert_vm_eval_matches_backend_with_args(name, package, source, &[]);
+}
+
+pub fn assert_vm_eval_matches_compiled_backend(name: &str, package: &str, source: &str) {
+    assert_vm_eval_matches_backend_internal(name, package, source, &[], &[], false, true);
+}
+
+pub fn assert_vm_eval_matches_compiled_backend_with_distinct_args(
+    name: &str,
+    package: &str,
+    source: &str,
+    interpreter_args: &[&str],
+    backend_args: &[&str],
+) {
+    assert_vm_eval_matches_backend_internal(
+        name,
+        package,
+        source,
+        interpreter_args,
+        backend_args,
+        false,
+        true,
+    );
 }
 
 pub fn run_with_large_stack(test: impl FnOnce() + Send + 'static) {
@@ -591,6 +622,7 @@ pub fn assert_vm_eval_matches_backend_with_distinct_args(
         interpreter_args,
         backend_args,
         false,
+        false,
     );
 }
 
@@ -608,6 +640,7 @@ pub fn assert_vm_eval_matches_backend_with_distinct_args_allowing_unused_mut_war
         interpreter_args,
         backend_args,
         true,
+        false,
     );
 }
 
@@ -618,6 +651,7 @@ pub fn assert_vm_eval_matches_backend_internal(
     interpreter_args: &[&str],
     backend_args: &[&str],
     allow_unused_mut_warning: bool,
+    force_compiled_backend: bool,
 ) {
     let eval = reg_vm_eval_source_main_with_args(name, source, interpreter_args.iter().copied())
         .unwrap_or_else(|error| panic!("interpreter eval failed for {name}: {error:?}"));
@@ -662,6 +696,10 @@ pub fn assert_vm_eval_matches_backend_internal(
                 "native JIT vs interpreter value divergence for {name}"
             );
         }
+    }
+
+    if !does_network_io && !force_compiled_backend && !full_backend_parity_enabled() {
+        return;
     }
 
     // Cache the compiled backend's (stdout, stderr) keyed by source + args, so

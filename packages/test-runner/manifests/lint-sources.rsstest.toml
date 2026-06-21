@@ -7,8 +7,8 @@ args = [
   "test",
   "-q",
   "--test",
-  "checker_frontend",
-  "core_interface_files_have_no_diagnostics",
+  "static",
+  "checker_frontend::misc::core_interface_files_have_no_diagnostics",
   "--",
   "--exact",
 ]
@@ -40,8 +40,8 @@ args = [
   "test",
   "-q",
   "--test",
-  "checker_frontend",
-  "pass_fixtures_have_no_diagnostics",
+  "static",
+  "checker_frontend::misc::pass_fixtures_have_no_diagnostics",
   "--",
   "--exact",
 ]

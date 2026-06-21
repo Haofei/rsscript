@@ -22,7 +22,7 @@ RSScript / REIR result:
 Run the PR-review golden test:
 
 ```sh
-cargo test --test s3_iam_reir_demo_e2e s3_iam_reir_demo_pr_review -- --nocapture
+cargo test --test soak s3_iam_reir_demo_e2e::s3_iam_reir_demo_pr_review -- --nocapture
 ```
 
 Expected output includes:
@@ -92,7 +92,7 @@ Scenario                 Required          Granted                 Result
 ## Run the full demo flow with the Rust test runner
 
 ```sh
-cargo test --test s3_iam_reir_demo_e2e s3_iam_reir_demo_fails_preflight_then_passes_and_shows_async_io_gain -- --ignored --nocapture
+cargo test --test soak s3_iam_reir_demo_e2e::s3_iam_reir_demo_fails_preflight_then_passes_and_shows_async_io_gain -- --ignored --nocapture
 ```
 
 Expected flow:
@@ -108,7 +108,7 @@ The test runner starts the Tokio mock S3 server, builds the generated RSS packag
 ## Run the fast preflight only
 
 ```sh
-cargo test --test s3_iam_reir_demo_e2e s3_iam_reir_demo_preflight -- --nocapture
+cargo test --test soak s3_iam_reir_demo_e2e::s3_iam_reir_demo_preflight -- --nocapture
 ```
 
 Expected output includes:
@@ -142,7 +142,7 @@ Scenario                 Reviewer question                         Expected REIR
 Run the scenario-only test:
 
 ```sh
-cargo test --test s3_iam_reir_demo_e2e s3_iam_reir_demo_scenarios -- --nocapture
+cargo test --test soak s3_iam_reir_demo_e2e::s3_iam_reir_demo_scenarios -- --nocapture
 ```
 
 Expected output includes:
@@ -156,7 +156,7 @@ The `03-code-adds-delete` package adds `Reports.cleanup_old_reports -> S3.delete
 Run the native-risk scenario:
 
 ```sh
-cargo test --test s3_iam_reir_demo_e2e s3_iam_reir_demo_native_risk -- --nocapture
+cargo test --test soak s3_iam_reir_demo_e2e::s3_iam_reir_demo_native_risk -- --nocapture
 ```
 
 Expected output includes:
@@ -168,7 +168,7 @@ s3 iam native-risk: native-wrapper build-scripts unsafe-policy require review
 Run the missing-binding negative control:
 
 ```sh
-cargo test --test s3_iam_reir_demo_e2e s3_iam_reir_demo_missing_capability -- --nocapture
+cargo test --test soak s3_iam_reir_demo_e2e::s3_iam_reir_demo_missing_capability -- --nocapture
 ```
 
 Expected output includes:
@@ -182,7 +182,7 @@ The checked-in negative-control output is [expected/missing-capability-binding.t
 Run the Postgres write scenario (cloud/security extension covering a non-S3 capability):
 
 ```sh
-cargo test --test s3_iam_reir_demo_e2e s3_iam_reir_demo_postgres_write_scenario -- --nocapture
+cargo test --test soak s3_iam_reir_demo_e2e::s3_iam_reir_demo_postgres_write_scenario -- --nocapture
 ```
 
 Expected output includes:

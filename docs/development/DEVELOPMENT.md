@@ -71,37 +71,60 @@ reviewing and eventually implementing its own core tooling.
 
 ## Testing Loop
 
-Use the broadest cheap signal first, then narrow only after a failure:
+Use the Docker-backed public test targets. They intentionally match the only
+Cargo-facing rsscript test target names: `static`, `runtime`, `differential`,
+and `soak`.
 
 ```sh
-cargo test -q
+make test-compile  # compile rsscript tests only
+make test-fast     # normal edit loop
+make test-full     # pre-commit local gate
+make test-soak     # slow parity/demo/release checks
 ```
 
-If that fails, run the specific failing test while editing. After the fix, return
-to the broad check instead of stacking many single-test passes.
+If a broad target fails, run the specific failing test while editing. After the
+fix, return to the broad target instead of stacking many single-test passes.
 
-Before committing a semantic change, run the static local gate:
+Focused integration tests should target one of the four public Cargo targets and
+filter by module path:
 
 ```sh
-cargo fmt --check
-cargo clippy -q --workspace -- -D warnings
-cargo test -q --workspace
-cargo run --quiet --bin rss -- test
-cargo build --quiet --bin rss
-target/debug/rss run packages/test-runner -- packages/test-runner/manifests/lint-sources.rsstest.toml
-git diff --check
+docker compose run --rm dev cargo test -p rsscript --test static checker_frontend::misc::pass_fixtures_have_no_diagnostics -- --exact
+docker compose run --rm dev cargo test -p rsscript --test runtime vm_eval_parity::tensor::parity_tensor_matmul -- --exact
 ```
 
-For the full development gate, use:
+Default RSScript runtime/differential tests run the broad VM/JIT matrix
+in-process and keep only small generated-Rust smoke coverage. Before a release,
+or after touching Rust lowering/runtime semantics, run the full generated-Rust
+parity matrix explicitly:
 
 ```sh
-cargo run --quiet --bin rss -- test --all
+docker compose run --rm dev bash -lc 'RSSCRIPT_FULL_BACKEND_PARITY=1 cargo test -p rsscript --test runtime'
+docker compose run --rm dev bash -lc 'RSSCRIPT_FULL_BACKEND_PARITY=1 cargo test -p rsscript --test differential'
 ```
 
-This full manifest must stay static-first. Do not add executable examples,
-checked-in self-hosted tool runs, ignored checker tests, or any other e2e test
-back into the default development loop. Static language, lowering,
-package-review, and lint coverage carry development verification.
+For a differential soak, raise the generated case counts explicitly:
+
+```sh
+docker compose run --rm dev bash -lc 'RSS_DIFF_PROPTEST_CASES=200 RSS_GENERATIVE_CASES=64 RSS_GENERATIVE_MUTATION_CASES=200 cargo test -p rsscript --test differential'
+```
+
+Before committing a semantic change, run the full local gate:
+
+```sh
+make test-full
+```
+
+For release/demo parity and timing-sensitive checks, use:
+
+```sh
+make test-soak
+```
+
+The default development loop must stay static/runtime/differential-first. Do not
+add executable examples, checked-in self-hosted tool runs, ignored static tests,
+or any other e2e test back into `make test-fast` or `make test-full`. Slow
+release-grade checks belong in `make test-soak`.
 
 For package-manager dogfood work, use the focused TDD gate first:
 
@@ -116,10 +139,10 @@ It is the intended sub-10-second loop while iterating on
 `packages/package-manager/main.rss`; run the full gate only before committing or when
 touching shared lowering/runtime behavior.
 
-Release/demo e2e tests live in a separate opt-in manifest:
+Release/soak tests live in a separate opt-in manifest:
 
 ```sh
-cargo run --quiet --bin rss -- run packages/test-runner -- packages/test-runner/manifests/demo-e2e.rsstest.toml
+make test-soak
 ```
 
 These tests may build native demo binaries, start local mock servers, generate
@@ -169,7 +192,7 @@ Do not point these paths back at the SSD for normal development; if a test has
 file conflicts, give it an isolated ramdisk subdirectory or copy the ramdisk
 seed target, then clean the copy after the test.
 
-No unignored runtime/demo e2e tests are allowed in this repository. Do not add
+No unignored runtime/soak tests are allowed in this repository. Do not add
 default tests that execute RSScript programs through `rss run`, drive
 `verify-rust` as an end-to-end compiler invocation, sweep examples as behavior
 tests, run checked-in self-hosted scripts as acceptance tests, build native demo
@@ -180,7 +203,7 @@ coverage, test the parser, analyzer, lowering, package metadata, source-map,
 runtime helper, or review function directly. Any unignored test that exceeds 10
 seconds must be deleted, split, or rewritten as a smaller static/unit-level
 check. Release-grade demos may exist only as ignored tests wired through
-`demo-e2e.rsstest.toml`.
+`soak.rsstest.toml`.
 
 Avoid running multiple workspace Cargo commands in parallel. Cargo's build lock
 makes that slower and noisier. Independent RSScript script checks may run in

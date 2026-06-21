@@ -36,12 +36,7 @@ fn module_prefix(segments: &[String]) -> String {
 
 /// The module prefix for a dotted namespace string (`a.b` -> `a_b`).
 fn module_prefix_from_dotted(namespace: &str) -> String {
-    module_prefix(
-        &namespace
-            .split('.')
-            .map(str::to_string)
-            .collect::<Vec<_>>(),
-    )
+    module_prefix(&namespace.split('.').map(str::to_string).collect::<Vec<_>>())
 }
 
 /// Rewrite a program so each `module`-scoped symbol becomes globally unique.
@@ -582,9 +577,7 @@ impl Resolver {
                     self.rewrite_field_pattern(field, file);
                 }
             }
-            MatchPattern::List {
-                prefix, suffix, ..
-            } => {
+            MatchPattern::List { prefix, suffix, .. } => {
                 for nested in prefix.iter_mut().chain(suffix) {
                     self.rewrite_pattern(nested, file);
                 }
@@ -663,7 +656,8 @@ impl Resolver {
                 // where the access lives in a different file than the declaration.
                 if let Expr::Ident(type_name, _) = base.as_ref()
                     && !scope.contains(type_name)
-                    && let Some((type_module, real_type)) = self.resolve_type_module(file, type_name)
+                    && let Some((type_module, real_type)) =
+                        self.resolve_type_module(file, type_name)
                 {
                     let flat = flatten_associated_const(&real_type, name);
                     if self
@@ -736,9 +730,7 @@ impl Resolver {
                 }
                 self.rewrite_block(body, file, &mut inner);
             }
-            Expr::Match {
-                value, arms, ..
-            } => {
+            Expr::Match { value, arms, .. } => {
                 self.rewrite_expr(value, file, scope);
                 for arm in arms {
                     self.rewrite_match_arm(arm, file, scope);
@@ -1022,8 +1014,14 @@ mod tests {
 
     #[test]
     fn two_modules_with_colliding_join_keep_distinct_symbols() {
-        let ab = parse_source("ab.rss", "module a.b\n\nfn count() -> Int {\n    return 1\n}\n");
-        let a_b = parse_source("a_b.rss", "module a_b\n\nfn count() -> Int {\n    return 2\n}\n");
+        let ab = parse_source(
+            "ab.rss",
+            "module a.b\n\nfn count() -> Int {\n    return 1\n}\n",
+        );
+        let a_b = parse_source(
+            "a_b.rss",
+            "module a_b\n\nfn count() -> Int {\n    return 2\n}\n",
+        );
         let mut program = merge_programs([ab, a_b]);
         isolate_module_namespaces(&mut program);
         let names = function_names(&program);

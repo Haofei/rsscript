@@ -5,7 +5,7 @@
 use std::rc::Rc;
 
 use crate::eval_types::{EvalError, NativeValue};
-use crate::vm_value::{ValueMap, VmMapKey, VmStruct, VmValue};
+use crate::vm_value::{TypedVec, ValueMap, VmMapKey, VmStruct, VmValue};
 
 use super::*;
 
@@ -279,7 +279,7 @@ pub(super) fn vm_value_to_json_literal(value: &VmValue) -> Result<serde_json::Va
         VmValue::List(items) => items
             .borrow()
             .iter()
-            .map(vm_value_to_json_literal)
+            .map(|v| vm_value_to_json_literal(&v))
             .collect::<Result<Vec<_>, _>>()
             .map(serde_json::Value::Array),
         VmValue::Map(entries) => {
@@ -377,11 +377,7 @@ fn write_struct_slot_in_place(
     }
     let mut fields = data.fields.clone();
     fields[slot] = new_value;
-    *data = Rc::new(VmStruct::with_layout(
-        Rc::clone(&data.name),
-        Rc::clone(&data.layout),
-        fields,
-    ));
+    *data = Rc::new(VmStruct::with_layout(Rc::clone(&data.layout), fields));
     Ok(())
 }
 
@@ -439,11 +435,7 @@ fn write_struct_field_in_place(
     // (the layout is immutable and shared with them).
     let mut fields = data.fields.clone();
     fields[slot] = new_value;
-    *data = Rc::new(VmStruct::with_layout(
-        Rc::clone(&data.name),
-        Rc::clone(&data.layout),
-        fields,
-    ));
+    *data = Rc::new(VmStruct::with_layout(Rc::clone(&data.layout), fields));
     Ok(())
 }
 
@@ -467,11 +459,7 @@ pub(super) fn unmanage_vm_value(value: VmValue) -> VmValue {
 pub(super) fn deep_copy_value(value: &VmValue) -> VmValue {
     match value {
         VmValue::List(items) => {
-            let copied = items
-                .borrow()
-                .iter()
-                .map(deep_copy_value)
-                .collect::<Vec<_>>();
+            let copied: TypedVec = items.borrow().iter().map(|v| deep_copy_value(&v)).collect();
             VmValue::List(Rc::new(RefCell::new(copied)))
         }
         VmValue::Deque(values) => {
@@ -492,7 +480,10 @@ pub(super) fn deep_copy_value(value: &VmValue) -> VmValue {
         }
         VmValue::Struct(data) => VmValue::Struct(deep_copy_struct(data)),
         VmValue::Variant(data) => VmValue::Variant(deep_copy_struct(data)),
-        VmValue::OptionSome(inner) => VmValue::OptionSome(Box::new(deep_copy_value(inner))),
+        VmValue::OptionSomeHeap(inner) => VmValue::some(deep_copy_value(inner)),
+        // Inline scalars are `Copy` and immutable — no deep copy needed, and the
+        // representation is already canonical.
+        VmValue::OptionSomeScalar(_) => value.clone(),
         other => other.clone(),
     }
 }
@@ -500,11 +491,7 @@ pub(super) fn deep_copy_value(value: &VmValue) -> VmValue {
 pub(super) fn deep_copy_struct(data: &Rc<VmStruct>) -> Rc<VmStruct> {
     // Share the immutable layout; deep-copy only the values (in slot order).
     let fields = data.fields.iter().map(deep_copy_value).collect();
-    Rc::new(VmStruct::with_layout(
-        Rc::clone(&data.name),
-        Rc::clone(&data.layout),
-        fields,
-    ))
+    Rc::new(VmStruct::with_layout(Rc::clone(&data.layout), fields))
 }
 
 pub(super) fn native_value_from_vm_value(value: VmValue) -> Result<NativeValue, EvalError> {
@@ -520,7 +507,6 @@ pub(super) fn native_value_from_vm_value(value: VmValue) -> Result<NativeValue, 
         VmValue::List(items) => items
             .borrow()
             .iter()
-            .cloned()
             .map(native_value_from_vm_value)
             .collect::<Result<Vec<_>, _>>()
             .map(NativeValue::List),
@@ -552,7 +538,7 @@ pub(super) fn native_value_from_vm_value(value: VmValue) -> Result<NativeValue, 
             })
             .collect::<Result<BTreeMap<_, _>, EvalError>>()
             .map(|fields| NativeValue::Struct {
-                name: data.name.to_string(),
+                name: data.name().to_string(),
                 fields,
             }),
         VmValue::Variant(data) => data
@@ -565,7 +551,7 @@ pub(super) fn native_value_from_vm_value(value: VmValue) -> Result<NativeValue, 
             })
             .collect::<Result<BTreeMap<_, _>, EvalError>>()
             .map(|fields| NativeValue::Variant {
-                name: data.name.to_string(),
+                name: data.name().to_string(),
                 fields,
             }),
         VmValue::Native(data) => Ok(NativeValue::Native {
@@ -577,9 +563,20 @@ pub(super) fn native_value_from_vm_value(value: VmValue) -> Result<NativeValue, 
         )),
         // Mirror the return direction: bridge `Option` as a `Some`/`None`
         // variant so native bindings can accept it.
-        VmValue::OptionSome(value) => {
+        VmValue::OptionSomeHeap(value) => {
             let mut fields = BTreeMap::new();
             fields.insert("value".to_string(), native_value_from_vm_value(*value)?);
+            Ok(NativeValue::Variant {
+                name: "Some".to_string(),
+                fields,
+            })
+        }
+        VmValue::OptionSomeScalar(scalar) => {
+            let mut fields = BTreeMap::new();
+            fields.insert(
+                "value".to_string(),
+                native_value_from_vm_value(scalar.to_value())?,
+            );
             Ok(NativeValue::Variant {
                 name: "Some".to_string(),
                 fields,
@@ -633,7 +630,7 @@ pub(super) fn vm_value_from_native_value(value: NativeValue) -> VmValue {
                 .remove("value")
                 .map(vm_value_from_native_value)
                 .unwrap_or(VmValue::Unit);
-            VmValue::OptionSome(Box::new(value))
+            VmValue::some(value)
         }
         NativeValue::Variant { name, .. } if name == "None" => VmValue::OptionNone,
         NativeValue::Variant { name, fields } => VmValue::Variant(Rc::new(VmStruct::from_named(
@@ -698,10 +695,10 @@ mod tests {
     // mutability; that is the key type by design, so the lint does not apply.
     #[allow(clippy::mutable_key_type)]
     fn vm_to_native_collections() {
-        let list = VmValue::List(Rc::new(RefCell::new(vec![
+        let list = VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(vec![
             VmValue::Int(1),
             VmValue::Int(2),
-        ])));
+        ]))));
         assert_eq!(
             to_native(list),
             NativeValue::List(vec![NativeValue::Int(1), NativeValue::Int(2)])
@@ -767,7 +764,7 @@ mod tests {
 
     #[test]
     fn vm_to_native_bridges_option() {
-        match to_native(VmValue::OptionSome(Box::new(VmValue::Int(5)))) {
+        match to_native(VmValue::some(VmValue::Int(5))) {
             NativeValue::Variant { name, fields } => {
                 assert_eq!(name, "Some");
                 assert_eq!(fields["value"], NativeValue::Int(5));
@@ -853,7 +850,7 @@ mod tests {
                 name: "Some".to_string(),
                 fields: some_fields,
             }),
-            VmValue::OptionSome(_)
+            VmValue::OptionSomeScalar(_)
         ));
         assert!(matches!(
             vm_value_from_native_value(NativeValue::Variant {

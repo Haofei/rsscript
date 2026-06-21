@@ -106,7 +106,12 @@ struct BenchResult {
     warmup: usize,
     min: Duration,
     mean: Duration,
+    median: Duration,
     max: Duration,
+    /// The raw per-iteration samples, sorted ascending. Exposed in `--json`
+    /// output so downstream tooling (the vm-jit baseline runner) can compute a
+    /// noise-aware median/IQR without changing how the timings are measured.
+    samples: Vec<Duration>,
     /// Native-JIT telemetry for `jit-native` mode (`--json` only); `None` otherwise.
     jit: Option<serde_json::Value>,
 }
@@ -553,6 +558,25 @@ fn run_internal_benchmark_binary(
             .ok_or_else(|| format!("internal benchmark JSON is missing `{field}`."))?;
         Ok(Duration::from_nanos(value))
     };
+    let mean = nanos("mean_nanos")?;
+    // `median_nanos` / `samples_nanos` were added alongside the noise-aware
+    // baseline work; fall back to the mean / an empty list if an older
+    // generated harness is somehow in play.
+    let median = match value.get("median_nanos").and_then(serde_json::Value::as_u64) {
+        Some(value) => Duration::from_nanos(value),
+        None => mean,
+    };
+    let samples: Vec<Duration> = value
+        .get("samples_nanos")
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(serde_json::Value::as_u64)
+                .map(Duration::from_nanos)
+                .collect()
+        })
+        .unwrap_or_default();
     Ok(BenchResult {
         name: benchmark_name(options.path),
         mode: options.mode,
@@ -560,8 +584,10 @@ fn run_internal_benchmark_binary(
         iterations: options.iterations,
         warmup: options.warmup,
         min: nanos("min_nanos")?,
-        mean: nanos("mean_nanos")?,
+        mean,
+        median,
         max: nanos("max_nanos")?,
+        samples,
         jit: None,
     })
 }
@@ -605,15 +631,21 @@ fn internal_benchmark_main(main_rs: &str) -> Result<String, String> {
             "{}",
             "        measurements.push(start.elapsed());\n",
             "    }}\n",
-            "    let min_nanos = measurements.iter().map(std::time::Duration::as_nanos).min().unwrap_or(0);\n",
-            "    let max_nanos = measurements.iter().map(std::time::Duration::as_nanos).max().unwrap_or(0);\n",
-            "    let total_nanos: u128 = measurements.iter().map(std::time::Duration::as_nanos).sum();\n",
-            "    let mean_nanos = if measurements.is_empty() {{ 0 }} else {{ total_nanos / measurements.len() as u128 }};\n",
+            "    let mut sorted: Vec<u128> = measurements.iter().map(std::time::Duration::as_nanos).collect();\n",
+            "    sorted.sort_unstable();\n",
+            "    let min_nanos = sorted.first().copied().unwrap_or(0);\n",
+            "    let max_nanos = sorted.last().copied().unwrap_or(0);\n",
+            "    let total_nanos: u128 = sorted.iter().sum();\n",
+            "    let mean_nanos = if sorted.is_empty() {{ 0 }} else {{ total_nanos / sorted.len() as u128 }};\n",
+            "    let median_nanos = if sorted.is_empty() {{ 0 }} else if sorted.len() % 2 == 1 {{ sorted[sorted.len() / 2] }} else {{ (sorted[sorted.len() / 2 - 1] + sorted[sorted.len() / 2]) / 2 }};\n",
+            "    let samples_nanos = sorted.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(\",\");\n",
             "    eprintln!(\n",
-            "        \"RSSCRIPT_BENCH_JSON:{{{{\\\"min_nanos\\\":{{}},\\\"mean_nanos\\\":{{}},\\\"max_nanos\\\":{{}}}}}}\",\n",
+            "        \"RSSCRIPT_BENCH_JSON:{{{{\\\"min_nanos\\\":{{}},\\\"mean_nanos\\\":{{}},\\\"median_nanos\\\":{{}},\\\"max_nanos\\\":{{}},\\\"samples_nanos\\\":[{{}}]}}}}\",\n",
             "        min_nanos,\n",
             "        mean_nanos,\n",
-            "        max_nanos\n",
+            "        median_nanos,\n",
+            "        max_nanos,\n",
+            "        samples_nanos\n",
             "    );\n",
             "}}\n"
         ),
@@ -656,10 +688,13 @@ fn summarize_measurements(
     warmup: usize,
     measurements: &[Duration],
 ) -> BenchResult {
-    let min = measurements.iter().copied().min().unwrap_or_default();
-    let max = measurements.iter().copied().max().unwrap_or_default();
-    let total_nanos: u128 = measurements.iter().map(Duration::as_nanos).sum();
-    let mean = Duration::from_nanos((total_nanos / measurements.len() as u128) as u64);
+    let mut sorted: Vec<Duration> = measurements.to_vec();
+    sorted.sort_unstable();
+    let min = sorted.first().copied().unwrap_or_default();
+    let max = sorted.last().copied().unwrap_or_default();
+    let total_nanos: u128 = sorted.iter().map(Duration::as_nanos).sum();
+    let mean = Duration::from_nanos((total_nanos / sorted.len() as u128) as u64);
+    let median = median_duration(&sorted);
     BenchResult {
         name,
         mode,
@@ -668,14 +703,32 @@ fn summarize_measurements(
         warmup,
         min,
         mean,
+        median,
         max,
+        samples: sorted,
         jit: None,
+    }
+}
+
+/// Median of an ascending-sorted slice of durations (mean of the two middle
+/// elements for an even count). Empty slice yields zero.
+fn median_duration(sorted: &[Duration]) -> Duration {
+    let len = sorted.len();
+    if len == 0 {
+        return Duration::default();
+    }
+    if len % 2 == 1 {
+        sorted[len / 2]
+    } else {
+        let lo = sorted[len / 2 - 1].as_nanos();
+        let hi = sorted[len / 2].as_nanos();
+        Duration::from_nanos(((lo + hi) / 2) as u64)
     }
 }
 
 fn bench_result_human(result: &BenchResult) -> String {
     format!(
-        "bench {} mode={} vm={} iterations={} warmup={} min_ms={:.3} mean_ms={:.3} max_ms={:.3}",
+        "bench {} mode={} vm={} iterations={} warmup={} min_ms={:.3} mean_ms={:.3} median_ms={:.3} max_ms={:.3}",
         result.name,
         result.mode.as_str(),
         result.vm.as_str(),
@@ -683,11 +736,13 @@ fn bench_result_human(result: &BenchResult) -> String {
         result.warmup,
         millis(result.min),
         millis(result.mean),
+        millis(result.median),
         millis(result.max)
     )
 }
 
 fn bench_result_json(result: &BenchResult) -> String {
+    let samples_ms: Vec<f64> = result.samples.iter().map(|d| millis(*d)).collect();
     let mut value = serde_json::json!({
         "name": result.name,
         "mode": result.mode.as_str(),
@@ -696,7 +751,9 @@ fn bench_result_json(result: &BenchResult) -> String {
         "warmup": result.warmup,
         "min_ms": millis(result.min),
         "mean_ms": millis(result.mean),
+        "median_ms": millis(result.median),
         "max_ms": millis(result.max),
+        "samples_ms": samples_ms,
     });
     if let Some(jit) = &result.jit {
         value["jit"] = jit.clone();

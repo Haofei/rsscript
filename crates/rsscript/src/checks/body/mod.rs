@@ -106,7 +106,6 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
     }
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Flow {
     Fallthrough,

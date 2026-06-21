@@ -421,7 +421,11 @@ pub(super) fn check_place_pair_conflict(
 /// only when it is a locally exclusive value. `mut` parameters are not
 /// splittable even when their declared type is a struct: the call site may pass
 /// a managed-backed value, so the callee cannot assume field disjointness.
-pub(super) fn base_allows_field_split(analyzer: &Analyzer<'_>, state: &BodyState, base: &str) -> bool {
+pub(super) fn base_allows_field_split(
+    analyzer: &Analyzer<'_>,
+    state: &BodyState,
+    base: &str,
+) -> bool {
     if !state.allows_field_split(base) {
         return false;
     }
@@ -598,4 +602,3 @@ pub(super) fn move_base_field_conflict_diagnostic(
         "Split the field access and `manage`/`take` into separate statements.",
     ));
 }
-

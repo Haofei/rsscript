@@ -353,7 +353,8 @@ fn check_builtin_operator_operand_types(
 ) {
     match op {
         BinaryOp::Equal | BinaryOp::NotEqual => {
-            let Some((left_type, right_type)) = inferred_operand_types(analyzer, left, right) else {
+            let Some((left_type, right_type)) = inferred_operand_types(analyzer, left, right)
+            else {
                 return;
             };
             if type_root_name(&left_type) != type_root_name(&right_type) {
@@ -368,7 +369,8 @@ fn check_builtin_operator_operand_types(
             }
         }
         BinaryOp::Less | BinaryOp::LessEqual | BinaryOp::Greater | BinaryOp::GreaterEqual => {
-            let Some((left_type, right_type)) = inferred_operand_types(analyzer, left, right) else {
+            let Some((left_type, right_type)) = inferred_operand_types(analyzer, left, right)
+            else {
                 return;
             };
             if !is_numeric_type(&left_type) || !is_numeric_type(&right_type) {
@@ -394,7 +396,8 @@ fn check_builtin_operator_operand_types(
             }
         }
         BinaryOp::LogicalAnd | BinaryOp::LogicalOr => {
-            let Some((left_type, right_type)) = inferred_operand_types(analyzer, left, right) else {
+            let Some((left_type, right_type)) = inferred_operand_types(analyzer, left, right)
+            else {
                 return;
             };
             if type_root_name(&left_type) != "Bool" || type_root_name(&right_type) != "Bool" {
@@ -416,7 +419,8 @@ fn check_builtin_operator_operand_types(
             // Non-numeric operands are already rejected by the operator-overload
             // check; here catch mixed numeric roots (e.g. `Float + Int`), which
             // otherwise pass `check` and then fail the backend with E0277/E0308.
-            let Some((left_type, right_type)) = inferred_operand_types(analyzer, left, right) else {
+            let Some((left_type, right_type)) = inferred_operand_types(analyzer, left, right)
+            else {
                 return;
             };
             if is_numeric_type(&left_type)
@@ -438,7 +442,8 @@ fn check_builtin_operator_operand_types(
         | BinaryOp::BitXor
         | BinaryOp::ShiftLeft
         | BinaryOp::ShiftRight => {
-            let Some((left_type, right_type)) = inferred_operand_types(analyzer, left, right) else {
+            let Some((left_type, right_type)) = inferred_operand_types(analyzer, left, right)
+            else {
                 return;
             };
             if type_root_name(&left_type) != "Int" || type_root_name(&right_type) != "Int" {

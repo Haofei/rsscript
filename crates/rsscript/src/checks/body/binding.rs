@@ -456,4 +456,3 @@ pub(super) fn remove_stmt_bindings(statement: &HirStmt, uses: &mut HashSet<Strin
         | HirStmt::Unknown(_) => {}
     }
 }
-

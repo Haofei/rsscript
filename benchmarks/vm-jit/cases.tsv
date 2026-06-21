@@ -14,6 +14,7 @@
 # category          path                                                         size      slow_path
 native-scalar       benchmarks/vm-jit/kernels/native_scalar_loop.rss             2000000   pure-Int scalar loop (native core)
 native-read-heap    benchmarks/vm-jit/kernels/native_read_heap.rss               2000000   read-heap helpers (list_len/get)
+native-read-heap-float  benchmarks/vm-jit/kernels/native_read_heap_float.rss     2000000   read-heap Float helpers (list_len/get_float)
 native-call         benchmarks/vm-jit/kernels/native_call_chain.rss              1500000   native cross-function call
 int-divmod          benchmarks/vm-jit/kernels/int_divmod_loop.rss                2000000   DivInt/ModInt + div-by-zero guard
 bool-logic          benchmarks/vm-jit/kernels/bool_logic_loop.rss                2000000   &&/|| short-circuit + branches

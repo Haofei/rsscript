@@ -2,21 +2,38 @@
 //!
 //! The curated parity suite (vm_eval / vm_eval_parity / corpus) only compares
 //! hand-picked inputs. This test *generates* valid RSScript programs and asserts
-//! the register VM and the compiled Rust backend produce identical output — so a
-//! divergence on an input nobody thought to write is still caught (proptest
-//! shrinks any failure to a minimal reproducer).
+//! the register VM and JIT produce identical output — so a divergence on an
+//! input nobody thought to write is still caught (proptest shrinks any failure
+//! to a minimal reproducer). Set `RSSCRIPT_FULL_BACKEND_PARITY=1` to include the
+//! compiled Rust backend in the broad sweep.
 //!
 //! Programs are `let`-binding chains of checked integer arithmetic
 //! (sum-of-products over literals and earlier variables), then print the result.
 //! This stays inside the parser surface (no parens / unary minus), is always
 //! type-correct, and skips overflowing cases (both backends error there).
 //!
-//! Each case compiles a generated crate, so the case count is modest by design;
-//! raise it for a longer differential-fuzz run.
+//! The default path stays in-process so it can run on every edit. Full backend
+//! parity compiles a generated crate per case, so keep that as a longer
+//! differential-fuzz run.
 
 mod common;
 
 use proptest::prelude::*;
+
+fn env_u32(name: &str, default: u32) -> u32 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
+}
+
+fn differential_proptest_cases() -> u32 {
+    env_u32("RSS_DIFF_PROPTEST_CASES", 4)
+}
+
+fn differential_proptest_shrink_iters() -> u32 {
+    env_u32("RSS_DIFF_SHRINK_ITERS", 16)
+}
 
 /// A factor in a product: a small literal or a reference to an earlier variable.
 #[derive(Debug, Clone)]
@@ -247,8 +264,32 @@ fn render(program: &Program) -> String {
     source
 }
 
+/// Small forced full-backend smoke, so default runs still execute the generated
+/// Rust backend without compiling a package for every differential case.
+#[test]
+fn compiled_backend_smoke_matches_vm_and_jit() {
+    let source = "\
+fn compute(seed: Int) -> Int {
+    let mut acc = seed
+    let mut i = 0
+    while i < 5 {
+        acc = acc * 3 - i
+        i = i + 1
+    }
+    return acc
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: read compute(seed: read 7)))
+    return Unit
+}
+";
+    common::differential::assert_backends_agree_full("compiled-smoke.rss", source, &[]);
+}
+
 /// Eligible function with parameters (exercises DeepCopy + integer arithmetic in
-/// the JIT) — interp == jit == compiled.
+/// the JIT) — interp == jit by default, plus compiled when
+/// `RSSCRIPT_FULL_BACKEND_PARITY=1`.
 #[test]
 fn backends_agree_on_parameterized_arithmetic() {
     let source = "\
@@ -384,8 +425,8 @@ fn main() -> Unit {
 
 /// A mut-heavy struct field-write loop plus mut/read parameter passing — gates the
 /// copy-on-write `SetField` (mutate in place when the struct `Rc` is uniquely
-/// owned, clone when shared). The results must match the compiled backend, which
-/// uses owned Rust structs.
+/// owned, clone when shared). Full parity mode also checks generated Rust's
+/// owned-struct lowering.
 #[test]
 fn backends_agree_on_struct_field_writes() {
     let source = "\
@@ -421,11 +462,11 @@ fn main() -> Unit {
 
 /// A `derives(Eq, Hash)` struct (with nested `List`/`Option` fields) used as a
 /// `Map` key and `Set` element. The VM keys on a structural projection of the
-/// value while the compiled backend keys on the derived `Hash`/`Eq`; both must
-/// agree on dedup (a structurally-equal, separately-constructed key overwrites),
+/// value while generated Rust keys on the derived `Hash`/`Eq`; all enabled
+/// backends agree on dedup (a structurally-equal, separately-constructed key overwrites),
 /// membership, and the round-trip through `Map.keys()` (key value reconstruction).
 /// Output is reduced to counts/booleans so hash *iteration order* — which legitimately
-/// differs between the backends — is not under test. interp == jit == compiled.
+/// differs between the backends — is not under test.
 #[test]
 fn backends_agree_on_struct_keyed_collections() {
     let source = "\
@@ -574,12 +615,150 @@ fn main() -> Unit {
     common::differential::assert_backends_agree("jit-native-heap-reads.rss", source, &[]);
 }
 
+/// Native **Float** heap reads (Phase 3.2): a loop function with a `read List<Float>`
+/// parameter and a `read Vec2f` struct parameter, reading and accumulating `f64`
+/// scalars in a hot loop. The list-element and field reads compile to the new
+/// `ListGetFloat`/`FieldFloat` host-helper calls (the list/struct passed as a
+/// handle), with their `f64` results bail-checked exactly like the Int helpers.
+/// These are side-effect-free reads, so the §7.2 deopt-from-top fallback stays
+/// valid. interp == jit == native == force-deopt == compiled.
+#[test]
+fn backends_agree_on_native_float_heap_reads() {
+    let source = "\
+struct Vec2f {
+    x: Float,
+    y: Float
+}
+
+fn blend(p: read Vec2f, xs: read List<Float>, n: Int) -> Float {
+    let mut acc = 0.0
+    let mut i = 0
+    let len = List.len<Float>(list: read xs)
+    while i < n {
+        acc = acc + p.x * 2.0 + p.y
+        if i < len {
+            acc = acc + List.get<Float>(list: read xs, index: i)
+        }
+        i = i + 1
+    }
+    return acc
+}
+
+fn main() -> Unit {
+    let xs = [1.5, 2.25, 3.75, 4.0]
+    let total = blend(p: read Vec2f(x: 0.5, y: 9.0), xs: read xs, n: read 64)
+    Log.write(message: read String.from_float(value: total))
+    return Unit
+}
+";
+    common::differential::assert_backends_agree("jit-native-float-heap-reads.rss", source, &[]);
+}
+
+/// Failure-path differential for Float reads: an out-of-bounds `List.get<Float>`
+/// in a hot loop must error identically on every backend — the native tier's
+/// Float read helper must signal an immediate bail (not loop forever or use a
+/// garbage 0.0), so the interpreter re-runs and produces the same error.
+#[test]
+fn backends_all_fail_on_out_of_bounds_float_list_get() {
+    let source = "\
+fn sum_n(xs: read List<Float>, n: Int) -> Float {
+    let mut i = 0
+    let mut acc = 0.0
+    while i < n {
+        acc = acc + List.get<Float>(list: read xs, index: i)
+        i = i + 1
+    }
+    return acc
+}
+
+fn main() -> Unit {
+    let xs = [1.0, 2.0, 3.0]
+    Log.write(message: read String.from_float(value: sum_n(xs: read xs, n: read 8)))
+    return Unit
+}
+";
+    common::differential::assert_backends_all_fail("oob-float-list-get.rss", source, &[]);
+}
+
+/// TV2 (Valhalla) direct flat-array reads: a `read List<Float>` and a
+/// `read List<Int>` param, each summed in its own hot loop, so the native tier
+/// reclassifies them as flat-array params (`FlatFloat`/`FlatInt`) and lowers
+/// `List.get`/`List.len` to **direct in-register loads** off the raw `f64`/`i64`
+/// buffer — no per-element host call. The direct read must be bit-identical to the
+/// interpreter's `TypedVec::get` materialization. interp == jit == native ==
+/// force-deopt == compiled (the force-deopt mode proves the §7.2 fallback still
+/// reproduces the exact result when the native path is suppressed).
+#[test]
+fn backends_agree_on_tv2_direct_flat_reads() {
+    let source = "\
+fn sum_floats(xs: read List<Float>, n: Int) -> Float {
+    let mut i = 0
+    let mut acc = 0.0
+    let len = List.len<Float>(list: read xs)
+    while i < n {
+        acc = acc + List.get<Float>(list: read xs, index: i % len)
+        i = i + 1
+    }
+    return acc
+}
+
+fn sum_ints(xs: read List<Int>, n: Int) -> Int {
+    let mut i = 0
+    let mut acc = 0
+    let len = List.len<Int>(list: read xs)
+    while i < n {
+        acc = acc + List.get<Int>(list: read xs, index: i % len)
+        i = i + 1
+    }
+    return acc
+}
+
+fn main() -> Unit {
+    let fs = [1.5, 2.25, 3.75, 4.0, 5.5]
+    let is = [10, 20, 30, 40]
+    let f = sum_floats(xs: read fs, n: read 96)
+    let s = sum_ints(xs: read is, n: read 96)
+    Log.write(message: read String.from_float(value: f))
+    Log.write(message: read String.from_int(value: s))
+    return Unit
+}
+";
+    common::differential::assert_backends_agree("tv2-direct-flat-reads.rss", source, &[]);
+}
+
+/// TV2 failure path: an out-of-bounds direct flat read (`List<Int>` indexed past
+/// its length in a hot loop) must error identically on every tier — the native
+/// tier's direct read must branch to fallback on OOB (not load garbage or loop),
+/// so the interpreter re-runs and produces the same error across interp == jit ==
+/// native == force-deopt == compiled.
+#[test]
+fn backends_all_fail_on_tv2_out_of_bounds_direct_read() {
+    let source = "\
+fn sum_n(xs: read List<Int>, n: Int) -> Int {
+    let mut i = 0
+    let mut acc = 0
+    while i < n {
+        acc = acc + List.get<Int>(list: read xs, index: i)
+        i = i + 1
+    }
+    return acc
+}
+
+fn main() -> Unit {
+    let xs = [7, 8, 9]
+    Log.write(message: read String.from_int(value: sum_n(xs: read xs, n: read 64)))
+    return Unit
+}
+";
+    common::differential::assert_backends_all_fail("tv2-oob-direct-read.rss", source, &[]);
+}
+
 /// Real self-hosted tool, cross-backend: the RSS package manifest inspector
 /// (`benchmarks/micro/selfhost_manifest_inspector.rss`) parses a fixture `rsspkg.toml`
-/// and emits a JSON report. interp == jit == native == force-deopt == compiled —
-/// a hardening check on a realistic intrinsic/IO/error-handling workload (not a
-/// numeric microbenchmark). An absolute fixture path keeps every backend (incl.
-/// the AOT subprocess) reading the same file.
+/// and emits a JSON report. This is a hardening check on a realistic
+/// intrinsic/IO/error-handling workload (not a numeric microbenchmark). An
+/// absolute fixture path keeps every enabled backend, including the AOT
+/// subprocess in full mode, reading the same file.
 #[test]
 fn backends_agree_on_manifest_inspector() {
     let source = include_str!("../../../benchmarks/micro/selfhost_manifest_inspector.rss");
@@ -595,7 +774,8 @@ fn backends_agree_on_manifest_inspector() {
 }
 
 /// Scalar field assignment through a `mut` parameter must propagate to the caller
-/// on every backend (VM write-back == AOT `&mut`). Regression for ledger SH-013.
+/// on every enabled backend (VM write-back == AOT `&mut` in full mode).
+/// Regression for ledger SH-013.
 #[test]
 fn backends_agree_on_mut_param_field_assignment() {
     let source = "features: local\n\
@@ -833,9 +1013,14 @@ fn main() -> Unit {
 }
 
 proptest! {
-    // Each case compiles a crate, so keep the count modest. Raise for a longer
-    // differential-fuzz session (e.g. PROPTEST_CASES=200).
-    #![proptest_config(ProptestConfig { cases: 24, max_shrink_iters: 64, ..ProptestConfig::default() })]
+    // Default cases stay small and in-process. Raise RSS_DIFF_PROPTEST_CASES
+    // for soak runs; with RSSCRIPT_FULL_BACKEND_PARITY=1 each case also compiles
+    // a generated crate, so keep that mode explicit.
+    #![proptest_config(ProptestConfig {
+        cases: differential_proptest_cases(),
+        max_shrink_iters: differential_proptest_shrink_iters(),
+        ..ProptestConfig::default()
+    })]
 
     #[test]
     fn backends_agree_on_integer_programs(program in arb_program()) {
