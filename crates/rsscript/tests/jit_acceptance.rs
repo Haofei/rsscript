@@ -637,6 +637,127 @@ fn main() -> Unit {
     }
 }
 
+/// J3 SCALAR REPLACEMENT — the optimization's payoff shape: a hot loop that
+/// constructs and matches a *non-escaping* `Option` with a scalar (`Int`) payload.
+/// Escape analysis proves the Option never leaves the function, the rewrite pre-pass
+/// dissolves `MakeSome`/`LoadNone`/`MatchOption`/`UnwrapSome` into tag + payload
+/// scalar registers, and the function then compiles through the existing native
+/// subset with NO heap allocation. The differential proves the scalar-replaced
+/// native run is byte-identical to the interpreter, and under `native-jit` we assert
+/// the loop genuinely reached native (`translated > 0 && native_calls > 0 &&
+/// compile_failed == 0`).
+#[test]
+fn jit_acceptance_runs_scalar_replaced_option_loop() {
+    // `hot` constructs a *non-escaping* `Option<Int>` each iteration (only ever
+    // matched/unwrapped, never stored or returned). J3 escape analysis proves it
+    // never escapes and the rewrite pre-pass dissolves the `MakeSome`/`LoadNone`/
+    // `MatchOption`/`UnwrapSome` into tag + payload scalar registers, so `hot`
+    // compiles through the native subset with no allocation.
+    let source = "\
+fn hot(limit: Int) -> Int {
+    let mut acc = 0
+    let mut i = 0
+    while i < limit {
+        let mut o: Option<Int> = None
+        if i % 2 == 0 {
+            o = Some(i * 2)
+        }
+        match o {
+            Some(x) => {
+                acc = acc + x
+            }
+            None => {
+                acc = acc + 0
+            }
+        }
+        i = i + 1
+    }
+    return acc
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: hot(limit: read 256)))
+    return Unit
+}
+";
+    let file = "jit-accept-scalar-replace-option.rss";
+    // Differential: scalar-replaced native must equal every other backend byte-for-byte.
+    assert_fast_jit_backends_agree(file, source);
+
+    #[cfg(feature = "native-jit")]
+    {
+        let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+        let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+        let (native, stats) = executable
+            .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
+            .expect("native JIT run should succeed");
+        assert_eq!(
+            native.stdout, interp.stdout,
+            "scalar-replaced Option loop (native) must equal the pure interpreter",
+        );
+        assert!(
+            stats.translated > 0 && stats.native_calls > 0,
+            "the non-escaping Option loop must reach native after scalar replacement: {stats:?}",
+        );
+        assert_eq!(
+            stats.compile_failed, 0,
+            "native compilation must not fail: {stats:?}",
+        );
+    }
+}
+
+/// J3 NEGATIVE — an ESCAPING `Option` must NOT be scalar-replaced. Here the
+/// constructed `Option` is pushed into a `List`, so it escapes the function; escape
+/// analysis sees the non-recognized use and leaves the whole function on its
+/// interpreter path (no scalar replacement, no native eligibility via this route).
+/// The result must still be correct. The differential proves correctness across all
+/// backends; this is purely a conservatism guard (an unsound transform of an
+/// escaping Option would diverge here).
+#[test]
+fn jit_acceptance_does_not_scalar_replace_escaping_option() {
+    let source = "\
+fn pick(i: Int) -> Option<Int> {
+    if i % 3 == 0 {
+        return Some(i)
+    }
+    return None
+}
+
+fn build(limit: Int) -> Int {
+    let mut xs = List<Option<Int>>.new()
+    let mut i = 0
+    while i < limit {
+        let o = pick(i: read i)
+        List.push<Option<Int>>(list: mut xs, value: read o)
+        i = i + 1
+    }
+    let mut acc = 0
+    let mut j = 0
+    while j < List.len<Option<Int>>(list: read xs) {
+        match List.get<Option<Int>>(list: read xs, index: j) {
+            Some(x) => {
+                acc = acc + x
+            }
+            None => {
+                acc = acc + 0
+            }
+        }
+        j = j + 1
+    }
+    return acc
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: build(limit: read 60)))
+    return Unit
+}
+";
+    // All backends must agree: the escaping Option is handled correctly on every
+    // path (it is never scalar-replaced; `build` falls back to the interpreter for
+    // the heap ops). If escape analysis wrongly scalar-replaced it, this diverges.
+    assert_fast_jit_backends_agree("jit-accept-escaping-option.rss", source);
+}
+
 /// J2.2 POLYMORPHIC inline-cache MISS-BAIL. Warm `dispatch` to a Polymorphic
 /// profile over THREE closures A/B/C (so its `CallClosure` site gets a 3-arm inline
 /// cache and tiers up to native), then drive the SAME site with a FOURTH, never-

@@ -638,6 +638,13 @@ fn native_may_translate_structurally(functions: &[RegFunction], func: &RegFuncti
             RegInstr::CallClosure {
                 closure, mut_args, ..
             } => mut_args.is_empty() && *closure < func.params,
+            // J3: an `Option` op *may* dissolve into the native subset via scalar
+            // replacement if the Option is non-escaping with a scalar payload. We
+            // can't run the full escape analysis cheaply here (it needs the inlined
+            // body), so accept the shape and let the real translator decide. This
+            // keeps a function that constructs/matches Options off the predictably-
+            // ineligible fast-path so it can tier up.
+            _ if is_option_op(instr) => true,
             _ => false,
         }
     })
@@ -826,6 +833,306 @@ fn native_translation_pending_on_profile(unit: &RegUnit, func: &RegFunction) -> 
         }
         _ => false,
     })
+}
+
+/// Whether `instr` is one of the four `Option` register-ops that the J3 scalar-
+/// replacement pre-pass dissolves into tag + payload scalar registers.
+#[cfg(feature = "native-jit")]
+fn is_option_op(instr: &RegInstr) -> bool {
+    matches!(
+        instr,
+        RegInstr::MakeSome { .. }
+            | RegInstr::LoadNone { .. }
+            | RegInstr::MatchOption { .. }
+            | RegInstr::UnwrapSome { .. }
+    )
+}
+
+/// The register *read* positions (value operands) of an instruction that is in the
+/// native subset ([`native_subset_instruction`]) or is one of the four `Option`
+/// ops ([`is_option_op`]). Used by J3 escape analysis to find every use of an
+/// Option register. Deliberately NOT a full enumeration of every `RegInstr` — the
+/// scalar-replacement pass only ever calls it after confirming every reachable
+/// instruction is in exactly this set, so a future enum addition outside the subset
+/// cannot silently reach here (the pass bails first). `None` for any instruction
+/// outside that set, which the caller treats as conservatively escaping.
+#[cfg(feature = "native-jit")]
+fn subset_or_option_reads(instr: &RegInstr) -> Option<Vec<usize>> {
+    Some(match instr {
+        RegInstr::LoadInt { .. }
+        | RegInstr::LoadFloat { .. }
+        | RegInstr::LoadBool { .. }
+        | RegInstr::Jump { .. }
+        | RegInstr::RuntimeError { .. }
+        | RegInstr::LoadNone { .. } => vec![],
+        RegInstr::Move { src, .. } => vec![*src],
+        RegInstr::DeepCopy { reg } => vec![*reg],
+        RegInstr::AddInt { lhs, rhs, .. }
+        | RegInstr::SubInt { lhs, rhs, .. }
+        | RegInstr::MulInt { lhs, rhs, .. }
+        | RegInstr::DivInt { lhs, rhs, .. }
+        | RegInstr::ModInt { lhs, rhs, .. }
+        | RegInstr::BitAndInt { lhs, rhs, .. }
+        | RegInstr::BitOrInt { lhs, rhs, .. }
+        | RegInstr::BitXorInt { lhs, rhs, .. }
+        | RegInstr::ShiftLeftInt { lhs, rhs, .. }
+        | RegInstr::ShiftRightInt { lhs, rhs, .. }
+        | RegInstr::LessInt { lhs, rhs, .. }
+        | RegInstr::LessEqualInt { lhs, rhs, .. }
+        | RegInstr::GreaterInt { lhs, rhs, .. }
+        | RegInstr::GreaterEqualInt { lhs, rhs, .. }
+        | RegInstr::Equal { lhs, rhs, .. }
+        | RegInstr::NotEqual { lhs, rhs, .. }
+        | RegInstr::JumpIfIntCompare { lhs, rhs, .. } => vec![*lhs, *rhs],
+        RegInstr::JumpIfBool { cond, .. } => vec![*cond],
+        RegInstr::Return { src } => vec![*src],
+        RegInstr::GetFieldSlot { base, .. } => vec![*base],
+        RegInstr::ListLen { list, .. } => vec![*list],
+        RegInstr::ListGet { list, index, .. } => vec![*list, *index],
+        RegInstr::NativeGuardClosureId { closure, .. } => vec![*closure],
+        RegInstr::NativeClosureId { closure, .. } => vec![*closure],
+        // Option ops (value operands).
+        RegInstr::MakeSome { value, .. } => vec![*value],
+        RegInstr::MatchOption { src, .. } => vec![*src],
+        RegInstr::UnwrapSome { src, .. } => vec![*src],
+        _ => return None,
+    })
+}
+
+/// J3 (escape analysis + scalar replacement). Identify `Option` registers that are
+/// NON-ESCAPING with a *scalar* payload and rewrite the function's `RegInstr` code
+/// so each such Option is dissolved into two scalar registers — `tag` (Bool,
+/// true=Some / false=None) and `payload` — leaving only native-subset ops (so the function then
+/// compiles through the existing native path with no heap allocation).
+///
+/// Returns `Some((code, n_regs, payload_regs))` when the function contains either no
+/// Option ops (code returned essentially unchanged) OR only scalar-replaceable ones.
+/// `payload_regs` are the freshly-allocated payload registers, which the caller must
+/// verify (post type-inference) are scalar (Int/Float/Bool) — a Handle/flat payload
+/// is a heap value and disqualifies the function.
+///
+/// Returns `None` (⇒ leave the WHOLE function on its current interpreter path, never
+/// partially transformed) if the function has any Option op that is NOT scalar-
+/// replaceable. Conservative: any unrecognized use of an Option register, or any
+/// non-subset / non-Option instruction in the body, makes it escaping.
+///
+/// Non-escaping criterion for an Option register `R` (defined by `MakeSome`/
+/// `LoadNone`, transitively including `Move`-aliases): EVERY use of `R` is one of
+/// `MatchOption{src:R}`, `UnwrapSome{src:R}`, or `Move{src:R}` (whose dst is itself
+/// an Option register); `R` is never a value operand of anything else; and `R`'s
+/// only definitions are `MakeSome`/`LoadNone`/`Move`-from-Option. A `MakeSome`
+/// payload that is itself an Option register is non-scalar ⇒ escaping.
+#[cfg(feature = "native-jit")]
+fn native_scalar_replace_options(
+    code: &[RegInstr],
+    n_regs: usize,
+) -> Option<(Vec<RegInstr>, usize, Vec<usize>)> {
+    let reachable = native_reachable_instructions(code);
+
+    // Fast path: no Option ops at all — nothing to do, no payload regs to verify.
+    if !code
+        .iter()
+        .enumerate()
+        .any(|(i, instr)| reachable[i] && is_option_op(instr))
+    {
+        return Some((code.to_vec(), n_regs, Vec::new()));
+    }
+
+    // Every reachable instruction must be either in the native subset or one of the
+    // four Option ops; anything else makes the function ineligible anyway (and would
+    // also defeat the read-enumeration below). Bail (interpreter path) if not.
+    for (i, instr) in code.iter().enumerate() {
+        if reachable[i] && !native_subset_instruction(instr) && !is_option_op(instr) {
+            return None;
+        }
+    }
+
+    // OPT = the set of registers that carry an Option value. Seed with every
+    // `MakeSome`/`LoadNone` destination, then close under `Move` aliasing
+    // (`Move{dst,src}` with `src` ∈ OPT ⇒ `dst` ∈ OPT).
+    let mut opt = vec![false; n_regs];
+    for (i, instr) in code.iter().enumerate() {
+        if !reachable[i] {
+            continue;
+        }
+        match instr {
+            RegInstr::MakeSome { dst, .. } | RegInstr::LoadNone { dst } => opt[*dst] = true,
+            _ => {}
+        }
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (i, instr) in code.iter().enumerate() {
+            if !reachable[i] {
+                continue;
+            }
+            if let RegInstr::Move { dst, src } = instr {
+                if opt[*src] && !opt[*dst] {
+                    opt[*dst] = true;
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    // Validate: every OPT register is only ever DEFINED by `MakeSome`/`LoadNone`/
+    // `Move`-from-OPT, and only ever USED by the recognized consumers. Any other
+    // definition or use ⇒ escaping ⇒ bail (leave the whole function on its path).
+    for (i, instr) in code.iter().enumerate() {
+        if !reachable[i] {
+            continue;
+        }
+        match instr {
+            // Recognized definitions of OPT registers.
+            RegInstr::LoadNone { dst } if opt[*dst] => {}
+            RegInstr::MakeSome { dst, value } if opt[*dst] => {
+                // The payload must be a scalar — an Option payload is non-scalar.
+                if opt[*value] {
+                    return None;
+                }
+            }
+            RegInstr::Move { dst, src } if opt[*dst] => {
+                // A Move that DEFINES an OPT register must copy from an OPT register
+                // (pure alias). `src` ∈ OPT by the fixpoint unless `dst` was seeded
+                // by a non-Move def and is also Move-assigned a non-Option — reject.
+                if !opt[*src] {
+                    return None;
+                }
+            }
+            // Recognized uses (consumers) of OPT registers — fine.
+            RegInstr::MatchOption { src, .. } if opt[*src] => {}
+            RegInstr::UnwrapSome { src, dst } if opt[*src] => {
+                // The unwrapped payload `dst` must NOT itself be an Option register
+                // (would mean a non-scalar payload slipped through).
+                if opt[*dst] {
+                    return None;
+                }
+            }
+            RegInstr::Move { src, .. } if opt[*src] => {
+                // A Move that READS an OPT register: its dst is in OPT (fixpoint), so
+                // it is a recognized alias and handled by the def arm above.
+            }
+            // Any OTHER instruction must not touch an OPT register at all.
+            other => {
+                let reads = subset_or_option_reads(other)?;
+                if reads.into_iter().any(|r| opt[r]) {
+                    return None; // an OPT register escapes into a non-recognized use
+                }
+                // It also must not (re)define an OPT register through an
+                // unrecognized destination. The only writers of OPT registers are
+                // handled above; a non-recognized instruction whose dst is an OPT
+                // register would mean the register is not purely an Option, so bail.
+                if let RegInstr::UnwrapSome { dst, .. }
+                | RegInstr::MakeSome { dst, .. }
+                | RegInstr::LoadNone { dst } = other
+                {
+                    if opt[*dst] {
+                        return None;
+                    }
+                }
+            }
+        }
+    }
+
+    // Allocate two fresh registers per OPT register: tag (Int) and payload.
+    let mut tag_reg = vec![0usize; n_regs];
+    let mut payload_reg = vec![0usize; n_regs];
+    let mut payload_regs: Vec<usize> = Vec::new();
+    let mut next_reg = n_regs;
+    for (reg, is_opt) in opt.iter().enumerate() {
+        if *is_opt {
+            tag_reg[reg] = next_reg;
+            payload_reg[reg] = next_reg + 1;
+            payload_regs.push(next_reg + 1);
+            next_reg += 2;
+        }
+    }
+
+    // Rewrite, remapping jump targets (indices shift because `MakeSome`/
+    // `MatchOption` expand to two instructions). Same index-map + fixup discipline
+    // as `native_inline_leaf_calls`.
+    enum Fix {
+        Target(usize),
+    }
+    let mut new_code: Vec<RegInstr> = Vec::with_capacity(code.len());
+    let mut index_map = vec![0usize; code.len()];
+    let mut fixups: Vec<(usize, Fix)> = Vec::new();
+    for (i, instr) in code.iter().enumerate() {
+        index_map[i] = new_code.len();
+        match instr {
+            RegInstr::MakeSome { dst, value } if opt[*dst] => {
+                // tag = Some (Bool true). The tag is a `Bool` (stored as i64 0/1) so
+                // it can drive a native `JumpIfBool` directly; `LoadBool true` is the
+                // native-subset form of "tag = 1".
+                new_code.push(RegInstr::LoadBool {
+                    dst: tag_reg[*dst],
+                    value: true,
+                });
+                new_code.push(RegInstr::Move {
+                    dst: payload_reg[*dst],
+                    src: *value,
+                });
+            }
+            RegInstr::LoadNone { dst } if opt[*dst] => {
+                // None: tag = false. Payload left undefined; the None arm never reads it.
+                new_code.push(RegInstr::LoadBool {
+                    dst: tag_reg[*dst],
+                    value: false,
+                });
+            }
+            RegInstr::Move { dst, src } if opt[*dst] => {
+                // Alias copy: move both tag and payload.
+                new_code.push(RegInstr::Move {
+                    dst: tag_reg[*dst],
+                    src: tag_reg[*src],
+                });
+                new_code.push(RegInstr::Move {
+                    dst: payload_reg[*dst],
+                    src: payload_reg[*src],
+                });
+            }
+            RegInstr::MatchOption {
+                src,
+                some_ip,
+                none_ip,
+            } if opt[*src] => {
+                // tag true (Some) → some_ip; else fall to an explicit jump to none_ip.
+                fixups.push((new_code.len(), Fix::Target(*some_ip)));
+                new_code.push(RegInstr::JumpIfBool {
+                    cond: tag_reg[*src],
+                    expected: true,
+                    target: 0,
+                });
+                fixups.push((new_code.len(), Fix::Target(*none_ip)));
+                new_code.push(RegInstr::Jump { target: 0 });
+            }
+            RegInstr::UnwrapSome { dst, src } if opt[*src] => {
+                new_code.push(RegInstr::Move {
+                    dst: *dst,
+                    src: payload_reg[*src],
+                });
+            }
+            // Copy-through, remapping any jump target (these never touch OPT regs).
+            RegInstr::Jump { target }
+            | RegInstr::JumpIfBool { target, .. }
+            | RegInstr::JumpIfIntCompare { target, .. } => {
+                fixups.push((new_code.len(), Fix::Target(*target)));
+                new_code.push(instr.clone());
+            }
+            other => new_code.push(other.clone()),
+        }
+    }
+    for (pos, Fix::Target(t)) in fixups {
+        let target = index_map[t];
+        match &mut new_code[pos] {
+            RegInstr::Jump { target: dst }
+            | RegInstr::JumpIfBool { target: dst, .. }
+            | RegInstr::JumpIfIntCompare { target: dst, .. } => *dst = target,
+            _ => {}
+        }
+    }
+    Some((new_code, next_reg, payload_regs))
 }
 
 #[cfg(feature = "native-jit")]
@@ -1168,6 +1475,14 @@ fn translate_to_native_jit(
     // Inline straight-line leaf calls first, so a function that only leaves the
     // native subset via small helper calls still qualifies (the calls vanish).
     let (code, n_regs) = native_inline_leaf_calls(unit, func)?;
+    // J3: then scalar-replace any non-escaping (scalar-payload) `Option` on the
+    // fully-inlined body, dissolving `MakeSome`/`LoadNone`/`MatchOption`/`UnwrapSome`
+    // into tag + payload scalar registers so the function compiles through the
+    // native subset with no allocation. Run AFTER inlining so it rewrites the final
+    // jump layout (and can dissolve Options exposed by an inlined callee). `None`
+    // here means an Option escapes ⇒ leave the whole function on the interpreter
+    // path (its bail/fallback re-runs from the top and reconstructs the Option).
+    let (code, n_regs, scalar_payload_regs) = native_scalar_replace_options(&code, n_regs)?;
     if func.params > n_regs {
         return None;
     }
@@ -1321,6 +1636,20 @@ fn translate_to_native_jit(
     for reg in 0..func.params {
         if let Some(kind) = flat_param_kind[reg] {
             ty[reg] = Some(kind);
+        }
+    }
+
+    // J3: a scalar-replaced Option's payload register must be a SCALAR (Int/Float/
+    // Bool, or fully unconstrained — defaults to Int). If inference proved it a
+    // `Handle`/flat array, the Some payload was a heap value, so the Option was not
+    // truly scalar-replaceable ⇒ bail and leave the function on the interpreter
+    // path. (Conservative: any doubt ⇒ don't scalar-replace.)
+    for &payload in &scalar_payload_regs {
+        if matches!(
+            ty[payload],
+            Some(NativeTy::Handle | NativeTy::FlatInt | NativeTy::FlatFloat)
+        ) {
+            return None;
         }
     }
 
