@@ -445,3 +445,99 @@ fn main() -> Unit {
     assert_eq!(interp.stdout, precise.stdout);
     assert_eq!(precise.stdout.trim(), "97664");
 }
+
+/// J2.1 profile-guided monomorphic closure inlining — the program shape the
+/// optimization targets: a higher-order `dispatch(f, x)` whose closure parameter is
+/// the same callee on every warm call, so J1 profiles the `CallClosure` site as
+/// monomorphic and J2 inlines that callee behind a closure-identity guard. All
+/// backends (interpreter / tier-0 / native / force-deopt) must agree — the
+/// differential proves the inlined native path is byte-identical to the
+/// interpreter.
+#[test]
+fn jit_acceptance_runs_monomorphic_closure_inline() {
+    let source = "\
+fn dispatch(f: read Fn(Int) -> Int, x: Int) -> Int {
+    return f(x)
+}
+
+fn main() -> Unit {
+    let mut total = 0
+    let mut i = 0
+    while i < 200 {
+        let a: Fn(Int) -> Int = |x| { return x * 2 - 1 }
+        total = total + dispatch(f: read a, x: read i)
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+";
+    assert_fast_jit_backends_agree("jit-accept-mono-closure-inline.rss", source);
+}
+
+/// J2.1 GUARD-BAIL (forced polymorphic): warm `dispatch` to a monomorphic profile
+/// on closure A (so its `CallClosure` site is inlined behind an identity guard and
+/// the function tiers up to native), then drive the SAME site with a DIFFERENT
+/// closure B. The identity guard detects `B != A`, BAILS to the interpreter (the
+/// existing re-run-from-top fallback — sound because the inlined subset is
+/// side-effect-free), and the interpreter handles B correctly. All backends must
+/// agree, so the result equals the pure interpreter on both A and B.
+#[test]
+fn jit_acceptance_monomorphic_inline_guard_bails_on_different_closure() {
+    let source = "\
+fn dispatch(f: read Fn(Int) -> Int, x: Int) -> Int {
+    return f(x)
+}
+
+fn main() -> Unit {
+    let mut total = 0
+    let mut i = 0
+    // Warm phase: 150 calls, all closure A (x * 2). Far past PROFILE_WARMUP, so the
+    // dispatch site profiles monomorphic on A and is inlined+compiled to native.
+    while i < 150 {
+        let a: Fn(Int) -> Int = |x| { return x * 2 }
+        total = total + dispatch(f: read a, x: read i)
+        i = i + 1
+    }
+    // Bail phase: a DIFFERENT closure B (x + 1000) through the now-native, A-inlined
+    // site. The identity guard sees B != A and bails to the interpreter, which runs
+    // B. If the guard were unsound, B would compute A's result (x * 2) and diverge.
+    let mut j = 0
+    while j < 40 {
+        let b: Fn(Int) -> Int = |x| { return x + 1000 }
+        total = total + dispatch(f: read b, x: read j)
+        j = j + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+";
+    let file = "jit-accept-mono-inline-guard-bail.rss";
+    // Differential: native (with the A-inlined guard) must equal every other backend.
+    assert_fast_jit_backends_agree(file, source);
+
+    // And specifically confirm the native tier really executed inlined code on this
+    // program (so the guard-bail path was genuinely exercised, not skipped), while
+    // still matching the pure interpreter byte-for-byte.
+    #[cfg(feature = "native-jit")]
+    {
+        let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+        let executable =
+            rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+        let (native, stats) = executable
+            .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
+            .expect("native JIT run should succeed");
+        assert_eq!(
+            native.stdout, interp.stdout,
+            "native (A-inlined, guard-bailing on B) must equal the pure interpreter",
+        );
+        assert!(
+            stats.translated > 0 && stats.native_calls > 0,
+            "the monomorphic dispatch site must reach native (inline + guard): {stats:?}",
+        );
+        assert_eq!(
+            stats.compile_failed, 0,
+            "native compilation must not fail: {stats:?}",
+        );
+    }
+}

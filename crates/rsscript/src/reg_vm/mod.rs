@@ -411,6 +411,9 @@ fn native_subset_instruction(instr: &RegInstr) -> bool {
             | RegInstr::GetFieldSlot { .. }
             | RegInstr::ListLen { .. }
             | RegInstr::ListGet { .. }
+            // Synthetic J2 monomorphic-inlining guard (only ever present in
+            // native-rewritten code; never in a lowered function body).
+            | RegInstr::NativeGuardClosureId { .. }
     )
 }
 
@@ -625,6 +628,15 @@ fn native_may_translate_structurally(functions: &[RegFunction], func: &RegFuncti
                         .get(*function)
                         .is_some_and(|callee| native_callee_inlinable(callee, args.len()))
             }
+            // J2: a `CallClosure` whose closure is a parameter handle and which has
+            // no `mut` write-backs *may* become inlinable once J1 profiles it as
+            // monomorphic. We can't resolve the callee cold (its identity is only
+            // known at runtime via the profile), so accept the shape here and let
+            // the real translator decide per-profile. This keeps the function off
+            // the predictably-ineligible fast-path so it can tier up after warming.
+            RegInstr::CallClosure {
+                closure, mut_args, ..
+            } => mut_args.is_empty() && *closure < func.params,
             _ => false,
         }
     })
@@ -650,13 +662,115 @@ fn mark_predictably_native_ineligible(functions: &[RegFunction]) {
 /// `Move` of the result into the call's destination plus a jump to the join point
 /// just past the spliced block. `None` if any call target is not inlinable (the
 /// function then falls back).
+/// If the `CallClosure` at instruction index `i` in `func` qualifies for J2
+/// profile-guided monomorphic inlining, return the observed callee's function id
+/// `k` (into `unit.functions`); otherwise `None`.
+///
+/// All of the following must hold (any failure ⇒ leave the site on its normal,
+/// interpreter path — behavior unchanged):
+/// - `func.code[i]` is a `CallClosure` with **no `mut` args** and a closure operand
+///   that is a **parameter** (`< func.params`), i.e. a native-visible handle (the
+///   higher-order "take a closure, call it" shape);
+/// - J1's profile for site `i` is **Monomorphic** with exactly one observed callee
+///   key `k` (so the identity guard has a single speculated target);
+/// - `unit.functions[k]` is **non-capturing** and [`native_callee_inlinable`] at the
+///   call's arity (side-effect-free, splice-able).
+///
+/// Read-only over the profile (a `try_borrow`, never a panic); never mutates state
+/// or feeds a computed value.
+#[cfg(feature = "native-jit")]
+fn monomorphic_closure_inline_target(
+    unit: &RegUnit,
+    func: &RegFunction,
+    i: usize,
+) -> Option<usize> {
+    let (closure, args, mut_args) = match func.code.get(i)? {
+        RegInstr::CallClosure {
+            closure,
+            args,
+            mut_args,
+            ..
+        } => (*closure, args, mut_args),
+        _ => return None,
+    };
+    // Conservative shape gate: side-effect-free call (no write-backs) whose closure
+    // is a parameter handle visible to native code.
+    if !mut_args.is_empty() || closure >= func.params {
+        return None;
+    }
+    // J1 profile: this site must have settled on exactly one callee.
+    let profile = func.profile.try_borrow().ok()?;
+    let feedback = profile.as_ref()?.call_sites.get(&i)?;
+    if feedback.state() != MonoState::Monomorphic {
+        return None;
+    }
+    // Monomorphic ⇒ exactly one observed callee key (its function id).
+    let &(key, _) = feedback.observed.first()?;
+    if feedback.observed.len() != 1 {
+        return None;
+    }
+    let k = usize::try_from(key).ok()?;
+    let callee = unit.functions.get(k)?;
+    if callee.captures != 0 || !native_callee_inlinable(callee, args.len()) {
+        return None;
+    }
+    Some(k)
+}
+
+/// True if `func` contains a `CallClosure` that *structurally* could become J2-
+/// inlinable (non-`mut`, closure operand is a parameter handle, observed/observable
+/// callee non-capturing + native-inlinable) but whose J1 profile has **not yet
+/// frozen** on a monomorphic decision. While such a site is pending, native
+/// translation must be RETRIED on a later (warmer) call rather than cached as
+/// permanently ineligible — otherwise a function that tiers up to native before its
+/// profile warms would be disabled forever and J2 could never fire.
+///
+/// Returns false once the profile is frozen ([`PROFILE_RECORD_LIMIT`] reached): the
+/// decision (mono → inline, poly/mega → never) is then stable and the usual
+/// NOT_ELIGIBLE caching is sound.
+#[cfg(feature = "native-jit")]
+fn native_translation_pending_on_profile(unit: &RegUnit, func: &RegFunction) -> bool {
+    // Frozen profile ⇒ no further state change ⇒ never pending.
+    if func.call_count.get() >= PROFILE_RECORD_LIMIT {
+        return false;
+    }
+    func.code.iter().enumerate().any(|(i, instr)| match instr {
+        RegInstr::CallClosure {
+            closure, mut_args, ..
+        } => {
+            if !mut_args.is_empty() || *closure >= func.params {
+                return false;
+            }
+            // Already qualifying ⇒ not "pending" (translation will inline it now).
+            if monomorphic_closure_inline_target(unit, func, i).is_some() {
+                return false;
+            }
+            // Structurally could still become monomorphic: either no decision yet,
+            // or the single observed callee is inlinable. Use a `try_borrow` to stay
+            // panic-free; a contended borrow conservatively counts as pending.
+            match func.profile.try_borrow() {
+                Ok(profile) => match profile.as_ref().and_then(|p| p.call_sites.get(&i)) {
+                    // No samples yet, or still monomorphic-with-one-observed but the
+                    // observed callee not (yet) confirmed inlinable — keep retrying
+                    // while the profile is unfrozen.
+                    None => true,
+                    Some(feedback) => feedback.state() == MonoState::Monomorphic,
+                },
+                Err(_) => true,
+            }
+        }
+        _ => false,
+    })
+}
+
 #[cfg(feature = "native-jit")]
 fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<RegInstr>, usize)> {
-    if !func
-        .code
-        .iter()
-        .any(|instr| matches!(instr, RegInstr::CallKnown { .. }))
-    {
+    let has_inlinable_call = func.code.iter().enumerate().any(|(i, instr)| match instr {
+        RegInstr::CallKnown { .. } => true,
+        RegInstr::CallClosure { .. } => monomorphic_closure_inline_target(unit, func, i).is_some(),
+        _ => false,
+    });
+    if !has_inlinable_call {
         return Some((func.code.clone(), func.regs));
     }
 
@@ -695,6 +809,109 @@ fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<R
                 if !mut_args.is_empty() || !native_callee_inlinable(callee, args.len()) {
                     return None;
                 }
+                let base = next_reg;
+                next_reg += callee.regs;
+                for (param, arg) in args.iter().enumerate() {
+                    new_code.push(RegInstr::Move {
+                        dst: base + param,
+                        src: *arg,
+                    });
+                }
+                let id = splices.len();
+                let reachable = native_reachable_instructions(&callee.code);
+                let mut cmap = vec![0usize; callee.code.len()];
+                for (ci, cinstr) in callee.code.iter().enumerate() {
+                    if !reachable[ci] {
+                        continue;
+                    }
+                    cmap[ci] = new_code.len();
+                    match cinstr {
+                        RegInstr::Return { src } => {
+                            new_code.push(RegInstr::Move {
+                                dst: *dst,
+                                src: base + src,
+                            });
+                            fixups.push((new_code.len(), Fix::Join(id)));
+                            new_code.push(RegInstr::Jump { target: 0 });
+                        }
+                        RegInstr::Jump { target } => {
+                            fixups.push((
+                                new_code.len(),
+                                Fix::Callee {
+                                    id,
+                                    callee_target: *target,
+                                },
+                            ));
+                            new_code.push(RegInstr::Jump { target: 0 });
+                        }
+                        RegInstr::JumpIfBool {
+                            cond,
+                            expected,
+                            target,
+                        } => {
+                            fixups.push((
+                                new_code.len(),
+                                Fix::Callee {
+                                    id,
+                                    callee_target: *target,
+                                },
+                            ));
+                            new_code.push(RegInstr::JumpIfBool {
+                                cond: cond + base,
+                                expected: *expected,
+                                target: 0,
+                            });
+                        }
+                        RegInstr::JumpIfIntCompare {
+                            lhs,
+                            rhs,
+                            op,
+                            expected,
+                            target,
+                        } => {
+                            fixups.push((
+                                new_code.len(),
+                                Fix::Callee {
+                                    id,
+                                    callee_target: *target,
+                                },
+                            ));
+                            new_code.push(RegInstr::JumpIfIntCompare {
+                                lhs: lhs + base,
+                                rhs: rhs + base,
+                                op: *op,
+                                expected: *expected,
+                                target: 0,
+                            });
+                        }
+                        pure => new_code.push(native_offset_regs(pure, base)?),
+                    }
+                }
+                let join = new_code.len();
+                splices.push(Splice { cmap, join });
+            }
+            RegInstr::CallClosure {
+                dst,
+                closure,
+                args,
+                mut_args,
+            } if monomorphic_closure_inline_target(unit, func, i).is_some() => {
+                // J2 profile-guided monomorphic inlining: J1 profiled this site as
+                // calling exactly one callee `k` (non-capturing, native-inlinable).
+                // Guard the closure's identity, then inline `k`'s body. On a callee
+                // mismatch the guard bails (re-run-from-top fallback), so the
+                // interpreter handles the unexpected closure — sound because the
+                // inlined subset is side-effect-free. `mut_args` is always empty for
+                // an inlinable (side-effect-free) callee; the target check enforces it.
+                debug_assert!(mut_args.is_empty());
+                let k = monomorphic_closure_inline_target(unit, func, i)?;
+                let callee = unit.functions.get(k)?;
+                // Identity guard up front: bail before any inlined work if the
+                // observed closure isn't the speculated callee `k`.
+                new_code.push(RegInstr::NativeGuardClosureId {
+                    closure: *closure,
+                    expected: k,
+                });
                 let base = next_reg;
                 next_reg += callee.regs;
                 for (param, arg) in args.iter().enumerate() {
@@ -905,6 +1122,11 @@ fn translate_to_native_jit(
                 RegInstr::ListGet { dst: _, list, index } => {
                     native_set_ty(ty, *list, NativeTy::Handle, c)
                         && native_set_ty(ty, *index, NativeTy::Int, c)
+                }
+                // The guarded closure operand is a native handle (a closure passed
+                // in as a parameter handle); the guard reads its function id.
+                RegInstr::NativeGuardClosureId { closure, .. } => {
+                    native_set_ty(ty, *closure, NativeTy::Handle, c)
                 }
                 _ => true,
             };
@@ -1253,6 +1475,17 @@ fn translate_to_native_jit(
                         base: r(*list),
                         index: r(*index),
                     }
+                }
+            }
+            RegInstr::NativeGuardClosureId { closure, expected } => {
+                // The closure handle must be a native Handle parameter (the
+                // higher-order function's closure param, marshalled as a heap
+                // handle); the guard reads its function id and bails on mismatch.
+                require(handle_param(*closure))?;
+                let expected = i64::try_from(*expected).ok()?;
+                JitInstr::GuardClosureId {
+                    base: r(*closure),
+                    expected,
                 }
             }
             // `native_subset_instruction` already rejected everything else.
@@ -2344,6 +2577,18 @@ enum RegInstr {
         /// propagate to the caller — identical to `CallKnown`'s `mut_args` and to
         /// AOT's `&mut` argument semantics.
         mut_args: Vec<usize>,
+    },
+    /// Synthetic, native-JIT-only guard (J2 profile-guided monomorphic inlining).
+    /// NEVER emitted by the lowerer and NEVER executed by the interpreter — it is
+    /// synthesized only inside [`native_inline_leaf_calls`], in code consumed solely
+    /// by [`translate_to_native_jit`]. Lowers to a [`vm_jit::JitInstr::GuardClosureId`]:
+    /// reads `closure`'s underlying function id and, if it differs from `expected`,
+    /// bails to the interpreter (the existing re-run-from-top fallback). Guards an
+    /// inlined monomorphic `CallClosure` so a mispredicted callee never runs native.
+    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    NativeGuardClosureId {
+        closure: Reg,
+        expected: usize,
     },
     ListFilter {
         dst: Reg,
@@ -7363,6 +7608,7 @@ fn jit_host_helpers() -> vm_jit::HostHelpers {
         list_get_int: rss_jit_list_get_int,
         field_float: rss_jit_field_float,
         list_get_float: rss_jit_list_get_float,
+        closure_id: rss_jit_closure_id,
     }
 }
 
@@ -7496,6 +7742,25 @@ extern "C" fn rss_jit_list_get_float(handle: i64, index: i64) -> f64 {
             0.0
         }
     }
+}
+
+/// The underlying function id of the closure behind `handle`, as `i64`. Used by the
+/// J2 monomorphic-inlining guard ([`vm_jit::JitInstr::GuardClosureId`]). Total: a
+/// non-closure / invalid handle, or a function id too large for `i64`, returns `-1`,
+/// which never equals a real (`>= 0`) callee id, so the guard simply bails. Never
+/// signals the out-of-band bail flag.
+#[cfg(feature = "native-jit")]
+fn jit_closure_function_id(value: &VmValue) -> Option<i64> {
+    match value {
+        VmValue::Closure(closure) => i64::try_from(closure.function).ok(),
+        VmValue::Managed(inner) => jit_closure_function_id(&inner.borrow()),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_closure_id(handle: i64) -> i64 {
+    jit_heap_read(handle, jit_closure_function_id).unwrap_or(-1)
 }
 
 #[cfg(feature = "native-jit")]
@@ -7912,6 +8177,14 @@ impl RegVm {
                             }
                         }
                         None => {
+                            // J2: if translation failed *only* because a structurally
+                            // inlinable `CallClosure` site hasn't yet warmed to a
+                            // monomorphic decision, the verdict is NOT invariant —
+                            // re-attempt on a later (warmer) call. Don't cache and
+                            // don't mark NOT_ELIGIBLE; just fall back this once.
+                            if native_translation_pending_on_profile(&unit, func) {
+                                return NativeAttempt::Fallback;
+                            }
                             if native.collect_stats {
                                 native.stats.not_eligible += 1;
                             }

@@ -58,6 +58,11 @@ pub type FieldFloatFn = extern "C" fn(i64, i64) -> f64;
 /// `(list_handle, index) -> f64`: the list element at `index` as a `Float`.
 /// Like [`FieldFloatFn`], a wrong-type/out-of-bounds element signals a bail.
 pub type ListGetFloatFn = extern "C" fn(i64, i64) -> f64;
+/// `(closure_handle) -> i64`: the closure's underlying function id (its stable
+/// callee identity). Returns `-1` for a non-closure / invalid handle, which never
+/// matches a real (`>= 0`) function id, so the identity guard then bails. Total —
+/// it never sets the out-of-band bail flag.
+pub type ClosureIdFn = extern "C" fn(i64) -> i64;
 
 /// Host helper functions the compiled code calls to read heap values (struct
 /// fields, list elements) that don't fit in a scalar register. The `rsscript`
@@ -78,13 +83,14 @@ pub struct HostHelpers {
     pub list_get_int: ListGetIntFn,
     pub field_float: FieldFloatFn,
     pub list_get_float: ListGetFloatFn,
+    pub closure_id: ClosureIdFn,
 }
 
 /// Version of the [`JitInstr`]/[`JitFunction`] IR this crate consumes. The
 /// producer (`rsscript`) translates its private bytecode into this stable,
 /// versioned surface, so the two crates are decoupled: a breaking IR change bumps
 /// this and the producer is updated in lock-step.
-pub const IR_VERSION: u32 = 4;
+pub const IR_VERSION: u32 = 5;
 
 /// Signed integer comparison (the four ordered comparisons; equality is its own
 /// instruction so it can also apply to booleans).
@@ -292,6 +298,17 @@ pub enum JitInstr {
         dst: u32,
         base: u32,
     },
+    /// Profile-guided monomorphic inlining guard (J2). `base` is a `Handle`
+    /// register holding a closure handle; reads its underlying function id via
+    /// [`HostHelpers::closure_id`] and, if it differs from `expected`, **bails** to
+    /// the interpreter (the existing re-run-from-top fallback). Emitted just before
+    /// the inlined body of the profiled-monomorphic callee, so a different callee
+    /// than the one speculated never runs native code. Writes no register; the
+    /// matching (hot) path falls through with zero extra work beyond the compare.
+    GuardClosureId {
+        base: u32,
+        expected: i64,
+    },
 }
 
 /// Storage class of a register: an unboxed `i64` (integers and booleans) or an
@@ -449,6 +466,7 @@ struct HostFuncs {
     list_get_int: FuncId,
     field_float: FuncId,
     list_get_float: FuncId,
+    closure_id: FuncId,
 }
 
 /// Handle to a function compiled into a [`NativeModule`]. Carries the minting
@@ -613,6 +631,7 @@ impl NativeModule {
         builder.symbol("rss_jit_list_get_int", helpers.list_get_int as *const u8);
         builder.symbol("rss_jit_field_float", helpers.field_float as *const u8);
         builder.symbol("rss_jit_list_get_float", helpers.list_get_float as *const u8);
+        builder.symbol("rss_jit_closure_id", helpers.closure_id as *const u8);
         let mut module = JITModule::new(builder);
         let imports = HostFuncs {
             field_int: declare_import(&mut module, "rss_jit_field_int", 2)?,
@@ -620,6 +639,7 @@ impl NativeModule {
             list_get_int: declare_import(&mut module, "rss_jit_list_get_int", 2)?,
             field_float: declare_import_f64(&mut module, "rss_jit_field_float", 2)?,
             list_get_float: declare_import_f64(&mut module, "rss_jit_list_get_float", 2)?,
+            closure_id: declare_import(&mut module, "rss_jit_closure_id", 1)?,
         };
         let ctx = module.make_context();
         Ok(Self {
@@ -1155,6 +1175,14 @@ fn validate(program: &JitFunction) -> Result<(), JitError> {
                 }
                 require_class(*dst, JitValueType::Int, "ListLenDirect result")?;
             }
+            JitInstr::GuardClosureId { base, expected } => {
+                require_class(*base, JitValueType::Handle, "GuardClosureId base")?;
+                if *expected < 0 {
+                    return Err(JitError(format!(
+                        "GuardClosureId expected: {expected} is not a valid function id"
+                    )));
+                }
+            }
         }
     }
     Ok(())
@@ -1194,6 +1222,7 @@ fn instr_def(instr: &JitInstr) -> Option<u32> {
         | JitInstr::JumpIfBool { .. }
         | JitInstr::JumpIfIntCompare { .. }
         | JitInstr::Return { .. }
+        | JitInstr::GuardClosureId { .. }
         | JitInstr::Bail => None,
     }
 }
@@ -1343,6 +1372,7 @@ fn build_function(
     let list_get_int_ref = module.declare_func_in_func(imports.list_get_int, bcx.func);
     let field_float_ref = module.declare_func_in_func(imports.field_float, bcx.func);
     let list_get_float_ref = module.declare_func_in_func(imports.list_get_float, bcx.func);
+    let closure_id_ref = module.declare_func_in_func(imports.closure_id, bcx.func);
 
     let n = program.code.len();
     let n_regs = program.n_regs as usize;
@@ -1866,6 +1896,29 @@ fn build_function(
                 );
                 bcx.def_var(reg(*dst), len);
             }
+            JitInstr::GuardClosureId { base, expected } => {
+                // Read the closure handle's underlying function id and bail to the
+                // interpreter if it isn't the speculated callee `expected`. The
+                // helper is total (returns -1 on a non-closure handle), so the
+                // compare alone decides; the bail reuses the standard re-run-from-top
+                // fallback, sound because the inlined subset is side-effect-free.
+                let handle = bcx.use_var(reg(*base));
+                let call = bcx.ins().call(closure_id_ref, &[handle]);
+                let id = bcx.inst_results(call)[0];
+                let want = bcx.ins().iconst(types::I64, *expected);
+                let mismatch = bcx.ins().icmp(IntCC::NotEqual, id, want);
+                let cont = bail_if(
+                    &mut bcx,
+                    mismatch,
+                    fallback,
+                    safepoint_ptr,
+                    payload_ptr,
+                    &vars,
+                    &mut next_id,
+                    deopt!(i),
+                );
+                bcx.switch_to_block(cont);
+            }
         }
     }
     if !terminated {
@@ -2143,6 +2196,9 @@ mod tests {
     extern "C" fn noop_list_get_float(_handle: i64, _index: i64) -> f64 {
         0.0
     }
+    extern "C" fn noop_closure_id(_handle: i64) -> i64 {
+        0
+    }
 
     /// A module with no-op host helpers (these tests exercise only scalar ops).
     fn module() -> NativeModule {
@@ -2152,6 +2208,7 @@ mod tests {
             list_get_int: noop_list_get_int,
             field_float: noop_field_float,
             list_get_float: noop_list_get_float,
+            closure_id: noop_closure_id,
         })
         .unwrap()
     }
@@ -2237,6 +2294,7 @@ mod tests {
             list_get_int: noop_list_get_int,
             field_float,
             list_get_float,
+            closure_id: noop_closure_id,
         })
         .unwrap();
         // fn(h: Handle, idx: Int) -> Float { return list[idx] }  regs 0=h,1=idx,2=res
@@ -2277,6 +2335,54 @@ mod tests {
             .unwrap();
         assert_eq!(m.callt(id2, &[0]), None);
         let _ = Int;
+    }
+
+    #[test]
+    fn guard_closure_id_passes_or_bails() {
+        use JitValueType::{Handle, Int};
+        // `closure_id` is the identity on the handle arg, so the handle value IS the
+        // observed function id — letting the test drive the guard directly.
+        extern "C" fn closure_id(handle: i64) -> i64 {
+            handle
+        }
+        let mut m = NativeModule::new(HostHelpers {
+            field_int: noop_field_int,
+            list_len: noop_list_len,
+            list_get_int: noop_list_get_int,
+            field_float: noop_field_float,
+            list_get_float: noop_list_get_float,
+            closure_id,
+        })
+        .unwrap();
+        // fn(h: Handle, x: Int) -> Int { guard id(h) == 7; return x + 100 }
+        // regs 0=h, 1=x, 2=hundred, 3=res
+        let id = m
+            .compile(&ft(
+                2,
+                vec![Handle, Int, Int, Int],
+                vec![
+                    JitInstr::GuardClosureId {
+                        base: 0,
+                        expected: 7,
+                    },
+                    JitInstr::LoadInt {
+                        dst: 2,
+                        value: 100,
+                    },
+                    JitInstr::Add {
+                        dst: 3,
+                        lhs: 1,
+                        rhs: 2,
+                    },
+                    JitInstr::Return { src: 3 },
+                ],
+            ))
+            .unwrap();
+        // Matching callee (handle == expected 7): native completes.
+        assert_eq!(m.callt(id, &[7, 5]), Some(105));
+        // Mismatched callee (handle != 7): guard bails to the interpreter (None).
+        assert_eq!(m.callt(id, &[8, 5]), None);
+        assert_eq!(m.callt(id, &[0, 5]), None);
     }
 
     #[test]
