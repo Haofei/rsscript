@@ -1643,3 +1643,122 @@ fn main() -> Unit {
     // sum_{i=0}^{49} i*i = 40425, matching native_osr_scalar_loop_matches_interpreter.
     assert_eq!(auto.stdout.trim_end(), "begin\n40425\n40425");
 }
+
+/// Broadened OSR loop detector — POSITIVE test (the real `variant_match_loop` kernel
+/// shape). The hot loop contains an INTERNAL forward `if sel == N { sel = 0 }` reset
+/// (a within-body branch + join), and the function calls a NON-inlinable helper
+/// (`bench_size`, which does I/O) OUTSIDE the loop before it. The detector now
+/// accepts a reducible single-header / single-exit loop with internal forward
+/// control flow, and the region-scoped inline pass copies the out-of-region
+/// `bench_size` through (its inlinability no longer vetoes OSR for the hot loop).
+/// The in-loop variant (`make_shape`/`area`) inlines + dissolves via the shipped J3
+/// passes, so the loop OSRs natively. Output must be byte-identical to the pure
+/// interpreter and `osr_entries > 0`.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_internal_if_reset_loop_matches_interpreter() {
+    let source = "\
+sum Shape {
+    Circle(radius: Int)
+    Square(side: Int)
+    Empty
+}
+
+fn bench_size(default: Int) -> Int {
+    Log.write(message: read \"begin\")
+    return default
+}
+
+fn make_shape(sel: Int, size: Int) -> Shape {
+    if sel == 0 { return Circle(radius: size) }
+    if sel == 1 { return Square(side: size) }
+    return Empty
+}
+
+fn area(shape: read Shape) -> Int {
+    match shape {
+        Circle(radius) => { return radius * radius * 3 }
+        Square(side) => { return side * side }
+        Empty => { return 0 }
+    }
+}
+
+fn main() -> Unit {
+    let limit = bench_size(default: read 2000)
+    let mut index = 0
+    let mut sel = 0
+    let mut total = 0
+    while index < limit {
+        let shape = make_shape(sel: read sel, size: read index)
+        total = total + area(shape: read shape)
+        index = index + 1
+        sel = sel + 1
+        if sel == 3 {
+            sel = 0
+        }
+    }
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+";
+    let file = "jit-osr-internal-if-reset.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "OSR loop with an internal `if sel==N` reset must be byte-identical to the interpreter"
+    );
+    assert!(
+        stats.osr_entries > 0,
+        "a reducible single-exit loop with an internal-if reset (the variant_match_loop \
+         shape) must OSR after region-scoped inline + variant dissolve: {stats:?}",
+    );
+}
+
+/// Broadened OSR loop detector — NEGATIVE test. A genuinely MULTI-EXIT loop (an
+/// early `return` inside the loop body, in addition to the header's loop-condition
+/// exit) is NOT a single-exit natural loop. The detector MUST reject it (`Return`
+/// in-body is an extra value-producing exit), so `osr_entries == 0`. Output must
+/// still be interpreter-identical (the interpreter runs the whole loop).
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_multi_exit_early_return_loop_rejected() {
+    let source = "\
+fn f(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        total = total + i * i
+        if total > 1000 {
+            return total
+        }
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(limit: read 200)))
+    return Unit
+}
+";
+    let file = "jit-osr-multi-exit-return.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "a multi-exit (early-return) loop must still run interpreter-identically"
+    );
+    assert_eq!(
+        stats.osr_entries, 0,
+        "a loop with an in-body early `return` is multi-exit and MUST NOT OSR: {stats:?}",
+    );
+}

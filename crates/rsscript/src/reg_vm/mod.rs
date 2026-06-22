@@ -2407,16 +2407,35 @@ fn instr_written_reg(instr: &RegInstr) -> RegFootprint {
 /// `Move`s and dispatch scaffolding — the map is the original index of the
 /// `CallKnown`/`CallClosure` it was inlined from: if a deopt lands inside the
 /// inlined region, the interpreter resumes by re-executing that original call.
+///
+/// `loop_region` is the `[header, exit)` index range (in ORIGINAL `func.code`) of
+/// the OSR loop the caller intends to compile. ONLY calls whose original index lies
+/// inside that range are subject to the inline-or-bail rule: an in-region call must
+/// be inlinable (it must dissolve to reach the native subset) or the whole pass
+/// bails (`None`). A call OUTSIDE the region (a pre-/post-loop helper such as
+/// `bench_size`) is copied through verbatim — it never runs natively (OSR entry is
+/// the header, the only native exit is `OsrExit`), so its inlinability is irrelevant
+/// and must not veto OSR for the hot loop. Passing `None` makes EVERY call in-scope
+/// (the conservative whole-function behavior), preserved for callers that do not
+/// pre-detect a region.
 fn native_inline_leaf_calls(
     unit: &RegUnit,
     func: &RegFunction,
     j3: bool,
+    loop_region: Option<(usize, usize)>,
 ) -> Option<(Vec<RegInstr>, usize, Vec<usize>)> {
+    // A call at original index `i` is subject to inline-or-bail only if it lies in
+    // the loop region (or no region was supplied ⇒ whole function in-scope).
+    let in_region = |i: usize| match loop_region {
+        Some((h, e)) => i >= h && i < e,
+        None => true,
+    };
     let has_inlinable_call = func.code.iter().enumerate().any(|(i, instr)| match instr {
-        RegInstr::CallKnown { .. } => true,
+        RegInstr::CallKnown { .. } => in_region(i),
         RegInstr::CallClosure { .. } => {
-            monomorphic_closure_inline_target(unit, func, i).is_some()
-                || polymorphic_closure_inline_targets(unit, func, i).is_some()
+            in_region(i)
+                && (monomorphic_closure_inline_target(unit, func, i).is_some()
+                    || polymorphic_closure_inline_targets(unit, func, i).is_some())
         }
         _ => false,
     });
@@ -2668,7 +2687,7 @@ fn native_inline_leaf_calls(
                 function,
                 args,
                 mut_args,
-            } => {
+            } if in_region(i) => {
                 let callee = unit.functions.get(*function)?;
                 // Calls with `mut` args need a write-back at return; don't inline
                 // them (native-inlinable callees are side-effect-free anyway). Under
@@ -2712,7 +2731,7 @@ fn native_inline_leaf_calls(
                 closure,
                 args,
                 mut_args,
-            } if monomorphic_closure_inline_target(unit, func, i).is_some() => {
+            } if in_region(i) && monomorphic_closure_inline_target(unit, func, i).is_some() => {
                 // J2.1 profile-guided monomorphic inlining: J1 profiled this site as
                 // calling exactly one callee `k` (non-capturing, native-inlinable).
                 // Guard the closure's identity, then inline `k`'s body. On a callee
@@ -2775,7 +2794,7 @@ fn native_inline_leaf_calls(
                 closure,
                 args,
                 mut_args,
-            } if polymorphic_closure_inline_targets(unit, func, i).is_some() => {
+            } if in_region(i) && polymorphic_closure_inline_targets(unit, func, i).is_some() => {
                 // J2.2 polymorphic inline cache: J1 profiled this site as calling 2–3
                 // distinct callees, EVERY one non-capturing and native-inlinable. Read
                 // the closure's function id ONCE, then dispatch: `if id == Kj { inline
@@ -2957,7 +2976,9 @@ fn translate_to_native_jit(
     }
     // Inline straight-line leaf calls first, so a function that only leaves the
     // native subset via small helper calls still qualifies (the calls vanish).
-    let (code, n_regs, _ip_map) = native_inline_leaf_calls(unit, func, false)?;
+    // Whole-function native translation: the ENTIRE body runs natively, so every
+    // call must be inlinable (`None` region ⇒ whole function in-scope).
+    let (code, n_regs, _ip_map) = native_inline_leaf_calls(unit, func, false, None)?;
     // J3: then scalar-replace any non-escaping (scalar-payload) `Option` on the
     // fully-inlined body, dissolving `MakeSome`/`LoadNone`/`MatchOption`/`UnwrapSome`
     // into tag + payload scalar registers so the function compiles through the
@@ -3558,17 +3579,23 @@ struct OsrEntry {
 /// Identify the single natural loop OSR will compile, **conservatively** (any
 /// shape we cannot analyze soundly returns `None`, so OSR does not apply).
 ///
-/// The shape this slice accepts is the canonical lowered `while cond { body }`:
-///   - `header`: a `JumpIfIntCompare`/`JumpIfBool` at `header` whose `target` is
-///     the post-loop `exit` (the branch *leaves* the loop), and
-///   - a single backedge `Jump { target: header }` at some `b > header`, and
-///   - every instruction in the loop body `header..=b` stays in `header..exit`
-///     (no other edge escapes the region; the only way out is the header's branch
-///     to `exit`), and there is exactly one backedge to `header`.
+/// The accepted shape is a **reducible natural loop with a single header `h`**,
+/// lowered as `while cond { body }` (the body may contain internal forward control
+/// flow, e.g. an `if x { ... }` reset):
+///   - `header` `h`: a `JumpIfIntCompare`/`JumpIfBool` at `h` whose `target` is the
+///     post-loop `exit` (the branch *leaves* the loop; fall-through stays in body),
+///   - one or more **backedges** `b → h` (a `Jump`/`JumpIf*`/`MatchOption` arm whose
+///     target is `≤ b`), **ALL targeting the same header `h`** (multiple backedges
+///     are collapsed; backedges to two different headers ⇒ nested/multiple loops ⇒
+///     reject), and
+///   - the contiguous region `[h, exit)` is **single-exit**: the ONLY edge leaving
+///     it is the header's exit edge to `exit`. Every other in-body branch (forward
+///     `if`/`match`, or a backedge) stays within `[h, exit)`. No in-body
+///     `Return` (a value-producing extra exit) is allowed.
 ///
-/// Requiring a single backedge, a single exit edge (the header test), and that no
-/// body instruction jumps outside `[header, exit)` makes the region a
-/// single-entry/single-exit natural loop — the only thing we can OSR soundly here.
+/// A single header (all backedges collapsed), a single exit edge, and a contiguous
+/// `[h, exit)` body make the region single-entry/single-exit — the only thing we can
+/// OSR soundly. Multi-header / multi-exit / non-contiguous shapes return `None`.
 #[cfg(feature = "native-jit")]
 fn detect_single_natural_loop(code: &[RegInstr]) -> Option<OsrLoop> {
     let n = code.len();
@@ -3601,14 +3628,22 @@ fn detect_single_natural_loop(code: &[RegInstr]) -> Option<OsrLoop> {
             }
         }
     }
-    // Exactly one backedge ⇒ a single loop (this slice).
-    if backedges.len() != 1 {
+    // At least one backedge ⇒ a loop exists.
+    if backedges.is_empty() {
         return None;
     }
-    let (backedge_from, header) = backedges[0];
+    // Collapse multiple backedges to the SAME header. Backedges to two DIFFERENT
+    // headers mean nested/sibling loops — out of scope, reject. The single shared
+    // header `h` is the loop entry; `body_end` is the furthest backedge source, so
+    // the contiguous loop body is `h..=body_end`.
+    let header = backedges[0].1;
+    if backedges.iter().any(|&(_, h)| h != header) {
+        return None;
+    }
     if header >= n {
         return None;
     }
+    let body_end = backedges.iter().map(|&(from, _)| from).max().unwrap();
     // The header must be a conditional branch that *exits* the loop on one edge: a
     // `JumpIfIntCompare`/`JumpIfBool` whose `target` is the post-loop exit (the
     // fall-through stays in the loop body). The exit must lie outside the body.
@@ -3616,20 +3651,25 @@ fn detect_single_natural_loop(code: &[RegInstr]) -> Option<OsrLoop> {
         RegInstr::JumpIfIntCompare { target, .. } | RegInstr::JumpIfBool { target, .. } => *target,
         _ => return None,
     };
-    // The loop body is `header..=backedge_from`; the exit must be after it (the
-    // loop's only way out). A header whose exit target points back inside the body
-    // is not the simple while-shape we accept.
-    if exit <= backedge_from || exit > n {
+    // The loop body is `header..=body_end`; the exit must be after it (the loop's
+    // only way out). A header whose exit target points back inside the body is not
+    // the while-shape we accept.
+    if exit <= body_end || exit > n {
         return None;
     }
-    // No instruction in the body `header..=backedge_from` may transfer control
-    // outside `[header, exit)` except the header's own exit edge and the backedge.
-    // (Any other escape would mean multiple exits / an irreducible shape.)
-    for i in header..=backedge_from {
+    // The set of backedge source indices (each must be a Jump/JumpIf* back to the
+    // header; checked in-region below — a backedge to `header` is in `[header, exit)`,
+    // so it is NOT an escaping edge and needs no special exemption).
+    //
+    // No instruction in the body `header..=body_end` may transfer control outside
+    // `[header, exit)` except the header's own exit edge. (Any other escape would
+    // mean multiple exits / an irreducible shape.) Internal forward branches and
+    // backedges to `header` stay in-region, so they pass the same `in_region` test.
+    for i in header..=body_end {
         let in_region = |t: usize| t >= header && t < exit;
         match &code[i] {
             RegInstr::Jump { target } => {
-                if i != backedge_from && !in_region(*target) {
+                if !in_region(*target) {
                     return None;
                 }
             }
@@ -3662,6 +3702,30 @@ fn detect_single_natural_loop(code: &[RegInstr]) -> Option<OsrLoop> {
             // check in `translate_osr_loop`; control-flow-wise it falls through,
             // which stays in-region.
             _ => {}
+        }
+    }
+    // Single-ENTRY check: OSR enters the region only at `header`. No instruction
+    // OUTSIDE `[header, exit)` may branch INTO the body interior `(header, exit)`
+    // (an edge to `header` itself is the legal loop entry / fall-through). An
+    // external edge into the middle would make the region multi-entry and the
+    // contiguous-region/ip-map assumptions unsound, so reject. (Lowered while-loops
+    // never do this; this guards an irreducible CFG defensively.)
+    for (i, instr) in code.iter().enumerate() {
+        if i >= header && i < exit {
+            continue; // in-body edges already validated above
+        }
+        let enters_interior = |t: usize| t > header && t < exit;
+        let bad = match instr {
+            RegInstr::Jump { target }
+            | RegInstr::JumpIfBool { target, .. }
+            | RegInstr::JumpIfIntCompare { target, .. } => enters_interior(*target),
+            RegInstr::MatchOption { some_ip, none_ip, .. } => {
+                enters_interior(*some_ip) || enters_interior(*none_ip)
+            }
+            _ => false,
+        };
+        if bad {
+            return None;
         }
     }
     Some(OsrLoop { header, exit })
@@ -11185,7 +11249,16 @@ impl RegVm {
                 // loop on the INLINED stream, then run the three region passes on it,
                 // composing ALL FOUR ip-maps:
                 // `ip_map[t] = ip_map0[ip_map1[ip_map2[ip_map3[t]]]]`.
-                let entry = native_inline_leaf_calls(&unit, func, true).and_then(
+                // Pre-detect the loop on the ORIGINAL code to bound the inline pass
+                // to the hot region: only calls INSIDE `[header, exit)` must be
+                // inlinable (they have to dissolve to reach the native subset). A
+                // pre-/post-loop helper call (e.g. `bench_size`, which is NOT
+                // native-inlinable) lies outside the region, runs on the interpreter,
+                // and is copied through — it must not veto OSR for the hot loop. When
+                // the original code has no analyzable loop there is nothing to OSR, so
+                // bail before inlining.
+                let entry = detect_single_natural_loop(&func.code).and_then(|lp_orig| {
+                native_inline_leaf_calls(&unit, func, true, Some((lp_orig.header, lp_orig.exit))).and_then(
                     |(inlined_code, n_regs0, ip_map0)| {
                     detect_single_natural_loop(&inlined_code).and_then(|lp0| {
                     native_scalar_replace_options_in_region(
@@ -11297,6 +11370,7 @@ impl RegVm {
                         })
                     })
                     })
+                })
                 });
                 // OSR × J2: a capturing/monomorphic closure inline is profile-
                 // guided, so on the first header hit (cold profile) the inline gate
@@ -21778,3 +21852,4 @@ fn main() -> Unit {{
         assert_eq!(sat.observed[0].1, u32::MAX);
     }
 }
+
