@@ -1239,6 +1239,85 @@ fn main() -> Unit {
     );
 }
 
+/// OSR × J2 AUTO test (Pending #2 + #1) — the stored/poly/capturing closure loop must
+/// auto-OSR by DEFAULT (no `RSS_JIT_OSR`, no override), proving the profile-guided
+/// auto-trigger RETRIES past the pending-profile window rather than permanently giving
+/// up. The closure-inline gate is profile-guided, so at the first backedge-threshold
+/// crossing the site may still be pending; the auto-trigger must reset+re-probe (not
+/// `GaveUp`) so OSR fires once the profile freezes. A forced-OSR test cannot catch this
+/// (it bypasses the auto `GaveUp` path); this uses `eval_main_with_args_native_with_stats`.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_stored_closure_auto_triggers_without_flag() {
+    let source = "\
+features: local
+
+struct Op derives(Clone) {
+    apply: owned Fn(Int) -> Int
+}
+
+fn lim() -> Int {
+    return 8000
+}
+
+fn main() -> Unit {
+    let base = 7
+    local ops = List.new<Op>()
+    let double_plus = Op(apply: fn(value) captures(read base) effects(pure) {
+        return value * 2 + base
+    })
+    List.push(list: mut ops, value: read double_plus)
+    let shift = Op(apply: fn(value) captures(read base) effects(pure) {
+        return value + base * 3
+    })
+    List.push(list: mut ops, value: read shift)
+
+    let limit = lim()
+    let mut index = 0
+    let mut sel = 0
+    let mut total = 0
+    while index < limit {
+        // The closure call is CONDITIONAL (~1/4 of iterations) so its inline profile
+        // warms SLOWER than the backedge counter: at the OSR backedge threshold (1000)
+        // the closure has only been called ~250 times (< PROFILE_RECORD_LIMIT 306), so
+        // the inline site is still PENDING. The auto-trigger must reset+re-probe rather
+        // than GaveUp — exactly the bug this test guards.
+        if index % 4 == 0 {
+            let op = List.get(list: read ops, index: sel)
+            let f = op.apply
+            total = total + f(index)
+            sel = sel + 1
+            if sel == 2 {
+                sel = 0
+            }
+        }
+        index = index + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+";
+    let file = "jit-osr-stored-closure-auto.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    // NO env flag, NO override: the default native path. Auto-OSR must fire on its own
+    // once the closure-inline profile warms — the GaveUp-while-pending bug would
+    // permanently disable OSR here (osr_entries would stay 0).
+    let (auto, stats) = executable
+        .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
+        .expect("native auto-OSR run should succeed");
+    assert_eq!(
+        auto.stdout, interp.stdout,
+        "auto-OSR stored/poly/capturing closure loop must be byte-identical to the interpreter",
+    );
+    assert!(
+        stats.osr_entries > 0,
+        "the stored/poly/capturing closure loop must AUTO-OSR by default once its profile \
+         warms (the auto-trigger must not GaveUp while the inline profile is still pending): \
+         {stats:?}",
+    );
+}
+
 /// OSR × J2 NEGATIVE test (Pending #1) — a stored closure whose callee is NOT
 /// native-inlinable MUST NOT OSR, no matter how the site profiles. The stored
 /// closure's body calls `Log.write` (an I/O op outside the native subset), so

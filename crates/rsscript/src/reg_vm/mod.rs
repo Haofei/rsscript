@@ -13012,14 +13012,30 @@ impl RegVm {
                             if self.try_osr(&func, base, ip) {
                                 continue 'frames;
                             }
-                            // Declined: in COUNTING (auto) mode, don't retry forever —
-                            // mark `GaveUp` so a non-compilable detected loop stops
-                            // re-probing `try_osr` on every header hit. In EAGER mode
-                            // keep today's behavior (fire every header hit; the
-                            // `osr_cache` `None` verdict already makes the retry cheap,
-                            // and a still-pending closure profile must be re-probed).
+                            // Declined. In COUNTING (auto) mode we must NOT give up
+                            // forever if the decline is only because a profile-guided
+                            // closure-inline site is still PENDING — `try_osr`
+                            // deliberately left that verdict uncached (re-probable) so a
+                            // warmer retry can succeed. Distinguish:
+                            //   - PENDING profile ⇒ reset the counter so we re-probe
+                            //     after another threshold of iterations (bounded
+                            //     re-probe), giving the profile time to freeze. It always
+                            //     freezes at `PROFILE_RECORD_LIMIT`, after which the
+                            //     verdict is stable and this falls through to `GaveUp` —
+                            //     so it cannot loop forever.
+                            //   - STABLE decline (not a compilable candidate) ⇒ `GaveUp`
+                            //     so we stop re-probing `try_osr` on every header hit.
+                            // EAGER mode keeps firing every header hit (the cached `None`
+                            // makes a stable retry cheap; a pending profile is re-probed).
                             if !osr_eager {
-                                func.osr_state.set(OsrTrigger::GaveUp);
+                                if native_translation_pending_on_profile(&self.unit, &func) {
+                                    func.osr_state.set(OsrTrigger::Counting {
+                                        header_ip: ip,
+                                        count: 0,
+                                    });
+                                } else {
+                                    func.osr_state.set(OsrTrigger::GaveUp);
+                                }
                             }
                         }
                     }
