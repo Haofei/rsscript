@@ -5000,8 +5000,17 @@ enum OsrTrigger {
     /// single hoisted `Cell` read per call, NO per-instruction cost.
     NotCandidate,
     /// Has a candidate loop header; the interpreter counts backedges to `header_ip`.
-    /// At [`OSR_BACKEDGE_THRESHOLD`] it fires `try_osr`.
-    Counting { header_ip: usize, count: u32 },
+    /// At [`OSR_BACKEDGE_THRESHOLD`] it fires `try_osr`. `probe_cc` is the function's
+    /// dynamic-call count (`call_count`) as of the LAST `try_osr` probe (0 before the
+    /// first), used to gate re-probes: a pending-profile decline only resets the counter
+    /// if the profile has ADVANCED (`call_count` increased) since then — otherwise the
+    /// site is dynamically dead/stalled and we `GaveUp`. `call_count` is capped at
+    /// `PROFILE_RECORD_LIMIT`, so the number of progress-resets is bounded.
+    Counting {
+        header_ip: usize,
+        count: u32,
+        probe_cc: u32,
+    },
     /// OSR fired (or `try_osr` declined at threshold): stop counting. `GaveUp` and
     /// `Fired` collapse to the same terminal "do nothing" behavior, but are kept
     /// distinct for telemetry/clarity.
@@ -11389,6 +11398,7 @@ impl RegVm {
                     Some(lp) => OsrTrigger::Counting {
                         header_ip: lp.header,
                         count: 0,
+                        probe_cc: 0,
                     },
                     None => OsrTrigger::NotCandidate,
                 };
@@ -12991,7 +13001,11 @@ impl RegVm {
                         } else {
                             // Count this backedge/header hit; fire at threshold.
                             match func.osr_state.get() {
-                                OsrTrigger::Counting { header_ip, count } => {
+                                OsrTrigger::Counting {
+                                    header_ip,
+                                    count,
+                                    probe_cc,
+                                } => {
                                     let next = count.saturating_add(1);
                                     if next >= OSR_BACKEDGE_THRESHOLD {
                                         true
@@ -12999,6 +13013,7 @@ impl RegVm {
                                         func.osr_state.set(OsrTrigger::Counting {
                                             header_ip,
                                             count: next,
+                                            probe_cc,
                                         });
                                         false
                                     }
@@ -13014,24 +13029,37 @@ impl RegVm {
                             }
                             // Declined. In COUNTING (auto) mode we must NOT give up
                             // forever if the decline is only because a profile-guided
-                            // closure-inline site is still PENDING — `try_osr`
-                            // deliberately left that verdict uncached (re-probable) so a
-                            // warmer retry can succeed. Distinguish:
-                            //   - PENDING profile ⇒ reset the counter so we re-probe
-                            //     after another threshold of iterations (bounded
-                            //     re-probe), giving the profile time to freeze. It always
-                            //     freezes at `PROFILE_RECORD_LIMIT`, after which the
-                            //     verdict is stable and this falls through to `GaveUp` —
-                            //     so it cannot loop forever.
-                            //   - STABLE decline (not a compilable candidate) ⇒ `GaveUp`
-                            //     so we stop re-probing `try_osr` on every header hit.
+                            // closure-inline site is still PENDING — `try_osr` leaves
+                            // that verdict uncached (re-probable) so a warmer retry can
+                            // succeed. But we must also not re-probe forever: a
+                            // structurally-present but **dynamically dead** (never-taken)
+                            // `CallClosure` stays `pending` indefinitely (no profile
+                            // entry), and its `call_count` never advances toward the
+                            // `PROFILE_RECORD_LIMIT` freeze. So re-probe ONLY when the
+                            // profile has made PROGRESS — `call_count` (the dynamic-call
+                            // count) increased since the previous probe. That is
+                            // intrinsically bounded: `call_count` is capped at
+                            // `PROFILE_RECORD_LIMIT`, so there can be at most that many
+                            // progress-resets before the profile freezes (⇒ not pending
+                            // ⇒ stable) or stalls (⇒ no progress ⇒ GaveUp here).
+                            //   - PENDING **and** progressed ⇒ reset (record the new
+                            //     progress point as `probe_cc`).
+                            //   - STABLE decline, OR pending-but-stalled/dead ⇒ `GaveUp`.
                             // EAGER mode keeps firing every header hit (the cached `None`
                             // makes a stable retry cheap; a pending profile is re-probed).
                             if !osr_eager {
-                                if native_translation_pending_on_profile(&self.unit, &func) {
+                                let cc = func.call_count.get();
+                                let prev_probe_cc = match func.osr_state.get() {
+                                    OsrTrigger::Counting { probe_cc, .. } => probe_cc,
+                                    _ => cc,
+                                };
+                                if cc > prev_probe_cc
+                                    && native_translation_pending_on_profile(&self.unit, &func)
+                                {
                                     func.osr_state.set(OsrTrigger::Counting {
                                         header_ip: ip,
                                         count: 0,
+                                        probe_cc: cc,
                                     });
                                 } else {
                                     func.osr_state.set(OsrTrigger::GaveUp);
