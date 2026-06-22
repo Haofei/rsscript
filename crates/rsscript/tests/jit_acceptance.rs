@@ -932,6 +932,127 @@ fn main() -> Unit {
     );
 }
 
+/// OSR × J3 NESTED-struct positive test (Pending #1 broadening). A two-level struct
+/// `Outer { inner: Inner, tag }` is built and read through a chained field access
+/// (`node.inner.value`, `node.inner.weight`) strictly inside the hot loop of an
+/// I/O-tangled (native-INELIGIBLE) function. The whole nested struct is dead at the
+/// loop boundary, so the recursive J3 struct pass dissolves it innermost-first: each
+/// leaf scalar field becomes one register, the struct-typed `inner` slot aliases the
+/// inner struct's registers, and the `a.b.c` chain collapses to register moves — the
+/// loop runs allocation-free natively via OSR. With OSR forced on, output must be
+/// byte-identical to the pure interpreter (which allocates the nested struct each
+/// iteration), and the loop must genuinely OSR (`osr_entries > 0`).
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j3_nested_struct_loop_matches_interpreter() {
+    let source = "\
+struct Inner {
+    value: Int,
+    weight: Int
+}
+
+struct Outer {
+    inner: Inner,
+    tag: Int
+}
+
+fn f(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        let node = Outer(inner: Inner(value: i, weight: i * 2), tag: i - 1)
+        total = total + read node.inner.value + read node.inner.weight + read node.tag
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(limit: read 60)))
+    return Unit
+}
+";
+    let file = "jit-osr-j3-nested-struct.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "OSR × J3 nested struct loop must be byte-identical to the interpreter (stdout)"
+    );
+    // i in 0..60: each iter adds value + weight + tag = i + 2i + (i-1) = 4i - 1.
+    // Total = sum_{i=0}^{59} (4i - 1) = 4*1770 - 60 = 7080 - 60 = 7020.
+    assert_eq!(osr.stdout.trim_end(), "begin\n7020\n7020");
+    assert!(
+        stats.osr_entries > 0,
+        "the non-escaping nested struct loop must OSR natively after recursive J3 \
+         scalar replacement: {stats:?}",
+    );
+}
+
+/// OSR × J3 NESTED-struct negative test — the dead-at-boundary guard, recursive case.
+/// The outer struct `node` (and thus its inner struct) is declared before the loop and
+/// read AFTER it, so it is live across the loop boundary. The recursive struct pass
+/// MUST refuse to dissolve it and therefore MUST NOT OSR (`osr_entries == 0`), or the
+/// interpreter would read a stale `node`/`node.inner` slot the native loop never wrote
+/// back. We assert interpreter-identical output AND that OSR genuinely bailed.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j3_escaping_nested_struct_does_not_osr() {
+    let source = "\
+struct Inner {
+    value: Int,
+    weight: Int
+}
+
+struct Outer {
+    inner: Inner,
+    tag: Int
+}
+
+fn f(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    let mut node = Outer(inner: Inner(value: 0, weight: 0), tag: 0)
+    while i < limit {
+        node = Outer(inner: Inner(value: i, weight: i * 2), tag: i - 1)
+        total = total + read node.inner.value + read node.inner.weight + read node.tag
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: read node.inner.value))
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(limit: read 60)))
+    return Unit
+}
+";
+    let file = "jit-osr-j3-escaping-nested-struct.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "a nested struct read after the loop must still produce interpreter-identical output"
+    );
+    // total = sum_{i=0}^{59}(4i-1) = 7020; node.inner.value = 59 after the loop.
+    assert_eq!(osr.stdout.trim_end(), "begin\n59\n7020\n7020");
+    assert_eq!(
+        stats.osr_entries, 0,
+        "a loop whose nested struct is live after the loop must NOT OSR (the dead-at-\
+         boundary gate must bail): {stats:?}",
+    );
+}
+
 /// OSR × inline-leaf-calls (Pending #1) CROSS-FUNCTION positive test. The variant is
 /// built in one leaf (`make_shape`) and matched in another (`area`), BOTH called from
 /// the hot loop in an I/O-tangled (native-INELIGIBLE) function `f`. The variant thus

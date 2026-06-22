@@ -2006,26 +2006,135 @@ fn native_scalar_replace_variants_in_region(
 }
 
 /// OSR × J3 for non-escaping FLAT user STRUCTS. Mirrors
-/// [`native_scalar_replace_variants_in_region`] but for `MakeStruct`/`GetFieldSlot`.
-/// A struct is a single shape (no tag), so a replaceable struct register `R`
-/// dissolves into ONE fresh scalar register per field *slot* (slot order =
-/// `layout.field_names`), exactly the inlined-fields form.
+/// Resolve the declared layout shape (`field_names`) of a struct-valued register by
+/// walking its in-region definitions. A register defined by `MakeStruct` carries the
+/// shape directly; a `Move` forwards its source's shape; a `GetFieldSlot{dst, base,
+/// slot}` reading a struct-typed field has the shape of whatever `MakeStruct` wrote
+/// that slot of `base` (i.e. the inner field's own struct shape). Returns `None` when
+/// the shape is ambiguous or not statically resolvable (⇒ the caller bails OSR).
+#[cfg(feature = "native-jit")]
+fn struct_shape_of_reg(
+    code: &[RegInstr],
+    header: usize,
+    exit: usize,
+    reg: usize,
+) -> Option<Vec<Rc<str>>> {
+    fn go(
+        code: &[RegInstr],
+        header: usize,
+        exit: usize,
+        reg: usize,
+        depth: usize,
+    ) -> Option<Vec<Rc<str>>> {
+        if depth > 64 {
+            return None;
+        }
+        let mut found: Option<Vec<Rc<str>>> = None;
+        for i in header..exit {
+            match &code[i] {
+                RegInstr::MakeStruct { dst, layout, .. } if *dst == reg => {
+                    let shape = layout.field_names.clone();
+                    match &found {
+                        Some(prev) if *prev != shape => return None,
+                        _ => found = Some(shape),
+                    }
+                }
+                RegInstr::Move { dst, src } if *dst == reg => {
+                    let shape = go(code, header, exit, *src, depth + 1)?;
+                    match &found {
+                        Some(prev) if *prev != shape => return None,
+                        _ => found = Some(shape),
+                    }
+                }
+                RegInstr::GetFieldSlot { dst, base, slot } if *dst == reg => {
+                    // The shape of `reg` is the shape of the struct stored in `base`'s
+                    // `slot`: resolve the field-source register that filled that slot of
+                    // `base` (following `base` through Move aliases to its `MakeStruct`),
+                    // then recurse on that source's shape.
+                    let base_shape = go(code, header, exit, *base, depth + 1)?;
+                    let slot_name = base_shape.get(*slot)?.clone();
+                    let mut field_shape: Option<Vec<Rc<str>>> = None;
+                    for &fsrc in &field_srcs_of(code, header, exit, *base, &slot_name, depth + 1) {
+                        let s = go(code, header, exit, fsrc, depth + 1)?;
+                        match &field_shape {
+                            Some(prev) if *prev != s => return None,
+                            _ => field_shape = Some(s),
+                        }
+                    }
+                    let shape = field_shape?;
+                    match &found {
+                        Some(prev) if *prev != shape => return None,
+                        _ => found = Some(shape),
+                    }
+                }
+                _ => {}
+            }
+        }
+        found
+    }
+    // Every register that feeds field `name` across ALL of `base`'s `MakeStruct`
+    // definitions, resolving `base` through `Move` aliases. (A class can have several
+    // `MakeStruct` defs along different paths; each must agree on shape, validated by
+    // the caller.)
+    fn field_srcs_of(
+        code: &[RegInstr],
+        header: usize,
+        exit: usize,
+        base: usize,
+        name: &Rc<str>,
+        depth: usize,
+    ) -> Vec<usize> {
+        if depth > 64 {
+            return vec![];
+        }
+        let mut out = Vec::new();
+        for i in header..exit {
+            match &code[i] {
+                RegInstr::MakeStruct { dst, fields, .. } if *dst == base => {
+                    if let Some((_, fsrc)) = fields.iter().find(|(n, _)| **n == **name) {
+                        out.push(*fsrc);
+                    }
+                }
+                // Resolve through a Move alias: `base = Move(src)` ⇒ inherit src's defs.
+                RegInstr::Move { dst, src } if *dst == base => {
+                    out.extend(field_srcs_of(code, header, exit, *src, name, depth + 1));
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+    go(code, header, exit, reg, 0)
+}
+
+/// [`native_scalar_replace_variants_in_region`] but for `MakeStruct`/`GetFieldSlot`,
+/// with RECURSIVE (nested-struct) dissolution.
 ///
-/// Scope (flat, scalar fields only): a struct register `R` is replaced iff every
-/// definition is a `MakeStruct` whose every field register is a **scalar** (never
-/// itself a replaceable struct ⇒ nested struct ⇒ bail) and whose layout shares the
-/// same `field_names` (same shape) as all other defs of `R`; every use is
-/// `GetFieldSlot{base:R}` or a `Move{src:R}` to another replaceable struct register;
-/// and `R` never appears as any other value operand. `Move`-aliased struct registers
-/// share one field-register vector, so they must agree on the layout shape. If any
-/// in-region struct register is not replaceable the whole region pass bails (no OSR),
-/// exactly like the Option/variant passes.
+/// A struct register `R` is dissolvable iff it is non-escaping and every field is
+/// EITHER a scalar OR itself a dissolvable struct register, recursively. The whole
+/// nested struct dissolves to ONE fresh register per LEAF SCALAR field (innermost-
+/// first): a struct-typed field slot owns no register of its own — it aliases the
+/// inner struct register's leaf registers (union-find), so a chained read `a.b.c`
+/// becomes plain register moves end-to-end and the nested struct never allocates.
+///
+/// Membership grows to a fixpoint over three relations: `Move` aliasing, a
+/// `MakeStruct` field whose source is itself a struct register (⇒ that slot is
+/// struct-typed), and a `GetFieldSlot` reading a struct-typed slot (⇒ its dst is a
+/// struct register too). A struct-typed slot's per-slot anchor is unioned with the
+/// inner struct register's class, so they literally share leaf registers.
+///
+/// Bails (conservative; when unsure REJECT) on: any escaping use of a struct register
+/// (read as a non-field/non-alias value operand, returned, stored, captured, alive at
+/// either OSR boundary), a field that is a heap value or a NON-dissolvable struct, a
+/// shape contradiction (scalar in a struct slot or vice-versa), or an unresolvable
+/// shape. The flat-struct case is the depth-1 instance of this recursion.
 ///
 /// Rewrite:
-/// - `MakeStruct{dst:R, layout, fields}` → for each `(name, src)`,
-///   `Move field_reg[slot(name)] = src`.
-/// - `GetFieldSlot{dst, base:R, slot}` → `Move dst = field_reg[slot]`.
-/// - `Move` aliases copy every field register.
+/// - `MakeStruct{dst:R}`: scalar field → `Move leaf = src`; nested field → nothing
+///   (aliased to the inner's already-written leaf registers).
+/// - `GetFieldSlot{dst, base:R, slot}`: scalar slot → `Move dst = leaf`; struct slot →
+///   nothing (`dst` aliases the inner's leaf registers).
+/// - `Move` struct alias → nothing (shared leaf registers ⇒ self-copies).
 ///
 /// Returns `(transformed_code, new_n_regs, ip_map)` with the same transformed→original
 /// `ip_map` discipline as the other two region passes.
@@ -2055,35 +2164,92 @@ fn native_scalar_replace_structs_in_region(
         }
     }
 
-    // STR = registers carrying a (replaceable) struct value: seed from in-region
-    // `MakeStruct` dsts, close under in-region `Move` aliasing.
+    // STR = registers carrying a (replaceable) struct value. Nested support: a struct
+    // register is dissolvable when every field is EITHER a scalar OR itself a
+    // dissolvable struct register, recursively. We seed STR from in-region
+    // `MakeStruct` dsts, then close under THREE relations to a fixpoint:
+    //   (1) `Move{dst,src}` with `src` STR ⇒ `dst` is STR (alias);
+    //   (2) a `MakeStruct{dst:R}` field whose `src` is STR makes that field a NESTED
+    //       (struct-typed) slot of R's shape;
+    //   (3) `GetFieldSlot{dst, base:R, slot}` reading a NESTED slot of R ⇒ `dst` is a
+    //       STR register (it aliases the inner struct), which can in turn expose more
+    //       nested slots / Move-aliases.
+    // The slot-kind map (per layout shape, by field name) records whether a slot is
+    // scalar or struct-typed; we discover it incrementally as STR membership grows.
     let mut strv = vec![false; n_regs];
     for i in header..exit {
         if let RegInstr::MakeStruct { dst, .. } = &code[i] {
             strv[*dst] = true;
         }
     }
+    // `nested_slots[shape_field_names] = set of field-name indices that are struct-typed`.
+    // Keyed by the layout's `field_names` (the canonical shape) so all structs of the
+    // same declared type share one slot-kind classification.
+    let mut nested_slots: HashMap<Vec<Rc<str>>, std::collections::HashSet<usize>> = HashMap::new();
     let mut changed = true;
     while changed {
         changed = false;
         for i in header..exit {
-            if let RegInstr::Move { dst, src } = &code[i] {
-                if strv[*src] && !strv[*dst] {
-                    strv[*dst] = true;
-                    changed = true;
+            match &code[i] {
+                RegInstr::Move { dst, src } => {
+                    if strv[*src] && !strv[*dst] {
+                        strv[*dst] = true;
+                        changed = true;
+                    }
                 }
+                RegInstr::MakeStruct { dst, layout, fields } if strv[*dst] => {
+                    let set = nested_slots.entry(layout.field_names.clone()).or_default();
+                    for (name, src) in fields {
+                        if strv[*src] {
+                            if let Some(slot) =
+                                layout.field_names.iter().position(|n| &**n == &**name)
+                            {
+                                if set.insert(slot) {
+                                    changed = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                RegInstr::GetFieldSlot { dst, base, slot } if strv[*base] => {
+                    // Is `slot` a nested (struct-typed) slot of `base`'s shape? Find
+                    // `base`'s shape via any in-region `MakeStruct` defining its class;
+                    // for now match against EVERY shape whose nested set contains `slot`
+                    // AND that `base` could carry. We resolve `base`'s exact shape during
+                    // class shaping; here we conservatively promote `dst` to STR when the
+                    // slot is nested under any shape that `base` is built with. Since a
+                    // register has a single shape, we look it up from its def.
+                    if !strv[*dst] {
+                        if let Some(shape) = struct_shape_of_reg(code, header, exit, *base) {
+                            if nested_slots.get(&shape).is_some_and(|s| s.contains(slot)) {
+                                strv[*dst] = true;
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         }
     }
 
-    // Validate in-region uses/defs of STR registers. Each `MakeStruct` field register
-    // must NOT itself be a STR register (a nested struct field is non-scalar ⇒ bail).
-    // Anything else touching a STR register as a value operand ⇒ bail.
+    // Validate in-region uses/defs of STR registers.
+    // - `MakeStruct{dst:R}`: each field `src` is EITHER a scalar (non-STR) OR an STR
+    //   register sitting in a nested slot (recorded above). A scalar reg in a nested
+    //   slot, or an STR reg in a non-nested slot, is a shape contradiction ⇒ bail.
+    // - `Move{dst,src}` writing an STR reg: `src` must be STR (alias copy).
+    // - `GetFieldSlot{dst, base:R}`: `dst` is STR exactly when the slot is nested.
+    // - Any OTHER read of an STR reg as a value operand ⇒ escape ⇒ bail.
     for i in header..exit {
         match &code[i] {
-            RegInstr::MakeStruct { dst, fields, .. } if strv[*dst] => {
-                if fields.iter().any(|(_, r)| strv[*r]) {
-                    return None; // nested struct field ⇒ non-scalar
+            RegInstr::MakeStruct { dst, layout, fields } if strv[*dst] => {
+                let set = nested_slots.get(&layout.field_names);
+                for (name, src) in fields {
+                    let slot = layout.field_names.iter().position(|n| &**n == &**name)?;
+                    let is_nested = set.is_some_and(|s| s.contains(&slot));
+                    if strv[*src] != is_nested {
+                        return None; // scalar-in-struct-slot or struct-in-scalar-slot
+                    }
                 }
             }
             RegInstr::Move { dst, src } if strv[*dst] => {
@@ -2091,9 +2257,11 @@ fn native_scalar_replace_structs_in_region(
                     return None;
                 }
             }
-            RegInstr::GetFieldSlot { dst, base, .. } if strv[*base] => {
-                if strv[*dst] {
-                    return None; // a field read aliased back as a struct ⇒ non-scalar
+            RegInstr::GetFieldSlot { dst, base, slot } if strv[*base] => {
+                let shape = struct_shape_of_reg(code, header, exit, *base)?;
+                let is_nested = nested_slots.get(&shape).is_some_and(|s| s.contains(slot));
+                if strv[*dst] != is_nested {
+                    return None;
                 }
             }
             RegInstr::Move { src, .. } if strv[*src] => {}
@@ -2138,10 +2306,17 @@ fn native_scalar_replace_structs_in_region(
         }
     }
 
-    // `Move`-aliased STR registers share ONE field-register vector, so group them into
-    // alias classes via union-find over in-region `Move` edges.
+    // Alias union-find. STR registers that name the SAME logical struct value share
+    // ONE leaf-register layout. We union over:
+    //   (a) in-region `Move{dst,src}` where both are STR (plain alias);
+    //   (b) `MakeStruct{dst:R, field src}` nested slot ⇒ union R's per-slot ANCHOR with
+    //       `src`'s class (the slot IS the inner struct's registers);
+    //   (c) `GetFieldSlot{dst, base:R, slot}` nested ⇒ union `dst` with R's slot anchor.
+    // Per-slot anchors are virtual ids ≥ n_regs (one per (class-representative, slot)).
+    // Because anchors are created lazily and keyed by a register's find-root, we resolve
+    // them through a small interning map below.
     let mut parent: Vec<usize> = (0..n_regs).collect();
-    fn find(parent: &mut [usize], x: usize) -> usize {
+    fn find(parent: &mut Vec<usize>, x: usize) -> usize {
         let mut r = x;
         while parent[r] != r {
             r = parent[r];
@@ -2154,20 +2329,73 @@ fn native_scalar_replace_structs_in_region(
         }
         r
     }
+    fn union(parent: &mut Vec<usize>, a: usize, b: usize) {
+        let (ra, rb) = (find(parent, a), find(parent, b));
+        if ra != rb {
+            parent[ra] = rb;
+        }
+    }
+    // Lazily intern a virtual anchor id for the (struct-value, slot) pair. Keyed by the
+    // current find-root of `base` so all aliases of `base` share the anchor.
+    fn anchor_of(
+        parent: &mut Vec<usize>,
+        anchors: &mut HashMap<(usize, usize), usize>,
+        base: usize,
+        slot: usize,
+    ) -> usize {
+        let root = find(parent, base);
+        if let Some(&a) = anchors.get(&(root, slot)) {
+            return a;
+        }
+        let id = parent.len();
+        parent.push(id);
+        anchors.insert((root, slot), id);
+        id
+    }
+    let mut anchors: HashMap<(usize, usize), usize> = HashMap::new();
+    // (a) plain Move aliases.
     for i in header..exit {
         if let RegInstr::Move { dst, src } = &code[i] {
             if strv[*dst] && strv[*src] {
-                let (a, b) = (find(&mut parent, *dst), find(&mut parent, *src));
-                if a != b {
-                    parent[a] = b;
+                union(&mut parent, *dst, *src);
+            }
+        }
+    }
+    // (b)+(c): union nested-slot anchors with their inner struct registers. Iterate to a
+    // fixpoint because anchors are keyed by find-roots that the unions themselves change.
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for i in header..exit {
+            match &code[i] {
+                RegInstr::MakeStruct { dst, layout, fields } if strv[*dst] => {
+                    for (name, src) in fields {
+                        if strv[*src] {
+                            let slot = layout.field_names.iter().position(|n| &**n == &**name)?;
+                            let a = anchor_of(&mut parent, &mut anchors, *dst, slot);
+                            let before = find(&mut parent, a);
+                            union(&mut parent, a, *src);
+                            if find(&mut parent, a) != before {
+                                changed = true;
+                            }
+                        }
+                    }
                 }
+                RegInstr::GetFieldSlot { dst, base, slot } if strv[*base] && strv[*dst] => {
+                    let a = anchor_of(&mut parent, &mut anchors, *base, *slot);
+                    let before = find(&mut parent, *dst);
+                    union(&mut parent, a, *dst);
+                    if find(&mut parent, *dst) != before {
+                        changed = true;
+                    }
+                }
+                _ => {}
             }
         }
     }
 
     // Determine ONE canonical layout shape (field_names) per alias class from its
-    // `MakeStruct` defs. All defs in a class must agree on the shape (Move aliases
-    // copy the whole field vector, so a class is a single struct shape).
+    // `MakeStruct` defs. All defs in a class must agree on the shape.
     let mut class_shape: HashMap<usize, Vec<Rc<str>>> = HashMap::new();
     for i in header..exit {
         if let RegInstr::MakeStruct { dst, layout, .. } = &code[i] {
@@ -2185,32 +2413,77 @@ fn native_scalar_replace_structs_in_region(
         }
     }
 
-    // Allocate one fresh field register per slot, one vector per alias class.
-    let mut next_reg = n_regs;
-    let mut class_field_regs: HashMap<usize, Vec<usize>> = HashMap::new();
-    for (&root, shape) in &class_shape {
-        let regs: Vec<usize> = (0..shape.len())
-            .map(|_| {
+    // Allocate one fresh LEAF register per SCALAR slot, per alias class. A nested slot
+    // owns no register here — it resolves through its anchor to the inner class's leaf
+    // registers. `class_slot_reg[(root, slot)]` is the leaf reg for a scalar slot.
+    let mut next_reg = parent.len();
+    let mut class_slot_reg: HashMap<(usize, usize), usize> = HashMap::new();
+    let roots: Vec<usize> = class_shape.keys().copied().collect();
+    for root in roots {
+        let shape = class_shape.get(&root).cloned().expect("root has shape");
+        let nested = nested_slots.get(&shape).cloned().unwrap_or_default();
+        for slot in 0..shape.len() {
+            if !nested.contains(&slot) {
                 let r = next_reg;
                 next_reg += 1;
-                r
-            })
-            .collect();
-        class_field_regs.insert(root, regs);
+                class_slot_reg.insert((root, slot), r);
+            }
+        }
     }
-    // Per-STR-register handle to its class field-register vector, plus the class's
-    // canonical field-name → slot map (the slot order is `field_names`).
-    let field_regs_of = |reg: usize, parent: &mut Vec<usize>| -> Vec<usize> {
+    // The leaf register backing `reg`'s scalar field `slot` (resolving Move aliases).
+    let scalar_slot_reg = |parent: &mut Vec<usize>,
+                           class_slot_reg: &HashMap<(usize, usize), usize>,
+                           reg: usize,
+                           slot: usize|
+     -> usize {
         let root = find(parent, reg);
-        class_field_regs.get(&root).cloned().expect("STR reg has a class")
+        *class_slot_reg.get(&(root, slot)).expect("scalar slot has a leaf register")
     };
-    let slot_of_name = |reg: usize, parent: &mut Vec<usize>, name: &str| -> usize {
+    let slot_of_name = |parent: &mut Vec<usize>,
+                        class_shape: &HashMap<usize, Vec<Rc<str>>>,
+                        reg: usize,
+                        name: &str|
+     -> usize {
         let root = find(parent, reg);
         class_shape
             .get(&root)
             .and_then(|shape| shape.iter().position(|n| &**n == name))
             .expect("field name in class shape")
     };
+
+    // Pre-flight: every struct op the rewrite will touch must resolve (every STR class
+    // has a shape; every SCALAR slot it reads/writes has an allocated leaf register).
+    // Bail rather than panic on any unresolved case — conservative REJECT.
+    for i in header..exit {
+        match &code[i] {
+            RegInstr::MakeStruct { dst, layout, fields } if strv[*dst] => {
+                let root = find(&mut parent, *dst);
+                if class_shape.get(&root) != Some(&layout.field_names) {
+                    return None;
+                }
+                for (name, src) in fields {
+                    if strv[*src] {
+                        continue;
+                    }
+                    let slot = layout.field_names.iter().position(|n| &**n == &**name)?;
+                    if !class_slot_reg.contains_key(&(root, slot)) {
+                        return None;
+                    }
+                }
+            }
+            RegInstr::GetFieldSlot { dst, base, slot } if strv[*base] => {
+                let root = find(&mut parent, *base);
+                let shape = class_shape.get(&root)?;
+                if *slot >= shape.len() {
+                    return None;
+                }
+                if !strv[*dst] && !class_slot_reg.contains_key(&(root, *slot)) {
+                    return None;
+                }
+            }
+            _ => {}
+        }
+    }
 
     // Rewrite the whole code, scalar-replacing in-region struct ops and copying the
     // rest through, remapping jump/match targets through the index map.
@@ -2227,25 +2500,36 @@ fn native_scalar_replace_structs_in_region(
         let region = in_region(i);
         match instr {
             RegInstr::MakeStruct { dst, fields, .. } if region && strv[*dst] => {
-                // For each named field, move the source into its slot's field reg.
-                let regs = field_regs_of(*dst, &mut parent);
+                // For each SCALAR field, move the source into its slot's leaf register.
+                // A NESTED field is a struct-typed slot whose per-slot anchor is unioned
+                // with the inner struct register's class, so the inner's leaf registers
+                // ARE this slot's registers — they were already written by the inner's
+                // own (earlier) `MakeStruct`. Emit nothing for it.
                 for (name, src) in fields {
-                    let slot = slot_of_name(*dst, &mut parent, name);
-                    new_code.push(RegInstr::Move { dst: regs[slot], src: *src });
+                    if strv[*src] {
+                        continue; // nested struct field: aliased, no copy needed
+                    }
+                    let slot = slot_of_name(&mut parent, &class_shape, *dst, name);
+                    let leaf = scalar_slot_reg(&mut parent, &class_slot_reg, *dst, slot);
+                    new_code.push(RegInstr::Move { dst: leaf, src: *src });
                 }
             }
             RegInstr::GetFieldSlot { dst, base, slot } if region && strv[*base] => {
-                let regs = field_regs_of(*base, &mut parent);
-                new_code.push(RegInstr::Move { dst: *dst, src: regs[*slot] });
+                if strv[*dst] {
+                    // Reading a struct-typed slot: `dst` is unioned with `base`'s slot
+                    // anchor, so `dst` already names the inner struct's leaf registers.
+                    // A subsequent `GetFieldSlot{base:dst, inner_slot}` reads the inner's
+                    // scalar leaf directly — the `a.b.c` chain collapses to register
+                    // moves end-to-end. Emit nothing here.
+                } else {
+                    let leaf = scalar_slot_reg(&mut parent, &class_slot_reg, *base, *slot);
+                    new_code.push(RegInstr::Move { dst: *dst, src: leaf });
+                }
             }
             RegInstr::Move { dst, src } if region && strv[*dst] => {
-                // Alias copy: same class ⇒ same field regs ⇒ self-copies (harmless);
-                // emit them for clarity/robustness.
-                let dregs = field_regs_of(*dst, &mut parent);
-                let sregs = field_regs_of(*src, &mut parent);
-                for (d, s) in dregs.iter().zip(sregs.iter()) {
-                    new_code.push(RegInstr::Move { dst: *d, src: *s });
-                }
+                // Plain struct alias: `dst` and `src` share an alias class ⇒ identical
+                // leaf registers ⇒ every per-slot copy is a self-Move. Emit nothing.
+                let _ = (dst, src);
             }
             // Copy-through, remapping jump/match targets.
             RegInstr::Jump { target }
