@@ -1574,6 +1574,98 @@ fn interval_analysis(program: &JitFunction) -> Vec<Vec<Interval>> {
         out
     };
 
+    // Edge-sensitive (branch-conditioned) refinement (J4.3+). When predecessor `p`
+    // is a `JumpIfIntCompare` and the edge `p -> succ` is governed by a comparison
+    // fact, tighten the operand intervals flowed along that *specific* edge by the
+    // asserted relation. This is what lets a loop counter `i` — TOP at the loop
+    // header after the join — be proven `<= N - 1` on the loop-body edge (the guard's
+    // taken edge), so the body's `i = i + 1` provably fits i64.
+    //
+    // Soundness: each rule narrows an interval only to values that genuinely satisfy
+    // the asserted relation; all arithmetic is in i128 so it cannot overflow; if a
+    // refinement would invert an interval (`lo > hi`) the edge is unreachable, so we
+    // leave the operand at its un-refined (still sound) value rather than emit a
+    // malformed interval. We refine ONLY the cmps/edges enumerated below; everything
+    // else flows un-refined. The join still hulls + widens to TOP (termination is
+    // unaffected — refinement only narrows along an edge, never grows the lattice).
+    let refine_edge = |out: &mut Vec<Interval>, p: usize, succ: usize| {
+        let JitInstr::JumpIfIntCompare { lhs, rhs, op, expected, target } = &program.code[p]
+        else {
+            return;
+        };
+        let (lhs, rhs) = (*lhs, *rhs);
+        if !is_int(lhs) || !is_int(rhs) {
+            return;
+        }
+        // Is this edge the one on which `(lhs op rhs)` holds, or its negation?
+        // The target edge is taken when `(lhs op rhs) == expected`.
+        let is_target = succ == *target as usize;
+        // Could this edge also be the fall-through? (e.g. target == next). If the
+        // edge is ambiguous (both target and fall-through reach `succ`), we cannot
+        // attribute a single fact to it — flow un-refined (sound).
+        let is_fallthrough = succ == p + 1;
+        if is_target && is_fallthrough {
+            return;
+        }
+        if !is_target && !is_fallthrough {
+            return;
+        }
+        // The relation that holds on THIS edge: on the target edge it is the raw
+        // comparison iff `expected` is true; on the fall-through edge it is the
+        // negation of "comparison == expected".
+        let cond_holds = if is_target { *expected } else { !*expected };
+        // `cond_holds == true`  => `lhs op rhs`
+        // `cond_holds == false` => `!(lhs op rhs)`
+        let (a, b) = (out[lhs as usize], out[rhs as usize]);
+        // Apply a refinement to register `r`, intersecting with [lo, hi]; if the
+        // intersection inverts, the edge is unreachable -> leave un-refined (sound).
+        let apply = |out: &mut Vec<Interval>, r: u32, lo: i128, hi: i128| {
+            let cur = out[r as usize];
+            let nlo = cur.lo.max(lo);
+            let nhi = cur.hi.min(hi);
+            if nlo <= nhi {
+                out[r as usize] = Interval { lo: nlo, hi: nhi };
+            }
+        };
+        // Effective relation between lhs and rhs that holds on this edge, expressed
+        // as one of the four primitive forms by folding `cond_holds`.
+        // Lt: lhs <  rhs ;  !Lt => lhs >= rhs
+        // Le: lhs <= rhs ;  !Le => lhs >  rhs
+        // Gt: lhs >  rhs ;  !Gt => lhs <= rhs
+        // Ge: lhs >= rhs ;  !Ge => lhs <  rhs
+        use JitCompare::*;
+        // Normalize to: does `lhs < rhs`, `lhs <= rhs`, `lhs > rhs`, or `lhs >= rhs`
+        // hold on this edge?
+        let rel = match (op, cond_holds) {
+            (Lt, true) | (Ge, false) => Lt,
+            (Le, true) | (Gt, false) => Le,
+            (Gt, true) | (Le, false) => Gt,
+            (Ge, true) | (Lt, false) => Ge,
+        };
+        match rel {
+            // lhs < rhs: lhs.hi <= rhs.hi - 1 ; rhs.lo >= lhs.lo + 1
+            Lt => {
+                apply(out, lhs, i64::MIN as i128, b.hi - 1);
+                apply(out, rhs, a.lo + 1, i64::MAX as i128);
+            }
+            // lhs <= rhs: lhs.hi <= rhs.hi ; rhs.lo >= lhs.lo
+            Le => {
+                apply(out, lhs, i64::MIN as i128, b.hi);
+                apply(out, rhs, a.lo, i64::MAX as i128);
+            }
+            // lhs > rhs: lhs.lo >= rhs.lo + 1 ; rhs.hi <= lhs.hi - 1
+            Gt => {
+                apply(out, lhs, b.lo + 1, i64::MAX as i128);
+                apply(out, rhs, i64::MIN as i128, a.hi - 1);
+            }
+            // lhs >= rhs: lhs.lo >= rhs.lo ; rhs.hi <= lhs.hi
+            Ge => {
+                apply(out, lhs, b.lo, i64::MAX as i128);
+                apply(out, rhs, i64::MIN as i128, a.hi);
+            }
+        }
+    };
+
     // Entry to instruction 0: params are untracked (TOP); everything else TOP too.
     // Every per-instruction register starts at TOP and the analysis narrows it only
     // where a definer/merge proves a bound. `initialized[j]` tracks whether block
@@ -1590,24 +1682,50 @@ fn interval_analysis(program: &JitFunction) -> Vec<Vec<Interval>> {
     // register at the safe TOP. Lattice height per register ≤ 3.
     let mut pinned_top: Vec<Vec<bool>> = (0..n).map(|_| vec![false; n_regs]).collect();
 
+    // PHASE 1 — plain monotone fixpoint (unchanged J4.3 lattice). Branch refinement
+    // is deliberately NOT applied here: it is a non-propagating, query-time narrowing
+    // (Phase 2 below). Keeping it out of the fixpoint preserves the original
+    // termination argument exactly (height-3 lattice + sticky-TOP pinning) — a refined
+    // bound never feeds back across a loop back-edge, so there is no slow descending
+    // ratchet, and the loop still converges in O(n_regs * n) passes.
     let mut changed = true;
     while changed {
         changed = false;
         for j in 0..n {
             // Instruction 0 and any predecessor-less block keep the all-TOP entry,
-            // which is sound (params and unreachable-block inputs are untracked).
+            // which is sound (params and unreachable-block inputs are untracked). Mark
+            // it initialized so it counts as a real predecessor for the optimistic
+            // join below (its all-TOP in-set is its final, correct value).
             if preds[j].is_empty() {
+                initialized[j] = true;
                 continue;
             }
-            let mut new_in: Vec<Interval> = vec![
-                Interval { lo: i128::MAX, hi: i128::MIN };
-                n_regs
-            ];
+            let bottom = Interval { lo: i128::MAX, hi: i128::MIN };
+            let mut new_in = vec![bottom; n_regs];
+            // Optimistic worklist join: only hull predecessors whose own in-set has
+            // been computed at least once. A not-yet-`initialized` predecessor still
+            // carries the all-TOP seed (e.g. an unvisited loop back-edge on the first
+            // pass); folding that seed in would prematurely widen loop-invariant
+            // registers (like a constant increment) to TOP and never recover. Treating
+            // it as bottom until it is real is the standard monotone worklist; once it
+            // is initialized it joins normally, and the widening below still caps any
+            // genuine loop-carried growth, so termination is unaffected.
+            let mut any_pred = false;
             for &p in &preds[j] {
+                if !initialized[p] {
+                    continue;
+                }
+                any_pred = true;
                 let out = out_of(&interval_in[p], p);
                 for r in 0..n_regs {
                     new_in[r] = new_in[r].hull(out[r]);
                 }
+            }
+            // No initialized predecessor yet (e.g. a block reachable only via a
+            // back-edge whose source hasn't been seen): leave it for a later pass
+            // rather than adopt the malformed bottom seed.
+            if !any_pred {
+                continue;
             }
             let first = !initialized[j];
             for r in 0..n_regs {
@@ -1617,15 +1735,12 @@ fn interval_analysis(program: &JitFunction) -> Vec<Vec<Interval>> {
                 }
                 let merged = new_in[r];
                 if first {
-                    // First real computation: adopt the predecessors' hull directly,
-                    // narrowing off the TOP seed.
                     new_in[r] = merged;
                     continue;
                 }
                 let old = interval_in[j][r];
-                // Subsequent passes: if the merged interval grew strictly wider than
-                // the current value, pin to TOP; otherwise keep the (non-growing)
-                // merged interval.
+                // If the merged interval grew strictly wider than the current value
+                // (e.g. across a loop back-edge), widen straight to TOP and pin it.
                 if merged.lo < old.lo || merged.hi > old.hi {
                     new_in[r] = Interval::TOP;
                     pinned_top[j][r] = true;
@@ -1641,7 +1756,55 @@ fn interval_analysis(program: &JitFunction) -> Vec<Vec<Interval>> {
         }
     }
 
-    interval_in
+    // PHASE 2 — branch-conditioned refinement (J4.3+), propagated through
+    // single-predecessor body chains but NOT across joins.
+    //
+    // A loop counter is tightened on the loop GUARD's body edge (e.g. `i <= N - 1`),
+    // but the increment `i = i + 1` may sit a few straight-line instructions later, so
+    // the refined bound must flow forward to it. We therefore recompute a refined
+    // in-set per block:
+    //   * a MULTI-predecessor block (a join: loop header, if/else merge) is PINNED to
+    //     its Phase-1 widened value — refinement never enters or crosses a join, so the
+    //     widening/termination story is exactly Phase 1's;
+    //   * a SINGLE-predecessor block `j` (pred `p`) takes `transfer(refined[p])` and
+    //     then intersects the branch fact asserted on the `p -> j` edge.
+    // Because every CFG cycle passes through a join (a loop header has ≥2 preds: entry
+    // + back-edge), and joins are pinned to a fixed value, the refined overlay has NO
+    // cycles — it is a DAG rooted at the pinned joins, so this fixpoint converges in at
+    // most `n` ordered passes. Every value is `⊑` its Phase-1 counterpart (refinement
+    // and the transfer only narrow off a sound base), so the result stays a sound
+    // over-approximation. `refine_edge` already drops any inverted (unreachable-edge)
+    // refinement, so no malformed interval is ever produced.
+    let multi_pred: Vec<bool> = (0..n)
+        .map(|j| preds[j].iter().filter(|&&p| initialized[p]).count() > 1)
+        .collect();
+    let mut refined_in = interval_in.clone();
+    // DAG depth ≤ n, so `n + 1` ordered sweeps reach the fixpoint; the loop also exits
+    // early once nothing changes.
+    for _ in 0..=n {
+        let mut changed = false;
+        for j in 0..n {
+            if multi_pred[j] || preds[j].is_empty() {
+                // Joins and entry/unreachable blocks keep their Phase-1 value.
+                continue;
+            }
+            // Exactly one (initialized) predecessor: attribute the edge fact to it.
+            let Some(&p) = preds[j].iter().find(|&&p| initialized[p]) else {
+                continue;
+            };
+            let mut row = out_of(&refined_in[p], p);
+            refine_edge(&mut row, p, j);
+            if row != refined_in[j] {
+                refined_in[j] = row;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    refined_in
 }
 
 /// Whether the result of the `Add`/`Sub`/`Mul` at instruction `i` provably fits in
@@ -4416,5 +4579,172 @@ mod tests {
         // After widening, `i` on entry to the Add is TOP ⇒ the increment stays checked.
         assert_eq!(iv[2][0], Interval::TOP);
         assert!(!arith_cannot_overflow(&iv[2], &prog.code[0 + 2]));
+    }
+
+    // --- J4.3+: branch-conditioned range refinement for loop counters ----------
+
+    /// Build the counted loop
+    ///   fn f(limit){ i=0; total=0; while i<limit { total += step; i += incr }; total }
+    /// in JIT IR. regs: 0=limit(param), 1=i, 2=total, 3=incr(const), 4=step(const 1).
+    /// The guard is `JumpIfIntCompare i < limit, expected=false, target=exit`, so the
+    /// FALL-THROUGH edge into the body asserts `i < limit` (the refinement site).
+    fn counted_loop(incr: i64, op: JitCompare) -> JitFunction {
+        f(
+            1,
+            5,
+            vec![
+                JitInstr::LoadInt { dst: 1, value: 0 },   // 0: i = 0
+                JitInstr::LoadInt { dst: 2, value: 0 },   // 1: total = 0
+                JitInstr::LoadInt { dst: 3, value: incr }, // 2: incr
+                JitInstr::LoadInt { dst: 4, value: 1 },   // 3: step = 1
+                // 4: header guard — if !(i <op> limit) goto exit(8)
+                JitInstr::JumpIfIntCompare {
+                    lhs: 1,
+                    rhs: 0,
+                    op,
+                    expected: false,
+                    target: 8,
+                },
+                JitInstr::Add { dst: 2, lhs: 2, rhs: 4 }, // 5: total = total + 1 (unbounded)
+                JitInstr::Add { dst: 1, lhs: 1, rhs: 3 }, // 6: i = i + incr (loop counter)
+                JitInstr::Jump { target: 4 },             // 7: back-edge
+                JitInstr::Return { src: 2 },              // 8: exit
+            ],
+        )
+    }
+
+    /// (i) Under the guard `i < limit`, the counter increment `i = i + 1` is proven
+    /// UNCHECKED: on the loop-body edge `i <= limit - 1 <= i64::MAX - 1`, so
+    /// `i + 1 <= i64::MAX` provably fits. The unbounded accumulator `total = total + 1`
+    /// stays CHECKED (total widens to TOP — no bounding guard).
+    #[test]
+    fn loop_counter_lt_increment_proven_accumulator_checked() {
+        let prog = counted_loop(1, JitCompare::Lt);
+        let iv = interval_analysis(&prog);
+        // Body in-set (ip 5/6): the refined `i` is bounded above by limit.hi - 1.
+        // limit is TOP ([MIN, MAX]) ⇒ i.hi = MAX - 1.
+        assert_eq!(iv[6][1].hi, i64::MAX as i128 - 1);
+        // i = i + 1 (ip 6): [.., MAX-1] + [1,1] = [.., MAX] ⇒ fits ⇒ UNCHECKED.
+        assert!(arith_cannot_overflow(&iv[6], &prog.code[6]));
+        // total = total + 1 (ip 5): total is TOP ⇒ stays CHECKED.
+        assert!(!arith_cannot_overflow(&iv[5], &prog.code[5]));
+    }
+
+    /// The same loop, compiled and run: the result equals the loop trip count for a
+    /// large limit, confirming the UNCHECKED counter increment is correct at scale
+    /// (no spurious bail, no wrong wrap). total stays small so its checked add is fine.
+    #[test]
+    fn loop_counter_lt_runs_correct_at_scale() {
+        let mut m = module();
+        let id = m.compile(&counted_loop(1, JitCompare::Lt)).unwrap();
+        assert_eq!(m.callt(id, &[0]), Some(0));
+        assert_eq!(m.callt(id, &[1]), Some(1));
+        assert_eq!(m.callt(id, &[1_000_000]), Some(1_000_000));
+    }
+
+    /// (ii-a) `i = i + 2` must stay CHECKED: under `i < limit` we only know
+    /// `i <= i64::MAX - 1`, so `i + 2` can reach `i64::MAX + 1` ⇒ does NOT fit.
+    #[test]
+    fn loop_counter_plus_two_stays_checked() {
+        let prog = counted_loop(2, JitCompare::Lt);
+        let iv = interval_analysis(&prog);
+        // i still refined to [.., MAX-1], but [.., MAX-1] + [2,2] = [.., MAX+1] ⇒
+        // does NOT fit i64 ⇒ CHECKED.
+        assert_eq!(iv[6][1].hi, i64::MAX as i128 - 1);
+        assert!(!arith_cannot_overflow(&iv[6], &prog.code[6]));
+    }
+
+    /// (ii-b) `while i <= limit` must keep `i = i + 1` CHECKED: the `Le` taken-edge
+    /// only proves `i <= limit <= i64::MAX`, so `i` may BE `i64::MAX` and `i + 1`
+    /// overflows. This locks the Lt-vs-Le off-by-one.
+    #[test]
+    fn loop_counter_le_increment_stays_checked() {
+        let prog = counted_loop(1, JitCompare::Le);
+        let iv = interval_analysis(&prog);
+        // Under `i <= limit` (limit TOP), i.hi = min(MAX, limit.hi) = MAX, NOT MAX-1.
+        assert_eq!(iv[6][1].hi, i64::MAX as i128);
+        // [.., MAX] + [1,1] = [.., MAX+1] ⇒ does NOT fit ⇒ CHECKED.
+        assert!(!arith_cannot_overflow(&iv[6], &prog.code[6]));
+    }
+
+    /// (iii) A bare `a + b` with unconstrained (TOP) operands and no governing guard
+    /// stays CHECKED and bails on a real overflow — refinement never strips a check
+    /// when there is no comparison fact to refine by. (Mirrors the param test, kept
+    /// here so the J4.3+ slice asserts the negative directly.)
+    #[test]
+    fn unguarded_add_stays_checked_and_bails() {
+        let mut m = module();
+        let prog = f(
+            2,
+            3,
+            vec![
+                JitInstr::Add { dst: 2, lhs: 0, rhs: 1 },
+                JitInstr::Return { src: 2 },
+            ],
+        );
+        let iv = interval_analysis(&prog);
+        assert!(!arith_cannot_overflow(&iv[0], &prog.code[0]));
+        let id = m.compile(&prog).unwrap();
+        assert_eq!(m.callt(id, &[i64::MAX, 1]), None); // checked overflow ⇒ bail
+    }
+
+    /// The refinement is edge-SENSITIVE: the SAME register is bounded on the taken
+    /// edge but TOP at the post-join loop header. A direct two-block check that the
+    /// guard's taken (`<`) edge tightens lhs while the header stays TOP, and that an
+    /// unreachable refinement (`x < x`) is handled soundly (no malformed interval).
+    #[test]
+    fn refinement_edge_sensitive_and_unreachable_safe() {
+        // if i < limit { return i + 1 } else { return i }   regs 0=limit,1=i,2=t
+        let prog = f(
+            2,
+            3,
+            vec![
+                // 0: if !(i < limit) goto 3 (else-branch)
+                JitInstr::JumpIfIntCompare {
+                    lhs: 1,
+                    rhs: 0,
+                    op: JitCompare::Lt,
+                    expected: false,
+                    target: 3,
+                },
+                JitInstr::Add { dst: 2, lhs: 1, rhs: 1 }, // 1: t = i + i (on i<limit edge)
+                JitInstr::Return { src: 2 },              // 2
+                JitInstr::Return { src: 1 },              // 3: else
+            ],
+        );
+        let iv = interval_analysis(&prog);
+        // On the body edge i is refined to [MIN, limit.hi-1] = [MIN, MAX-1]; the
+        // header in-set (ip 0) still sees i as TOP (param, untracked).
+        assert_eq!(iv[0][1], Interval::TOP);
+        assert_eq!(iv[1][1].hi, i64::MAX as i128 - 1);
+
+        // Unreachable edge: `if i < i` — the taken edge asserts the empty fact i < i.
+        // The two per-operand narrowings (i.hi <= i.hi-1, i.lo >= i.lo+1) each apply
+        // to the SAME register but never invert it in a single `apply`, so the result
+        // is a sound (over-approximating) but WELL-FORMED interval. The contract this
+        // test locks is soundness's structural half: NO malformed interval (lo > hi)
+        // ever escapes the refinement, even on an unreachable edge.
+        let bad = f(
+            1,
+            2,
+            vec![
+                JitInstr::JumpIfIntCompare {
+                    lhs: 0,
+                    rhs: 0,
+                    op: JitCompare::Lt,
+                    expected: true,
+                    target: 2,
+                },
+                JitInstr::Return { src: 0 }, // 1: fall-through (i >= i, always)
+                JitInstr::Return { src: 0 }, // 2: taken (i < i, unreachable)
+            ],
+        );
+        let iv2 = interval_analysis(&bad);
+        // Every register interval at every ip is well-formed (lo <= hi).
+        for row in &iv2 {
+            for v in row {
+                assert!(v.lo <= v.hi, "malformed interval {v:?}");
+            }
+        }
     }
 }
