@@ -477,6 +477,28 @@ fn native_reachable_instructions(code: &[RegInstr]) -> Vec<bool> {
                 stack.push(*target);
                 stack.push(i + 1);
             }
+            // Branch-shaped match ops: both ip targets are reachable (no fallthrough;
+            // every arm jumps explicitly). The native subset never contains these, so
+            // this only matters once a J3-bearing callee is spliced in for OSR×inline.
+            RegInstr::MatchOption {
+                some_ip, none_ip, ..
+            }
+            | RegInstr::MatchMapGet {
+                some_ip, none_ip, ..
+            } => {
+                stack.push(*some_ip);
+                stack.push(*none_ip);
+            }
+            RegInstr::MatchResult { ok_ip, err_ip, .. } => {
+                stack.push(*ok_ip);
+                stack.push(*err_ip);
+            }
+            RegInstr::MatchVariant {
+                match_ip, else_ip, ..
+            } => {
+                stack.push(*match_ip);
+                stack.push(*else_ip);
+            }
             // Terminators with no fallthrough.
             RegInstr::Return { .. } | RegInstr::RuntimeError { .. } => {}
             // Everything else falls through to the next instruction. (Functions
@@ -591,6 +613,92 @@ fn native_offset_regs(instr: &RegInstr, b: usize) -> Option<RegInstr> {
             rhs: rhs + b,
         },
         _ => return None,
+    })
+}
+
+/// Register-offset an instruction for the OSR×inline path, which (unlike the plain
+/// native subset) ALSO accepts the J3-dissolvable value ops: a callee that builds /
+/// destructures a non-escaping `Option`/variant/struct is spliced into the loop body
+/// so the J3 region passes can dissolve it to scalars. The branch-shaped match ops
+/// (`MatchOption`/`MatchResult`/`MatchVariant`/`MatchMapGet`) are remapped by the
+/// splicer (they carry callee ip targets), not here. `None` if neither the native
+/// subset nor a J3 value op.
+#[cfg(feature = "native-jit")]
+fn native_offset_regs_j3(instr: &RegInstr, b: usize) -> Option<RegInstr> {
+    if let Some(offset) = native_offset_regs(instr, b) {
+        return Some(offset);
+    }
+    Some(match instr {
+        RegInstr::MakeVariant {
+            dst,
+            layout,
+            fields,
+        } => RegInstr::MakeVariant {
+            dst: dst + b,
+            layout: layout.clone(),
+            fields: fields.iter().map(|(n, r)| (n.clone(), r + b)).collect(),
+        },
+        RegInstr::MakeStruct {
+            dst,
+            layout,
+            fields,
+        } => RegInstr::MakeStruct {
+            dst: dst + b,
+            layout: layout.clone(),
+            fields: fields.iter().map(|(n, r)| (n.clone(), r + b)).collect(),
+        },
+        RegInstr::UnwrapVariantValue { dst, src, expected } => RegInstr::UnwrapVariantValue {
+            dst: dst + b,
+            src: src + b,
+            expected: expected.clone(),
+        },
+        RegInstr::GetFieldSlot { dst, base, slot } => RegInstr::GetFieldSlot {
+            dst: dst + b,
+            base: base + b,
+            slot: *slot,
+        },
+        RegInstr::MakeSome { dst, value } => RegInstr::MakeSome {
+            dst: dst + b,
+            value: value + b,
+        },
+        RegInstr::LoadNone { dst } => RegInstr::LoadNone { dst: dst + b },
+        RegInstr::UnwrapSome { dst, src } => RegInstr::UnwrapSome {
+            dst: dst + b,
+            src: src + b,
+        },
+        _ => return None,
+    })
+}
+
+/// Whether `callee` can be inlined into the OSR loop body: like
+/// [`native_callee_inlinable`] but ALSO permitting the J3-dissolvable value ops
+/// ([`native_offset_regs_j3`]) and the branch-shaped match ops, so a leaf that
+/// builds/destructures a non-escaping `Option`/variant/struct (e.g.
+/// `make_shape`/`area`) qualifies — the value becomes loop-local once inlined and
+/// the J3 region passes dissolve it. Still captureless, arity-matched, side-effect-
+/// free (no calls/suspends/heap-collection/runtime-error/non-J3 ops).
+#[cfg(feature = "native-jit")]
+fn native_callee_inlinable_j3(callee: &RegFunction, n_args: usize) -> bool {
+    if callee.captures != 0 || callee.params != n_args {
+        return false;
+    }
+    let reachable = native_reachable_instructions(&callee.code);
+    callee.code.iter().enumerate().all(|(i, instr)| {
+        let ok = !reachable[i]
+            || matches!(
+                instr,
+                RegInstr::Jump { .. }
+                    | RegInstr::JumpIfBool { .. }
+                    | RegInstr::JumpIfIntCompare { .. }
+                    | RegInstr::Return { .. }
+                    | RegInstr::RuntimeError { .. }
+                    | RegInstr::MatchOption { .. }
+                    | RegInstr::MatchResult { .. }
+                    | RegInstr::MatchVariant { .. }
+                    | RegInstr::MatchMapGet { .. }
+            )
+            || native_offset_regs_j3(instr, 0).is_some();
+        ok
     })
 }
 
@@ -1549,6 +1657,10 @@ fn native_scalar_replace_variants_in_region(
                     return None; // unwrapped payload aliased as a variant ⇒ non-scalar
                 }
             }
+            // `DeepCopy` of a VAR register (e.g. from a `read`/param-marshalling of a
+            // heap variant): a no-op once the variant is scalar-replaced (tag/payload
+            // are copied by value). Allowed here; dropped in the rewrite.
+            RegInstr::DeepCopy { reg } if var[*reg] => {}
             RegInstr::Move { src, .. } if var[*src] => {}
             other => {
                 let reads = subset_or_option_reads(other)?;
@@ -1728,6 +1840,8 @@ fn native_scalar_replace_variants_in_region(
             RegInstr::UnwrapVariantValue { dst, src, .. } if region && var[*src] => {
                 new_code.push(RegInstr::Move { dst: *dst, src: payload_reg[*src] });
             }
+            // `DeepCopy` of a scalar-replaced variant: drop it (scalars copy by value).
+            RegInstr::DeepCopy { reg } if region && var[*reg] => {}
             // Copy-through, remapping jump/match targets.
             RegInstr::Jump { target }
             | RegInstr::JumpIfBool { target, .. }
@@ -2243,7 +2357,20 @@ fn instr_written_reg(instr: &RegInstr) -> RegFootprint {
 }
 
 #[cfg(feature = "native-jit")]
-fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<RegInstr>, usize)> {
+/// Inline straight-line leaf `CallKnown`/closure calls, returning the rewritten
+/// code, the new register count, AND a transformed→original ip-map
+/// (`ip_map[transformed_ip] = original_ip`).
+///
+/// For a copy-through (non-inlined) instruction the map is its original index. For
+/// an instruction spliced in from an inlined callee — including the arg-marshalling
+/// `Move`s and dispatch scaffolding — the map is the original index of the
+/// `CallKnown`/`CallClosure` it was inlined from: if a deopt lands inside the
+/// inlined region, the interpreter resumes by re-executing that original call.
+fn native_inline_leaf_calls(
+    unit: &RegUnit,
+    func: &RegFunction,
+    j3: bool,
+) -> Option<(Vec<RegInstr>, usize, Vec<usize>)> {
     let has_inlinable_call = func.code.iter().enumerate().any(|(i, instr)| match instr {
         RegInstr::CallKnown { .. } => true,
         RegInstr::CallClosure { .. } => {
@@ -2253,7 +2380,8 @@ fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<R
         _ => false,
     });
     if !has_inlinable_call {
-        return Some((func.code.clone(), func.regs));
+        let ip_map: Vec<usize> = (0..func.code.len()).collect();
+        return Some((func.code.clone(), func.regs, ip_map));
     }
 
     /// A jump target to be resolved once all positions are known.
@@ -2262,6 +2390,15 @@ fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<R
         Caller(usize),
         /// Target is a callee instruction index within splice `id` (use its `cmap`).
         Callee { id: usize, callee_target: usize },
+        /// Like `Callee` but for a branch-shaped MATCH op spliced from a callee
+        /// (`MatchOption`/`MatchResult`/`MatchVariant`/`MatchMapGet`): these carry TWO
+        /// callee ip targets, so `which` selects the first (`false`) or second
+        /// (`true`) target field to patch.
+        CalleeMatch {
+            id: usize,
+            callee_target: usize,
+            second: bool,
+        },
         /// A `Return` jump to the shared join slot `slot` (use `joins[slot]`). A
         /// `CallKnown`/monomorphic-`CallClosure` splice owns a private join slot; a
         /// polymorphic dispatch shares ONE join slot across all of its arms.
@@ -2272,6 +2409,8 @@ fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<R
     }
 
     let mut new_code: Vec<RegInstr> = Vec::new();
+    // `ip_map[transformed_ip] = original_ip`, grown in lockstep with `new_code`.
+    let mut ip_map: Vec<usize> = Vec::new();
     let mut index_map = vec![0usize; func.code.len()];
     let mut fixups: Vec<(usize, Fix)> = Vec::new();
     let mut splices: Vec<Splice> = Vec::new();
@@ -2291,7 +2430,10 @@ fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<R
         dst: usize,
         base: usize,
         join_slot: usize,
+        origin: usize,
+        j3: bool,
         new_code: &mut Vec<RegInstr>,
+        ip_map: &mut Vec<usize>,
         fixups: &mut Vec<(usize, Fix)>,
         splices: &mut Vec<Splice>,
     ) -> Option<()> {
@@ -2309,8 +2451,10 @@ fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<R
                         dst,
                         src: base + src,
                     });
+                    ip_map.push(origin);
                     fixups.push((new_code.len(), Fix::Join(join_slot)));
                     new_code.push(RegInstr::Jump { target: 0 });
+                    ip_map.push(origin);
                 }
                 RegInstr::Jump { target } => {
                     fixups.push((
@@ -2321,6 +2465,7 @@ fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<R
                         },
                     ));
                     new_code.push(RegInstr::Jump { target: 0 });
+                    ip_map.push(origin);
                 }
                 RegInstr::JumpIfBool {
                     cond,
@@ -2339,6 +2484,7 @@ fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<R
                         expected: *expected,
                         target: 0,
                     });
+                    ip_map.push(origin);
                 }
                 RegInstr::JumpIfIntCompare {
                     lhs,
@@ -2361,8 +2507,112 @@ fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<R
                         expected: *expected,
                         target: 0,
                     });
+                    ip_map.push(origin);
                 }
-                pure => new_code.push(native_offset_regs(pure, base)?),
+                // J3 branch-shaped match ops (OSR×inline only): two callee ip targets,
+                // each remapped via the callee's `cmap`. The J3 region passes dissolve
+                // the matched variant/Option/struct afterward.
+                RegInstr::MatchOption {
+                    src,
+                    some_ip,
+                    none_ip,
+                } if j3 => {
+                    fixups.push((
+                        new_code.len(),
+                        Fix::CalleeMatch { id, callee_target: *some_ip, second: false },
+                    ));
+                    fixups.push((
+                        new_code.len(),
+                        Fix::CalleeMatch { id, callee_target: *none_ip, second: true },
+                    ));
+                    new_code.push(RegInstr::MatchOption {
+                        src: src + base,
+                        some_ip: 0,
+                        none_ip: 0,
+                    });
+                    ip_map.push(origin);
+                }
+                RegInstr::MatchResult { src, ok_ip, err_ip } if j3 => {
+                    fixups.push((
+                        new_code.len(),
+                        Fix::CalleeMatch { id, callee_target: *ok_ip, second: false },
+                    ));
+                    fixups.push((
+                        new_code.len(),
+                        Fix::CalleeMatch { id, callee_target: *err_ip, second: true },
+                    ));
+                    new_code.push(RegInstr::MatchResult {
+                        src: src + base,
+                        ok_ip: 0,
+                        err_ip: 0,
+                    });
+                    ip_map.push(origin);
+                }
+                RegInstr::MatchVariant {
+                    src,
+                    expected,
+                    match_ip,
+                    else_ip,
+                } if j3 => {
+                    fixups.push((
+                        new_code.len(),
+                        Fix::CalleeMatch { id, callee_target: *match_ip, second: false },
+                    ));
+                    fixups.push((
+                        new_code.len(),
+                        Fix::CalleeMatch { id, callee_target: *else_ip, second: true },
+                    ));
+                    new_code.push(RegInstr::MatchVariant {
+                        src: src + base,
+                        expected: expected.clone(),
+                        match_ip: 0,
+                        else_ip: 0,
+                    });
+                    ip_map.push(origin);
+                }
+                RegInstr::MatchMapGet {
+                    map,
+                    key,
+                    value_dst,
+                    some_ip,
+                    none_ip,
+                } if j3 => {
+                    fixups.push((
+                        new_code.len(),
+                        Fix::CalleeMatch { id, callee_target: *some_ip, second: false },
+                    ));
+                    fixups.push((
+                        new_code.len(),
+                        Fix::CalleeMatch { id, callee_target: *none_ip, second: true },
+                    ));
+                    new_code.push(RegInstr::MatchMapGet {
+                        map: map + base,
+                        key: key + base,
+                        value_dst: value_dst + base,
+                        some_ip: 0,
+                        none_ip: 0,
+                    });
+                    ip_map.push(origin);
+                }
+                // A callee `RuntimeError` (e.g. the match-exhaustiveness fallback) is a
+                // terminator with no registers: copy it through. In the native subset
+                // it lowers to a bail, which re-runs the call from the interpreter —
+                // sound because the inlined body is side-effect-free.
+                RegInstr::RuntimeError { message } => {
+                    new_code.push(RegInstr::RuntimeError {
+                        message: message.clone(),
+                    });
+                    ip_map.push(origin);
+                }
+                pure => {
+                    let offset = if j3 {
+                        native_offset_regs_j3(pure, base)?
+                    } else {
+                        native_offset_regs(pure, base)?
+                    };
+                    new_code.push(offset);
+                    ip_map.push(origin);
+                }
             }
         }
         splices.push(Splice { cmap });
@@ -2380,8 +2630,15 @@ fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<R
             } => {
                 let callee = unit.functions.get(*function)?;
                 // Calls with `mut` args need a write-back at return; don't inline
-                // them (native-inlinable callees are side-effect-free anyway).
-                if !mut_args.is_empty() || !native_callee_inlinable(callee, args.len()) {
+                // them (native-inlinable callees are side-effect-free anyway). Under
+                // `j3` (OSR×inline) a callee that builds/destructures a non-escaping
+                // Option/variant/struct also qualifies — it dissolves post-inline.
+                let inlinable = if j3 {
+                    native_callee_inlinable_j3(callee, args.len())
+                } else {
+                    native_callee_inlinable(callee, args.len())
+                };
+                if !mut_args.is_empty() || !inlinable {
                     return None;
                 }
                 let base = next_reg;
@@ -2391,6 +2648,7 @@ fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<R
                         dst: base + param,
                         src: *arg,
                     });
+                    ip_map.push(i);
                 }
                 let join_slot = joins.len();
                 joins.push(0);
@@ -2399,7 +2657,10 @@ fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<R
                     *dst,
                     base,
                     join_slot,
+                    i,
+                    j3,
                     &mut new_code,
+                    &mut ip_map,
                     &mut fixups,
                     &mut splices,
                 )?;
@@ -2427,6 +2688,7 @@ fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<R
                     closure: *closure,
                     expected: k,
                 });
+                ip_map.push(i);
                 let base = next_reg;
                 next_reg += callee.regs;
                 for (param, arg) in args.iter().enumerate() {
@@ -2434,6 +2696,7 @@ fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<R
                         dst: base + param,
                         src: *arg,
                     });
+                    ip_map.push(i);
                 }
                 let join_slot = joins.len();
                 joins.push(0);
@@ -2442,7 +2705,10 @@ fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<R
                     *dst,
                     base,
                     join_slot,
+                    i,
+                    j3,
                     &mut new_code,
+                    &mut ip_map,
                     &mut fixups,
                     &mut splices,
                 )?;
@@ -2476,6 +2742,7 @@ fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<R
                     dst: id_reg,
                     closure: *closure,
                 });
+                ip_map.push(i);
                 // One shared join past the last arm: every arm's `Return` jumps here.
                 let join_slot = joins.len();
                 joins.push(0);
@@ -2488,23 +2755,27 @@ fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<R
                         dst: key_reg,
                         value: k as i64,
                     });
+                    ip_map.push(i);
                     new_code.push(RegInstr::Equal {
                         dst: eq_reg,
                         lhs: id_reg,
                         rhs: key_reg,
                     });
+                    ip_map.push(i);
                     arm_branch_pos.push(new_code.len());
                     new_code.push(RegInstr::JumpIfBool {
                         cond: eq_reg,
                         expected: true,
                         target: 0, // patched to the arm start below
                     });
+                    ip_map.push(i);
                 }
                 // No-match: bail to the interpreter (re-run from the top). Sound
                 // because every candidate body is side-effect-free.
                 new_code.push(RegInstr::RuntimeError {
                     message: String::new(),
                 });
+                ip_map.push(i);
                 // Emit each arm's inlined body; record its start to patch the branch.
                 for (arm, &k) in targets.iter().enumerate() {
                     let callee = unit.functions.get(k)?;
@@ -2521,13 +2792,17 @@ fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<R
                             dst: base + param,
                             src: *arg,
                         });
+                        ip_map.push(i);
                     }
                     splice_callee(
                         callee,
                         *dst,
                         base,
                         join_slot,
+                        i,
+                        j3,
                         &mut new_code,
+                        &mut ip_map,
                         &mut fixups,
                         &mut splices,
                     )?;
@@ -2540,25 +2815,70 @@ fn native_inline_leaf_calls(unit: &RegUnit, func: &RegFunction) -> Option<(Vec<R
             | RegInstr::JumpIfIntCompare { target, .. } => {
                 fixups.push((new_code.len(), Fix::Caller(*target)));
                 new_code.push(instr.clone());
+                ip_map.push(i);
             }
-            other => new_code.push(other.clone()),
+            other => {
+                new_code.push(other.clone());
+                ip_map.push(i);
+            }
         }
     }
 
     for (pos, fix) in fixups {
+        // For a `CalleeMatch`, remember which of the two match targets to patch.
+        let second = matches!(fix, Fix::CalleeMatch { second: true, .. });
+        let is_match = matches!(fix, Fix::CalleeMatch { .. });
         let target = match fix {
             Fix::Caller(t) => index_map[t],
-            Fix::Callee { id, callee_target } => splices[id].cmap[callee_target],
+            Fix::Callee { id, callee_target }
+            | Fix::CalleeMatch {
+                id, callee_target, ..
+            } => splices[id].cmap[callee_target],
             Fix::Join(slot) => joins[slot],
         };
         match &mut new_code[pos] {
+            // Single-target branches.
             RegInstr::Jump { target: t }
             | RegInstr::JumpIfBool { target: t, .. }
-            | RegInstr::JumpIfIntCompare { target: t, .. } => *t = target,
+            | RegInstr::JumpIfIntCompare { target: t, .. }
+                if !is_match =>
+            {
+                *t = target
+            }
+            // Two-target match ops: patch the first/second ip per `second`.
+            RegInstr::MatchOption {
+                some_ip, none_ip, ..
+            }
+            | RegInstr::MatchMapGet {
+                some_ip, none_ip, ..
+            } => {
+                if second {
+                    *none_ip = target;
+                } else {
+                    *some_ip = target;
+                }
+            }
+            RegInstr::MatchResult { ok_ip, err_ip, .. } => {
+                if second {
+                    *err_ip = target;
+                } else {
+                    *ok_ip = target;
+                }
+            }
+            RegInstr::MatchVariant {
+                match_ip, else_ip, ..
+            } => {
+                if second {
+                    *else_ip = target;
+                } else {
+                    *match_ip = target;
+                }
+            }
             _ => {}
         }
     }
-    Some((new_code, next_reg))
+    debug_assert_eq!(ip_map.len(), new_code.len());
+    Some((new_code, next_reg, ip_map))
 }
 
 /// Translate a `RegFunction` into the native-JIT IR, or `None` if it is not in the
@@ -2581,7 +2901,7 @@ fn translate_to_native_jit(
     }
     // Inline straight-line leaf calls first, so a function that only leaves the
     // native subset via small helper calls still qualifies (the calls vanish).
-    let (code, n_regs) = native_inline_leaf_calls(unit, func)?;
+    let (code, n_regs, _ip_map) = native_inline_leaf_calls(unit, func, false)?;
     // J3: then scalar-replace any non-escaping (scalar-payload) `Option` on the
     // fully-inlined body, dissolving `MakeSome`/`LoadNone`/`MatchOption`/`UnwrapSome`
     // into tag + payload scalar registers so the function compiles through the
@@ -10536,6 +10856,9 @@ impl RegVm {
                     }
                 }
             }
+            // Clone the unit handle before borrowing `self.native` mutably: the OSR
+            // pre-pass inlines leaf `CallKnown`s, which needs the callee bodies.
+            let unit = Rc::clone(&self.unit);
             let Some(native) = self.native.as_mut() else {
                 return false;
             };
@@ -10554,9 +10877,23 @@ impl RegVm {
             // returns the code unchanged with an identity ip-map, so plain
             // native-subset OSR is byte-for-byte the old path.
             if !native.osr_cache.contains_key(&native_key) {
-                let entry = detect_single_natural_loop(&func.code).and_then(|lp0| {
+                // OSR × inline-leaf-calls (Pending #1): FIRST inline straight-line
+                // leaf `CallKnown`/closure calls into the function body, so a value
+                // that is built in one helper and matched in another — both called
+                // from the loop (e.g. `variant_match_loop`'s `make_shape`/`area`) —
+                // becomes loop-LOCAL and the Option/variant/struct region passes
+                // below can dissolve it. `native_inline_leaf_calls` returns a
+                // transformed→original ip-map (`ip_map0`); a body with no inlinable
+                // call yields the code unchanged with an identity map, so the
+                // non-inline OSR path is byte-for-byte the old behavior. Detect the
+                // loop on the INLINED stream, then run the three region passes on it,
+                // composing ALL FOUR ip-maps:
+                // `ip_map[t] = ip_map0[ip_map1[ip_map2[ip_map3[t]]]]`.
+                let entry = native_inline_leaf_calls(&unit, func, true).and_then(
+                    |(inlined_code, n_regs0, ip_map0)| {
+                    detect_single_natural_loop(&inlined_code).and_then(|lp0| {
                     native_scalar_replace_options_in_region(
-                        &func.code, func.regs, lp0.header, lp0.exit,
+                        &inlined_code, n_regs0, lp0.header, lp0.exit,
                     )
                     .and_then(|(code1, n_regs1, ip_map1)| {
                         // OSR × J3 for VARIANTS: after dissolving Options, re-detect the
@@ -10585,26 +10922,62 @@ impl RegVm {
                         let (code, n_regs, ip_map3) = native_scalar_replace_structs_in_region(
                             &code2, n_regs2, lp_s.header, lp_s.exit,
                         )?;
-                        let ip_map: Vec<usize> =
-                            ip_map3.iter().map(|&t3| ip_map1[ip_map2[t3]]).collect();
+                        // Compose all FOUR maps to land in the ORIGINAL `func.code`
+                        // index space. `ip_map1/2/3` index the INLINED stream
+                        // (`inlined_code`); the final hop through `ip_map0` carries
+                        // an inlined-stream ip back to the original `func.code` ip.
+                        // `ip_map[t] = ip_map0[ip_map1[ip_map2[ip_map3[t]]]]`.
+                        let ip_map: Vec<usize> = ip_map3
+                            .iter()
+                            .map(|&t3| ip_map0[ip_map1[ip_map2[t3]]])
+                            .collect();
                         // Re-detect on the fully-transformed stream; its single loop is
                         // the same loop with both Option and variant ops dissolved (the
                         // body is now native-subset). Indices shift, so use `lp`.
                         detect_single_natural_loop(&code).and_then(|lp| {
-                            // Map the OSR boundary back to the ORIGINAL code. Both the
-                            // header and the exit instruction are copy-through branches
-                            // (`JumpIfIntCompare`/`JumpIfBool` / `Jump`) — never Option
-                            // ops — so each maps one-to-one to its original index,
-                            // making the boundary mapping unambiguous. If either ip
-                            // cannot map back soundly, bail OSR (never misresume).
+                            // Map the OSR boundary back to the ORIGINAL code. The loop
+                            // header and exit branches live in the OUTER function (not
+                            // inside an inlined callee), so they are copy-through
+                            // branches (`JumpIfIntCompare`/`JumpIfBool`/`Jump`) — never
+                            // Option ops, never spliced callee body — and map one-to-one
+                            // to their original index, making the boundary mapping
+                            // unambiguous. If either ip cannot map back soundly, bail
+                            // OSR (never misresume).
                             //
+                            // Soundness (OSR × inline): the OSR boundary MUST be a
+                            // copy-through instruction. An instruction spliced in from
+                            // an inlined callee has its `ip_map0` entry pointing at the
+                            // `CallKnown`/`CallClosure` site it was inlined from, so the
+                            // boundary maps into an inlined region exactly when the
+                            // original instruction at the mapped ip is a call. If the
+                            // header or exit maps into an inlined region, bail OSR (the
+                            // dissolved/inlined values must be strictly loop-internal,
+                            // dead at both boundaries; the inlined-callee temp registers
+                            // are fresh windows above `func.regs`, used only in the loop
+                            // body). The struct/variant/Option region gates already
+                            // enforce dead-at-boundary for the scalar-replaced regs.
+                            let maps_into_inline = |orig: usize| {
+                                func.code.get(orig).is_some_and(|instr| {
+                                    matches!(
+                                        instr,
+                                        RegInstr::CallKnown { .. } | RegInstr::CallClosure { .. }
+                                    )
+                                })
+                            };
                             // For `lp.exit`, the loop exits to one-past the post-loop
                             // body; when that lands exactly at the end of the
                             // transformed stream it maps to the end of the original
                             // stream.
                             let orig_header = *ip_map.get(lp.header)?;
+                            if maps_into_inline(orig_header) {
+                                return None;
+                            }
                             let orig_exit = if lp.exit < ip_map.len() {
-                                ip_map[lp.exit]
+                                let oe = ip_map[lp.exit];
+                                if maps_into_inline(oe) {
+                                    return None;
+                                }
+                                oe
                             } else if lp.exit == code.len() {
                                 func.code.len()
                             } else {
@@ -10626,6 +10999,7 @@ impl RegVm {
                                     }
                                 })
                         })
+                    })
                     })
                 });
                 native.osr_cache.insert(native_key, entry);

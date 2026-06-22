@@ -932,6 +932,138 @@ fn main() -> Unit {
     );
 }
 
+/// OSR × inline-leaf-calls (Pending #1) CROSS-FUNCTION positive test. The variant is
+/// built in one leaf (`make_shape`) and matched in another (`area`), BOTH called from
+/// the hot loop in an I/O-tangled (native-INELIGIBLE) function `f`. The variant thus
+/// crosses function boundaries and never dissolves under plain OSR. The fix runs
+/// `native_inline_leaf_calls` inside the OSR loop region FIRST, inlining the two
+/// `CallKnown` leaves into the loop body so the variant becomes loop-LOCAL; the
+/// already-shipped J3 variant scalar-replacement then dissolves it — an allocation-
+/// free native loop. Forcing OSR on, the output must be byte-identical to the pure
+/// interpreter (which allocates a `Shape` per iteration), and `osr_entries > 0`
+/// proves the loop inlined + dissolved + OSR'd across the function boundary.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_inline_cross_function_variant_loop() {
+    let source = "\
+sum Shape {
+    Circle(radius: Int)
+    Square(side: Int)
+    Empty
+}
+
+fn make_shape(sel: Int, size: Int) -> Shape {
+    if sel == 0 {
+        return Circle(radius: size)
+    }
+    if sel == 1 {
+        return Square(side: size)
+    }
+    return Empty
+}
+
+fn area(shape: read Shape) -> Int {
+    match shape {
+        Circle(radius) => {
+            return radius * radius * 3
+        }
+        Square(side) => {
+            return side * side
+        }
+        Empty => {
+            return 0
+        }
+    }
+}
+
+fn f(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        let shape = make_shape(sel: i % 3, size: i)
+        total = total + area(shape: read shape)
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(limit: read 60)))
+    return Unit
+}
+";
+    let file = "jit-osr-inline-cross-function-variant.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "OSR × inline cross-function variant loop must be byte-identical to the interpreter"
+    );
+    assert!(
+        stats.osr_entries > 0,
+        "a cross-function variant (built in make_shape, matched in area) must inline into \
+         the loop, dissolve, and OSR natively: {stats:?}",
+    );
+}
+
+/// OSR × inline-leaf-calls NEGATIVE test — a loop calling a NON-inlinable leaf must
+/// NOT OSR. Here `bump` takes a `mut` List parameter and mutates it (`List.append`),
+/// so it has `mut_args` and a non-native heap op: `native_callee_inlinable_j3` (and
+/// the inline pass) refuses it. It cannot become loop-local, the loop never reaches
+/// the native subset, and `osr_entries` MUST stay 0. The output must still be
+/// interpreter-identical (the interpreter runs the whole loop). This guards against
+/// the inline pass accidentally splicing a side-effecting / mut-arg leaf into the
+/// loop body.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_inline_non_inlinable_leaf_does_not_osr() {
+    let source = "\
+fn bump(xs: mut List<Int>, v: Int) -> Int {
+    List.append(list: mut xs, values: read [v])
+    return v
+}
+
+fn f(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    let mut xs: List<Int> = []
+    while i < limit {
+        total = total + bump(xs: mut xs, v: i)
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(limit: read 60)))
+    return Unit
+}
+";
+    let file = "jit-osr-inline-non-inlinable-leaf.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "a loop calling a non-inlinable (mut-arg) leaf must still be interpreter-identical"
+    );
+    // i in 0..60: total = 0+1+...+59 = 1770.
+    assert_eq!(osr.stdout.trim_end(), "begin\n1770\n1770");
+    assert_eq!(
+        stats.osr_entries, 0,
+        "a loop calling a non-inlinable leaf must NOT OSR: {stats:?}",
+    );
+}
+
 /// J2.1 profile-guided monomorphic closure inlining — the program shape the
 /// optimization targets: a higher-order `dispatch(f, x)` whose closure parameter is
 /// the same callee on every warm call, so J1 profiles the `CallClosure` site as
