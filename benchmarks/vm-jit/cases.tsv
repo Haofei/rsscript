@@ -53,3 +53,18 @@ async               benchmarks/micro/async_call_loop.rss                        
 async-taskgroup     benchmarks/vm-jit/kernels/task_group_spawn.rss               20000     structured concurrency spawn+join
 selfhost-manifest   benchmarks/micro/selfhost_manifest_inspector.rss             benchmarks/micro/fixtures/package-medium/rsspkg.toml   realistic mixed (parse+collections)
 selfhost-mailbox    benchmarks/micro/selfhost_mailbox_bench.rss                  60000     realistic async actor loop
+#
+# --- OSR (on-stack replacement) kernels: hot loop in an I/O-tangled (native-INELIGIBLE)
+# function; jit-native auto-OSRs. The whole function never reaches the native tier (the
+# Log.write calls keep it off the whole-function native subset), so ONLY OSR can run the
+# loop natively. `size` is the loop bound (consumed via bench_size), chosen so the reg_vm
+# median lands in the hundreds-of-ms range, comparable to the other kernels above.
+# category               path                                                         size      slow_path
+osr-scalar              benchmarks/vm-jit/kernels/osr_scalar_loop.rss                3000000   OSR pure-Int scalar hot loop in I/O-tangled fn
+osr-option              benchmarks/vm-jit/kernels/osr_option_loop.rss                2000000   OSR × J3: non-escaping Option<Int> per iter
+osr-variant             benchmarks/vm-jit/kernels/osr_variant_loop.rss               1400000   OSR × J3: non-escaping user variant per iter
+osr-struct              benchmarks/vm-jit/kernels/osr_struct_loop.rss                2400000   OSR × J3: non-escaping flat struct per iter
+osr-inline-variant      benchmarks/vm-jit/kernels/osr_inline_variant_loop.rss        700000    OSR × inline-leaf-calls + J3 variant
+osr-closure             benchmarks/vm-jit/kernels/osr_closure_loop.rss               2700000   OSR × J2: inline capturing Int closure in loop
+osr-multifield-variant  benchmarks/vm-jit/kernels/osr_multifield_variant_loop.rss    1150000   OSR × J3: multi-field variant arms per iter
+osr-float-closure       benchmarks/vm-jit/kernels/osr_float_closure_loop.rss         2400000   OSR × J2: inline capturing Float closure in loop
