@@ -930,6 +930,15 @@ fn is_variant_op(instr: &RegInstr) -> bool {
     )
 }
 
+/// Whether `instr` is a struct construction op that the J3 struct scalar-replacement
+/// dissolves into one scalar register per field slot. `GetFieldSlot` is already in
+/// the native subset (it is also a heap-read on a handle param), so the struct pass
+/// only needs to additionally accept `MakeStruct` inside the region.
+#[cfg(feature = "native-jit")]
+fn is_make_struct_op(instr: &RegInstr) -> bool {
+    matches!(instr, RegInstr::MakeStruct { .. })
+}
+
 /// J3 (escape analysis + scalar replacement). Identify `Option` registers that are
 /// NON-ESCAPING with a *scalar* payload and rewrite the function's `RegInstr` code
 /// so each such Option is dissolved into two scalar registers — `tag` (Bool,
@@ -1732,6 +1741,306 @@ fn native_scalar_replace_variants_in_region(
             }
             RegInstr::MatchVariant { match_ip, else_ip, .. } => {
                 fixups.push((new_code.len(), Fix::VariantMatch { match_ip: *match_ip, else_ip: *else_ip }));
+                new_code.push(instr.clone());
+            }
+            other => new_code.push(other.clone()),
+        }
+    }
+    for (pos, fix) in fixups {
+        match fix {
+            Fix::Target(t) => {
+                let target = index_map[t];
+                match &mut new_code[pos] {
+                    RegInstr::Jump { target: dst }
+                    | RegInstr::JumpIfBool { target: dst, .. }
+                    | RegInstr::JumpIfIntCompare { target: dst, .. } => *dst = target,
+                    _ => {}
+                }
+            }
+            Fix::Match { some_ip, none_ip } => {
+                let (s, n) = (index_map[some_ip], index_map[none_ip]);
+                if let RegInstr::MatchOption { some_ip: sd, none_ip: nd, .. } = &mut new_code[pos] {
+                    *sd = s;
+                    *nd = n;
+                }
+            }
+            Fix::VariantMatch { match_ip, else_ip } => {
+                let (m, e) = (index_map[match_ip], index_map[else_ip]);
+                if let RegInstr::MatchVariant { match_ip: md, else_ip: ed, .. } = &mut new_code[pos] {
+                    *md = m;
+                    *ed = e;
+                }
+            }
+        }
+    }
+    // Inverse ip-map (see `native_scalar_replace_options`).
+    let mut ip_map = vec![0usize; new_code.len()];
+    for i in 0..code.len() {
+        let start = index_map[i];
+        let end = if i + 1 < code.len() { index_map[i + 1] } else { new_code.len() };
+        for t in start..end {
+            ip_map[t] = i;
+        }
+    }
+    Some((new_code, next_reg, ip_map))
+}
+
+/// OSR × J3 for non-escaping FLAT user STRUCTS. Mirrors
+/// [`native_scalar_replace_variants_in_region`] but for `MakeStruct`/`GetFieldSlot`.
+/// A struct is a single shape (no tag), so a replaceable struct register `R`
+/// dissolves into ONE fresh scalar register per field *slot* (slot order =
+/// `layout.field_names`), exactly the inlined-fields form.
+///
+/// Scope (flat, scalar fields only): a struct register `R` is replaced iff every
+/// definition is a `MakeStruct` whose every field register is a **scalar** (never
+/// itself a replaceable struct ⇒ nested struct ⇒ bail) and whose layout shares the
+/// same `field_names` (same shape) as all other defs of `R`; every use is
+/// `GetFieldSlot{base:R}` or a `Move{src:R}` to another replaceable struct register;
+/// and `R` never appears as any other value operand. `Move`-aliased struct registers
+/// share one field-register vector, so they must agree on the layout shape. If any
+/// in-region struct register is not replaceable the whole region pass bails (no OSR),
+/// exactly like the Option/variant passes.
+///
+/// Rewrite:
+/// - `MakeStruct{dst:R, layout, fields}` → for each `(name, src)`,
+///   `Move field_reg[slot(name)] = src`.
+/// - `GetFieldSlot{dst, base:R, slot}` → `Move dst = field_reg[slot]`.
+/// - `Move` aliases copy every field register.
+///
+/// Returns `(transformed_code, new_n_regs, ip_map)` with the same transformed→original
+/// `ip_map` discipline as the other two region passes.
+#[cfg(feature = "native-jit")]
+fn native_scalar_replace_structs_in_region(
+    code: &[RegInstr],
+    n_regs: usize,
+    header: usize,
+    exit: usize,
+) -> Option<(Vec<RegInstr>, usize, Vec<usize>)> {
+    if header >= exit || exit > code.len() {
+        return None;
+    }
+    let in_region = |i: usize| i >= header && i < exit;
+
+    // Fast path: no `MakeStruct` inside the region ⇒ nothing for THIS pass to do.
+    // (A bare `GetFieldSlot` whose base is a handle param stays a native heap read.)
+    if !(header..exit).any(|i| is_make_struct_op(&code[i])) {
+        let ip_map: Vec<usize> = (0..code.len()).collect();
+        return Some((code.to_vec(), n_regs, ip_map));
+    }
+
+    // Every in-region instruction must be native-subset or a `MakeStruct`.
+    for i in header..exit {
+        if !native_subset_instruction(&code[i]) && !is_make_struct_op(&code[i]) {
+            return None;
+        }
+    }
+
+    // STR = registers carrying a (replaceable) struct value: seed from in-region
+    // `MakeStruct` dsts, close under in-region `Move` aliasing.
+    let mut strv = vec![false; n_regs];
+    for i in header..exit {
+        if let RegInstr::MakeStruct { dst, .. } = &code[i] {
+            strv[*dst] = true;
+        }
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for i in header..exit {
+            if let RegInstr::Move { dst, src } = &code[i] {
+                if strv[*src] && !strv[*dst] {
+                    strv[*dst] = true;
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    // Validate in-region uses/defs of STR registers. Each `MakeStruct` field register
+    // must NOT itself be a STR register (a nested struct field is non-scalar ⇒ bail).
+    // Anything else touching a STR register as a value operand ⇒ bail.
+    for i in header..exit {
+        match &code[i] {
+            RegInstr::MakeStruct { dst, fields, .. } if strv[*dst] => {
+                if fields.iter().any(|(_, r)| strv[*r]) {
+                    return None; // nested struct field ⇒ non-scalar
+                }
+            }
+            RegInstr::Move { dst, src } if strv[*dst] => {
+                if !strv[*src] {
+                    return None;
+                }
+            }
+            RegInstr::GetFieldSlot { dst, base, .. } if strv[*base] => {
+                if strv[*dst] {
+                    return None; // a field read aliased back as a struct ⇒ non-scalar
+                }
+            }
+            RegInstr::Move { src, .. } if strv[*src] => {}
+            other => {
+                let reads = subset_or_option_reads(other)?;
+                if reads.into_iter().any(|r| strv[r]) {
+                    return None;
+                }
+                if let RegInstr::GetFieldSlot { dst, .. } | RegInstr::MakeStruct { dst, .. } = other
+                {
+                    if strv[*dst] {
+                        return None;
+                    }
+                }
+            }
+        }
+    }
+
+    // Dead-at-boundary soundness (identical argument to the Option/variant passes):
+    // every STR register must be neither read nor written by ANY instruction OUTSIDE
+    // the region, so the original register slot is never observed across either OSR
+    // boundary. A footprint we cannot model reports `All` ⇒ bail.
+    for i in 0..code.len() {
+        if in_region(i) {
+            continue;
+        }
+        match instr_read_regs(&code[i]) {
+            RegFootprint::Some(reads) => {
+                if reads.into_iter().any(|r| r < n_regs && strv[r]) {
+                    return None;
+                }
+            }
+            RegFootprint::All => return None,
+        }
+        match instr_written_reg(&code[i]) {
+            RegFootprint::Some(writes) => {
+                if writes.into_iter().any(|r| r < n_regs && strv[r]) {
+                    return None;
+                }
+            }
+            RegFootprint::All => return None,
+        }
+    }
+
+    // `Move`-aliased STR registers share ONE field-register vector, so group them into
+    // alias classes via union-find over in-region `Move` edges.
+    let mut parent: Vec<usize> = (0..n_regs).collect();
+    fn find(parent: &mut [usize], x: usize) -> usize {
+        let mut r = x;
+        while parent[r] != r {
+            r = parent[r];
+        }
+        let mut c = x;
+        while parent[c] != c {
+            let n = parent[c];
+            parent[c] = r;
+            c = n;
+        }
+        r
+    }
+    for i in header..exit {
+        if let RegInstr::Move { dst, src } = &code[i] {
+            if strv[*dst] && strv[*src] {
+                let (a, b) = (find(&mut parent, *dst), find(&mut parent, *src));
+                if a != b {
+                    parent[a] = b;
+                }
+            }
+        }
+    }
+
+    // Determine ONE canonical layout shape (field_names) per alias class from its
+    // `MakeStruct` defs. All defs in a class must agree on the shape (Move aliases
+    // copy the whole field vector, so a class is a single struct shape).
+    let mut class_shape: HashMap<usize, Vec<Rc<str>>> = HashMap::new();
+    for i in header..exit {
+        if let RegInstr::MakeStruct { dst, layout, .. } = &code[i] {
+            if strv[*dst] {
+                let root = find(&mut parent, *dst);
+                let shape = layout.field_names.clone();
+                match class_shape.get(&root) {
+                    Some(existing) if *existing != shape => return None, // shape mismatch
+                    Some(_) => {}
+                    None => {
+                        class_shape.insert(root, shape);
+                    }
+                }
+            }
+        }
+    }
+
+    // Allocate one fresh field register per slot, one vector per alias class.
+    let mut next_reg = n_regs;
+    let mut class_field_regs: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (&root, shape) in &class_shape {
+        let regs: Vec<usize> = (0..shape.len())
+            .map(|_| {
+                let r = next_reg;
+                next_reg += 1;
+                r
+            })
+            .collect();
+        class_field_regs.insert(root, regs);
+    }
+    // Per-STR-register handle to its class field-register vector, plus the class's
+    // canonical field-name → slot map (the slot order is `field_names`).
+    let field_regs_of = |reg: usize, parent: &mut Vec<usize>| -> Vec<usize> {
+        let root = find(parent, reg);
+        class_field_regs.get(&root).cloned().expect("STR reg has a class")
+    };
+    let slot_of_name = |reg: usize, parent: &mut Vec<usize>, name: &str| -> usize {
+        let root = find(parent, reg);
+        class_shape
+            .get(&root)
+            .and_then(|shape| shape.iter().position(|n| &**n == name))
+            .expect("field name in class shape")
+    };
+
+    // Rewrite the whole code, scalar-replacing in-region struct ops and copying the
+    // rest through, remapping jump/match targets through the index map.
+    enum Fix {
+        Target(usize),
+        Match { some_ip: usize, none_ip: usize },
+        VariantMatch { match_ip: usize, else_ip: usize },
+    }
+    let mut new_code: Vec<RegInstr> = Vec::with_capacity(code.len());
+    let mut index_map = vec![0usize; code.len()];
+    let mut fixups: Vec<(usize, Fix)> = Vec::new();
+    for (i, instr) in code.iter().enumerate() {
+        index_map[i] = new_code.len();
+        let region = in_region(i);
+        match instr {
+            RegInstr::MakeStruct { dst, fields, .. } if region && strv[*dst] => {
+                // For each named field, move the source into its slot's field reg.
+                let regs = field_regs_of(*dst, &mut parent);
+                for (name, src) in fields {
+                    let slot = slot_of_name(*dst, &mut parent, name);
+                    new_code.push(RegInstr::Move { dst: regs[slot], src: *src });
+                }
+            }
+            RegInstr::GetFieldSlot { dst, base, slot } if region && strv[*base] => {
+                let regs = field_regs_of(*base, &mut parent);
+                new_code.push(RegInstr::Move { dst: *dst, src: regs[*slot] });
+            }
+            RegInstr::Move { dst, src } if region && strv[*dst] => {
+                // Alias copy: same class ⇒ same field regs ⇒ self-copies (harmless);
+                // emit them for clarity/robustness.
+                let dregs = field_regs_of(*dst, &mut parent);
+                let sregs = field_regs_of(*src, &mut parent);
+                for (d, s) in dregs.iter().zip(sregs.iter()) {
+                    new_code.push(RegInstr::Move { dst: *d, src: *s });
+                }
+            }
+            // Copy-through, remapping jump/match targets.
+            RegInstr::Jump { target }
+            | RegInstr::JumpIfBool { target, .. }
+            | RegInstr::JumpIfIntCompare { target, .. } => {
+                fixups.push((new_code.len(), Fix::Target(*target)));
+                new_code.push(instr.clone());
+            }
+            RegInstr::MatchOption { some_ip, none_ip, .. } => {
+                fixups.push((new_code.len(), Fix::Match { some_ip: *some_ip, none_ip: *none_ip }));
+                new_code.push(instr.clone());
+            }
+            RegInstr::MatchVariant { match_ip, else_ip, .. } => {
+                fixups
+                    .push((new_code.len(), Fix::VariantMatch { match_ip: *match_ip, else_ip: *else_ip }));
                 new_code.push(instr.clone());
             }
             other => new_code.push(other.clone()),
@@ -10260,11 +10569,24 @@ impl RegVm {
                         // byte-for-byte the old path. Compose the two transformed→
                         // original ip-maps: `ip_map[t] = ip_map1[ip_map2[t]]`.
                         let lp_v = detect_single_natural_loop(&code1)?;
-                        let (code, n_regs, ip_map2) = native_scalar_replace_variants_in_region(
+                        let (code2, n_regs2, ip_map2) = native_scalar_replace_variants_in_region(
                             &code1, n_regs1, lp_v.header, lp_v.exit,
                         )?;
+                        // OSR × J3 for STRUCTS: after dissolving Options and variants,
+                        // re-detect the loop on the transformed stream and scalar-replace
+                        // any non-escaping flat user struct living entirely inside that
+                        // region (`MakeStruct`/`GetFieldSlot` → per-slot `Move`). When
+                        // there is no replaceable struct the pass returns the code
+                        // unchanged with an identity ip-map, so an Option/variant-only (or
+                        // plain) body is byte-for-byte the old path. Compose all three
+                        // transformed→original ip-maps:
+                        // `ip_map[t] = ip_map1[ip_map2[ip_map3[t]]]`.
+                        let lp_s = detect_single_natural_loop(&code2)?;
+                        let (code, n_regs, ip_map3) = native_scalar_replace_structs_in_region(
+                            &code2, n_regs2, lp_s.header, lp_s.exit,
+                        )?;
                         let ip_map: Vec<usize> =
-                            ip_map2.iter().map(|&t2| ip_map1[t2]).collect();
+                            ip_map3.iter().map(|&t3| ip_map1[ip_map2[t3]]).collect();
                         // Re-detect on the fully-transformed stream; its single loop is
                         // the same loop with both Option and variant ops dissolved (the
                         // body is now native-subset). Indices shift, so use `lp`.

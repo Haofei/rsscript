@@ -814,6 +814,124 @@ fn main() -> Unit {
     );
 }
 
+/// OSR × J3 for STRUCTS (Pending #1) correctness: a hot loop that constructs and
+/// field-reads a *non-escaping* FLAT user `struct Point { x: Int, y: Int }` (scalar
+/// fields) each iteration, wrapped by non-native I/O (`Log.write` before/after) in the
+/// SAME function — so the function is native-INELIGIBLE as a whole and only OSR can
+/// run the loop natively. The `Point` is built and read strictly inside the loop body
+/// and is dead at the loop boundary, so OSR's J3 struct pass scalar-replaces it (one
+/// register per field slot, no tag, no allocation), making the loop an allocation-free
+/// native loop, while the live-in/live-out are the unchanged loop-carried registers
+/// (`i`, `total`).
+///
+/// With OSR forced on, the program's output must be byte-identical to the pure
+/// interpreter — which interprets the whole loop, allocating a `Point` per iteration.
+/// That byte-identity (and the differential corpus) is the correctness net. Under
+/// `native-jit` we also assert the loop genuinely OSR'd (`osr_entries > 0`).
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j3_struct_loop_matches_interpreter() {
+    let source = "\
+struct Point {
+    x: Int,
+    y: Int
+}
+
+fn f(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        let p = Point(x: i, y: i * 2)
+        total = total + read p.x + read p.y
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(limit: read 60)))
+    return Unit
+}
+";
+    let file = "jit-osr-j3-struct.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "OSR × J3 struct loop must be byte-identical to the interpreter (stdout)"
+    );
+    // i in 0..60: each iter adds p.x + p.y = i + 2i = 3i. Total = 3 * (0+..+59) =
+    // 3 * 1770 = 5310.
+    assert_eq!(osr.stdout.trim_end(), "begin\n5310\n5310");
+    assert!(
+        stats.osr_entries > 0,
+        "the non-escaping flat struct loop must OSR natively after J3 scalar replacement: {stats:?}",
+    );
+}
+
+/// OSR × J3 struct negative test — the dead-at-boundary safety guard. The core
+/// soundness rule of `native_scalar_replace_structs_in_region` is that every scalar-
+/// replaced struct register must be DEAD outside `[header, exit)`. Here `p` is
+/// declared before the loop AND read AFTER it, so it is live across the loop boundary:
+/// the region gate MUST refuse to scalar-replace it and therefore MUST NOT OSR
+/// (`osr_entries == 0`), or the interpreter would read a stale `p` slot the native loop
+/// never wrote back. We assert both that the program is still correct (the interpreter
+/// runs the whole loop, no OSR) and that OSR genuinely bailed. This protects against a
+/// future edit to `instr_read_regs`/`instr_written_reg` accidentally making a boundary-
+/// escaping struct look dead.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j3_escaping_struct_does_not_osr() {
+    let source = "\
+struct Point {
+    x: Int,
+    y: Int
+}
+
+fn f(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    let mut p = Point(x: 0, y: 0)
+    while i < limit {
+        p = Point(x: i, y: i * 2)
+        total = total + read p.x + read p.y
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: read p.x))
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(limit: read 60)))
+    return Unit
+}
+";
+    let file = "jit-osr-j3-escaping-struct.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "a struct read after the loop must still produce interpreter-identical output"
+    );
+    // i in 0..60: total = 3 * 1770 = 5310; p = Point(59, 118) after the loop ⇒ p.x = 59.
+    assert_eq!(osr.stdout.trim_end(), "begin\n59\n5310\n5310");
+    assert_eq!(
+        stats.osr_entries, 0,
+        "a loop whose struct is live after the loop must NOT OSR (the dead-at-boundary \
+         gate must bail): {stats:?}",
+    );
+}
+
 /// J2.1 profile-guided monomorphic closure inlining — the program shape the
 /// optimization targets: a higher-order `dispatch(f, x)` whose closure parameter is
 /// the same callee on every warm call, so J1 profiles the `CallClosure` site as
