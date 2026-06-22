@@ -1,0 +1,54 @@
+// OSR × J2 FLOAT-CAPTURE kernel (Pending #2 broadening). A higher-order function
+// `apply_loop` takes a closure PARAMETER `g: read Fn(Float) -> Float` and calls it
+// in a hot loop. The closure CAPTURES a FLOAT (`scale`), so the inline must
+// materialize that f64 capture into the loop body by BIT-REINTERPRETING its i64
+// capture slot (the `closure_capture` helper returns `f64::to_bits` as i64; the
+// inlined body's Float-class capture register bit-casts it back to f64 — NOT an
+// integer→float conversion). `apply_loop` is also I/O-tangled (`Log.write` around
+// the loop in the same, once-called function), so the whole function is native-
+// INELIGIBLE — only OSR can run the loop natively, and only by inlining the
+// capturing closure into it (otherwise the per-iteration `CallClosure` keeps the
+// loop off the native subset).
+//
+// Run OSR off (`--mode jit-native`) vs OSR on (`--mode jit-native-osr`, or the
+// default auto-trigger); the OSR median should beat the off median. The closure is
+// monomorphic at the call site (one callee, one scalar Float capture), the
+// precondition for the OSR × J2 inline.
+
+fn bench_size(default: Int) -> Int {
+    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
+    match String.parse_int(value: read raw) {
+        Some(value) => {
+            return value
+        }
+        None => {
+            return default
+        }
+    }
+}
+
+fn apply_loop(g: read Fn(Float) -> Float, limit: Int, seed: Float) -> Float {
+    Log.write(message: read "osr-begin")
+    let mut i = 0
+    let mut total = seed
+    let mut x = 0.0
+    while i < limit {
+        total = total + g(read x)
+        x = x + 1.0
+        i = i + 1
+    }
+    Log.write(message: read String.from_float(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    let limit = bench_size(default: 2000000)
+    let scale = 1.5
+    let g = fn(value) captures(read scale) effects(pure) {
+        return value * scale + scale
+    }
+    let result = apply_loop(g: read g, limit: limit, seed: 0.0)
+    Log.write(message: read String.from_float(value: result))
+    return Unit
+}
+features: local

@@ -3576,13 +3576,16 @@ fn translate_to_native_jit(
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
                 // Capturing-closure inline (OSR × J2): the closure operand is a
-                // native handle; the materialized capture `dst` is an `Int`-class
-                // register (the `closure_capture` helper returns scalar bits). A
-                // body that uses the capture as a `Float` conflicts here ⇒ bail, so
-                // only Int/Bool-class captures inline natively (Float deferred).
-                RegInstr::NativeClosureCapture { dst, closure, .. } => {
+                // native handle; the materialized capture `dst` carries the
+                // capture's scalar bits (the `closure_capture` helper returns the
+                // raw i64 bit pattern: an `Int` directly, a `Bool` as 0/1, a
+                // `Float` reinterpreted via `f64::to_bits`). Leave `dst`'s class to
+                // flow from its uses — exactly like a `GetFieldSlot` read — so an
+                // Int/Bool capture stays Int-class and a Float capture becomes
+                // Float-class. Lowering admits only a provably Int/Bool/Float `dst`
+                // (and the Float arm bit-reinterprets the i64 slot to f64).
+                RegInstr::NativeClosureCapture { dst: _, closure, .. } => {
                     native_set_ty(ty, *closure, NativeTy::Handle, c)
-                        && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
                 _ => true,
             };
@@ -3996,10 +3999,16 @@ fn translate_to_native_jit(
                 index,
             } => {
                 // The closure handle is a native-readable handle; materialize
-                // capture `index`'s scalar bits into the `Int`-class `dst` (the
-                // inlined body's capture register). A non-scalar capture bails
-                // out-of-band in the host helper.
-                require(handle_reg(*closure) && int_or_free(*dst))?;
+                // capture `index`'s scalar bits into `dst` (the inlined body's
+                // capture register). `dst` may be Int/Bool (i64 used directly) or
+                // Float (the i64 slot is `f64::to_bits`, bit-reinterpreted to f64 in
+                // codegen); an unconstrained `dst` defaults to Int. A non-scalar
+                // (Handle/flat) `dst` bails. A non-scalar capture VALUE additionally
+                // bails out-of-band in the host helper at runtime.
+                require(
+                    handle_reg(*closure)
+                        && (int_or_free(*dst) || bool_ty(*dst) || float(*dst)),
+                )?;
                 let index = i64::try_from(*index).ok()?;
                 let index = u32::try_from(index).ok()?;
                 JitInstr::ClosureCapture {
@@ -4355,8 +4364,11 @@ fn translate_osr_loop(
                 }
                 // Synthetic closure-inline ops (only present when an inlined
                 // capturing/monomorphic closure body landed in the OSR region):
-                // the closure operand is a native Handle param; an id read or a
-                // materialized capture is `Int`-class.
+                // the closure operand is a native Handle param; an id read is
+                // `Int`-class. A materialized capture's `dst` is left to flow from
+                // its uses (Int/Bool/Float) — the helper returns the raw scalar bit
+                // pattern (a `Float` via `f64::to_bits`), and lowering admits only a
+                // provably Int/Bool/Float `dst`, bit-reinterpreting a Float slot.
                 RegInstr::NativeGuardClosureId { closure, .. } => {
                     native_set_ty(ty, *closure, NativeTy::Handle, c)
                 }
@@ -4364,9 +4376,8 @@ fn translate_osr_loop(
                     native_set_ty(ty, *closure, NativeTy::Handle, c)
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
-                RegInstr::NativeClosureCapture { dst, closure, .. } => {
+                RegInstr::NativeClosureCapture { dst: _, closure, .. } => {
                     native_set_ty(ty, *closure, NativeTy::Handle, c)
-                        && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
                 _ => true,
             };
@@ -4552,7 +4563,14 @@ fn translate_osr_loop(
                 JitInstr::ClosureId { dst: r(*dst), base: r(*closure) }
             }
             RegInstr::NativeClosureCapture { dst, closure, index } => {
-                require(handle_reg(*closure) && int_or_free(*dst))?;
+                // The capture's `dst` may be Int/Bool (i64 slot used directly) or
+                // Float (the i64 slot is `f64::to_bits`, bit-reinterpreted to f64
+                // in codegen). An unconstrained `dst` defaults to Int. A non-scalar
+                // `dst` (Handle/flat array) cannot hold a scalar capture ⇒ bail.
+                require(
+                    handle_reg(*closure)
+                        && (int_or_free(*dst) || bool_ty(*dst) || float(*dst)),
+                )?;
                 let index = u32::try_from(*index).ok()?;
                 JitInstr::ClosureCapture { dst: r(*dst), base: r(*closure), index }
             }

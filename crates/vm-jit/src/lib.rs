@@ -1334,7 +1334,15 @@ fn validate(program: &JitFunction) -> Result<(), JitError> {
             }
             JitInstr::ClosureCapture { dst, base, .. } => {
                 require_class(*base, JitValueType::Handle, "ClosureCapture base")?;
-                require_class(*dst, JitValueType::Int, "ClosureCapture result")?;
+                // The capture result `dst` is Int-class (an Int/Bool capture, used
+                // as i64 directly) or Float-class (a Float capture, whose i64 slot
+                // is `f64::to_bits` and is bit-reinterpreted to f64 in codegen).
+                if !matches!(class(*dst), JitValueType::Int | JitValueType::Float) {
+                    return Err(JitError(format!(
+                        "ClosureCapture result: register {dst} is {:?}, expected Int or Float",
+                        class(*dst)
+                    )));
+                }
             }
             JitInstr::FieldHandle { dst, base, .. } => {
                 require_class(*base, JitValueType::Handle, "FieldHandle base")?;
@@ -2634,7 +2642,17 @@ fn build_function(
                     deopt!(i),
                 );
                 bcx.switch_to_block(cont);
-                bcx.def_var(reg(*dst), result);
+                // The helper returns the capture's raw scalar bits as i64. For an
+                // Int/Bool-class `dst` that IS the value; for a Float-class `dst`
+                // the i64 is `f64::to_bits`, so bit-reinterpret it to f64 (NOT an
+                // integer-to-float conversion) — the same convention by which a
+                // float register's arg slot is loaded as f64 on entry.
+                let stored = if program.is_float(*dst) {
+                    bcx.ins().bitcast(types::F64, MemFlags::new(), result)
+                } else {
+                    result
+                };
+                bcx.def_var(reg(*dst), stored);
             }
             JitInstr::FieldHandle { dst, base, slot } => {
                 // Fetch a heap field (e.g. a stored closure) as a fresh handle.

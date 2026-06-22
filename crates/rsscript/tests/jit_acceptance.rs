@@ -1392,6 +1392,119 @@ fn main() -> Unit {
     );
 }
 
+/// OSR × J2 POSITIVE test (Pending #2 Float-capture broadening) — a CAPTURING
+/// monomorphic param-handle closure whose capture is a FLOAT, called in a hot loop
+/// inside an I/O-tangled (native-INELIGIBLE) function, MUST inline (bit-reinterpreting
+/// the f64 capture from its i64 slot) and OSR to an allocation-free native loop.
+/// `apply_loop` takes `g: read Fn(Float) -> Float` and calls it every iteration;
+/// `g = |value| value * scale + scale` captures the Float `scale = 1.5`. The capture
+/// is materialized via the `closure_capture` helper, which returns `f64::to_bits` as
+/// i64; the inlined body's Float-class capture register bit-reinterprets that i64 to
+/// f64 (NOT an integer→float conversion). Forcing OSR on, stdout (a Float, formatted
+/// via `String.from_float`) MUST be byte-identical to the pure interpreter AND
+/// `osr_entries > 0` proves the loop inlined the capturing closure + materialized the
+/// FLOAT capture + OSR'd. If the bits were int-converted, the Float would be wrong and
+/// stdout would diverge.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j2_float_capture_closure_loop_matches_interpreter() {
+    let source = "\
+fn apply_loop(g: read Fn(Float) -> Float, limit: Int, seed: Float) -> Float {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = seed
+    let mut x = 0.0
+    while i < limit {
+        total = total + g(read x)
+        x = x + 1.0
+        i = i + 1
+    }
+    Log.write(message: read String.from_float(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    let scale = 1.5
+    let g = fn(value) captures(read scale) effects(pure) {
+        return value * scale + scale
+    }
+    Log.write(message: read String.from_float(value: apply_loop(g: read g, limit: read 4000, seed: read 0.0)))
+    return Unit
+}
+";
+    let file = "jit-osr-j2-float-capture-closure.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "OSR × J2 Float-capture closure loop must be byte-identical to the interpreter \
+         (the f64 capture must be bit-reinterpreted, not int-converted)"
+    );
+    assert!(
+        stats.osr_entries > 0,
+        "a capturing monomorphic param-handle closure with a FLOAT capture called in an \
+         I/O-tangled hot loop must inline (bit-reinterpreting the f64 capture) and OSR \
+         natively: {stats:?}",
+    );
+}
+
+/// OSR × J2 NEGATIVE test (Pending #2) — a closure capturing a NON-scalar value that
+/// HAPPENS TO BE float-typed (`scales: List<Float>`, a heap value) MUST NOT OSR. The
+/// Float broadening admits only FLAT scalar captures (Int/Bool/Float); a heap capture
+/// — even one whose elements are Floats — cannot be materialized as a scalar via the
+/// `closure_capture` helper, so the inline gate's `captures_all_scalar` profile bit
+/// goes false on the first observation, the site never inlines, the per-iteration
+/// `CallClosure` keeps the loop off the native subset, and `osr_entries` MUST stay 0.
+/// Output must still be interpreter-identical. This guards the Float broadening from
+/// over-reaching: widening flat-scalar captures to include `Float` must NOT start
+/// admitting a heap aggregate just because it carries Floats (which would read garbage
+/// bits from a heap handle's slot).
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j2_float_heap_capture_closure_does_not_osr() {
+    let source = "\
+fn apply_loop(g: read Fn(Int) -> Float, limit: Int, seed: Float) -> Float {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = seed
+    while i < limit {
+        total = total + g(i)
+        i = i + 1
+    }
+    Log.write(message: read String.from_float(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    let scales: List<Float> = [1.5, 2.25, 3.75]
+    let g = fn(value) captures(read scales) effects(pure) {
+        let n = List.len<Float>(list: read scales)
+        return List.get<Float>(list: read scales, index: value - (value / n) * n)
+    }
+    Log.write(message: read String.from_float(value: apply_loop(g: read g, limit: read 4000, seed: read 0.0)))
+    return Unit
+}
+";
+    let file = "jit-osr-j2-float-heap-capture-closure.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "a closure capturing a List<Float> (heap) must still be interpreter-identical under OSR"
+    );
+    assert_eq!(
+        stats.osr_entries, 0,
+        "a closure capturing a heap value (List<Float>) must NOT OSR even though its \
+         elements are Floats — only FLAT scalar captures inline: {stats:?}",
+    );
+}
+
 /// OSR × J2 NEGATIVE test — a closure with a NON-scalar (heap) capture MUST NOT OSR.
 /// `g` captures `tag: List<Int>` (a heap value) and reads its length each call, so
 /// the capture cannot be materialized as a scalar via the `closure_capture` helper:
