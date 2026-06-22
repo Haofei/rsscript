@@ -5462,6 +5462,20 @@ enum OsrTrigger {
 #[cfg(feature = "native-jit")]
 const OSR_BACKEDGE_THRESHOLD: u32 = 1000;
 
+/// Effective OSR backedge threshold. Defaults to [`OSR_BACKEDGE_THRESHOLD`]
+/// (1000); a bench/test-only `RSS_JIT_OSR_THRESHOLD` env var, when set to a
+/// parseable `u32`, overrides it (mirrors `RSS_JIT_OSR`). Unset or unparseable
+/// ⇒ exactly the default constant, so production behavior is unchanged. Read
+/// per-fire (cheap relative to the OSR compile it gates); the override exists so
+/// the auto-trigger threshold can be swept without recompiling per value.
+#[cfg(feature = "native-jit")]
+fn osr_backedge_threshold() -> u32 {
+    match std::env::var("RSS_JIT_OSR_THRESHOLD") {
+        Ok(s) => s.trim().parse::<u32>().unwrap_or(OSR_BACKEDGE_THRESHOLD),
+        Err(_) => OSR_BACKEDGE_THRESHOLD,
+    }
+}
+
 impl RegFunction {
     fn placeholder(name: String) -> Self {
         Self {
@@ -13438,7 +13452,7 @@ impl RegVm {
                                     probe_cc,
                                 } => {
                                     let next = count.saturating_add(1);
-                                    if next >= OSR_BACKEDGE_THRESHOLD {
+                                    if next >= osr_backedge_threshold() {
                                         true
                                     } else {
                                         func.osr_state.set(OsrTrigger::Counting {
@@ -22553,4 +22567,3 @@ fn main() -> Unit {{
         assert_eq!(sat.observed[0].1, u32::MAX);
     }
 }
-

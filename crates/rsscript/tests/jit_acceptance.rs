@@ -2420,3 +2420,109 @@ fn main() -> Unit {
         "a loop with an in-body early `return` is multi-exit and MUST NOT OSR: {stats:?}",
     );
 }
+
+/// Adaptive-tiering knob: `RSS_JIT_OSR_THRESHOLD` overrides the OSR auto-trigger
+/// (counting `jit-native`) backedge threshold for sweeps WITHOUT recompiling per
+/// value, mirroring `RSS_JIT_OSR`. Default behavior is unchanged (unset ⇒ 1000).
+/// This test drives the real `rss bench --mode jit-native --json` binary as a
+/// subprocess (so env is set safely via `Command::env`, respecting the crate's
+/// `#![forbid(unsafe_code)]`) on a fixed medium-loop kernel whose trip count
+/// (600) sits BELOW the default 1000: at the default threshold the counting
+/// auto-trigger must NOT fire (`osr_entries == 0`), but with the override lowered
+/// to 100 the SAME loop must OSR (`osr_entries > 0`). Deterministic: trip count,
+/// kernel, and thresholds are all fixed.
+#[cfg(feature = "native-jit")]
+#[test]
+fn rss_jit_osr_threshold_env_overrides_auto_trigger_fire_point() {
+    use std::process::Command;
+
+    let bin = env!("CARGO_BIN_EXE_rss");
+    let kernel = std::env::temp_dir().join(format!(
+        "rss_osr_threshold_probe_{}_{}.rss",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    // Native-INELIGIBLE function (Log.write tangled around it) with one hot scalar
+    // loop of 600 iterations: only OSR can run the loop natively.
+    std::fs::write(
+        &kernel,
+        "\
+fn hot(limit: Int, seed: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = seed
+    while i < limit {
+        total = total + i * 3 - i / 2 + 7
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: hot(limit: read 600, seed: read 0)))
+    return Unit
+}
+",
+    )
+    .expect("write kernel");
+
+    let osr_entries = |threshold: Option<&str>| -> u64 {
+        let mut cmd = Command::new(bin);
+        cmd.args([
+            "bench",
+            "--json",
+            "--mode",
+            "jit-native",
+            "--iterations",
+            "1",
+            "--warmup",
+            "0",
+        ])
+        .arg(&kernel);
+        cmd.env_remove("RSS_JIT_OSR");
+        match threshold {
+            Some(t) => {
+                cmd.env("RSS_JIT_OSR_THRESHOLD", t);
+            }
+            None => {
+                cmd.env_remove("RSS_JIT_OSR_THRESHOLD");
+            }
+        }
+        let out = cmd.output().expect("run rss bench");
+        assert!(
+            out.status.success(),
+            "rss bench failed: {}",
+            String::from_utf8_lossy(&out.stderr),
+        );
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        // Pull "osr_entries":<n> out of the JSON line (no serde dep in this test).
+        let key = "\"osr_entries\":";
+        let pos = stdout
+            .find(key)
+            .unwrap_or_else(|| panic!("no osr_entries in bench json: {stdout}"));
+        let rest = &stdout[pos + key.len()..];
+        let end = rest
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(rest.len());
+        rest[..end].parse::<u64>().expect("parse osr_entries")
+    };
+
+    // Default threshold (1000): trip=600 < 1000 ⇒ counting auto-trigger never fires.
+    let default_entries = osr_entries(None);
+    // Override lowered to 100: trip=600 > 100 ⇒ the same loop now OSRs.
+    let lowered_entries = osr_entries(Some("100"));
+    let _ = std::fs::remove_file(&kernel);
+
+    assert_eq!(
+        default_entries, 0,
+        "trip=600 below default 1000 must NOT OSR at the default threshold",
+    );
+    assert!(
+        lowered_entries > 0,
+        "RSS_JIT_OSR_THRESHOLD=100 must make trip=600 OSR via the counting auto-trigger",
+    );
+}
