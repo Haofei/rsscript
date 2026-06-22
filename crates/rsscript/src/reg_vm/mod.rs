@@ -4781,7 +4781,53 @@ struct RegFunction {
     /// crosses [`PROFILE_WARMUP`]. `None` for cold functions (zero allocation).
     /// Feeds J2 compile decisions only — never a value (determinism).
     profile: RefCell<Option<Box<FunctionProfile>>>,
+    /// OSR hot-backedge auto-trigger state (Pending #2). Lazily resolved ONCE on
+    /// first `drive` entry into this function: a cheap single-natural-loop
+    /// detection decides `NotCandidate` (no loop / unanalyzable — the common case,
+    /// which then pays nothing per-instruction) vs `Counting` (has a candidate
+    /// header). For a candidate, the interpreter counts backedges to the header and
+    /// at [`OSR_BACKEDGE_THRESHOLD`] calls `try_osr` (the real detect+compile); on
+    /// success the loop runs native and the counter cost is bounded to the warm-up
+    /// iterations, on failure the state goes `GaveUp` (never retried). A `Cell`
+    /// (interior-mut, no allocation), so a non-candidate function pays one `Cell`
+    /// read per call and zero per-instruction cost.
+    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    osr_state: std::cell::Cell<OsrTrigger>,
 }
+
+/// Per-function OSR auto-trigger state machine (Pending #2). Lives in a `Cell` on
+/// [`RegFunction`]; see `osr_state`.
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OsrTrigger {
+    /// Not yet inspected — resolved on first `drive` entry.
+    Unknown,
+    /// No qualifying single natural loop (or step/cancel budget armed): pays only a
+    /// single hoisted `Cell` read per call, NO per-instruction cost.
+    NotCandidate,
+    /// Has a candidate loop header; the interpreter counts backedges to `header_ip`.
+    /// At [`OSR_BACKEDGE_THRESHOLD`] it fires `try_osr`.
+    Counting { header_ip: usize, count: u32 },
+    /// OSR fired (or `try_osr` declined at threshold): stop counting. `GaveUp` and
+    /// `Fired` collapse to the same terminal "do nothing" behavior, but are kept
+    /// distinct for telemetry/clarity.
+    GaveUp,
+}
+
+/// Mirror of `OsrTrigger` that is always present (so the non-`native-jit`
+/// `RegFunction` constructor compiles). Only the `native-jit` build reads it.
+#[cfg(not(feature = "native-jit"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OsrTrigger {
+    Unknown,
+}
+
+/// Backedge count at which a counting OSR candidate fires `try_osr`. Chosen so
+/// tiny loops (which run < this many iterations) never pay OSR compile/setup, but
+/// genuinely hot loops cross it quickly and then run native for the rest of their
+/// (much longer) life. The eager path (`RSS_JIT_OSR`) uses threshold 0.
+#[cfg(feature = "native-jit")]
+const OSR_BACKEDGE_THRESHOLD: u32 = 1000;
 
 impl RegFunction {
     fn placeholder(name: String) -> Self {
@@ -4796,6 +4842,7 @@ impl RegFunction {
             native_status: std::cell::Cell::new(0),
             call_count: std::cell::Cell::new(0),
             profile: RefCell::new(None),
+            osr_state: std::cell::Cell::new(OsrTrigger::Unknown),
         }
     }
 }
@@ -6077,6 +6124,7 @@ impl RegUnit {
                     native_status: std::cell::Cell::new(0),
                     call_count: std::cell::Cell::new(0),
                     profile: RefCell::new(None),
+                    osr_state: std::cell::Cell::new(OsrTrigger::Unknown),
                 },
                 loop_stack: Vec::new(),
                 cleanup_stack: Vec::new(),
@@ -6116,6 +6164,7 @@ impl RegUnit {
                     native_status: std::cell::Cell::new(0),
                     call_count: std::cell::Cell::new(0),
                     profile: RefCell::new(None),
+                    osr_state: std::cell::Cell::new(OsrTrigger::Unknown),
                 },
                 loop_stack: Vec::new(),
                 cleanup_stack: Vec::new(),
@@ -7153,6 +7202,7 @@ impl RegLowerer<'_> {
                             native_status: std::cell::Cell::new(0),
                             call_count: std::cell::Cell::new(0),
                             profile: RefCell::new(None),
+                            osr_state: std::cell::Cell::new(OsrTrigger::Unknown),
                         },
                         loop_stack: Vec::new(),
                         cleanup_stack: Vec::new(),
@@ -11031,6 +11081,54 @@ impl RegVm {
     /// and the only native exit is the OSR-exit, whose `resume_ip` is the
     /// interpreter's own post-loop instruction index — so resuming there with the
     /// restored window is byte-identical to having interpreted the loop.
+    /// Resolve a function's OSR auto-trigger state ONCE, on first `drive` entry
+    /// (Pending #2). Returns the candidate loop header (if any) so the caller can
+    /// hoist it into a single per-frame local. Runs a cheap single-natural-loop
+    /// detection on `func.code` (no compile, no region passes — that is deferred to
+    /// the threshold `try_osr` call); a function with no analyzable loop becomes
+    /// `NotCandidate` and thereafter pays only one `Cell` read per call with NO
+    /// per-instruction cost. The eager `RSS_JIT_OSR` path resolves the same way but
+    /// fires at threshold 0 (handled by the caller), so its very first header hit
+    /// triggers — preserving the forced-OSR behavior and the differential backend.
+    ///
+    /// Determinism: this only decides *whether/when* to attempt OSR; `try_osr` is
+    /// byte-identical to interpretation, so triggering never changes a value.
+    #[cfg(feature = "native-jit")]
+    fn resolve_osr_candidate(&self, func: &RegFunction) -> Option<usize> {
+        match func.osr_state.get() {
+            OsrTrigger::Unknown => {
+                // Preemption parity with `try_osr`: native loops poll neither the
+                // step budget nor the cancel flag, so a function can never OSR while
+                // either is armed. Resolve to `NotCandidate` WITHOUT caching it
+                // permanently — a later run without the budget must re-resolve, so
+                // leave the state `Unknown` (return `None` for this frame only).
+                if self.limits.step_budget.is_some() || self.limits.cancel.is_some() {
+                    return None;
+                }
+                // Cheap candidacy pre-check: does the ORIGINAL code have a single
+                // analyzable natural loop? (No inline/region passes, no compile.)
+                // The real native-subset/dissolvable verdict is only known after
+                // `try_osr` at threshold; a detected-but-uncompilable loop simply
+                // counts to threshold once, fails `try_osr`, and goes `GaveUp` —
+                // bounded cost, only for functions that have a natural loop at all.
+                let state = match detect_single_natural_loop(&func.code) {
+                    Some(lp) => OsrTrigger::Counting {
+                        header_ip: lp.header,
+                        count: 0,
+                    },
+                    None => OsrTrigger::NotCandidate,
+                };
+                func.osr_state.set(state);
+                match state {
+                    OsrTrigger::Counting { header_ip, .. } => Some(header_ip),
+                    _ => None,
+                }
+            }
+            OsrTrigger::Counting { header_ip, .. } => Some(header_ip),
+            OsrTrigger::NotCandidate | OsrTrigger::GaveUp => None,
+        }
+    }
+
     #[cfg(feature = "native-jit")]
     fn try_osr(&mut self, func: &RegFunction, base: usize, header_ip: usize) -> bool {
         // Preemption parity (as in `try_native`): native loops poll neither the
@@ -12549,32 +12647,81 @@ impl RegVm {
                 continue 'frames;
             }
 
-            // J5.2 OSR (forced trigger): is on-stack replacement armed for this run?
-            // A single per-frame `Cell` read; when OSR is off (the default and every
-            // production path) `osr_active` is `false`, so the per-instruction check
-            // below is a single never-taken branch and the interpreter hot path is
-            // unchanged. When on, the first time the interpreter reaches a qualifying
-            // loop header we hand the loop to the native OSR body (see `try_osr`).
-            // NOTE: this is deliberately NOT gated on `native_status`: OSR targets
-            // exactly the functions that are native-INELIGIBLE as a whole (the loop
-            // is wrapped by non-native I/O), which `try_native` marks NOT_ELIGIBLE.
-            // Gating on it would exclude every OSR candidate. The per-function OSR
-            // verdict is cached separately in `native.osr_cache`.
+            // OSR auto-trigger (Pending #2): resolve this function's OSR-candidate
+            // state ONCE (lazy, cached in `func.osr_state`) and hoist the candidate
+            // loop header into a single per-frame local. For the overwhelming common
+            // case — a function with no analyzable natural loop — this is a single
+            // `Cell` read that yields `None`, and the per-instruction guard below is
+            // then EXACTLY today's hoisted never-taken branch (`if let Some(..)`),
+            // so the non-candidate interpreter hot path is byte-for-byte unchanged.
+            // Only a candidate function pays the per-`ip` header compare, and only
+            // until OSR fires (after which the loop runs native).
+            //
+            // `osr_eager` (set by `RSS_JIT_OSR` / a test override) keeps the forced
+            // path: threshold 0, so the FIRST header hit triggers `try_osr` — this
+            // preserves the differential OSR backend and the deterministic
+            // forced-OSR tests. NOTE: candidacy is NOT gated on `native_status`: OSR
+            // targets functions that are native-INELIGIBLE as a whole (the loop is
+            // wrapped by non-native I/O); the verdict is cached in `native.osr_cache`.
             #[cfg(feature = "native-jit")]
-            let osr_active = self.native.as_ref().is_some_and(|n| n.osr_enabled);
+            let (osr_candidate, osr_eager) = if self.native.is_some() {
+                (
+                    self.resolve_osr_candidate(&func),
+                    self.native.as_ref().is_some_and(|n| n.osr_enabled),
+                )
+            } else {
+                (None, false)
+            };
             #[cfg(not(feature = "native-jit"))]
-            let osr_active = false;
+            let _osr_candidate: Option<usize> = None;
 
             while let Some(instr) = func.code.get(ip) {
-                // OSR trigger: when armed and the interpreter is *at* a qualifying
-                // loop header, run the loop natively and resume at the post-loop ip.
-                // `try_osr` is total — on any non-applicability it leaves the frame
-                // untouched and returns `false`, so the loop just runs normally.
+                // OSR trigger: only candidate functions enter this arm (`None` for
+                // every non-loop / unanalyzable function ⇒ a hoisted never-taken
+                // branch, no per-instruction work). When the interpreter reaches the
+                // candidate header, count the backedge; at the threshold (or
+                // immediately when eager) fire `try_osr`. `try_osr` is total — on any
+                // non-applicability it leaves the frame untouched and returns `false`,
+                // and we mark `GaveUp` so we never recompile-probe in a tight loop.
                 #[cfg(feature = "native-jit")]
-                if osr_active {
-                    self.frames.last_mut().expect("active frame").ip = ip;
-                    if self.try_osr(&func, base, ip) {
-                        continue 'frames;
+                if let Some(header) = osr_candidate {
+                    if ip == header {
+                        let fire = if osr_eager {
+                            true
+                        } else {
+                            // Count this backedge/header hit; fire at threshold.
+                            match func.osr_state.get() {
+                                OsrTrigger::Counting { header_ip, count } => {
+                                    let next = count.saturating_add(1);
+                                    if next >= OSR_BACKEDGE_THRESHOLD {
+                                        true
+                                    } else {
+                                        func.osr_state.set(OsrTrigger::Counting {
+                                            header_ip,
+                                            count: next,
+                                        });
+                                        false
+                                    }
+                                }
+                                // Already fired/gave up: stop probing.
+                                _ => false,
+                            }
+                        };
+                        if fire {
+                            self.frames.last_mut().expect("active frame").ip = ip;
+                            if self.try_osr(&func, base, ip) {
+                                continue 'frames;
+                            }
+                            // Declined: in COUNTING (auto) mode, don't retry forever —
+                            // mark `GaveUp` so a non-compilable detected loop stops
+                            // re-probing `try_osr` on every header hit. In EAGER mode
+                            // keep today's behavior (fire every header hit; the
+                            // `osr_cache` `None` verdict already makes the retry cheap,
+                            // and a still-pending closure profile must be re-probed).
+                            if !osr_eager {
+                                func.osr_state.set(OsrTrigger::GaveUp);
+                            }
+                        }
                     }
                 }
                 self.tick()?;
@@ -20880,6 +21027,7 @@ mod register_window_tests {
             native_status: std::cell::Cell::new(0),
             call_count: std::cell::Cell::new(0),
             profile: RefCell::new(None),
+            osr_state: std::cell::Cell::new(OsrTrigger::Unknown),
         }
     }
 
@@ -21044,6 +21192,7 @@ mod register_window_tests {
             native_status: std::cell::Cell::new(0),
             call_count: std::cell::Cell::new(0),
             profile: RefCell::new(None),
+            osr_state: std::cell::Cell::new(OsrTrigger::Unknown),
         }
     }
 
@@ -21146,6 +21295,7 @@ mod register_window_tests {
             native_status: std::cell::Cell::new(0),
             call_count: std::cell::Cell::new(0),
             profile: RefCell::new(None),
+            osr_state: std::cell::Cell::new(OsrTrigger::Unknown),
         }
     }
 

@@ -1549,3 +1549,97 @@ fn main() -> Unit {
         );
     }
 }
+
+/// Pending #2 OSR hot-backedge AUTO-trigger: a hot native-subset scalar loop
+/// wrapped by non-native I/O *in the same (once-called) function* — so the
+/// function is native-INELIGIBLE as a whole and only OSR can run the loop
+/// natively — must auto-fire with NO `RSS_JIT_OSR` env flag and NO test override
+/// (the plain `eval_main_with_args_native_with_stats` path). The loop runs far
+/// more than the OSR backedge threshold iterations, so the backedge counter
+/// crosses the threshold and `try_osr` fires on its own. We assert (a) the output
+/// is byte-identical to the pure interpreter and (b) `osr_entries > 0` — i.e. the
+/// auto-trigger genuinely handed the loop to native code without any flag.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_auto_triggers_on_hot_loop_without_flag() {
+    let source = "\
+fn compute(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        total = total + i * i
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: compute(limit: read 5000)))
+    return Unit
+}
+";
+    let file = "jit-osr-auto.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    // NO env flag, NO override: the default native path. Auto-trigger must fire on
+    // the hot loop entirely on its own.
+    let (auto, stats) = executable
+        .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
+        .expect("native auto-OSR run should succeed");
+    assert_eq!(
+        auto.stdout, interp.stdout,
+        "auto-OSR loop must be byte-identical to the interpreter (stdout)",
+    );
+    assert!(
+        stats.osr_entries > 0,
+        "a hot (> threshold) native-subset loop must AUTO-OSR with no env flag and \
+         no override: {stats:?}",
+    );
+}
+
+/// Pending #2 OSR auto-trigger gating: a loop that runs FEWER than the OSR backedge
+/// threshold iterations must NOT auto-fire (the backedge counter never crosses the
+/// threshold) — so the OSR compile/setup cost is never paid for a short loop — and
+/// the result must still be correct. Run with NO env flag and NO override; assert
+/// `osr_entries == 0` and output == interpreter.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_short_loop_does_not_auto_trigger() {
+    let source = "\
+fn compute(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        total = total + i * i
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: compute(limit: read 50)))
+    return Unit
+}
+";
+    let file = "jit-osr-short.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (auto, stats) = executable
+        .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
+        .expect("native run should succeed");
+    assert_eq!(
+        auto.stdout, interp.stdout,
+        "short-loop result must still be byte-identical to the interpreter",
+    );
+    assert_eq!(
+        stats.osr_entries, 0,
+        "a loop shorter than the OSR backedge threshold must NOT auto-fire (no OSR \
+         setup paid for tiny loops): {stats:?}",
+    );
+    // sum_{i=0}^{49} i*i = 40425, matching native_osr_scalar_loop_matches_interpreter.
+    assert_eq!(auto.stdout.trim_end(), "begin\n40425\n40425");
+}
