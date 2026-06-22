@@ -779,15 +779,16 @@ fn native_may_translate_structurally(functions: &[RegFunction], func: &RegFuncti
                         .get(*function)
                         .is_some_and(|callee| native_callee_inlinable(callee, args.len()))
             }
-            // J2: a `CallClosure` whose closure is a parameter handle and which has
+            // J2: a `CallClosure` whose closure is a native-readable handle (a param,
+            // or a stored closure fetched via `GetFieldSlot`/`ListGet`) and which has
             // no `mut` write-backs *may* become inlinable once J1 profiles it as
-            // monomorphic. We can't resolve the callee cold (its identity is only
-            // known at runtime via the profile), so accept the shape here and let
-            // the real translator decide per-profile. This keeps the function off
+            // monomorphic/polymorphic. We can't resolve the callee cold (its identity
+            // is only known at runtime via the profile), so accept the shape here and
+            // let the real translator decide per-profile. This keeps the function off
             // the predictably-ineligible fast-path so it can tier up after warming.
             RegInstr::CallClosure {
                 closure, mut_args, ..
-            } => mut_args.is_empty() && *closure < func.params,
+            } => mut_args.is_empty() && native_readable_closure_operand(func, *closure),
             // J3: an `Option` op *may* dissolve into the native subset via scalar
             // replacement if the Option is non-escaping with a scalar payload. We
             // can't run the full escape analysis cheaply here (it needs the inlined
@@ -836,6 +837,58 @@ fn mark_predictably_native_ineligible(functions: &[RegFunction]) {
 ///
 /// Read-only over the profile (a `try_borrow`, never a panic); never mutates state
 /// or feeds a computed value.
+/// Whether `closure` is a **native-readable closure handle** operand for a
+/// `CallClosure` (Pending #1, stored-closure broadening). Either:
+/// - a **parameter** handle (`closure < func.params`) — the shipped higher-order
+///   "take a closure, call it" shape (marshalled into the heap-arg window); or
+/// - a register produced by an in-function native-subset heap read — a
+///   `GetFieldSlot` (`f = op.apply`) or `ListGet` (`op = List.get(ops, i)`) — i.e.
+///   a **stored** closure fetched each iteration. Such a register is lowered to a
+///   `FieldHandle`/`ListGetHandle` read (a fresh heap-table index) and consumed by
+///   the closure guard/dispatch, so the closure identity is checked at runtime and
+///   a wrong handle simply bails. We require the producer to be exactly one of those
+///   reads so the operand is provably a fetched heap value (never a scalar register
+///   reinterpreted as a handle).
+#[cfg(feature = "native-jit")]
+fn native_readable_closure_operand(func: &RegFunction, closure: usize) -> bool {
+    if closure < func.params {
+        return true;
+    }
+    // A non-param operand must trace back (through `Move` temporaries the lowerer
+    // introduces, e.g. `let f = op.apply`) to the dst of a native-subset heap read
+    // (`GetFieldSlot`/`ListGet`). A register may be assigned via a producing read or
+    // a chain of moves from one; accept it if ANY such producer exists. The
+    // type/lowering pass rejects a register that isn't actually a consistent handle
+    // chain, so this structural acceptance is a conservative prefilter. Bound the
+    // Move-chasing by the register count to stay total even on pathological code.
+    let mut target = closure;
+    for _ in 0..=func.regs {
+        let mut produced_by_read = false;
+        let mut moved_from: Option<usize> = None;
+        for instr in &func.code {
+            match instr {
+                RegInstr::GetFieldSlot { dst, .. } | RegInstr::ListGet { dst, .. }
+                    if *dst == target =>
+                {
+                    produced_by_read = true;
+                }
+                RegInstr::Move { dst, src } if *dst == target => {
+                    moved_from = Some(*src);
+                }
+                _ => {}
+            }
+        }
+        if produced_by_read {
+            return true;
+        }
+        match moved_from {
+            Some(src) => target = src,
+            None => return false,
+        }
+    }
+    false
+}
+
 #[cfg(feature = "native-jit")]
 fn monomorphic_closure_inline_target(
     unit: &RegUnit,
@@ -852,8 +905,9 @@ fn monomorphic_closure_inline_target(
         _ => return None,
     };
     // Conservative shape gate: side-effect-free call (no write-backs) whose closure
-    // is a parameter handle visible to native code.
-    if !mut_args.is_empty() || closure >= func.params {
+    // is a native-readable handle (a parameter, or a stored closure fetched via a
+    // `GetFieldSlot`/`ListGet` heap read).
+    if !mut_args.is_empty() || !native_readable_closure_operand(func, closure) {
         return None;
     }
     // J1 profile: this site must have settled on exactly one callee.
@@ -922,7 +976,7 @@ fn polymorphic_closure_inline_targets(
         _ => return None,
     };
     // Same conservative shape gate as the monomorphic case.
-    if !mut_args.is_empty() || closure >= func.params {
+    if !mut_args.is_empty() || !native_readable_closure_operand(func, closure) {
         return None;
     }
     let profile = func.profile.try_borrow().ok()?;
@@ -939,8 +993,19 @@ fn polymorphic_closure_inline_targets(
     for &(key, _) in &feedback.observed {
         let k = usize::try_from(key).ok()?;
         let callee = unit.functions.get(k)?;
-        // EVERY observed callee must be inlinable, else disqualify the whole site.
-        if callee.captures != 0 || !native_callee_inlinable(callee, args.len()) {
+        // EVERY observed callee must be inlinable, else disqualify the whole site
+        // (no partial inlining — a no-match bail must re-run the exact same side-
+        // effect-free subset on the interpreter). A CAPTURING callee is allowed
+        // ONLY when every observed capture at this site was scalar (the profile's
+        // monotone `captures_all_scalar` bit), so each capture materializes via the
+        // `closure_capture` host helper. A non-scalar (heap) capture, or any callee
+        // not native-inlinable at the call's arity, disqualifies the whole site.
+        let ok = if callee.captures == 0 {
+            native_callee_inlinable(callee, args.len())
+        } else {
+            feedback.captures_all_scalar && native_capturing_callee_inlinable(callee, args.len())
+        };
+        if !ok {
             return None;
         }
         targets.push(k);
@@ -969,7 +1034,7 @@ fn native_translation_pending_on_profile(unit: &RegUnit, func: &RegFunction) -> 
         RegInstr::CallClosure {
             closure, mut_args, ..
         } => {
-            if !mut_args.is_empty() || *closure >= func.params {
+            if !mut_args.is_empty() || !native_readable_closure_operand(func, *closure) {
                 return false;
             }
             // Already qualifying (mono single-guard OR poly inline cache) ⇒ not
@@ -2862,9 +2927,25 @@ fn native_inline_leaf_calls(
                     }
                     let base = next_reg;
                     next_reg += callee.regs;
+                    // Capturing-closure inline (OSR × J2.2): like the monomorphic
+                    // path, a closure callee lays out its capture registers `0..
+                    // captures` BELOW its params. Materialize each scalar capture
+                    // from THIS arm's matched closure handle (`*closure`) into
+                    // `base + k_cap`, then bind the call args ABOVE the captures at
+                    // `base + captures + param`. For a non-capturing callee
+                    // (`captures == 0`) this is exactly the shipped path (args at
+                    // `base + param`).
+                    for k_cap in 0..callee.captures {
+                        new_code.push(RegInstr::NativeClosureCapture {
+                            dst: base + k_cap,
+                            closure: *closure,
+                            index: k_cap,
+                        });
+                        ip_map.push(i);
+                    }
                     for (param, arg) in args.iter().enumerate() {
                         new_code.push(RegInstr::Move {
-                            dst: base + param,
+                            dst: base + callee.captures + param,
                             src: *arg,
                         });
                         ip_map.push(i);
@@ -3183,6 +3264,12 @@ fn translate_to_native_jit(
     // A handle register must be a *parameter*: handles only enter via the caller's
     // heap args (`try_native`), never produced by a native instruction.
     let handle_param = |reg: usize| ty[reg] == Some(NativeTy::Handle) && reg < func.params;
+    // A *native-readable* handle (Pending #1): any Handle register — a param/live-in
+    // (marshalled into the heap-arg window) or a loop-internal handle produced by a
+    // `FieldHandle`/`ListGetHandle` read (a stored struct/closure fetched as a fresh
+    // table index). Used by the heap reads and closure ops, whose runtime helper +
+    // identity guard/bail make a wrong handle sound (re-run from the top).
+    let handle_reg = |reg: usize| ty[reg] == Some(NativeTy::Handle);
     // A TV2 flat-array param (pointer + length, read directly in-register).
     let flat_param = |reg: usize| {
         matches!(ty[reg], Some(NativeTy::FlatInt | NativeTy::FlatFloat)) && reg < func.params
@@ -3387,8 +3474,16 @@ fn translate_to_native_jit(
             }
             RegInstr::RuntimeError { .. } => JitInstr::Bail,
             RegInstr::GetFieldSlot { dst, base, slot } => {
-                require(handle_param(*base))?;
-                if float(*dst) {
+                require(handle_reg(*base))?;
+                if handle_reg(*dst) {
+                    // A heap-valued field (a stored closure) fetched as a fresh
+                    // handle so a downstream closure read can address it.
+                    JitInstr::FieldHandle {
+                        dst: r(*dst),
+                        base: r(*base),
+                        slot: *slot as u32,
+                    }
+                } else if float(*dst) {
                     JitInstr::FieldFloat {
                         dst: r(*dst),
                         base: r(*base),
@@ -3396,7 +3491,7 @@ fn translate_to_native_jit(
                     }
                 } else {
                     // Int or unconstrained → Int helper (a non-Int field then
-                    // bails at the helper). A heap/Bool dst is rejected here.
+                    // bails at the helper). A Bool dst is rejected here.
                     require(int_or_free(*dst))?;
                     JitInstr::FieldInt {
                         dst: r(*dst),
@@ -3438,15 +3533,24 @@ fn translate_to_native_jit(
                         base: r(*list),
                         index: r(*index),
                     }
+                } else if handle_reg(*dst) {
+                    // A heap-valued element (a struct holding a stored closure)
+                    // fetched as a fresh handle for a downstream field/closure read.
+                    require(handle_reg(*list))?;
+                    JitInstr::ListGetHandle {
+                        dst: r(*dst),
+                        base: r(*list),
+                        index: r(*index),
+                    }
                 } else if float(*dst) {
-                    require(handle_param(*list))?;
+                    require(handle_reg(*list))?;
                     JitInstr::ListGetFloat {
                         dst: r(*dst),
                         base: r(*list),
                         index: r(*index),
                     }
                 } else {
-                    require(handle_param(*list) && int_or_free(*dst))?;
+                    require(handle_reg(*list) && int_or_free(*dst))?;
                     JitInstr::ListGetInt {
                         dst: r(*dst),
                         base: r(*list),
@@ -3455,10 +3559,10 @@ fn translate_to_native_jit(
                 }
             }
             RegInstr::NativeGuardClosureId { closure, expected } => {
-                // The closure handle must be a native Handle parameter (the
-                // higher-order function's closure param, marshalled as a heap
-                // handle); the guard reads its function id and bails on mismatch.
-                require(handle_param(*closure))?;
+                // The closure handle is a native-readable handle (a param, or a
+                // stored closure fetched via `FieldHandle`/`ListGetHandle`); the
+                // guard reads its function id and bails on mismatch.
+                require(handle_reg(*closure))?;
                 let expected = i64::try_from(*expected).ok()?;
                 JitInstr::GuardClosureId {
                     base: r(*closure),
@@ -3466,9 +3570,9 @@ fn translate_to_native_jit(
                 }
             }
             RegInstr::NativeClosureId { dst, closure } => {
-                // The closure handle must be a native Handle parameter; reads its
+                // The closure handle is a native-readable handle; reads its
                 // function id once into `dst` for the polymorphic dispatcher.
-                require(handle_param(*closure))?;
+                require(handle_reg(*closure))?;
                 JitInstr::ClosureId {
                     dst: r(*dst),
                     base: r(*closure),
@@ -3479,11 +3583,11 @@ fn translate_to_native_jit(
                 closure,
                 index,
             } => {
-                // The closure handle must be a native Handle parameter; materialize
+                // The closure handle is a native-readable handle; materialize
                 // capture `index`'s scalar bits into the `Int`-class `dst` (the
                 // inlined body's capture register). A non-scalar capture bails
                 // out-of-band in the host helper.
-                require(handle_param(*closure) && int_or_free(*dst))?;
+                require(handle_reg(*closure) && int_or_free(*dst))?;
                 let index = i64::try_from(*index).ok()?;
                 let index = u32::try_from(index).ok()?;
                 JitInstr::ClosureCapture {
@@ -3574,6 +3678,13 @@ struct OsrEntry {
     /// marshalling window and `lens` slice must be exactly this wide.
     n_jit_regs: usize,
     param_types: Vec<NativeTy>,
+    /// Per-register native types of the compiled OSR body. Used at OSR-exit to skip
+    /// restoring **Handle**-class registers: a loop-internal handle (a stored
+    /// struct/closure fetched via `FieldHandle`/`ListGetHandle`) is dead at the exit
+    /// and its live-out "value" is only a heap-table index — restoring it as an Int
+    /// into the interpreter slot would corrupt the register. The interpreter re-
+    /// derives any still-needed heap value; a dead one is simply never read.
+    reg_types: Vec<NativeTy>,
 }
 
 /// Identify the single natural loop OSR will compile, **conservatively** (any
@@ -3754,7 +3865,7 @@ fn translate_osr_loop(
     n_params: usize,
     captures: usize,
     lp: OsrLoop,
-) -> Option<(vm_jit::JitFunction, Vec<NativeTy>)> {
+) -> Option<(vm_jit::JitFunction, Vec<NativeTy>, Vec<NativeTy>)> {
     use vm_jit::{JitCompare, JitInstr};
 
     if captures != 0 {
@@ -3863,6 +3974,14 @@ fn translate_osr_loop(
     // carries whatever the interpreter has, so a Handle base must be a *parameter*
     // register (consistent with `translate_to_native_jit`, and marshalled the same).
     let handle_param = |reg: usize| ty[reg] == Some(NativeTy::Handle) && reg < n_params;
+    // A *native-readable* handle (Pending #1, stored-closure broadening): any Handle
+    // register. A param/live-in handle is marshalled into the heap-arg window by
+    // `try_osr` (phase 2); a loop-INTERNAL handle is produced by a `FieldHandle`/
+    // `ListGetHandle` read (a stored struct/closure fetched as a fresh table index)
+    // and is dead at the OSR boundary (the exit-restore skips Handle registers, so
+    // its index bits never leak back into an interpreter slot). Sound because every
+    // closure read goes through the runtime helper + identity guard/bail.
+    let handle_reg = |reg: usize| ty[reg] == Some(NativeTy::Handle);
     let r = |reg: usize| reg as u32;
     let cmp = |op: &RegIntCompare| match op {
         RegIntCompare::Less => JitCompare::Lt,
@@ -3982,8 +4101,12 @@ fn translate_osr_loop(
             // so OSR never has to model the trap's semantics.
             RegInstr::RuntimeError { .. } => JitInstr::Bail,
             RegInstr::GetFieldSlot { dst, base, slot } => {
-                require(handle_param(*base))?;
-                if float(*dst) {
+                require(handle_reg(*base))?;
+                if handle_reg(*dst) {
+                    // A heap-valued field (a stored closure) fetched as a fresh
+                    // handle so a downstream closure read can address it.
+                    JitInstr::FieldHandle { dst: r(*dst), base: r(*base), slot: *slot as u32 }
+                } else if float(*dst) {
                     JitInstr::FieldFloat { dst: r(*dst), base: r(*base), slot: *slot as u32 }
                 } else {
                     require(int_or_free(*dst))?;
@@ -3991,12 +4114,16 @@ fn translate_osr_loop(
                 }
             }
             RegInstr::ListLen { dst, list } => {
-                require(int(*dst) && handle_param(*list))?;
+                require(int(*dst) && handle_reg(*list))?;
                 JitInstr::ListLen { dst: r(*dst), base: r(*list) }
             }
             RegInstr::ListGet { dst, list, index } => {
-                require(int(*index) && handle_param(*list))?;
-                if float(*dst) {
+                require(int(*index) && handle_reg(*list))?;
+                if handle_reg(*dst) {
+                    // A heap-valued element (a struct holding a stored closure)
+                    // fetched as a fresh handle for a downstream field/closure read.
+                    JitInstr::ListGetHandle { dst: r(*dst), base: r(*list), index: r(*index) }
+                } else if float(*dst) {
                     JitInstr::ListGetFloat { dst: r(*dst), base: r(*list), index: r(*index) }
                 } else {
                     require(int_or_free(*dst))?;
@@ -4004,16 +4131,16 @@ fn translate_osr_loop(
                 }
             }
             RegInstr::NativeGuardClosureId { closure, expected } => {
-                require(handle_param(*closure))?;
+                require(handle_reg(*closure))?;
                 let expected = i64::try_from(*expected).ok()?;
                 JitInstr::GuardClosureId { base: r(*closure), expected }
             }
             RegInstr::NativeClosureId { dst, closure } => {
-                require(handle_param(*closure) && int(*dst))?;
+                require(handle_reg(*closure) && int(*dst))?;
                 JitInstr::ClosureId { dst: r(*dst), base: r(*closure) }
             }
             RegInstr::NativeClosureCapture { dst, closure, index } => {
-                require(handle_param(*closure) && int_or_free(*dst))?;
+                require(handle_reg(*closure) && int_or_free(*dst))?;
                 let index = u32::try_from(*index).ok()?;
                 JitInstr::ClosureCapture { dst: r(*dst), base: r(*closure), index }
             }
@@ -4023,14 +4150,17 @@ fn translate_osr_loop(
         jit_code.push(jit);
     }
 
-    let reg_types = (0..n_regs)
-        .map(|reg| ty[reg].unwrap_or(NativeTy::Int).jit_value_type())
+    // Native type per register, then the JIT-class projection for codegen.
+    let native_reg_types: Vec<NativeTy> = (0..n_regs)
+        .map(|reg| ty[reg].unwrap_or(NativeTy::Int))
+        .collect();
+    let reg_types = native_reg_types
+        .iter()
+        .map(|t| t.jit_value_type())
         .collect();
     // Param types so the caller can marshal handle params (List/struct) in the
     // window; scalar live-in regs marshal directly by `reg_types`.
-    let param_types: Vec<NativeTy> = (0..n_params)
-        .map(|reg| ty[reg].unwrap_or(NativeTy::Int))
-        .collect();
+    let param_types: Vec<NativeTy> = native_reg_types[..n_params].to_vec();
 
     let jit_fn = vm_jit::JitFunction {
         n_params: n_params as u32,
@@ -4038,7 +4168,7 @@ fn translate_osr_loop(
         reg_types,
         code: jit_code,
     };
-    Some((jit_fn, param_types))
+    Some((jit_fn, param_types, native_reg_types))
 }
 
 /// Argument positions of a closure call site that carry a `mut` effect marker
@@ -10297,6 +10427,8 @@ fn jit_host_helpers() -> vm_jit::HostHelpers {
         list_get_float: rss_jit_list_get_float,
         closure_id: rss_jit_closure_id,
         closure_capture: rss_jit_closure_capture,
+        field_handle: rss_jit_field_handle,
+        list_get_handle: rss_jit_list_get_handle,
     }
 }
 
@@ -10484,6 +10616,84 @@ extern "C" fn rss_jit_closure_capture(handle: i64, index: i64) -> i64 {
             0
         }
     }
+}
+
+/// A clone of the struct/variant field `slot` IF it is itself a heap value (a
+/// stored closure, struct, variant, or list) — the only fields a `FieldHandle`
+/// read is allowed to fetch as a fresh handle. A scalar/absent field returns
+/// `None` (→ bail), so a misclassified slot never produces a bogus handle.
+#[cfg(feature = "native-jit")]
+fn jit_struct_field_heap_value(value: &VmValue, slot: usize) -> Option<VmValue> {
+    match value {
+        VmValue::Struct(data) | VmValue::Variant(data) => {
+            let field = data.fields.get(slot)?;
+            jit_heap_value_clone(field)
+        }
+        VmValue::Managed(inner) => jit_struct_field_heap_value(&inner.borrow(), slot),
+        _ => None,
+    }
+}
+
+/// A clone of list element `index` IF it is itself a heap value (e.g. a struct
+/// holding a stored closure). A scalar/absent element returns `None` (→ bail).
+#[cfg(feature = "native-jit")]
+fn jit_list_get_heap_value(value: &VmValue, index: i64) -> Option<VmValue> {
+    match value {
+        VmValue::List(list) => {
+            let index = usize::try_from(index).ok()?;
+            let elem = list.borrow().get(index)?;
+            jit_heap_value_clone(&elem)
+        }
+        VmValue::Managed(inner) => jit_list_get_heap_value(&inner.borrow(), index),
+        _ => None,
+    }
+}
+
+/// `Some(clone)` only when `value` is a heap value the host helpers can read
+/// through a handle (closure/struct/variant/list, transparently unwrapping a
+/// `Managed` cell). A scalar is `None`: handles only ever name heap values.
+#[cfg(feature = "native-jit")]
+fn jit_heap_value_clone(value: &VmValue) -> Option<VmValue> {
+    match value {
+        VmValue::Closure(_)
+        | VmValue::Struct(_)
+        | VmValue::Variant(_)
+        | VmValue::List(_)
+        | VmValue::Managed(_) => Some(value.clone()),
+        _ => None,
+    }
+}
+
+/// Push a freshly-fetched heap value into the per-call handle table and return its
+/// index, or signal the standard re-run-from-top bail (returning 0) when the field/
+/// element was not a heap value the helper could fetch.
+#[cfg(feature = "native-jit")]
+fn jit_push_heap_handle(value: Option<VmValue>) -> i64 {
+    match value {
+        Some(value) => JIT_HEAP_ARGS.with(|table| {
+            let mut table = table.borrow_mut();
+            table.push(value);
+            (table.len() - 1) as i64
+        }),
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_field_handle(handle: i64, slot: i64) -> i64 {
+    let value = usize::try_from(slot)
+        .ok()
+        .and_then(|slot| jit_heap_read(handle, |value| jit_struct_field_heap_value(value, slot)));
+    jit_push_heap_handle(value)
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_list_get_handle(handle: i64, index: i64) -> i64 {
+    let value = jit_heap_read(handle, |value| jit_list_get_heap_value(value, index));
+    jit_push_heap_handle(value)
 }
 
 #[cfg(feature = "native-jit")]
@@ -11206,7 +11416,7 @@ impl RegVm {
         // then gate on being at the loop header. This runs at every instruction when
         // OSR is armed, so it must be cheap on the common (not-at-header) path: the
         // cache lookup + header compare returns without cloning anything.
-        let (id, trans_exit, orig_exit, n_jit_regs, param_types) = {
+        let (id, trans_exit, orig_exit, n_jit_regs, param_types, reg_types) = {
             // Fast path: cached and NOT at the header ⇒ nothing to do (no clone).
             if let Some(native) = self.native.as_ref() {
                 if let Some(entry) = native.osr_cache.get(&native_key) {
@@ -11353,7 +11563,7 @@ impl RegVm {
                                 return None;
                             };
                             translate_osr_loop(&code, n_regs, func.params, func.captures, lp)
-                                .and_then(|(jit_fn, params)| {
+                                .and_then(|(jit_fn, params, reg_types)| {
                                     let n_jit_regs = jit_fn.n_regs as usize;
                                     match native.module.compile_osr(&jit_fn, lp.header as u32) {
                                         Ok(id) => Some(OsrEntry {
@@ -11363,6 +11573,7 @@ impl RegVm {
                                             orig_exit,
                                             n_jit_regs,
                                             param_types: params,
+                                            reg_types,
                                         }),
                                         Err(_) => None,
                                     }
@@ -11388,7 +11599,14 @@ impl RegVm {
                 // Only OSR when the interpreter is *at* the cached loop's (original)
                 // header ip.
                 Some(Some(e)) if e.orig_header == header_ip => {
-                    (e.id, e.trans_exit, e.orig_exit, e.n_jit_regs, e.param_types.clone())
+                    (
+                        e.id,
+                        e.trans_exit,
+                        e.orig_exit,
+                        e.n_jit_regs,
+                        e.param_types.clone(),
+                        e.reg_types.clone(),
+                    )
                 }
                 _ => return false,
             }
@@ -11471,11 +11689,19 @@ impl RegVm {
                 // construction of `translate_osr_loop`) AND any J3-added tag/payload
                 // register (index >= func.regs): those are strictly loop-internal,
                 // dead at the exit, and have no slot in the interpreter's original
-                // `func.regs`-wide window.
+                // `func.regs`-wide window. ALSO skip any **Handle**-class register
+                // (Pending #1 stored-closure broadening): a loop-internal handle (a
+                // stored struct/closure fetched via `FieldHandle`/`ListGetHandle`) is
+                // dead at the exit and its captured "value" is only a heap-table
+                // index — writing it back as an `Int` would corrupt the interpreter
+                // slot. The interpreter re-derives any value it still needs.
                 let n_params = func.params;
                 let n_orig_regs = func.regs;
                 for vm_jit::DeoptReg { reg, value } in live {
                     if (reg as usize) < n_params || (reg as usize) >= n_orig_regs {
+                        continue;
+                    }
+                    if reg_types.get(reg as usize) == Some(&NativeTy::Handle) {
                         continue;
                     }
                     let vm_value = match value {

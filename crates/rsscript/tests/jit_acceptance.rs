@@ -1166,6 +1166,196 @@ fn main() -> Unit {
     );
 }
 
+/// OSR × J2 POSITIVE test (Pending #1 stored-closure broadening) — a STORED,
+/// POLYMORPHIC, CAPTURING closure called in a hot loop (the `dynamic_closure_call`
+/// kernel shape). Each iteration fetches a struct from a `List<Op>` (`op =
+/// List.get(ops, sel)`), reads its `apply` closure field (`f = op.apply`), and calls
+/// it (`f(index)`). The two stored closures both capture the scalar `base` and
+/// differ by `sel` (polymorphic, 2 targets). The whole `main` is native-INELIGIBLE
+/// (the `Log.write`s + list construction), so only OSR can run the loop natively —
+/// and only by (1) reading the stored closure handle via `ListGetHandle`/
+/// `FieldHandle`, (2) dispatching the polymorphic inline cache, and (3) materializing
+/// each arm's scalar capture. Forcing OSR on, stdout MUST be byte-identical to the
+/// pure interpreter AND `osr_entries > 0` proves the stored/poly/capturing loop OSR'd.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_stored_polymorphic_capturing_closure_loop_matches_interpreter() {
+    let source = "\
+features: local
+
+struct Op derives(Clone) {
+    apply: owned Fn(Int) -> Int
+}
+
+fn lim() -> Int {
+    return 6000
+}
+
+fn main() -> Unit {
+    let base = 7
+    local ops = List.new<Op>()
+    let double_plus = Op(apply: fn(value) captures(read base) effects(pure) {
+        return value * 2 + base
+    })
+    List.push(list: mut ops, value: read double_plus)
+    let shift = Op(apply: fn(value) captures(read base) effects(pure) {
+        return value + base * 3
+    })
+    List.push(list: mut ops, value: read shift)
+
+    let limit = lim()
+    let mut index = 0
+    let mut sel = 0
+    let mut total = 0
+    while index < limit {
+        let op = List.get(list: read ops, index: sel)
+        let f = op.apply
+        total = total + f(index)
+        index = index + 1
+        sel = sel + 1
+        if sel == 2 {
+            sel = 0
+        }
+    }
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+";
+    let file = "jit-osr-stored-poly-capturing-closure.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "OSR × J2 stored/poly/capturing closure loop must be byte-identical to the interpreter"
+    );
+    assert!(
+        stats.osr_entries > 0,
+        "a stored, polymorphic, capturing closure called in an I/O-tangled hot loop must \
+         read the handle (FieldHandle/ListGetHandle), poly-dispatch, materialize the scalar \
+         capture, and OSR natively: {stats:?}",
+    );
+}
+
+/// OSR × J2 NEGATIVE test (Pending #1) — a stored closure whose callee is NOT
+/// native-inlinable MUST NOT OSR, no matter how the site profiles. The stored
+/// closure's body calls `Log.write` (an I/O op outside the native subset), so
+/// `native_callee_inlinable` (and the capturing variant) rejects it for EVERY
+/// profile state — monomorphic, polymorphic, or megamorphic. The per-iteration
+/// `CallClosure` therefore keeps the loop off the native subset and `osr_entries`
+/// MUST stay 0 deterministically. Output must still be interpreter-identical.
+/// (The megamorphic-by-distinct-closures case is exercised structurally by the
+/// `polymorphic_closure_inline_targets` 2..=3 cap; this test pins the orthogonal
+/// "the speculated callee itself can't be inlined" guard, which never transiently
+/// fires the way an incrementally-warming distinct-closure count would.)
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_stored_non_inlinable_closure_does_not_osr() {
+    let source = "\
+features: local
+
+struct Op derives(Clone) {
+    apply: owned Fn(Int) -> Int
+}
+
+fn lim() -> Int {
+    return 6000
+}
+
+fn main() -> Unit {
+    let base = 7
+    local ops = List.new<Op>()
+    List.push(list: mut ops, value: read Op(apply: fn(v) captures(read base) effects(write) {
+        Log.write(message: read \"tick\")
+        return v * 2 + base
+    }))
+
+    let limit = lim()
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        let op = List.get(list: read ops, index: 0)
+        let f = op.apply
+        total = total + f(index)
+        index = index + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+";
+    let file = "jit-osr-stored-non-inlinable-closure.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "a stored non-inlinable closure loop must still be interpreter-identical under OSR"
+    );
+    assert_eq!(
+        stats.osr_entries, 0,
+        "a stored closure whose callee is not native-inlinable must NOT OSR: {stats:?}",
+    );
+}
+
+/// OSR × J2 NEGATIVE test (Pending #1) — a STORED closure with a NON-scalar (heap)
+/// capture MUST NOT OSR. The stored closure captures `tag: List<Int>` (a heap value)
+/// and reads its length each call, so the capture cannot be materialized as a scalar
+/// via the `closure_capture` helper: the inline gate's `captures_all_scalar` profile
+/// bit goes false on the first observation, the site never inlines, the per-iteration
+/// `CallClosure` keeps the loop off the native subset, and `osr_entries` MUST stay 0.
+/// Output must still be interpreter-identical.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_stored_heap_capture_closure_does_not_osr() {
+    let source = "\
+features: local
+
+struct Op derives(Clone) {
+    apply: owned Fn(Int) -> Int
+}
+
+fn lim() -> Int {
+    return 6000
+}
+
+fn main() -> Unit {
+    let tag: List<Int> = [1, 2, 3]
+    local ops = List.new<Op>()
+    List.push(list: mut ops, value: read Op(apply: fn(v) captures(read tag) effects(pure) { return v + List.len<Int>(list: read tag) }))
+
+    let limit = lim()
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        let op = List.get(list: read ops, index: 0)
+        let f = op.apply
+        total = total + f(index)
+        index = index + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+";
+    let file = "jit-osr-stored-heap-capture-closure.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "a stored closure with a heap capture must still be interpreter-identical under OSR"
+    );
+    assert_eq!(
+        stats.osr_entries, 0,
+        "a stored closure with a non-scalar (heap) capture must NOT OSR: {stats:?}",
+    );
+}
+
 /// J2.1 profile-guided monomorphic closure inlining — the program shape the
 /// optimization targets: a higher-order `dispatch(f, x)` whose closure parameter is
 /// the same callee on every warm call, so J1 profiles the `CallClosure` site as

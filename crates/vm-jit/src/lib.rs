@@ -71,6 +71,18 @@ pub type ClosureIdFn = extern "C" fn(i64) -> i64;
 /// only emits this for captures it has already proven scalar, so the bail path is a
 /// defensive backstop.
 pub type ClosureCaptureFn = extern "C" fn(i64, i64) -> i64;
+/// `(struct_handle, slot) -> i64`: a fresh **handle** (heap-table index) for the
+/// struct's `slot`-th field, when that field is itself a heap value (e.g. a stored
+/// closure). The helper clones the nested value into the per-call heap table and
+/// returns its index, so a subsequent closure read (`closure_id`/`closure_capture`)
+/// can address it like any other handle. A wrong-type/out-of-range field (or a
+/// non-heap field) signals a bail out-of-band — exactly like [`FieldIntFn`].
+pub type FieldHandleFn = extern "C" fn(i64, i64) -> i64;
+/// `(list_handle, index) -> i64`: a fresh **handle** for the list element at
+/// `index`, when that element is a heap value (e.g. a struct holding a closure).
+/// Clones the nested value into the per-call heap table and returns its index; an
+/// out-of-bounds index or non-heap element signals a bail out-of-band.
+pub type ListGetHandleFn = extern "C" fn(i64, i64) -> i64;
 
 /// Host helper functions the compiled code calls to read heap values (struct
 /// fields, list elements) that don't fit in a scalar register. The `rsscript`
@@ -93,13 +105,15 @@ pub struct HostHelpers {
     pub list_get_float: ListGetFloatFn,
     pub closure_id: ClosureIdFn,
     pub closure_capture: ClosureCaptureFn,
+    pub field_handle: FieldHandleFn,
+    pub list_get_handle: ListGetHandleFn,
 }
 
 /// Version of the [`JitInstr`]/[`JitFunction`] IR this crate consumes. The
 /// producer (`rsscript`) translates its private bytecode into this stable,
 /// versioned surface, so the two crates are decoupled: a breaking IR change bumps
 /// this and the producer is updated in lock-step.
-pub const IR_VERSION: u32 = 7;
+pub const IR_VERSION: u32 = 8;
 
 /// Signed integer comparison (the four ordered comparisons; equality is its own
 /// instruction so it can also apply to booleans).
@@ -345,6 +359,28 @@ pub enum JitInstr {
         base: u32,
         index: u32,
     },
+    /// `dst = handle(field[slot])` of the struct/variant handle in `base`, read as a
+    /// raw **`Handle`** (a fresh heap-table index) via [`HostHelpers::field_handle`].
+    /// Used to fetch a stored heap value (notably a closure stored in a struct
+    /// field) into a `Handle` register so a downstream closure read
+    /// (`GuardClosureId`/`ClosureId`/`ClosureCapture`) can address it. A wrong-type/
+    /// out-of-range field makes the helper flag the standard re-run-from-top
+    /// fallback. `dst` is a `Handle`-class register.
+    FieldHandle {
+        dst: u32,
+        base: u32,
+        slot: u32,
+    },
+    /// `dst = handle(list[index])` of the list handle in `base`, read as a raw
+    /// **`Handle`** (a fresh heap-table index) via [`HostHelpers::list_get_handle`].
+    /// Like [`FieldHandle`] but for a list element that is itself a heap value (e.g.
+    /// a struct holding a stored closure). An out-of-bounds/non-heap element flags
+    /// the standard fallback. `dst` is a `Handle`-class register.
+    ListGetHandle {
+        dst: u32,
+        base: u32,
+        index: u32,
+    },
     /// OSR-exit (J5.2). Marks the post-loop instruction at the loop's exit edge: a
     /// function compiled with an OSR-entry (see [`NativeModule::compile_osr`]) runs
     /// only the loop region natively, so reaching this instruction means the loop
@@ -521,6 +557,8 @@ struct HostFuncs {
     list_get_float: FuncId,
     closure_id: FuncId,
     closure_capture: FuncId,
+    field_handle: FuncId,
+    list_get_handle: FuncId,
 }
 
 /// Handle to a function compiled into a [`NativeModule`]. Carries the minting
@@ -690,6 +728,8 @@ impl NativeModule {
         builder.symbol("rss_jit_list_get_float", helpers.list_get_float as *const u8);
         builder.symbol("rss_jit_closure_id", helpers.closure_id as *const u8);
         builder.symbol("rss_jit_closure_capture", helpers.closure_capture as *const u8);
+        builder.symbol("rss_jit_field_handle", helpers.field_handle as *const u8);
+        builder.symbol("rss_jit_list_get_handle", helpers.list_get_handle as *const u8);
         let mut module = JITModule::new(builder);
         let imports = HostFuncs {
             field_int: declare_import(&mut module, "rss_jit_field_int", 2)?,
@@ -699,6 +739,8 @@ impl NativeModule {
             list_get_float: declare_import_f64(&mut module, "rss_jit_list_get_float", 2)?,
             closure_id: declare_import(&mut module, "rss_jit_closure_id", 1)?,
             closure_capture: declare_import(&mut module, "rss_jit_closure_capture", 2)?,
+            field_handle: declare_import(&mut module, "rss_jit_field_handle", 2)?,
+            list_get_handle: declare_import(&mut module, "rss_jit_list_get_handle", 2)?,
         };
         let ctx = module.make_context();
         Ok(Self {
@@ -1176,9 +1218,17 @@ fn validate(program: &JitFunction) -> Result<(), JitError> {
             JitInstr::Move { dst, src } => {
                 check_reg(*dst)?;
                 check_reg(*src)?;
-                if is_nonscalar(*src) || is_nonscalar(*dst) {
+                // A **Handle** register is a plain `i64` (a heap-table index), so a
+                // Move just copies it — sound for a stored closure handle threaded
+                // through a temporary (Pending #1). A **flat-array** register (pointer
+                // + length, keyed by reg in the `lens` slice) genuinely cannot be
+                // moved, so those stay rejected.
+                let is_flat = |r: u32| {
+                    matches!(class(r), JitValueType::FlatInt | JitValueType::FlatFloat)
+                };
+                if is_flat(*src) || is_flat(*dst) {
                     return Err(JitError(
-                        "Move: non-scalar (Handle/flat) registers cannot be moved".into(),
+                        "Move: flat-array registers cannot be moved".into(),
                     ));
                 }
                 if class(*dst) != class(*src) {
@@ -1286,6 +1336,15 @@ fn validate(program: &JitFunction) -> Result<(), JitError> {
                 require_class(*base, JitValueType::Handle, "ClosureCapture base")?;
                 require_class(*dst, JitValueType::Int, "ClosureCapture result")?;
             }
+            JitInstr::FieldHandle { dst, base, .. } => {
+                require_class(*base, JitValueType::Handle, "FieldHandle base")?;
+                require_class(*dst, JitValueType::Handle, "FieldHandle result")?;
+            }
+            JitInstr::ListGetHandle { dst, base, index } => {
+                require_class(*base, JitValueType::Handle, "ListGetHandle base")?;
+                require_class(*index, JitValueType::Int, "ListGetHandle index")?;
+                require_class(*dst, JitValueType::Handle, "ListGetHandle result")?;
+            }
             // OSR-exit is a parameterless terminator (an unconditional deopt at its
             // own ip); its live set is computed from definite-assignment, so it
             // carries no operands to validate.
@@ -1325,7 +1384,9 @@ fn instr_def(instr: &JitInstr) -> Option<u32> {
         | JitInstr::ListGetFloatDirect { dst, .. }
         | JitInstr::ListLenDirect { dst, .. }
         | JitInstr::ClosureId { dst, .. }
-        | JitInstr::ClosureCapture { dst, .. } => Some(*dst),
+        | JitInstr::ClosureCapture { dst, .. }
+        | JitInstr::FieldHandle { dst, .. }
+        | JitInstr::ListGetHandle { dst, .. } => Some(*dst),
         JitInstr::Nop
         | JitInstr::Jump { .. }
         | JitInstr::JumpIfBool { .. }
@@ -1907,6 +1968,8 @@ fn build_function(
     let list_get_float_ref = module.declare_func_in_func(imports.list_get_float, bcx.func);
     let closure_id_ref = module.declare_func_in_func(imports.closure_id, bcx.func);
     let closure_capture_ref = module.declare_func_in_func(imports.closure_capture, bcx.func);
+    let field_handle_ref = module.declare_func_in_func(imports.field_handle, bcx.func);
+    let list_get_handle_ref = module.declare_func_in_func(imports.list_get_handle, bcx.func);
 
     let n = program.code.len();
     let n_regs = program.n_regs as usize;
@@ -2573,6 +2636,48 @@ fn build_function(
                 bcx.switch_to_block(cont);
                 bcx.def_var(reg(*dst), result);
             }
+            JitInstr::FieldHandle { dst, base, slot } => {
+                // Fetch a heap field (e.g. a stored closure) as a fresh handle.
+                // Mirrors `FieldInt`: the helper clones the nested value into the
+                // per-call heap table and returns its index, flagging the standard
+                // fallback out-of-band for a non-heap/out-of-range field.
+                let handle = bcx.use_var(reg(*base));
+                let slot_v = bcx.ins().iconst(types::I64, i64::from(*slot));
+                let call = bcx.ins().call(field_handle_ref, &[handle, slot_v]);
+                let result = bcx.inst_results(call)[0];
+                let cont = bail_if_helper_failed(
+                    &mut bcx,
+                    bail_ptr,
+                    fallback,
+                    safepoint_ptr,
+                    payload_ptr,
+                    &vars,
+                    &mut next_id,
+                    deopt!(i),
+                );
+                bcx.switch_to_block(cont);
+                bcx.def_var(reg(*dst), result);
+            }
+            JitInstr::ListGetHandle { dst, base, index } => {
+                // Fetch a heap list element (e.g. a struct holding a closure) as a
+                // fresh handle. Mirrors `ListGetInt` with a handle result.
+                let handle = bcx.use_var(reg(*base));
+                let index_v = bcx.use_var(reg(*index));
+                let call = bcx.ins().call(list_get_handle_ref, &[handle, index_v]);
+                let result = bcx.inst_results(call)[0];
+                let cont = bail_if_helper_failed(
+                    &mut bcx,
+                    bail_ptr,
+                    fallback,
+                    safepoint_ptr,
+                    payload_ptr,
+                    &vars,
+                    &mut next_id,
+                    deopt!(i),
+                );
+                bcx.switch_to_block(cont);
+                bcx.def_var(reg(*dst), result);
+            }
         }
     }
     if !terminated {
@@ -2860,6 +2965,12 @@ mod tests {
     extern "C" fn noop_closure_capture(_handle: i64, _index: i64) -> i64 {
         0
     }
+    extern "C" fn noop_field_handle(_handle: i64, _slot: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_list_get_handle(_handle: i64, _index: i64) -> i64 {
+        0
+    }
 
     /// A module with no-op host helpers (these tests exercise only scalar ops).
     fn module() -> NativeModule {
@@ -2871,6 +2982,8 @@ mod tests {
             list_get_float: noop_list_get_float,
             closure_id: noop_closure_id,
             closure_capture: noop_closure_capture,
+            field_handle: noop_field_handle,
+            list_get_handle: noop_list_get_handle,
         })
         .unwrap()
     }
@@ -2958,6 +3071,8 @@ mod tests {
             list_get_float,
             closure_id: noop_closure_id,
             closure_capture: noop_closure_capture,
+            field_handle: noop_field_handle,
+            list_get_handle: noop_list_get_handle,
         })
         .unwrap();
         // fn(h: Handle, idx: Int) -> Float { return list[idx] }  regs 0=h,1=idx,2=res
@@ -3016,6 +3131,8 @@ mod tests {
             list_get_float: noop_list_get_float,
             closure_id,
             closure_capture: noop_closure_capture,
+            field_handle: noop_field_handle,
+            list_get_handle: noop_list_get_handle,
         })
         .unwrap();
         // fn(h: Handle, x: Int) -> Int { guard id(h) == 7; return x + 100 }
@@ -3067,6 +3184,8 @@ mod tests {
             list_get_float: noop_list_get_float,
             closure_id,
             closure_capture: noop_closure_capture,
+            field_handle: noop_field_handle,
+            list_get_handle: noop_list_get_handle,
         })
         .unwrap();
         // Polymorphic inline cache over two callees {3, 5}:
