@@ -527,6 +527,71 @@ fn main() -> Unit {
     assert_eq!(osr.stdout.trim_end(), "begin\n31\n31");
 }
 
+/// OSR × J3 (Pending #1) correctness: a hot loop that constructs and matches a
+/// *non-escaping* scalar `Option<Int>` each iteration, wrapped by non-native I/O
+/// (`Log.write` before/after) in the SAME function — so the function is
+/// native-INELIGIBLE as a whole and only OSR can run the loop natively. The
+/// Option is built and matched strictly inside the loop body and is dead at the
+/// loop boundary, so OSR's J3 pre-pass scalar-replaces it (tag + payload scalar
+/// registers) making the loop an allocation-free native loop, while the live-in /
+/// live-out are the unchanged loop-carried registers (`i`, `total`).
+///
+/// With OSR forced on, the program's output must be byte-identical to the pure
+/// interpreter — which interprets the whole loop, allocating an `Option` per
+/// iteration. That byte-identity (and the differential corpus) is the correctness
+/// net: a wrong ip-map or live-out restore would diverge here. Under `native-jit`
+/// we also assert the loop genuinely OSR'd (`osr_entries > 0`).
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j3_option_loop_matches_interpreter() {
+    let source = "\
+fn f(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        let mut o: Option<Int> = None
+        if i % 3 == 0 {
+            o = Some(i * 2)
+        }
+        match o {
+            Some(x) => {
+                total = total + x
+            }
+            None => {
+                total = total + 0
+            }
+        }
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(limit: read 60)))
+    return Unit
+}
+";
+    let file = "jit-osr-j3-option.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "OSR × J3 Option loop must be byte-identical to the interpreter (stdout)"
+    );
+    // i in 0..60, i%3==0 ⇒ Some(2i): sum of 2i for i in {0,3,...,57} = 2*(0+3+...+57)
+    // = 2 * (20 terms, sum = 570) = 1140.
+    assert_eq!(osr.stdout.trim_end(), "begin\n1140\n1140");
+    assert!(
+        stats.osr_entries > 0,
+        "the non-escaping Option loop must OSR natively after J3 scalar replacement: {stats:?}",
+    );
+}
+
 /// J2.1 profile-guided monomorphic closure inlining — the program shape the
 /// optimization targets: a higher-order `dispatch(f, x)` whose closure parameter is
 /// the same callee on every warm call, so J1 profiles the `CallClosure` site as

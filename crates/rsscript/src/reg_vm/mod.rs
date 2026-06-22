@@ -940,7 +940,7 @@ fn subset_or_option_reads(instr: &RegInstr) -> Option<Vec<usize>> {
 fn native_scalar_replace_options(
     code: &[RegInstr],
     n_regs: usize,
-) -> Option<(Vec<RegInstr>, usize, Vec<usize>)> {
+) -> Option<(Vec<RegInstr>, usize, Vec<usize>, Vec<usize>)> {
     let reachable = native_reachable_instructions(code);
 
     // Fast path: no Option ops at all — nothing to do, no payload regs to verify.
@@ -949,7 +949,10 @@ fn native_scalar_replace_options(
         .enumerate()
         .any(|(i, instr)| reachable[i] && is_option_op(instr))
     {
-        return Some((code.to_vec(), n_regs, Vec::new()));
+        // Identity ip-map: transformed code == original code, so each transformed
+        // ip maps to itself.
+        let ip_map: Vec<usize> = (0..code.len()).collect();
+        return Some((code.to_vec(), n_regs, Vec::new(), ip_map));
     }
 
     // Every reachable instruction must be either in the native subset or one of the
@@ -1146,7 +1149,433 @@ fn native_scalar_replace_options(
             _ => {}
         }
     }
-    Some((new_code, next_reg, payload_regs))
+    // Inverse ip-map: `ip_map[transformed_ip] = original_ip`. Each original
+    // instruction `i` expanded to the consecutive transformed range
+    // `[index_map[i], index_map[i+1])` (or `..new_code.len()` for the last), so
+    // every transformed ip in that range maps back to `i`. Each original
+    // instruction always emits at least one transformed instruction (the rewrite
+    // loop pushes unconditionally), so the ranges tile `0..new_code.len()`
+    // exactly. A rewritten Option op (e.g. `MatchOption` → `JumpIfBool;Jump`)
+    // thus maps every fragment to the original op's index; copy-through
+    // instructions map one-to-one.
+    let mut ip_map = vec![0usize; new_code.len()];
+    for i in 0..code.len() {
+        let start = index_map[i];
+        let end = if i + 1 < code.len() {
+            index_map[i + 1]
+        } else {
+            new_code.len()
+        };
+        for t in start..end {
+            ip_map[t] = i;
+        }
+    }
+    Some((new_code, next_reg, payload_regs, ip_map))
+}
+
+/// OSR × J3: scalar-replace non-escaping scalar `Option`s that live entirely
+/// inside the loop region `[header, exit)` of an otherwise native-INELIGIBLE
+/// function (one whose pre/post-loop code does I/O — calls, `Log.write`, …, which
+/// the whole-function [`native_scalar_replace_options`] would reject).
+///
+/// Soundness model (region-scoped, conservative): an `Option` register is
+/// scalar-replaced only if EVERY one of its definitions and uses lies strictly
+/// inside `[header, exit)`, every in-region instruction is native-subset or one of
+/// the four Option ops, and the register never appears outside the region (so it
+/// is dead at both OSR boundaries and the non-subset I/O outside never touches it).
+/// Anything we cannot prove ⇒ `None` (no OSR; the interpreter runs the loop). The
+/// loop-carried (boundary) registers keep their original indices; only fresh
+/// tag/payload regs (>= `n_regs`) are added, and they are loop-internal.
+///
+/// Returns `(transformed_code, new_n_regs, ip_map)` where
+/// `ip_map[transformed_ip] = original_ip` (each rewritten Option op's fragments map
+/// to that op's original index; copy-through maps one-to-one). Out-of-region
+/// instructions are copied through verbatim, so the I/O before/after the loop is
+/// preserved exactly.
+#[cfg(feature = "native-jit")]
+fn native_scalar_replace_options_in_region(
+    code: &[RegInstr],
+    n_regs: usize,
+    header: usize,
+    exit: usize,
+) -> Option<(Vec<RegInstr>, usize, Vec<usize>)> {
+    if header >= exit || exit > code.len() {
+        return None;
+    }
+    let in_region = |i: usize| i >= header && i < exit;
+
+    // Fast path: no Option op inside the region ⇒ identity transform (plain OSR).
+    if !(header..exit).any(|i| is_option_op(&code[i])) {
+        let ip_map: Vec<usize> = (0..code.len()).collect();
+        return Some((code.to_vec(), n_regs, ip_map));
+    }
+
+    // Every in-region instruction must be native-subset or one of the four Option
+    // ops; otherwise the loop body cannot become a native loop anyway — bail.
+    for i in header..exit {
+        if !native_subset_instruction(&code[i]) && !is_option_op(&code[i]) {
+            return None;
+        }
+    }
+
+    // OPT = registers carrying an Option value: seed from in-region
+    // `MakeSome`/`LoadNone` dsts, close under in-region `Move` aliasing.
+    let mut opt = vec![false; n_regs];
+    for i in header..exit {
+        match &code[i] {
+            RegInstr::MakeSome { dst, .. } | RegInstr::LoadNone { dst } => opt[*dst] = true,
+            _ => {}
+        }
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for i in header..exit {
+            if let RegInstr::Move { dst, src } = &code[i] {
+                if opt[*src] && !opt[*dst] {
+                    opt[*dst] = true;
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    // Validate in-region uses/defs of OPT registers (identical recognition rules to
+    // the whole-function pass), and require a SCALAR payload.
+    for i in header..exit {
+        match &code[i] {
+            RegInstr::LoadNone { dst } if opt[*dst] => {}
+            RegInstr::MakeSome { dst, value } if opt[*dst] => {
+                if opt[*value] {
+                    return None; // Option payload ⇒ non-scalar
+                }
+            }
+            RegInstr::Move { dst, src } if opt[*dst] => {
+                if !opt[*src] {
+                    return None;
+                }
+            }
+            RegInstr::MatchOption { src, .. } if opt[*src] => {}
+            RegInstr::UnwrapSome { dst, src } if opt[*src] => {
+                if opt[*dst] {
+                    return None;
+                }
+            }
+            RegInstr::Move { src, .. } if opt[*src] => {}
+            other => {
+                let reads = subset_or_option_reads(other)?;
+                if reads.into_iter().any(|r| opt[r]) {
+                    return None;
+                }
+                if let RegInstr::UnwrapSome { dst, .. }
+                | RegInstr::MakeSome { dst, .. }
+                | RegInstr::LoadNone { dst } = other
+                {
+                    if opt[*dst] {
+                        return None;
+                    }
+                }
+            }
+        }
+    }
+
+    // CRITICAL boundary soundness. After scalar replacement the ORIGINAL Option
+    // register `o` is NEVER written inside the transformed region (its defs became
+    // tag/payload writes), so the OSR JIT's definite-assignment live-out does not
+    // include `o`, and the interpreter's `o` slot is left untouched across the OSR.
+    // For the OSR result to equal the interpreter, `o` must therefore carry NO value
+    // that any out-of-region (interpreter-run) instruction observes — i.e. every OPT
+    // register must be DEAD at both OSR boundaries: not read, and not written, by ANY
+    // instruction outside `[header, exit)`.
+    //
+    // We prove this with a complete, conservative register footprint
+    // (`instr_read_regs` / `instr_written_reg`): a variant we cannot fully analyze
+    // reports `RegFootprint::All` (reads/writes EVERY register), which only ever
+    // makes more registers appear live ⇒ more bails, never a missed escape. The
+    // common call family (`CallNative`/`CallKnown`/…, e.g. the wrapping `Log.write`)
+    // is enumerated exactly, so a genuinely loop-local Option still qualifies.
+    for i in 0..code.len() {
+        if in_region(i) {
+            continue;
+        }
+        // No out-of-region read of an OPT register (would observe a stale `o`).
+        match instr_read_regs(&code[i]) {
+            RegFootprint::Some(reads) => {
+                if reads.into_iter().any(|r| r < n_regs && opt[r]) {
+                    return None;
+                }
+            }
+            // Unknown reads ⇒ assume it could read an OPT register ⇒ bail (only if
+            // any OPT register exists, which it does here).
+            RegFootprint::All => return None,
+        }
+        // No out-of-region write of an OPT register (would redefine the Option the
+        // region owns, breaking the dead-at-boundary invariant).
+        match instr_written_reg(&code[i]) {
+            RegFootprint::Some(writes) => {
+                if writes.into_iter().any(|r| r < n_regs && opt[r]) {
+                    return None;
+                }
+            }
+            RegFootprint::All => return None,
+        }
+    }
+    // Note on in-region leakage: a `tag`/`payload` value can never leak past `exit`
+    // because those are fresh registers (>= n_regs) emitted only inside the region,
+    // and `UnwrapSome` writes a plain scalar `dst` (an Int, fully captured by the
+    // deopt live-out payload) — the OPT register itself is never copied to a boundary
+    // register. So the boundary disjointness above is the complete proof.
+
+    // Allocate fresh tag/payload regs per OPT register.
+    let mut tag_reg = vec![0usize; n_regs];
+    let mut payload_reg = vec![0usize; n_regs];
+    let mut next_reg = n_regs;
+    for (reg, is_opt) in opt.iter().enumerate() {
+        if *is_opt {
+            tag_reg[reg] = next_reg;
+            payload_reg[reg] = next_reg + 1;
+            next_reg += 2;
+        }
+    }
+
+    // Rewrite the WHOLE code, scalar-replacing in-region Option ops and copying
+    // everything else through verbatim; remap all jump/match targets through the
+    // index map. (Out-of-region jumps keep pointing at the right place after the
+    // region's instructions expand.)
+    enum Fix {
+        Target(usize),
+        Match { some_ip: usize, none_ip: usize },
+    }
+    let mut new_code: Vec<RegInstr> = Vec::with_capacity(code.len());
+    let mut index_map = vec![0usize; code.len()];
+    let mut fixups: Vec<(usize, Fix)> = Vec::new();
+    for (i, instr) in code.iter().enumerate() {
+        index_map[i] = new_code.len();
+        let region = in_region(i);
+        match instr {
+            RegInstr::MakeSome { dst, value } if region && opt[*dst] => {
+                new_code.push(RegInstr::LoadBool { dst: tag_reg[*dst], value: true });
+                new_code.push(RegInstr::Move { dst: payload_reg[*dst], src: *value });
+            }
+            RegInstr::LoadNone { dst } if region && opt[*dst] => {
+                new_code.push(RegInstr::LoadBool { dst: tag_reg[*dst], value: false });
+            }
+            RegInstr::Move { dst, src } if region && opt[*dst] => {
+                new_code.push(RegInstr::Move { dst: tag_reg[*dst], src: tag_reg[*src] });
+                new_code.push(RegInstr::Move { dst: payload_reg[*dst], src: payload_reg[*src] });
+            }
+            RegInstr::MatchOption { src, some_ip, none_ip } if region && opt[*src] => {
+                fixups.push((new_code.len(), Fix::Target(*some_ip)));
+                new_code.push(RegInstr::JumpIfBool { cond: tag_reg[*src], expected: true, target: 0 });
+                fixups.push((new_code.len(), Fix::Target(*none_ip)));
+                new_code.push(RegInstr::Jump { target: 0 });
+            }
+            RegInstr::UnwrapSome { dst, src } if region && opt[*src] => {
+                new_code.push(RegInstr::Move { dst: *dst, src: payload_reg[*src] });
+            }
+            // Copy-through, remapping jump targets (covers both in-region native
+            // branches and the pre/post-loop control flow). `MatchOption` outside the
+            // region (or on a non-OPT src) is copied with BOTH targets remapped.
+            RegInstr::Jump { target }
+            | RegInstr::JumpIfBool { target, .. }
+            | RegInstr::JumpIfIntCompare { target, .. } => {
+                fixups.push((new_code.len(), Fix::Target(*target)));
+                new_code.push(instr.clone());
+            }
+            RegInstr::MatchOption { some_ip, none_ip, .. } => {
+                fixups.push((new_code.len(), Fix::Match { some_ip: *some_ip, none_ip: *none_ip }));
+                new_code.push(instr.clone());
+            }
+            other => new_code.push(other.clone()),
+        }
+    }
+    for (pos, fix) in fixups {
+        match fix {
+            Fix::Target(t) => {
+                let target = index_map[t];
+                match &mut new_code[pos] {
+                    RegInstr::Jump { target: dst }
+                    | RegInstr::JumpIfBool { target: dst, .. }
+                    | RegInstr::JumpIfIntCompare { target: dst, .. } => *dst = target,
+                    _ => {}
+                }
+            }
+            Fix::Match { some_ip, none_ip } => {
+                let (s, n) = (index_map[some_ip], index_map[none_ip]);
+                if let RegInstr::MatchOption { some_ip: sd, none_ip: nd, .. } = &mut new_code[pos] {
+                    *sd = s;
+                    *nd = n;
+                }
+            }
+        }
+    }
+    // Inverse ip-map (see `native_scalar_replace_options`).
+    let mut ip_map = vec![0usize; new_code.len()];
+    for i in 0..code.len() {
+        let start = index_map[i];
+        let end = if i + 1 < code.len() { index_map[i + 1] } else { new_code.len() };
+        for t in start..end {
+            ip_map[t] = i;
+        }
+    }
+    Some((new_code, next_reg, ip_map))
+}
+
+/// A conservative register footprint: either an EXACT set of register operands, or
+/// `All` meaning "could touch every register" (used for instruction variants we do
+/// not fully model, so an omission is sound — it over-approximates liveness and can
+/// only cause more OSR bails, never a missed escape).
+#[cfg(feature = "native-jit")]
+enum RegFootprint {
+    Some(Vec<usize>),
+    All,
+}
+
+/// Registers an instruction READS (value operands). Returns [`RegFootprint::All`]
+/// for any variant whose read set we do not exhaustively model. Used by OSR × J3 to
+/// prove a scalar-replaced Option register is dead at the loop boundary.
+#[cfg(feature = "native-jit")]
+fn instr_read_regs(instr: &RegInstr) -> RegFootprint {
+    use RegFootprint::Some as S;
+    match instr {
+        RegInstr::LoadUnit { .. }
+        | RegInstr::LoadInt { .. }
+        | RegInstr::LoadFloat { .. }
+        | RegInstr::LoadBool { .. }
+        | RegInstr::LoadString { .. }
+        | RegInstr::LoadNone { .. }
+        | RegInstr::Jump { .. }
+        | RegInstr::RuntimeError { .. } => S(vec![]),
+        RegInstr::Move { src, .. }
+        | RegInstr::Manage { src, .. }
+        | RegInstr::DeepCopy { reg: src }
+        | RegInstr::UnwrapSome { src, .. }
+        | RegInstr::UnwrapVariantValue { src, .. }
+        | RegInstr::AwaitJoin { src, .. } => S(vec![*src]),
+        RegInstr::ResourceDrop { resource } => S(vec![*resource]),
+        RegInstr::GetField { base, .. } | RegInstr::GetFieldSlot { base, .. } => S(vec![*base]),
+        RegInstr::SetField { base, value, .. } | RegInstr::SetFieldSlot { base, value, .. } => {
+            S(vec![*base, *value])
+        }
+        RegInstr::AddInt { lhs, rhs, .. }
+        | RegInstr::SubInt { lhs, rhs, .. }
+        | RegInstr::MulInt { lhs, rhs, .. }
+        | RegInstr::DivInt { lhs, rhs, .. }
+        | RegInstr::ModInt { lhs, rhs, .. }
+        | RegInstr::BitAndInt { lhs, rhs, .. }
+        | RegInstr::BitOrInt { lhs, rhs, .. }
+        | RegInstr::BitXorInt { lhs, rhs, .. }
+        | RegInstr::ShiftLeftInt { lhs, rhs, .. }
+        | RegInstr::ShiftRightInt { lhs, rhs, .. }
+        | RegInstr::LessInt { lhs, rhs, .. }
+        | RegInstr::LessEqualInt { lhs, rhs, .. }
+        | RegInstr::GreaterInt { lhs, rhs, .. }
+        | RegInstr::GreaterEqualInt { lhs, rhs, .. }
+        | RegInstr::Equal { lhs, rhs, .. }
+        | RegInstr::NotEqual { lhs, rhs, .. }
+        | RegInstr::JumpIfIntCompare { lhs, rhs, .. } => S(vec![*lhs, *rhs]),
+        RegInstr::JumpIfBool { cond, .. } => S(vec![*cond]),
+        RegInstr::MatchOption { src, .. }
+        | RegInstr::MatchResult { src, .. }
+        | RegInstr::MatchVariant { src, .. } => S(vec![*src]),
+        RegInstr::MatchMapGet { map, key, .. } => S(vec![*map, *key]),
+        RegInstr::MakeSome { value, .. } => S(vec![*value]),
+        RegInstr::StringConcat { left, right, .. } => S(vec![*left, *right]),
+        RegInstr::Return { src } => S(vec![*src]),
+        // Call / construction families: their value operands are the arg/field/item
+        // register vectors (the `dst` is written, not read).
+        RegInstr::CallKnown { args, .. }
+        | RegInstr::CallDynamic { args, .. }
+        | RegInstr::SpawnTask { args, .. }
+        | RegInstr::CallNative { args, .. }
+        | RegInstr::CallIntrinsic { args, .. }
+        | RegInstr::CallTypedIntrinsic { args, .. } => S(args.clone()),
+        RegInstr::CallClosure { closure, args, .. } => {
+            let mut v = args.clone();
+            v.push(*closure);
+            S(v)
+        }
+        RegInstr::MakeList { items, .. } => S(items.clone()),
+        RegInstr::MakeStruct { fields, .. }
+        | RegInstr::MakeVariant { fields, .. }
+        | RegInstr::MakeObject { fields, .. } => S(fields.iter().map(|(_, r)| *r).collect()),
+        RegInstr::MakeMap { entries, .. } => {
+            S(entries.iter().flat_map(|(k, v)| [*k, *v]).collect())
+        }
+        RegInstr::MakeClosure { captures, .. } => S(captures.clone()),
+        // Anything not modelled above (collection mutators, select, try, …) ⇒
+        // conservatively "reads everything".
+        _ => RegFootprint::All,
+    }
+}
+
+/// The register an instruction WRITES (its `dst`), or [`RegFootprint::All`] for a
+/// variant we do not model (treated as writing every register — sound).
+#[cfg(feature = "native-jit")]
+fn instr_written_reg(instr: &RegInstr) -> RegFootprint {
+    use RegFootprint::Some as S;
+    match instr {
+        RegInstr::Jump { .. }
+        | RegInstr::JumpIfBool { .. }
+        | RegInstr::JumpIfIntCompare { .. }
+        | RegInstr::MatchOption { .. }
+        | RegInstr::MatchResult { .. }
+        | RegInstr::MatchVariant { .. }
+        | RegInstr::RuntimeError { .. }
+        | RegInstr::ResourceDrop { .. }
+        | RegInstr::DeepCopy { .. }
+        | RegInstr::Return { .. } => S(vec![]),
+        RegInstr::LoadUnit { dst }
+        | RegInstr::LoadInt { dst, .. }
+        | RegInstr::LoadFloat { dst, .. }
+        | RegInstr::LoadBool { dst, .. }
+        | RegInstr::LoadString { dst, .. }
+        | RegInstr::LoadNone { dst }
+        | RegInstr::Move { dst, .. }
+        | RegInstr::Manage { dst, .. }
+        | RegInstr::GetField { dst, .. }
+        | RegInstr::GetFieldSlot { dst, .. }
+        | RegInstr::SetField { dst, .. }
+        | RegInstr::SetFieldSlot { dst, .. }
+        | RegInstr::MakeStruct { dst, .. }
+        | RegInstr::MakeVariant { dst, .. }
+        | RegInstr::MakeList { dst, .. }
+        | RegInstr::MakeObject { dst, .. }
+        | RegInstr::MakeMap { dst, .. }
+        | RegInstr::MakeClosure { dst, .. }
+        | RegInstr::MakeSome { dst, .. }
+        | RegInstr::AddInt { dst, .. }
+        | RegInstr::SubInt { dst, .. }
+        | RegInstr::MulInt { dst, .. }
+        | RegInstr::DivInt { dst, .. }
+        | RegInstr::ModInt { dst, .. }
+        | RegInstr::BitAndInt { dst, .. }
+        | RegInstr::BitOrInt { dst, .. }
+        | RegInstr::BitXorInt { dst, .. }
+        | RegInstr::ShiftLeftInt { dst, .. }
+        | RegInstr::ShiftRightInt { dst, .. }
+        | RegInstr::LessInt { dst, .. }
+        | RegInstr::LessEqualInt { dst, .. }
+        | RegInstr::GreaterInt { dst, .. }
+        | RegInstr::GreaterEqualInt { dst, .. }
+        | RegInstr::Equal { dst, .. }
+        | RegInstr::NotEqual { dst, .. }
+        | RegInstr::UnwrapSome { dst, .. }
+        | RegInstr::UnwrapVariantValue { dst, .. }
+        | RegInstr::CallKnown { dst, .. }
+        | RegInstr::CallDynamic { dst, .. }
+        | RegInstr::SpawnTask { dst, .. }
+        | RegInstr::AwaitJoin { dst, .. }
+        | RegInstr::CallNative { dst, .. }
+        | RegInstr::CallClosure { dst, .. }
+        | RegInstr::CallIntrinsic { dst, .. }
+        | RegInstr::CallTypedIntrinsic { dst, .. }
+        | RegInstr::StringConcat { dst, .. } => S(vec![*dst]),
+        // `MatchMapGet` writes `value_dst`; `SelectWait` writes winner/value; calls
+        // with `mut_args` write back to arg registers — all modelled conservatively
+        // as `All` so OSR × J3 bails rather than risk a missed boundary write.
+        _ => RegFootprint::All,
+    }
 }
 
 #[cfg(feature = "native-jit")]
@@ -1496,7 +1925,8 @@ fn translate_to_native_jit(
     // jump layout (and can dissolve Options exposed by an inlined callee). `None`
     // here means an Option escapes ⇒ leave the whole function on the interpreter
     // path (its bail/fallback re-runs from the top and reconstructs the Option).
-    let (code, n_regs, scalar_payload_regs) = native_scalar_replace_options(&code, n_regs)?;
+    let (code, n_regs, scalar_payload_regs, _ip_map) =
+        native_scalar_replace_options(&code, n_regs)?;
     if func.params > n_regs {
         return None;
     }
@@ -2029,6 +2459,35 @@ struct OsrLoop {
     exit: usize,
 }
 
+/// A compiled OSR loop cached per function. The OSR loop is detected and compiled
+/// on the (possibly J3-scalar-replaced) `code`, so its native `resume_ip` indexes
+/// that transformed stream. The interpreter, however, executes the ORIGINAL
+/// `func.code`; the two stored `orig_*` ips translate the OSR boundary back:
+///   - `orig_header`: the original-code header ip the interpreter must be at for
+///     the OSR to fire (the header gate). When no Option was scalar-replaced this
+///     equals `trans_exit`'s loop header in original space (identity ip-map).
+///   - `trans_exit`: the transformed-code exit ip (= the native `resume_ip` the
+///     OSR-exit deopt reports). Used to validate the deopt resumed at the loop's
+///     single exit.
+///   - `orig_exit`: the ORIGINAL-code post-loop ip the interpreter resumes at —
+///     `ip_map[trans_exit]`. Set the frame ip to this after an OSR-exit.
+/// Loop-carried (live-in/out) registers keep their original indices (J3 only adds
+/// fresh tag/payload regs used strictly inside the loop and dead at both
+/// boundaries), so the marshalling window and live-out restore are unchanged.
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Clone)]
+struct OsrEntry {
+    id: vm_jit::CompiledId,
+    orig_header: usize,
+    trans_exit: usize,
+    orig_exit: usize,
+    /// Width of the OSR register window the native ABI expects — the TRANSFORMED
+    /// register count (`func.regs` plus any J3-added tag/payload regs). The
+    /// marshalling window and `lens` slice must be exactly this wide.
+    n_jit_regs: usize,
+    param_types: Vec<NativeTy>,
+}
+
 /// Identify the single natural loop OSR will compile, **conservatively** (any
 /// shape we cannot analyze soundly returns `None`, so OSR does not apply).
 ///
@@ -2049,6 +2508,19 @@ fn detect_single_natural_loop(code: &[RegInstr]) -> Option<OsrLoop> {
     // Collect backedges: a jump/branch whose target is at or before it.
     let mut backedges: Vec<(usize, usize)> = Vec::new(); // (from, header)
     for (i, instr) in code.iter().enumerate() {
+        // `MatchOption` is a two-way control transfer (some_ip / none_ip); count a
+        // backedge for either target that jumps backward. This matters when this
+        // runs on UNTRANSFORMED code (OSR × J3, before scalar replacement): a
+        // forward in-loop `match` must not be mistaken for straight-line code.
+        if let RegInstr::MatchOption { some_ip, none_ip, .. } = instr {
+            if *some_ip <= i {
+                backedges.push((i, *some_ip));
+            }
+            if *none_ip <= i {
+                backedges.push((i, *none_ip));
+            }
+            continue;
+        }
         let target = match instr {
             RegInstr::Jump { target } => Some(*target),
             RegInstr::JumpIfBool { target, .. } | RegInstr::JumpIfIntCompare { target, .. } => {
@@ -2103,22 +2575,38 @@ fn detect_single_natural_loop(code: &[RegInstr]) -> Option<OsrLoop> {
                     return None;
                 }
             }
-            // A `Return`/`RuntimeError` inside the loop is an extra exit edge we do
-            // not model in the OSR-exit (single exit only) — bail conservatively.
-            RegInstr::Return { .. } | RegInstr::RuntimeError { .. } => return None,
-            // Any non-straight-line match/call inside the body is rejected by the
-            // subset check in `translate_osr_loop`; control-flow-wise it falls
-            // through, which stays in-region.
+            // A `Return` inside the loop is a value-producing exit we do not model in
+            // the single OSR-exit — bail conservatively.
+            RegInstr::Return { .. } => return None,
+            // A `RuntimeError` inside the loop is a trap, not a normal loop exit. It
+            // is compiled to `JitInstr::Bail` (deopt to the interpreter, which then
+            // re-runs the loop and raises the error itself if actually reached). The
+            // exhaustive-match lowering emits a statically-reachable-but-dynamically-
+            // dead `RuntimeError` after an `Option` match, so accepting it (as a bail)
+            // is what lets Option-bearing loops OSR at all.
+            RegInstr::RuntimeError { .. } => {}
+            // `MatchOption` (untransformed-code path): both arms must stay in-region.
+            RegInstr::MatchOption { some_ip, none_ip, .. } => {
+                if !in_region(*some_ip) || !in_region(*none_ip) {
+                    return None;
+                }
+            }
+            // Any non-straight-line call inside the body is rejected by the subset
+            // check in `translate_osr_loop`; control-flow-wise it falls through,
+            // which stays in-region.
             _ => {}
         }
     }
     Some(OsrLoop { header, exit })
 }
 
-/// Build an OSR [`vm_jit::JitFunction`] for the loop `lp` in `func`, **identity-
-/// indexed** with `func.code` so a native OSR-exit's `resume_ip` is directly the
-/// interpreter's instruction index (the soundness keystone: no inlining / no
-/// scalar-replacement, so indices never drift).
+/// Build an OSR [`vm_jit::JitFunction`] for the loop `lp` in `code`. `code` is the
+/// (possibly J3-scalar-replaced) instruction stream; `lp.header`/`lp.exit` index
+/// into it. The JIT is index-aligned with `code` so a native OSR-exit's
+/// `resume_ip` is the `code` instruction index — which the caller maps back to the
+/// ORIGINAL `func.code` post-loop ip via the J3 ip-map (identity when no Option was
+/// replaced, so the keystone holds: indices into `code` track the interpreter's
+/// resume position through the ip-map).
 ///
 /// Every instruction in the loop body region must be in the native subset. The
 /// exit instruction becomes [`vm_jit::JitInstr::OsrExit`] (deopt back to the
@@ -2130,17 +2618,18 @@ fn detect_single_natural_loop(code: &[RegInstr]) -> Option<OsrLoop> {
 /// the subset or types don't unify.
 #[cfg(feature = "native-jit")]
 fn translate_osr_loop(
-    func: &RegFunction,
+    code: &[RegInstr],
+    n_regs: usize,
+    n_params: usize,
+    captures: usize,
     lp: OsrLoop,
 ) -> Option<(vm_jit::JitFunction, Vec<NativeTy>)> {
     use vm_jit::{JitCompare, JitInstr};
 
-    if func.captures != 0 {
+    if captures != 0 {
         return None;
     }
-    let code = &func.code;
     let n = code.len();
-    let n_regs = func.regs;
     if lp.header >= n || lp.exit > n {
         return None;
     }
@@ -2227,7 +2716,7 @@ fn translate_osr_loop(
     // Handles only enter via the caller's heap-arg window; for OSR the window
     // carries whatever the interpreter has, so a Handle base must be a *parameter*
     // register (consistent with `translate_to_native_jit`, and marshalled the same).
-    let handle_param = |reg: usize| ty[reg] == Some(NativeTy::Handle) && reg < func.params;
+    let handle_param = |reg: usize| ty[reg] == Some(NativeTy::Handle) && reg < n_params;
     let r = |reg: usize| reg as u32;
     let cmp = |op: &RegIntCompare| match op {
         RegIntCompare::Less => JitCompare::Lt,
@@ -2340,7 +2829,12 @@ fn translate_osr_loop(
                 }
             }
             // A `Return` inside the loop was rejected by `detect_single_natural_loop`
-            // (single-exit only), so we never reach one here.
+            // (single-exit only), so we never reach one here. A `RuntimeError`
+            // (e.g. the dynamically-dead exhaustive-match trap an `Option` match
+            // lowers to) compiles to `Bail`: if ever reached natively it deopts to
+            // the interpreter, which re-runs the loop and raises the error itself —
+            // so OSR never has to model the trap's semantics.
+            RegInstr::RuntimeError { .. } => JitInstr::Bail,
             RegInstr::GetFieldSlot { dst, base, slot } => {
                 require(handle_param(*base))?;
                 if float(*dst) {
@@ -2374,12 +2868,12 @@ fn translate_osr_loop(
         .collect();
     // Param types so the caller can marshal handle params (List/struct) in the
     // window; scalar live-in regs marshal directly by `reg_types`.
-    let param_types: Vec<NativeTy> = (0..func.params)
+    let param_types: Vec<NativeTy> = (0..n_params)
         .map(|reg| ty[reg].unwrap_or(NativeTy::Int))
         .collect();
 
     let jit_fn = vm_jit::JitFunction {
-        n_params: func.params as u32,
+        n_params: n_params as u32,
         n_regs: n_regs as u32,
         reg_types,
         code: jit_code,
@@ -8426,7 +8920,7 @@ struct NativeState {
     /// types (for window marshalling); `None` means "known not OSR-eligible" (don't
     /// re-analyze). Populated lazily the first time the interpreter reaches a header.
     #[allow(clippy::type_complexity)]
-    osr_cache: HashMap<usize, Option<(vm_jit::CompiledId, OsrLoop, Vec<NativeTy>)>>,
+    osr_cache: HashMap<usize, Option<OsrEntry>>,
 }
 
 /// Native-JIT telemetry. The VM is single-threaded, so plain counters suffice.
@@ -9368,12 +9862,12 @@ impl RegVm {
         // then gate on being at the loop header. This runs at every instruction when
         // OSR is armed, so it must be cheap on the common (not-at-header) path: the
         // cache lookup + header compare returns without cloning anything.
-        let (id, lp, param_types) = {
+        let (id, trans_exit, orig_exit, n_jit_regs, param_types) = {
             // Fast path: cached and NOT at the header ⇒ nothing to do (no clone).
             if let Some(native) = self.native.as_ref() {
                 if let Some(entry) = native.osr_cache.get(&native_key) {
                     match entry {
-                        Some((_, lp, _)) if lp.header == header_ip => {}
+                        Some(e) if e.orig_header == header_ip => {}
                         _ => return false,
                     }
                 }
@@ -9384,37 +9878,91 @@ impl RegVm {
             // Detect + compile the function's single OSR loop ONCE, keyed by the
             // function (independent of the current ip). The header gate decides when
             // to actually fire.
+            //
+            // OSR × J3: detect the loop on the ORIGINAL code (detection understands
+            // `MatchOption` as a two-way branch, so an Option-bearing body is shaped
+            // correctly), then scalar-replace any non-escaping scalar `Option` that
+            // lives ENTIRELY inside that loop region — turning the alloc-bound body
+            // into native-subset code. Re-detect on the TRANSFORMED stream (where the
+            // Option ops are gone) and compile. The transformed→original ip-map
+            // translates the OSR boundary back to `func.code` (where the interpreter
+            // resumes). When the body has no replaceable Option the region pass
+            // returns the code unchanged with an identity ip-map, so plain
+            // native-subset OSR is byte-for-byte the old path.
             if !native.osr_cache.contains_key(&native_key) {
-                let entry = detect_single_natural_loop(&func.code).and_then(|lp| {
-                    translate_osr_loop(func, lp).and_then(|(jit_fn, params)| {
-                        match native.module.compile_osr(&jit_fn, lp.header as u32) {
-                            Ok(id) => Some((id, lp, params)),
-                            Err(_) => None,
-                        }
+                let entry = detect_single_natural_loop(&func.code).and_then(|lp0| {
+                    native_scalar_replace_options_in_region(
+                        &func.code, func.regs, lp0.header, lp0.exit,
+                    )
+                    .and_then(|(code, n_regs, ip_map)| {
+                        // Re-detect on the transformed stream; its single loop is the
+                        // same loop with the Option ops dissolved (the body is now
+                        // native-subset). Indices shift, so use the transformed `lp`.
+                        detect_single_natural_loop(&code).and_then(|lp| {
+                            // Map the OSR boundary back to the ORIGINAL code. Both the
+                            // header and the exit instruction are copy-through branches
+                            // (`JumpIfIntCompare`/`JumpIfBool` / `Jump`) — never Option
+                            // ops — so each maps one-to-one to its original index,
+                            // making the boundary mapping unambiguous. If either ip
+                            // cannot map back soundly, bail OSR (never misresume).
+                            //
+                            // For `lp.exit`, the loop exits to one-past the post-loop
+                            // body; when that lands exactly at the end of the
+                            // transformed stream it maps to the end of the original
+                            // stream.
+                            let orig_header = *ip_map.get(lp.header)?;
+                            let orig_exit = if lp.exit < ip_map.len() {
+                                ip_map[lp.exit]
+                            } else if lp.exit == code.len() {
+                                func.code.len()
+                            } else {
+                                return None;
+                            };
+                            translate_osr_loop(&code, n_regs, func.params, func.captures, lp)
+                                .and_then(|(jit_fn, params)| {
+                                    let n_jit_regs = jit_fn.n_regs as usize;
+                                    match native.module.compile_osr(&jit_fn, lp.header as u32) {
+                                        Ok(id) => Some(OsrEntry {
+                                            id,
+                                            orig_header,
+                                            trans_exit: lp.exit,
+                                            orig_exit,
+                                            n_jit_regs,
+                                            param_types: params,
+                                        }),
+                                        Err(_) => None,
+                                    }
+                                })
+                        })
                     })
                 });
                 native.osr_cache.insert(native_key, entry);
             }
             match native.osr_cache.get(&native_key) {
-                // Only OSR when the interpreter is *at* the cached loop's header.
-                Some(Some((id, lp, params))) if lp.header == header_ip => {
-                    (*id, *lp, params.clone())
+                // Only OSR when the interpreter is *at* the cached loop's (original)
+                // header ip.
+                Some(Some(e)) if e.orig_header == header_ip => {
+                    (e.id, e.trans_exit, e.orig_exit, e.n_jit_regs, e.param_types.clone())
                 }
                 _ => return false,
             }
         };
 
         // Phase 2: marshal the current register window into the OSR call. The OSR
-        // ABI's `args_ptr` is the full `n_regs`-wide window indexed by register: a
-        // scalar register contributes its raw bits, a handle (List/struct) param its
-        // heap-table index (the host helpers read through it), and an unwritten /
-        // non-scalar slot contributes 0 (native only ever loads the live-in subset,
-        // all of which are written by definite-assignment at the header). A drop
-        // guard clears the heap table on every exit path.
+        // ABI's `args_ptr` is the full (TRANSFORMED) `n_jit_regs`-wide window indexed
+        // by register: a scalar register contributes its raw bits, a handle
+        // (List/struct) param its heap-table index (the host helpers read through
+        // it), and an unwritten / non-scalar slot contributes 0 (native only ever
+        // loads the live-in subset, all of which are written by definite-assignment
+        // at the header). Under OSR × J3 the window is wider than `func.regs` by the
+        // fresh tag/payload registers; only original registers `0..func.regs` carry
+        // an interpreter value, and the J3-added slots stay 0 — the loop body assigns
+        // them (LoadBool tag, Move payload) before any read, so their live-in value
+        // is irrelevant. A drop guard clears the heap table on every exit path.
         let _heap_guard = JitHeapArgsGuard;
         let n_regs = func.regs;
-        let mut window = vec![0i64; n_regs];
-        let lens = vec![0i64; n_regs];
+        let mut window = vec![0i64; n_jit_regs];
+        let lens = vec![0i64; n_jit_regs];
         for reg in 0..n_regs {
             if !self.written.get(base + reg).copied().unwrap_or(false) {
                 continue; // not live here; native won't read it
@@ -9465,18 +10013,23 @@ impl RegVm {
                 let Some(resume_ip) = resume_ip else {
                     return false;
                 };
-                // The OSR-exit's resume_ip MUST be the loop's post-loop ip; anything
-                // else is an OSR construction bug. Fall back rather than misresume.
-                if resume_ip as usize != lp.exit {
+                // The OSR-exit's resume_ip (a TRANSFORMED-code ip) MUST be the loop's
+                // post-loop exit ip; anything else is an OSR construction bug. Fall
+                // back rather than misresume.
+                if resume_ip as usize != trans_exit {
                     return false;
                 }
                 // Restore the live-out window, SKIPPING parameter registers (their
                 // slots already hold valid — possibly heap — values the scalar deopt
                 // payload cannot represent; non-param live-out regs are all scalar by
-                // construction of `translate_osr_loop`).
+                // construction of `translate_osr_loop`) AND any J3-added tag/payload
+                // register (index >= func.regs): those are strictly loop-internal,
+                // dead at the exit, and have no slot in the interpreter's original
+                // `func.regs`-wide window.
                 let n_params = func.params;
+                let n_orig_regs = func.regs;
                 for vm_jit::DeoptReg { reg, value } in live {
-                    if (reg as usize) < n_params {
+                    if (reg as usize) < n_params || (reg as usize) >= n_orig_regs {
                         continue;
                     }
                     let vm_value = match value {
@@ -9485,7 +10038,8 @@ impl RegVm {
                     };
                     self.set_reg(base + reg as usize, vm_value);
                 }
-                self.frames.last_mut().expect("active frame").ip = resume_ip as usize;
+                // Resume in the ORIGINAL `func.code`, at the ip-mapped post-loop ip.
+                self.frames.last_mut().expect("active frame").ip = orig_exit;
                 if let Some(native) = self.native.as_mut() {
                     if native.collect_stats {
                         native.stats.osr_entries += 1;
