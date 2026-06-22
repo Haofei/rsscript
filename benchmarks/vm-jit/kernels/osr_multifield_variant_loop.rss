@@ -1,0 +1,72 @@
+// OSR × J3 for MULTI-FIELD VARIANTS kernel (Pending #1 broadening): a hot loop that
+// constructs and matches a *non-escaping* user `sum`/variant value (`Shape`) whose
+// arms carry SEVERAL scalar payload fields (`Rect(w, h)`, `Tri(a, b, c)`), each
+// iteration, wrapped by non-native I/O in the SAME, once-called function — so the
+// function is native-INELIGIBLE as a whole (the `Log.write` calls keep it off the
+// whole-function native tier), and the only way to run the loop natively is OSR. The
+// variant is built and read inline in one loop body (NO helper functions ⇒ no
+// inlining needed) and is dead at the loop boundary.
+//
+// Today (OSR off, or plain native-subset OSR) the interpreter runs the whole loop,
+// ALLOCATING a `Shape` per iteration. With OSR × J3 for multi-field variants, the OSR
+// pre-pass scalar-replaces the loop-internal variant into a tag register (arm index)
+// plus ONE leaf register per payload field of each arm, so the loop runs as an
+// allocation-free native loop reading multiple fields per arm. The `Shape` is dead at
+// the loop boundary, so the OSR live-in/live-out stay the loop-carried registers
+// (`i`, `total`).
+//
+// Run it with OSR off (`--mode jit-native`, today's interpreter for this shape) vs
+// OSR on (`--mode jit-native-osr`); the OSR median should beat the off median.
+
+sum Shape {
+    Circle(radius: Int)
+    Rect(width: Int, height: Int)
+    Tri(a: Int, b: Int, c: Int)
+}
+
+fn bench_size(default: Int) -> Int {
+    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
+    match String.parse_int(value: read raw) {
+        Some(value) => {
+            return value
+        }
+        None => {
+            return default
+        }
+    }
+}
+
+fn f(limit: Int) -> Int {
+    Log.write(message: read "osr-multifield-variant-begin")
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        let mut s: Shape = Circle(radius: i)
+        if i % 3 == 1 {
+            s = Rect(width: i, height: i * 2)
+        } else if i % 3 == 2 {
+            s = Tri(a: i, b: i * 2, c: i * 3)
+        }
+        match read s {
+            Circle(r) => {
+                total = total + read r
+            }
+            Rect { width: w, height: h } => {
+                total = total + read w + read h
+            }
+            Tri { a: a, b: b, c: c } => {
+                total = total + read a + read b + read c
+            }
+        }
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    let limit = bench_size(default: 2000000)
+    let result = f(limit: limit)
+    Log.write(message: read String.from_int(value: result))
+    return Unit
+}

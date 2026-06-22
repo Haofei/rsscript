@@ -1666,27 +1666,37 @@ fn native_scalar_replace_options_in_region(
 /// INELIGIBLE function. Mirrors [`native_scalar_replace_options_in_region`] but for
 /// `MakeVariant`/`MatchVariant`/`UnwrapVariantValue`.
 ///
-/// Scope (single-scalar-payload arms only): a variant register `R` is replaced iff
-/// every definition is a `MakeVariant` whose arm has **0 or 1 scalar field** (the
-/// payload register must end up Int/Float/Bool — never a heap/Option/variant value)
-/// or a `Move` from another replaceable variant register; every use is
-/// `MatchVariant{src:R}`, `UnwrapVariantValue{src:R}`, or a `Move{src:R}` to another
-/// replaceable variant register; and `R` never appears as a value operand of anything
-/// else. Multi-field arms and heap/sum-payload arms ⇒ bail (future work). If any
-/// in-region variant register is not replaceable, the whole region pass bails (no
-/// OSR), exactly like the Option pass.
+/// Scope (multiple scalar payload fields per arm; N>=0 per arm, possibly different N
+/// per arm): a variant register `R` is replaced iff every definition is a `MakeVariant`
+/// whose arm carries only **scalar fields** (each payload register must end up
+/// Int/Float/Bool — never a heap/Option/variant value, and never itself a replaceable
+/// variant register) or a `Move` from another replaceable variant register; every use
+/// is `MatchVariant{src:R}`, `UnwrapVariantValue{src:R}`, a `GetField{base:R}` (the
+/// payload-field read a struct-style arm pattern lowers to), or a `Move{src:R}` to
+/// another replaceable variant register; and `R` never appears as a value operand of
+/// anything else. Heap/sum-payload arms (incl. nested variants/structs) ⇒ bail. If any
+/// in-region variant register is not replaceable, the whole region pass bails (no OSR),
+/// exactly like the Option pass.
 ///
-/// Rewrite: each `R` becomes a `tag` register (Int holding the arm index) plus ONE
-/// `payload` register (the single scalar field). A per-`R` arm-name→tag-index map is
-/// built by scanning `R`'s `MakeVariant` arm names AND its `MatchVariant` `expected`
-/// names, assigning each distinct name a stable small integer (first-seen order).
-/// - `MakeVariant{dst:R, layout, fields}` → `LoadInt tag = idx(layout.name)`; if the
-///   arm has a (single, scalar) field, `Move payload = <that field reg>` (fieldless
-///   arms leave payload undefined — never read).
+/// Rewrite: each `R` becomes a `tag` register (Int holding the arm index) PLUS one
+/// fresh scalar **leaf register per `(arm, slot)`** — i.e. every payload field of every
+/// arm in `R`'s alias class gets its own leaf register (so a 3-field arm dissolves to a
+/// tag plus three leaf registers). A per-class arm-name→tag-index map is built by
+/// scanning the class's `MakeVariant` arm names AND its `MatchVariant`/
+/// `UnwrapVariantValue` `expected` names, assigning each distinct name a stable index.
+/// Per arm, the slot order is the arm's `MakeVariant` `layout.field_names` (all defs of
+/// one arm must agree on field names; otherwise bail).
+/// - `MakeVariant{dst:R, layout, fields}` → `LoadInt tag = idx(layout.name)`; for each
+///   slot, `Move leaf[(arm, slot)] = <that field reg>` (fieldless arms write only the
+///   tag).
 /// - `MatchVariant{src:R, expected, match_ip, else_ip}` → `LoadInt c = idx(expected)`;
 ///   `Equal eq = tag, c`; `JumpIfBool eq==true → match_ip`; `Jump → else_ip`.
-/// - `UnwrapVariantValue{dst, src:R, ..}` → `Move dst = payload`.
-/// - `Move` aliases copy both tag and payload.
+/// - `GetField{dst, base:R, name}` → `Move dst = leaf[(arm, slot)]`, where the arm is
+///   the unique class arm that declares field `name` (ambiguous/absent name ⇒ bail) and
+///   the slot is `name`'s position in that arm's field list.
+/// - `UnwrapVariantValue{dst, src:R, expected}` → `Move dst = leaf[(expected, 0)]` (the
+///   single-field tuple-arm case; its arm is `expected`, slot 0).
+/// - `Move` aliases copy the tag and every leaf register.
 ///
 /// Returns `(transformed_code, new_n_regs, ip_map)` with the same transformed→original
 /// `ip_map` discipline as the Option region pass (each rewritten op's fragments map to
@@ -1707,13 +1717,6 @@ fn native_scalar_replace_variants_in_region(
     if !(header..exit).any(|i| is_variant_op(&code[i])) {
         let ip_map: Vec<usize> = (0..code.len()).collect();
         return Some((code.to_vec(), n_regs, ip_map));
-    }
-
-    // Every in-region instruction must be native-subset or one of the variant ops.
-    for i in header..exit {
-        if !native_subset_instruction(&code[i]) && !is_variant_op(&code[i]) {
-            return None;
-        }
     }
 
     // VAR = registers carrying a (replaceable) variant value: seed from in-region
@@ -1737,19 +1740,29 @@ fn native_scalar_replace_variants_in_region(
         }
     }
 
-    // Validate in-region uses/defs of VAR registers. Each `MakeVariant` arm must have
-    // 0 or 1 field, and that field must NOT itself be a VAR register (a variant
-    // payload is non-scalar ⇒ bail). Anything else touching a VAR register ⇒ bail.
+    // Every in-region instruction must be native-subset, a variant op, or a
+    // `GetField` reading a VAR register (the payload-field read a struct-style arm
+    // pattern lowers to — its `base` is the matched variant). `GetField` on a
+    // non-VAR base is a heap struct read this pass can't lower ⇒ bail.
+    let is_var_getfield = |i: usize| -> bool {
+        matches!(&code[i], RegInstr::GetField { base, .. } if var[*base])
+    };
+    for i in header..exit {
+        if !native_subset_instruction(&code[i]) && !is_variant_op(&code[i]) && !is_var_getfield(i)
+        {
+            return None;
+        }
+    }
+
+    // Validate in-region uses/defs of VAR registers. Each `MakeVariant` arm carries
+    // only scalar fields (no field may itself be a VAR register — that would be a
+    // nested variant, out of scope ⇒ bail). Anything else touching a VAR register that
+    // is not a recognized consumer ⇒ bail.
     for i in header..exit {
         match &code[i] {
             RegInstr::MakeVariant { dst, fields, .. } if var[*dst] => {
-                if fields.len() > 1 {
-                    return None; // multi-field arm ⇒ not single-scalar-payload
-                }
-                if let Some((_, field_reg)) = fields.first() {
-                    if var[*field_reg] {
-                        return None; // variant payload ⇒ non-scalar
-                    }
+                if fields.iter().any(|(_, field_reg)| var[*field_reg]) {
+                    return None; // nested variant payload ⇒ non-scalar
                 }
             }
             RegInstr::Move { dst, src } if var[*dst] => {
@@ -1761,6 +1774,14 @@ fn native_scalar_replace_variants_in_region(
             RegInstr::UnwrapVariantValue { dst, src, .. } if var[*src] => {
                 if var[*dst] {
                     return None; // unwrapped payload aliased as a variant ⇒ non-scalar
+                }
+            }
+            // A payload-field read of a struct-style arm (`Rect(w, h) => ... read w`).
+            // Its `dst` must NOT be a VAR register (a struct/variant-typed field is a
+            // nested aggregate ⇒ out of scope, bail).
+            RegInstr::GetField { dst, base, .. } if var[*base] => {
+                if var[*dst] {
+                    return None;
                 }
             }
             // `DeepCopy` of a VAR register (e.g. from a `read`/param-marshalling of a
@@ -1875,21 +1896,116 @@ fn native_scalar_replace_variants_in_region(
             .expect("arm name interned for its class")
     };
 
-    // Allocate fresh tag/payload regs, one pair per alias class.
+    // Per class, per arm-name, the slot-ordered payload field names (from each arm's
+    // `MakeVariant` `layout.field_names`). All `MakeVariant` defs of one arm in a class
+    // MUST agree on the field-name vector (they always do for a single `sum` type; a
+    // disagreement means an unresolvable shape ⇒ bail). `(root, arm_name)` keys.
+    let mut class_arm_fields: HashMap<(usize, String), Vec<Rc<str>>> = HashMap::new();
+    for i in header..exit {
+        if let RegInstr::MakeVariant { dst, layout, .. } = &code[i] {
+            if var[*dst] {
+                let root = find(&mut parent, *dst);
+                let key = (root, layout.name.to_string());
+                let shape = layout.field_names.clone();
+                match class_arm_fields.get(&key) {
+                    Some(prev) if *prev != shape => return None, // shape contradiction
+                    Some(_) => {}
+                    None => {
+                        class_arm_fields.insert(key, shape);
+                    }
+                }
+            }
+        }
+    }
+
+    // Per class, the field-name → owning arm-name map, used to resolve a
+    // `GetField{base:R, name}` to its arm. A field name owned by MORE THAN ONE arm in a
+    // class is ambiguous (we can't statically know which arm's leaf the read refers to)
+    // ⇒ bail conservatively. Within one arm a field name is unique by construction.
+    let mut class_field_owner: HashMap<(usize, String), String> = HashMap::new();
+    for ((root, arm_name), fields) in &class_arm_fields {
+        for fname in fields {
+            let key = (*root, fname.to_string());
+            match class_field_owner.get(&key) {
+                Some(existing) if existing != arm_name => return None, // ambiguous field
+                Some(_) => {}
+                None => {
+                    class_field_owner.insert(key, arm_name.clone());
+                }
+            }
+        }
+    }
+
+    // Allocate fresh registers per alias class: ONE tag register, plus one leaf scalar
+    // register per `(arm, slot)` across all arms of the class. `class_tag[root]` is the
+    // tag register; `leaf_reg[(root, arm_name, slot)]` is the per-field leaf register.
     let mut tag_reg = vec![0usize; n_regs];
-    let mut payload_reg = vec![0usize; n_regs];
-    let mut class_regs: HashMap<usize, (usize, usize)> = HashMap::new();
+    let mut class_tag: HashMap<usize, usize> = HashMap::new();
+    let mut leaf_reg: HashMap<(usize, String, usize), usize> = HashMap::new();
     let mut next_reg = n_regs;
+    // Stable allocation order: roots ascending, then arms by tag-index, then slot.
+    let mut roots: Vec<usize> = (0..n_regs).filter(|&r| var[r]).map(|r| find(&mut parent, r)).collect();
+    roots.sort_unstable();
+    roots.dedup();
+    for root in &roots {
+        let t = next_reg;
+        next_reg += 1;
+        class_tag.insert(*root, t);
+        // Arms in tag-index order for determinism.
+        let mut arms: Vec<(String, Vec<Rc<str>>)> = class_arm_fields
+            .iter()
+            .filter(|((r, _), _)| r == root)
+            .map(|((_, arm), fields)| (arm.clone(), fields.clone()))
+            .collect();
+        arms.sort_by_key(|(arm, _)| {
+            class_arm_index.get(root).and_then(|m| m.get(arm)).copied().unwrap_or(i64::MAX)
+        });
+        for (arm, fields) in arms {
+            for slot in 0..fields.len() {
+                leaf_reg.insert((*root, arm.clone(), slot), next_reg);
+                next_reg += 1;
+            }
+        }
+    }
     for reg in 0..n_regs {
         if var[reg] {
             let root = find(&mut parent, reg);
-            let (t, p) = *class_regs.entry(root).or_insert_with(|| {
-                let pair = (next_reg, next_reg + 1);
-                next_reg += 2;
-                pair
-            });
-            tag_reg[reg] = t;
-            payload_reg[reg] = p;
+            tag_reg[reg] = class_tag[&root];
+        }
+    }
+    // Resolve a `(reg, arm, slot)` to its leaf register.
+    let leaf_of = |reg: usize, parent: &mut Vec<usize>, arm: &str, slot: usize| -> Option<usize> {
+        let root = find(parent, reg);
+        leaf_reg.get(&(root, arm.to_string(), slot)).copied()
+    };
+    // Resolve a `GetField{base:R, name}` to its `(arm, slot)`: `name`'s owning arm in
+    // R's class, and `name`'s position in that arm's field list.
+    let getfield_arm_slot = |reg: usize, parent: &mut Vec<usize>, name: &str| -> Option<(String, usize)> {
+        let root = find(parent, reg);
+        let arm = class_field_owner.get(&(root, name.to_string()))?.clone();
+        let slot = class_arm_fields
+            .get(&(root, arm.clone()))?
+            .iter()
+            .position(|f| &**f == name)?;
+        Some((arm, slot))
+    };
+
+    // PRE-FLIGHT (bail-rather-than-panic): every in-region payload read of a VAR
+    // register must resolve to a concrete leaf register BEFORE we rewrite. A
+    // `GetField` whose name has no owning arm / unresolvable slot, or an
+    // `UnwrapVariantValue` on an arm with no in-region `MakeVariant` (hence no leaf),
+    // is rejected here so the rewrite below can rely on the lookups succeeding.
+    for i in header..exit {
+        match &code[i] {
+            RegInstr::GetField { base, name, .. } if var[*base] => {
+                let (arm, slot) = getfield_arm_slot(*base, &mut parent, name)?;
+                leaf_of(*base, &mut parent, &arm, slot)?;
+            }
+            RegInstr::UnwrapVariantValue { src, expected, .. } if var[*src] => {
+                // Tuple-style single-field arm: payload is slot 0 of `expected`.
+                leaf_of(*src, &mut parent, expected, 0)?;
+            }
+            _ => {}
         }
     }
 
@@ -1917,18 +2033,19 @@ fn native_scalar_replace_variants_in_region(
             RegInstr::MakeVariant { dst, layout, fields } if region && var[*dst] => {
                 let idx = arm_idx(*dst, &mut parent, &layout.name);
                 new_code.push(RegInstr::LoadInt { dst: tag_reg[*dst], value: idx });
-                if let Some((_, field_reg)) = fields.first() {
-                    new_code.push(RegInstr::Move {
-                        dst: payload_reg[*dst],
-                        src: *field_reg,
-                    });
+                // Each scalar payload field → `Move` into its `(arm, slot)` leaf
+                // register. `fields` is in canonical slot order (matching the arm's
+                // `layout.field_names`, validated above), so slot = field index.
+                for (slot, (_, field_reg)) in fields.iter().enumerate() {
+                    let leaf = leaf_of(*dst, &mut parent, &layout.name, slot)
+                        .expect("MakeVariant arm/slot leaf interned");
+                    new_code.push(RegInstr::Move { dst: leaf, src: *field_reg });
                 }
             }
             RegInstr::Move { dst, src } if region && var[*dst] => {
-                // Alias copy: both share a class ⇒ same fresh regs ⇒ these are
-                // self-copies (harmless), but emit them for clarity/robustness.
-                new_code.push(RegInstr::Move { dst: tag_reg[*dst], src: tag_reg[*src] });
-                new_code.push(RegInstr::Move { dst: payload_reg[*dst], src: payload_reg[*src] });
+                // Alias copy: source and dst share a class ⇒ identical tag and leaf
+                // registers ⇒ these would be self-copies. Emit nothing.
+                let _ = (dst, src);
             }
             RegInstr::MatchVariant { src, expected, match_ip, else_ip } if region && var[*src] => {
                 let idx = arm_idx(*src, &mut parent, expected);
@@ -1943,8 +2060,19 @@ fn native_scalar_replace_variants_in_region(
                 fixups.push((new_code.len(), Fix::Target(*else_ip)));
                 new_code.push(RegInstr::Jump { target: 0 });
             }
-            RegInstr::UnwrapVariantValue { dst, src, .. } if region && var[*src] => {
-                new_code.push(RegInstr::Move { dst: *dst, src: payload_reg[*src] });
+            // Tuple-style single-field arm payload read: slot 0 of `expected`.
+            RegInstr::UnwrapVariantValue { dst, src, expected } if region && var[*src] => {
+                let leaf = leaf_of(*src, &mut parent, expected, 0)
+                    .expect("UnwrapVariantValue arm leaf interned (pre-flight checked)");
+                new_code.push(RegInstr::Move { dst: *dst, src: leaf });
+            }
+            // Struct-style arm payload-field read: `Move dst = leaf[(arm, slot)]`.
+            RegInstr::GetField { dst, base, name } if region && var[*base] => {
+                let (arm, slot) = getfield_arm_slot(*base, &mut parent, name)
+                    .expect("GetField arm/slot resolvable (pre-flight checked)");
+                let leaf = leaf_of(*base, &mut parent, &arm, slot)
+                    .expect("GetField leaf interned (pre-flight checked)");
+                new_code.push(RegInstr::Move { dst: *dst, src: leaf });
             }
             // `DeepCopy` of a scalar-replaced variant: drop it (scalars copy by value).
             RegInstr::DeepCopy { reg } if region && var[*reg] => {}
@@ -11771,9 +11899,10 @@ impl RegVm {
                     .and_then(|(code1, n_regs1, ip_map1)| {
                         // OSR × J3 for VARIANTS: after dissolving Options, re-detect the
                         // loop on the Option-transformed stream and scalar-replace any
-                        // non-escaping single-scalar-payload user variant living
-                        // entirely inside that region (`MakeVariant`/`MatchVariant`/
-                        // `UnwrapVariantValue` → LoadInt-tag + Move-payload). When there
+                        // non-escaping user variant whose arms carry only scalar fields
+                        // (N>=0 fields per arm) living entirely inside that region
+                        // (`MakeVariant`/`MatchVariant`/`UnwrapVariantValue`/`GetField`
+                        // → LoadInt-tag + per-(arm,slot) Move). When there
                         // is no replaceable variant the pass returns the code unchanged
                         // with an identity ip-map, so an Option-only (or plain) body is
                         // byte-for-byte the old path. Compose the two transformed→

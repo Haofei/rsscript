@@ -814,6 +814,161 @@ fn main() -> Unit {
     );
 }
 
+/// OSR × J3 for MULTI-FIELD VARIANTS (Pending #1 broadening) correctness: a hot loop
+/// that constructs and matches a *non-escaping* user `sum Shape` whose arms carry
+/// SEVERAL scalar payload fields (`Rect(width, height)`, `Tri(a, b, c)`) each
+/// iteration, wrapped by non-native I/O (`Log.write` before/after) in the SAME, once-
+/// called function — so the function is native-INELIGIBLE as a whole and only OSR can
+/// run the loop natively. The variant is built and field-read strictly inside the loop
+/// body and is dead at the loop boundary, so OSR's J3 variant pass scalar-replaces it
+/// (a tag register plus one fresh leaf register per `(arm, slot)` payload field, no
+/// allocation), making the loop allocation-free native, while the live-in/live-out are
+/// the unchanged loop-carried registers (`i`, `total`).
+///
+/// With OSR forced on, the program's output must be byte-identical to the pure
+/// interpreter — which interprets the whole loop, allocating a `Shape` per iteration.
+/// That byte-identity (and the differential corpus) is the correctness net. Under
+/// `native-jit` we also assert the loop genuinely OSR'd (`osr_entries > 0`).
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j3_multifield_variant_loop_matches_interpreter() {
+    let source = "\
+sum Shape {
+    Circle(radius: Int)
+    Rect(width: Int, height: Int)
+    Tri(a: Int, b: Int, c: Int)
+}
+
+fn f(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        let mut s: Shape = Circle(radius: i)
+        if i % 3 == 1 {
+            s = Rect(width: i, height: i * 2)
+        } else if i % 3 == 2 {
+            s = Tri(a: i, b: i * 2, c: i * 3)
+        }
+        match read s {
+            Circle(r) => {
+                total = total + read r
+            }
+            Rect { width: w, height: h } => {
+                total = total + read w + read h
+            }
+            Tri { a: a, b: b, c: c } => {
+                total = total + read a + read b + read c
+            }
+        }
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(limit: read 60)))
+    return Unit
+}
+";
+    let file = "jit-osr-j3-multifield-variant.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "OSR × J3 multi-field variant loop must be byte-identical to the interpreter (stdout)"
+    );
+    // i in 0..60: Circle(i) adds i (i%3==0), Rect(i,2i) adds 3i (i%3==1), Tri(i,2i,3i)
+    // adds 6i (i%3==2). Total = 570 + 1770 + 3660 = 6000.
+    assert_eq!(osr.stdout.trim_end(), "begin\n6000\n6000");
+    assert!(
+        stats.osr_entries > 0,
+        "the non-escaping multi-field variant loop must OSR natively after J3 scalar \
+         replacement: {stats:?}",
+    );
+}
+
+/// OSR × J3 multi-field variant NEGATIVE test — the dead-at-boundary safety guard for
+/// multi-field arms. A multi-field variant register that is live ACROSS the loop
+/// boundary (read in a `match` AFTER the loop) MUST NOT be scalar-replaced: the region
+/// gate must bail and the loop must NOT OSR (`osr_entries == 0`), or the interpreter
+/// would read a stale `s` slot the native loop never wrote back. We assert both that
+/// the program is still correct (the interpreter runs the whole loop, no OSR) and that
+/// OSR genuinely bailed.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j3_escaping_multifield_variant_does_not_osr() {
+    let source = "\
+sum Shape {
+    Circle(radius: Int)
+    Rect(width: Int, height: Int)
+    Tri(a: Int, b: Int, c: Int)
+}
+
+fn f(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    let mut s: Shape = Circle(radius: 0)
+    while i < limit {
+        s = Rect(width: i, height: i * 2)
+        match read s {
+            Circle(r) => {
+                total = total + read r
+            }
+            Rect { width: w, height: h } => {
+                total = total + read w + read h
+            }
+            Tri { a: a, b: b, c: c } => {
+                total = total + read a + read b + read c
+            }
+        }
+        i = i + 1
+    }
+    match read s {
+        Circle(r) => {
+            Log.write(message: read String.from_int(value: read r))
+        }
+        Rect { width: w, height: h } => {
+            Log.write(message: read String.from_int(value: read w + read h))
+        }
+        Tri { a: a, b: b, c: c } => {
+            Log.write(message: read String.from_int(value: read a + read b + read c))
+        }
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(limit: read 60)))
+    return Unit
+}
+";
+    let file = "jit-osr-j3-escaping-multifield-variant.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "a multi-field variant read after the loop must still produce interpreter-identical output"
+    );
+    // i in 0..60: each iter adds Rect(i,2i) = 3i, total = 3*(0+1+..+59) = 3*1770 = 5310.
+    // s = Rect(59, 118) after the loop ⇒ 59 + 118 = 177.
+    assert_eq!(osr.stdout.trim_end(), "begin\n177\n5310\n5310");
+    assert_eq!(
+        stats.osr_entries, 0,
+        "a loop whose multi-field variant is live after the loop must NOT OSR (the \
+         dead-at-boundary gate must bail): {stats:?}",
+    );
+}
+
 /// OSR × J3 for STRUCTS (Pending #1) correctness: a hot loop that constructs and
 /// field-reads a *non-escaping* FLAT user `struct Point { x: Int, y: Int }` (scalar
 /// fields) each iteration, wrapped by non-native I/O (`Log.write` before/after) in the
