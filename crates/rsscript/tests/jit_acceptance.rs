@@ -592,6 +592,73 @@ fn main() -> Unit {
     );
 }
 
+/// OSR × J3 negative test — the safety invariant guard. The core soundness rule of
+/// `native_scalar_replace_options_in_region` is that every scalar-replaced `Option`
+/// must be DEAD outside `[header, exit)`. Here `o` is declared before the loop AND
+/// read in a `match` AFTER it, so it is live across the loop boundary: the region
+/// gate MUST refuse to scalar-replace it and therefore MUST NOT OSR (`osr_entries
+/// == 0`), or the interpreter would read a stale `o` slot the native loop never
+/// wrote back. We assert both that the program is still correct (the interpreter
+/// runs the whole loop, no OSR) and that OSR genuinely bailed. This protects against
+/// a future edit to `instr_read_regs`/`instr_written_reg` accidentally making a
+/// boundary-escaping Option look dead.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j3_escaping_option_does_not_osr() {
+    let source = "\
+fn f(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    let mut o: Option<Int> = None
+    while i < limit {
+        o = Some(i)
+        match o {
+            Some(x) => {
+                total = total + x
+            }
+            None => {
+                total = total + 0
+            }
+        }
+        i = i + 1
+    }
+    match o {
+        Some(x) => {
+            Log.write(message: read String.from_int(value: x))
+        }
+        None => {
+            Log.write(message: read \"none\")
+        }
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(limit: read 60)))
+    return Unit
+}
+";
+    let file = "jit-osr-j3-escaping-option.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "an Option read after the loop must still produce interpreter-identical output"
+    );
+    // i in 0..60: total = 0+1+...+59 = 1770; o = Some(59) after the loop ⇒ "59".
+    assert_eq!(osr.stdout.trim_end(), "begin\n59\n1770\n1770");
+    assert_eq!(
+        stats.osr_entries, 0,
+        "a loop whose Option is live after the loop must NOT OSR (the dead-at-boundary \
+         gate must bail): {stats:?}",
+    );
+}
+
 /// J2.1 profile-guided monomorphic closure inlining — the program shape the
 /// optimization targets: a higher-order `dispatch(f, x)` whose closure parameter is
 /// the same callee on every warm call, so J1 profiles the `CallClosure` site as
