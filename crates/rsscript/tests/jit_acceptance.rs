@@ -659,6 +659,161 @@ fn main() -> Unit {
     );
 }
 
+/// OSR × J3 for VARIANTS (Pending #1) correctness: a hot loop that constructs and
+/// matches a *non-escaping* single-scalar-payload user `sum`/variant (`Shape`) each
+/// iteration, wrapped by non-native I/O (`Log.write` before/after) in the SAME
+/// function — so the function is native-INELIGIBLE as a whole and only OSR can run
+/// the loop natively. The `Shape` is built and matched strictly inside the loop body
+/// and is dead at the loop boundary, so OSR's J3 pre-pass scalar-replaces it (a tag
+/// register holding the arm index + one payload register) making the loop an
+/// allocation-free native loop, while the live-in/live-out are the unchanged loop-
+/// carried registers (`i`, `total`).
+///
+/// With OSR forced on, the program's output must be byte-identical to the pure
+/// interpreter — which interprets the whole loop, allocating a `Shape` per iteration.
+/// That byte-identity (and the differential corpus) is the correctness net. Under
+/// `native-jit` we also assert the loop genuinely OSR'd (`osr_entries > 0`).
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j3_variant_loop_matches_interpreter() {
+    let source = "\
+sum Shape {
+    Circle(radius: Int)
+    Square(side: Int)
+    Empty
+}
+
+fn f(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        let mut s: Shape = Empty
+        if i % 3 == 0 {
+            s = Circle(radius: i)
+        } else if i % 3 == 1 {
+            s = Square(side: i * 2)
+        }
+        match s {
+            Circle(r) => {
+                total = total + read r
+            }
+            Square(w) => {
+                total = total + read w
+            }
+            Empty => {
+                total = total + 0
+            }
+        }
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(limit: read 60)))
+    return Unit
+}
+";
+    let file = "jit-osr-j3-variant.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "OSR × J3 variant loop must be byte-identical to the interpreter (stdout)"
+    );
+    // i in 0..60: Circle(i) adds i (i%3==0), Square(2i) adds 2i (i%3==1), Empty
+    // adds 0 (i%3==2). Total = 1750.
+    assert_eq!(osr.stdout.trim_end(), "begin\n1750\n1750");
+    assert!(
+        stats.osr_entries > 0,
+        "the non-escaping variant loop must OSR natively after J3 scalar replacement: {stats:?}",
+    );
+}
+
+/// OSR × J3 variant negative test — the dead-at-boundary safety guard. The core
+/// soundness rule of `native_scalar_replace_variants_in_region` is that every scalar-
+/// replaced variant register must be DEAD outside `[header, exit)`. Here `s` is
+/// declared before the loop AND read in a `match` AFTER it, so it is live across the
+/// loop boundary: the region gate MUST refuse to scalar-replace it and therefore MUST
+/// NOT OSR (`osr_entries == 0`), or the interpreter would read a stale `s` slot the
+/// native loop never wrote back. We assert both that the program is still correct (the
+/// interpreter runs the whole loop, no OSR) and that OSR genuinely bailed. This
+/// protects against a future edit to `instr_read_regs`/`instr_written_reg`
+/// accidentally making a boundary-escaping variant look dead.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j3_escaping_variant_does_not_osr() {
+    let source = "\
+sum Shape {
+    Circle(radius: Int)
+    Square(side: Int)
+    Empty
+}
+
+fn f(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    let mut s: Shape = Empty
+    while i < limit {
+        s = Circle(radius: i)
+        match s {
+            Circle(r) => {
+                total = total + read r
+            }
+            Square(w) => {
+                total = total + read w
+            }
+            Empty => {
+                total = total + 0
+            }
+        }
+        i = i + 1
+    }
+    match s {
+        Circle(r) => {
+            Log.write(message: read String.from_int(value: read r))
+        }
+        Square(w) => {
+            Log.write(message: read String.from_int(value: read w))
+        }
+        Empty => {
+            Log.write(message: read \"empty\")
+        }
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(limit: read 60)))
+    return Unit
+}
+";
+    let file = "jit-osr-j3-escaping-variant.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "a variant read after the loop must still produce interpreter-identical output"
+    );
+    // i in 0..60: total = 0+1+...+59 = 1770; s = Circle(59) after the loop ⇒ "59".
+    assert_eq!(osr.stdout.trim_end(), "begin\n59\n1770\n1770");
+    assert_eq!(
+        stats.osr_entries, 0,
+        "a loop whose variant is live after the loop must NOT OSR (the dead-at-boundary \
+         gate must bail): {stats:?}",
+    );
+}
+
 /// J2.1 profile-guided monomorphic closure inlining — the program shape the
 /// optimization targets: a higher-order `dispatch(f, x)` whose closure parameter is
 /// the same callee on every warm call, so J1 profiles the `CallClosure` site as

@@ -1,0 +1,69 @@
+// OSR × J3 for VARIANTS kernel (Pending #1): a hot loop that constructs and matches
+// a *non-escaping* user `sum`/variant value (`Shape`) each iteration, wrapped by
+// non-native I/O in the SAME, once-called function — so the function is native-
+// INELIGIBLE as a whole (the `Log.write` calls keep it off the whole-function native
+// tier), and the only way to run the loop natively is OSR. The variant is built and
+// matched inline in one loop body (NO helper functions ⇒ no inlining needed).
+//
+// Today (OSR off, or plain native-subset OSR) the interpreter runs the whole loop,
+// ALLOCATING a `Shape` per iteration. With OSR × J3 for variants (Pending #1), the
+// OSR pre-pass scalar-replaces the loop-internal single-scalar-payload variant into
+// a tag register (arm index) + payload register, so the loop runs as an allocation-
+// free native loop. The `Shape` is dead at the loop boundary, so the OSR live-in/
+// live-out stay the loop-carried registers (`i`, `total`).
+//
+// Run it with OSR off (`--mode jit-native`, today's interpreter for this shape) vs
+// OSR on (`--mode jit-native-osr`); the OSR median should beat the off median.
+
+sum Shape {
+    Circle(radius: Int)
+    Square(side: Int)
+    Empty
+}
+
+fn bench_size(default: Int) -> Int {
+    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
+    match String.parse_int(value: read raw) {
+        Some(value) => {
+            return value
+        }
+        None => {
+            return default
+        }
+    }
+}
+
+fn f(limit: Int) -> Int {
+    Log.write(message: read "osr-variant-begin")
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        let mut s: Shape = Empty
+        if i % 3 == 0 {
+            s = Circle(radius: i)
+        } else if i % 3 == 1 {
+            s = Square(side: i * 2)
+        }
+        match s {
+            Circle(r) => {
+                total = total + read r
+            }
+            Square(w) => {
+                total = total + read w
+            }
+            Empty => {
+                total = total + 0
+            }
+        }
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    let limit = bench_size(default: 2000000)
+    let result = f(limit: limit)
+    Log.write(message: read String.from_int(value: result))
+    return Unit
+}

@@ -909,8 +909,25 @@ fn subset_or_option_reads(instr: &RegInstr) -> Option<Vec<usize>> {
         RegInstr::MakeSome { value, .. } => vec![*value],
         RegInstr::MatchOption { src, .. } => vec![*src],
         RegInstr::UnwrapSome { src, .. } => vec![*src],
+        // Variant ops (value operands). `MakeVariant`'s value operands are its
+        // field registers; `MatchVariant`/`UnwrapVariantValue` read `src`.
+        RegInstr::MakeVariant { fields, .. } => fields.iter().map(|(_, r)| *r).collect(),
+        RegInstr::MatchVariant { src, .. } => vec![*src],
+        RegInstr::UnwrapVariantValue { src, .. } => vec![*src],
         _ => return None,
     })
+}
+
+/// Whether `instr` is one of the three variant register-ops that the J3 scalar-
+/// replacement dissolves into a tag + payload scalar register pair.
+#[cfg(feature = "native-jit")]
+fn is_variant_op(instr: &RegInstr) -> bool {
+    matches!(
+        instr,
+        RegInstr::MakeVariant { .. }
+            | RegInstr::MatchVariant { .. }
+            | RegInstr::UnwrapVariantValue { .. }
+    )
 }
 
 /// J3 (escape analysis + scalar replacement). Identify `Option` registers that are
@@ -1405,6 +1422,344 @@ fn native_scalar_replace_options_in_region(
                 if let RegInstr::MatchOption { some_ip: sd, none_ip: nd, .. } = &mut new_code[pos] {
                     *sd = s;
                     *nd = n;
+                }
+            }
+        }
+    }
+    // Inverse ip-map (see `native_scalar_replace_options`).
+    let mut ip_map = vec![0usize; new_code.len()];
+    for i in 0..code.len() {
+        let start = index_map[i];
+        let end = if i + 1 < code.len() { index_map[i + 1] } else { new_code.len() };
+        for t in start..end {
+            ip_map[t] = i;
+        }
+    }
+    Some((new_code, next_reg, ip_map))
+}
+
+/// OSR × J3 for VARIANTS: scalar-replace non-escaping user `sum`/variant values that
+/// live entirely inside the loop region `[header, exit)` of an otherwise native-
+/// INELIGIBLE function. Mirrors [`native_scalar_replace_options_in_region`] but for
+/// `MakeVariant`/`MatchVariant`/`UnwrapVariantValue`.
+///
+/// Scope (single-scalar-payload arms only): a variant register `R` is replaced iff
+/// every definition is a `MakeVariant` whose arm has **0 or 1 scalar field** (the
+/// payload register must end up Int/Float/Bool — never a heap/Option/variant value)
+/// or a `Move` from another replaceable variant register; every use is
+/// `MatchVariant{src:R}`, `UnwrapVariantValue{src:R}`, or a `Move{src:R}` to another
+/// replaceable variant register; and `R` never appears as a value operand of anything
+/// else. Multi-field arms and heap/sum-payload arms ⇒ bail (future work). If any
+/// in-region variant register is not replaceable, the whole region pass bails (no
+/// OSR), exactly like the Option pass.
+///
+/// Rewrite: each `R` becomes a `tag` register (Int holding the arm index) plus ONE
+/// `payload` register (the single scalar field). A per-`R` arm-name→tag-index map is
+/// built by scanning `R`'s `MakeVariant` arm names AND its `MatchVariant` `expected`
+/// names, assigning each distinct name a stable small integer (first-seen order).
+/// - `MakeVariant{dst:R, layout, fields}` → `LoadInt tag = idx(layout.name)`; if the
+///   arm has a (single, scalar) field, `Move payload = <that field reg>` (fieldless
+///   arms leave payload undefined — never read).
+/// - `MatchVariant{src:R, expected, match_ip, else_ip}` → `LoadInt c = idx(expected)`;
+///   `Equal eq = tag, c`; `JumpIfBool eq==true → match_ip`; `Jump → else_ip`.
+/// - `UnwrapVariantValue{dst, src:R, ..}` → `Move dst = payload`.
+/// - `Move` aliases copy both tag and payload.
+///
+/// Returns `(transformed_code, new_n_regs, ip_map)` with the same transformed→original
+/// `ip_map` discipline as the Option region pass (each rewritten op's fragments map to
+/// the original op's index; copy-through maps one-to-one).
+#[cfg(feature = "native-jit")]
+fn native_scalar_replace_variants_in_region(
+    code: &[RegInstr],
+    n_regs: usize,
+    header: usize,
+    exit: usize,
+) -> Option<(Vec<RegInstr>, usize, Vec<usize>)> {
+    if header >= exit || exit > code.len() {
+        return None;
+    }
+    let in_region = |i: usize| i >= header && i < exit;
+
+    // Fast path: no variant op inside the region ⇒ nothing for THIS pass to do.
+    if !(header..exit).any(|i| is_variant_op(&code[i])) {
+        let ip_map: Vec<usize> = (0..code.len()).collect();
+        return Some((code.to_vec(), n_regs, ip_map));
+    }
+
+    // Every in-region instruction must be native-subset or one of the variant ops.
+    for i in header..exit {
+        if !native_subset_instruction(&code[i]) && !is_variant_op(&code[i]) {
+            return None;
+        }
+    }
+
+    // VAR = registers carrying a (replaceable) variant value: seed from in-region
+    // `MakeVariant` dsts, close under in-region `Move` aliasing.
+    let mut var = vec![false; n_regs];
+    for i in header..exit {
+        if let RegInstr::MakeVariant { dst, .. } = &code[i] {
+            var[*dst] = true;
+        }
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for i in header..exit {
+            if let RegInstr::Move { dst, src } = &code[i] {
+                if var[*src] && !var[*dst] {
+                    var[*dst] = true;
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    // Validate in-region uses/defs of VAR registers. Each `MakeVariant` arm must have
+    // 0 or 1 field, and that field must NOT itself be a VAR register (a variant
+    // payload is non-scalar ⇒ bail). Anything else touching a VAR register ⇒ bail.
+    for i in header..exit {
+        match &code[i] {
+            RegInstr::MakeVariant { dst, fields, .. } if var[*dst] => {
+                if fields.len() > 1 {
+                    return None; // multi-field arm ⇒ not single-scalar-payload
+                }
+                if let Some((_, field_reg)) = fields.first() {
+                    if var[*field_reg] {
+                        return None; // variant payload ⇒ non-scalar
+                    }
+                }
+            }
+            RegInstr::Move { dst, src } if var[*dst] => {
+                if !var[*src] {
+                    return None;
+                }
+            }
+            RegInstr::MatchVariant { src, .. } if var[*src] => {}
+            RegInstr::UnwrapVariantValue { dst, src, .. } if var[*src] => {
+                if var[*dst] {
+                    return None; // unwrapped payload aliased as a variant ⇒ non-scalar
+                }
+            }
+            RegInstr::Move { src, .. } if var[*src] => {}
+            other => {
+                let reads = subset_or_option_reads(other)?;
+                if reads.into_iter().any(|r| var[r]) {
+                    return None;
+                }
+                if let RegInstr::UnwrapVariantValue { dst, .. }
+                | RegInstr::MakeVariant { dst, .. } = other
+                {
+                    if var[*dst] {
+                        return None;
+                    }
+                }
+            }
+        }
+    }
+
+    // Dead-at-boundary soundness (identical argument to the Option pass): every VAR
+    // register must be neither read nor written by ANY instruction OUTSIDE the region,
+    // so the original register slot is never observed by interpreter-run code across
+    // either OSR boundary. A footprint we cannot model reports `All` ⇒ bail.
+    for i in 0..code.len() {
+        if in_region(i) {
+            continue;
+        }
+        match instr_read_regs(&code[i]) {
+            RegFootprint::Some(reads) => {
+                if reads.into_iter().any(|r| r < n_regs && var[r]) {
+                    return None;
+                }
+            }
+            RegFootprint::All => return None,
+        }
+        match instr_written_reg(&code[i]) {
+            RegFootprint::Some(writes) => {
+                if writes.into_iter().any(|r| r < n_regs && var[r]) {
+                    return None;
+                }
+            }
+            RegFootprint::All => return None,
+        }
+    }
+
+    // `Move`-aliased VAR registers share ONE tag/payload register pair (the alias
+    // copies both halves), and therefore must agree on the arm-name→index map. Group
+    // VAR registers into alias classes with a union-find over in-region `Move` edges.
+    let mut parent: Vec<usize> = (0..n_regs).collect();
+    fn find(parent: &mut [usize], x: usize) -> usize {
+        let mut r = x;
+        while parent[r] != r {
+            r = parent[r];
+        }
+        let mut c = x;
+        while parent[c] != c {
+            let n = parent[c];
+            parent[c] = r;
+            c = n;
+        }
+        r
+    }
+    for i in header..exit {
+        if let RegInstr::Move { dst, src } = &code[i] {
+            if var[*dst] && var[*src] {
+                let (a, b) = (find(&mut parent, *dst), find(&mut parent, *src));
+                if a != b {
+                    parent[a] = b;
+                }
+            }
+        }
+    }
+
+    // Build ONE canonical arm-name→tag-index map per alias class. Scan every in-region
+    // `MakeVariant` arm name AND `MatchVariant` `expected` name, collecting them under
+    // the register's class root; assign each distinct name a stable index in sorted-
+    // name order (deterministic, and identical across all registers in the class).
+    let mut class_names: HashMap<usize, BTreeSet<String>> = HashMap::new();
+    for i in header..exit {
+        match &code[i] {
+            RegInstr::MakeVariant { dst, layout, .. } if var[*dst] => {
+                let root = find(&mut parent, *dst);
+                class_names.entry(root).or_default().insert(layout.name.to_string());
+            }
+            RegInstr::MatchVariant { src, expected, .. } if var[*src] => {
+                let root = find(&mut parent, *src);
+                class_names.entry(root).or_default().insert(expected.clone());
+            }
+            _ => {}
+        }
+    }
+    let class_arm_index: HashMap<usize, HashMap<String, i64>> = class_names
+        .into_iter()
+        .map(|(root, names)| {
+            let map: HashMap<String, i64> = names
+                .into_iter()
+                .enumerate()
+                .map(|(k, name)| (name, k as i64))
+                .collect();
+            (root, map)
+        })
+        .collect();
+    let arm_idx = |reg: usize, parent: &mut Vec<usize>, name: &str| -> i64 {
+        let root = find(parent, reg);
+        *class_arm_index
+            .get(&root)
+            .and_then(|m| m.get(name))
+            .expect("arm name interned for its class")
+    };
+
+    // Allocate fresh tag/payload regs, one pair per alias class.
+    let mut tag_reg = vec![0usize; n_regs];
+    let mut payload_reg = vec![0usize; n_regs];
+    let mut class_regs: HashMap<usize, (usize, usize)> = HashMap::new();
+    let mut next_reg = n_regs;
+    for reg in 0..n_regs {
+        if var[reg] {
+            let root = find(&mut parent, reg);
+            let (t, p) = *class_regs.entry(root).or_insert_with(|| {
+                let pair = (next_reg, next_reg + 1);
+                next_reg += 2;
+                pair
+            });
+            tag_reg[reg] = t;
+            payload_reg[reg] = p;
+        }
+    }
+
+    // Rewrite the whole code, scalar-replacing in-region variant ops and copying the
+    // rest through, remapping all jump/match targets through the index map. Each
+    // rewritten op may emit MULTIPLE instructions; jump fixups are resolved after.
+    enum Fix {
+        Target(usize),
+        Match { some_ip: usize, none_ip: usize },
+        VariantMatch { match_ip: usize, else_ip: usize },
+    }
+    let mut new_code: Vec<RegInstr> = Vec::with_capacity(code.len());
+    let mut index_map = vec![0usize; code.len()];
+    let mut fixups: Vec<(usize, Fix)> = Vec::new();
+    // Scratch registers for `MatchVariant` lowering (constant + equality result). One
+    // dedicated pair, reused across all matches (each match fully consumes them before
+    // branching, and they are never live across the branch).
+    let cmp_const_reg = next_reg;
+    let cmp_eq_reg = next_reg + 1;
+    next_reg += 2;
+    for (i, instr) in code.iter().enumerate() {
+        index_map[i] = new_code.len();
+        let region = in_region(i);
+        match instr {
+            RegInstr::MakeVariant { dst, layout, fields } if region && var[*dst] => {
+                let idx = arm_idx(*dst, &mut parent, &layout.name);
+                new_code.push(RegInstr::LoadInt { dst: tag_reg[*dst], value: idx });
+                if let Some((_, field_reg)) = fields.first() {
+                    new_code.push(RegInstr::Move {
+                        dst: payload_reg[*dst],
+                        src: *field_reg,
+                    });
+                }
+            }
+            RegInstr::Move { dst, src } if region && var[*dst] => {
+                // Alias copy: both share a class ⇒ same fresh regs ⇒ these are
+                // self-copies (harmless), but emit them for clarity/robustness.
+                new_code.push(RegInstr::Move { dst: tag_reg[*dst], src: tag_reg[*src] });
+                new_code.push(RegInstr::Move { dst: payload_reg[*dst], src: payload_reg[*src] });
+            }
+            RegInstr::MatchVariant { src, expected, match_ip, else_ip } if region && var[*src] => {
+                let idx = arm_idx(*src, &mut parent, expected);
+                new_code.push(RegInstr::LoadInt { dst: cmp_const_reg, value: idx });
+                new_code.push(RegInstr::Equal {
+                    dst: cmp_eq_reg,
+                    lhs: tag_reg[*src],
+                    rhs: cmp_const_reg,
+                });
+                fixups.push((new_code.len(), Fix::Target(*match_ip)));
+                new_code.push(RegInstr::JumpIfBool { cond: cmp_eq_reg, expected: true, target: 0 });
+                fixups.push((new_code.len(), Fix::Target(*else_ip)));
+                new_code.push(RegInstr::Jump { target: 0 });
+            }
+            RegInstr::UnwrapVariantValue { dst, src, .. } if region && var[*src] => {
+                new_code.push(RegInstr::Move { dst: *dst, src: payload_reg[*src] });
+            }
+            // Copy-through, remapping jump/match targets.
+            RegInstr::Jump { target }
+            | RegInstr::JumpIfBool { target, .. }
+            | RegInstr::JumpIfIntCompare { target, .. } => {
+                fixups.push((new_code.len(), Fix::Target(*target)));
+                new_code.push(instr.clone());
+            }
+            RegInstr::MatchOption { some_ip, none_ip, .. } => {
+                fixups.push((new_code.len(), Fix::Match { some_ip: *some_ip, none_ip: *none_ip }));
+                new_code.push(instr.clone());
+            }
+            RegInstr::MatchVariant { match_ip, else_ip, .. } => {
+                fixups.push((new_code.len(), Fix::VariantMatch { match_ip: *match_ip, else_ip: *else_ip }));
+                new_code.push(instr.clone());
+            }
+            other => new_code.push(other.clone()),
+        }
+    }
+    for (pos, fix) in fixups {
+        match fix {
+            Fix::Target(t) => {
+                let target = index_map[t];
+                match &mut new_code[pos] {
+                    RegInstr::Jump { target: dst }
+                    | RegInstr::JumpIfBool { target: dst, .. }
+                    | RegInstr::JumpIfIntCompare { target: dst, .. } => *dst = target,
+                    _ => {}
+                }
+            }
+            Fix::Match { some_ip, none_ip } => {
+                let (s, n) = (index_map[some_ip], index_map[none_ip]);
+                if let RegInstr::MatchOption { some_ip: sd, none_ip: nd, .. } = &mut new_code[pos] {
+                    *sd = s;
+                    *nd = n;
+                }
+            }
+            Fix::VariantMatch { match_ip, else_ip } => {
+                let (m, e) = (index_map[match_ip], index_map[else_ip]);
+                if let RegInstr::MatchVariant { match_ip: md, else_ip: ed, .. } = &mut new_code[pos] {
+                    *md = m;
+                    *ed = e;
                 }
             }
         }
@@ -9894,10 +10249,25 @@ impl RegVm {
                     native_scalar_replace_options_in_region(
                         &func.code, func.regs, lp0.header, lp0.exit,
                     )
-                    .and_then(|(code, n_regs, ip_map)| {
-                        // Re-detect on the transformed stream; its single loop is the
-                        // same loop with the Option ops dissolved (the body is now
-                        // native-subset). Indices shift, so use the transformed `lp`.
+                    .and_then(|(code1, n_regs1, ip_map1)| {
+                        // OSR × J3 for VARIANTS: after dissolving Options, re-detect the
+                        // loop on the Option-transformed stream and scalar-replace any
+                        // non-escaping single-scalar-payload user variant living
+                        // entirely inside that region (`MakeVariant`/`MatchVariant`/
+                        // `UnwrapVariantValue` → LoadInt-tag + Move-payload). When there
+                        // is no replaceable variant the pass returns the code unchanged
+                        // with an identity ip-map, so an Option-only (or plain) body is
+                        // byte-for-byte the old path. Compose the two transformed→
+                        // original ip-maps: `ip_map[t] = ip_map1[ip_map2[t]]`.
+                        let lp_v = detect_single_natural_loop(&code1)?;
+                        let (code, n_regs, ip_map2) = native_scalar_replace_variants_in_region(
+                            &code1, n_regs1, lp_v.header, lp_v.exit,
+                        )?;
+                        let ip_map: Vec<usize> =
+                            ip_map2.iter().map(|&t2| ip_map1[t2]).collect();
+                        // Re-detect on the fully-transformed stream; its single loop is
+                        // the same loop with both Option and variant ops dissolved (the
+                        // body is now native-subset). Indices shift, so use `lp`.
                         detect_single_natural_loop(&code).and_then(|lp| {
                             // Map the OSR boundary back to the ORIGINAL code. Both the
                             // header and the exit instruction are copy-through branches
