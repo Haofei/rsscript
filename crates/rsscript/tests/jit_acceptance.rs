@@ -1064,6 +1064,108 @@ fn main() -> Unit {
     );
 }
 
+/// OSR × J2 POSITIVE test — a CAPTURING monomorphic param-handle closure called in a
+/// hot loop inside an I/O-tangled (native-INELIGIBLE) once-called function MUST
+/// inline (materializing its scalar capture) and OSR to an allocation-free native
+/// loop. `apply_loop` takes `g: read Fn(Int) -> Int` and calls it every iteration;
+/// `g = |value| value * 2 + base` captures the scalar `base`. The whole function is
+/// native-ineligible (the `Log.write`s), so only OSR can run the loop natively — and
+/// only by inlining the capturing closure (else the per-iteration `CallClosure` keeps
+/// the loop off the native subset). Forcing OSR on, stdout MUST be byte-identical to
+/// the pure interpreter AND `osr_entries > 0` proves the loop inlined the capturing
+/// closure + materialized the capture + OSR'd.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j2_capturing_closure_loop_matches_interpreter() {
+    let source = "\
+fn apply_loop(g: read Fn(Int) -> Int, limit: Int, seed: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = seed
+    while i < limit {
+        total = total + g(i)
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    let base = 7
+    let g = fn(value) captures(read base) effects(pure) {
+        return value * 2 + base
+    }
+    Log.write(message: read String.from_int(value: apply_loop(g: read g, limit: read 4000, seed: read 0)))
+    return Unit
+}
+";
+    let file = "jit-osr-j2-capturing-closure.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "OSR × J2 capturing-closure loop must be byte-identical to the interpreter"
+    );
+    assert!(
+        stats.osr_entries > 0,
+        "a capturing monomorphic param-handle closure called in an I/O-tangled hot loop \
+         must inline (materializing its scalar capture) and OSR natively: {stats:?}",
+    );
+}
+
+/// OSR × J2 NEGATIVE test — a closure with a NON-scalar (heap) capture MUST NOT OSR.
+/// `g` captures `tag: List<Int>` (a heap value) and reads its length each call, so
+/// the capture cannot be materialized as a scalar via the `closure_capture` helper:
+/// the inline gate's `captures_all_scalar` profile bit goes false on the first
+/// observation, the site never inlines, the per-iteration `CallClosure` keeps the
+/// loop off the native subset, and `osr_entries` MUST stay 0. Output must still be
+/// interpreter-identical (the interpreter runs the whole loop). This guards against
+/// the capturing-closure inline accidentally materializing a heap capture as a
+/// scalar (which would read garbage bits).
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j2_heap_capture_closure_does_not_osr() {
+    let source = "\
+fn apply_loop(g: read Fn(Int) -> Int, limit: Int, seed: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = seed
+    while i < limit {
+        total = total + g(i)
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    let tag: List<Int> = [1, 2, 3]
+    let g = fn(value) captures(read tag) effects(pure) {
+        return value + List.len<Int>(list: read tag)
+    }
+    Log.write(message: read String.from_int(value: apply_loop(g: read g, limit: read 4000, seed: read 0)))
+    return Unit
+}
+";
+    let file = "jit-osr-j2-heap-capture-closure.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "a closure with a heap capture must still be interpreter-identical under OSR"
+    );
+    assert_eq!(
+        stats.osr_entries, 0,
+        "a closure with a non-scalar (heap) capture must NOT OSR: {stats:?}",
+    );
+}
+
 /// J2.1 profile-guided monomorphic closure inlining — the program shape the
 /// optimization targets: a higher-order `dispatch(f, x)` whose closure parameter is
 /// the same callee on every warm call, so J1 profiles the `CallClosure` site as

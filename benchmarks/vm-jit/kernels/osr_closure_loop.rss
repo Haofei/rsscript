@@ -1,0 +1,48 @@
+// OSR × J2 (capturing-closure inlining inside an OSR loop) kernel. A higher-order
+// function `apply_loop` takes a closure PARAMETER `g: read Fn(Int) -> Int` and
+// calls it in a hot loop. The closure CAPTURES a scalar (`base`), so the inline
+// must materialize that capture into the loop body. `apply_loop` is also I/O-
+// tangled (`Log.write` around the loop in the same, once-called function), so the
+// whole function is native-INELIGIBLE — only OSR can run the loop natively, and
+// only by inlining the capturing closure into it (otherwise the per-iteration
+// `CallClosure` keeps the loop off the native subset).
+//
+// Run OSR off (`--mode jit-native`) vs OSR on (`--mode jit-native-osr`); the OSR
+// median should beat the off median. The closure is monomorphic at the call site
+// (one callee, one scalar Int capture), the precondition for the OSR × J2 inline.
+
+fn bench_size(default: Int) -> Int {
+    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
+    match String.parse_int(value: read raw) {
+        Some(value) => {
+            return value
+        }
+        None => {
+            return default
+        }
+    }
+}
+
+fn apply_loop(g: read Fn(Int) -> Int, limit: Int, seed: Int) -> Int {
+    Log.write(message: read "osr-begin")
+    let mut i = 0
+    let mut total = seed
+    while i < limit {
+        total = total + g(i)
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    let limit = bench_size(default: 2000000)
+    let base = 7
+    let g = fn(value) captures(read base) effects(pure) {
+        return value * 2 + base
+    }
+    let result = apply_loop(g: read g, limit: limit, seed: 0)
+    Log.write(message: read String.from_int(value: result))
+    return Unit
+}
+features: local

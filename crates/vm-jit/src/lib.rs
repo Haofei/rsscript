@@ -63,6 +63,14 @@ pub type ListGetFloatFn = extern "C" fn(i64, i64) -> f64;
 /// matches a real (`>= 0`) function id, so the identity guard then bails. Total —
 /// it never sets the out-of-band bail flag.
 pub type ClosureIdFn = extern "C" fn(i64) -> i64;
+/// `(closure_handle, index) -> i64`: the scalar bits of capture `index` of the
+/// closure handle (an `Int` directly, a `Float` reinterpreted via `to_bits`, or a
+/// `Bool` as 0/1). A non-scalar (heap) capture, an out-of-range index, or a
+/// non-closure handle signals a bail **out-of-band** (the shared bail flag), so the
+/// returned value is unused on failure — exactly like [`FieldIntFn`]. The producer
+/// only emits this for captures it has already proven scalar, so the bail path is a
+/// defensive backstop.
+pub type ClosureCaptureFn = extern "C" fn(i64, i64) -> i64;
 
 /// Host helper functions the compiled code calls to read heap values (struct
 /// fields, list elements) that don't fit in a scalar register. The `rsscript`
@@ -84,13 +92,14 @@ pub struct HostHelpers {
     pub field_float: FieldFloatFn,
     pub list_get_float: ListGetFloatFn,
     pub closure_id: ClosureIdFn,
+    pub closure_capture: ClosureCaptureFn,
 }
 
 /// Version of the [`JitInstr`]/[`JitFunction`] IR this crate consumes. The
 /// producer (`rsscript`) translates its private bytecode into this stable,
 /// versioned surface, so the two crates are decoupled: a breaking IR change bumps
 /// this and the producer is updated in lock-step.
-pub const IR_VERSION: u32 = 6;
+pub const IR_VERSION: u32 = 7;
 
 /// Signed integer comparison (the four ordered comparisons; equality is its own
 /// instruction so it can also apply to booleans).
@@ -322,6 +331,20 @@ pub enum JitInstr {
         dst: u32,
         base: u32,
     },
+    /// Capturing-closure inline support (OSR × J2). `base` is a `Handle` register
+    /// holding a closure handle; `dst` is an `Int`-class register receiving the
+    /// scalar bits of capture `index` (read via [`HostHelpers::closure_capture`]).
+    /// Used at a monomorphic param-handle closure-inline site (right after the
+    /// `GuardClosureId`) to materialize each scalar capture into the inlined callee
+    /// body's capture register, so the body addresses captures as ordinary scalars.
+    /// A non-scalar/out-of-range capture makes the helper flag the standard
+    /// re-run-from-top fallback (defensive — the producer only emits this for
+    /// captures it proved scalar). `dst` is written.
+    ClosureCapture {
+        dst: u32,
+        base: u32,
+        index: u32,
+    },
     /// OSR-exit (J5.2). Marks the post-loop instruction at the loop's exit edge: a
     /// function compiled with an OSR-entry (see [`NativeModule::compile_osr`]) runs
     /// only the loop region natively, so reaching this instruction means the loop
@@ -497,6 +520,7 @@ struct HostFuncs {
     field_float: FuncId,
     list_get_float: FuncId,
     closure_id: FuncId,
+    closure_capture: FuncId,
 }
 
 /// Handle to a function compiled into a [`NativeModule`]. Carries the minting
@@ -665,6 +689,7 @@ impl NativeModule {
         builder.symbol("rss_jit_field_float", helpers.field_float as *const u8);
         builder.symbol("rss_jit_list_get_float", helpers.list_get_float as *const u8);
         builder.symbol("rss_jit_closure_id", helpers.closure_id as *const u8);
+        builder.symbol("rss_jit_closure_capture", helpers.closure_capture as *const u8);
         let mut module = JITModule::new(builder);
         let imports = HostFuncs {
             field_int: declare_import(&mut module, "rss_jit_field_int", 2)?,
@@ -673,6 +698,7 @@ impl NativeModule {
             field_float: declare_import_f64(&mut module, "rss_jit_field_float", 2)?,
             list_get_float: declare_import_f64(&mut module, "rss_jit_list_get_float", 2)?,
             closure_id: declare_import(&mut module, "rss_jit_closure_id", 1)?,
+            closure_capture: declare_import(&mut module, "rss_jit_closure_capture", 2)?,
         };
         let ctx = module.make_context();
         Ok(Self {
@@ -1256,6 +1282,10 @@ fn validate(program: &JitFunction) -> Result<(), JitError> {
                 require_class(*base, JitValueType::Handle, "ClosureId base")?;
                 require_class(*dst, JitValueType::Int, "ClosureId result")?;
             }
+            JitInstr::ClosureCapture { dst, base, .. } => {
+                require_class(*base, JitValueType::Handle, "ClosureCapture base")?;
+                require_class(*dst, JitValueType::Int, "ClosureCapture result")?;
+            }
             // OSR-exit is a parameterless terminator (an unconditional deopt at its
             // own ip); its live set is computed from definite-assignment, so it
             // carries no operands to validate.
@@ -1294,7 +1324,8 @@ fn instr_def(instr: &JitInstr) -> Option<u32> {
         | JitInstr::ListGetIntDirect { dst, .. }
         | JitInstr::ListGetFloatDirect { dst, .. }
         | JitInstr::ListLenDirect { dst, .. }
-        | JitInstr::ClosureId { dst, .. } => Some(*dst),
+        | JitInstr::ClosureId { dst, .. }
+        | JitInstr::ClosureCapture { dst, .. } => Some(*dst),
         JitInstr::Nop
         | JitInstr::Jump { .. }
         | JitInstr::JumpIfBool { .. }
@@ -1875,6 +1906,7 @@ fn build_function(
     let field_float_ref = module.declare_func_in_func(imports.field_float, bcx.func);
     let list_get_float_ref = module.declare_func_in_func(imports.list_get_float, bcx.func);
     let closure_id_ref = module.declare_func_in_func(imports.closure_id, bcx.func);
+    let closure_capture_ref = module.declare_func_in_func(imports.closure_capture, bcx.func);
 
     let n = program.code.len();
     let n_regs = program.n_regs as usize;
@@ -2518,6 +2550,29 @@ fn build_function(
                 let id = bcx.inst_results(call)[0];
                 bcx.def_var(reg(*dst), id);
             }
+            JitInstr::ClosureCapture { dst, base, index } => {
+                // Materialize a scalar capture of an inlined param-handle closure
+                // (OSR × J2). Mirrors `FieldInt`: read the capture bits via the host
+                // helper, which flags the standard re-run-from-top fallback out-of-band
+                // for a non-scalar/out-of-range capture (defensive — the producer only
+                // emits this for captures it proved scalar).
+                let handle = bcx.use_var(reg(*base));
+                let index_v = bcx.ins().iconst(types::I64, i64::from(*index));
+                let call = bcx.ins().call(closure_capture_ref, &[handle, index_v]);
+                let result = bcx.inst_results(call)[0];
+                let cont = bail_if_helper_failed(
+                    &mut bcx,
+                    bail_ptr,
+                    fallback,
+                    safepoint_ptr,
+                    payload_ptr,
+                    &vars,
+                    &mut next_id,
+                    deopt!(i),
+                );
+                bcx.switch_to_block(cont);
+                bcx.def_var(reg(*dst), result);
+            }
         }
     }
     if !terminated {
@@ -2802,6 +2857,9 @@ mod tests {
     extern "C" fn noop_closure_id(_handle: i64) -> i64 {
         0
     }
+    extern "C" fn noop_closure_capture(_handle: i64, _index: i64) -> i64 {
+        0
+    }
 
     /// A module with no-op host helpers (these tests exercise only scalar ops).
     fn module() -> NativeModule {
@@ -2812,6 +2870,7 @@ mod tests {
             field_float: noop_field_float,
             list_get_float: noop_list_get_float,
             closure_id: noop_closure_id,
+            closure_capture: noop_closure_capture,
         })
         .unwrap()
     }
@@ -2898,6 +2957,7 @@ mod tests {
             field_float,
             list_get_float,
             closure_id: noop_closure_id,
+            closure_capture: noop_closure_capture,
         })
         .unwrap();
         // fn(h: Handle, idx: Int) -> Float { return list[idx] }  regs 0=h,1=idx,2=res
@@ -2955,6 +3015,7 @@ mod tests {
             field_float: noop_field_float,
             list_get_float: noop_list_get_float,
             closure_id,
+            closure_capture: noop_closure_capture,
         })
         .unwrap();
         // fn(h: Handle, x: Int) -> Int { guard id(h) == 7; return x + 100 }
@@ -3005,6 +3066,7 @@ mod tests {
             field_float: noop_field_float,
             list_get_float: noop_list_get_float,
             closure_id,
+            closure_capture: noop_closure_capture,
         })
         .unwrap();
         // Polymorphic inline cache over two callees {3, 5}:

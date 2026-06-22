@@ -429,6 +429,7 @@ fn native_subset_instruction(instr: &RegInstr) -> bool {
             // native-rewritten code; never in a lowered function body).
             | RegInstr::NativeGuardClosureId { .. }
             | RegInstr::NativeClosureId { .. }
+            | RegInstr::NativeClosureCapture { .. }
     )
 }
 
@@ -726,6 +727,33 @@ fn native_callee_inlinable(callee: &RegFunction, n_args: usize) -> bool {
     })
 }
 
+/// Like [`native_callee_inlinable`] but permits a **capturing** closure callee
+/// (OSR × J2): every capture must be materialized as a scalar at the inline site
+/// (the gate enforces scalarity via the profile's `captures_all_scalar` bit), so
+/// the body addresses its capture registers `0..captures` exactly like ordinary
+/// scalar params. `n_args` is the call's argument count, which must equal the
+/// callee's PARAM count (captures are bound separately). Every reachable
+/// instruction must still be a pure native-subset op / native control flow /
+/// `Return`; the uniform `base`-offset splice places capture reg `k` at `base + k`.
+#[cfg(feature = "native-jit")]
+fn native_capturing_callee_inlinable(callee: &RegFunction, n_args: usize) -> bool {
+    if callee.params != n_args {
+        return false;
+    }
+    let reachable = native_reachable_instructions(&callee.code);
+    callee.code.iter().enumerate().all(|(i, instr)| {
+        !reachable[i]
+            || matches!(
+                instr,
+                RegInstr::Jump { .. }
+                    | RegInstr::JumpIfBool { .. }
+                    | RegInstr::JumpIfIntCompare { .. }
+                    | RegInstr::Return { .. }
+            )
+            || native_offset_regs(instr, 0).is_some()
+    })
+}
+
 /// A cheap structural prefilter for native eligibility. It is deliberately a
 /// necessary condition, not a full duplicate of [`translate_to_native_jit`]: false
 /// means translation cannot currently succeed, true means "try the real translator".
@@ -841,7 +869,19 @@ fn monomorphic_closure_inline_target(
     }
     let k = usize::try_from(key).ok()?;
     let callee = unit.functions.get(k)?;
-    if callee.captures != 0 || !native_callee_inlinable(callee, args.len()) {
+    // Non-capturing callee: the original (shipped) path. A capturing callee is
+    // allowed ONLY when every observed capture at this site was scalar (the
+    // profile's monotone `captures_all_scalar` bit) — then each capture is
+    // materialized as a scalar at the inline site via the `closure_capture` host
+    // helper. A heap capture (or a profile that ever saw one) leaves the site on
+    // its interpreter path: no inline, no OSR.
+    if callee.captures == 0 {
+        if !native_callee_inlinable(callee, args.len()) {
+            return None;
+        }
+    } else if !feedback.captures_all_scalar
+        || !native_capturing_callee_inlinable(callee, args.len())
+    {
         return None;
     }
     Some(k)
@@ -1013,6 +1053,7 @@ fn subset_or_option_reads(instr: &RegInstr) -> Option<Vec<usize>> {
         RegInstr::ListGet { list, index, .. } => vec![*list, *index],
         RegInstr::NativeGuardClosureId { closure, .. } => vec![*closure],
         RegInstr::NativeClosureId { closure, .. } => vec![*closure],
+        RegInstr::NativeClosureCapture { closure, .. } => vec![*closure],
         // Option ops (value operands).
         RegInstr::MakeSome { value, .. } => vec![*value],
         RegInstr::MatchOption { src, .. } => vec![*src],
@@ -2691,9 +2732,24 @@ fn native_inline_leaf_calls(
                 ip_map.push(i);
                 let base = next_reg;
                 next_reg += callee.regs;
+                // Capturing-closure inlining (OSR × J2): a closure callee lays out
+                // its capture registers `0..captures` BELOW its params, so the
+                // splice window is `[captures.. params.. locals]`. Materialize each
+                // scalar capture into `base + k` via the host helper, then bind the
+                // call args ABOVE the captures at `base + captures + param`. For a
+                // non-capturing callee (`captures == 0`) this is exactly the shipped
+                // path: no `NativeClosureCapture`, args at `base + param`.
+                for k_cap in 0..callee.captures {
+                    new_code.push(RegInstr::NativeClosureCapture {
+                        dst: base + k_cap,
+                        closure: *closure,
+                        index: k_cap,
+                    });
+                    ip_map.push(i);
+                }
                 for (param, arg) in args.iter().enumerate() {
                     new_code.push(RegInstr::Move {
-                        dst: base + param,
+                        dst: base + callee.captures + param,
                         src: *arg,
                     });
                     ip_map.push(i);
@@ -3002,6 +3058,15 @@ fn translate_to_native_jit(
                 // J2.2 dispatch: the closure operand is a native handle; the read
                 // function id is an `Int` (consumed by integer compares/branches).
                 RegInstr::NativeClosureId { dst, closure } => {
+                    native_set_ty(ty, *closure, NativeTy::Handle, c)
+                        && native_set_ty(ty, *dst, NativeTy::Int, c)
+                }
+                // Capturing-closure inline (OSR × J2): the closure operand is a
+                // native handle; the materialized capture `dst` is an `Int`-class
+                // register (the `closure_capture` helper returns scalar bits). A
+                // body that uses the capture as a `Float` conflicts here ⇒ bail, so
+                // only Int/Bool-class captures inline natively (Float deferred).
+                RegInstr::NativeClosureCapture { dst, closure, .. } => {
                     native_set_ty(ty, *closure, NativeTy::Handle, c)
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
@@ -3388,6 +3453,24 @@ fn translate_to_native_jit(
                     base: r(*closure),
                 }
             }
+            RegInstr::NativeClosureCapture {
+                dst,
+                closure,
+                index,
+            } => {
+                // The closure handle must be a native Handle parameter; materialize
+                // capture `index`'s scalar bits into the `Int`-class `dst` (the
+                // inlined body's capture register). A non-scalar capture bails
+                // out-of-band in the host helper.
+                require(handle_param(*closure) && int_or_free(*dst))?;
+                let index = i64::try_from(*index).ok()?;
+                let index = u32::try_from(index).ok()?;
+                JitInstr::ClosureCapture {
+                    dst: r(*dst),
+                    base: r(*closure),
+                    index,
+                }
+            }
             // `native_subset_instruction` already rejected everything else.
             _ => return None,
         };
@@ -3683,6 +3766,21 @@ fn translate_osr_loop(
                 RegInstr::GetFieldSlot { base, .. } => {
                     native_set_ty(ty, *base, NativeTy::Handle, c)
                 }
+                // Synthetic closure-inline ops (only present when an inlined
+                // capturing/monomorphic closure body landed in the OSR region):
+                // the closure operand is a native Handle param; an id read or a
+                // materialized capture is `Int`-class.
+                RegInstr::NativeGuardClosureId { closure, .. } => {
+                    native_set_ty(ty, *closure, NativeTy::Handle, c)
+                }
+                RegInstr::NativeClosureId { dst, closure } => {
+                    native_set_ty(ty, *closure, NativeTy::Handle, c)
+                        && native_set_ty(ty, *dst, NativeTy::Int, c)
+                }
+                RegInstr::NativeClosureCapture { dst, closure, .. } => {
+                    native_set_ty(ty, *closure, NativeTy::Handle, c)
+                        && native_set_ty(ty, *dst, NativeTy::Int, c)
+                }
                 _ => true,
             };
             if !ok {
@@ -3840,6 +3938,20 @@ fn translate_osr_loop(
                     require(int_or_free(*dst))?;
                     JitInstr::ListGetInt { dst: r(*dst), base: r(*list), index: r(*index) }
                 }
+            }
+            RegInstr::NativeGuardClosureId { closure, expected } => {
+                require(handle_param(*closure))?;
+                let expected = i64::try_from(*expected).ok()?;
+                JitInstr::GuardClosureId { base: r(*closure), expected }
+            }
+            RegInstr::NativeClosureId { dst, closure } => {
+                require(handle_param(*closure) && int(*dst))?;
+                JitInstr::ClosureId { dst: r(*dst), base: r(*closure) }
+            }
+            RegInstr::NativeClosureCapture { dst, closure, index } => {
+                require(handle_param(*closure) && int_or_free(*dst))?;
+                let index = u32::try_from(*index).ok()?;
+                JitInstr::ClosureCapture { dst: r(*dst), base: r(*closure), index }
             }
             // Any other (non-subset) instruction in-region was already rejected.
             _ => return None,
@@ -4489,7 +4601,7 @@ enum MonoState {
 /// [`PROFILE_MAX_CALLEES`].
 ///
 /// Drives J2 compile decisions ONLY — never a computed value (determinism).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct CallSiteFeedback {
     /// `(callee_key, saturating_count)` for each distinct callee, in first-seen
     /// order. `callee_key` is the callee's underlying function id (stable
@@ -4498,12 +4610,30 @@ struct CallSiteFeedback {
     /// `true` once a distinct callee beyond [`PROFILE_MAX_CALLEES`] was seen, so
     /// the site is permanently megamorphic even though `observed` is capped.
     overflowed: bool,
+    /// `false` once ANY observation at this site saw a closure with a non-scalar
+    /// (heap) capture. Capturing-closure inlining (OSR × J2) materializes captures
+    /// as scalars via the `closure_capture` host helper, so a site that ever saw a
+    /// heap capture is not eligible — the gate then leaves it on the interpreter
+    /// path (no inline, no OSR). Starts `true`; ANDed monotonically downward.
+    captures_all_scalar: bool,
+}
+
+impl Default for CallSiteFeedback {
+    fn default() -> Self {
+        CallSiteFeedback {
+            observed: Vec::new(),
+            overflowed: false,
+            captures_all_scalar: true,
+        }
+    }
 }
 
 impl CallSiteFeedback {
     /// Record one observation of `callee_key` (saturating). Pure bookkeeping:
     /// has no effect on the call dispatch decision or any value.
-    fn record(&mut self, callee_key: u64) {
+    fn record(&mut self, callee_key: u64, captures_scalar: bool) {
+        // Monotone AND: one heap-capture observation disqualifies the site forever.
+        self.captures_all_scalar &= captures_scalar;
         if let Some(entry) = self.observed.iter_mut().find(|(key, _)| *key == callee_key) {
             entry.1 = entry.1.saturating_add(1);
             return;
@@ -4545,11 +4675,11 @@ struct FunctionProfile {
 impl FunctionProfile {
     /// Record `callee_key` at the dynamic call site whose instruction index is
     /// `instr_idx`. Observation only — never affects dispatch or values.
-    fn record_call(&mut self, instr_idx: usize, callee_key: u64) {
+    fn record_call(&mut self, instr_idx: usize, callee_key: u64, captures_scalar: bool) {
         self.call_sites
             .entry(instr_idx)
             .or_default()
-            .record(callee_key);
+            .record(callee_key, captures_scalar);
     }
 }
 
@@ -4574,7 +4704,7 @@ impl FunctionProfile {
 /// `PROFILE_RECORD_LIMIT` samples are far more than enough to settle the
 /// mono/poly/mega classification J2 needs. Observation only: feeds J2 compile
 /// decisions, never a computed value and never control flow (determinism).
-fn record_call_site(func: &RegFunction, instr_idx: usize, callee_key: u64) {
+fn record_call_site(func: &RegFunction, instr_idx: usize, callee_key: u64, captures_scalar: bool) {
     let count = func.call_count.get();
     if count >= PROFILE_RECORD_LIMIT {
         // Frozen: enough samples collected. Cheapest possible steady state.
@@ -4596,9 +4726,26 @@ fn record_call_site(func: &RegFunction, instr_idx: usize, callee_key: u64) {
     // Warm and within the sample budget: record this observation.
     if let Ok(mut slot) = func.profile.try_borrow_mut() {
         if let Some(profile) = slot.as_mut() {
-            profile.record_call(instr_idx, callee_key);
+            profile.record_call(instr_idx, callee_key, captures_scalar);
         }
     }
+}
+
+/// Whether every capture of `closure` is a scalar (`Int`/`Float`/`Bool`) — the
+/// precondition for materializing captures into an inlined native body via the
+/// `closure_capture` host helper. A non-scalar (heap) capture makes the
+/// capturing-closure inline ineligible; a `Managed` wrapper is unwrapped first.
+fn closure_captures_all_scalar(closure: &VmClosure) -> bool {
+    closure.captures.iter().all(|c| {
+        fn scalar(v: &VmValue) -> bool {
+            match v {
+                VmValue::Int(_) | VmValue::Float(_) | VmValue::Bool(_) => true,
+                VmValue::Managed(inner) => scalar(&inner.borrow()),
+                _ => false,
+            }
+        }
+        scalar(c)
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -4980,6 +5127,21 @@ enum RegInstr {
     NativeClosureId {
         dst: Reg,
         closure: Reg,
+    },
+    /// Synthetic, native-JIT-only capture materialization (OSR × J2 capturing-
+    /// closure inlining). NEVER emitted by the lowerer and NEVER executed by the
+    /// interpreter — synthesized only inside [`native_inline_leaf_calls`] (right
+    /// after a [`NativeGuardClosureId`]) and consumed solely by
+    /// [`translate_to_native_jit`]. Lowers to a [`vm_jit::JitInstr::ClosureCapture`]:
+    /// reads the scalar bits of capture `index` of the param-handle `closure` into
+    /// `dst` (the inlined callee body's capture register `base + index`). A
+    /// non-scalar/out-of-range capture bails out-of-band (defensive — the inline
+    /// gate only fires for profiled-scalar captures).
+    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    NativeClosureCapture {
+        dst: Reg,
+        closure: Reg,
+        index: usize,
     },
     ListFilter {
         dst: Reg,
@@ -10020,6 +10182,7 @@ fn jit_host_helpers() -> vm_jit::HostHelpers {
         field_float: rss_jit_field_float,
         list_get_float: rss_jit_list_get_float,
         closure_id: rss_jit_closure_id,
+        closure_capture: rss_jit_closure_capture,
     }
 }
 
@@ -10172,6 +10335,41 @@ fn jit_closure_function_id(value: &VmValue) -> Option<i64> {
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_closure_id(handle: i64) -> i64 {
     jit_heap_read(handle, jit_closure_function_id).unwrap_or(-1)
+}
+
+/// The scalar bits of capture `index` of the closure behind `handle`, as `i64` (an
+/// `Int` directly, a `Float` reinterpreted via [`f64::to_bits`], a `Bool` as 0/1).
+/// Used by the capturing-closure inline support
+/// ([`vm_jit::JitInstr::ClosureCapture`]) to materialize a scalar capture into the
+/// inlined callee body. A non-scalar (heap) capture, an out-of-range index, or a
+/// non-closure handle signals the out-of-band bail flag — defensive, since the
+/// producer only emits `ClosureCapture` for captures it proved scalar.
+#[cfg(feature = "native-jit")]
+fn jit_closure_capture_scalar(value: &VmValue, index: usize) -> Option<i64> {
+    match value {
+        VmValue::Closure(closure) => match closure.captures.get(index)? {
+            VmValue::Int(v) => Some(*v),
+            VmValue::Float(v) => Some(v.to_bits() as i64),
+            VmValue::Bool(b) => Some(i64::from(*b)),
+            _ => None,
+        },
+        VmValue::Managed(inner) => jit_closure_capture_scalar(&inner.borrow(), index),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_closure_capture(handle: i64, index: i64) -> i64 {
+    match usize::try_from(index)
+        .ok()
+        .and_then(|index| jit_heap_read(handle, |value| jit_closure_capture_scalar(value, index)))
+    {
+        Some(value) => value,
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
 }
 
 #[cfg(feature = "native-jit")]
@@ -11002,7 +11200,17 @@ impl RegVm {
                     })
                     })
                 });
-                native.osr_cache.insert(native_key, entry);
+                // OSR × J2: a capturing/monomorphic closure inline is profile-
+                // guided, so on the first header hit (cold profile) the inline gate
+                // declines and `entry` is `None`. Caching that permanently would
+                // disable OSR forever — exactly the `try_native` warmup hazard. If a
+                // closure-inline site is still PENDING on its profile, leave the
+                // cache unpopulated so a later (warmer) header hit retries; once the
+                // profile settles (or there is no pending site) the `None`/`Some`
+                // verdict is stable and we cache it.
+                if entry.is_some() || !native_translation_pending_on_profile(&unit, func) {
+                    native.osr_cache.insert(native_key, entry);
+                }
             }
             match native.osr_cache.get(&native_key) {
                 // Only OSR when the interpreter is *at* the cached loop's (original)
@@ -12455,7 +12663,7 @@ impl RegVm {
                             // unchanged — we only observe it. `ip` was already
                             // advanced past this instruction, so its index is
                             // `ip - 1`.
-                            record_call_site(&func, ip - 1, callee_id as u64);
+                            record_call_site(&func, ip - 1, callee_id as u64, true);
                             let callee = Rc::clone(&unit.functions[callee_id]);
                             self.prepare_frame(next_base, callee.regs)?;
                             for (index, reg) in args.iter().enumerate() {
@@ -12593,7 +12801,12 @@ impl RegVm {
                             // does not change which closure runs; `ip` already
                             // points past this instruction, so its index is
                             // `ip - 1`.
-                            record_call_site(&func, ip - 1, closure.function as u64);
+                            record_call_site(
+                                &func,
+                                ip - 1,
+                                closure.function as u64,
+                                closure_captures_all_scalar(&closure),
+                            );
                             let result = self.call_closure_from_regs(
                                 unit, &closure, args, mut_args, base, next_base,
                             )?;
@@ -21390,28 +21603,28 @@ fn main() -> Unit {{
     fn feedback_classification_and_saturation() {
         let mut fb = CallSiteFeedback::default();
         assert_eq!(fb.state(), MonoState::Monomorphic); // zero observations
-        fb.record(1);
+        fb.record(1, true);
         assert_eq!(fb.state(), MonoState::Monomorphic);
-        fb.record(1);
+        fb.record(1, true);
         assert_eq!(fb.observed[0].1, 2);
-        fb.record(2);
+        fb.record(2, true);
         assert_eq!(fb.state(), MonoState::Polymorphic);
-        fb.record(3);
+        fb.record(3, true);
         assert_eq!(fb.state(), MonoState::Polymorphic); // 3 distinct
-        fb.record(4);
+        fb.record(4, true);
         // 4 distinct == PROFILE_MAX_CALLEES (cap), still not overflowed.
         assert_eq!(fb.observed.len(), PROFILE_MAX_CALLEES);
         assert_eq!(fb.state(), MonoState::Polymorphic);
-        fb.record(5); // 5th distinct ⇒ overflow ⇒ megamorphic, list stays capped
+        fb.record(5, true); // 5th distinct ⇒ overflow ⇒ megamorphic, list stays capped
         assert!(fb.overflowed);
         assert_eq!(fb.observed.len(), PROFILE_MAX_CALLEES);
         assert_eq!(fb.state(), MonoState::Megamorphic);
 
         // Saturating count never panics at the u32 ceiling.
         let mut sat = CallSiteFeedback::default();
-        sat.record(9);
+        sat.record(9, true);
         sat.observed[0].1 = u32::MAX;
-        sat.record(9);
+        sat.record(9, true);
         assert_eq!(sat.observed[0].1, u32::MAX);
     }
 }
