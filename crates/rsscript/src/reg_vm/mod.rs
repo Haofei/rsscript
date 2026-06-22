@@ -10764,6 +10764,15 @@ struct NativeState {
     /// re-analyze). Populated lazily the first time the interpreter reaches a header.
     #[allow(clippy::type_complexity)]
     osr_cache: HashMap<usize, Option<OsrEntry>>,
+    /// Reusable per-call marshalling scratch buffers (TV2 arg/len words and the
+    /// flat-list `Rc` keep-alive set). Held here and `mem::take`n into the call
+    /// frame so a hot per-iteration native dispatch (e.g. a tiny leaf/closure
+    /// called once per loop iteration) does not heap-allocate three `Vec`s on
+    /// every call — that per-call allocation churn, not the native body, is what
+    /// made marginal closure/leaf kernels slower than the interpreter.
+    scratch_args: Vec<i64>,
+    scratch_lens: Vec<i64>,
+    scratch_flat_owned: Vec<Rc<RefCell<TypedVec>>>,
 }
 
 /// Native-JIT telemetry. The VM is single-threaded, so plain counters suffice.
@@ -11190,6 +11199,9 @@ impl NativeState {
             precise_deopt,
             osr_enabled,
             osr_cache: HashMap::new(),
+            scratch_args: Vec::new(),
+            scratch_lens: Vec::new(),
+            scratch_flat_owned: Vec::new(),
         })
     }
 
@@ -11604,12 +11616,42 @@ impl RegVm {
         // index; a `FlatInt`/`FlatFloat` puts the raw buffer pointer in `args[i]`
         // and the element count in `lens[i]`.
         let n = param_types.len();
-        let mut args = vec![0i64; n];
-        let mut lens = vec![0i64; n];
+        // Reuse the pooled scratch buffers instead of allocating three `Vec`s on
+        // every native call: a tiny leaf/closure dispatched once per loop iteration
+        // would otherwise pay that per-call allocation churn (the actual cause of
+        // marginal closure/leaf kernels running slower than the interpreter). The
+        // buffers are taken from `self.native` and returned to it on every exit
+        // path (`restore_scratch`), so they stay warm across calls.
+        let (mut args, mut lens, mut flat_owned) = match self.native.as_mut() {
+            Some(native) => (
+                std::mem::take(&mut native.scratch_args),
+                std::mem::take(&mut native.scratch_lens),
+                std::mem::take(&mut native.scratch_flat_owned),
+            ),
+            None => return NativeAttempt::Fallback,
+        };
+        args.clear();
+        args.resize(n, 0i64);
+        lens.clear();
+        lens.resize(n, 0i64);
         // TV2 borrow protocol: owned `Rc`s of every flat list arg, kept alive for
         // the whole call; we then pin a shared `Ref` borrow of each so no
         // `borrow_mut`/realloc can occur while native code holds the raw pointer.
-        let mut flat_owned: Vec<Rc<RefCell<TypedVec>>> = Vec::new();
+        flat_owned.clear();
+        // Returns the (drained) scratch buffers to the pool so the next call reuses
+        // their capacity. `flat_owned` is cleared of its `Rc`s first so no list arg
+        // is retained past the call.
+        let restore_scratch =
+            |this: &mut Self, mut args: Vec<i64>, mut lens: Vec<i64>, mut flat: Vec<Rc<RefCell<TypedVec>>>| {
+                if let Some(native) = this.native.as_mut() {
+                    args.clear();
+                    lens.clear();
+                    flat.clear();
+                    native.scratch_args = args;
+                    native.scratch_lens = lens;
+                    native.scratch_flat_owned = flat;
+                }
+            };
         let bail_marshal = |this: &mut Self| {
             if let Some(native) = this.native.as_mut() {
                 if native.collect_stats {
@@ -11671,6 +11713,7 @@ impl RegVm {
                 Some(bits) => args[index] = bits,
                 None => {
                     bail_marshal(self);
+                    restore_scratch(self, args, lens, flat_owned);
                     return NativeAttempt::Fallback;
                 }
             }
@@ -11716,14 +11759,23 @@ impl RegVm {
         // bailed at a guard *or* a host helper flagged an unsatisfiable heap read;
         // either way the interpreter re-runs the function. A clean
         // `NativeOutcome::Completed` result is boxed per the function's return type
-        // (a float register stored its `f64` bit pattern).
-        let Some(native_ref) = self.native.as_ref() else {
-            return NativeAttempt::Fallback;
+        // (a float register stored its `f64` bit pattern). The call is scoped so
+        // `flat_guards` (the pinned shared borrows of the flat list args) drops
+        // immediately after, before the scratch buffers are returned to the pool.
+        let (result, elapsed) = {
+            let Some(native_ref) = self.native.as_ref() else {
+                return NativeAttempt::Fallback;
+            };
+            let collect_stats = native_ref.collect_stats;
+            let started = collect_stats.then(std::time::Instant::now);
+            let result = native_ref.module.call(id, &args, &lens);
+            let elapsed = started.map(|started| started.elapsed().as_nanos());
+            (result, elapsed)
         };
-        let collect_stats = native_ref.collect_stats;
-        let started = collect_stats.then(std::time::Instant::now);
-        let result = native_ref.module.call(id, &args, &lens);
-        let elapsed = started.map(|started| started.elapsed().as_nanos());
+        drop(flat_guards);
+        // Return the scratch buffers (incl. the now-unborrowed `flat_owned`) to the
+        // pool before the result-handling re-borrows `self.native`.
+        restore_scratch(self, args, lens, flat_owned);
         let Some(native) = self.native.as_mut() else {
             return NativeAttempt::Fallback;
         };
