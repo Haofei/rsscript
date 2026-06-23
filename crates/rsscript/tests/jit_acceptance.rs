@@ -3071,3 +3071,170 @@ fn main() -> Unit {
         "a loop whose combinator Option is live after the loop must NOT OSR: {stats:?}",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Self-tail-call optimization (TCO): a self-tail-call is rewritten to an
+// arg-rebind + backward jump (recursion -> loop), so the function loses its
+// call-graph self-edge and becomes native-eligible. These lock the three
+// behaviours: a self-tail-recursive accumulator now runs *native*; non-tail and
+// mutual recursion are left *untouched* (still interpreted); and an unbounded
+// self-tail-recursion with no base case still trips the recursion-depth cap
+// (the limit-observability soundness gate) rather than looping forever.
+// ---------------------------------------------------------------------------
+
+/// Positive: `sum_to(n, acc)` is self-tail-recursive with an accumulator, the
+/// canonical TCO shape (`return sum_to(n: n - 1, acc: acc + n)`). After TCO it is
+/// a loop with no self-edge, so it compiles + runs on the native tier
+/// (`native_calls > 0`) — proof TCO made a previously recursion-only function
+/// native-eligible. The driver tangles it with I/O (`Log.write`) to exercise the
+/// real entry path, and the result must stay byte-identical to the interpreter.
+#[cfg(feature = "native-jit")]
+#[test]
+fn tco_self_tail_accumulator_runs_native_and_matches_interpreter() {
+    let source = "\
+fn sum_to(n: Int, acc: Int) -> Int {
+    if n == 0 {
+        return acc
+    }
+    return sum_to(n: n - 1, acc: acc + n)
+}
+
+fn main() -> Unit {
+    let mut i = 0
+    let mut total = 0
+    while i < 100 {
+        total = total + sum_to(n: 200, acc: 0)
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+";
+    let file = "tco-self-tail-accumulator.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (native, stats) = executable
+        .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
+        .expect("native run should succeed");
+    assert_eq!(
+        interp.stdout, native.stdout,
+        "TCO must not change the observable result"
+    );
+    assert_eq!(native.stdout.trim(), "2010000");
+    assert!(
+        stats.native_calls > 0 && stats.compiled > 0,
+        "the self-tail-recursive accumulator must now run native after TCO: {stats:?}"
+    );
+    assert_eq!(stats.native_bails, 0, "no native bail expected: {stats:?}");
+}
+
+/// Negative (non-tail recursion): `fib(n) = fib(n-1) + fib(n-2)` is tree
+/// recursion — the self-call result is consumed by `+`, so it is NOT in tail
+/// position. TCO must NOT fire (the result is observed by an `AddInt`), so `fib`
+/// stays recursive and therefore interpreter-only (`native_calls == 0`). Output
+/// must still match the interpreter.
+#[cfg(feature = "native-jit")]
+#[test]
+fn tco_leaves_non_tail_tree_recursion_untouched() {
+    let source = "\
+fn fib(n: Int) -> Int {
+    if n < 2 {
+        return n
+    }
+    return fib(n: n - 1) + fib(n: n - 2)
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: fib(n: 20)))
+    return Unit
+}
+";
+    let file = "tco-non-tail-fib.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (native, stats) = executable
+        .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
+        .expect("native run should succeed");
+    assert_eq!(interp.stdout, native.stdout, "result must match interpreter");
+    assert_eq!(native.stdout.trim(), "6765");
+    assert_eq!(
+        stats.native_calls, 0,
+        "non-tail tree recursion must NOT be made native-eligible by TCO: {stats:?}"
+    );
+    assert_eq!(
+        stats.translated, 0,
+        "non-tail tree recursion must not be translated: {stats:?}"
+    );
+}
+
+/// Negative (mutual recursion): `is_even`/`is_odd` call *each other* in tail
+/// position, not themselves. TCO only rewrites *self*-tail-calls, so neither is
+/// transformed; the mutual call cycle remains, keeping both functions
+/// interpreter-only (`native_calls == 0`). Output must match the interpreter.
+#[cfg(feature = "native-jit")]
+#[test]
+fn tco_leaves_mutual_recursion_untouched() {
+    let source = "\
+fn is_even(n: Int) -> Bool {
+    if n == 0 {
+        return true
+    }
+    return is_odd(n: n - 1)
+}
+
+fn is_odd(n: Int) -> Bool {
+    if n == 0 {
+        return false
+    }
+    return is_even(n: n - 1)
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_bool(value: is_even(n: 1000)))
+    return Unit
+}
+";
+    let file = "tco-mutual-recursion.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (native, stats) = executable
+        .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
+        .expect("native run should succeed");
+    assert_eq!(interp.stdout, native.stdout, "result must match interpreter");
+    assert_eq!(native.stdout.trim(), "true");
+    assert_eq!(
+        stats.native_calls, 0,
+        "mutual recursion is not a self-tail-call; TCO must leave it interpreted: {stats:?}"
+    );
+}
+
+/// Soundness (recursion-depth-limit observability): `spin(n) = return spin(n+1)`
+/// is a self-tail-call, but it has NO base case — every reachable exit is the
+/// self-call. TCO MUST refuse it (converting it to a loop would replace the clean
+/// `"recursion depth limit exceeded"` error with an infinite hang). We verify the
+/// function still errors cleanly with the depth message under default limits,
+/// proving the limit stays observable exactly as before.
+#[test]
+fn tco_preserves_depth_limit_for_baseless_self_tail_recursion() {
+    let source = "\
+fn spin(n: Int) -> Int {
+    return spin(n: n + 1)
+}
+
+fn main() -> Int {
+    return spin(n: 0)
+}
+";
+    let err = rsscript::reg_vm_eval_source_main_with_args(
+        "tco-baseless-spin.rss",
+        source,
+        std::iter::empty::<String>(),
+    )
+    .expect_err("a baseless self-tail-recursion must error, not loop forever");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("recursion depth"),
+        "expected a clean recursion-depth error (TCO must not convert a baseless \
+         self-tail-recursion to an infinite loop), got: {msg}"
+    );
+}
