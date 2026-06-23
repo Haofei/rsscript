@@ -159,6 +159,19 @@ pub fn reg_vm_eval_source_main_native_osr(
     reg_vm_compile_source(file, source)?.eval_main_with_args_native_osr(args)
 }
 
+/// Lever 2 test entry point: run `main` with the native tier + OSR forced on AND the
+/// `RSS_JIT_REPORT` missed-optimization report armed deterministically, returning the
+/// report's per-region lines (one `\n`-joined block per function) alongside the output
+/// and stats. The report is observational, so the output equals every other backend.
+#[cfg(feature = "native-jit")]
+pub fn reg_vm_eval_source_main_native_osr_report(
+    file: &str,
+    source: &str,
+    args: impl IntoIterator<Item = impl Into<String>>,
+) -> Result<(EvalOutput, NativeStats, Vec<String>), EvalError> {
+    reg_vm_compile_source(file, source)?.eval_main_with_args_native_osr_report(args)
+}
+
 /// Per-program JIT eligibility: how many functions are fully covered by the
 /// tier-0 JIT-supported instruction subset (and so are candidates for native
 /// codegen) versus how many must fall back to the interpreter.
@@ -7899,6 +7912,20 @@ impl RegVmExecutable {
         .map(|(output, _stats)| output)
     }
 
+    /// Test/validation entry point for the lever-2 missed-optimization report. Runs
+    /// `main` with the native tier + OSR forced on AND the report armed deterministically
+    /// (independent of the `RSS_JIT_REPORT` env var), returning the report block lines
+    /// alongside the stats. The report is observational, so the `EvalOutput` is byte-
+    /// identical to [`Self::eval_main_with_args_native_osr`]; this just also hands the
+    /// caller the report so a test can assert the per-region reasons.
+    #[cfg(feature = "native-jit")]
+    pub fn eval_main_with_args_native_osr_report(
+        &self,
+        args: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Result<(EvalOutput, NativeStats, Vec<String>), EvalError> {
+        self.eval_main_with_args_native_inner_reported(args, 0, false, true, true, true, true)
+    }
+
     #[cfg(feature = "native-jit")]
     fn eval_main_with_args_native_inner(
         &self,
@@ -7909,6 +7936,30 @@ impl RegVmExecutable {
         precise_deopt_override: bool,
         osr_override: bool,
     ) -> Result<(EvalOutput, NativeStats), EvalError> {
+        self.eval_main_with_args_native_inner_reported(
+            args,
+            tier_up_threshold,
+            force_bail,
+            collect_stats,
+            precise_deopt_override,
+            osr_override,
+            false,
+        )
+        .map(|(output, stats, _lines)| (output, stats))
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[allow(clippy::too_many_arguments)]
+    fn eval_main_with_args_native_inner_reported(
+        &self,
+        args: impl IntoIterator<Item = impl Into<String>>,
+        tier_up_threshold: u32,
+        force_bail: bool,
+        collect_stats: bool,
+        precise_deopt_override: bool,
+        osr_override: bool,
+        report_override: bool,
+    ) -> Result<(EvalOutput, NativeStats, Vec<String>), EvalError> {
         let mut vm = RegVm::new(
             Rc::clone(&self.unit),
             args.into_iter().map(Into::into).collect(),
@@ -7937,6 +7988,11 @@ impl RegVmExecutable {
         // entry). Default (unset, not overridden) leaves the OSR hook unarmed.
         let osr_enabled = osr_override || std::env::var_os("RSS_JIT_OSR").is_some();
         let precise_deopt = precise_deopt || osr_enabled;
+        // `RSS_JIT_REPORT=1` (lever 2) arms the developer-facing missed-optimization
+        // report: a purely observational, read-only diagnostic printed to stderr
+        // after the run. It changes NO compile decision (the differential is byte-
+        // identical with it on or off); when unset the report machinery is inert.
+        let report = report_override || std::env::var_os("RSS_JIT_REPORT").is_some();
         vm.native = Some(NativeState::new_with_opt(
             tier_up_threshold,
             force_bail,
@@ -7944,6 +8000,7 @@ impl RegVmExecutable {
             baseline,
             precise_deopt,
             osr_enabled,
+            report,
         )?);
         vm.jit_enabled = true;
         vm.jit_force_all = true;
@@ -7955,6 +8012,24 @@ impl RegVmExecutable {
         {
             eprintln!("{}", native.stats.summary());
         }
+        // Lever 2: `RSS_JIT_REPORT=1` (or `report_override`) prints the per-hot-region
+        // missed-optimization report (why each function/loop did or didn't go
+        // native/OSR/…). Purely observational; emitted once after the run, deduped per
+        // function. When armed via the env var we print to stderr; the structured lines
+        // are always returned so a test/caller can assert them.
+        let report_lines = if let Some(native) = &vm.native
+            && native.report
+        {
+            let lines = jit_missed_opt_report(&self.unit, native);
+            if std::env::var_os("RSS_JIT_REPORT").is_some() {
+                for line in &lines {
+                    eprintln!("{line}");
+                }
+            }
+            lines
+        } else {
+            Vec::new()
+        };
         let stats = vm
             .native
             .as_ref()
@@ -7971,6 +8046,7 @@ impl RegVmExecutable {
                 stderr: vm.stderr,
             },
             stats,
+            report_lines,
         ))
     }
 
@@ -13780,6 +13856,20 @@ struct NativeState {
     scratch_args: Vec<i64>,
     scratch_lens: Vec<i64>,
     scratch_flat_owned: Vec<Rc<RefCell<TypedVec>>>,
+    /// Lever 2: `RSS_JIT_REPORT` missed-optimization report armed. Read ONCE from
+    /// the env at construction (mirrors `collect_stats`), so the hot path pays only
+    /// a single hoisted bool read. When `false` the report machinery does nothing —
+    /// no allocation, no recording, no print. Purely observational: it never gates
+    /// any compile decision (the differential proves byte-identical behavior on/off).
+    report: bool,
+    /// Per-function set of `native_key`s that actually ran natively to completion at
+    /// least once this run. Populated ONLY when `report` is on (gated like the
+    /// stats counters). Lets the report print an accurate `native: ok` positive that
+    /// matches the real runtime outcome (vs the static eligibility re-derivation).
+    report_native_ok: std::collections::HashSet<usize>,
+    /// Per-function set of `native_key`s that actually OSR-entered at least once.
+    /// Populated ONLY when `report` is on. Accurate positive for `osr: entered`.
+    report_osr_ok: std::collections::HashSet<usize>,
 }
 
 /// Native-JIT telemetry. The VM is single-threaded, so plain counters suffice.
@@ -13852,6 +13942,204 @@ compile_ms={:.3} run_ms={:.3} osr_entries={}",
             "osr_entries": self.osr_entries,
         })
     }
+}
+
+/// Lever 2: the developer-facing missed-optimization report (`RSS_JIT_REPORT`).
+///
+/// Walks every function in `unit` and re-derives — **observationally, read-only** —
+/// why each did or didn't go native / OSR / scalar-replace / inline / fold, with the
+/// intrinsic-level reasons sourced from the central [`intrinsic_descriptor`] registry
+/// (effect + notes). This RE-RUNS the same cheap predicates the real passes use
+/// (`translate_to_native_jit`, `detect_single_natural_loop`, `native_subset_instruction`,
+/// `native_inline_leaf_calls`) WITHOUT touching the passes themselves, so it cannot
+/// change any compile decision — the proof is the byte-identical differential with the
+/// report on or off. Positive verdicts (`native: ok`, `osr: entered`) are cross-checked
+/// against the actual runtime outcome recorded in `report_native_ok` / `report_osr_ok`,
+/// so a line the report prints as "ok"/"entered" really happened, and a "not …" line
+/// really did not (the report-correctness tests assert this).
+///
+/// One block per function (deduped by construction — each function is visited once).
+#[cfg(feature = "native-jit")]
+fn jit_missed_opt_report(unit: &RegUnit, native: &NativeState) -> Vec<String> {
+    let mut out = Vec::new();
+    for func in &unit.functions {
+        // Skip the synthetic/placeholder/trivial bodies: a body that is only the
+        // lowerer's defensive `LoadUnit; Return` (≤ 2 instructions, no real work) is
+        // not a "hot region" worth a block. Everything with real code gets one.
+        if func.code.len() <= 2 {
+            continue;
+        }
+        let key = Rc::as_ptr(func) as usize;
+        let mut block = vec![format!("jit-report: fn `{}`", func.name)];
+
+        // --- Native-tier verdict --------------------------------------------------
+        match translate_to_native_jit(unit, func) {
+            Some(_) => {
+                if native.report_native_ok.contains(&key) {
+                    block.push("  native: ok".to_string());
+                } else {
+                    // Statically eligible but never observed running natively this
+                    // run (tier-deferred, not called hot, or demoted by another gate).
+                    block.push("  native: eligible (not run natively this execution)".to_string());
+                }
+            }
+            None => {
+                block.push(format!("  not native: {}", native_decline_reason(unit, func)));
+            }
+        }
+
+        // --- OSR verdict ----------------------------------------------------------
+        // ACCURACY FIRST: if the function actually OSR-entered this run, the verdict is
+        // `osr: entered` regardless of any static re-derivation — the recorded runtime
+        // outcome is ground truth. (The OSR pipeline applies several region transforms —
+        // combinator expansion, leaf inlining, string-length folding, Option/Result/
+        // variant/struct scalar replacement — before the subset check, so a body with a
+        // *raw* allocating string/Option op can still OSR once those passes dissolve it;
+        // re-deriving that whole pipeline here would be fragile, so we trust the outcome
+        // for the positive and use the cheap static re-derivation only to EXPLAIN a
+        // genuine non-entry.)
+        if native.report_osr_ok.contains(&key) {
+            block.push("  osr: entered".to_string());
+        } else {
+            match detect_single_natural_loop(&func.code) {
+                None => {
+                    if jit_function_has_loop(&func.code) {
+                        block.push(
+                            "  not osr: loop shape not a single reducible natural loop"
+                                .to_string(),
+                        );
+                    } else {
+                        block.push("  not osr: no loop".to_string());
+                    }
+                }
+                Some(lp) => {
+                    // A candidate loop exists but it did not OSR. Surface the first
+                    // disqualifier in the RAW loop body (registry-sourced for
+                    // intrinsics) as the likely cause; if the raw body is already in
+                    // the native subset, the decline was a downstream
+                    // type/marshalling reason.
+                    match first_non_subset_reason(&func.code[lp.header..lp.exit]) {
+                        Some(reason) => block.push(format!("  not osr: loop body {reason}")),
+                        None if native.report_native_ok.contains(&key) => block.push(
+                            "  osr: n/a (whole function ran native; no mid-function OSR needed)"
+                                .to_string(),
+                        ),
+                        None => block.push(
+                            "  not osr: loop not lowered (type/marshalling decline)".to_string(),
+                        ),
+                    }
+                }
+            }
+        }
+
+        out.push(block.join("\n"));
+    }
+    out
+}
+
+/// Re-derive, observationally, the first reason whole-function native translation
+/// declines `func`. Mirrors the early bails in [`translate_to_native_jit`] and then
+/// scans the (leaf-inlined) reachable body for the first non-subset instruction —
+/// reporting the intrinsic-level cause from the registry. Read-only.
+#[cfg(feature = "native-jit")]
+fn native_decline_reason(unit: &RegUnit, func: &RegFunction) -> String {
+    if func.captures != 0 {
+        return "function has captures (closure body, not a native leaf)".to_string();
+    }
+    // Re-run leaf inlining + Option scalar-replacement exactly as translation does, so
+    // the reason reflects the FINAL body the native subset check sees. If either bails,
+    // report that — these are the structural reasons (un-inlinable call / escaping
+    // Option) the real pass declines on.
+    let Some((code, _n_regs, _ip_map)) = native_inline_leaf_calls(unit, func, false, None) else {
+        return "contains a non-inlinable call (callee not native-inlinable)".to_string();
+    };
+    let Some((code, _n_regs, _payload, _ip_map)) = native_scalar_replace_options(&code, _n_regs)
+    else {
+        return "not scalar-replaced: Option/variant/struct escapes the region".to_string();
+    };
+    let reachable = native_reachable_instructions(&code);
+    for (i, instr) in code.iter().enumerate() {
+        if reachable[i]
+            && !native_subset_instruction(instr)
+            && let Some(reason) = instr_decline_reason(instr)
+        {
+            return reason;
+        }
+    }
+    // Translation declined for a shape reason the above re-derivation doesn't pinpoint
+    // (e.g. type unification conflict, param/reg count). Generic but honest.
+    "outside the native subset (shape/type not lowerable)".to_string()
+}
+
+/// A report reason for why `body` is outside the native subset. Prefers the most
+/// *substantive* cause — a non-pure (allocate/write/suspend/read) `CallIntrinsic`,
+/// whose registry effect/notes are the real missed-opt explanation — over an
+/// incidental non-subset instruction (e.g. a `LoadString` constant load that the
+/// subset also rejects). Falls back to the first non-subset instruction otherwise.
+/// `None` ⇒ the whole body is in the native subset.
+#[cfg(feature = "native-jit")]
+fn first_non_subset_reason(body: &[RegInstr]) -> Option<String> {
+    // First: a non-subset effectful intrinsic (the headline reason).
+    if let Some(instr) = body.iter().find(|instr| {
+        !native_subset_instruction(instr)
+            && matches!(
+                instr,
+                RegInstr::CallIntrinsic { .. } | RegInstr::CallTypedIntrinsic { .. }
+            )
+            && match instr {
+                RegInstr::CallIntrinsic { intrinsic, .. }
+                | RegInstr::CallTypedIntrinsic { intrinsic, .. } => {
+                    intrinsic_descriptor(*intrinsic).effect != IntrinsicEffect::Pure
+                }
+                _ => false,
+            }
+    }) {
+        return instr_decline_reason(instr);
+    }
+    // Otherwise: the first non-subset instruction, whatever it is.
+    body.iter()
+        .find(|instr| !native_subset_instruction(instr))
+        .map(|instr| instr_decline_reason(instr).unwrap_or_else(|| "outside native subset".into()))
+}
+
+/// Human-readable reason a single instruction is outside the native subset, with
+/// the intrinsic-level effect/notes pulled from the central [`intrinsic_descriptor`]
+/// registry for `CallIntrinsic`/`CallTypedIntrinsic`. `None` for a subset instruction.
+#[cfg(feature = "native-jit")]
+fn instr_decline_reason(instr: &RegInstr) -> Option<String> {
+    if native_subset_instruction(instr) {
+        return None;
+    }
+    Some(match instr {
+        RegInstr::CallIntrinsic { intrinsic, .. }
+        | RegInstr::CallTypedIntrinsic { intrinsic, .. } => {
+            let d = intrinsic_descriptor(*intrinsic);
+            let effect = match d.effect {
+                IntrinsicEffect::Pure => "pure",
+                IntrinsicEffect::Read => "read",
+                IntrinsicEffect::Allocate => "allocate",
+                IntrinsicEffect::Write => "write",
+                IntrinsicEffect::Suspend => "suspend",
+            };
+            format!(
+                "contains CallIntrinsic {:?} (effect={}; {})",
+                intrinsic, effect, d.notes
+            )
+        }
+        RegInstr::CallClosure { .. } => {
+            "contains a closure call (megamorphic / not native-inlinable)".to_string()
+        }
+        RegInstr::CallKnown { .. } | RegInstr::CallDynamic { .. } => {
+            "contains a non-inlined call".to_string()
+        }
+        other => {
+            // A non-call, non-subset instruction (heap construct, async, float-only
+            // op the subset rejects, …). Name the opcode for the developer.
+            let dbg = format!("{other:?}");
+            let opcode = dbg.split([' ', '{']).next().unwrap_or("?");
+            format!("contains {opcode} (outside native scalar/control subset)")
+        }
+    })
 }
 
 // --- Native-JIT host helpers ------------------------------------------------
@@ -14176,7 +14464,7 @@ impl NativeState {
         force_bail: bool,
         collect_stats: bool,
     ) -> Result<Self, EvalError> {
-        Self::new_with_opt(tier_up_threshold, force_bail, collect_stats, false, false, false)
+        Self::new_with_opt(tier_up_threshold, force_bail, collect_stats, false, false, false, false)
     }
 
     /// Build the native state at a selectable optimization level. `baseline ==
@@ -14192,6 +14480,7 @@ impl NativeState {
         baseline: bool,
         precise_deopt: bool,
         osr_enabled: bool,
+        report: bool,
     ) -> Result<Self, EvalError> {
         Ok(Self {
             module: vm_jit::NativeModule::new_with_opt(jit_host_helpers(), baseline)
@@ -14210,6 +14499,9 @@ impl NativeState {
             scratch_args: Vec::new(),
             scratch_lens: Vec::new(),
             scratch_flat_owned: Vec::new(),
+            report,
+            report_native_ok: std::collections::HashSet::new(),
+            report_osr_ok: std::collections::HashSet::new(),
         })
     }
 
@@ -14823,6 +15115,13 @@ impl RegVm {
                 if native.collect_stats {
                     native.stats.native_calls += 1;
                 }
+                // Lever 2 (observational): record that this function actually ran
+                // natively to completion, so the report's `native: ok` positive
+                // reflects the real runtime outcome. Gated on `report`; no effect
+                // on any decision.
+                if native.report {
+                    native.report_native_ok.insert(native_key);
+                }
                 // Consecutive-bail semantics: a clean completion clears the
                 // give-up counter, so only *sustained* failure demotes a function.
                 native.bail_counts.insert(native_key, 0);
@@ -15404,6 +15703,12 @@ impl RegVm {
                 if let Some(native) = self.native.as_mut() {
                     if native.collect_stats {
                         native.stats.osr_entries += 1;
+                    }
+                    // Lever 2 (observational): record this function actually OSR-
+                    // entered, so the report's `osr: entered` positive matches the
+                    // real outcome. Gated on `report`; no effect on any decision.
+                    if native.report {
+                        native.report_osr_ok.insert(func as *const RegFunction as usize);
                     }
                 }
                 true

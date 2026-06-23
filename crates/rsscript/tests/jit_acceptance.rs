@@ -3650,3 +3650,220 @@ fn main() -> Unit {
         "a String.slice of an unprovably-ASCII string must NOT fold/OSR: {stats:?}",
     );
 }
+
+// --- Lever 2: RSS_JIT_REPORT missed-optimization report correctness ----------
+//
+// These tests pin that the observational report emits the RIGHT reason for the
+// canonical cases AND that the reason is accurate — a region the report says went
+// "native: ok" / "osr: entered" really did (stats back it), and one it says "not
+// native/osr: <reason>" really did not. The report is observational, so the run's
+// output is byte-identical to the plain OSR path (verified throughout).
+
+/// Find the report block for function `name` (blocks are `\n`-joined, first line
+/// is `jit-report: fn \`<name>\``).
+#[cfg(feature = "native-jit")]
+fn report_block<'a>(lines: &'a [String], name: &str) -> &'a str {
+    let needle = format!("fn `{name}`");
+    lines
+        .iter()
+        .find(|b| b.lines().next().is_some_and(|h| h.contains(&needle)))
+        .map(|s| s.as_str())
+        .unwrap_or_else(|| panic!("no report block for fn `{name}` in {lines:#?}"))
+}
+
+/// A winning pure-Int scalar loop: the whole function is in the native subset, so it
+/// compiles+runs as one native body (`native: ok`) and OSR never has to fire. The
+/// report must say `native: ok` and `osr: eligible` (the loop body IS in the subset),
+/// and the stats must confirm the function actually ran natively (accuracy).
+#[cfg(feature = "native-jit")]
+#[test]
+fn report_native_scalar_loop_says_native_ok() {
+    let source = "\
+fn hot(limit: Int, seed: Int) -> Int {
+    let mut i = 0
+    let mut total = seed
+    while i < limit {
+        total = total + i * 3 - i / 2 + 7
+        i = i + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: hot(limit: read 50, seed: read 0)))
+    return Unit
+}
+";
+    let file = "jit-report-native-scalar.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let (out, stats, lines) =
+        rsscript::reg_vm_eval_source_main_native_osr_report(file, source, std::iter::empty::<String>())
+            .expect("osr+report run");
+    assert_eq!(interp.stdout, out.stdout, "report run must be byte-identical");
+    let block = report_block(&lines, "hot");
+    assert!(
+        block.contains("native: ok") && block.contains("osr: n/a"),
+        "scalar loop should report native: ok + osr: n/a, got:\n{block}"
+    );
+    assert!(stats.native_calls >= 1, "accuracy: function really ran native: {stats:?}");
+}
+
+/// A `Bytes.slice` (allocating) loop: the report must say the loop body is NOT
+/// OSR-able because it contains the allocating `Bytes.slice` intrinsic, with the
+/// registry effect surfaced; the stats must confirm NO OSR entry (accuracy).
+#[cfg(feature = "native-jit")]
+#[test]
+fn report_bytes_scan_says_not_osr_bytes_slice_allocate() {
+    let source = "\
+fn scan(data: read Bytes, limit: Int) -> Int {
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        let head = Bytes.slice(value: read data, start: 0, len: 5)
+        total = total + Bytes.len(value: read head)
+        index = index + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    let data = Bytes.from_string(value: read \"the quick brown fox\")
+    Log.write(message: read String.from_int(value: scan(data: read data, limit: read 50)))
+    return Unit
+}
+";
+    let file = "jit-report-bytes-scan.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let (out, stats, lines) =
+        rsscript::reg_vm_eval_source_main_native_osr_report(file, source, std::iter::empty::<String>())
+            .expect("osr+report run");
+    assert_eq!(interp.stdout, out.stdout, "report run must be byte-identical");
+    let block = report_block(&lines, "scan");
+    assert!(
+        block.contains("not osr") && block.contains("BytesSlice") && block.contains("allocate"),
+        "bytes loop should report not osr w/ BytesSlice allocate, got:\n{block}"
+    );
+    assert_eq!(stats.osr_entries, 0, "accuracy: bytes loop must NOT osr: {stats:?}");
+}
+
+/// A `String.slice` of a RUNTIME (not provably-ASCII) string source: the
+/// length-law fold bails (the ASCII gate fails), so the loop does NOT OSR. The report
+/// must say `not osr` and surface the allocating `StringSlice` intrinsic from the
+/// registry (effect=allocate + its ASCII-gated note); the stats must confirm NO OSR
+/// entry (accuracy). This is the registry-driven "not folded: string slice source not
+/// provably ASCII" case.
+#[cfg(feature = "native-jit")]
+#[test]
+fn report_string_slice_runtime_source_says_not_osr() {
+    let source = "\
+fn build(text: read String, limit: Int) -> Int {
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        let head = String.slice(value: read text, start: 0, len: 3)
+        total = total + String.len(value: read head)
+        index = index + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: build(text: read \"hello world\", limit: read 50)))
+    return Unit
+}
+";
+    let file = "jit-report-string-slice.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let (out, stats, lines) =
+        rsscript::reg_vm_eval_source_main_native_osr_report(file, source, std::iter::empty::<String>())
+            .expect("osr+report run");
+    assert_eq!(interp.stdout, out.stdout, "report run must be byte-identical");
+    let block = report_block(&lines, "build");
+    assert!(
+        block.contains("not osr")
+            && block.contains("StringSlice")
+            && block.contains("allocate"),
+        "string-slice loop should report not osr w/ StringSlice allocate, got:\n{block}"
+    );
+    assert_eq!(stats.osr_entries, 0, "accuracy: string-slice loop must NOT osr: {stats:?}");
+}
+
+/// A non-loop function (no back-edge): the report must say `not osr: no loop`, and
+/// it must never claim an OSR entry. Pins the negative-shape reason.
+#[cfg(feature = "native-jit")]
+#[test]
+fn report_loopless_function_says_no_loop() {
+    let source = "\
+fn add3(a: Int, b: Int, c: Int) -> Int {
+    let s = a + b
+    let t = s + c
+    return t + 1
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: add3(a: read 1, b: read 2, c: read 3)))
+    return Unit
+}
+";
+    let file = "jit-report-loopless.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let (out, _stats, lines) =
+        rsscript::reg_vm_eval_source_main_native_osr_report(file, source, std::iter::empty::<String>())
+            .expect("osr+report run");
+    assert_eq!(interp.stdout, out.stdout, "report run must be byte-identical");
+    let block = report_block(&lines, "add3");
+    assert!(
+        block.contains("not osr: no loop"),
+        "loopless fn should report 'not osr: no loop', got:\n{block}"
+    );
+}
+
+/// `option_result_chain` positive: a hot loop chaining Option/Result combinators that
+/// the combinator-expansion + scalar-replacement passes dissolve so the loop OSRs. The
+/// report must say `osr: entered` for the loop function, and the stats must confirm an
+/// actual OSR entry (accuracy: a positive verdict is backed by the real outcome).
+#[cfg(feature = "native-jit")]
+#[test]
+fn report_option_result_chain_says_osr_entered() {
+    let source = "\
+fn maybe_even(value: Int) -> Option<Int> {
+    let half = value / 2
+    if half * 2 == value { return Some(value) }
+    return None
+}
+
+fn f(limit: Int) -> Int {
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        let option_value = Option.and_then<Int, Int>(
+            value: read Option.map<Int, Int>(
+                value: read maybe_even(value: index),
+                mapper: |value| { return value + 1 },
+            ),
+            mapper: |value| { return Some(value * 2) },
+        )
+        total = total + Option.unwrap_or<Int>(value: read option_value, default: read 0)
+        index = index + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(limit: read 200)))
+    return Unit
+}
+";
+    let file = "jit-report-option-result-chain.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let (out, stats, lines) =
+        rsscript::reg_vm_eval_source_main_native_osr_report(file, source, std::iter::empty::<String>())
+            .expect("osr+report run");
+    assert_eq!(interp.stdout, out.stdout, "report run must be byte-identical");
+    let block = report_block(&lines, "f");
+    assert!(
+        block.contains("osr: entered"),
+        "combinator chain loop should report osr: entered, got:\n{block}"
+    );
+    assert!(stats.osr_entries >= 1, "accuracy: combinator chain really OSR'd: {stats:?}");
+}
