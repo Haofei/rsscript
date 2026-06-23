@@ -2385,6 +2385,724 @@ fn native_expand_option_result_combinators_in_region(
     Some((new_code, next_reg, ip_map))
 }
 
+/// OSR × J3 (string length-law folding): a non-escaping string register `s`
+/// inside the loop region `[header, exit)` whose EVERY use is `String.len(s)`,
+/// another foldable producer's operand, or a `Move` to a foldable register, can
+/// have its allocation DELETED — every `String.len(s)` is replaced by arithmetic
+/// on operand lengths, and the producer instruction(s) are dropped. This stays
+/// READ-ONLY (it removes allocations, never performs a heap write — Exec Spec
+/// §7.2 holds), so a length-only string loop becomes pure-scalar and OSRs.
+///
+/// VERIFIED length laws (against the interpreter's exact `String` semantics):
+/// - `String.len` is the BYTE length (`str::len`, see [`RegIntrinsic::StringLen`]).
+/// - `String.concat` is byte concatenation (see [`RegInstr::StringConcat`]), so
+///   `len(concat(a,b)) = len(a) + len(b)` exactly, REGARDLESS of encoding.
+/// - `String.from_int(k)` is `i64::to_string()`: ASCII decimal digits with a
+///   leading `-` for negatives, `"0"` for zero, all bytes 1-wide. Its byte length
+///   is the decimal-digit count (`+1` for the sign when `k < 0`), computed natively
+///   by a forward branch ladder that handles `0`, negatives, and `i64::MIN` (which
+///   cannot be negated) by comparing `k` directly against ± powers of ten.
+/// - `String.slice(s, start, n)` (see [`string_slice_range`]) clamps to CHAR
+///   boundaries in BYTE units: `bs = clamp_cb(s, max(start,0))`,
+///   `be = clamp_cb(s, min(bs + max(n,0), len(s)))`, result byte-length `be - bs`.
+///   The char-boundary clamp depends on the actual bytes of `s`, so the law is only
+///   provable when `s` is ASCII (every byte is a boundary ⇒ clamp is identity):
+///   `len = min(min(max(start,0), L) + max(n,0), L) - min(max(start,0), L)` with
+///   `L = len(s)`. A slice of a NON-ASCII (unprovably-ASCII) string ⇒ NOT foldable.
+/// - `LoadString` / string `Move`: constant byte length / alias of the source.
+///
+/// Conservative bails (when unsure REJECT ⇒ no OSR, never unsound): any escaping
+/// string use (stored / returned / captured / compared / passed to a non-`len`
+/// intrinsic / live at a loop boundary); a `String.slice` of an unprovably-ASCII
+/// string; a `String.len` whose source is not a fully-foldable producer; a leaf
+/// non-foldable string reaching `String.len` (the real `StringLen` is NOT native-
+/// subset, so it would block OSR anyway). `RegFootprint::All` ⇒ bail.
+///
+/// Returns `(transformed_code, new_n_regs, ip_map)` with the same transformed→
+/// original `ip_map` discipline as the sibling region passes. Identity (no
+/// foldable `String.len`) ⇒ code unchanged with an identity ip-map.
+#[cfg(feature = "native-jit")]
+fn native_string_length_fold_in_region(
+    code: &[RegInstr],
+    n_regs: usize,
+    header: usize,
+    exit: usize,
+) -> Option<(Vec<RegInstr>, usize, Vec<usize>)> {
+    if header >= exit || exit > code.len() {
+        return None;
+    }
+    let in_region = |i: usize| i >= header && i < exit;
+
+    // The only thing this pass targets is an in-region `String.len`. Without one,
+    // there is nothing to fold ⇒ identity (plain OSR, byte-for-byte the old path).
+    let is_string_len = |instr: &RegInstr| {
+        matches!(
+            instr,
+            RegInstr::CallIntrinsic { intrinsic: RegIntrinsic::StringLen, args, .. }
+                | RegInstr::CallTypedIntrinsic { intrinsic: RegIntrinsic::StringLen, args, .. }
+                if args.len() == 1
+        )
+    };
+    if !(header..exit).any(|i| is_string_len(&code[i])) {
+        let ip_map: Vec<usize> = (0..code.len()).collect();
+        return Some((code.to_vec(), n_regs, ip_map));
+    }
+
+    // Classify each in-region string producer. A producer register is a candidate
+    // iff it is defined EXACTLY ONCE in-region by a foldable op and never defined
+    // out-of-region. `ascii` records whether the produced string is provably ASCII
+    // (needed only for the slice length law).
+    #[derive(Clone)]
+    enum Producer {
+        Literal { len: i64, ascii: bool },
+        FromInt { src: usize },
+        Concat { left: usize, right: usize },
+        Slice { src: usize, start: usize, len: usize },
+        Alias { src: usize }, // string `Move`
+    }
+    let mut producer: Vec<Option<Producer>> = vec![None; n_regs];
+    let mut def_count = vec![0usize; n_regs]; // in-region defs of a candidate dst
+    let mut multiply_defined = vec![false; n_regs];
+
+    let slice_args = |args: &[usize]| -> Option<(usize, usize, usize)> {
+        if args.len() == 3 {
+            Some((args[0], args[1], args[2]))
+        } else {
+            None
+        }
+    };
+    for i in header..exit {
+        let dst_prod: Option<(usize, Producer)> = match &code[i] {
+            RegInstr::LoadString { dst, value } => Some((
+                *dst,
+                Producer::Literal { len: value.len() as i64, ascii: value.is_ascii() },
+            )),
+            RegInstr::StringConcat { dst, left, right } => {
+                Some((*dst, Producer::Concat { left: *left, right: *right }))
+            }
+            RegInstr::CallIntrinsic { dst, intrinsic: RegIntrinsic::StringFromInt, args }
+                if args.len() == 1 =>
+            {
+                Some((*dst, Producer::FromInt { src: args[0] }))
+            }
+            RegInstr::CallIntrinsic { dst, intrinsic: RegIntrinsic::StringSlice, args }
+            | RegInstr::CallTypedIntrinsic {
+                dst, intrinsic: RegIntrinsic::StringSlice, args, ..
+            } => slice_args(args)
+                .map(|(src, start, len)| (*dst, Producer::Slice { src, start, len })),
+            // A `Move` whose src is a (candidate) string is a potential alias; we
+            // only mark it a producer if the src is itself a string producer (below,
+            // after all defs are seen). Record it provisionally as an Alias.
+            RegInstr::Move { dst, src } => Some((*dst, Producer::Alias { src: *src })),
+            _ => None,
+        };
+        if let Some((dst, prod)) = dst_prod {
+            if dst >= n_regs {
+                return None;
+            }
+            def_count[dst] += 1;
+            if def_count[dst] > 1 || producer[dst].is_some() {
+                multiply_defined[dst] = true;
+            }
+            producer[dst] = Some(prod);
+        }
+    }
+
+    // A register defined out-of-region, or defined more than once in-region, cannot
+    // be a sound single-producer string ⇒ drop it from the candidate set. (Out-of-
+    // region defs would change the value the loop observes.)
+    for i in 0..code.len() {
+        if in_region(i) {
+            continue;
+        }
+        match instr_written_reg(&code[i]) {
+            RegFootprint::Some(ws) => {
+                for w in ws {
+                    if w < n_regs {
+                        multiply_defined[w] = true;
+                    }
+                }
+            }
+            RegFootprint::All => return None,
+        }
+    }
+    for r in 0..n_regs {
+        if multiply_defined[r] {
+            producer[r] = None;
+        }
+    }
+
+    // Resolve foldability with a fixpoint: a producer is FOLDABLE iff all the
+    // operands its length law needs are themselves foldable (or, for slice/from_int,
+    // satisfy the ASCII / integer requirements). `Move`/`Concat`/`Slice` of a non-
+    // foldable string is itself non-foldable. `ascii` is tracked alongside.
+    let mut foldable = vec![false; n_regs];
+    let mut ascii = vec![false; n_regs];
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for r in 0..n_regs {
+            if foldable[r] {
+                continue;
+            }
+            let Some(prod) = &producer[r] else { continue };
+            let (ok, is_ascii) = match prod {
+                Producer::Literal { ascii, .. } => (true, *ascii),
+                // `from_int` is always ASCII; its operand is an Int (not a string),
+                // so no string dependency.
+                Producer::FromInt { .. } => (true, true),
+                Producer::Concat { left, right } => {
+                    let ok = *left < n_regs
+                        && *right < n_regs
+                        && foldable[*left]
+                        && foldable[*right];
+                    (ok, ok && ascii[*left] && ascii[*right])
+                }
+                Producer::Slice { src, .. } => {
+                    // The slice length law needs the SOURCE to be provably ASCII
+                    // (so the char-boundary clamp is the identity). A slice of an
+                    // ASCII string is itself ASCII.
+                    let ok = *src < n_regs && foldable[*src] && ascii[*src];
+                    (ok, ok)
+                }
+                Producer::Alias { src } => {
+                    let ok = *src < n_regs && foldable[*src];
+                    (ok, ok && ascii[*src])
+                }
+            };
+            if ok && !foldable[r] {
+                foldable[r] = true;
+                ascii[r] = is_ascii;
+                changed = true;
+            }
+        }
+    }
+
+    // STRING = registers we (provisionally) treat as string-valued and intend to
+    // dissolve: every foldable producer register. For soundness we now require that
+    // EVERY use of a STRING register is itself foldable — i.e. an operand of another
+    // foldable producer, a `Move` to a foldable register, or a `String.len`. Any
+    // other in-region use, or ANY out-of-region use, ESCAPES ⇒ that register cannot
+    // be dissolved. We don't need partial dissolution: if a `String.len` source is
+    // foldable but the foldable register also escapes elsewhere, the producer must
+    // stay live, so we cannot delete it — bail that whole register out of `foldable`
+    // and re-resolve, then finally require every in-region `String.len` to be
+    // foldable (else bail the pass: a live `StringLen` is not native-subset).
+    //
+    // Compute "escapes": a foldable register read by an instruction that is neither
+    // (a) a foldable producer consuming it as a string operand, nor (b) a
+    // `String.len`. Iterate to a fixpoint (dropping an escaping register can make a
+    // consumer's operand non-foldable, propagating).
+    loop {
+        let mut escaped = vec![false; n_regs];
+        // Out-of-region reads of any foldable register ⇒ escape.
+        for i in 0..code.len() {
+            if in_region(i) {
+                continue;
+            }
+            match instr_read_regs(&code[i]) {
+                RegFootprint::Some(rs) => {
+                    for r in rs {
+                        if r < n_regs && foldable[r] {
+                            escaped[r] = true;
+                        }
+                    }
+                }
+                RegFootprint::All => return None,
+            }
+        }
+        // In-region uses: each read of a foldable register must be a sanctioned
+        // string consumer.
+        for i in header..exit {
+            match &code[i] {
+                // Sanctioned: foldable producers consuming foldable string operands.
+                RegInstr::StringConcat { dst, left, right } if foldable[*dst] => {
+                    // operands consumed as strings — fine (handled by being foldable)
+                    let _ = (left, right);
+                }
+                RegInstr::CallIntrinsic { dst, intrinsic: RegIntrinsic::StringSlice, args }
+                | RegInstr::CallTypedIntrinsic {
+                    dst, intrinsic: RegIntrinsic::StringSlice, args, ..
+                } if foldable[*dst] && args.len() == 3 => {
+                    // start/len (args[1], args[2]) are Int operands, not strings.
+                }
+                RegInstr::Move { dst, src } if foldable[*dst] && foldable[*src] => {
+                    // alias of a foldable string into a foldable register — fine.
+                }
+                // Sanctioned: the query itself.
+                _ if is_string_len(&code[i]) => {
+                    // its single arg is consumed as a string — fine.
+                }
+                // Any other instruction: any foldable register it reads escapes.
+                other => match instr_read_regs(other) {
+                    RegFootprint::Some(rs) => {
+                        for r in rs {
+                            if r < n_regs && foldable[r] {
+                                escaped[r] = true;
+                            }
+                        }
+                    }
+                    RegFootprint::All => return None,
+                },
+            }
+        }
+        if !escaped.iter().any(|&e| e) {
+            break;
+        }
+        // Drop escaped registers and re-resolve foldability (a dropped operand can
+        // un-fold its consumers).
+        for r in 0..n_regs {
+            if escaped[r] {
+                foldable[r] = false;
+                ascii[r] = false;
+            }
+        }
+        let mut changed2 = true;
+        while changed2 {
+            changed2 = false;
+            for r in 0..n_regs {
+                if !foldable[r] {
+                    continue;
+                }
+                let Some(prod) = &producer[r] else { continue };
+                let still = match prod {
+                    Producer::Literal { .. } | Producer::FromInt { .. } => true,
+                    Producer::Concat { left, right } => foldable[*left] && foldable[*right],
+                    Producer::Slice { src, .. } => foldable[*src] && ascii[*src],
+                    Producer::Alias { src } => foldable[*src],
+                };
+                if !still {
+                    foldable[r] = false;
+                    ascii[r] = false;
+                    changed2 = true;
+                }
+            }
+        }
+    }
+
+    // Every in-region `String.len` MUST now resolve to a foldable source; otherwise a
+    // real `StringLen` (not native-subset) survives and would block OSR ⇒ bail.
+    for i in header..exit {
+        if is_string_len(&code[i]) {
+            let src = match &code[i] {
+                RegInstr::CallIntrinsic { args, .. }
+                | RegInstr::CallTypedIntrinsic { args, .. } => args[0],
+                _ => unreachable!(),
+            };
+            if src >= n_regs || !foldable[src] {
+                return None;
+            }
+        }
+    }
+
+    // Nothing dissolvable after escape analysis ⇒ identity (no fold). (Reachable
+    // when the only `String.len` had a non-foldable source that we bailed above; if
+    // we get here there IS at least one foldable `String.len`.)
+    if !foldable.iter().any(|&f| f) {
+        let ip_map: Vec<usize> = (0..code.len()).collect();
+        return Some((code.to_vec(), n_regs, ip_map));
+    }
+
+    // Allocate a fresh Int `len_reg` per foldable string register: it will hold that
+    // string's byte length, computed at the producer site. `from_int` needs scratch
+    // registers for its digit-count ladder; reserve them lazily.
+    let mut len_reg = vec![0usize; n_regs];
+    let mut next_reg = n_regs;
+    for r in 0..n_regs {
+        if foldable[r] {
+            len_reg[r] = next_reg;
+            next_reg += 1;
+        }
+    }
+
+    // Emit the byte-length computation for `from_int(src)` into `out`, appending to
+    // `out_code` (using absolute new-code indices for intra-fragment forward jumps,
+    // back-patched after emission). Allocates scratch registers from `next_reg`.
+    //
+    // Matches `i64::to_string().len()`: `1` for `0`; `digits(k)` for `k > 0`;
+    // `1 + digits(|k|)` for `k < 0`. Avoids negating `i64::MIN` by comparing `k`
+    // directly against negative powers of ten.
+    fn emit_from_int_len(
+        out_code: &mut Vec<RegInstr>,
+        out: usize,
+        k: usize,
+        next_reg: &mut usize,
+    ) {
+        // result accumulator is `out`. Strategy:
+        //   if k >= 0:  out = pos_digits(k)
+        //   else:       out = 1 + neg_digits(k)
+        // pos_digits(k): 1 + count of thresholds {10,100,...,1e18} that k >= t.
+        // neg_digits(k): 1 + count of thresholds {-10,...,-1e18} that k <= t.
+        // Both are computed branchlessly-by-cascade using comparisons that write a
+        // Bool then a conditional add — but Bool isn't Int-addable, so we instead use
+        // a forward branch ladder: for k >= 0, test largest threshold first and on
+        // the first hit LoadInt the digit count and Jump to the merge.
+        let zero = *next_reg;
+        *next_reg += 1;
+        let thr = *next_reg;
+        *next_reg += 1;
+        // Positive powers of ten (10^1 .. 10^18); 10^19 overflows i64, so 19-digit
+        // positives (>= 10^18) are the final else of the positive ladder.
+        const POW10: [i64; 18] = [
+            10,
+            100,
+            1_000,
+            10_000,
+            100_000,
+            1_000_000,
+            10_000_000,
+            100_000_000,
+            1_000_000_000,
+            10_000_000_000,
+            100_000_000_000,
+            1_000_000_000_000,
+            10_000_000_000_000,
+            100_000_000_000_000,
+            1_000_000_000_000_000,
+            10_000_000_000_000_000,
+            100_000_000_000_000_000,
+            1_000_000_000_000_000_000,
+        ];
+        out_code.push(RegInstr::LoadInt { dst: zero, value: 0 });
+        // Branch: if k < 0 jump to neg-ladder.
+        let neg_start_patch = out_code.len();
+        out_code.push(RegInstr::JumpIfIntCompare {
+            lhs: k,
+            rhs: zero,
+            op: RegIntCompare::Less,
+            expected: true,
+            target: 0, // back-patched
+        });
+        // --- positive (and zero) ladder: emit largest threshold first ---
+        // For d in 19..=2: if k >= 10^(d-1) -> out = d; Jump merge.
+        let mut to_merge: Vec<usize> = Vec::new();
+        for d in (2..=19usize).rev() {
+            let t = POW10[d - 2];
+            out_code.push(RegInstr::LoadInt { dst: thr, value: t });
+            // if k >= t -> set out=d, jump merge
+            let skip_patch = out_code.len();
+            out_code.push(RegInstr::JumpIfIntCompare {
+                lhs: k,
+                rhs: thr,
+                op: RegIntCompare::GreaterEqual,
+                expected: false, // if NOT (k>=t) skip the assignment
+                target: 0, // back-patched to the next threshold test
+            });
+            out_code.push(RegInstr::LoadInt { dst: out, value: d as i64 });
+            to_merge.push(out_code.len());
+            out_code.push(RegInstr::Jump { target: 0 }); // -> merge
+            // back-patch skip to here (next threshold test / final else)
+            let here = out_code.len();
+            if let RegInstr::JumpIfIntCompare { target, .. } = &mut out_code[skip_patch] {
+                *target = here;
+            }
+        }
+        // positive final else: k in [0,10) -> 1 digit.
+        out_code.push(RegInstr::LoadInt { dst: out, value: 1 });
+        to_merge.push(out_code.len());
+        out_code.push(RegInstr::Jump { target: 0 }); // -> merge
+        // --- negative ladder ---
+        let neg_start = out_code.len();
+        if let RegInstr::JumpIfIntCompare { target, .. } = &mut out_code[neg_start_patch] {
+            *target = neg_start;
+        }
+        // out (magnitude digits) then +1 for sign. For d in 19..=2: if k <= -10^(d-1)
+        // -> magnitude d. Final else -> magnitude 1.
+        let mut neg_to_add: Vec<usize> = Vec::new();
+        for d in (2..=19usize).rev() {
+            let t = -POW10[d - 2];
+            out_code.push(RegInstr::LoadInt { dst: thr, value: t });
+            let skip_patch = out_code.len();
+            out_code.push(RegInstr::JumpIfIntCompare {
+                lhs: k,
+                rhs: thr,
+                op: RegIntCompare::LessEqual,
+                expected: false, // if NOT (k<=t) skip
+                target: 0,
+            });
+            out_code.push(RegInstr::LoadInt { dst: out, value: d as i64 });
+            neg_to_add.push(out_code.len());
+            out_code.push(RegInstr::Jump { target: 0 }); // -> add-sign
+            let here = out_code.len();
+            if let RegInstr::JumpIfIntCompare { target, .. } = &mut out_code[skip_patch] {
+                *target = here;
+            }
+        }
+        out_code.push(RegInstr::LoadInt { dst: out, value: 1 });
+        // fallthrough to add-sign
+        let add_sign = out_code.len();
+        for p in neg_to_add {
+            if let RegInstr::Jump { target } = &mut out_code[p] {
+                *target = add_sign;
+            }
+        }
+        // out = out + 1 (sign byte). Reuse `thr` as the constant 1.
+        out_code.push(RegInstr::LoadInt { dst: thr, value: 1 });
+        out_code.push(RegInstr::AddInt { dst: out, lhs: out, rhs: thr });
+        // fallthrough to merge
+        let merge = out_code.len();
+        for p in to_merge {
+            if let RegInstr::Jump { target } = &mut out_code[p] {
+                *target = merge;
+            }
+        }
+    }
+
+    // Emit the slice byte-length law for an ASCII source into `out_code`, writing
+    // `out`. `l_src` is the source's length register; `start`,`len` the Int operands.
+    //   sc = max(start,0); s_clamp = min(sc, L); ec = s_clamp + max(len,0);
+    //   e_clamp = min(ec, L); out = e_clamp - s_clamp.
+    fn emit_slice_len(
+        out_code: &mut Vec<RegInstr>,
+        out: usize,
+        l_src: usize,
+        start: usize,
+        len: usize,
+        next_reg: &mut usize,
+    ) {
+        let zero = *next_reg;
+        let sc = *next_reg + 1;
+        let sclamp = *next_reg + 2;
+        let lc = *next_reg + 3;
+        let ec = *next_reg + 4;
+        *next_reg += 5;
+        out_code.push(RegInstr::LoadInt { dst: zero, value: 0 });
+        // sc = max(start, 0)
+        emit_max(out_code, sc, start, zero, next_reg);
+        // s_clamp = min(sc, L)
+        emit_min(out_code, sclamp, sc, l_src, next_reg);
+        // lc = max(len, 0)
+        emit_max(out_code, lc, len, zero, next_reg);
+        // ec = s_clamp + lc
+        out_code.push(RegInstr::AddInt { dst: ec, lhs: sclamp, rhs: lc });
+        // e_clamp = min(ec, L)  -> reuse `ec`
+        emit_min(out_code, ec, ec, l_src, next_reg);
+        // out = e_clamp - s_clamp
+        out_code.push(RegInstr::SubInt { dst: out, lhs: ec, rhs: sclamp });
+    }
+
+    // out = max(a, b): if a >= b -> out=a else out=b (forward branch).
+    fn emit_max(
+        out_code: &mut Vec<RegInstr>,
+        out: usize,
+        a: usize,
+        b: usize,
+        _next_reg: &mut usize,
+    ) {
+        let take_b = out_code.len();
+        out_code.push(RegInstr::JumpIfIntCompare {
+            lhs: a,
+            rhs: b,
+            op: RegIntCompare::GreaterEqual,
+            expected: false,
+            target: 0,
+        });
+        out_code.push(RegInstr::Move { dst: out, src: a });
+        let jmp = out_code.len();
+        out_code.push(RegInstr::Jump { target: 0 });
+        let here = out_code.len();
+        if let RegInstr::JumpIfIntCompare { target, .. } = &mut out_code[take_b] {
+            *target = here;
+        }
+        out_code.push(RegInstr::Move { dst: out, src: b });
+        let merge = out_code.len();
+        if let RegInstr::Jump { target } = &mut out_code[jmp] {
+            *target = merge;
+        }
+    }
+
+    // out = min(a, b): if a <= b -> out=a else out=b.
+    fn emit_min(
+        out_code: &mut Vec<RegInstr>,
+        out: usize,
+        a: usize,
+        b: usize,
+        _next_reg: &mut usize,
+    ) {
+        let take_b = out_code.len();
+        out_code.push(RegInstr::JumpIfIntCompare {
+            lhs: a,
+            rhs: b,
+            op: RegIntCompare::LessEqual,
+            expected: false,
+            target: 0,
+        });
+        out_code.push(RegInstr::Move { dst: out, src: a });
+        let jmp = out_code.len();
+        out_code.push(RegInstr::Jump { target: 0 });
+        let here = out_code.len();
+        if let RegInstr::JumpIfIntCompare { target, .. } = &mut out_code[take_b] {
+            *target = here;
+        }
+        out_code.push(RegInstr::Move { dst: out, src: b });
+        let merge = out_code.len();
+        if let RegInstr::Jump { target } = &mut out_code[jmp] {
+            *target = merge;
+        }
+    }
+
+    // Rewrite the whole stream. In-region foldable producers are replaced by the
+    // length computation writing `len_reg[dst]` (the original heap allocation is
+    // DELETED); each `String.len(s)` becomes `Move(dst, len_reg[s])`. Everything
+    // else is copied through, remapping inter-instruction jump/match targets through
+    // `index_map`. Intra-fragment jumps emitted by the helpers above already carry
+    // absolute new-code positions (back-patched at emit time) and must NOT be
+    // remapped, so producer fragments are spliced AFTER recording `index_map[i]` and
+    // the fragment's internal jumps are left untouched.
+    enum Fix {
+        Target(usize),
+        Match { a: usize, b: usize },
+        MapGet { a: usize, b: usize },
+    }
+    let mut new_code: Vec<RegInstr> = Vec::with_capacity(code.len());
+    let mut index_map = vec![0usize; code.len()];
+    let mut fixups: Vec<(usize, Fix)> = Vec::new();
+    for (i, instr) in code.iter().enumerate() {
+        index_map[i] = new_code.len();
+        let region = in_region(i);
+        // A foldable producer in-region: emit its length computation, drop the alloc.
+        if region {
+            let folded = match instr {
+                RegInstr::LoadString { dst, .. } if foldable[*dst] => {
+                    if let Some(Producer::Literal { len, .. }) = &producer[*dst] {
+                        new_code.push(RegInstr::LoadInt { dst: len_reg[*dst], value: *len });
+                    }
+                    true
+                }
+                RegInstr::StringConcat { dst, .. } if foldable[*dst] => {
+                    if let Some(Producer::Concat { left, right }) = &producer[*dst] {
+                        new_code.push(RegInstr::AddInt {
+                            dst: len_reg[*dst],
+                            lhs: len_reg[*left],
+                            rhs: len_reg[*right],
+                        });
+                    }
+                    true
+                }
+                RegInstr::Move { dst, src } if foldable[*dst] && foldable[*src] => {
+                    new_code.push(RegInstr::Move {
+                        dst: len_reg[*dst],
+                        src: len_reg[*src],
+                    });
+                    true
+                }
+                RegInstr::CallIntrinsic { dst, intrinsic: RegIntrinsic::StringFromInt, .. }
+                    if foldable[*dst] =>
+                {
+                    if let Some(Producer::FromInt { src }) = &producer[*dst] {
+                        emit_from_int_len(&mut new_code, len_reg[*dst], *src, &mut next_reg);
+                    }
+                    true
+                }
+                RegInstr::CallIntrinsic { dst, intrinsic: RegIntrinsic::StringSlice, .. }
+                | RegInstr::CallTypedIntrinsic {
+                    dst, intrinsic: RegIntrinsic::StringSlice, ..
+                } if foldable[*dst] => {
+                    if let Some(Producer::Slice { src, start, len }) = &producer[*dst] {
+                        emit_slice_len(
+                            &mut new_code,
+                            len_reg[*dst],
+                            len_reg[*src],
+                            *start,
+                            *len,
+                            &mut next_reg,
+                        );
+                    }
+                    true
+                }
+                _ if is_string_len(instr) => {
+                    let (dst, src) = match instr {
+                        RegInstr::CallIntrinsic { dst, args, .. }
+                        | RegInstr::CallTypedIntrinsic { dst, args, .. } => (*dst, args[0]),
+                        _ => unreachable!(),
+                    };
+                    new_code.push(RegInstr::Move { dst, src: len_reg[src] });
+                    true
+                }
+                _ => false,
+            };
+            if folded {
+                continue;
+            }
+        }
+        // Copy-through, remapping jump/match targets to the new index space.
+        match instr {
+            RegInstr::Jump { target }
+            | RegInstr::JumpIfBool { target, .. }
+            | RegInstr::JumpIfIntCompare { target, .. } => {
+                fixups.push((new_code.len(), Fix::Target(*target)));
+                new_code.push(instr.clone());
+            }
+            RegInstr::MatchOption { some_ip, none_ip, .. } => {
+                fixups.push((new_code.len(), Fix::Match { a: *some_ip, b: *none_ip }));
+                new_code.push(instr.clone());
+            }
+            RegInstr::MatchResult { ok_ip, err_ip, .. } => {
+                fixups.push((new_code.len(), Fix::Match { a: *ok_ip, b: *err_ip }));
+                new_code.push(instr.clone());
+            }
+            RegInstr::MatchVariant { match_ip, else_ip, .. } => {
+                fixups.push((new_code.len(), Fix::Match { a: *match_ip, b: *else_ip }));
+                new_code.push(instr.clone());
+            }
+            RegInstr::MatchMapGet { some_ip, none_ip, .. } => {
+                fixups.push((new_code.len(), Fix::MapGet { a: *some_ip, b: *none_ip }));
+                new_code.push(instr.clone());
+            }
+            other => new_code.push(other.clone()),
+        }
+    }
+    for (pos, fix) in fixups {
+        match fix {
+            Fix::Target(t) => {
+                let target = index_map[t];
+                match &mut new_code[pos] {
+                    RegInstr::Jump { target: dst }
+                    | RegInstr::JumpIfBool { target: dst, .. }
+                    | RegInstr::JumpIfIntCompare { target: dst, .. } => *dst = target,
+                    _ => {}
+                }
+            }
+            Fix::Match { a, b } => {
+                let (sa, sb) = (index_map[a], index_map[b]);
+                match &mut new_code[pos] {
+                    RegInstr::MatchOption { some_ip, none_ip, .. } => {
+                        *some_ip = sa;
+                        *none_ip = sb;
+                    }
+                    RegInstr::MatchResult { ok_ip, err_ip, .. } => {
+                        *ok_ip = sa;
+                        *err_ip = sb;
+                    }
+                    RegInstr::MatchVariant { match_ip, else_ip, .. } => {
+                        *match_ip = sa;
+                        *else_ip = sb;
+                    }
+                    _ => {}
+                }
+            }
+            Fix::MapGet { a, b } => {
+                let (sa, sb) = (index_map[a], index_map[b]);
+                if let RegInstr::MatchMapGet { some_ip, none_ip, .. } = &mut new_code[pos] {
+                    *some_ip = sa;
+                    *none_ip = sb;
+                }
+            }
+        }
+    }
+    // Inverse ip-map: every fragment instruction maps back to the producer's
+    // original index (`String.len` → its own index; copy-through 1:1).
+    let mut ip_map = vec![0usize; new_code.len()];
+    for i in 0..code.len() {
+        let start = index_map[i];
+        let end = if i + 1 < code.len() { index_map[i + 1] } else { new_code.len() };
+        for t in start..end {
+            ip_map[t] = i;
+        }
+    }
+    Some((new_code, next_reg, ip_map))
+}
+
 /// OSR × J3: scalar-replace non-escaping scalar `Option`s that live entirely
 /// inside the loop region `[header, exit)` of an otherwise native-INELIGIBLE
 /// function (one whose pre/post-loop code does I/O — calls, `Log.write`, …, which
@@ -14118,6 +14836,28 @@ impl RegVm {
                 let entry = detect_single_natural_loop(&eff_func.code).and_then(|lp_orig| {
                 native_inline_leaf_calls(&unit, eff_func, true, Some((lp_orig.header, lp_orig.exit))).and_then(
                     |(inlined_code, n_regs0, ip_map0)| {
+                    // OSR × J3 for STRING LENGTH-LAW FOLDING: BEFORE the Result/Option/
+                    // variant/struct passes, dissolve any non-escaping string built ONLY
+                    // to be measured (`String.len` of `concat`/`slice`/`from_int`/literal/
+                    // `Move`). Each `String.len` folds to arithmetic on operand byte
+                    // lengths (verified laws — byte len, additive concat, ASCII slice
+                    // clamp, `from_int` sign/zero/`i64::MIN` digit count) and the now-dead
+                    // string allocations are DELETED — read-only (no heap write; Exec Spec
+                    // §7.2 holds), turning a length-only string loop into pure-scalar Int
+                    // code the native subset accepts. An escaping string, an unprovable
+                    // length law (non-ASCII slice), or a `String.len` not traceable to a
+                    // foldable producer bails the whole pass; a body with no foldable
+                    // `String.len` returns the code unchanged with an identity ip-map, so
+                    // a non-string (or plain) body is byte-for-byte the old path. This runs
+                    // FIRST because it must see the RAW string ops (`StringConcat`/
+                    // `StringFromInt`/`StringSlice`/`StringLen`) before any later pass; the
+                    // transformed stream carries only Int arithmetic + branches in place of
+                    // the string ops, which the Result-SR pass copies through verbatim.
+                    detect_single_natural_loop(&inlined_code).and_then(|lp_sl| {
+                    native_string_length_fold_in_region(
+                        &inlined_code, n_regs0, lp_sl.header, lp_sl.exit,
+                    )
+                    .and_then(|(inlined_code, n_regs0, ip_map_sl)| {
                     // OSR × J3 for RESULTS (deopt-before-heap, Slice 1): scalar-replace
                     // any non-escaping, statically-always-`Ok` `Result<Scalar,_>` living
                     // entirely inside the region. An inlined leaf whose `Err` arm built a
@@ -14194,12 +14934,14 @@ impl RegVm {
                         // final hop through `ip_map0` carries an inlined-stream ip back to
                         // the (effective) function's ip.
                         // The loop-carried struct pass (`ip_map3b`) runs LAST, so its
-                        // index is the outermost hop:
+                        // index is the outermost hop. The string length-fold pass
+                        // (`ip_map_sl`) runs FIRST (right after inlining), so its hop sits
+                        // just inside `ip_map0`:
                         // `ip_map[t] =
-                        //   ip_map0[ip_map_r[ip_map1[ip_map2[ip_map3[ip_map3b[t]]]]]]`.
+                        //   ip_map0[ip_map_sl[ip_map_r[ip_map1[ip_map2[ip_map3[ip_map3b[t]]]]]]]`.
                         let ip_map: Vec<usize> = ip_map3b
                             .iter()
-                            .map(|&tb| ip_map0[ip_map_r[ip_map1[ip_map2[ip_map3[tb]]]]])
+                            .map(|&tb| ip_map0[ip_map_sl[ip_map_r[ip_map1[ip_map2[ip_map3[tb]]]]]])
                             .collect();
                         // Re-detect on the fully-transformed stream; its single loop is
                         // the same loop with both Option and variant ops dissolved (the
@@ -14291,6 +15033,8 @@ impl RegVm {
                                     }
                                 })
                         })
+                    })
+                    })
                     })
                     })
                 })

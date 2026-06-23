@@ -3464,12 +3464,13 @@ fn main() -> Unit {
 
 /// IntToFloat OSR negative test — proving we admitted ONLY `IntToFloat`, not
 /// `CallIntrinsic` broadly. This loop calls a DIFFERENT, still-unsupported intrinsic
-/// each iteration (`String.from_int`, a heap-String producer that is NOT in the
-/// native subset) alongside the same float arithmetic. Because that `CallIntrinsic`
-/// is in-region and unsupported, the loop MUST NOT OSR (`osr_entries == 0`), or the
-/// interpreter would diverge. The output must still be interpreter-identical. This
-/// guards against a future edit accidentally broadening the `CallIntrinsic`
-/// admission beyond the single `IntToFloat` shape.
+/// each iteration — `String.to_uppercase`, a heap-String producer that is NOT in the
+/// native subset AND is NOT a length-foldable producer (so the string length-fold
+/// pass cannot dissolve it either, leaving a real non-subset `StringLen`). Because
+/// that `CallIntrinsic` is in-region and unsupported, the loop MUST NOT OSR
+/// (`osr_entries == 0`), or the interpreter would diverge. The output must still be
+/// interpreter-identical. This guards against a future edit accidentally broadening
+/// the `CallIntrinsic` admission beyond the single `IntToFloat` shape.
 #[cfg(feature = "native-jit")]
 #[test]
 fn native_osr_other_intrinsic_in_loop_does_not_osr() {
@@ -3479,7 +3480,7 @@ fn compute(limit: Int) -> Int {
     let mut index = 0
     let mut total = 0
     while index < limit {
-        let s = String.from_int(value: read index)
+        let s = String.to_uppercase(value: read \"abc\")
         total = total + String.len(value: read s)
         index = index + 1
     }
@@ -3506,5 +3507,146 @@ fn main() -> Unit {
         stats.osr_entries, 0,
         "a loop with a non-IntToFloat CallIntrinsic in-region must NOT OSR — only the \
          single IntToFloat shape is admitted, not CallIntrinsic broadly: {stats:?}",
+    );
+}
+
+/// OSR × J3 string length-law folding — POSITIVE test. A hot loop builds a
+/// non-escaping string (`from_int` → `concat` → `slice`) used ONLY by
+/// `String.len`, inside an I/O-tangled (native-INELIGIBLE) function. The length
+/// fold dissolves every allocation to arithmetic on operand byte lengths, leaving a
+/// pure-scalar loop that OSRs. We assert byte-identical stdout to the interpreter
+/// AND that the loop genuinely OSR'd (`osr_entries > 0`).
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j3_string_length_fold_loop_matches_interpreter() {
+    let source = "\
+fn f(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        let s = String.from_int(value: i)
+        let k = String.concat(left: read \"v=\", right: read s)
+        let h = String.slice(value: read k, start: 0, len: 3)
+        total = total + String.len(value: read k) + String.len(value: read h)
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(limit: read 50)))
+    return Unit
+}
+";
+    let file = "jit-osr-j3-string-length-fold.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "OSR × J3 string length-fold loop must be byte-identical to the interpreter (stdout)"
+    );
+    // i in 0..50: len(k)=2+digits(i) summed = 100 + (10*1 + 40*2) = 190; len(h)=
+    // min(3, 2+digits(i)) = 3 always ⇒ 150. total = 340.
+    assert_eq!(osr.stdout.trim_end(), "begin\n340\n340");
+    assert!(
+        stats.osr_entries > 0,
+        "a non-escaping length-only string loop must OSR after length-law folding: {stats:?}",
+    );
+}
+
+/// OSR × J3 string length-fold — NEGATIVE test (escape). The constructed string is
+/// ALSO logged (escapes the loop region), so its allocation cannot be deleted: the
+/// pass must refuse to fold it and the loop must NOT OSR (`osr_entries == 0`). The
+/// program stays interpreter-identical (the interpreter runs the whole loop).
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j3_string_length_fold_escaping_does_not_osr() {
+    let source = "\
+fn f(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        let s = String.from_int(value: i)
+        let k = String.concat(left: read \"v=\", right: read s)
+        total = total + String.len(value: read k)
+        if i == 0 {
+            Log.write(message: read k)
+        }
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(limit: read 50)))
+    return Unit
+}
+";
+    let file = "jit-osr-j3-string-length-fold-escaping.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "an escaping (logged) constructed string must stay interpreter-identical"
+    );
+    assert_eq!(
+        stats.osr_entries, 0,
+        "a constructed string that ESCAPES (is logged) must NOT fold/OSR: {stats:?}",
+    );
+}
+
+/// OSR × J3 string length-fold — NEGATIVE test (unprovable law / non-ASCII slice).
+/// The string is built from a NON-ASCII literal, so `String.slice`'s char-boundary
+/// clamp depends on the actual bytes and the slice length law is NOT provable: the
+/// pass must bail that producer and the loop must NOT OSR (`osr_entries == 0`).
+/// `String.len` is byte length, so the byte-vs-char distinction is exercised here.
+/// Stays interpreter-identical.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j3_string_length_fold_non_ascii_slice_does_not_osr() {
+    let source = "\
+fn f(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        let s = String.from_int(value: i)
+        let k = String.concat(left: read \"café-\", right: read s)
+        let h = String.slice(value: read k, start: 0, len: 3)
+        total = total + String.len(value: read h)
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(limit: read 50)))
+    return Unit
+}
+";
+    let file = "jit-osr-j3-string-length-fold-non-ascii.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "a non-ASCII slice (unprovable length law) must stay interpreter-identical"
+    );
+    assert_eq!(
+        stats.osr_entries, 0,
+        "a String.slice of an unprovably-ASCII string must NOT fold/OSR: {stats:?}",
     );
 }
