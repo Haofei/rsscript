@@ -2319,21 +2319,38 @@ fn main() -> Unit {
 #[cfg(feature = "native-jit")]
 #[test]
 fn native_loop_free_per_iteration_dispatch_is_demoted_by_profitability_gate() {
-    // `main`'s hot loop allocates a fresh closure each iteration (so the loop itself
-    // is not OSR-eligible — MakeClosure in the region) and calls the loop-free body
-    // `x * 2 + 1` once per iteration. sum_{i=0}^{1999} (2i + 1) = 2000^2 = 4000000.
+    // `main`'s hot loop calls the loop-free leaf `helper` (`x * 2 + 1`) once per
+    // iteration AND has an early `return` inside the body. The early return makes the
+    // loop genuinely MULTI-EXIT, so `detect_single_natural_loop` rejects it and the
+    // loop can NEVER OSR (no whole-loop native body, no closure-sink) — yet the
+    // loop-free leaf is still dispatched natively per iteration, so this is the pure
+    // per-iteration-dispatch scenario the no-amortization gate exists to demote.
+    //
+    // (This shape replaced the previous in-loop `local f = |x| {...}` closure: that
+    // captureless non-escaping per-iteration closure is now SUNK + OSR'd by the J3
+    // closure-allocation-sinking pass, so it no longer reaches the per-iteration
+    // dispatch path. A multi-exit loop calling a non-sinkable leaf keeps a real gate
+    // test alive — the leaf can't be sunk because the loop can't OSR at all.)
+    //
+    // The early return is never taken (`total` never exceeds the guard), so
+    // sum_{i=0}^{1999} (2i + 1) = 2000^2 = 4000000.
     let source = "\
 features: local
+
+fn helper(x: Int) -> Int {
+    return x * 2 + 1
+}
 
 fn main() -> Unit {
     let limit = 2000
     let mut i = 0
     let mut total = 0
     while i < limit {
-        local f = |x| {
-            return x * 2 + 1
+        if total > 1000000000 {
+            Log.write(message: read \"overflow\")
+            return Unit
         }
-        total = total + f(i)
+        total = total + helper(x: i)
         i = i + 1
     }
     Log.write(message: read String.from_int(value: total))
@@ -2348,13 +2365,13 @@ fn main() -> Unit {
         .expect("native run should succeed");
     assert_eq!(
         native.stdout, interp.stdout,
-        "demoted-closure result must be byte-identical to the interpreter",
+        "demoted-leaf result must be byte-identical to the interpreter",
     );
     assert_eq!(native.stdout.trim_end(), "4000000");
     assert_eq!(
         stats.osr_entries, 0,
-        "this is a per-iteration native-dispatch scenario, NOT an OSR one (the in-loop \
-         MakeClosure makes the loop OSR-ineligible): {stats:?}",
+        "this is a per-iteration native-dispatch scenario, NOT an OSR one (the multi-exit \
+         loop — an early in-body return — makes the loop OSR-ineligible): {stats:?}",
     );
     assert!(
         stats.native_calls > 0,
@@ -2366,6 +2383,106 @@ fn main() -> Unit {
         "the no-amortization gate must demote the loop-free per-iteration body long \
          before 2000 iterations — native_calls must be bounded, NOT one-per-iteration: \
          {stats:?}",
+    );
+}
+
+/// OSR × closure-allocation sinking — POSITIVE test. A hot loop allocates a fresh
+/// NON-escaping closure (`local f = |x| { x*2+1 }`, a per-iteration `MakeClosure`)
+/// and calls it once per iteration, with the loop I/O-tangled (a `Log.write` before
+/// and after it in the same once-called `main`, so the whole function is native-
+/// INELIGIBLE — only OSR can run the loop). The closure's callee is known STATICALLY
+/// from the `MakeClosure`, is non-escaping, and is captureless, so the sinking pass
+/// dissolves the alloc and inlines `x*2+1`: the loop becomes pure-scalar and OSRs.
+/// Output must be byte-identical to the pure interpreter and `osr_entries > 0`.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_sinks_non_escaping_per_iteration_closure_alloc() {
+    let source = "\
+features: local
+
+fn main() -> Unit {
+    Log.write(message: read \"begin\")
+    let limit = 2000
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        local f = |x| {
+            return x * 2 + 1
+        }
+        total = total + f(i)
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+";
+    let file = "jit-osr-closure-sink-positive.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "OSR with a sunk per-iteration closure alloc must be byte-identical to the interpreter",
+    );
+    assert_eq!(osr.stdout.trim_end(), "begin\n4000000");
+    assert!(
+        stats.osr_entries > 0,
+        "the non-escaping per-iteration closure alloc must be sunk + inlined so the loop \
+         OSRs natively: {stats:?}",
+    );
+}
+
+/// OSR × closure-allocation sinking — NEGATIVE test. A per-iteration closure that is
+/// NOT sinkable must NOT OSR. Here the per-iteration `local f = |x| { ... }` CAPTURES
+/// a heap value (a `List`, used inside the body via `List.len`), so the callee body
+/// is not native-inlinable AND the capture is non-scalar: the sinking analysis
+/// rejects it (it never enters `sink_calls`), the `MakeClosure` stays in the loop,
+/// and the loop is not native-subset — so it cannot OSR. Output must still be
+/// byte-identical to the interpreter (the interpreter runs the whole loop) and
+/// `osr_entries == 0`. This is the conservative bail: a per-iteration closure whose
+/// value/captures escape the scalar subset is left on its normal heap-allocating
+/// path, behavior unchanged.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_does_not_sink_non_inlinable_heap_capturing_per_iteration_closure() {
+    let source = "\
+features: local
+
+fn main() -> Unit {
+    Log.write(message: read \"begin\")
+    let limit = 2000
+    let mut i = 0
+    let mut total = 0
+    let data = List.new<Int>()
+    while i < limit {
+        local f = |x| {
+            return x * 2 + 1 + List.len(list: read data)
+        }
+        total = total + f(i)
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+";
+    let file = "jit-osr-closure-sink-negative.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    // Force OSR ON deterministically: even with the OSR hook armed, the non-sinkable
+    // closure must keep the loop off the native subset, so no OSR can fire.
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "a non-sinkable (heap-capturing) per-iteration closure must run interpreter-identical",
+    );
+    assert_eq!(
+        stats.osr_entries, 0,
+        "a per-iteration closure whose body is non-inlinable / capture is non-scalar must \
+         NOT be sunk and the loop must NOT OSR: {stats:?}",
     );
 }
 

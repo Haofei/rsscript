@@ -2874,6 +2874,168 @@ fn instr_written_reg(instr: &RegInstr) -> RegFootprint {
     }
 }
 
+/// The result of [`loop_local_sinkable_closures`].
+#[cfg(feature = "native-jit")]
+#[derive(Default)]
+struct SinkableClosures {
+    /// `call_operand_reg -> callee_id`: a `CallClosure{closure: reg}` whose `reg` is a
+    /// sunk closure-value register dispatches statically to `callee_id`; its body is
+    /// inlined at the call site.
+    sink_calls: std::collections::HashMap<usize, usize>,
+    /// `MakeClosure`/copy-`Move` instruction indices to DELETE: the heap alloc and the
+    /// pure copies that only forward the (now non-existent) closure value.
+    dead_defs: std::collections::HashSet<usize>,
+}
+
+/// OSR × closure-allocation sinking. A `MakeClosure{dst, function:k, captures}` whose
+/// closure value is **loop-local and non-escaping** — flowing (possibly through pure
+/// copy `Move`s) ONLY into the `closure` operand of `CallClosure` sites, never stored,
+/// returned, captured, or read as a plain value — can have its heap allocation
+/// dissolved: the callee `k` is known STATICALLY from the `MakeClosure` (no profile
+/// needed), so its body is inlined at every call site and the `MakeClosure` (plus its
+/// dead copy `Move`s) is deleted. The loop then becomes pure-scalar and OSRs.
+///
+/// The analysis builds, for each in-region `MakeClosure`, the **closure-value set**
+/// `S` = its dst plus every register that is a pure `Move`-copy of a member of `S`.
+/// It is sinkable iff ALL of the following hold (any failure ⇒ skip it; the alloc
+/// stays on its normal heap path — behavior unchanged):
+/// - every register in `S` has a SINGLE definition (the `MakeClosure`, or a `Move`
+///   from another `S` member) — a second definition of any `S` register (e.g. a
+///   `MakeClosure` of a different callee on another path) is polymorphic ⇒ bail;
+/// - EVERY read of any `S` register is either a copy-`Move` into another `S` member
+///   or the `closure` operand of a `CallClosure` (never an `arg`, never any other
+///   instruction — i.e. the closure value never escapes as a value); every such
+///   `CallClosure` is in the region with no `mut` args;
+/// - the callee `k` is native-inlinable at the call arity
+///   ([`native_callee_inlinable`] when captureless, else
+///   [`native_capturing_callee_inlinable`]) and `captures.len() == callee.captures`.
+///   Each scalar capture is materialized at the inline site by a plain `Move` of the
+///   (already-live) capture register; a non-scalar (heap) capture is caught by the
+///   downstream OSR type inference (Int/Bool/Float only — the same safety net the
+///   other region passes rely on), so such a body simply fails to compile.
+#[cfg(feature = "native-jit")]
+fn loop_local_sinkable_closures(
+    unit: &RegUnit,
+    func: &RegFunction,
+    header: usize,
+    exit: usize,
+) -> SinkableClosures {
+    use std::collections::HashSet;
+    let in_region = |i: usize| i >= header && i < exit;
+    let mut out = SinkableClosures::default();
+
+    'candidates: for (mi, instr) in func.code.iter().enumerate() {
+        let RegInstr::MakeClosure {
+            dst: c,
+            function: k,
+            captures,
+        } = instr
+        else {
+            continue;
+        };
+        if !in_region(mi) {
+            continue;
+        }
+        let k = *k;
+        let callee = match unit.functions.get(k) {
+            Some(callee) => callee,
+            None => continue,
+        };
+
+        // Grow the closure-value set `S` by following pure copy-`Move`s: a
+        // `Move{dst:d, src:s}` with `s in S` adds `d` to `S`. Record the defining
+        // instruction index of each member (the MakeClosure or the copy Move).
+        let mut value_regs: HashSet<usize> = HashSet::new();
+        value_regs.insert(*c);
+        let mut def_indices: HashSet<usize> = HashSet::new();
+        def_indices.insert(mi);
+        // Fixpoint over the copy graph (bounded by code length).
+        loop {
+            let mut grew = false;
+            for (di, dinstr) in func.code.iter().enumerate() {
+                if let RegInstr::Move { dst, src } = dinstr {
+                    if value_regs.contains(src) && !value_regs.contains(dst) {
+                        value_regs.insert(*dst);
+                        def_indices.insert(di);
+                        grew = true;
+                    }
+                }
+            }
+            if !grew {
+                break;
+            }
+        }
+
+        // Single-definition guard: every `S` register must be written ONLY by a
+        // recorded def (the MakeClosure or an `S`-copy Move). Any other writer means
+        // the value is redefined on some path (polymorphic / clobbered) ⇒ bail.
+        for (wi, winstr) in func.code.iter().enumerate() {
+            if def_indices.contains(&wi) {
+                continue;
+            }
+            let writes_value = match instr_written_reg(winstr) {
+                RegFootprint::Some(regs) => regs.iter().any(|r| value_regs.contains(r)),
+                RegFootprint::All => true,
+            };
+            if writes_value {
+                continue 'candidates;
+            }
+        }
+
+        // Non-escape: every read of an `S` register must be a copy-`Move` (already a
+        // recorded def) or the `closure` operand of an in-region `CallClosure` with no
+        // `mut` args, where the value is NOT also an arg.
+        let mut call_operands: Vec<usize> = Vec::new();
+        for (ri, rinstr) in func.code.iter().enumerate() {
+            if def_indices.contains(&ri) {
+                // A recorded copy-Move: it reads an `S` reg by construction; fine.
+                continue;
+            }
+            match rinstr {
+                RegInstr::CallClosure {
+                    closure,
+                    args,
+                    mut_args,
+                    ..
+                } if value_regs.contains(closure) => {
+                    if args.iter().any(|a| value_regs.contains(a))
+                        || !mut_args.is_empty()
+                        || !in_region(ri)
+                    {
+                        continue 'candidates;
+                    }
+                    let inlinable = if callee.captures == 0 {
+                        native_callee_inlinable(callee, args.len())
+                    } else {
+                        native_capturing_callee_inlinable(callee, args.len())
+                    };
+                    if callee.captures != captures.len() || !inlinable {
+                        continue 'candidates;
+                    }
+                    call_operands.push(*closure);
+                }
+                _ => {
+                    let reads_value = match instr_read_regs(rinstr) {
+                        RegFootprint::Some(regs) => regs.iter().any(|r| value_regs.contains(r)),
+                        RegFootprint::All => true,
+                    };
+                    if reads_value {
+                        continue 'candidates;
+                    }
+                }
+            }
+        }
+        if call_operands.is_empty() {
+            continue;
+        }
+        for op in call_operands {
+            out.sink_calls.insert(op, k);
+        }
+        out.dead_defs.extend(def_indices);
+    }
+    out
+}
+
 #[cfg(feature = "native-jit")]
 /// Inline straight-line leaf `CallKnown`/closure calls, returning the rewritten
 /// code, the new register count, AND a transformed→original ip-map
@@ -2907,11 +3069,22 @@ fn native_inline_leaf_calls(
         Some((h, e)) => i >= h && i < e,
         None => true,
     };
+    // OSR × closure-allocation sinking: in a loop region, a `MakeClosure` whose dst
+    // is loop-local + non-escaping + called only via `CallClosure{closure:dst}` is
+    // sunk — its alloc is dissolved and the statically-known callee body is inlined
+    // at each call. `sinkable[dst] = callee_id`. Only computed when a region is
+    // supplied (whole-function translation never sinks: it goes through the normal
+    // captureless-native path). The `MakeClosure` of each sunk dst is DELETED below.
+    let sinkable = match loop_region {
+        Some((h, e)) => loop_local_sinkable_closures(unit, func, h, e),
+        None => SinkableClosures::default(),
+    };
     let has_inlinable_call = func.code.iter().enumerate().any(|(i, instr)| match instr {
         RegInstr::CallKnown { .. } => in_region(i),
-        RegInstr::CallClosure { .. } => {
+        RegInstr::CallClosure { closure, .. } => {
             in_region(i)
-                && (monomorphic_closure_inline_target(unit, func, i).is_some()
+                && (sinkable.sink_calls.contains_key(closure)
+                    || monomorphic_closure_inline_target(unit, func, i).is_some()
                     || polymorphic_closure_inline_targets(unit, func, i).is_some())
         }
         _ => false,
@@ -3159,6 +3332,87 @@ fn native_inline_leaf_calls(
     for (i, instr) in func.code.iter().enumerate() {
         index_map[i] = new_code.len();
         match instr {
+            // OSR × closure-allocation sinking: DELETE the `MakeClosure` and the dead
+            // copy `Move`s whose value is being sunk — the heap alloc is dissolved and
+            // every call to it is inlined below. The captured registers stay live (the
+            // inlined body materializes each via a `Move` at the call site). Emit
+            // nothing; `index_map[i]` points at the next instruction so any branch to
+            // this ip lands correctly.
+            _ if sinkable.dead_defs.contains(&i) => {}
+            // OSR × closure-allocation sinking: a `CallClosure` whose closure operand
+            // is a loop-local non-escaping closure value (a `MakeClosure` dst, possibly
+            // forwarded through copy `Move`s). The callee `k` is known STATICALLY (no
+            // profile, no identity guard — the closure value never exists at runtime),
+            // so we inline its body directly: materialize each scalar capture from the
+            // `MakeClosure`'s (still-live) capture registers, bind the call args, and
+            // splice the body. This is the sibling of the J2 monomorphic path with the
+            // guard removed and the captures sourced from the alloc site instead of a
+            // heap closure handle.
+            RegInstr::CallClosure {
+                dst,
+                closure,
+                args,
+                mut_args,
+            } if in_region(i) && sinkable.sink_calls.contains_key(closure) => {
+                debug_assert!(mut_args.is_empty());
+                let k = sinkable.sink_calls[closure];
+                let callee = unit.functions.get(k)?;
+                // Read the sunk `MakeClosure`'s capture registers. The analysis proved
+                // a single MakeClosure defines this closure value; locate it by callee
+                // id (the only MakeClosure of `k` whose def is in `dead_defs`).
+                let captures: Vec<usize> = func
+                    .code
+                    .iter()
+                    .enumerate()
+                    .find_map(|(mi, instr)| match instr {
+                        RegInstr::MakeClosure {
+                            function, captures, ..
+                        } if *function == k && sinkable.dead_defs.contains(&mi) => {
+                            Some(captures.clone())
+                        }
+                        _ => None,
+                    })?;
+                if captures.len() != callee.captures {
+                    return None;
+                }
+                let base = next_reg;
+                next_reg += callee.regs;
+                // Capture layout matches the J2 inline path: capture regs `0..captures`
+                // live BELOW the params. Materialize each capture by MOVING the alloc
+                // site's (already-live) capture register into `base + k_cap` — no heap
+                // closure ever exists, so there is no `NativeClosureCapture` read. A
+                // non-scalar capture is caught by the downstream OSR type inference
+                // (Int/Bool/Float only), so the body simply fails to compile.
+                for (k_cap, &cap_reg) in captures.iter().enumerate() {
+                    new_code.push(RegInstr::Move {
+                        dst: base + k_cap,
+                        src: cap_reg,
+                    });
+                    ip_map.push(i);
+                }
+                for (param, arg) in args.iter().enumerate() {
+                    new_code.push(RegInstr::Move {
+                        dst: base + callee.captures + param,
+                        src: *arg,
+                    });
+                    ip_map.push(i);
+                }
+                let join_slot = joins.len();
+                joins.push(0);
+                splice_callee(
+                    callee,
+                    *dst,
+                    base,
+                    join_slot,
+                    i,
+                    j3,
+                    &mut new_code,
+                    &mut ip_map,
+                    &mut fixups,
+                    &mut splices,
+                )?;
+                joins[join_slot] = new_code.len();
+            }
             RegInstr::CallKnown {
                 dst,
                 function,
