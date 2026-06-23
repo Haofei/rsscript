@@ -2710,3 +2710,171 @@ fn main() -> Unit {
         "RSS_JIT_OSR_THRESHOLD=100 must make trip=600 OSR via the counting auto-trigger",
     );
 }
+
+/// OSR × J3 for RESULTS (deopt-before-heap, Slice 1) — POSITIVE. A leaf `checked`
+/// returns `Result<Int, String>`; its COLD `Err` arm builds a heap `String`. Called
+/// in an I/O-tangled hot loop where the argument is ALWAYS >= 0 (the Err arm is never
+/// built natively), the Ok `Result` is matched/unwrapped in-loop and dead at the
+/// boundary. The OSR pre-pass inlines `checked`, splices its Err arm as a native
+/// `Bail` (deopt-before-heap), and the Result scalar-replacement pass dissolves the
+/// now-always-Ok Result to a scalar — so the loop OSRs. Byte-identical to the
+/// interpreter (which builds a real `Ok` per iteration) AND `osr_entries > 0`.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j3_result_cold_bail_loop_matches_interpreter() {
+    let source = "\
+fn checked(value: Int) -> Result<Int, String> {
+    if value < 0 { return Err(String.copy(value: read \"neg\")) }
+    return Ok(value)
+}
+
+fn f(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        let r: Result<Int, String> = checked(value: read i)
+        match r {
+            Ok(v) => { total = total + v }
+            Err(e) => { total = total + 0 }
+        }
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(limit: read 60)))
+    return Unit
+}
+";
+    let file = "jit-osr-j3-result-cold-bail.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "OSR × J3 Result cold-bail loop must be byte-identical to the interpreter (stdout)"
+    );
+    // i in 0..60, always Ok(i): total = 0+1+...+59 = 1770.
+    assert_eq!(osr.stdout.trim_end(), "begin\n1770\n1770");
+    assert!(
+        stats.osr_entries > 0,
+        "the always-Ok Result loop must OSR (Err arm bails + Ok Result dissolves): {stats:?}",
+    );
+}
+
+/// OSR × J3 for RESULTS — COLD-PATH-DRIVING (the deopt-before-heap soundness net).
+/// The SAME shape, but the argument is SOMETIMES negative: on those iterations the
+/// `Err(String)` arm IS taken. Natively the inlined Err arm is a `Bail`, so those
+/// iterations deopt → the interpreter re-runs the whole loop and builds the real
+/// `Err` itself. stdout must stay byte-identical to the pure interpreter — proving
+/// the abandon-and-reinterpret-the-loop fallback is sound when the cold arm is taken.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j3_result_cold_bail_takes_err_arm_matches_interpreter() {
+    let source = "\
+fn checked(value: Int) -> Result<Int, String> {
+    if value < 0 { return Err(String.copy(value: read \"neg\")) }
+    return Ok(value)
+}
+
+fn f(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        let arg = i - 30
+        let r: Result<Int, String> = checked(value: read arg)
+        match r {
+            Ok(v) => { total = total + v }
+            Err(e) => { total = total + 1000 }
+        }
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(limit: read 60)))
+    return Unit
+}
+";
+    let file = "jit-osr-j3-result-cold-bail-err.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, _stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "Result cold-bail loop where the Err arm IS taken must still be interpreter-identical \
+         (bail → reinterpret → interpreter builds Err)"
+    );
+    // arg = i-30 for i in 0..60. arg<0 for i in 0..30 (30 iters ⇒ +1000 each = 30000);
+    // arg>=0 for i in 30..60 ⇒ total += arg = 0+1+...+29 = 435. Sum = 30435.
+    assert_eq!(osr.stdout.trim_end(), "begin\n30435\n30435");
+}
+
+/// OSR × J3 for RESULTS — ESCAPING (the dead-at-boundary safety guard). The `Result`
+/// is declared before the loop and matched AFTER it, so it is live across the loop
+/// boundary: the Result region gate MUST refuse to scalar-replace it and therefore
+/// MUST NOT OSR (`osr_entries == 0`), or the interpreter would read a stale slot the
+/// native loop never wrote back. Still interpreter-identical (the whole loop runs on
+/// the interpreter).
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j3_escaping_result_does_not_osr() {
+    let source = "\
+fn checked(value: Int) -> Result<Int, String> {
+    if value < 0 { return Err(String.copy(value: read \"neg\")) }
+    return Ok(value)
+}
+
+fn f(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    let mut r: Result<Int, String> = Ok(0)
+    while i < limit {
+        r = checked(value: read i)
+        match r {
+            Ok(v) => { total = total + v }
+            Err(e) => { total = total + 0 }
+        }
+        i = i + 1
+    }
+    match r {
+        Ok(v) => { Log.write(message: read String.from_int(value: v)) }
+        Err(e) => { Log.write(message: read \"err\") }
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(limit: read 60)))
+    return Unit
+}
+";
+    let file = "jit-osr-j3-escaping-result.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "a Result read after the loop must still produce interpreter-identical output"
+    );
+    // i in 0..60: total = 0+...+59 = 1770; r = Ok(59) after the loop ⇒ "59".
+    assert_eq!(osr.stdout.trim_end(), "begin\n59\n1770\n1770");
+    assert_eq!(
+        stats.osr_entries, 0,
+        "a loop whose Result is live after the loop must NOT OSR (dead-at-boundary gate): {stats:?}",
+    );
+}

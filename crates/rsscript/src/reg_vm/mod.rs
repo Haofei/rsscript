@@ -671,6 +671,244 @@ fn native_offset_regs_j3(instr: &RegInstr, b: usize) -> Option<RegInstr> {
     })
 }
 
+/// Whether `intrinsic` is a PURE, side-effect-free heap value-builder that the
+/// deopt-before-heap cold-arm classifier is allowed to see inside a cold arm. These
+/// allocate a fresh `String` from their (read-only) operands and observe/mutate
+/// nothing else — so re-running the arm on the interpreter after a native `Bail`
+/// reproduces it exactly (Execution Spec §7.2). Deliberately a tight whitelist: any
+/// intrinsic that touches I/O, the environment, collections, time, or RNG is impure
+/// and must NOT appear in a bailable cold arm. Unknown ⇒ false (reject).
+#[cfg(feature = "native-jit")]
+fn cold_arm_pure_intrinsic(intrinsic: &RegIntrinsic) -> bool {
+    matches!(
+        intrinsic,
+        RegIntrinsic::StringCopy
+            | RegIntrinsic::StringFromBool
+            | RegIntrinsic::StringFromFloat
+            | RegIntrinsic::StringFromInt
+    )
+}
+
+/// Whether `instr` is a pure, side-effect-free value-construction instruction that
+/// the deopt-before-heap cold-arm classifier permits inside a bailable cold arm. It
+/// covers the J3-dissolvable value ops (`native_offset_regs_j3`-class), plus the
+/// recognized pure HEAP value-builders a cold arm may use to construct its returned
+/// value: `LoadString`, a whitelisted pure `CallIntrinsic` (e.g. `String.copy`),
+/// `StringConcat`, and `MakeVariant`/`MakeStruct` (the `Err(..)` / record the arm
+/// returns). Every such op only READS its operands and writes its single `dst`; none
+/// has an observable effect, so an arm built from them can be discarded by a native
+/// `Bail` and faithfully re-run on the interpreter. `Move` is included (scalar copy).
+/// Branches, returns, calls, suspends, and collection mutators are NOT pure here.
+#[cfg(feature = "native-jit")]
+fn cold_arm_pure_value_op(instr: &RegInstr) -> bool {
+    if native_offset_regs_j3(instr, 0).is_some() {
+        return true;
+    }
+    match instr {
+        RegInstr::LoadString { .. }
+        | RegInstr::LoadUnit { .. }
+        | RegInstr::StringConcat { .. }
+        | RegInstr::MakeVariant { .. }
+        | RegInstr::MakeStruct { .. }
+        | RegInstr::MakeSome { .. } => true,
+        RegInstr::CallIntrinsic { intrinsic, .. } => cold_arm_pure_intrinsic(intrinsic),
+        _ => false,
+    }
+}
+
+/// Deopt-before-heap classifier. Identify every **deopt-replaceable cold arm** in a
+/// callee about to be inlined into an OSR loop: a maximal straight-line suffix
+/// `[s..=e]` such that
+///   1. `code[e]` is a `Return`,
+///   2. every instruction in `[s..=e]` is a pure value-construction op
+///      ([`cold_arm_pure_value_op`]) — including the recognized pure HEAP builders —
+///      and none falls outside that set (no branch/call/suspend/collection-mutation),
+///   3. control enters the arm ONLY at `s` via a branch boundary: no reachable
+///      instruction OUTSIDE `[s..=e]` jumps or falls into any ip in `[s..=e]` (the
+///      interior is private to the arm, and `s` is reached purely as the taken/
+///      not-taken edge of a preceding branch — never by the native path falling
+///      straight through), and
+///   4. register isolation: no register written inside `[s..=e]` is read by any
+///      reachable instruction OUTSIDE `[s..=e]`.
+///
+/// Such an arm is replaced at splice time by a single native `Bail` (a `RuntimeError`
+/// sentinel) at `s`: because every op in the arm is side-effect-free, native does
+/// NOTHING observable before bailing, so the existing abandon-and-reinterpret-the-
+/// loop fallback re-runs the whole loop on the interpreter — which rebuilds the heap
+/// value itself (Execution Spec §7.2 holds unchanged; no rollback, no resume-ip).
+///
+/// Returns `(cold, arm_start)` where `cold[i]` marks every ip in some cold arm and
+/// `arm_start[i]` marks the single `s` of each arm (where the `Bail` is emitted). The
+/// caller treats a reachable, non-cold instruction that is neither native-subset nor
+/// a J3 op / match / branch as a veto (no inline). Conservative throughout: anything
+/// not provably a clean pure tail is simply NOT marked cold (so it must be otherwise
+/// classifiable, else the inline is vetoed).
+#[cfg(feature = "native-jit")]
+fn deopt_replaceable_cold_arms(code: &[RegInstr], reachable: &[bool]) -> (Vec<bool>, Vec<bool>) {
+    let n = code.len();
+    let mut cold = vec![false; n];
+    let mut arm_start = vec![false; n];
+
+    // Find each reachable `Return` and walk backward to the maximal pure-value
+    // straight-line prefix. A candidate arm `[s..=e]` is only ACCEPTED after the
+    // entry + isolation checks below; failure leaves it unmarked (the inline gate
+    // then decides whether the leaf is still classifiable some other way).
+    for e in 0..n {
+        if !reachable[e] || !matches!(code[e], RegInstr::Return { .. }) {
+            continue;
+        }
+        if cold[e] {
+            continue; // already part of an accepted arm (returns can't overlap)
+        }
+        // Extend `s` downward while the predecessor is a pure value op. Stop at the
+        // first non-pure / non-reachable instruction (or the function start).
+        let mut s = e;
+        while s > 0 && reachable[s - 1] && cold_arm_pure_value_op(&code[s - 1]) {
+            s -= 1;
+        }
+        // The arm must build a heap value that the J3 region passes CANNOT dissolve —
+        // otherwise it is a SUPPORTED arm (e.g. the `Ok(scalar)` arm, a
+        // `MakeVariant`/`MakeStruct`/`MakeSome` with a scalar payload) that should
+        // inline normally and dissolve, NOT bail. The undissolvable builders are the
+        // String/heap-scalar producers (`LoadString`, `StringConcat`, a `CallIntrinsic`
+        // such as `String.copy`): a `MakeVariant{Err, [String]}` is only cold because
+        // its payload flows from one of these. Require at least one such op in
+        // `[s..=e]`; otherwise leave the arm to the normal J3 path (do not mark cold).
+        let has_undissolvable_heap_builder = (s..=e).any(|j| {
+            matches!(
+                &code[j],
+                RegInstr::LoadString { .. }
+                    | RegInstr::StringConcat { .. }
+                    | RegInstr::CallIntrinsic { .. }
+                    | RegInstr::CallTypedIntrinsic { .. }
+            )
+        });
+        if !has_undissolvable_heap_builder {
+            continue;
+        }
+        // Entry/interior isolation: no reachable instruction OUTSIDE `[s..=e]` may
+        // transfer control into the interior `(s..=e]`, and the native path must not
+        // fall straight into `s`. We check both by enumerating every reachable
+        // instruction's control-flow successors and rejecting any that lands in
+        // `(s..=e]` from outside, plus requiring the textual predecessor `s-1` (if
+        // reachable) to be a NON-fallthrough terminator/branch so the native path
+        // cannot fall into `s`.
+        let in_arm = |ip: usize| ip >= s && ip <= e;
+        let mut ok = true;
+        // `s` must be entered only via an explicit branch edge: its textual
+        // predecessor must not fall through into it. A `JumpIf*`/`Match*` whose
+        // not-taken/fallthrough edge is `s` IS an explicit branch boundary (the arm
+        // is the cold side), which is exactly the shape we want — those are allowed.
+        // A plain pure op or `Jump`/`Return`/`RuntimeError` predecessor: a pure op
+        // would fall through into `s` on the native path (reject); `Jump`/`Return`/
+        // `RuntimeError`/match/branch do not fall through, so `s` is only reached via
+        // an explicit target/edge (allow). `s == 0` is a function entry (allow only
+        // if entry is genuinely a branch target, which for a leaf it is not — but a
+        // whole-body cold function would have been native-translated already; be
+        // conservative and reject `s == 0`).
+        if s == 0 {
+            ok = false;
+        } else if reachable[s - 1] {
+            let pred_branches = matches!(
+                &code[s - 1],
+                RegInstr::Jump { .. }
+                    | RegInstr::JumpIfBool { .. }
+                    | RegInstr::JumpIfIntCompare { .. }
+                    | RegInstr::Return { .. }
+                    | RegInstr::RuntimeError { .. }
+                    | RegInstr::MatchOption { .. }
+                    | RegInstr::MatchResult { .. }
+                    | RegInstr::MatchVariant { .. }
+                    | RegInstr::MatchMapGet { .. }
+            );
+            if !pred_branches {
+                ok = false;
+            }
+        }
+        // No external control-flow edge into the interior `(s..=e]`. (An edge to `s`
+        // itself from a preceding branch is fine — that is the cold-arm entry.)
+        if ok {
+            for (ip, instr) in code.iter().enumerate() {
+                if !reachable[ip] || in_arm(ip) {
+                    continue;
+                }
+                let lands_inside = |t: usize| t > s && t <= e;
+                let hits = match instr {
+                    RegInstr::Jump { target } => lands_inside(*target),
+                    RegInstr::JumpIfBool { target, .. }
+                    | RegInstr::JumpIfIntCompare { target, .. } => {
+                        lands_inside(*target) || lands_inside(ip + 1)
+                    }
+                    RegInstr::MatchOption { some_ip, none_ip, .. }
+                    | RegInstr::MatchMapGet { some_ip, none_ip, .. } => {
+                        lands_inside(*some_ip) || lands_inside(*none_ip)
+                    }
+                    RegInstr::MatchResult { ok_ip, err_ip, .. } => {
+                        lands_inside(*ok_ip) || lands_inside(*err_ip)
+                    }
+                    RegInstr::MatchVariant { match_ip, else_ip, .. } => {
+                        lands_inside(*match_ip) || lands_inside(*else_ip)
+                    }
+                    RegInstr::Return { .. } | RegInstr::RuntimeError { .. } => false,
+                    // A pure fallthrough op just before the arm is already rejected by
+                    // the `pred_branches` check; any other reachable fallthrough op at
+                    // `ip` falls into `ip+1`.
+                    _ => lands_inside(ip + 1),
+                };
+                if hits {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        // Register isolation: every register the arm WRITES must be dead outside the
+        // arm (read by no reachable out-of-arm instruction). A write we cannot model
+        // (`RegFootprint::All`) cannot occur — the arm is all pure value ops — but be
+        // defensive and reject if it ever appears.
+        if ok {
+            let mut written: Vec<usize> = Vec::new();
+            for j in s..=e {
+                match instr_written_reg(&code[j]) {
+                    RegFootprint::Some(ws) => written.extend(ws),
+                    RegFootprint::All => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if ok {
+                'outer: for (ip, instr) in code.iter().enumerate() {
+                    if !reachable[ip] || in_arm(ip) {
+                        continue;
+                    }
+                    match instr_read_regs(instr) {
+                        RegFootprint::Some(rs) => {
+                            for r in rs {
+                                if written.contains(&r) {
+                                    ok = false;
+                                    break 'outer;
+                                }
+                            }
+                        }
+                        RegFootprint::All => {
+                            ok = false;
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+        }
+        if ok {
+            for j in s..=e {
+                cold[j] = true;
+            }
+            arm_start[s] = true;
+        }
+    }
+
+    (cold, arm_start)
+}
+
 /// Whether `callee` can be inlined into the OSR loop body: like
 /// [`native_callee_inlinable`] but ALSO permitting the J3-dissolvable value ops
 /// ([`native_offset_regs_j3`]) and the branch-shaped match ops, so a leaf that
@@ -678,14 +916,22 @@ fn native_offset_regs_j3(instr: &RegInstr, b: usize) -> Option<RegInstr> {
 /// `make_shape`/`area`) qualifies — the value becomes loop-local once inlined and
 /// the J3 region passes dissolve it. Still captureless, arity-matched, side-effect-
 /// free (no calls/suspends/heap-collection/runtime-error/non-J3 ops).
+///
+/// Deopt-before-heap extension: a reachable instruction that is part of a
+/// **deopt-replaceable cold arm** ([`deopt_replaceable_cold_arms`]) is also accepted
+/// — at splice time that arm is replaced by a native `Bail`, so a leaf whose COLD arm
+/// builds a heap value (e.g. `Err(String.copy(..))`) qualifies as long as its
+/// SUPPORTED (non-cold) arms are fully native/J3-dissolvable. When unsure, REJECT.
 #[cfg(feature = "native-jit")]
 fn native_callee_inlinable_j3(callee: &RegFunction, n_args: usize) -> bool {
     if callee.captures != 0 || callee.params != n_args {
         return false;
     }
     let reachable = native_reachable_instructions(&callee.code);
+    let (cold, _arm_start) = deopt_replaceable_cold_arms(&callee.code, &reachable);
     callee.code.iter().enumerate().all(|(i, instr)| {
         let ok = !reachable[i]
+            || cold[i]
             || matches!(
                 instr,
                 RegInstr::Jump { .. }
@@ -1645,6 +1891,302 @@ fn native_scalar_replace_options_in_region(
                 if let RegInstr::MatchOption { some_ip: sd, none_ip: nd, .. } = &mut new_code[pos] {
                     *sd = s;
                     *nd = n;
+                }
+            }
+        }
+    }
+    // Inverse ip-map (see `native_scalar_replace_options`).
+    let mut ip_map = vec![0usize; new_code.len()];
+    for i in 0..code.len() {
+        let start = index_map[i];
+        let end = if i + 1 < code.len() { index_map[i + 1] } else { new_code.len() };
+        for t in start..end {
+            ip_map[t] = i;
+        }
+    }
+    Some((new_code, next_reg, ip_map))
+}
+
+/// Whether a `MakeVariant` layout name is a `Result` constructor (`Ok`/`Err`). These
+/// are reserved by the language for `Result`, are matched by the dedicated
+/// `MatchResult` op (not `MatchVariant`), and are dissolved by the Result region pass
+/// — never by the user-variant pass.
+#[cfg(feature = "native-jit")]
+fn is_result_ctor_name(name: &str) -> bool {
+    name == "Ok" || name == "Err"
+}
+
+/// OSR × J3 for RESULTS (deopt-before-heap, Slice 1): scalar-replace a non-escaping
+/// `Result<Scalar, _>` that is **statically always-`Ok`** on the native path and
+/// lives entirely inside the loop region `[header, exit)` of an otherwise native-
+/// INELIGIBLE function. Mirrors [`native_scalar_replace_options_in_region`] but for
+/// the `Result` shape (`MakeVariant{Ok|Err}` + `MatchResult` + `UnwrapVariantValue`).
+///
+/// KEY (the deopt-before-heap interplay): when a leaf's `Err` arm built a heap value,
+/// [`native_inline_leaf_calls`] already replaced that arm with a native `Bail`, so the
+/// inlined stream contains NO reachable `MakeVariant{Err}` — the only constructor of
+/// the Result register is `MakeVariant{Ok, [scalar]}`. The Result is therefore
+/// statically always-`Ok`, and this pass dissolves it to a single scalar **payload**
+/// register (no tag needed): every `MatchResult{src:R}` becomes an unconditional
+/// `Jump → ok_ip` (the `Err` arm goes dead) and every `UnwrapVariantValue{src:R,
+/// expected:"Ok"}` becomes a `Move` from the payload. A LIVE heap `Err` (a reachable
+/// `MakeVariant{Err}` def of `R`) ⇒ BAIL the pass (leave the loop on the interpreter):
+/// such a Result is genuinely two-armed with a heap payload and cannot be scalarized.
+///
+/// Soundness: identical region discipline to the sibling passes. `R` is replaced only
+/// if every def/use lies strictly inside `[header, exit)`, the `Ok` payload is scalar,
+/// and `R` is dead at both OSR boundaries (`instr_read_regs`/`instr_written_reg`, with
+/// `RegFootprint::All ⇒ bail`). The always-`Ok` rewrite is sound because the only way
+/// the program reaches the dissolved `MatchResult` is by having built an `Ok` (the
+/// `Err` constructor bailed to the interpreter before any heap op — Exec Spec §7.2), so
+/// the `Err` arm is dynamically unreachable on the native path; rewriting it to a
+/// statically-dead `Jump`/`Bail` cannot change observable behavior.
+///
+/// Returns `(transformed_code, new_n_regs, ip_map)` with the same transformed→original
+/// `ip_map` discipline as the other region passes.
+#[cfg(feature = "native-jit")]
+fn native_scalar_replace_results_in_region(
+    code: &[RegInstr],
+    n_regs: usize,
+    header: usize,
+    exit: usize,
+) -> Option<(Vec<RegInstr>, usize, Vec<usize>)> {
+    if header >= exit || exit > code.len() {
+        return None;
+    }
+    let in_region = |i: usize| i >= header && i < exit;
+
+    // Fast path: no `MatchResult` and no `Result` constructor in the region ⇒ nothing
+    // for THIS pass to do (identity transform; preserves the byte-for-byte old path).
+    let has_result_op = (header..exit).any(|i| {
+        matches!(&code[i], RegInstr::MatchResult { .. })
+            || matches!(&code[i], RegInstr::MakeVariant { layout, .. } if is_result_ctor_name(&layout.name))
+    });
+    if !has_result_op {
+        let ip_map: Vec<usize> = (0..code.len()).collect();
+        return Some((code.to_vec(), n_regs, ip_map));
+    }
+
+    // RES = registers carrying a (replaceable) Result value: seed from in-region
+    // `MakeVariant{Ok|Err}` dsts, close under in-region `Move` aliasing.
+    let mut res = vec![false; n_regs];
+    for i in header..exit {
+        if let RegInstr::MakeVariant { dst, layout, .. } = &code[i] {
+            if is_result_ctor_name(&layout.name) {
+                res[*dst] = true;
+            }
+        }
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for i in header..exit {
+            if let RegInstr::Move { dst, src } = &code[i] {
+                if res[*src] && !res[*dst] {
+                    res[*dst] = true;
+                    changed = true;
+                }
+            }
+        }
+    }
+    // A `MatchResult{src}` whose `src` is not (yet) a RES register means a Result we
+    // cannot see being constructed in-region (it flows in from outside, e.g. a heap
+    // Result param) ⇒ this pass cannot dissolve it. Bail so the loop stays on the
+    // interpreter (the boundary/escape gates below would also catch it, but bailing
+    // early is clearer and conservative).
+    for i in header..exit {
+        if let RegInstr::MatchResult { src, .. } = &code[i] {
+            if !res[*src] {
+                return None;
+            }
+        }
+    }
+
+    // Validate every in-region def/use of a RES register. The Result must be
+    // statically always-`Ok`: a reachable `MakeVariant{Err}` def is a LIVE heap Err
+    // ⇒ bail. `Ok` payload must be scalar (not itself a RES register). Recognized uses:
+    // `MatchResult{src:R}`, `UnwrapVariantValue{src:R}` (Ok scalar payload, or the dead
+    // Err-arm unwrap which the rewrite drops), and `Move` aliases. Anything else that
+    // touches a RES register ⇒ bail.
+    for i in header..exit {
+        match &code[i] {
+            RegInstr::MakeVariant { dst, layout, fields } if res[*dst] => {
+                if layout.name.as_ref() == "Err" {
+                    return None; // live heap Err ⇒ not always-Ok ⇒ leave on interpreter
+                }
+                // Ok constructor: exactly one scalar field `value`.
+                if fields.len() != 1 || fields.iter().any(|(_, r)| res[*r]) {
+                    return None;
+                }
+            }
+            RegInstr::Move { dst, src } if res[*dst] => {
+                if !res[*src] {
+                    return None;
+                }
+            }
+            RegInstr::MatchResult { src, .. } if res[*src] => {}
+            RegInstr::UnwrapVariantValue { dst, src, expected } if res[*src] => {
+                // The Ok-arm unwrap yields the scalar payload; its `dst` must not be a
+                // RES register (a Result payload would be non-scalar). The Err-arm
+                // unwrap (`expected == "Err"`) lies on the statically-dead arm — its
+                // `dst` is unused on the native path; allow it (rewritten to a Bail).
+                let _ = expected;
+                if res[*dst] {
+                    return None;
+                }
+            }
+            RegInstr::Move { src, .. } if res[*src] => {}
+            other => {
+                // Any other instruction must not read a RES register, nor (re)define one
+                // through an unrecognized destination.
+                match instr_read_regs(other) {
+                    RegFootprint::Some(reads) => {
+                        if reads.into_iter().any(|r| r < n_regs && res[r]) {
+                            return None;
+                        }
+                    }
+                    RegFootprint::All => return None,
+                }
+                if let RegInstr::UnwrapVariantValue { dst, .. } | RegInstr::MakeVariant { dst, .. } =
+                    other
+                {
+                    if res[*dst] {
+                        return None;
+                    }
+                }
+            }
+        }
+    }
+
+    // Boundary soundness (identical to the Option pass): every RES register must be
+    // DEAD outside `[header, exit)` — its defs become payload writes inside the region
+    // and the original RES register is never written there, so the interpreter's slot
+    // must carry no value any out-of-region instruction observes.
+    for i in 0..code.len() {
+        if in_region(i) {
+            continue;
+        }
+        match instr_read_regs(&code[i]) {
+            RegFootprint::Some(reads) => {
+                if reads.into_iter().any(|r| r < n_regs && res[r]) {
+                    return None;
+                }
+            }
+            RegFootprint::All => return None,
+        }
+        match instr_written_reg(&code[i]) {
+            RegFootprint::Some(writes) => {
+                if writes.into_iter().any(|r| r < n_regs && res[r]) {
+                    return None;
+                }
+            }
+            RegFootprint::All => return None,
+        }
+    }
+
+    // Allocate one fresh payload register per RES register (always-Ok ⇒ no tag).
+    let mut payload_reg = vec![0usize; n_regs];
+    let mut next_reg = n_regs;
+    for (reg, is_res) in res.iter().enumerate() {
+        if *is_res {
+            payload_reg[reg] = next_reg;
+            next_reg += 1;
+        }
+    }
+
+    // Rewrite the WHOLE code, dissolving in-region Result ops and copying everything
+    // else through verbatim; remap all jump/match targets through the index map.
+    enum Fix {
+        Target(usize),
+        Match { a: usize, b: usize },
+    }
+    let mut new_code: Vec<RegInstr> = Vec::with_capacity(code.len());
+    let mut index_map = vec![0usize; code.len()];
+    let mut fixups: Vec<(usize, Fix)> = Vec::new();
+    for (i, instr) in code.iter().enumerate() {
+        index_map[i] = new_code.len();
+        let region = in_region(i);
+        match instr {
+            RegInstr::MakeVariant { dst, fields, .. } if region && res[*dst] => {
+                // Always-Ok constructor: payload = the single scalar field.
+                let (_, field_reg) = &fields[0];
+                new_code.push(RegInstr::Move { dst: payload_reg[*dst], src: *field_reg });
+            }
+            RegInstr::Move { dst, src } if region && res[*dst] => {
+                new_code.push(RegInstr::Move { dst: payload_reg[*dst], src: payload_reg[*src] });
+            }
+            RegInstr::MatchResult { src, ok_ip, err_ip } if region && res[*src] => {
+                // Statically always-Ok ⇒ unconditional jump to the Ok arm. The Err arm
+                // (`err_ip`) becomes unreachable.
+                let _ = err_ip;
+                fixups.push((new_code.len(), Fix::Target(*ok_ip)));
+                new_code.push(RegInstr::Jump { target: 0 });
+            }
+            RegInstr::UnwrapVariantValue { dst, src, expected } if region && res[*src] => {
+                if expected.as_str() == "Err" {
+                    // Dead Err-arm unwrap: unreachable after the always-Ok rewrite. Emit
+                    // a Bail sentinel so that, even if some path reached it, native would
+                    // safely deopt rather than read a non-existent heap Err payload.
+                    new_code.push(RegInstr::RuntimeError { message: String::new() });
+                } else {
+                    // Ok-arm unwrap ⇒ the scalar payload.
+                    new_code.push(RegInstr::Move { dst: *dst, src: payload_reg[*src] });
+                }
+            }
+            // Copy-through, remapping jump targets (in-region native branches and the
+            // pre/post-loop control flow). A `MatchResult` outside the region (or on a
+            // non-RES src) is copied with BOTH targets remapped; same for the other
+            // match ops the body may carry.
+            RegInstr::Jump { target }
+            | RegInstr::JumpIfBool { target, .. }
+            | RegInstr::JumpIfIntCompare { target, .. } => {
+                fixups.push((new_code.len(), Fix::Target(*target)));
+                new_code.push(instr.clone());
+            }
+            RegInstr::MatchResult { ok_ip, err_ip, .. } => {
+                fixups.push((new_code.len(), Fix::Match { a: *ok_ip, b: *err_ip }));
+                new_code.push(instr.clone());
+            }
+            RegInstr::MatchOption { some_ip, none_ip, .. }
+            | RegInstr::MatchMapGet { some_ip, none_ip, .. } => {
+                fixups.push((new_code.len(), Fix::Match { a: *some_ip, b: *none_ip }));
+                new_code.push(instr.clone());
+            }
+            RegInstr::MatchVariant { match_ip, else_ip, .. } => {
+                fixups.push((new_code.len(), Fix::Match { a: *match_ip, b: *else_ip }));
+                new_code.push(instr.clone());
+            }
+            other => new_code.push(other.clone()),
+        }
+    }
+    for (pos, fix) in fixups {
+        match fix {
+            Fix::Target(t) => {
+                let target = index_map[t];
+                match &mut new_code[pos] {
+                    RegInstr::Jump { target: dst }
+                    | RegInstr::JumpIfBool { target: dst, .. }
+                    | RegInstr::JumpIfIntCompare { target: dst, .. } => *dst = target,
+                    _ => {}
+                }
+            }
+            Fix::Match { a, b } => {
+                let (na, nb) = (index_map[a], index_map[b]);
+                match &mut new_code[pos] {
+                    RegInstr::MatchResult { ok_ip, err_ip, .. } => {
+                        *ok_ip = na;
+                        *err_ip = nb;
+                    }
+                    RegInstr::MatchOption { some_ip, none_ip, .. }
+                    | RegInstr::MatchMapGet { some_ip, none_ip, .. } => {
+                        *some_ip = na;
+                        *none_ip = nb;
+                    }
+                    RegInstr::MatchVariant { match_ip, else_ip, .. } => {
+                        *match_ip = na;
+                        *else_ip = nb;
+                    }
+                    _ => {}
                 }
             }
         }
@@ -3098,6 +3640,11 @@ fn native_inline_leaf_calls(
     enum Fix {
         /// Target is a caller instruction index (use `index_map`).
         Caller(usize),
+        /// Like `Caller` but for a branch-shaped MATCH op in the OUTER caller body
+        /// (`MatchOption`/`MatchResult`/`MatchVariant`/`MatchMapGet`): the caller's
+        /// own indices shift when a leaf is spliced in, so both of its ip targets must
+        /// be remapped through `index_map`. `second` selects the first/second target.
+        CallerMatch { target: usize, second: bool },
         /// Target is a callee instruction index within splice `id` (use its `cmap`).
         Callee { id: usize, callee_target: usize },
         /// Like `Callee` but for a branch-shaped MATCH op spliced from a callee
@@ -3149,12 +3696,36 @@ fn native_inline_leaf_calls(
     ) -> Option<()> {
         let id = splices.len();
         let reachable = native_reachable_instructions(&callee.code);
+        // Deopt-before-heap: a COLD arm that builds a heap value (`cold[ci]`) is
+        // replaced by a single native `Bail` (a `RuntimeError` sentinel) at the arm's
+        // start, with the rest of the arm emitting nothing. Because every op in the arm
+        // is side-effect-free, native does nothing observable before bailing, so the
+        // abandon-and-reinterpret-the-loop fallback re-runs the loop on the interpreter
+        // (which rebuilds the heap value itself) — Execution Spec §7.2 holds unchanged.
+        let (cold, arm_start) = deopt_replaceable_cold_arms(&callee.code, &reachable);
         let mut cmap = vec![0usize; callee.code.len()];
         for (ci, cinstr) in callee.code.iter().enumerate() {
             if !reachable[ci] {
                 continue;
             }
+            // Cold-arm interior (everything after the arm's start): emit nothing. The
+            // interior is provably never a jump target from outside the arm (the
+            // classifier enforces it), so no `cmap` entry is ever consulted; point it
+            // at the arm's Bail for total safety.
+            if cold[ci] && !arm_start[ci] {
+                cmap[ci] = new_code.len();
+                continue;
+            }
             cmap[ci] = new_code.len();
+            // Cold-arm start: a single `RuntimeError` ⇒ `JitInstr::Bail` at OSR-loop
+            // translation. The arm's heap value is never built natively.
+            if arm_start[ci] {
+                new_code.push(RegInstr::RuntimeError {
+                    message: String::new(),
+                });
+                ip_map.push(origin);
+                continue;
+            }
             match cinstr {
                 RegInstr::Return { src } => {
                     new_code.push(RegInstr::Move {
@@ -3639,6 +4210,30 @@ fn native_inline_leaf_calls(
                 new_code.push(instr.clone());
                 ip_map.push(i);
             }
+            // OUTER-caller branch-shaped match ops: when a leaf is inlined, the
+            // caller's instruction indices shift, so the two ip targets of an outer
+            // `MatchResult`/`MatchOption`/`MatchVariant`/`MatchMapGet` must be remapped
+            // through `index_map` (the J3 region passes later dissolve these). Without
+            // a region leaf inline these copy-through unchanged (identity index_map).
+            RegInstr::MatchOption { some_ip, none_ip, .. }
+            | RegInstr::MatchMapGet { some_ip, none_ip, .. } => {
+                fixups.push((new_code.len(), Fix::CallerMatch { target: *some_ip, second: false }));
+                fixups.push((new_code.len(), Fix::CallerMatch { target: *none_ip, second: true }));
+                new_code.push(instr.clone());
+                ip_map.push(i);
+            }
+            RegInstr::MatchResult { ok_ip, err_ip, .. } => {
+                fixups.push((new_code.len(), Fix::CallerMatch { target: *ok_ip, second: false }));
+                fixups.push((new_code.len(), Fix::CallerMatch { target: *err_ip, second: true }));
+                new_code.push(instr.clone());
+                ip_map.push(i);
+            }
+            RegInstr::MatchVariant { match_ip, else_ip, .. } => {
+                fixups.push((new_code.len(), Fix::CallerMatch { target: *match_ip, second: false }));
+                fixups.push((new_code.len(), Fix::CallerMatch { target: *else_ip, second: true }));
+                new_code.push(instr.clone());
+                ip_map.push(i);
+            }
             other => {
                 new_code.push(other.clone());
                 ip_map.push(i);
@@ -3647,11 +4242,14 @@ fn native_inline_leaf_calls(
     }
 
     for (pos, fix) in fixups {
-        // For a `CalleeMatch`, remember which of the two match targets to patch.
-        let second = matches!(fix, Fix::CalleeMatch { second: true, .. });
-        let is_match = matches!(fix, Fix::CalleeMatch { .. });
+        // For a `*Match`, remember which of the two match targets to patch.
+        let second = matches!(
+            fix,
+            Fix::CalleeMatch { second: true, .. } | Fix::CallerMatch { second: true, .. }
+        );
+        let is_match = matches!(fix, Fix::CalleeMatch { .. } | Fix::CallerMatch { .. });
         let target = match fix {
-            Fix::Caller(t) => index_map[t],
+            Fix::Caller(t) | Fix::CallerMatch { target: t, .. } => index_map[t],
             Fix::Callee { id, callee_target }
             | Fix::CalleeMatch {
                 id, callee_target, ..
@@ -12294,19 +12892,34 @@ impl RegVm {
                         &inlined_code, n_regs0, lp0.header, lp0.exit,
                     )
                     .and_then(|(code1, n_regs1, ip_map1)| {
-                        // OSR × J3 for VARIANTS: after dissolving Options, re-detect the
-                        // loop on the Option-transformed stream and scalar-replace any
+                        // OSR × J3 for RESULTS (deopt-before-heap, Slice 1): after
+                        // dissolving Options, re-detect the loop and scalar-replace any
+                        // non-escaping, statically-always-`Ok` `Result<Scalar,_>` living
+                        // entirely inside the region. This pairs with the cold-arm bail:
+                        // an inlined leaf whose `Err` arm built a heap value left a native
+                        // `Bail` in its place, so the only Result constructor is
+                        // `MakeVariant{Ok,[scalar]}` and the Result dissolves to a scalar
+                        // payload (`MatchResult` → `Jump ok`). A live heap `Err` (or any
+                        // non-dissolvable shape) returns the code unchanged with an
+                        // identity ip-map (or bails), so an Option-only/plain body is
+                        // byte-for-byte the old path. Compose `ip_map1` with `ip_map_r`.
+                        let lp_r = detect_single_natural_loop(&code1)?;
+                        let (code_r, n_regs_r, ip_map_r) = native_scalar_replace_results_in_region(
+                            &code1, n_regs1, lp_r.header, lp_r.exit,
+                        )?;
+                        // OSR × J3 for VARIANTS: after dissolving Options/Results, re-detect
+                        // the loop on the transformed stream and scalar-replace any
                         // non-escaping user variant whose arms carry only scalar fields
                         // (N>=0 fields per arm) living entirely inside that region
                         // (`MakeVariant`/`MatchVariant`/`UnwrapVariantValue`/`GetField`
                         // → LoadInt-tag + per-(arm,slot) Move). When there
                         // is no replaceable variant the pass returns the code unchanged
                         // with an identity ip-map, so an Option-only (or plain) body is
-                        // byte-for-byte the old path. Compose the two transformed→
-                        // original ip-maps: `ip_map[t] = ip_map1[ip_map2[t]]`.
-                        let lp_v = detect_single_natural_loop(&code1)?;
+                        // byte-for-byte the old path. Compose the transformed→
+                        // original ip-maps.
+                        let lp_v = detect_single_natural_loop(&code_r)?;
                         let (code2, n_regs2, ip_map2) = native_scalar_replace_variants_in_region(
-                            &code1, n_regs1, lp_v.header, lp_v.exit,
+                            &code_r, n_regs_r, lp_v.header, lp_v.exit,
                         )?;
                         // OSR × J3 for STRUCTS: after dissolving Options and variants,
                         // re-detect the loop on the transformed stream and scalar-replace
@@ -12321,14 +12934,15 @@ impl RegVm {
                         let (code, n_regs, ip_map3) = native_scalar_replace_structs_in_region(
                             &code2, n_regs2, lp_s.header, lp_s.exit,
                         )?;
-                        // Compose all FOUR maps to land in the ORIGINAL `func.code`
-                        // index space. `ip_map1/2/3` index the INLINED stream
-                        // (`inlined_code`); the final hop through `ip_map0` carries
-                        // an inlined-stream ip back to the original `func.code` ip.
-                        // `ip_map[t] = ip_map0[ip_map1[ip_map2[ip_map3[t]]]]`.
+                        // Compose all FIVE maps to land in the ORIGINAL `func.code`
+                        // index space. `ip_map3` (struct) → `ip_map2` (variant) →
+                        // `ip_map_r` (result) → `ip_map1` (option) index successive
+                        // transformed streams; the final hop through `ip_map0` carries an
+                        // inlined-stream ip back to the original `func.code` ip.
+                        // `ip_map[t] = ip_map0[ip_map1[ip_map_r[ip_map2[ip_map3[t]]]]]`.
                         let ip_map: Vec<usize> = ip_map3
                             .iter()
-                            .map(|&t3| ip_map0[ip_map1[ip_map2[t3]]])
+                            .map(|&t3| ip_map0[ip_map1[ip_map_r[ip_map2[t3]]]])
                             .collect();
                         // Re-detect on the fully-transformed stream; its single loop is
                         // the same loop with both Option and variant ops dissolved (the
