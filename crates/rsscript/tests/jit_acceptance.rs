@@ -2878,3 +2878,196 @@ fn main() -> Unit {
         "a loop whose Result is live after the loop must NOT OSR (dead-at-boundary gate): {stats:?}",
     );
 }
+
+/// OSR × J3 combinator expansion (deopt-before-heap, Slice 2) — POSITIVE. The
+/// `option_result_chain` shape: a hot loop chains `Option.map`/`and_then`/
+/// `unwrap_or` (with inline `|v| {...}` mappers) and `Result.map`/`and_then`/
+/// `unwrap_or` over `maybe_even` (Option) and `checked` (Result, heap Err arm),
+/// tangled with `Log.write` I/O. The combinator-expansion pass lowers each
+/// intrinsic to primitive match/construct form with the mapper sunk+inlined; the
+/// Result Err arm bails (Slice 1) and Option/Result scalar-replacement dissolve the
+/// per-iteration values, so the loop OSRs. Byte-identical to the interpreter AND
+/// `osr_entries > 0`. The argument is ALWAYS even-then-odd alternating and >= 0, so
+/// the None arm fires on odd indices but the Err arm never builds heap natively.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j3_combinator_chain_loop_matches_interpreter() {
+    let source = "\
+fn maybe_even(value: Int) -> Option<Int> {
+    let half = value / 2
+    if half * 2 == value { return Some(value) }
+    return None
+}
+
+fn checked(value: Int) -> Result<Int, String> {
+    if value < 0 { return Err(String.copy(value: read \"negative\")) }
+    return Ok(value)
+}
+
+fn f(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        let option_value = Option.and_then<Int, Int>(
+            value: read Option.map<Int, Int>(
+                value: read maybe_even(value: index),
+                mapper: |value| { return value + 1 },
+            ),
+            mapper: |value| { return Some(value * 2) },
+        )
+        let option_total = Option.unwrap_or<Int>(value: read option_value, default: read 0)
+        let result_value = Result.and_then<Int, String, Int>(
+            result: read Result.map<Int, String, Int>(
+                result: read checked(value: option_total),
+                mapper: |value| { return value + 3 },
+            ),
+            mapper: |value| { return Ok(value * 2) },
+        )
+        total = total + Result.unwrap_or<Int, String>(value: read result_value, default: read 0)
+        index = index + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(limit: read 200)))
+    return Unit
+}
+";
+    let file = "jit-osr-j3-combinator-chain.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "OSR × J3 combinator chain must be byte-identical to the interpreter (stdout)"
+    );
+    assert!(
+        stats.osr_entries > 0,
+        "the combinator chain loop must OSR (combinators expand + mappers inline + \
+         Option/Result dissolve): {stats:?}",
+    );
+}
+
+/// OSR × J3 combinator expansion — COLD-PATH-DRIVING (the deopt-before-heap net).
+/// The combinator chain DYNAMICALLY hits None (odd index ⇒ `maybe_even` is None,
+/// the Option combinator None arm) AND Err (negative arg ⇒ `checked` is Err, whose
+/// expanded arm is a native `Bail`). On those iterations native bails →
+/// the interpreter re-runs the whole loop and builds the real None/Err itself.
+/// stdout must stay byte-identical to the pure interpreter — proving the
+/// abandon-and-reinterpret-the-loop fallback is sound when the cold arms are taken.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j3_combinator_chain_cold_path_matches_interpreter() {
+    let source = "\
+fn maybe_even(value: Int) -> Option<Int> {
+    let half = value / 2
+    if half * 2 == value { return Some(value) }
+    return None
+}
+
+fn checked(value: Int) -> Result<Int, String> {
+    if value < 0 { return Err(String.copy(value: read \"negative\")) }
+    return Ok(value)
+}
+
+fn f(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        let arg = index - 50
+        let option_value = Option.map<Int, Int>(
+            value: read maybe_even(value: arg),
+            mapper: |value| { return value + 1 },
+        )
+        let option_total = Option.unwrap_or<Int>(value: read option_value, default: read 7)
+        let result_value = Result.map<Int, String, Int>(
+            result: read checked(value: arg),
+            mapper: |value| { return value + 3 },
+        )
+        total = total + Result.unwrap_or<Int, String>(value: read result_value, default: read 1000)
+        index = index + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(limit: read 200)))
+    return Unit
+}
+";
+    let file = "jit-osr-j3-combinator-cold-path.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, _stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "combinator chain hitting None (odd index) AND Err (negative arg) must still be \
+         interpreter-identical (bail → reinterpret → interpreter builds None/Err)"
+    );
+}
+
+/// OSR × J3 combinator expansion — ESCAPING (the dead-at-boundary safety guard).
+/// The Option combinator result is declared before the loop and read AFTER it, so
+/// it is live across the loop boundary: the Option scalar-replacement gate MUST
+/// refuse to dissolve it ⇒ MUST NOT OSR (`osr_entries == 0`). Still
+/// interpreter-identical (the whole loop runs on the interpreter).
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j3_combinator_escaping_does_not_osr() {
+    let source = "\
+fn maybe_even(value: Int) -> Option<Int> {
+    let half = value / 2
+    if half * 2 == value { return Some(value) }
+    return None
+}
+
+fn f(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut index = 0
+    let mut total = 0
+    let mut last: Option<Int> = None
+    while index < limit {
+        last = Option.map<Int, Int>(
+            value: read maybe_even(value: index),
+            mapper: |value| { return value + 1 },
+        )
+        total = total + Option.unwrap_or<Int>(value: read last, default: read 0)
+        index = index + 1
+    }
+    match last {
+        Some(v) => { Log.write(message: read String.from_int(value: v)) }
+        None => { Log.write(message: read \"none\") }
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(limit: read 200)))
+    return Unit
+}
+";
+    let file = "jit-osr-j3-combinator-escaping.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "an escaping combinator Option read after the loop must still be interpreter-identical"
+    );
+    assert_eq!(
+        stats.osr_entries, 0,
+        "a loop whose combinator Option is live after the loop must NOT OSR: {stats:?}",
+    );
+}

@@ -1659,6 +1659,432 @@ fn native_scalar_replace_options(
     Some((new_code, next_reg, payload_regs, ip_map))
 }
 
+/// The interned `Ok { value }` variant layout, used by the combinator-expansion
+/// pass when lowering `Result.map` into `MakeVariant{Ok,[mapped]}` (the same shape
+/// the lowerer and the interpreter's `value_ok` produce).
+#[cfg(feature = "native-jit")]
+fn result_ok_layout() -> Rc<crate::vm_value::TypeLayout> {
+    crate::vm_value::intern_layout(Rc::from("Ok"), vec![Rc::from("value")])
+}
+
+/// Whether `intrinsic` is one of the six Option/Result combinator intrinsics that
+/// the combinator-expansion pass (deopt-before-heap Slice 2) lowers into primitive
+/// match/construct form with the mapper closure inlined.
+#[cfg(feature = "native-jit")]
+fn combinator_intrinsic_kind(intrinsic: RegIntrinsic) -> Option<CombinatorKind> {
+    match intrinsic {
+        RegIntrinsic::OptionMap => Some(CombinatorKind::OptionMap),
+        RegIntrinsic::OptionAndThen => Some(CombinatorKind::OptionAndThen),
+        RegIntrinsic::OptionUnwrapOr => Some(CombinatorKind::OptionUnwrapOr),
+        RegIntrinsic::ResultMap => Some(CombinatorKind::ResultMap),
+        RegIntrinsic::ResultAndThen => Some(CombinatorKind::ResultAndThen),
+        RegIntrinsic::ResultUnwrapOr => Some(CombinatorKind::ResultUnwrapOr),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "native-jit")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CombinatorKind {
+    OptionMap,
+    OptionAndThen,
+    OptionUnwrapOr,
+    ResultMap,
+    ResultAndThen,
+    ResultUnwrapOr,
+}
+
+#[cfg(feature = "native-jit")]
+impl CombinatorKind {
+    /// Whether `arg[1]` is a mapper *closure* (map/and_then) rather than a scalar
+    /// default value (unwrap_or).
+    fn has_mapper(self) -> bool {
+        !matches!(self, CombinatorKind::OptionUnwrapOr | CombinatorKind::ResultUnwrapOr)
+    }
+}
+
+/// OSR × J3 (deopt-before-heap, Slice 2): expand the six Option/Result combinator
+/// intrinsics (`Option.map`/`and_then`/`unwrap_or`, `Result.map`/`and_then`/
+/// `unwrap_or`) that appear inside the loop region `[header, exit)` into primitive
+/// match/construct form, leaving the mapper closure call as an in-region
+/// `CallClosure{closure: mapper_reg, args:[payload]}`. The downstream
+/// [`native_inline_leaf_calls`] then SINKS each loop-local mapper `MakeClosure`
+/// (inlining its body), and the Option / Result scalar-replacement passes dissolve
+/// the per-iteration Option/Result values — so the combinator chain becomes pure
+/// scalar code and the loop OSRs.
+///
+/// The lowering replicates the interpreter's exact combinator semantics
+/// (`exec_option_intrinsics` / `exec_result_intrinsics`):
+/// - `OptionMap(o, f)`     → `match o { Some(v) => MakeSome(f(v)), None => LoadNone }`
+/// - `OptionAndThen(o, f)` → `match o { Some(v) => f(v) /*already Option*/, None => LoadNone }`
+/// - `OptionUnwrapOr(o,d)` → `match o { Some(v) => v, None => d }`
+/// - `ResultMap(r, f)`     → `match r { Ok(v) => MakeVariant{Ok,[f(v)]}, Err(_) => Bail }`
+/// - `ResultAndThen(r, f)` → `match r { Ok(v) => f(r) /*already Result*/, Err(_) => Bail }`
+/// - `ResultUnwrapOr(r,d)` → `match r { Ok(v) => v, Err(_) => d }`
+///
+/// The `Result` `Err` arm rebuilds a HEAP `Err` in the interpreter; building heap is
+/// forbidden on the native path (Exec Spec §7.2), so that arm becomes a native
+/// `Bail` (a `RuntimeError` sentinel — identical to the Slice-1 cold-arm splice).
+/// Because the inlined `checked` leaf's own `Err` arm already bailed, the `Result`
+/// reaching `ResultMap`/`ResultAndThen` is statically always-`Ok` after inlining,
+/// so Slice-1 Result scalar-replacement dissolves it (the `Err` arm goes dead). The
+/// `Ok` arm constructs `MakeVariant{Ok,[scalar]}`, exactly the shape Result-SR
+/// dissolves. `ResultUnwrapOr`'s `Err` arm only moves the scalar default (no heap),
+/// so it need not bail; but a live heap `Err` reaching it would have been dissolved
+/// upstream — if not, the surrounding Result-SR/escape gates bail.
+///
+/// Conservative — returns `None` (⇒ no OSR; the loop stays on the interpreter)
+/// when ANY in-region combinator's mapper is not a loop-local, native-inlinable
+/// `MakeClosure` (a stored/param `Fn`, a capturing-with-heap closure, …): such a
+/// mapper cannot be sunk/inlined, so leaving a bare `CallClosure` would block the
+/// native subset anyway. A non-combinator body returns the code unchanged with an
+/// identity ip-map (byte-for-byte the old path). Escape / dead-at-boundary of the
+/// produced Option/Result values is enforced by the downstream SR passes, exactly
+/// as for a hand-written `match`.
+///
+/// Returns `(transformed_code, new_n_regs, ip_map)` with the same transformed→
+/// original `ip_map` discipline as the sibling region passes.
+#[cfg(feature = "native-jit")]
+fn native_expand_option_result_combinators_in_region(
+    unit: &RegUnit,
+    func: &RegFunction,
+    code: &[RegInstr],
+    n_regs: usize,
+    header: usize,
+    exit: usize,
+) -> Option<(Vec<RegInstr>, usize, Vec<usize>)> {
+    if header >= exit || exit > code.len() {
+        return None;
+    }
+    let in_region = |i: usize| i >= header && i < exit;
+
+    // Fast path: no combinator intrinsic in the region ⇒ identity transform.
+    let has_combinator = (header..exit).any(|i| {
+        matches!(
+            &code[i],
+            RegInstr::CallIntrinsic { intrinsic, .. } | RegInstr::CallTypedIntrinsic { intrinsic, .. }
+                if combinator_intrinsic_kind(*intrinsic).is_some()
+        )
+    });
+    if !has_combinator {
+        let ip_map: Vec<usize> = (0..code.len()).collect();
+        return Some((code.to_vec(), n_regs, ip_map));
+    }
+
+    // For a mapper-bearing combinator, the mapper arg register MUST be the dst of an
+    // in-region `MakeClosure` whose callee is native-inlinable at arity 1 (the
+    // single payload argument). The closure is loop-local and only fed into the
+    // combinator, so `loop_local_sinkable_closures` will sink + inline it. If we
+    // cannot prove this, bail the whole expansion (no OSR): a bare `CallClosure`
+    // would block the native subset and a non-inlinable mapper is genuinely opaque.
+    let mapper_callee = |mapper_reg: usize| -> Option<usize> {
+        // Single defining `MakeClosure` in-region (no copy-Move forwarding needed for
+        // the literal-closure shape the lowerer emits; a forwarded/redefined mapper
+        // conservatively fails this lookup and bails).
+        let mut found: Option<usize> = None;
+        for (mi, instr) in code.iter().enumerate() {
+            if let RegInstr::MakeClosure { dst, function, .. } = instr {
+                if *dst == mapper_reg {
+                    if !in_region(mi) || found.is_some() {
+                        return None;
+                    }
+                    found = Some(*function);
+                }
+            }
+        }
+        let k = found?;
+        let callee = unit.functions.get(k)?;
+        // The mapper is invoked with exactly one argument (the matched payload).
+        let inlinable = if callee.captures == 0 {
+            native_callee_inlinable_j3(callee, 1)
+        } else {
+            // A capturing mapper needs all-scalar captures to be sinkable; we cannot
+            // see the profile's `captures_all_scalar` bit here, so accept only
+            // captureless mappers (the common literal `|v| {...}` shape). A capturing
+            // mapper bails the expansion (conservative ⇒ no OSR).
+            false
+        };
+        if !inlinable {
+            return None;
+        }
+        Some(k)
+    };
+
+    // Validate every in-region combinator up front; bail the whole pass on the first
+    // one we cannot expand. Collect the (operand, mapper/default) regs for the rewrite.
+    for i in header..exit {
+        let (intrinsic, args) = match &code[i] {
+            RegInstr::CallIntrinsic { intrinsic, args, .. }
+            | RegInstr::CallTypedIntrinsic { intrinsic, args, .. } => (*intrinsic, args),
+            _ => continue,
+        };
+        let Some(kind) = combinator_intrinsic_kind(intrinsic) else {
+            continue;
+        };
+        if args.len() != 2 {
+            return None;
+        }
+        if kind.has_mapper() {
+            mapper_callee(args[1])?;
+        }
+    }
+
+    // Rewrite the WHOLE code: each in-region combinator becomes a primitive
+    // match/construct fragment (fresh temp + payload regs allocated above `n_regs`);
+    // everything else copies through with jump/match targets remapped through the
+    // index map (identical discipline to the sibling SR passes).
+    enum Fix {
+        Target(usize),
+        Match { a: usize, b: usize },
+        // A forward jump to the join point AFTER the combinator fragment at original
+        // index `orig`: resolved to the start of the next original instruction.
+        JoinAfter(usize),
+    }
+    let mut new_code: Vec<RegInstr> = Vec::with_capacity(code.len() + 16);
+    let mut index_map = vec![0usize; code.len()];
+    let mut fixups: Vec<(usize, Fix)> = Vec::new();
+    let mut next_reg = n_regs;
+
+    for (i, instr) in code.iter().enumerate() {
+        index_map[i] = new_code.len();
+        let region = in_region(i);
+        let combinator = if region {
+            match instr {
+                RegInstr::CallIntrinsic { intrinsic, args, dst }
+                | RegInstr::CallTypedIntrinsic { intrinsic, args, dst, .. } => {
+                    combinator_intrinsic_kind(*intrinsic).map(|k| (k, args.clone(), *dst))
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if let Some((kind, args, dst)) = combinator {
+            let operand = args[0];
+            let other = args[1]; // mapper closure OR scalar default
+            match kind {
+                CombinatorKind::OptionMap
+                | CombinatorKind::OptionAndThen
+                | CombinatorKind::OptionUnwrapOr => {
+                    // match operand { Some(v) => <some arm> ; None => <none arm> }
+                    let payload = next_reg;
+                    next_reg += 1;
+                    // MatchOption operand → some_ip(next) / none_ip(patched)
+                    let match_pos = new_code.len();
+                    new_code.push(RegInstr::MatchOption {
+                        src: operand,
+                        some_ip: 0,
+                        none_ip: 0,
+                    });
+                    // --- Some arm (falls through from the match's some_ip) ---
+                    let some_ip = new_code.len();
+                    new_code.push(RegInstr::UnwrapSome { dst: payload, src: operand });
+                    match kind {
+                        CombinatorKind::OptionMap => {
+                            // dst = Some(mapper(payload))
+                            let mapped = next_reg;
+                            next_reg += 1;
+                            new_code.push(RegInstr::CallClosure {
+                                dst: mapped,
+                                closure: other,
+                                args: vec![payload],
+                                mut_args: Vec::new(),
+                            });
+                            new_code.push(RegInstr::MakeSome { dst, value: mapped });
+                        }
+                        CombinatorKind::OptionAndThen => {
+                            // dst = mapper(payload) (already an Option)
+                            new_code.push(RegInstr::CallClosure {
+                                dst,
+                                closure: other,
+                                args: vec![payload],
+                                mut_args: Vec::new(),
+                            });
+                        }
+                        CombinatorKind::OptionUnwrapOr => {
+                            // dst = payload (the Some value)
+                            new_code.push(RegInstr::Move { dst, src: payload });
+                        }
+                        _ => unreachable!(),
+                    }
+                    // jump to join (after this combinator)
+                    fixups.push((new_code.len(), Fix::JoinAfter(i)));
+                    new_code.push(RegInstr::Jump { target: 0 });
+                    // --- None arm ---
+                    let none_ip = new_code.len();
+                    match kind {
+                        CombinatorKind::OptionMap | CombinatorKind::OptionAndThen => {
+                            new_code.push(RegInstr::LoadNone { dst });
+                        }
+                        CombinatorKind::OptionUnwrapOr => {
+                            new_code.push(RegInstr::Move { dst, src: other });
+                        }
+                        _ => unreachable!(),
+                    }
+                    // (falls through to join)
+                    if let RegInstr::MatchOption { some_ip: s, none_ip: nn, .. } =
+                        &mut new_code[match_pos]
+                    {
+                        *s = some_ip;
+                        *nn = none_ip;
+                    }
+                }
+                CombinatorKind::ResultMap
+                | CombinatorKind::ResultAndThen
+                | CombinatorKind::ResultUnwrapOr => {
+                    let payload = next_reg;
+                    next_reg += 1;
+                    let match_pos = new_code.len();
+                    new_code.push(RegInstr::MatchResult {
+                        src: operand,
+                        ok_ip: 0,
+                        err_ip: 0,
+                    });
+                    // --- Ok arm ---
+                    let ok_ip = new_code.len();
+                    new_code.push(RegInstr::UnwrapVariantValue {
+                        dst: payload,
+                        src: operand,
+                        expected: "Ok".to_string(),
+                    });
+                    match kind {
+                        CombinatorKind::ResultMap => {
+                            // dst = Ok(mapper(payload))
+                            let mapped = next_reg;
+                            next_reg += 1;
+                            new_code.push(RegInstr::CallClosure {
+                                dst: mapped,
+                                closure: other,
+                                args: vec![payload],
+                                mut_args: Vec::new(),
+                            });
+                            new_code.push(RegInstr::MakeVariant {
+                                dst,
+                                layout: result_ok_layout(),
+                                fields: vec![("value".to_string(), mapped)],
+                            });
+                        }
+                        CombinatorKind::ResultAndThen => {
+                            // dst = mapper(payload) (already a Result)
+                            new_code.push(RegInstr::CallClosure {
+                                dst,
+                                closure: other,
+                                args: vec![payload],
+                                mut_args: Vec::new(),
+                            });
+                        }
+                        CombinatorKind::ResultUnwrapOr => {
+                            new_code.push(RegInstr::Move { dst, src: payload });
+                        }
+                        _ => unreachable!(),
+                    }
+                    fixups.push((new_code.len(), Fix::JoinAfter(i)));
+                    new_code.push(RegInstr::Jump { target: 0 });
+                    // --- Err arm ---
+                    let err_ip = new_code.len();
+                    match kind {
+                        CombinatorKind::ResultMap | CombinatorKind::ResultAndThen => {
+                            // Heap Err rebuild ⇒ native Bail (Slice-1 cold-arm path).
+                            new_code.push(RegInstr::RuntimeError { message: String::new() });
+                        }
+                        CombinatorKind::ResultUnwrapOr => {
+                            // dst = default (scalar; no heap build).
+                            new_code.push(RegInstr::Move { dst, src: other });
+                        }
+                        _ => unreachable!(),
+                    }
+                    if let RegInstr::MatchResult { ok_ip: o, err_ip: e, .. } =
+                        &mut new_code[match_pos]
+                    {
+                        *o = ok_ip;
+                        *e = err_ip;
+                    }
+                }
+            }
+            continue;
+        }
+        // Copy-through, remapping jump/match targets (same as the SR passes).
+        match instr {
+            RegInstr::Jump { target }
+            | RegInstr::JumpIfBool { target, .. }
+            | RegInstr::JumpIfIntCompare { target, .. } => {
+                fixups.push((new_code.len(), Fix::Target(*target)));
+                new_code.push(instr.clone());
+            }
+            RegInstr::MatchResult { ok_ip, err_ip, .. } => {
+                fixups.push((new_code.len(), Fix::Match { a: *ok_ip, b: *err_ip }));
+                new_code.push(instr.clone());
+            }
+            RegInstr::MatchOption { some_ip, none_ip, .. }
+            | RegInstr::MatchMapGet { some_ip, none_ip, .. } => {
+                fixups.push((new_code.len(), Fix::Match { a: *some_ip, b: *none_ip }));
+                new_code.push(instr.clone());
+            }
+            RegInstr::MatchVariant { match_ip, else_ip, .. } => {
+                fixups.push((new_code.len(), Fix::Match { a: *match_ip, b: *else_ip }));
+                new_code.push(instr.clone());
+            }
+            other => new_code.push(other.clone()),
+        }
+    }
+    for (pos, fix) in fixups {
+        match fix {
+            Fix::Target(t) => {
+                let target = index_map[t];
+                match &mut new_code[pos] {
+                    RegInstr::Jump { target: dst }
+                    | RegInstr::JumpIfBool { target: dst, .. }
+                    | RegInstr::JumpIfIntCompare { target: dst, .. } => *dst = target,
+                    _ => {}
+                }
+            }
+            Fix::JoinAfter(orig) => {
+                // The instruction AFTER the combinator at `orig` (its successor); for
+                // the last instruction this is one-past-the-end (handled below).
+                let target = if orig + 1 < code.len() {
+                    index_map[orig + 1]
+                } else {
+                    new_code.len()
+                };
+                if let RegInstr::Jump { target: dst } = &mut new_code[pos] {
+                    *dst = target;
+                }
+            }
+            Fix::Match { a, b } => {
+                let (na, nb) = (index_map[a], index_map[b]);
+                match &mut new_code[pos] {
+                    RegInstr::MatchResult { ok_ip, err_ip, .. } => {
+                        *ok_ip = na;
+                        *err_ip = nb;
+                    }
+                    RegInstr::MatchOption { some_ip, none_ip, .. }
+                    | RegInstr::MatchMapGet { some_ip, none_ip, .. } => {
+                        *some_ip = na;
+                        *none_ip = nb;
+                    }
+                    RegInstr::MatchVariant { match_ip, else_ip, .. } => {
+                        *match_ip = na;
+                        *else_ip = nb;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    // Inverse ip-map: every fragment of a combinator at original index `i` maps back
+    // to `i` (a deopt inside the expanded fragment resumes by re-running the original
+    // combinator on the interpreter); copy-through maps one-to-one.
+    let mut ip_map = vec![0usize; new_code.len()];
+    for i in 0..code.len() {
+        let start = index_map[i];
+        let end = if i + 1 < code.len() { index_map[i + 1] } else { new_code.len() };
+        for t in start..end {
+            ip_map[t] = i;
+        }
+    }
+    Some((new_code, next_reg, ip_map))
+}
+
 /// OSR × J3: scalar-replace non-escaping scalar `Option`s that live entirely
 /// inside the loop region `[header, exit)` of an otherwise native-INELIGIBLE
 /// function (one whose pre/post-loop code does I/O — calls, `Log.write`, …, which
@@ -3461,6 +3887,7 @@ fn loop_local_sinkable_closures(
     func: &RegFunction,
     header: usize,
     exit: usize,
+    j3: bool,
 ) -> SinkableClosures {
     use std::collections::HashSet;
     let in_region = |i: usize| i >= header && i < exit;
@@ -3546,8 +3973,16 @@ fn loop_local_sinkable_closures(
                     {
                         continue 'candidates;
                     }
+                    // Under j3 (OSR×inline) a mapper that builds/destructures a
+                    // non-escaping Option/Result/variant/struct also qualifies — it
+                    // dissolves post-inline via the region SR passes (e.g. an
+                    // `and_then` mapper `|v| Some(v*2)` / `|v| Ok(v*2)`).
                     let inlinable = if callee.captures == 0 {
-                        native_callee_inlinable(callee, args.len())
+                        if j3 {
+                            native_callee_inlinable_j3(callee, args.len())
+                        } else {
+                            native_callee_inlinable(callee, args.len())
+                        }
                     } else {
                         native_capturing_callee_inlinable(callee, args.len())
                     };
@@ -3618,7 +4053,7 @@ fn native_inline_leaf_calls(
     // supplied (whole-function translation never sinks: it goes through the normal
     // captureless-native path). The `MakeClosure` of each sunk dst is DELETED below.
     let sinkable = match loop_region {
-        Some((h, e)) => loop_local_sinkable_closures(unit, func, h, e),
+        Some((h, e)) => loop_local_sinkable_closures(unit, func, h, e, j3),
         None => SinkableClosures::default(),
     };
     let has_inlinable_call = func.code.iter().enumerate().any(|(i, instr)| match instr {
@@ -12884,28 +13319,94 @@ impl RegVm {
                 // and is copied through — it must not veto OSR for the hot loop. When
                 // the original code has no analyzable loop there is nothing to OSR, so
                 // bail before inlining.
-                let entry = detect_single_natural_loop(&func.code).and_then(|lp_orig| {
-                native_inline_leaf_calls(&unit, func, true, Some((lp_orig.header, lp_orig.exit))).and_then(
-                    |(inlined_code, n_regs0, ip_map0)| {
-                    detect_single_natural_loop(&inlined_code).and_then(|lp0| {
-                    native_scalar_replace_options_in_region(
-                        &inlined_code, n_regs0, lp0.header, lp0.exit,
+                // OSR × J3 combinator expansion (deopt-before-heap, Slice 2): BEFORE
+                // inlining, lower each Option/Result combinator intrinsic
+                // (`Option.map`/`and_then`/`unwrap_or`, `Result.map`/`and_then`/
+                // `unwrap_or`) in the loop region into primitive match/construct form
+                // with the mapper call left as an in-region `CallClosure` to the
+                // (loop-local) mapper closure. The inline pass below then SINKS each
+                // mapper `MakeClosure` (inlining its body) and the Option/Result SR
+                // passes dissolve the per-iteration Option/Result values, so the
+                // combinator chain becomes pure scalar code and the loop OSRs.
+                //
+                // When the body has no combinator the pass returns the code unchanged
+                // with an identity `expand_map`, and we keep using the REAL `func`
+                // (byte-for-byte the old path). When it DOES fire, the rest of the
+                // chain runs on a synthetic `func_e` carrying the expanded code (with
+                // NO profile — combinator mappers are sunk statically, not via the
+                // profile, so disabling profile-guided mono/poly inlining for an
+                // expanded body is a conservative restriction, never unsound). The
+                // final OSR boundary is composed back through `expand_map` to land in
+                // the REAL `func.code` (where the interpreter resumes).
+                let expanded = detect_single_natural_loop(&func.code).and_then(|lp_pre| {
+                    native_expand_option_result_combinators_in_region(
+                        &unit, func, &func.code, func.regs, lp_pre.header, lp_pre.exit,
                     )
-                    .and_then(|(code1, n_regs1, ip_map1)| {
-                        // OSR × J3 for RESULTS (deopt-before-heap, Slice 1): after
-                        // dissolving Options, re-detect the loop and scalar-replace any
-                        // non-escaping, statically-always-`Ok` `Result<Scalar,_>` living
-                        // entirely inside the region. This pairs with the cold-arm bail:
-                        // an inlined leaf whose `Err` arm built a heap value left a native
-                        // `Bail` in its place, so the only Result constructor is
-                        // `MakeVariant{Ok,[scalar]}` and the Result dissolves to a scalar
-                        // payload (`MatchResult` → `Jump ok`). A live heap `Err` (or any
-                        // non-dissolvable shape) returns the code unchanged with an
-                        // identity ip-map (or bails), so an Option-only/plain body is
-                        // byte-for-byte the old path. Compose `ip_map1` with `ip_map_r`.
-                        let lp_r = detect_single_natural_loop(&code1)?;
-                        let (code_r, n_regs_r, ip_map_r) = native_scalar_replace_results_in_region(
-                            &code1, n_regs1, lp_r.header, lp_r.exit,
+                });
+                let (eff_owned, expand_map): (Option<RegFunction>, Vec<usize>) = match expanded {
+                    // The identity fast-path returns the code unchanged with
+                    // `eregs == func.regs` and `ecode.len() == func.code.len()`; a real
+                    // expansion always adds temp regs AND grows the stream. Detect "did
+                    // it fire" by either growing.
+                    Some((ecode, eregs, emap))
+                        if eregs != func.regs || ecode.len() != func.code.len() =>
+                    {
+                        let f_e = RegFunction {
+                            name: func.name.clone(),
+                            params: func.params,
+                            captures: func.captures,
+                            regs: eregs,
+                            local_regs: HashMap::new(),
+                            code: ecode,
+                            jit_analysis: std::cell::Cell::new(None),
+                            native_status: std::cell::Cell::new(0),
+                            call_count: std::cell::Cell::new(0),
+                            profile: RefCell::new(None),
+                            osr_state: std::cell::Cell::new(OsrTrigger::Unknown),
+                        };
+                        (Some(f_e), emap)
+                    }
+                    _ => (None, (0..func.code.len()).collect()),
+                };
+                let eff_func: &RegFunction = eff_owned.as_ref().unwrap_or(func);
+                // `expand_map[eff_idx] = real func.code idx`. A combinator at a real
+                // index maps MANY expanded indices back to itself; the OSR boundary
+                // (loop header/exit) is copy-through control flow, so it maps 1:1 to a
+                // non-combinator real index. Guard anyway: a boundary landing on a real
+                // combinator `CallIntrinsic` (impossible for copy-through, but defended)
+                // bails OSR rather than misresume mid-fragment.
+                let real_code = &func.code;
+                let entry = detect_single_natural_loop(&eff_func.code).and_then(|lp_orig| {
+                native_inline_leaf_calls(&unit, eff_func, true, Some((lp_orig.header, lp_orig.exit))).and_then(
+                    |(inlined_code, n_regs0, ip_map0)| {
+                    // OSR × J3 for RESULTS (deopt-before-heap, Slice 1): scalar-replace
+                    // any non-escaping, statically-always-`Ok` `Result<Scalar,_>` living
+                    // entirely inside the region. An inlined leaf whose `Err` arm built a
+                    // heap value (or a combinator's expanded `Err` arm) left a native
+                    // `Bail` in its place, so the only Result constructor is
+                    // `MakeVariant{Ok,[scalar]}` and the Result dissolves to a scalar
+                    // payload (`MatchResult` → `Jump ok`). RESULT-SR runs BEFORE Option-SR
+                    // because it tolerates in-region Option ops (it copies `MatchOption`/
+                    // `MakeSome`/`UnwrapSome`/`LoadNone` through verbatim), whereas
+                    // Option-SR requires every in-region instruction to be native-subset
+                    // or an Option op — so a MIXED Option+Result body (the combinator
+                    // chain) must dissolve its Results first. A live heap `Err` (or any
+                    // non-dissolvable shape) returns the code unchanged with an identity
+                    // ip-map (or bails), so a pure-Option/plain body is byte-for-byte the
+                    // old path.
+                    detect_single_natural_loop(&inlined_code).and_then(|lp_r| {
+                    native_scalar_replace_results_in_region(
+                        &inlined_code, n_regs0, lp_r.header, lp_r.exit,
+                    )
+                    .and_then(|(code_r, n_regs_r, ip_map_r)| {
+                        // OSR × J3 for OPTIONS: dissolve any non-escaping scalar Option
+                        // living entirely inside the region. After Result-SR the region
+                        // carries only Option ops + native subset, so the strict
+                        // subset-or-option gate is satisfied. Identity (no Option) ⇒
+                        // unchanged.
+                        let lp1 = detect_single_natural_loop(&code_r)?;
+                        let (code1, n_regs1, ip_map1) = native_scalar_replace_options_in_region(
+                            &code_r, n_regs_r, lp1.header, lp1.exit,
                         )?;
                         // OSR × J3 for VARIANTS: after dissolving Options/Results, re-detect
                         // the loop on the transformed stream and scalar-replace any
@@ -12917,9 +13418,9 @@ impl RegVm {
                         // with an identity ip-map, so an Option-only (or plain) body is
                         // byte-for-byte the old path. Compose the transformed→
                         // original ip-maps.
-                        let lp_v = detect_single_natural_loop(&code_r)?;
+                        let lp_v = detect_single_natural_loop(&code1)?;
                         let (code2, n_regs2, ip_map2) = native_scalar_replace_variants_in_region(
-                            &code_r, n_regs_r, lp_v.header, lp_v.exit,
+                            &code1, n_regs1, lp_v.header, lp_v.exit,
                         )?;
                         // OSR × J3 for STRUCTS: after dissolving Options and variants,
                         // re-detect the loop on the transformed stream and scalar-replace
@@ -12934,15 +13435,17 @@ impl RegVm {
                         let (code, n_regs, ip_map3) = native_scalar_replace_structs_in_region(
                             &code2, n_regs2, lp_s.header, lp_s.exit,
                         )?;
-                        // Compose all FIVE maps to land in the ORIGINAL `func.code`
-                        // index space. `ip_map3` (struct) → `ip_map2` (variant) →
-                        // `ip_map_r` (result) → `ip_map1` (option) index successive
-                        // transformed streams; the final hop through `ip_map0` carries an
-                        // inlined-stream ip back to the original `func.code` ip.
-                        // `ip_map[t] = ip_map0[ip_map1[ip_map_r[ip_map2[ip_map3[t]]]]]`.
+                        // Compose all FIVE maps to land in the (effective) inlined
+                        // `func.code` index space. The transform order is now
+                        // result → option → variant → struct, so:
+                        // `ip_map3` (struct) → `ip_map2` (variant) → `ip_map1` (option) →
+                        // `ip_map_r` (result) index successive transformed streams; the
+                        // final hop through `ip_map0` carries an inlined-stream ip back to
+                        // the (effective) function's ip.
+                        // `ip_map[t] = ip_map0[ip_map_r[ip_map1[ip_map2[ip_map3[t]]]]]`.
                         let ip_map: Vec<usize> = ip_map3
                             .iter()
-                            .map(|&t3| ip_map0[ip_map1[ip_map_r[ip_map2[t3]]]])
+                            .map(|&t3| ip_map0[ip_map_r[ip_map1[ip_map2[t3]]]])
                             .collect();
                         // Re-detect on the fully-transformed stream; its single loop is
                         // the same loop with both Option and variant ops dissolved (the
@@ -12969,34 +13472,55 @@ impl RegVm {
                             // are fresh windows above `func.regs`, used only in the loop
                             // body). The struct/variant/Option region gates already
                             // enforce dead-at-boundary for the scalar-replaced regs.
-                            let maps_into_inline = |orig: usize| {
-                                func.code.get(orig).is_some_and(|instr| {
+                            // The inline-region check is against the EXPANDED stream
+                            // (`eff_func.code`), since `ip_map0`/`ip_map` map back into
+                            // it. A boundary that maps into an inlined call site bails.
+                            let maps_into_inline = |eff_idx: usize| {
+                                eff_func.code.get(eff_idx).is_some_and(|instr| {
                                     matches!(
                                         instr,
                                         RegInstr::CallKnown { .. } | RegInstr::CallClosure { .. }
                                     )
                                 })
                             };
+                            // Compose the final hop through `expand_map` to land in the
+                            // REAL `func.code` (interpreter resume index). A boundary
+                            // landing on a real combinator `CallIntrinsic` bails (cannot
+                            // resume mid-expanded-fragment).
+                            let to_real = |eff_idx: usize| -> Option<usize> {
+                                if eff_idx == eff_func.code.len() {
+                                    return Some(real_code.len());
+                                }
+                                let real = *expand_map.get(eff_idx)?;
+                                let is_combinator = real_code.get(real).is_some_and(|instr| matches!(
+                                    instr,
+                                    RegInstr::CallIntrinsic { intrinsic, .. }
+                                        | RegInstr::CallTypedIntrinsic { intrinsic, .. }
+                                            if combinator_intrinsic_kind(*intrinsic).is_some()
+                                ));
+                                if is_combinator { None } else { Some(real) }
+                            };
                             // For `lp.exit`, the loop exits to one-past the post-loop
                             // body; when that lands exactly at the end of the
                             // transformed stream it maps to the end of the original
                             // stream.
-                            let orig_header = *ip_map.get(lp.header)?;
-                            if maps_into_inline(orig_header) {
+                            let eff_header = *ip_map.get(lp.header)?;
+                            if maps_into_inline(eff_header) {
                                 return None;
                             }
+                            let orig_header = to_real(eff_header)?;
                             let orig_exit = if lp.exit < ip_map.len() {
                                 let oe = ip_map[lp.exit];
                                 if maps_into_inline(oe) {
                                     return None;
                                 }
-                                oe
+                                to_real(oe)?
                             } else if lp.exit == code.len() {
-                                func.code.len()
+                                real_code.len()
                             } else {
                                 return None;
                             };
-                            translate_osr_loop(&code, n_regs, func.params, func.captures, lp)
+                            translate_osr_loop(&code, n_regs, eff_func.params, eff_func.captures, lp)
                                 .and_then(|(jit_fn, params, reg_types)| {
                                     let n_jit_regs = jit_fn.n_regs as usize;
                                     match native.module.compile_osr(&jit_fn, lp.header as u32) {
