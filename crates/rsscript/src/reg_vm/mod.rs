@@ -5181,6 +5181,26 @@ const NATIVE_STATUS_NOT_ELIGIBLE: u8 = 1;
 #[cfg(feature = "native-jit")]
 const NATIVE_BAIL_GIVEUP_THRESHOLD: u32 = 3;
 
+/// Native-dispatch count at which the native tier gives up on a *back-edge-free*
+/// (loop-free) function and demotes it to `NOT_ELIGIBLE` (a profitability
+/// governor, mirroring the `NATIVE_BAIL_GIVEUP_THRESHOLD` predict-and-skip).
+///
+/// Invariant: a native body with no internal back-edge does bounded O(1) work
+/// per dispatch, so calling it once per interpreter loop iteration (a tiny leaf
+/// or closure body — `closure_alloc`, `option_result_chain`) pays FFI +
+/// marshalling cost it can never amortize across the body's own iterations. A
+/// *loop-bearing* body (the whole hot loop compiled into one native call —
+/// `native_scalar_loop`, every `osr_*` kernel) does O(n) work per dispatch and
+/// is dispatched `calls=1`, so it amortizes the FFI cost and is EXEMPT here
+/// regardless of call count. The combination (back-edge-free AND dispatched many
+/// times) is exactly the diagnosed per-iteration-dispatch loss pattern.
+///
+/// `K = 64` is large enough that a `calls=1` whole-loop win NEVER trips it and
+/// small enough to cap the wasted FFI churn at a fixed bounded prefix before the
+/// function falls back to the cheap interpreter path for the rest of the loop.
+#[cfg(feature = "native-jit")]
+const NATIVE_NOAMORTIZE_GIVEUP: u32 = 64;
+
 /// Call count at which a function becomes "warm" and starts collecting a
 /// [`FunctionProfile`] (J1). Below this threshold a function allocates and
 /// records nothing — cold code pays only a single saturating `Cell<u32>`
@@ -10716,11 +10736,15 @@ enum NativeAttempt {
 #[cfg(feature = "native-jit")]
 struct NativeState {
     module: vm_jit::NativeModule,
-    // `None` = known not native-eligible; `Some((id, ret, params))` = compiled
-    // handle, return type (to box the 64-bit result), and parameter types (to
-    // unbox each argument: `Int`/`Bool` from their VM value, `Float` as bits).
+    // `None` = known not native-eligible; `Some((id, ret, params, has_backedge))`
+    // = compiled handle, return type (to box the 64-bit result), parameter types
+    // (to unbox each argument: `Int`/`Bool` from their VM value, `Float` as bits),
+    // and whether the function's body contains an internal back-edge (a loop). The
+    // back-edge bit drives the no-amortization profitability gate
+    // (`NATIVE_NOAMORTIZE_GIVEUP`): a loop-free body dispatched per loop iteration
+    // can never amortize FFI cost, so it is demoted after `K` dispatches.
     #[allow(clippy::type_complexity)]
-    cache: HashMap<usize, Option<(vm_jit::CompiledId, NativeTy, Vec<NativeTy>)>>,
+    cache: HashMap<usize, Option<(vm_jit::CompiledId, NativeTy, Vec<NativeTy>, bool)>>,
     /// Per-function call counts, for tiering: a function is compiled and run
     /// natively only once it has been entered more than `tier_up_threshold` times
     /// (a hot-function heuristic). `0` means "compile on first call" (force-all).
@@ -10732,6 +10756,12 @@ struct NativeState {
     /// dropped from `cache`, so the predict-and-skip path stops the wasted
     /// compile-marshal-bail churn (vm-jit-perf-plan §3.0).
     bail_counts: HashMap<usize, u32>,
+    /// Per-function count of *native dispatches of a back-edge-free body*, keyed
+    /// like `counts`/`cache`. Only loop-free bodies are counted here; at
+    /// `NATIVE_NOAMORTIZE_GIVEUP` the function is demoted to `NOT_ELIGIBLE` and
+    /// dropped from `cache` (the no-amortization profitability gate). Loop-bearing
+    /// bodies are never inserted, so they are never demoted by this counter.
+    noamortize_counts: HashMap<usize, u32>,
     tier_up_threshold: u32,
     /// Deopt stress mode: when set, the native tier always bails, so every
     /// native-eligible function exercises the fallback path. Used to verify
@@ -11192,6 +11222,7 @@ impl NativeState {
             cache: HashMap::new(),
             counts: HashMap::new(),
             bail_counts: HashMap::new(),
+            noamortize_counts: HashMap::new(),
             tier_up_threshold,
             force_bail,
             stats: NativeStats::default(),
@@ -11567,7 +11598,13 @@ impl RegVm {
                                     if native.collect_stats {
                                         native.stats.compiled += 1;
                                     }
-                                    Some((id, ret, params))
+                                    // Static profitability signal: a body with an
+                                    // internal back-edge (a loop) does O(n) work per
+                                    // dispatch and amortizes FFI cost; a loop-free body
+                                    // does O(1) and, if dispatched per loop iteration,
+                                    // never does. Drives `NATIVE_NOAMORTIZE_GIVEUP`.
+                                    let has_backedge = jit_function_has_loop(&func.code);
+                                    Some((id, ret, params, has_backedge))
                                 }
                                 Err(_) => {
                                     if native.collect_stats {
@@ -11599,10 +11636,32 @@ impl RegVm {
                     entry
                 }
             };
-            match entry {
+            let (id, ret, params, has_backedge) = match entry {
                 Some(entry) => entry,
                 None => return NativeAttempt::Fallback,
+            };
+            // No-amortization profitability gate. A loop-free body does O(1) work
+            // per dispatch; dispatched once per interpreter loop iteration it pays
+            // FFI + marshalling cost it can never amortize. After
+            // `NATIVE_NOAMORTIZE_GIVEUP` such dispatches, demote it to NOT_ELIGIBLE
+            // (reusing the `record_bail` demotion machinery: set the status bit, drop
+            // the cache + the counter) so the remainder of the loop takes the cheap
+            // interpreter fallback. Loop-bearing bodies (`has_backedge`) do O(n) work
+            // per dispatch, amortize the cost, and are never counted here — they are
+            // dispatched `calls=1` (the whole loop compiled into one native body) and
+            // so could never reach `K` anyway. This is the same predict-and-skip
+            // pattern as the bail give-up, not a parallel system.
+            if !has_backedge {
+                let count = native.noamortize_counts.entry(native_key).or_insert(0);
+                *count += 1;
+                if *count >= NATIVE_NOAMORTIZE_GIVEUP {
+                    func.native_status.set(NATIVE_STATUS_NOT_ELIGIBLE);
+                    native.cache.remove(&native_key);
+                    native.noamortize_counts.remove(&native_key);
+                    return NativeAttempt::Fallback;
+                }
             }
+            (id, ret, params)
         };
         // Phase 2: marshal each argument to 64 bits per its inferred parameter
         // type. Scalars unbox directly; a `Handle` (struct/list) is registered in

@@ -2302,6 +2302,73 @@ fn main() -> Unit {
     assert_eq!(auto.stdout.trim_end(), "begin\n40425\n40425");
 }
 
+/// No-amortization profitability gate (native-tier bail-overhead fix). A loop-free
+/// body (here a `|x| x * 2 + 1` closure) allocated and dispatched once per loop
+/// iteration does O(1) work per native call, so the per-dispatch FFI + marshalling
+/// cost can never be amortized — dispatching it natively every iteration is a net
+/// loss versus the interpreter. The gate counts native dispatches of back-edge-free
+/// bodies and, after `NATIVE_NOAMORTIZE_GIVEUP` (64) of them, demotes the function
+/// to NOT_ELIGIBLE so the rest of the loop runs on the interpreter. We assert (a)
+/// the body WAS dispatched natively at least once (the gate is on the accept path,
+/// not a blanket reject — `native_calls > 0`) and (b) it was demoted long before the
+/// loop ended (`native_calls` is bounded far below the 2000 iterations — NOT one
+/// dispatch per iteration), and (c) the result is byte-identical to the interpreter.
+/// The complementary "loop-bearing bodies are NEVER demoted" half is covered by the
+/// whole-loop native wins (e.g. `native_scalar_loop`, every `osr_*` kernel) whose
+/// `native_calls == 1`: a loop body compiles as one native call and is exempt.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_loop_free_per_iteration_dispatch_is_demoted_by_profitability_gate() {
+    // `main`'s hot loop allocates a fresh closure each iteration (so the loop itself
+    // is not OSR-eligible — MakeClosure in the region) and calls the loop-free body
+    // `x * 2 + 1` once per iteration. sum_{i=0}^{1999} (2i + 1) = 2000^2 = 4000000.
+    let source = "\
+features: local
+
+fn main() -> Unit {
+    let limit = 2000
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        local f = |x| {
+            return x * 2 + 1
+        }
+        total = total + f(i)
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+";
+    let file = "jit-noamortize-gate.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (native, stats) = executable
+        .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
+        .expect("native run should succeed");
+    assert_eq!(
+        native.stdout, interp.stdout,
+        "demoted-closure result must be byte-identical to the interpreter",
+    );
+    assert_eq!(native.stdout.trim_end(), "4000000");
+    assert_eq!(
+        stats.osr_entries, 0,
+        "this is a per-iteration native-dispatch scenario, NOT an OSR one (the in-loop \
+         MakeClosure makes the loop OSR-ineligible): {stats:?}",
+    );
+    assert!(
+        stats.native_calls > 0,
+        "the loop-free closure body must be dispatched natively at least once before \
+         the gate demotes it (the gate is on the accept path): {stats:?}",
+    );
+    assert!(
+        stats.native_calls < 500,
+        "the no-amortization gate must demote the loop-free per-iteration body long \
+         before 2000 iterations — native_calls must be bounded, NOT one-per-iteration: \
+         {stats:?}",
+    );
+}
+
 /// Broadened OSR loop detector — POSITIVE test (the real `variant_match_loop` kernel
 /// shape). The hot loop contains an INTERNAL forward `if sel == N { sel = 0 }` reset
 /// (a within-body branch + join), and the function calls a NON-inlinable helper
