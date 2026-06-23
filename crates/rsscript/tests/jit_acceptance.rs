@@ -1208,6 +1208,176 @@ fn main() -> Unit {
     );
 }
 
+/// OSR × J3 LOOP-CARRIED struct positive test. A non-escaping struct `p` is created
+/// BEFORE the hot loop, MUTATED IN PLACE across iterations (`p.x = p.x + p.vx`, …, a
+/// per-iteration `SetFieldSlot` heap write the native tier cannot perform), and DEAD
+/// after the loop. The shipped loop-LOCAL struct pass cannot help (the `MakeStruct`
+/// is in the pre-header, and the in-loop `SetFieldSlot` is neither native-subset nor
+/// `MakeStruct`). `native_loop_carried_struct_in_region` dissolves `p` into one
+/// loop-carried scalar register per field (the init sources become the live-in
+/// leaves; each in-loop field read/write becomes a register Move), so the loop OSRs to
+/// a pure-scalar native loop. The body is I/O-tangled (`Log.write` makes `f`
+/// native-INELIGIBLE) so only OSR can run it natively. Output must be byte-identical
+/// to the pure interpreter (which mutates the heap struct each iteration) AND the loop
+/// must genuinely OSR (`osr_entries > 0`).
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j3_loop_carried_struct_loop_matches_interpreter() {
+    let source = "\
+struct Particle {
+    x: Int,
+    y: Int,
+    vx: Int,
+    vy: Int
+}
+
+fn f(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut p = Particle(x: 0, y: 0, vx: 1, vy: 2)
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        p.x = p.x + p.vx
+        p.y = p.y + p.vy
+        p.vx = p.vx + 1
+        p.vy = p.vy - 1
+        total = total + p.x + p.y
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(limit: read 60)))
+    return Unit
+}
+";
+    let file = "jit-osr-j3-loop-carried-struct.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "OSR × J3 loop-carried struct mutation must be byte-identical to the interpreter"
+    );
+    assert!(
+        stats.osr_entries > 0,
+        "the non-escaping loop-carried struct (dead after loop) must OSR natively after \
+         loop-carried scalar replacement: {stats:?}",
+    );
+}
+
+/// OSR × J3 loop-carried struct NEGATIVE test — live-after-loop bail. Identical to the
+/// positive case except `p` is READ AFTER the loop (`p.x`). The struct is now live
+/// across the loop exit, so dissolving it into loop-carried scalars would require
+/// reconstructing the heap struct at the OSR boundary — out of scope. The pass MUST
+/// refuse and the loop MUST NOT OSR (`osr_entries == 0`); the program still runs
+/// correctly on the interpreter. Guards the dead-after-loop requirement.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j3_loop_carried_struct_live_after_loop_does_not_osr() {
+    let source = "\
+struct Particle {
+    x: Int,
+    y: Int,
+    vx: Int,
+    vy: Int
+}
+
+fn f(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut p = Particle(x: 0, y: 0, vx: 1, vy: 2)
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        p.x = p.x + p.vx
+        p.y = p.y + p.vy
+        p.vx = p.vx + 1
+        p.vy = p.vy - 1
+        total = total + p.x + p.y
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: read p.x))
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(limit: read 60)))
+    return Unit
+}
+";
+    let file = "jit-osr-j3-loop-carried-struct-live.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "a loop-carried struct read after the loop must still be interpreter-identical"
+    );
+    assert_eq!(
+        stats.osr_entries, 0,
+        "a loop-carried struct LIVE after the loop must NOT OSR (live-out bail): {stats:?}",
+    );
+}
+
+/// OSR × J3 loop-carried struct NEGATIVE test — escape bail. Here the mutated struct
+/// `p` ESCAPES: it is RETURNED out of `f` (and also read by `main`). An escaping struct
+/// cannot be dissolved into registers (the heap value is observed), so the pass MUST
+/// refuse and the loop MUST NOT OSR (`osr_entries == 0`). The program remains correct
+/// on the interpreter. Guards the non-escaping requirement.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j3_loop_carried_struct_escaping_does_not_osr() {
+    let source = "\
+struct Particle {
+    x: Int,
+    y: Int,
+    vx: Int,
+    vy: Int
+}
+
+fn f(limit: Int) -> Particle {
+    Log.write(message: read \"begin\")
+    let mut p = Particle(x: 0, y: 0, vx: 1, vy: 2)
+    let mut i = 0
+    while i < limit {
+        p.x = p.x + p.vx
+        p.y = p.y + p.vy
+        p.vx = p.vx + 1
+        p.vy = p.vy - 1
+        i = i + 1
+    }
+    return p
+}
+
+fn main() -> Unit {
+    let q = f(limit: read 60)
+    Log.write(message: read String.from_int(value: read q.x))
+    return Unit
+}
+";
+    let file = "jit-osr-j3-loop-carried-struct-escaping.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "an escaping (returned) loop-carried struct must still be interpreter-identical"
+    );
+    assert_eq!(
+        stats.osr_entries, 0,
+        "a loop-carried struct that ESCAPES (returned) must NOT OSR: {stats:?}",
+    );
+}
+
 /// OSR × inline-leaf-calls (Pending #1) CROSS-FUNCTION positive test. The variant is
 /// built in one leaf (`make_shape`) and matched in another (`area`), BOTH called from
 /// the hot loop in an I/O-tangled (native-INELIGIBLE) function `f`. The variant thus

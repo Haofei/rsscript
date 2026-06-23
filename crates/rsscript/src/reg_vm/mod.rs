@@ -3985,6 +3985,387 @@ fn native_scalar_replace_structs_in_region(
     Some((new_code, next_reg, ip_map))
 }
 
+/// OSR × J3 (loop-carried struct scalar replacement). Extends
+/// [`native_scalar_replace_structs_in_region`] to a struct that is CREATED BEFORE the
+/// loop, MUTATED IN PLACE across iterations (`SetFieldSlot`), and DEAD after the loop.
+///
+/// The shipped struct pass only dissolves a struct allocated AND dead INSIDE the loop
+/// (the `MakeStruct` lives in the region; the dead-at-boundary gate forbids any
+/// outside reference). A struct mutated loop-carried fails that pass two ways: its
+/// `MakeStruct` sits in the PRE-HEADER (so the strict "every in-region instr is
+/// native-subset or `MakeStruct`" check trips on the in-loop `SetFieldSlot`, which the
+/// shipped pass does not even model), and the struct register is WRITTEN before the
+/// region (so the dead-at-boundary gate bails). The in-loop `SetFieldSlot` is a heap
+/// write the native tier cannot perform, so without this pass the loop never OSRs.
+///
+/// This pass dissolves such a struct into one LOOP-CARRIED scalar register per field:
+/// - the pre-header `MakeStruct{m}` + `Move{p, m}` becomes nothing — each field's
+///   INIT SOURCE register is REUSED as that field's loop-carried leaf register, so the
+///   interpreter has already written it (definite assignment) before the header and it
+///   marshals live-in through the normal `try_osr` window with no new channel;
+/// - in-loop `GetFieldSlot{dst, base:p, slot}` → `Move dst := leaf_slot` (register read);
+/// - in-loop `SetFieldSlot{dst, base:p, slot, value}` → `Move leaf_slot := value`
+///   (the heap write becomes a register write) plus `LoadUnit dst` (its old `dst`,
+///   which the interpreter set to `Unit`, is preserved in case it is read);
+/// - in-loop self-`Move{p, p}` (the lowerer's redundant copy after each `SetFieldSlot`)
+///   → nothing.
+/// The leaf registers are loop-carried (live-in at the header, carried across the
+/// backedge, in the OSR window). Because `p` is DEAD after the loop, no heap struct is
+/// reconstructed at the OSR-exit; the scalar leaves simply flow out (each leaf is a
+/// real register `< n_regs`, restored by the precise deopt — harmless, since dead).
+///
+/// Conservative bails (when unsure REJECT — never unsound): no in-region
+/// `SetFieldSlot` (nothing for THIS pass — return unchanged); the struct ESCAPES (read
+/// as a plain value / stored / returned / captured / any non-(Get/Set)FieldSlot,
+/// non-alias use); the struct is LIVE after the loop (read at/after `exit` ⇒ would need
+/// heap reconstruction ⇒ out of scope); the pre-header def is not a clean
+/// `MakeStruct` (single def reachable through `Move` aliases); a field INIT SOURCE
+/// register is not REUSABLE as a leaf (shared between two fields, or read/written
+/// anywhere other than the defining `MakeStruct` — reuse would corrupt a live value);
+/// two struct handles that might alias the same heap object; a footprint we cannot
+/// model (`RegFootprint::All`). Every existing loop-LOCAL / nested struct behavior is
+/// untouched — this pass only fires when the shipped struct pass could not (an
+/// in-region `SetFieldSlot` on a pre-header struct).
+///
+/// Returns `(transformed_code, new_n_regs, ip_map)` with the same transformed→original
+/// `ip_map` discipline as the other region passes; `new_n_regs == n_regs` (no fresh
+/// regs — leaves reuse the init sources).
+#[cfg(feature = "native-jit")]
+fn native_loop_carried_struct_in_region(
+    code: &[RegInstr],
+    n_regs: usize,
+    header: usize,
+    exit: usize,
+) -> Option<(Vec<RegInstr>, usize, Vec<usize>)> {
+    if header >= exit || exit > code.len() {
+        return None;
+    }
+    let in_region = |i: usize| i >= header && i < exit;
+    let identity = || -> (Vec<RegInstr>, usize, Vec<usize>) {
+        (code.to_vec(), n_regs, (0..code.len()).collect())
+    };
+
+    // Fast path: no in-region `SetFieldSlot` ⇒ nothing for THIS pass. (A loop-LOCAL
+    // struct, or a bare native-subset body, is handled by the earlier passes.)
+    if !(header..exit).any(|i| matches!(&code[i], RegInstr::SetFieldSlot { .. })) {
+        return Some(identity());
+    }
+
+    // Candidate struct handles: every register that is the `base` of an in-region
+    // `GetFieldSlot`/`SetFieldSlot`. We require EXACTLY ONE such base register (a
+    // single loop-carried struct); multiple distinct bases (possible aliasing of two
+    // heap structs) ⇒ bail. A `base` that is a Move-alias of the same pre-header
+    // struct still appears as one register here because the lowering threads the
+    // in-place mutation back through that one register (`SetFieldSlot` rewrites its
+    // `base` slot, and the self-`Move{p,p}` keeps it that register).
+    let mut base_regs: Vec<usize> = Vec::new();
+    for i in header..exit {
+        match &code[i] {
+            RegInstr::GetFieldSlot { base, .. } | RegInstr::SetFieldSlot { base, .. } => {
+                if !base_regs.contains(base) {
+                    base_regs.push(*base);
+                }
+            }
+            _ => {}
+        }
+    }
+    if base_regs.len() != 1 {
+        return None;
+    }
+    let p = base_regs[0];
+    if p >= n_regs {
+        return None;
+    }
+
+    // The pre-header definition of `p`: follow `Move{p, src}` aliases backward to a
+    // single `MakeStruct`. `p` must have EXACTLY ONE writer outside the region, that
+    // writer must be either a `MakeStruct{p,..}` directly or `Move{p, m}` where `m`
+    // has exactly one writer, a `MakeStruct{m,..}`, and `m` is used ONLY by that Move.
+    // All such defs must precede the region (a pre-header def).
+    //
+    // `instr_written_reg` reports the literal `dst` field. A struct handle mutated in
+    // place by `SetFieldSlot{base:p}` writes `p`'s slot at RUNTIME but its modelled
+    // `dst` is the (unused) result reg — so a SetFieldSlot does NOT appear as a writer
+    // of `p` here. What DOES is the lowerer's redundant self-`Move{p,p}` emitted after
+    // each in-region `SetFieldSlot` (a semantic no-op). Exclude those self-moves so the
+    // sole REAL writer of `p` is its pre-header definition.
+    let writers_of = |reg: usize| -> Vec<usize> {
+        (0..code.len())
+            .filter(|&i| match instr_written_reg(&code[i]) {
+                RegFootprint::Some(ws) => ws.contains(&reg),
+                RegFootprint::All => true,
+            })
+            .collect()
+    };
+    let is_self_move = |i: usize| matches!(&code[i], RegInstr::Move { dst, src } if dst == src);
+    let p_writers: Vec<usize> = writers_of(p)
+        .into_iter()
+        .filter(|&i| !(in_region(i) && is_self_move(i)))
+        .collect();
+    if p_writers.len() != 1 {
+        return None;
+    }
+    let p_def = p_writers[0];
+    if in_region(p_def) || p_def >= header {
+        return None;
+    }
+    // Resolve the `MakeStruct` providing `p`'s fields (directly, or through one Move).
+    let make_idx = match &code[p_def] {
+        RegInstr::MakeStruct { dst, .. } if *dst == p => p_def,
+        RegInstr::Move { dst, src } if *dst == p => {
+            let m = *src;
+            let m_writers = writers_of(m);
+            if m_writers.len() != 1 {
+                return None;
+            }
+            let mi = m_writers[0];
+            if !matches!(&code[mi], RegInstr::MakeStruct { dst, .. } if *dst == m) {
+                return None;
+            }
+            // `m` must be used ONLY by this Move (otherwise the struct also flows
+            // elsewhere — an escape we are not modelling).
+            for (i, instr) in code.iter().enumerate() {
+                if i == mi {
+                    continue;
+                }
+                let reads = match instr_read_regs(instr) {
+                    RegFootprint::Some(rs) => rs,
+                    RegFootprint::All => return None,
+                };
+                if reads.contains(&m) && i != p_def {
+                    return None;
+                }
+            }
+            mi
+        }
+        _ => return None,
+    };
+    if make_idx >= header {
+        return None;
+    }
+    let RegInstr::MakeStruct { layout, fields, .. } = &code[make_idx] else {
+        return None;
+    };
+
+    // Non-escaping + dead-after-loop check on `p`. EVERY read of `p` in the whole
+    // function must be: an in-region `GetFieldSlot`/`SetFieldSlot` base, an in-region
+    // self-`Move{p,p}`, or the pre-header `Move{p_def}` source-side... `p` is never a
+    // Move SOURCE in the pre-header (it is the dst there). So: every read of `p` must
+    // be a (Get/Set)FieldSlot base or a self-Move — both IN-REGION. Any read of `p`
+    // OUTSIDE the region (incl. at/after `exit`) ⇒ live-after-loop or escape ⇒ bail.
+    for (i, instr) in code.iter().enumerate() {
+        let reads = match instr_read_regs(instr) {
+            RegFootprint::Some(rs) => rs,
+            RegFootprint::All => return None,
+        };
+        if !reads.contains(&p) {
+            continue;
+        }
+        match instr {
+            RegInstr::GetFieldSlot { base, .. } | RegInstr::SetFieldSlot { base, .. }
+                if *base == p && in_region(i) => {}
+            RegInstr::Move { dst, src } if *dst == p && *src == p && in_region(i) => {}
+            _ => return None, // escapes or live after the loop
+        }
+    }
+    // `p` must not be WRITTEN anywhere except its single pre-header def and the
+    // in-region redundant self-`Move{p,p}` (deleted by the rewrite). `SetFieldSlot`
+    // does not model `p` as a written reg (its `dst` is the unused result). Any OTHER
+    // writer of `p` (e.g. a second struct construction on another path) ⇒
+    // aliasing/polymorphism ⇒ bail.
+    for i in 0..code.len() {
+        if i == p_def {
+            continue;
+        }
+        if in_region(i) && is_self_move(i) {
+            continue; // redundant self-Move, deleted below
+        }
+        let writes = match instr_written_reg(&code[i]) {
+            RegFootprint::Some(ws) => ws,
+            RegFootprint::All => return None,
+        };
+        if writes.contains(&p) {
+            return None;
+        }
+    }
+
+    // Allocate one loop-carried leaf register per field slot by REUSING the field's
+    // init-source register. Reuse is sound iff the source register is used ONLY as
+    // that single `MakeStruct` field source (so the native loop owning/overwriting it
+    // corrupts nothing) and the sources are pairwise DISTINCT (each leaf is its own
+    // register). Build `slot -> leaf` from the layout's declaration order.
+    let n_slots = layout.field_names.len();
+    let mut slot_leaf: Vec<Option<usize>> = vec![None; n_slots];
+    let mut seen_leaves: Vec<usize> = Vec::new();
+    for (name, src) in fields.iter() {
+        let slot = layout.field_names.iter().position(|n| &**n == &**name)?;
+        if slot >= n_slots {
+            return None;
+        }
+        if slot_leaf[slot].is_some() {
+            return None; // duplicate field
+        }
+        // Distinct across fields.
+        if seen_leaves.contains(src) {
+            return None;
+        }
+        // The source must be a real interpreter register that the OSR window can
+        // marshal (`< n_regs`).
+        if *src >= n_regs {
+            return None;
+        }
+        // The source must be used ONLY by this `MakeStruct` (any other read would be
+        // clobbered when the native loop overwrites the leaf). Reads elsewhere ⇒ bail.
+        for (i, instr) in code.iter().enumerate() {
+            if i == make_idx {
+                continue;
+            }
+            let reads = match instr_read_regs(instr) {
+                RegFootprint::Some(rs) => rs,
+                RegFootprint::All => return None,
+            };
+            if reads.contains(src) {
+                return None;
+            }
+        }
+        // The source must have a single writer (its pre-header init), and that writer
+        // must precede the region. (It feeds the live-in marshalling.)
+        let src_writers = writers_of(*src);
+        if src_writers.len() != 1 || src_writers[0] >= header {
+            return None;
+        }
+        slot_leaf[slot] = Some(*src);
+        seen_leaves.push(*src);
+    }
+    if slot_leaf.iter().any(|s| s.is_none()) {
+        return None; // a slot had no field source
+    }
+    let slot_leaf: Vec<usize> = slot_leaf.into_iter().map(|s| s.expect("checked")).collect();
+
+    // Each in-region `SetFieldSlot{dst}` writes `dst := Unit` at runtime (an unused
+    // result of the in-place mutation). The rewrite turns the SetFieldSlot into a plain
+    // `Move leaf := value` and emits NOTHING for the (dead) `dst`. Require every such
+    // `dst` to be DEAD (never read anywhere in the function) so dropping its `Unit`
+    // write is observationally invisible; a read of it would need a `LoadUnit` (not in
+    // the native subset) ⇒ bail instead.
+    for i in header..exit {
+        if let RegInstr::SetFieldSlot { dst, base, .. } = &code[i] {
+            if *base != p {
+                continue;
+            }
+            for (j, instr) in code.iter().enumerate() {
+                let reads = match instr_read_regs(instr) {
+                    RegFootprint::Some(rs) => rs,
+                    RegFootprint::All => return None,
+                };
+                if j != i && reads.contains(dst) {
+                    return None;
+                }
+            }
+        }
+    }
+
+    // Rewrite. The pre-header `MakeStruct` (and its forwarding `Move{p, m}`) are
+    // DELETED — the field sources already hold the init values as the leaf registers.
+    // In-region field ops become register Moves. Everything else copies through with
+    // jump/match targets remapped via the index map.
+    enum Fix {
+        Target(usize),
+        Match { some_ip: usize, none_ip: usize },
+        VariantMatch { match_ip: usize, else_ip: usize },
+    }
+    let mut new_code: Vec<RegInstr> = Vec::with_capacity(code.len());
+    let mut index_map = vec![0usize; code.len()];
+    let mut fixups: Vec<(usize, Fix)> = Vec::new();
+    for (i, instr) in code.iter().enumerate() {
+        index_map[i] = new_code.len();
+        match instr {
+            // Pre-header struct construction + its forwarding Move: delete (leaves are
+            // the init-source registers, already written by the interpreter).
+            RegInstr::MakeStruct { dst, .. } if i == make_idx && *dst == p => {}
+            RegInstr::MakeStruct { dst, .. } if i == make_idx => {
+                // The `MakeStruct{m}` whose result a `Move{p,m}` forwards: delete it;
+                // its dst `m` is otherwise unused (validated above).
+                let _ = dst;
+            }
+            RegInstr::Move { dst, src } if i == p_def && *dst == p && *src != p => {
+                // The forwarding `Move{p, m}`: delete (m is gone).
+            }
+            // In-region field reads/writes on `p`.
+            RegInstr::GetFieldSlot { dst, base, slot } if in_region(i) && *base == p => {
+                let leaf = *slot_leaf.get(*slot)?;
+                new_code.push(RegInstr::Move { dst: *dst, src: leaf });
+            }
+            RegInstr::SetFieldSlot { base, slot, value, .. } if in_region(i) && *base == p => {
+                let leaf = *slot_leaf.get(*slot)?;
+                // The heap write becomes a register write into the loop-carried leaf.
+                // The SetFieldSlot's `dst` (the unused `Unit` result) is validated dead
+                // above, so emit nothing for it.
+                new_code.push(RegInstr::Move { dst: leaf, src: *value });
+            }
+            // The lowerer's redundant self-`Move{p,p}` after each SetFieldSlot.
+            RegInstr::Move { dst, src } if in_region(i) && *dst == p && *src == p => {}
+            // Copy-through, remapping jump/match targets.
+            RegInstr::Jump { target }
+            | RegInstr::JumpIfBool { target, .. }
+            | RegInstr::JumpIfIntCompare { target, .. } => {
+                fixups.push((new_code.len(), Fix::Target(*target)));
+                new_code.push(instr.clone());
+            }
+            RegInstr::MatchOption { some_ip, none_ip, .. } => {
+                fixups.push((new_code.len(), Fix::Match { some_ip: *some_ip, none_ip: *none_ip }));
+                new_code.push(instr.clone());
+            }
+            RegInstr::MatchVariant { match_ip, else_ip, .. } => {
+                fixups
+                    .push((new_code.len(), Fix::VariantMatch { match_ip: *match_ip, else_ip: *else_ip }));
+                new_code.push(instr.clone());
+            }
+            other => new_code.push(other.clone()),
+        }
+    }
+    for (pos, fix) in fixups {
+        match fix {
+            Fix::Target(t) => {
+                let target = index_map[t];
+                match &mut new_code[pos] {
+                    RegInstr::Jump { target: dst }
+                    | RegInstr::JumpIfBool { target: dst, .. }
+                    | RegInstr::JumpIfIntCompare { target: dst, .. } => *dst = target,
+                    _ => {}
+                }
+            }
+            Fix::Match { some_ip, none_ip } => {
+                let (s, n) = (index_map[some_ip], index_map[none_ip]);
+                if let RegInstr::MatchOption { some_ip: sd, none_ip: nd, .. } = &mut new_code[pos] {
+                    *sd = s;
+                    *nd = n;
+                }
+            }
+            Fix::VariantMatch { match_ip, else_ip } => {
+                let (m, e) = (index_map[match_ip], index_map[else_ip]);
+                if let RegInstr::MatchVariant { match_ip: md, else_ip: ed, .. } = &mut new_code[pos] {
+                    *md = m;
+                    *ed = e;
+                }
+            }
+        }
+    }
+    // Inverse ip-map (see `native_scalar_replace_options`). A deleted pre-header
+    // instruction maps its (empty) range to the next emitted index; the OSR boundary
+    // (header/exit) is in-region/post-region control flow, never a deleted pre-header
+    // index, so the boundary mapping stays unambiguous.
+    let mut ip_map = vec![0usize; new_code.len()];
+    for i in 0..code.len() {
+        let start = index_map[i];
+        let end = if i + 1 < code.len() { index_map[i + 1] } else { new_code.len() };
+        for t in start..end {
+            ip_map[t] = i;
+        }
+    }
+    Some((new_code, n_regs, ip_map))
+}
+
 /// A conservative register footprint: either an EXACT set of register operands, or
 /// `All` meaning "could touch every register" (used for instruction variants we do
 /// not fully model, so an omission is sound — it over-approximates liveness and can
@@ -13790,8 +14171,20 @@ impl RegVm {
                         // transformed→original ip-maps:
                         // `ip_map[t] = ip_map1[ip_map2[ip_map3[t]]]`.
                         let lp_s = detect_single_natural_loop(&code2)?;
-                        let (code, n_regs, ip_map3) = native_scalar_replace_structs_in_region(
+                        let (code_s, n_regs_s, ip_map3) = native_scalar_replace_structs_in_region(
                             &code2, n_regs2, lp_s.header, lp_s.exit,
+                        )?;
+                        // OSR × J3 for LOOP-CARRIED STRUCTS: after the loop-LOCAL
+                        // struct pass, dissolve a struct created in the pre-header,
+                        // mutated in place across iterations (`SetFieldSlot`), and dead
+                        // after the loop into loop-carried scalar leaf registers (the
+                        // in-place heap writes become register writes). When there is no
+                        // in-region `SetFieldSlot` the pass returns the code unchanged
+                        // with an identity ip-map, so an earlier-dissolved (or plain)
+                        // body is byte-for-byte the prior path. Compose its map too.
+                        let lp_lc = detect_single_natural_loop(&code_s)?;
+                        let (code, n_regs, ip_map3b) = native_loop_carried_struct_in_region(
+                            &code_s, n_regs_s, lp_lc.header, lp_lc.exit,
                         )?;
                         // Compose all FIVE maps to land in the (effective) inlined
                         // `func.code` index space. The transform order is now
@@ -13800,10 +14193,13 @@ impl RegVm {
                         // `ip_map_r` (result) index successive transformed streams; the
                         // final hop through `ip_map0` carries an inlined-stream ip back to
                         // the (effective) function's ip.
-                        // `ip_map[t] = ip_map0[ip_map_r[ip_map1[ip_map2[ip_map3[t]]]]]`.
-                        let ip_map: Vec<usize> = ip_map3
+                        // The loop-carried struct pass (`ip_map3b`) runs LAST, so its
+                        // index is the outermost hop:
+                        // `ip_map[t] =
+                        //   ip_map0[ip_map_r[ip_map1[ip_map2[ip_map3[ip_map3b[t]]]]]]`.
+                        let ip_map: Vec<usize> = ip_map3b
                             .iter()
-                            .map(|&t3| ip_map0[ip_map_r[ip_map1[ip_map2[t3]]]])
+                            .map(|&tb| ip_map0[ip_map_r[ip_map1[ip_map2[ip_map3[tb]]]]])
                             .collect();
                         // Re-detect on the fully-transformed stream; its single loop is
                         // the same loop with both Option and variant ops dissolved (the
