@@ -3238,3 +3238,103 @@ fn main() -> Int {
          self-tail-recursion to an infinite loop), got: {msg}"
     );
 }
+
+/// IntToFloat OSR positive test: a hot loop that converts the loop counter with
+/// `Int.to_float` and then does pure FLOAT arithmetic (`+ f * 0.5 - 1.0`), wrapped
+/// by non-native I/O (`Log.write` before/after) in the SAME function — so the
+/// function is whole-function native-INELIGIBLE and only OSR can run the loop
+/// natively. The in-loop `Int.to_float` lowers to a `CallIntrinsic { IntToFloat }`;
+/// before native IntToFloat lowering existed this bailed OSR (a non-native
+/// `CallIntrinsic` in-region), so the float loop never won. With the native
+/// signed-int→f64 conversion (`fcvt_from_sint`) the loop is now OSR-eligible.
+///
+/// With OSR forced on the program's stdout (including the post-loop
+/// `Float.to_string`) must be byte-identical to the pure interpreter — the float
+/// formatting must match EXACTLY, which is the bit-parity net for the conversion.
+/// Under `native-jit` we also assert the loop genuinely OSR'd (`osr_entries > 0`).
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_int_to_float_loop_matches_interpreter() {
+    let source = "\
+fn compute(limit: Int) -> Float {
+    Log.write(message: read \"begin\")
+    let mut index = 0
+    let mut acc = 0.0
+    while index < limit {
+        let f = Int.to_float(value: read index)
+        acc = acc + f * 0.5 - 1.0
+        index = index + 1
+    }
+    Log.write(message: read Float.to_string(value: read acc))
+    return acc
+}
+
+fn main() -> Unit {
+    Log.write(message: read Float.to_string(value: read compute(limit: read 1000)))
+    return Unit
+}
+";
+    let file = "jit-osr-int-to-float.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "OSR Int.to_float + float-arith loop must be byte-identical to the \
+         interpreter (stdout, including the Float.to_string formatting)"
+    );
+    assert!(
+        stats.osr_entries > 0,
+        "an Int.to_float + float-arith loop must OSR natively now that IntToFloat \
+         has a native fcvt_from_sint lowering: {stats:?}",
+    );
+}
+
+/// IntToFloat OSR negative test — proving we admitted ONLY `IntToFloat`, not
+/// `CallIntrinsic` broadly. This loop calls a DIFFERENT, still-unsupported intrinsic
+/// each iteration (`String.from_int`, a heap-String producer that is NOT in the
+/// native subset) alongside the same float arithmetic. Because that `CallIntrinsic`
+/// is in-region and unsupported, the loop MUST NOT OSR (`osr_entries == 0`), or the
+/// interpreter would diverge. The output must still be interpreter-identical. This
+/// guards against a future edit accidentally broadening the `CallIntrinsic`
+/// admission beyond the single `IntToFloat` shape.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_other_intrinsic_in_loop_does_not_osr() {
+    let source = "\
+fn compute(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        let s = String.from_int(value: read index)
+        total = total + String.len(value: read s)
+        index = index + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: compute(limit: read 1000)))
+    return Unit
+}
+";
+    let file = "jit-osr-other-intrinsic.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "a loop using a still-unsupported intrinsic must stay interpreter-identical"
+    );
+    assert_eq!(
+        stats.osr_entries, 0,
+        "a loop with a non-IntToFloat CallIntrinsic in-region must NOT OSR — only the \
+         single IntToFloat shape is admitted, not CallIntrinsic broadly: {stats:?}",
+    );
+}

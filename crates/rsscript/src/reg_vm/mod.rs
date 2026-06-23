@@ -682,6 +682,17 @@ impl NativeTy {
 /// core, no heap/calls/async/floats). Tighter than [`jit_supported_instruction`].
 #[cfg(feature = "native-jit")]
 fn native_subset_instruction(instr: &RegInstr) -> bool {
+    // `Int.to_float` lowers to a `CallIntrinsic { IntToFloat }` with a single Int
+    // arg → Float dst. This single shape gets a native signed-int→f64 conversion
+    // (`fcvt_from_sint`); all other `CallIntrinsic`s stay on the interpreter.
+    if let RegInstr::CallIntrinsic {
+        intrinsic: RegIntrinsic::IntToFloat,
+        args,
+        ..
+    } = instr
+    {
+        return args.len() == 1;
+    }
     matches!(
         instr,
         RegInstr::LoadInt { .. }
@@ -5163,6 +5174,16 @@ fn translate_to_native_jit(
                 RegInstr::NativeClosureCapture { dst: _, closure, .. } => {
                     native_set_ty(ty, *closure, NativeTy::Handle, c)
                 }
+                // `Int.to_float`: single Int arg → Float dst (signed-int→f64
+                // conversion via `fcvt_from_sint` at lowering).
+                RegInstr::CallIntrinsic {
+                    intrinsic: RegIntrinsic::IntToFloat,
+                    args,
+                    dst,
+                } => {
+                    native_set_ty(ty, args[0], NativeTy::Int, c)
+                        && native_set_ty(ty, *dst, NativeTy::Float, c)
+                }
                 _ => true,
             };
             if !ok {
@@ -5593,6 +5614,21 @@ fn translate_to_native_jit(
                     index,
                 }
             }
+            // `Int.to_float`: signed-int→f64 conversion (`fcvt_from_sint`). The
+            // src register holds an Int (i64) and dst a Float (f64). The
+            // interpreter's `IntToFloat` does `i as f64`; this is the identical
+            // value-preserving conversion (not a bitcast).
+            RegInstr::CallIntrinsic {
+                intrinsic: RegIntrinsic::IntToFloat,
+                args,
+                dst,
+            } => {
+                require(int(args[0]) && float(*dst))?;
+                JitInstr::IntToFloat {
+                    dst: r(*dst),
+                    src: r(args[0]),
+                }
+            }
             // `native_subset_instruction` already rejected everything else.
             _ => return None,
         };
@@ -5955,6 +5991,16 @@ fn translate_osr_loop(
                 RegInstr::NativeClosureCapture { dst: _, closure, .. } => {
                     native_set_ty(ty, *closure, NativeTy::Handle, c)
                 }
+                // `Int.to_float`: single Int arg → Float dst (signed-int→f64
+                // conversion via `fcvt_from_sint` at lowering).
+                RegInstr::CallIntrinsic {
+                    intrinsic: RegIntrinsic::IntToFloat,
+                    args,
+                    dst,
+                } => {
+                    native_set_ty(ty, args[0], NativeTy::Int, c)
+                        && native_set_ty(ty, *dst, NativeTy::Float, c)
+                }
                 _ => true,
             };
             if !ok {
@@ -6149,6 +6195,17 @@ fn translate_osr_loop(
                 )?;
                 let index = u32::try_from(*index).ok()?;
                 JitInstr::ClosureCapture { dst: r(*dst), base: r(*closure), index }
+            }
+            // `Int.to_float`: signed-int→f64 conversion (`fcvt_from_sint`). src is
+            // an Int (i64), dst a Float (f64). Identical to the interpreter's
+            // `i as f64` (a value-preserving conversion, not a bitcast).
+            RegInstr::CallIntrinsic {
+                intrinsic: RegIntrinsic::IntToFloat,
+                args,
+                dst,
+            } => {
+                require(int(args[0]) && float(*dst))?;
+                JitInstr::IntToFloat { dst: r(*dst), src: r(args[0]) }
             }
             // Any other (non-subset) instruction in-region was already rejected.
             _ => return None,

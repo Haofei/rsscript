@@ -113,7 +113,7 @@ pub struct HostHelpers {
 /// producer (`rsscript`) translates its private bytecode into this stable,
 /// versioned surface, so the two crates are decoupled: a breaking IR change bumps
 /// this and the producer is updated in lock-step.
-pub const IR_VERSION: u32 = 8;
+pub const IR_VERSION: u32 = 9;
 
 /// Signed integer comparison (the four ordered comparisons; equality is its own
 /// instruction so it can also apply to booleans).
@@ -195,6 +195,13 @@ pub enum JitInstr {
         dst: u32,
         lhs: u32,
         rhs: u32,
+    },
+    /// `dst (Float) = src (Int) as f64` — a signed-int→f64 value-preserving
+    /// conversion (`fcvt_from_sint`), mirroring the interpreter's `i as f64`
+    /// (`Int.to_float`). Not a bitcast.
+    IntToFloat {
+        dst: u32,
+        src: u32,
     },
     BitAnd {
         dst: u32,
@@ -1244,6 +1251,10 @@ fn validate(program: &JitFunction) -> Result<(), JitError> {
             JitInstr::Mul { dst, lhs, rhs } => arith(*dst, *lhs, *rhs, "Mul")?,
             JitInstr::Div { dst, lhs, rhs } => arith(*dst, *lhs, *rhs, "Div")?,
             JitInstr::Mod { dst, lhs, rhs } => int_op(*dst, *lhs, *rhs, "Mod")?,
+            JitInstr::IntToFloat { dst, src } => {
+                require_class(*src, JitValueType::Int, "IntToFloat src")?;
+                require_class(*dst, JitValueType::Float, "IntToFloat result")?;
+            }
             JitInstr::BitAnd { dst, lhs, rhs } => int_op(*dst, *lhs, *rhs, "BitAnd")?,
             JitInstr::BitOr { dst, lhs, rhs } => int_op(*dst, *lhs, *rhs, "BitOr")?,
             JitInstr::BitXor { dst, lhs, rhs } => int_op(*dst, *lhs, *rhs, "BitXor")?,
@@ -1375,6 +1386,7 @@ fn instr_def(instr: &JitInstr) -> Option<u32> {
         | JitInstr::Mul { dst, .. }
         | JitInstr::Div { dst, .. }
         | JitInstr::Mod { dst, .. }
+        | JitInstr::IntToFloat { dst, .. }
         | JitInstr::BitAnd { dst, .. }
         | JitInstr::BitOr { dst, .. }
         | JitInstr::BitXor { dst, .. }
@@ -2291,6 +2303,14 @@ fn build_function(
                     deopt!(i),
                     true,
                 );
+                bcx.def_var(reg(*dst), res);
+            }
+            JitInstr::IntToFloat { dst, src } => {
+                // `Int.to_float`: signed-int (i64) → f64 value-preserving
+                // conversion, identical to the interpreter's `i as f64`. The src
+                // var is I64, the dst var F64 (per their register classes).
+                let v = bcx.use_var(reg(*src));
+                let res = bcx.ins().fcvt_from_sint(types::F64, v);
                 bcx.def_var(reg(*dst), res);
             }
             JitInstr::BitAnd { dst, lhs, rhs } => {
