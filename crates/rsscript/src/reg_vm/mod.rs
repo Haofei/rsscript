@@ -678,6 +678,230 @@ impl NativeTy {
     }
 }
 
+// ============================================================================
+// Central intrinsic/effect registry (JIT descriptor table)
+// ============================================================================
+//
+// One `IntrinsicDescriptor` per `RegIntrinsic`, re-encoding the per-intrinsic
+// facts the JIT's three hand-coded classification sites need. The table is the
+// single source of truth for *which* intrinsics each site admits/expands/folds;
+// the sites keep their exact lowering/fold/expansion *mechanism*.
+//
+// Conservative DEFAULT: the vast majority of the ~637 `RegIntrinsic` variants
+// are opaque to the JIT — they allocate / write / suspend / are not foldable and
+// not native-lowerable, so they BAIL out of the native subset. The `Default` impl
+// encodes exactly that (`effect: Allocate`, every capability `false`). Only the
+// intrinsics the three sites historically special-cased carry an explicit
+// descriptor; populating richer facts for the rest is incremental future work and
+// changes no behavior until a site is taught to read the new field.
+
+/// The observable effect class of an intrinsic, as the JIT cares about it. Today's
+/// sites only need to distinguish "pure/read" (safe to fold / re-run after a native
+/// bail) from "allocate/write/suspend" (opaque to the native path). The richer
+/// split is recorded for the future missed-optimization report (lever 2).
+// The registry's consumers (the three JIT classification sites) are all
+// `native-jit`-gated, so in a plain library build the table and its fields look
+// dead. They are exercised under `--features native-jit` and by the table unit
+// test; keep them compiled unconditionally as the lever-2 substrate.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IntrinsicEffect {
+    /// No observable effect; result depends only on the (read-only) operands.
+    Pure,
+    /// Reads heap/host state but mutates nothing (e.g. a length query).
+    Read,
+    /// Allocates a fresh heap value from its operands; observes/mutates nothing
+    /// else. This is the conservative DEFAULT.
+    Allocate,
+    /// Mutates heap/host/collection state.
+    Write,
+    /// May suspend (async/stream/await).
+    Suspend,
+}
+
+/// The role a foldable-string intrinsic plays in the string-length-fold pass: it is
+/// either a *producer* of a string whose byte length the pass can compute from its
+/// operands, or the length *query* itself. `None` ⇒ not part of that pass.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StringFoldRole {
+    /// `String.from_int` — produces an (always-ASCII) decimal string from an Int.
+    ProducerFromInt,
+    /// `String.slice` — produces a (length-law, ASCII-gated) substring.
+    ProducerSlice,
+    /// `String.len` — the byte-length query the pass dissolves into arithmetic.
+    LengthQuery,
+}
+
+/// Per-intrinsic JIT facts, keyed by `RegIntrinsic` via [`intrinsic_descriptor`].
+/// Every field defaults to the most conservative value so an unlisted intrinsic is
+/// automatically opaque to all three sites (see the module note above).
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
+struct IntrinsicDescriptor {
+    /// Observable effect class (pure/read vs allocate/write/suspend).
+    effect: IntrinsicEffect,
+    /// Whether a value this intrinsic produces can be folded away when used only by
+    /// a read-only query (e.g. `String.from_int`/`String.slice` feeding `String.len`).
+    /// Also marks the pure heap value-builders a deopt cold arm may re-run.
+    can_fold: bool,
+    /// Whether the intrinsic can be emitted directly in the native subset (today:
+    /// only `IntToFloat`, in its single-Int-arg form — the shape check stays at the
+    /// call site).
+    native_lowerable: bool,
+    /// RESERVED for the future view work (zero-copy slice/borrow lowering). Set
+    /// `false` for every intrinsic today; it exists only so the table shape is right
+    /// for lever-2 / view consumers. No site reads it yet.
+    view_capable: bool,
+    /// If `Some`, this intrinsic is one of the six expandable Option/Result
+    /// combinators, with its concrete lowering kind. The combinator-expansion pass
+    /// uses this for *recognition*; it keeps the per-kind match/construct emission.
+    combinator_kind: Option<CombinatorKind>,
+    /// If `Some`, this intrinsic participates in the string-length-fold pass in the
+    /// given role. The pass uses this for *classification*; it keeps the exact length
+    /// laws and the ASCII-only-slice bail.
+    string_fold_role: Option<StringFoldRole>,
+    /// Whether this intrinsic is a pure, re-runnable heap String *builder* that the
+    /// deopt-before-heap cold-arm classifier permits inside a bailable cold arm (it
+    /// allocates a fresh String from read-only operands and observes/mutates nothing
+    /// else). A tight whitelist; impure intrinsics (I/O, env, collections, time, RNG)
+    /// are excluded. Distinct from `can_fold` (which also covers queries/combinators).
+    cold_arm_pure_builder: bool,
+    /// Short human-readable reason for the conservative classification, for the
+    /// future missed-optimization report (e.g. "allocates", "suspends",
+    /// "non-ASCII-dependent slice"). Empty for the trivial/expected cases.
+    notes: &'static str,
+}
+
+impl Default for IntrinsicDescriptor {
+    /// The conservative default for the ~637 intrinsics that no site special-cases:
+    /// treat as an opaque allocator that the JIT cannot fold or lower.
+    fn default() -> Self {
+        IntrinsicDescriptor {
+            effect: IntrinsicEffect::Allocate,
+            can_fold: false,
+            native_lowerable: false,
+            view_capable: false,
+            combinator_kind: None,
+            string_fold_role: None,
+            cold_arm_pure_builder: false,
+            notes: "default: opaque to JIT (allocate/not-foldable/not-native-lowerable)",
+        }
+    }
+}
+
+/// The central JIT descriptor for `intrinsic`. Returns the conservative
+/// [`IntrinsicDescriptor::default`] for every intrinsic not explicitly listed (the
+/// vast majority) and an explicit descriptor for the ones the three classification
+/// sites historically special-cased.
+#[allow(dead_code)]
+fn intrinsic_descriptor(intrinsic: RegIntrinsic) -> IntrinsicDescriptor {
+    use IntrinsicEffect::*;
+    let d = IntrinsicDescriptor::default;
+    match intrinsic {
+        // --- native_subset_instruction: the single native-lowerable intrinsic ---
+        // `Int.to_float` lowers to a native signed-int→f64 conversion (the single-Int
+        // -arg shape check stays at the call site).
+        RegIntrinsic::IntToFloat => IntrinsicDescriptor {
+            effect: Pure,
+            native_lowerable: true,
+            notes: "native i64→f64 conversion (single Int arg)",
+            ..d()
+        },
+
+        // --- Option/Result combinator expansion: the six expandable combinators ---
+        RegIntrinsic::OptionMap => IntrinsicDescriptor {
+            effect: Pure,
+            can_fold: true,
+            combinator_kind: Some(CombinatorKind::OptionMap),
+            notes: "expandable pure Option combinator",
+            ..d()
+        },
+        RegIntrinsic::OptionAndThen => IntrinsicDescriptor {
+            effect: Pure,
+            can_fold: true,
+            combinator_kind: Some(CombinatorKind::OptionAndThen),
+            notes: "expandable pure Option combinator",
+            ..d()
+        },
+        RegIntrinsic::OptionUnwrapOr => IntrinsicDescriptor {
+            effect: Pure,
+            can_fold: true,
+            combinator_kind: Some(CombinatorKind::OptionUnwrapOr),
+            notes: "expandable pure Option combinator",
+            ..d()
+        },
+        RegIntrinsic::ResultMap => IntrinsicDescriptor {
+            effect: Pure,
+            can_fold: true,
+            combinator_kind: Some(CombinatorKind::ResultMap),
+            notes: "expandable pure Result combinator",
+            ..d()
+        },
+        RegIntrinsic::ResultAndThen => IntrinsicDescriptor {
+            effect: Pure,
+            can_fold: true,
+            combinator_kind: Some(CombinatorKind::ResultAndThen),
+            notes: "expandable pure Result combinator",
+            ..d()
+        },
+        RegIntrinsic::ResultUnwrapOr => IntrinsicDescriptor {
+            effect: Pure,
+            can_fold: true,
+            combinator_kind: Some(CombinatorKind::ResultUnwrapOr),
+            notes: "expandable pure Result combinator",
+            ..d()
+        },
+
+        // --- string-length fold: the foldable string producers + the length query ---
+        // `String.len` is a pure byte-length READ; the pass dissolves it to arithmetic.
+        RegIntrinsic::StringLen => IntrinsicDescriptor {
+            effect: Read,
+            can_fold: true,
+            string_fold_role: Some(StringFoldRole::LengthQuery),
+            notes: "byte-length query (foldable to arithmetic)",
+            ..d()
+        },
+        // `String.from_int` allocates a fresh (always-ASCII) decimal string, but its
+        // byte length is computable, so the length-fold pass can dissolve it; it is
+        // also a whitelisted pure heap builder for deopt cold arms.
+        RegIntrinsic::StringFromInt => IntrinsicDescriptor {
+            effect: Allocate,
+            can_fold: true,
+            string_fold_role: Some(StringFoldRole::ProducerFromInt),
+            cold_arm_pure_builder: true,
+            notes: "allocates ASCII decimal string; byte length foldable; pure cold-arm builder",
+            ..d()
+        },
+        // `String.slice` allocates a substring; foldable only when the source is
+        // provably ASCII (the ASCII-gate stays in the pass).
+        RegIntrinsic::StringSlice => IntrinsicDescriptor {
+            effect: Allocate,
+            can_fold: true,
+            string_fold_role: Some(StringFoldRole::ProducerSlice),
+            notes: "allocates substring; byte length foldable only when source is ASCII",
+            ..d()
+        },
+
+        // --- deopt cold-arm pure heap builders (cold_arm_pure_intrinsic) ---
+        // These allocate a fresh String from read-only operands and observe/mutate
+        // nothing else, so a native Bail can discard the arm and the interpreter
+        // re-runs it faithfully. (`StringFromInt` above already carries can_fold.)
+        RegIntrinsic::StringCopy
+        | RegIntrinsic::StringFromBool
+        | RegIntrinsic::StringFromFloat => IntrinsicDescriptor {
+            effect: Allocate,
+            cold_arm_pure_builder: true,
+            notes: "pure String builder (re-runnable after a native cold-arm bail)",
+            ..d()
+        },
+
+        // Everything else: conservative default (opaque allocator). Intentionally the
+        // common case for the ~637 intrinsics; see the module note.
+        _ => d(),
+    }
+}
+
 /// Whether an instruction is in the *native* JIT subset (integer/boolean/control
 /// core, no heap/calls/async/floats). Tighter than [`jit_supported_instruction`].
 #[cfg(feature = "native-jit")]
@@ -685,13 +909,12 @@ fn native_subset_instruction(instr: &RegInstr) -> bool {
     // `Int.to_float` lowers to a `CallIntrinsic { IntToFloat }` with a single Int
     // arg → Float dst. This single shape gets a native signed-int→f64 conversion
     // (`fcvt_from_sint`); all other `CallIntrinsic`s stay on the interpreter.
-    if let RegInstr::CallIntrinsic {
-        intrinsic: RegIntrinsic::IntToFloat,
-        args,
-        ..
-    } = instr
-    {
-        return args.len() == 1;
+    if let RegInstr::CallIntrinsic { intrinsic, args, .. } = instr {
+        // A `CallIntrinsic` is native-eligible only if the central registry marks the
+        // intrinsic `native_lowerable` (today: only `IntToFloat`) AND its single-arg
+        // shape holds (the shape check stays here; the table classifies). Every other
+        // intrinsic stays on the interpreter.
+        return intrinsic_descriptor(*intrinsic).native_lowerable && args.len() == 1;
     }
     matches!(
         instr,
@@ -980,13 +1203,10 @@ fn native_offset_regs_j3(instr: &RegInstr, b: usize) -> Option<RegInstr> {
 /// and must NOT appear in a bailable cold arm. Unknown ⇒ false (reject).
 #[cfg(feature = "native-jit")]
 fn cold_arm_pure_intrinsic(intrinsic: &RegIntrinsic) -> bool {
-    matches!(
-        intrinsic,
-        RegIntrinsic::StringCopy
-            | RegIntrinsic::StringFromBool
-            | RegIntrinsic::StringFromFloat
-            | RegIntrinsic::StringFromInt
-    )
+    // Classification reads the central registry's `cold_arm_pure_builder` whitelist
+    // (StringCopy/StringFromBool/StringFromFloat/StringFromInt); the cold-arm pass
+    // keeps its exact arm-detection mechanism.
+    intrinsic_descriptor(*intrinsic).cold_arm_pure_builder
 }
 
 /// Whether `instr` is a pure, side-effect-free value-construction instruction that
@@ -1969,22 +2189,19 @@ fn result_ok_layout() -> Rc<crate::vm_value::TypeLayout> {
 
 /// Whether `intrinsic` is one of the six Option/Result combinator intrinsics that
 /// the combinator-expansion pass (deopt-before-heap Slice 2) lowers into primitive
-/// match/construct form with the mapper closure inlined.
+/// match/construct form with the mapper closure inlined. Recognition now reads the
+/// central [`intrinsic_descriptor`] table's `combinator_kind`; the pass keeps the
+/// exact per-kind match/construct lowering.
 #[cfg(feature = "native-jit")]
 fn combinator_intrinsic_kind(intrinsic: RegIntrinsic) -> Option<CombinatorKind> {
-    match intrinsic {
-        RegIntrinsic::OptionMap => Some(CombinatorKind::OptionMap),
-        RegIntrinsic::OptionAndThen => Some(CombinatorKind::OptionAndThen),
-        RegIntrinsic::OptionUnwrapOr => Some(CombinatorKind::OptionUnwrapOr),
-        RegIntrinsic::ResultMap => Some(CombinatorKind::ResultMap),
-        RegIntrinsic::ResultAndThen => Some(CombinatorKind::ResultAndThen),
-        RegIntrinsic::ResultUnwrapOr => Some(CombinatorKind::ResultUnwrapOr),
-        _ => None,
-    }
+    intrinsic_descriptor(intrinsic).combinator_kind
 }
 
-#[cfg(feature = "native-jit")]
-#[derive(Clone, Copy, PartialEq, Eq)]
+// Not `native-jit`-gated: the intrinsic descriptor table (always compiled, for the
+// table unit test and lever-2) embeds `Option<CombinatorKind>`. Read by the
+// `native-jit` combinator-expansion pass and the table unit test.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CombinatorKind {
     OptionMap,
     OptionAndThen,
@@ -2435,12 +2652,16 @@ fn native_string_length_fold_in_region(
 
     // The only thing this pass targets is an in-region `String.len`. Without one,
     // there is nothing to fold ⇒ identity (plain OSR, byte-for-byte the old path).
+    // The length-query *classification* reads the central registry's
+    // `string_fold_role`; the single-arg shape check stays here.
     let is_string_len = |instr: &RegInstr| {
         matches!(
             instr,
-            RegInstr::CallIntrinsic { intrinsic: RegIntrinsic::StringLen, args, .. }
-                | RegInstr::CallTypedIntrinsic { intrinsic: RegIntrinsic::StringLen, args, .. }
+            RegInstr::CallIntrinsic { intrinsic, args, .. }
+                | RegInstr::CallTypedIntrinsic { intrinsic, args, .. }
                 if args.len() == 1
+                    && intrinsic_descriptor(*intrinsic).string_fold_role
+                        == Some(StringFoldRole::LengthQuery)
         )
     };
     if !(header..exit).any(|i| is_string_len(&code[i])) {
@@ -2480,16 +2701,25 @@ fn native_string_length_fold_in_region(
             RegInstr::StringConcat { dst, left, right } => {
                 Some((*dst, Producer::Concat { left: *left, right: *right }))
             }
-            RegInstr::CallIntrinsic { dst, intrinsic: RegIntrinsic::StringFromInt, args }
-                if args.len() == 1 =>
+            // Foldable string *producer* intrinsics — recognized via the central
+            // registry's `string_fold_role`; the per-role operand extraction and the
+            // length laws stay here. (`String.from_int` is recognized only in the
+            // untyped `CallIntrinsic` form, exactly as before; `String.slice` in both
+            // the untyped and typed forms.)
+            RegInstr::CallIntrinsic { dst, intrinsic, args }
+                if intrinsic_descriptor(*intrinsic).string_fold_role
+                    == Some(StringFoldRole::ProducerFromInt)
+                    && args.len() == 1 =>
             {
                 Some((*dst, Producer::FromInt { src: args[0] }))
             }
-            RegInstr::CallIntrinsic { dst, intrinsic: RegIntrinsic::StringSlice, args }
-            | RegInstr::CallTypedIntrinsic {
-                dst, intrinsic: RegIntrinsic::StringSlice, args, ..
-            } => slice_args(args)
-                .map(|(src, start, len)| (*dst, Producer::Slice { src, start, len })),
+            RegInstr::CallIntrinsic { dst, intrinsic, args }
+            | RegInstr::CallTypedIntrinsic { dst, intrinsic, args, .. }
+                if intrinsic_descriptor(*intrinsic).string_fold_role
+                    == Some(StringFoldRole::ProducerSlice) =>
+            {
+                slice_args(args).map(|(src, start, len)| (*dst, Producer::Slice { src, start, len }))
+            }
             // A `Move` whose src is a (candidate) string is a potential alias; we
             // only mark it a producer if the src is itself a string producer (below,
             // after all defs are seen). Record it provisionally as an Alias.
@@ -2620,10 +2850,13 @@ fn native_string_length_fold_in_region(
                     // operands consumed as strings — fine (handled by being foldable)
                     let _ = (left, right);
                 }
-                RegInstr::CallIntrinsic { dst, intrinsic: RegIntrinsic::StringSlice, args }
-                | RegInstr::CallTypedIntrinsic {
-                    dst, intrinsic: RegIntrinsic::StringSlice, args, ..
-                } if foldable[*dst] && args.len() == 3 => {
+                RegInstr::CallIntrinsic { dst, intrinsic, args }
+                | RegInstr::CallTypedIntrinsic { dst, intrinsic, args, .. }
+                    if foldable[*dst]
+                        && args.len() == 3
+                        && intrinsic_descriptor(*intrinsic).string_fold_role
+                            == Some(StringFoldRole::ProducerSlice) =>
+                {
                     // start/len (args[1], args[2]) are Int operands, not strings.
                 }
                 RegInstr::Move { dst, src } if foldable[*dst] && foldable[*src] => {
@@ -24731,6 +24964,130 @@ struct VmStreamState {
     items: Rc<RefCell<Vec<VmValue>>>,
     collect_error: Option<String>,
     channel_id: Option<i64>,
+}
+
+#[cfg(test)]
+mod intrinsic_registry_tests {
+    use super::*;
+
+    /// The conservative DEFAULT must hold for an intrinsic no site special-cases:
+    /// opaque allocator, not foldable, not native-lowerable, no combinator/string
+    /// role, no cold-arm whitelist. This locks the table's contract for lever 2.
+    #[test]
+    fn default_is_conservative() {
+        // `ListContains` is a representative unlisted intrinsic (allocating, opaque).
+        let d = intrinsic_descriptor(RegIntrinsic::ListContains);
+        assert_eq!(d.effect, IntrinsicEffect::Allocate);
+        assert!(!d.can_fold);
+        assert!(!d.native_lowerable);
+        assert!(!d.view_capable);
+        assert!(d.combinator_kind.is_none());
+        assert!(d.string_fold_role.is_none());
+        assert!(!d.cold_arm_pure_builder);
+
+        // The bare `Default` impl matches the conservative classification.
+        let def = IntrinsicDescriptor::default();
+        assert_eq!(def.effect, IntrinsicEffect::Allocate);
+        assert!(!def.can_fold);
+        assert!(!def.native_lowerable);
+        assert!(!def.view_capable);
+    }
+
+    /// `view_capable` is a reserved placeholder — false for EVERY intrinsic today.
+    #[test]
+    fn view_capable_is_false_everywhere() {
+        for i in [
+            RegIntrinsic::IntToFloat,
+            RegIntrinsic::OptionMap,
+            RegIntrinsic::ResultAndThen,
+            RegIntrinsic::StringLen,
+            RegIntrinsic::StringSlice,
+            RegIntrinsic::StringFromInt,
+            RegIntrinsic::ListContains,
+        ] {
+            assert!(!intrinsic_descriptor(i).view_capable);
+        }
+    }
+
+    /// Site 1: only `IntToFloat` is native-lowerable.
+    #[test]
+    fn int_to_float_is_native_lowerable() {
+        let d = intrinsic_descriptor(RegIntrinsic::IntToFloat);
+        assert!(d.native_lowerable);
+        assert_eq!(d.effect, IntrinsicEffect::Pure);
+        // A non-listed intrinsic is NOT native-lowerable.
+        assert!(!intrinsic_descriptor(RegIntrinsic::StringLen).native_lowerable);
+    }
+
+    /// Site 2: exactly the six Option/Result combinators are expandable, each with
+    /// its kind; nothing else is.
+    #[test]
+    fn six_combinators_are_expandable() {
+        let cases = [
+            (RegIntrinsic::OptionMap, CombinatorKind::OptionMap),
+            (RegIntrinsic::OptionAndThen, CombinatorKind::OptionAndThen),
+            (RegIntrinsic::OptionUnwrapOr, CombinatorKind::OptionUnwrapOr),
+            (RegIntrinsic::ResultMap, CombinatorKind::ResultMap),
+            (RegIntrinsic::ResultAndThen, CombinatorKind::ResultAndThen),
+            (RegIntrinsic::ResultUnwrapOr, CombinatorKind::ResultUnwrapOr),
+        ];
+        for (i, k) in cases {
+            let d = intrinsic_descriptor(i);
+            assert_eq!(d.combinator_kind, Some(k));
+            assert!(d.can_fold);
+            assert_eq!(d.effect, IntrinsicEffect::Pure);
+        }
+        assert!(intrinsic_descriptor(RegIntrinsic::StringLen).combinator_kind.is_none());
+        assert!(intrinsic_descriptor(RegIntrinsic::ListContains).combinator_kind.is_none());
+    }
+
+    /// Site 3: the string-fold producers/query carry the expected roles.
+    #[test]
+    fn string_fold_roles_match() {
+        assert_eq!(
+            intrinsic_descriptor(RegIntrinsic::StringLen).string_fold_role,
+            Some(StringFoldRole::LengthQuery)
+        );
+        assert_eq!(
+            intrinsic_descriptor(RegIntrinsic::StringFromInt).string_fold_role,
+            Some(StringFoldRole::ProducerFromInt)
+        );
+        assert_eq!(
+            intrinsic_descriptor(RegIntrinsic::StringSlice).string_fold_role,
+            Some(StringFoldRole::ProducerSlice)
+        );
+        for i in [
+            RegIntrinsic::StringLen,
+            RegIntrinsic::StringFromInt,
+            RegIntrinsic::StringSlice,
+        ] {
+            assert!(intrinsic_descriptor(i).can_fold);
+        }
+        // A non-fold string intrinsic has no role.
+        assert!(intrinsic_descriptor(RegIntrinsic::StringCopy).string_fold_role.is_none());
+    }
+
+    /// The deopt cold-arm pure-builder whitelist is exactly the four String builders.
+    #[test]
+    fn cold_arm_pure_builders_whitelist() {
+        for i in [
+            RegIntrinsic::StringCopy,
+            RegIntrinsic::StringFromBool,
+            RegIntrinsic::StringFromFloat,
+            RegIntrinsic::StringFromInt,
+        ] {
+            assert!(intrinsic_descriptor(i).cold_arm_pure_builder, "{:?}", i);
+        }
+        // Not on the whitelist: queries, combinators, slices, opaque allocators.
+        for i in [
+            RegIntrinsic::StringLen,
+            RegIntrinsic::StringSlice,
+            RegIntrinsic::OptionMap,
+            RegIntrinsic::ListContains,
+        ] {
+            assert!(!intrinsic_descriptor(i).cold_arm_pure_builder, "{:?}", i);
+        }
+    }
 }
 
 #[cfg(test)]
