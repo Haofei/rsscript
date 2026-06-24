@@ -3,7 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use super::source_map::{parse_source_map_json, remap_rustc_diagnostic_json_lines};
+use super::rustc_remap::remap_rustc_diagnostic_json_lines;
+use super::source_map::parse_source_map_json;
 use super::types::RustBackendCheckResult;
 
 pub fn check_generated_rust_package(package_dir: &Path) -> Result<RustBackendCheckResult, String> {

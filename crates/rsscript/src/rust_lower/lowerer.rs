@@ -8,6 +8,7 @@ use crate::syntax::ast::{
 };
 
 use super::helpers::*;
+use super::intrinsics::*;
 use super::source_map::{generated_span_at_end, push_source_marker};
 use super::types::{LoweredRust, RustSourceMapEntry};
 

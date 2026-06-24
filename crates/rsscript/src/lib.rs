@@ -9,12 +9,15 @@
 
 mod analyzer;
 pub mod bbom;
+pub mod bbom_policy;
+pub mod bbom_reir;
 mod capability;
 mod checks;
 mod core_index;
 mod diagnostic;
 mod editor_grammar;
 mod eval_types;
+mod fnv;
 mod formatter;
 mod generate;
 mod hir;
