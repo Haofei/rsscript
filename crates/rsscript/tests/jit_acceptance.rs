@@ -3708,9 +3708,13 @@ fn main() -> Unit {
     assert!(stats.native_calls >= 1, "accuracy: function really ran native: {stats:?}");
 }
 
-/// A `Bytes.slice` (allocating) loop: the report must say the loop body is NOT
-/// OSR-able because it contains the allocating `Bytes.slice` intrinsic, with the
-/// registry effect surfaced; the stats must confirm NO OSR entry (accuracy).
+/// NEGATIVE Bytes-fold test: a `Bytes.slice` (allocating) loop whose source `data` is a
+/// FUNCTION PARAMETER (no constant byte length, no in-region producer). The Bytes
+/// length-fold cannot prove a length law for a parameter source, so it bails — the
+/// allocating `Bytes.slice` survives and the loop does NOT OSR. The report must say
+/// `not osr` and surface the `Bytes.slice` intrinsic (effect=allocate) from the
+/// registry; the stats must confirm NO OSR entry (accuracy). (Contrast with the
+/// constant-source `bytes_scan` kernel / the positive test below, which DOES fold.)
 #[cfg(feature = "native-jit")]
 #[test]
 fn report_bytes_scan_says_not_osr_bytes_slice_allocate() {
@@ -3744,6 +3748,99 @@ fn main() -> Unit {
         "bytes loop should report not osr w/ BytesSlice allocate, got:\n{block}"
     );
     assert_eq!(stats.osr_entries, 0, "accuracy: bytes loop must NOT osr: {stats:?}");
+}
+
+/// POSITIVE Bytes-fold test: a non-escaping Bytes value built ONLY to be measured
+/// (`Bytes.len` of `Bytes.slice`) in an I/O-tangled function, with the source `data`
+/// a loop-invariant `Bytes.from_string(<literal>)` defined before the loop (so its byte
+/// length is a compile-time constant). The Bytes length-fold dissolves the per-iteration
+/// `Bytes.slice` allocation into byte-length arithmetic and the loop OSRs to native.
+/// Read-only: the result MUST be byte-identical to the interpreter AND `osr_entries > 0`.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_bytes_length_fold_constant_source_osrs_and_matches_interpreter() {
+    // `data = "the quick brown fox"` is 19 bytes. Per iteration:
+    //   len(slice(data,0,5)) + len(data) = 5 + 19 = 24.
+    // limit = 50 ⇒ total = 24 * 50 = 1200. The leading `Log.write("begin")` makes the
+    // function native-INELIGIBLE as a whole, so only the hot loop can OSR.
+    let source = "\
+fn scan(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let data = Bytes.from_string(value: read \"the quick brown fox\")
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        let head = Bytes.slice(value: read data, start: 0, len: 5)
+        total = total + Bytes.len(value: read head) + Bytes.len(value: read data)
+        index = index + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: scan(limit: read 50)))
+    return Unit
+}
+";
+    let file = "jit-osr-bytes-fold-positive.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "Bytes length-fold loop must be byte-identical to the interpreter (stdout)"
+    );
+    assert_eq!(osr.stdout.trim_end(), "begin\n1200");
+    assert!(
+        stats.osr_entries > 0,
+        "the non-escaping constant-source Bytes length loop must OSR after the fold: {stats:?}",
+    );
+}
+
+/// NEGATIVE Bytes-fold test (escape): the same constant-source Bytes value, but the
+/// `head` slice ESCAPES the measurement — it is also passed to `Log.write` (an opaque
+/// non-fold consumer). The escape analysis must refuse to dissolve `head` (its
+/// allocation is observed), so the allocating `Bytes.slice` survives and the loop does
+/// NOT OSR (`osr_entries == 0`), while the result stays interpreter-identical.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_bytes_length_fold_escaping_slice_does_not_osr() {
+    let source = "\
+fn scan(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let data = Bytes.from_string(value: read \"the quick brown fox\")
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        let head = Bytes.slice(value: read data, start: 0, len: 5)
+        total = total + Bytes.len(value: read head)
+        Log.write(message: read Bytes.to_string(value: read head))
+        index = index + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: scan(limit: read 3)))
+    return Unit
+}
+";
+    let file = "jit-osr-bytes-fold-escaping.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "escaping-Bytes loop must be byte-identical to the interpreter (stdout)"
+    );
+    assert_eq!(
+        stats.osr_entries, 0,
+        "a Bytes slice that escapes to Log.write must NOT be dissolved / must NOT OSR: {stats:?}",
+    );
 }
 
 /// A `String.slice` of a RUNTIME (not provably-ASCII) string source: the

@@ -746,6 +746,24 @@ enum StringFoldRole {
     LengthQuery,
 }
 
+/// The role a foldable-Bytes intrinsic plays in the (Bytes sibling of the) query-fold
+/// pass. Bytes are RAW bytes — there is no char/grapheme boundary, so the Bytes slice
+/// length law is exact integer arithmetic with NO ASCII gate (unlike `String.slice`).
+/// A producer's byte length is computed from its operands; the query is the length read.
+/// `None` ⇒ not part of the Bytes fold.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BytesFoldRole {
+    /// `Bytes.from_string` — produces raw bytes from a String; its byte length equals
+    /// the source String's byte length (`value.as_bytes().len()`).
+    ProducerFromString,
+    /// `Bytes.slice` — produces a byte-index substring; the length law is the exact
+    /// clamp arithmetic of `bytes_slice` (no char-boundary subtlety, no ASCII gate).
+    ProducerSlice,
+    /// `Bytes.len` — the byte-length query the pass dissolves into arithmetic.
+    LengthQuery,
+}
+
 /// Per-intrinsic JIT facts, keyed by `RegIntrinsic` via [`intrinsic_descriptor`].
 /// Every field defaults to the most conservative value so an unlisted intrinsic is
 /// automatically opaque to all three sites (see the module note above).
@@ -774,6 +792,11 @@ struct IntrinsicDescriptor {
     /// given role. The pass uses this for *classification*; it keeps the exact length
     /// laws and the ASCII-only-slice bail.
     string_fold_role: Option<StringFoldRole>,
+    /// If `Some`, this intrinsic participates in the Bytes-length-fold pass in the
+    /// given role (the Bytes sibling of `string_fold_role`). The pass uses this for
+    /// *classification*; the exact byte-length laws stay in the pass. Bytes carry no
+    /// char-boundary subtlety, so the slice law needs no ASCII gate.
+    bytes_fold_role: Option<BytesFoldRole>,
     /// Whether this intrinsic is a pure, re-runnable heap String *builder* that the
     /// deopt-before-heap cold-arm classifier permits inside a bailable cold arm (it
     /// allocates a fresh String from read-only operands and observes/mutates nothing
@@ -797,6 +820,7 @@ impl Default for IntrinsicDescriptor {
             view_capable: false,
             combinator_kind: None,
             string_fold_role: None,
+            bytes_fold_role: None,
             cold_arm_pure_builder: false,
             notes: "default: opaque to JIT (allocate/not-foldable/not-native-lowerable)",
         }
@@ -893,6 +917,36 @@ fn intrinsic_descriptor(intrinsic: RegIntrinsic) -> IntrinsicDescriptor {
             can_fold: true,
             string_fold_role: Some(StringFoldRole::ProducerSlice),
             notes: "allocates substring; byte length foldable only when source is ASCII",
+            ..d()
+        },
+
+        // --- Bytes-length fold: the foldable Bytes producers + the length query ---
+        // `Bytes.len` is a pure raw-byte-length READ (`value.len()`); the Bytes fold
+        // dissolves it to arithmetic. No char/grapheme subtlety — raw bytes.
+        RegIntrinsic::BytesLen => IntrinsicDescriptor {
+            effect: Read,
+            can_fold: true,
+            bytes_fold_role: Some(BytesFoldRole::LengthQuery),
+            notes: "raw byte-length query (foldable to arithmetic)",
+            ..d()
+        },
+        // `Bytes.from_string` allocates raw bytes from a String; its byte length is
+        // exactly the source String's byte length (`as_bytes().len()`), so the Bytes
+        // fold can dissolve it when the source length is known.
+        RegIntrinsic::BytesFromString => IntrinsicDescriptor {
+            effect: Allocate,
+            can_fold: true,
+            bytes_fold_role: Some(BytesFoldRole::ProducerFromString),
+            notes: "allocates raw bytes from String; byte length = source String byte length",
+            ..d()
+        },
+        // `Bytes.slice` allocates a byte-index substring; its length is the exact clamp
+        // arithmetic of `bytes_slice` — NO ASCII gate (raw bytes have no char boundary).
+        RegIntrinsic::BytesSlice => IntrinsicDescriptor {
+            effect: Allocate,
+            can_fold: true,
+            bytes_fold_role: Some(BytesFoldRole::ProducerSlice),
+            notes: "allocates byte-index substring; byte length foldable (exact clamp, no ASCII gate)",
             ..d()
         },
 
@@ -3338,6 +3392,576 @@ fn native_string_length_fold_in_region(
     }
     // Inverse ip-map: every fragment instruction maps back to the producer's
     // original index (`String.len` → its own index; copy-through 1:1).
+    let mut ip_map = vec![0usize; new_code.len()];
+    for i in 0..code.len() {
+        let start = index_map[i];
+        let end = if i + 1 < code.len() { index_map[i + 1] } else { new_code.len() };
+        for t in start..end {
+            ip_map[t] = i;
+        }
+    }
+    Some((new_code, next_reg, ip_map))
+}
+
+/// OSR × J3 for BYTES LENGTH-LAW FOLDING (the read-only sibling of
+/// [`native_string_length_fold_in_region`]): dissolve a non-escaping Bytes value built
+/// ONLY to be measured (`Bytes.len` of `Bytes.slice`/`Bytes.from_string`/`Move`/a
+/// constant-length source) into byte-length arithmetic, DELETING the now-dead Bytes
+/// allocation. Read-only (no heap write; Exec Spec §7.2 holds), turning a length-only
+/// Bytes loop into pure-scalar Int code the native subset accepts.
+///
+/// Why a separate pass from the String fold: Bytes are RAW bytes with NO char/grapheme
+/// boundary, so the slice length law is the EXACT clamp arithmetic of [`bytes_slice`]
+/// with NO ASCII gate — verified identical: `bytes_slice` does `s'=max(start,0); if
+/// s'>=L {0} else { min(s'+max(len,0), L) - s' }`, which is precisely the
+/// `emit_slice_len` law (`sc=max(start,0); sclamp=min(sc,L); ec=sclamp+max(len,0);
+/// e=min(ec,L); out=e-sclamp` — for `sc>=L` it yields `L-L=0`). `Bytes.len` is
+/// `value.len()` (raw byte count) and `Bytes.from_string(s)` is `s.as_bytes().len()`,
+/// so a from-string's byte length equals the source String's byte length.
+///
+/// A length source may be (a) an in-region foldable Bytes producer, or (b) ANY register
+/// whose byte length resolves to a COMPILE-TIME CONSTANT through its unique global def
+/// (covers a loop-invariant `Bytes.from_string(<literal>)` defined before the loop —
+/// the `bytes_scan` shape). The constant is materialized as an in-region `LoadInt` so it
+/// is available after the native OSR entry (which lands AT the loop header, skipping any
+/// pre-header transformed code). The constant trace requires the register be defined
+/// EXACTLY ONCE in the whole function by a chain of immutable constant ops, so the
+/// length is loop-invariant and exact.
+///
+/// Conservative bail: any escaping foldable Bytes register, any in-region `Bytes.len`
+/// whose source does not resolve, or any unmodelled read/write footprint ⇒ `None`
+/// (no fold; the interpreter runs the loop). A body with no foldable `Bytes.len`
+/// returns the code unchanged with an identity ip-map (byte-for-byte the old path).
+#[cfg(feature = "native-jit")]
+fn native_bytes_length_fold_in_region(
+    code: &[RegInstr],
+    n_regs: usize,
+    header: usize,
+    exit: usize,
+) -> Option<(Vec<RegInstr>, usize, Vec<usize>)> {
+    if header >= exit || exit > code.len() {
+        return None;
+    }
+    let in_region = |i: usize| i >= header && i < exit;
+
+    let is_bytes_len = |instr: &RegInstr| {
+        matches!(
+            instr,
+            RegInstr::CallIntrinsic { intrinsic, args, .. }
+                | RegInstr::CallTypedIntrinsic { intrinsic, args, .. }
+                if args.len() == 1
+                    && intrinsic_descriptor(*intrinsic).bytes_fold_role
+                        == Some(BytesFoldRole::LengthQuery)
+        )
+    };
+    // No in-region Bytes.len ⇒ nothing to fold ⇒ identity (plain OSR, byte-for-byte).
+    if !(header..exit).any(|i| is_bytes_len(&code[i])) {
+        let ip_map: Vec<usize> = (0..code.len()).collect();
+        return Some((code.to_vec(), n_regs, ip_map));
+    }
+
+    // --- Constant byte-length tracer -------------------------------------------------
+    // `const_len[r] = Some(L)` iff register `r` is defined EXACTLY ONCE in the whole
+    // function by a chain of immutable constant ops whose byte length is the compile-
+    // time constant `L`. Multiply-defined (or `All`-footprint) registers get `None`.
+    //
+    //   LoadString lit                 -> lit.as_bytes().len()      (== lit.len())
+    //   Bytes.from_string(s)           -> const_len[s]
+    //   Bytes.slice(s, start, len)     -> clamp(const_len[s], start, len)  [const args]
+    //   Move(dst, src)                 -> const_len[src]
+    //
+    // `start`/`len` for a constant slice must themselves be constant Ints (LoadInt) for
+    // the result to be a compile-time constant. Anything else ⇒ not a constant.
+    let mut global_def_count = vec![0usize; n_regs];
+    for instr in code.iter() {
+        match instr_written_reg(instr) {
+            RegFootprint::Some(ws) => {
+                for w in ws {
+                    if w < n_regs {
+                        global_def_count[w] += 1;
+                    }
+                }
+            }
+            RegFootprint::All => return None,
+        }
+    }
+    // Single-def constant-Int values (for slice start/len constant args).
+    let int_const = |r: usize| -> Option<i64> {
+        if r >= n_regs || global_def_count[r] != 1 {
+            return None;
+        }
+        code.iter().find_map(|instr| match instr {
+            RegInstr::LoadInt { dst, value } if *dst == r => Some(*value),
+            _ => None,
+        })
+    };
+    // Resolve a register's constant byte length with a depth-bounded trace over its
+    // unique def. Depth bound guards against any pathological chain; immutability is
+    // guaranteed by `global_def_count == 1` at each hop.
+    fn const_byte_len(
+        r: usize,
+        depth: usize,
+        code: &[RegInstr],
+        n_regs: usize,
+        global_def_count: &[usize],
+        int_const: &dyn Fn(usize) -> Option<i64>,
+    ) -> Option<i64> {
+        if depth == 0 || r >= n_regs || global_def_count[r] != 1 {
+            return None;
+        }
+        let def = code.iter().find(|instr| match instr_written_reg(instr) {
+            RegFootprint::Some(ws) => ws.contains(&r),
+            RegFootprint::All => false,
+        })?;
+        match def {
+            RegInstr::LoadString { value, .. } => Some(value.len() as i64),
+            RegInstr::Move { src, .. } => {
+                const_byte_len(*src, depth - 1, code, n_regs, global_def_count, int_const)
+            }
+            RegInstr::CallIntrinsic { intrinsic, args, .. }
+            | RegInstr::CallTypedIntrinsic { intrinsic, args, .. } => {
+                match intrinsic_descriptor(*intrinsic).bytes_fold_role {
+                    Some(BytesFoldRole::ProducerFromString) if args.len() == 1 => {
+                        const_byte_len(
+                            args[0], depth - 1, code, n_regs, global_def_count, int_const,
+                        )
+                    }
+                    Some(BytesFoldRole::ProducerSlice) if args.len() == 3 => {
+                        let l = const_byte_len(
+                            args[0], depth - 1, code, n_regs, global_def_count, int_const,
+                        )?;
+                        let start = int_const(args[1])?;
+                        let len = int_const(args[2])?;
+                        // Mirror `bytes_slice` exactly on the constant operands.
+                        let sc = start.max(0);
+                        if sc >= l {
+                            return Some(0);
+                        }
+                        let lc = len.max(0);
+                        let end = sc.saturating_add(lc).min(l);
+                        Some(end - sc)
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+    let mut const_len: Vec<Option<i64>> = vec![None; n_regs];
+    for r in 0..n_regs {
+        const_len[r] = const_byte_len(r, 32, code, n_regs, &global_def_count, &int_const);
+    }
+
+    // --- In-region foldable Bytes producers ------------------------------------------
+    #[derive(Clone)]
+    enum BProducer {
+        FromString { src: usize },
+        Slice { src: usize, start: usize, len: usize },
+        Alias { src: usize },
+    }
+    let mut producer: Vec<Option<BProducer>> = vec![None; n_regs];
+    let mut def_count = vec![0usize; n_regs];
+    let mut multiply_defined = vec![false; n_regs];
+    for i in header..exit {
+        let dst_prod: Option<(usize, BProducer)> = match &code[i] {
+            RegInstr::CallIntrinsic { dst, intrinsic, args }
+            | RegInstr::CallTypedIntrinsic { dst, intrinsic, args, .. }
+                if intrinsic_descriptor(*intrinsic).bytes_fold_role
+                    == Some(BytesFoldRole::ProducerFromString)
+                    && args.len() == 1 =>
+            {
+                Some((*dst, BProducer::FromString { src: args[0] }))
+            }
+            RegInstr::CallIntrinsic { dst, intrinsic, args }
+            | RegInstr::CallTypedIntrinsic { dst, intrinsic, args, .. }
+                if intrinsic_descriptor(*intrinsic).bytes_fold_role
+                    == Some(BytesFoldRole::ProducerSlice)
+                    && args.len() == 3 =>
+            {
+                Some((*dst, BProducer::Slice { src: args[0], start: args[1], len: args[2] }))
+            }
+            RegInstr::Move { dst, src } => Some((*dst, BProducer::Alias { src: *src })),
+            _ => None,
+        };
+        if let Some((dst, prod)) = dst_prod {
+            if dst >= n_regs {
+                return None;
+            }
+            def_count[dst] += 1;
+            if def_count[dst] > 1 || producer[dst].is_some() {
+                multiply_defined[dst] = true;
+            }
+            producer[dst] = Some(prod);
+        }
+    }
+    // A register defined out-of-region or multiply-defined in-region is not a sound
+    // single-producer in-region Bytes value (its out-of-region def may differ). Drop
+    // it — but it can still serve as a CONSTANT-length source via `const_len`.
+    for i in 0..code.len() {
+        if in_region(i) {
+            continue;
+        }
+        match instr_written_reg(&code[i]) {
+            RegFootprint::Some(ws) => {
+                for w in ws {
+                    if w < n_regs {
+                        multiply_defined[w] = true;
+                    }
+                }
+            }
+            RegFootprint::All => return None,
+        }
+    }
+    for r in 0..n_regs {
+        if multiply_defined[r] {
+            producer[r] = None;
+        }
+    }
+
+    // A length source resolves iff it is an in-region foldable producer OR has a
+    // constant byte length. `foldable[r]` marks the in-region producers we will
+    // dissolve; `const_len` sources stay live (cheap loop-invariant) and supply a
+    // `LoadInt`. Resolve in-region producer foldability by fixpoint.
+    let resolves = |r: usize, foldable: &[bool]| -> bool {
+        r < n_regs && (foldable[r] || const_len[r].is_some())
+    };
+    let mut foldable = vec![false; n_regs];
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for r in 0..n_regs {
+            if foldable[r] {
+                continue;
+            }
+            let ok = match &producer[r] {
+                Some(BProducer::FromString { src }) => resolves(*src, &foldable),
+                Some(BProducer::Slice { src, .. }) => resolves(*src, &foldable),
+                Some(BProducer::Alias { src }) => resolves(*src, &foldable),
+                None => false,
+            };
+            if ok {
+                foldable[r] = true;
+                changed = true;
+            }
+        }
+    }
+
+    // Escape analysis: every use of a foldable (to-be-dissolved) Bytes register must be
+    // a sanctioned Bytes consumer — a foldable producer operand, a `Move` to a foldable
+    // register, or a `Bytes.len`. Any other read (in OR out of region) escapes; drop it
+    // and re-resolve to a fixpoint. (Constant-length sources are NOT dissolved, so their
+    // other uses — e.g. the still-live `data` slice arg — do not need to be sanctioned.)
+    loop {
+        let mut escaped = vec![false; n_regs];
+        let note_reads = |rs: &[usize], escaped: &mut Vec<bool>| {
+            for &r in rs {
+                if r < n_regs && foldable[r] {
+                    escaped[r] = true;
+                }
+            }
+        };
+        for i in 0..code.len() {
+            if in_region(i) {
+                continue;
+            }
+            match instr_read_regs(&code[i]) {
+                RegFootprint::Some(rs) => note_reads(&rs, &mut escaped),
+                RegFootprint::All => return None,
+            }
+        }
+        for i in header..exit {
+            match &code[i] {
+                RegInstr::CallIntrinsic { dst, intrinsic, args }
+                | RegInstr::CallTypedIntrinsic { dst, intrinsic, args, .. }
+                    if foldable[*dst]
+                        && intrinsic_descriptor(*intrinsic).bytes_fold_role
+                            == Some(BytesFoldRole::ProducerFromString)
+                        && args.len() == 1 => {}
+                RegInstr::CallIntrinsic { dst, intrinsic, args }
+                | RegInstr::CallTypedIntrinsic { dst, intrinsic, args, .. }
+                    if foldable[*dst]
+                        && intrinsic_descriptor(*intrinsic).bytes_fold_role
+                            == Some(BytesFoldRole::ProducerSlice)
+                        && args.len() == 3 =>
+                {
+                    // args[0] is the (foldable or constant) source consumed as Bytes;
+                    // args[1]/args[2] are Int operands. Fine.
+                }
+                RegInstr::Move { dst, src } if foldable[*dst] && foldable[*src] => {}
+                _ if is_bytes_len(&code[i]) => {}
+                other => match instr_read_regs(other) {
+                    RegFootprint::Some(rs) => note_reads(&rs, &mut escaped),
+                    RegFootprint::All => return None,
+                },
+            }
+        }
+        if !escaped.iter().any(|&e| e) {
+            break;
+        }
+        for r in 0..n_regs {
+            if escaped[r] {
+                foldable[r] = false;
+            }
+        }
+        let mut c2 = true;
+        while c2 {
+            c2 = false;
+            for r in 0..n_regs {
+                if !foldable[r] {
+                    continue;
+                }
+                let still = match &producer[r] {
+                    Some(BProducer::FromString { src })
+                    | Some(BProducer::Slice { src, .. })
+                    | Some(BProducer::Alias { src }) => resolves(*src, &foldable),
+                    None => false,
+                };
+                if !still {
+                    foldable[r] = false;
+                    c2 = true;
+                }
+            }
+        }
+    }
+
+    // Every in-region `Bytes.len` MUST now resolve, else a real (non-subset) `BytesLen`
+    // survives and blocks OSR ⇒ bail.
+    for i in header..exit {
+        if is_bytes_len(&code[i]) {
+            let src = match &code[i] {
+                RegInstr::CallIntrinsic { args, .. }
+                | RegInstr::CallTypedIntrinsic { args, .. } => args[0],
+                _ => unreachable!(),
+            };
+            if !resolves(src, &foldable) {
+                return None;
+            }
+        }
+    }
+    // Nothing to dissolve (e.g. the only `Bytes.len` was directly on a constant-length
+    // source with no in-region producer) is still a WIN: we replace the `Bytes.len`
+    // with a `LoadInt`/`Move`. Only bail if no `Bytes.len` resolves at all — but the
+    // loop above already guaranteed every `Bytes.len` resolves, so proceed.
+
+    // --- Length registers + constant materialization ---------------------------------
+    // One fresh Int `len_reg` per resolvable register (foldable producer OR constant
+    // source). Constant sources get a `LoadInt` materialized at the region head so the
+    // value is live after the native OSR entry (which lands at `header`).
+    let needs_len = |r: usize, foldable: &[bool]| -> bool {
+        r < n_regs && (foldable[r] || const_len[r].is_some())
+    };
+    let mut len_reg = vec![0usize; n_regs];
+    let mut next_reg = n_regs;
+    let mut const_sources: Vec<usize> = Vec::new();
+    for r in 0..n_regs {
+        if needs_len(r, &foldable) {
+            len_reg[r] = next_reg;
+            next_reg += 1;
+            if !foldable[r] {
+                // a pure constant source (not an in-region producer we dissolve)
+                if const_len[r].is_some() {
+                    const_sources.push(r);
+                }
+            }
+        }
+    }
+
+    fn emit_max_b(out_code: &mut Vec<RegInstr>, out: usize, a: usize, b: usize) {
+        let take_b = out_code.len();
+        out_code.push(RegInstr::JumpIfIntCompare {
+            lhs: a, rhs: b, op: RegIntCompare::GreaterEqual, expected: false, target: 0,
+        });
+        out_code.push(RegInstr::Move { dst: out, src: a });
+        let jmp = out_code.len();
+        out_code.push(RegInstr::Jump { target: 0 });
+        let here = out_code.len();
+        if let RegInstr::JumpIfIntCompare { target, .. } = &mut out_code[take_b] {
+            *target = here;
+        }
+        out_code.push(RegInstr::Move { dst: out, src: b });
+        let merge = out_code.len();
+        if let RegInstr::Jump { target } = &mut out_code[jmp] {
+            *target = merge;
+        }
+    }
+    fn emit_min_b(out_code: &mut Vec<RegInstr>, out: usize, a: usize, b: usize) {
+        let take_b = out_code.len();
+        out_code.push(RegInstr::JumpIfIntCompare {
+            lhs: a, rhs: b, op: RegIntCompare::LessEqual, expected: false, target: 0,
+        });
+        out_code.push(RegInstr::Move { dst: out, src: a });
+        let jmp = out_code.len();
+        out_code.push(RegInstr::Jump { target: 0 });
+        let here = out_code.len();
+        if let RegInstr::JumpIfIntCompare { target, .. } = &mut out_code[take_b] {
+            *target = here;
+        }
+        out_code.push(RegInstr::Move { dst: out, src: b });
+        let merge = out_code.len();
+        if let RegInstr::Jump { target } = &mut out_code[jmp] {
+            *target = merge;
+        }
+    }
+    // out = clamp slice length, byte-exact mirror of `bytes_slice`:
+    //   sc = max(start,0); s_clamp = min(sc, L); ec = s_clamp + max(len,0);
+    //   e_clamp = min(ec, L); out = e_clamp - s_clamp.
+    fn emit_slice_len_b(
+        out_code: &mut Vec<RegInstr>,
+        out: usize,
+        l_src: usize,
+        start: usize,
+        len: usize,
+        next_reg: &mut usize,
+    ) {
+        let zero = *next_reg;
+        let sc = *next_reg + 1;
+        let sclamp = *next_reg + 2;
+        let lc = *next_reg + 3;
+        let ec = *next_reg + 4;
+        *next_reg += 5;
+        out_code.push(RegInstr::LoadInt { dst: zero, value: 0 });
+        emit_max_b(out_code, sc, start, zero);
+        emit_min_b(out_code, sclamp, sc, l_src);
+        emit_max_b(out_code, lc, len, zero);
+        out_code.push(RegInstr::AddInt { dst: ec, lhs: sclamp, rhs: lc });
+        emit_min_b(out_code, ec, ec, l_src);
+        out_code.push(RegInstr::SubInt { dst: out, lhs: ec, rhs: sclamp });
+    }
+
+    // --- Rewrite the stream ----------------------------------------------------------
+    enum Fix {
+        Target(usize),
+        Match { a: usize, b: usize },
+        MapGet { a: usize, b: usize },
+    }
+    let mut new_code: Vec<RegInstr> = Vec::with_capacity(code.len());
+    let mut index_map = vec![0usize; code.len()];
+    let mut fixups: Vec<(usize, Fix)> = Vec::new();
+    for (i, instr) in code.iter().enumerate() {
+        index_map[i] = new_code.len();
+        // Materialize the constant-length sources as the FIRST instructions of the
+        // loop BODY (just after the header condition at `header`), so they (a) dominate
+        // every in-region use and (b) are re-run each iteration AFTER the native OSR
+        // entry — which lands AT `header`, so anything emitted before `header` would be
+        // skipped on resume. The header itself (the `index < limit` test) never uses a
+        // Bytes length, so the body start is a safe, dominating insertion point.
+        // Re-running these `LoadInt`s per iteration is idempotent and cheap.
+        if i == header + 1 {
+            for &r in &const_sources {
+                if let Some(value) = const_len[r] {
+                    new_code.push(RegInstr::LoadInt { dst: len_reg[r], value });
+                }
+            }
+        }
+        if in_region(i) {
+            let folded = match instr {
+                RegInstr::CallIntrinsic { dst, intrinsic, .. }
+                | RegInstr::CallTypedIntrinsic { dst, intrinsic, .. }
+                    if foldable[*dst]
+                        && intrinsic_descriptor(*intrinsic).bytes_fold_role
+                            == Some(BytesFoldRole::ProducerFromString) =>
+                {
+                    if let Some(BProducer::FromString { src }) = &producer[*dst] {
+                        new_code.push(RegInstr::Move { dst: len_reg[*dst], src: len_reg[*src] });
+                    }
+                    true
+                }
+                RegInstr::CallIntrinsic { dst, intrinsic, .. }
+                | RegInstr::CallTypedIntrinsic { dst, intrinsic, .. }
+                    if foldable[*dst]
+                        && intrinsic_descriptor(*intrinsic).bytes_fold_role
+                            == Some(BytesFoldRole::ProducerSlice) =>
+                {
+                    if let Some(BProducer::Slice { src, start, len }) = &producer[*dst] {
+                        emit_slice_len_b(
+                            &mut new_code, len_reg[*dst], len_reg[*src], *start, *len, &mut next_reg,
+                        );
+                    }
+                    true
+                }
+                RegInstr::Move { dst, src } if foldable[*dst] && foldable[*src] => {
+                    new_code.push(RegInstr::Move { dst: len_reg[*dst], src: len_reg[*src] });
+                    true
+                }
+                _ if is_bytes_len(instr) => {
+                    let (dst, src) = match instr {
+                        RegInstr::CallIntrinsic { dst, args, .. }
+                        | RegInstr::CallTypedIntrinsic { dst, args, .. } => (*dst, args[0]),
+                        _ => unreachable!(),
+                    };
+                    new_code.push(RegInstr::Move { dst, src: len_reg[src] });
+                    true
+                }
+                _ => false,
+            };
+            if folded {
+                continue;
+            }
+        }
+        match instr {
+            RegInstr::Jump { target }
+            | RegInstr::JumpIfBool { target, .. }
+            | RegInstr::JumpIfIntCompare { target, .. } => {
+                fixups.push((new_code.len(), Fix::Target(*target)));
+                new_code.push(instr.clone());
+            }
+            RegInstr::MatchOption { some_ip, none_ip, .. } => {
+                fixups.push((new_code.len(), Fix::Match { a: *some_ip, b: *none_ip }));
+                new_code.push(instr.clone());
+            }
+            RegInstr::MatchResult { ok_ip, err_ip, .. } => {
+                fixups.push((new_code.len(), Fix::Match { a: *ok_ip, b: *err_ip }));
+                new_code.push(instr.clone());
+            }
+            RegInstr::MatchVariant { match_ip, else_ip, .. } => {
+                fixups.push((new_code.len(), Fix::Match { a: *match_ip, b: *else_ip }));
+                new_code.push(instr.clone());
+            }
+            RegInstr::MatchMapGet { some_ip, none_ip, .. } => {
+                fixups.push((new_code.len(), Fix::MapGet { a: *some_ip, b: *none_ip }));
+                new_code.push(instr.clone());
+            }
+            other => new_code.push(other.clone()),
+        }
+    }
+    for (pos, fix) in fixups {
+        match fix {
+            Fix::Target(t) => {
+                let target = index_map[t];
+                match &mut new_code[pos] {
+                    RegInstr::Jump { target: dst }
+                    | RegInstr::JumpIfBool { target: dst, .. }
+                    | RegInstr::JumpIfIntCompare { target: dst, .. } => *dst = target,
+                    _ => {}
+                }
+            }
+            Fix::Match { a, b } => {
+                let (sa, sb) = (index_map[a], index_map[b]);
+                match &mut new_code[pos] {
+                    RegInstr::MatchOption { some_ip, none_ip, .. } => {
+                        *some_ip = sa;
+                        *none_ip = sb;
+                    }
+                    RegInstr::MatchResult { ok_ip, err_ip, .. } => {
+                        *ok_ip = sa;
+                        *err_ip = sb;
+                    }
+                    RegInstr::MatchVariant { match_ip, else_ip, .. } => {
+                        *match_ip = sa;
+                        *else_ip = sb;
+                    }
+                    _ => {}
+                }
+            }
+            Fix::MapGet { a, b } => {
+                let (sa, sb) = (index_map[a], index_map[b]);
+                if let RegInstr::MatchMapGet { some_ip, none_ip, .. } = &mut new_code[pos] {
+                    *some_ip = sa;
+                    *none_ip = sb;
+                }
+            }
+        }
+    }
     let mut ip_map = vec![0usize; new_code.len()];
     for i in 0..code.len() {
         let start = index_map[i];
@@ -15390,6 +16014,22 @@ impl RegVm {
                         &inlined_code, n_regs0, lp_sl.header, lp_sl.exit,
                     )
                     .and_then(|(inlined_code, n_regs0, ip_map_sl)| {
+                    // OSR × J3 for BYTES LENGTH-LAW FOLDING (read-only sibling of the
+                    // string fold above): dissolve any non-escaping Bytes value built
+                    // ONLY to be measured (`Bytes.len` of `Bytes.slice`/
+                    // `Bytes.from_string`/`Move`/a constant-length source) into byte-
+                    // length arithmetic, DELETING the dead Bytes allocation. Bytes carry
+                    // no char boundary, so the slice law is the exact `bytes_slice` clamp
+                    // with NO ASCII gate. Runs right after the string fold (it also needs
+                    // the RAW `BytesSlice`/`BytesLen` ops before the Result/Option/variant/
+                    // struct passes copy them through). A body with no foldable
+                    // `Bytes.len` returns the code unchanged with an identity ip-map, so a
+                    // non-Bytes (or plain) body is byte-for-byte the prior path.
+                    detect_single_natural_loop(&inlined_code).and_then(|lp_by| {
+                    native_bytes_length_fold_in_region(
+                        &inlined_code, n_regs0, lp_by.header, lp_by.exit,
+                    )
+                    .and_then(|(inlined_code, n_regs0, ip_map_by)| {
                     // OSR × J3 for RESULTS (deopt-before-heap, Slice 1): scalar-replace
                     // any non-escaping, statically-always-`Ok` `Result<Scalar,_>` living
                     // entirely inside the region. An inlined leaf whose `Err` arm built a
@@ -15468,12 +16108,16 @@ impl RegVm {
                         // The loop-carried struct pass (`ip_map3b`) runs LAST, so its
                         // index is the outermost hop. The string length-fold pass
                         // (`ip_map_sl`) runs FIRST (right after inlining), so its hop sits
-                        // just inside `ip_map0`:
+                        // just inside `ip_map0`; the Bytes length-fold (`ip_map_by`) runs
+                        // immediately after the string fold, so its hop sits just inside
+                        // `ip_map_sl`:
                         // `ip_map[t] =
-                        //   ip_map0[ip_map_sl[ip_map_r[ip_map1[ip_map2[ip_map3[ip_map3b[t]]]]]]]`.
+                        //   ip_map0[ip_map_sl[ip_map_by[ip_map_r[ip_map1[ip_map2[ip_map3[ip_map3b[t]]]]]]]]`.
                         let ip_map: Vec<usize> = ip_map3b
                             .iter()
-                            .map(|&tb| ip_map0[ip_map_sl[ip_map_r[ip_map1[ip_map2[ip_map3[tb]]]]]])
+                            .map(|&tb| {
+                                ip_map0[ip_map_sl[ip_map_by[ip_map_r[ip_map1[ip_map2[ip_map3[tb]]]]]]]
+                            })
                             .collect();
                         // Re-detect on the fully-transformed stream; its single loop is
                         // the same loop with both Option and variant ops dissolved (the
@@ -15565,6 +16209,8 @@ impl RegVm {
                                     }
                                 })
                         })
+                    })
+                    })
                     })
                     })
                     })
@@ -25288,6 +25934,7 @@ mod intrinsic_registry_tests {
         assert!(!d.view_capable);
         assert!(d.combinator_kind.is_none());
         assert!(d.string_fold_role.is_none());
+        assert!(d.bytes_fold_role.is_none());
         assert!(!d.cold_arm_pure_builder);
 
         // The bare `Default` impl matches the conservative classification.
@@ -25370,6 +26017,44 @@ mod intrinsic_registry_tests {
         }
         // A non-fold string intrinsic has no role.
         assert!(intrinsic_descriptor(RegIntrinsic::StringCopy).string_fold_role.is_none());
+    }
+
+    /// Site 3 (Bytes sibling): the Bytes-fold producers/query carry the expected roles
+    /// and are `can_fold`; an unrelated Bytes intrinsic has no Bytes role.
+    #[test]
+    fn bytes_fold_roles_match() {
+        assert_eq!(
+            intrinsic_descriptor(RegIntrinsic::BytesLen).bytes_fold_role,
+            Some(BytesFoldRole::LengthQuery)
+        );
+        assert_eq!(
+            intrinsic_descriptor(RegIntrinsic::BytesFromString).bytes_fold_role,
+            Some(BytesFoldRole::ProducerFromString)
+        );
+        assert_eq!(
+            intrinsic_descriptor(RegIntrinsic::BytesSlice).bytes_fold_role,
+            Some(BytesFoldRole::ProducerSlice)
+        );
+        for i in [
+            RegIntrinsic::BytesLen,
+            RegIntrinsic::BytesFromString,
+            RegIntrinsic::BytesSlice,
+        ] {
+            assert!(intrinsic_descriptor(i).can_fold);
+            // Bytes-fold intrinsics carry NO string role (they are a disjoint family).
+            assert!(intrinsic_descriptor(i).string_fold_role.is_none());
+        }
+        // `Bytes.len` is a pure READ; the producers allocate.
+        assert_eq!(intrinsic_descriptor(RegIntrinsic::BytesLen).effect, IntrinsicEffect::Read);
+        assert_eq!(
+            intrinsic_descriptor(RegIntrinsic::BytesFromString).effect,
+            IntrinsicEffect::Allocate
+        );
+        assert_eq!(intrinsic_descriptor(RegIntrinsic::BytesSlice).effect, IntrinsicEffect::Allocate);
+        // A non-fold Bytes intrinsic has no Bytes role.
+        assert!(intrinsic_descriptor(RegIntrinsic::BytesConcat).bytes_fold_role.is_none());
+        // String-fold intrinsics carry no Bytes role.
+        assert!(intrinsic_descriptor(RegIntrinsic::StringLen).bytes_fold_role.is_none());
     }
 
     /// The deopt cold-arm pure-builder whitelist is exactly the four String builders.
@@ -25764,7 +26449,8 @@ mod register_window_tests {
         let mut vm = empty_vm();
         // threshold 0 => compile/attempt on the first call; precise_deopt on.
         vm.native = Some(
-            NativeState::new_with_opt(0, false, true, false, true, false).expect("native module"),
+            NativeState::new_with_opt(0, false, true, false, true, false, false)
+                .expect("native module"),
         );
         let func = Rc::new(add_then_square_func());
 
@@ -25818,7 +26504,8 @@ mod register_window_tests {
         let mut vm = empty_vm();
         // precise_deopt OFF (the last arg).
         vm.native = Some(
-            NativeState::new_with_opt(0, false, true, false, false, false).expect("native module"),
+            NativeState::new_with_opt(0, false, true, false, false, false, false)
+                .expect("native module"),
         );
         let func = Rc::new(add_then_square_func());
 
