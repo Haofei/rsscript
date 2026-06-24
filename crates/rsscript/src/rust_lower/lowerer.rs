@@ -2,49 +2,48 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::diagnostic::Span;
 use crate::syntax::ast::{
-    BinaryOp, Block, CallArg, Callee, ConstDecl, DataEffect, EffectDecl, Expr, FieldDecl, ForStmt,
-    FunctionDecl, GenericBound, GenericParam, Item, LetStmt, MatchPattern, MatchStmt, Param,
-    Program, Stmt, SumTypeDecl, TypeAliasDecl, TypeDecl, TypeKind, TypeRef,
+    BinaryOp, Block, CallArg, Callee, DataEffect, Expr, FieldDecl, ForStmt, GenericParam, Item, LetStmt, MatchPattern, MatchStmt, Param,
+    Program, Stmt, TypeKind, TypeRef,
 };
 
 use super::helpers::*;
 use super::intrinsics::*;
-use super::source_map::{generated_span_at_end, push_source_marker};
+use super::source_map::push_source_marker;
 use super::types::{LoweredRust, RustSourceMapEntry};
 
 pub(super) struct RustLowerer<'a> {
-    program: &'a Program,
-    type_kinds: BTreeMap<String, TypeKind>,
-    protocol_names: BTreeSet<String>,
-    native_boundary_callees: BTreeSet<String>,
-    async_native_boundary_callees: BTreeSet<String>,
-    native_bindings: BTreeMap<String, String>,
-    function_return_types: BTreeMap<String, TypeRef>,
-    function_type_params: BTreeMap<String, Vec<String>>,
-    function_param_types: BTreeMap<String, Vec<(String, TypeRef)>>,
-    function_param_defaults: BTreeMap<String, Vec<Option<Expr>>>,
-    function_param_effects: BTreeMap<String, Vec<(String, Option<DataEffect>)>>,
-    retained_params_by_callee: BTreeMap<String, BTreeSet<String>>,
-    param_effects: BTreeMap<String, DataEffect>,
-    value_types: BTreeMap<String, TypeRef>,
-    managed_bindings: BTreeSet<String>,
-    read_view_bindings: BTreeSet<String>,
-    current_retained_params: BTreeSet<String>,
-    mutated_bindings: BTreeSet<String>,
-    drop_field_names: BTreeSet<String>,
-    current_return_type: Option<TypeRef>,
-    current_async_executor: Option<String>,
+    pub(super) program: &'a Program,
+    pub(super) type_kinds: BTreeMap<String, TypeKind>,
+    pub(super) protocol_names: BTreeSet<String>,
+    pub(super) native_boundary_callees: BTreeSet<String>,
+    pub(super) async_native_boundary_callees: BTreeSet<String>,
+    pub(super) native_bindings: BTreeMap<String, String>,
+    pub(super) function_return_types: BTreeMap<String, TypeRef>,
+    pub(super) function_type_params: BTreeMap<String, Vec<String>>,
+    pub(super) function_param_types: BTreeMap<String, Vec<(String, TypeRef)>>,
+    pub(super) function_param_defaults: BTreeMap<String, Vec<Option<Expr>>>,
+    pub(super) function_param_effects: BTreeMap<String, Vec<(String, Option<DataEffect>)>>,
+    pub(super) retained_params_by_callee: BTreeMap<String, BTreeSet<String>>,
+    pub(super) param_effects: BTreeMap<String, DataEffect>,
+    pub(super) value_types: BTreeMap<String, TypeRef>,
+    pub(super) managed_bindings: BTreeSet<String>,
+    pub(super) read_view_bindings: BTreeSet<String>,
+    pub(super) current_retained_params: BTreeSet<String>,
+    pub(super) mutated_bindings: BTreeSet<String>,
+    pub(super) drop_field_names: BTreeSet<String>,
+    pub(super) current_return_type: Option<TypeRef>,
+    pub(super) current_async_executor: Option<String>,
     /// Name of the enclosing `task_group`'s cancellation guard local, if any, so
     /// `Task.cancellation_token()` resolves to that scope's token.
-    current_task_group_token: Option<String>,
-    source_map: Vec<RustSourceMapEntry>,
+    pub(super) current_task_group_token: Option<String>,
+    pub(super) source_map: Vec<RustSourceMapEntry>,
     /// Maps generic type param name -> protocol bound name for receiver-call resolution
-    generic_protocol_bounds: BTreeMap<String, String>,
+    pub(super) generic_protocol_bounds: BTreeMap<String, String>,
 }
 
-struct AsyncTaskGroupBoundary {
-    pending: String,
-    returns_result: bool,
+pub(super) struct AsyncTaskGroupBoundary {
+    pub(super) pending: String,
+    pub(super) returns_result: bool,
 }
 
 impl<'a> RustLowerer<'a> {
@@ -210,593 +209,13 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    fn lower_protocol_traits(&mut self, out: &mut String) {
-        for protocol in &self.program.protocols {
-            self.record_source_marker(out, 0, "protocol", &protocol.span);
-            out.push_str(&format!("pub trait {} {{\n", rust_ident(&protocol.name)));
-            for method in protocol_methods(self.program, &protocol.name) {
-                out.push_str("    fn ");
-                out.push_str(&rust_ident(protocol_method_name(&method.name)));
-                out.push('(');
-                out.push_str(&self.lower_protocol_trait_params(method));
-                out.push(')');
-                if let Some(return_ty) = &method.return_ty {
-                    out.push_str(" -> ");
-                    out.push_str(&self.lower_return_type(return_ty, method.returns_fresh));
-                }
-                out.push_str(";\n");
-            }
-            out.push_str("}\n\n");
-        }
-    }
-
-    fn lower_protocol_trait_params(&self, method: &FunctionDecl) -> String {
-        method
-            .params
-            .iter()
-            .map(|param| {
-                if param.name == "self" {
-                    return match param.effect {
-                        Some(DataEffect::Read) => "&self".to_string(),
-                        Some(DataEffect::Mut) => "&mut self".to_string(),
-                        Some(DataEffect::Take) | None => "self".to_string(),
-                    };
-                }
-                self.lower_param(param)
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
-
-    fn lower_protocol_impls(&mut self, out: &mut String) {
-        for protocol_impl in &self.program.protocol_impls {
-            out.push_str(&format!(
-                "impl {} for {} {{\n",
-                rust_ident(&protocol_impl.protocol),
-                rust_ident(&protocol_impl.type_name)
-            ));
-            for mapping in &protocol_impl.mappings {
-                let Some(method) =
-                    protocol_method(self.program, &protocol_impl.protocol, &mapping.method)
-                else {
-                    continue;
-                };
-                out.push_str("    fn ");
-                out.push_str(&rust_ident(&mapping.method));
-                out.push('(');
-                out.push_str(&self.lower_protocol_trait_params(method));
-                out.push(')');
-                if let Some(return_ty) = &method.return_ty {
-                    out.push_str(" -> ");
-                    out.push_str(&self.lower_return_type(return_ty, method.returns_fresh));
-                }
-                out.push_str(" {\n        ");
-                if method
-                    .return_ty
-                    .as_ref()
-                    .is_none_or(|return_ty| return_ty.name != "Unit")
-                {
-                    out.push_str("return ");
-                }
-                out.push_str(&rust_function_ident(&mapping.target));
-                out.push('(');
-                out.push_str(
-                    &method
-                        .params
-                        .iter()
-                        .map(protocol_impl_forward_arg)
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                );
-                out.push_str(");\n");
-                out.push_str("    }\n");
-            }
-            out.push_str("}\n\n");
-        }
-    }
-
-    fn lower_capability_enums(&mut self, out: &mut String) {
-        for protocol in &self.program.protocols {
-            let impls = self.protocol_capability_impls(&protocol.name);
-            if impls.is_empty() {
-                continue;
-            }
-            out.push_str(&format!(
-                "pub enum {} {{\n",
-                capability_enum_name(&protocol.name)
-            ));
-            for protocol_impl in impls {
-                out.push_str(&format!(
-                    "    {}({}),\n",
-                    rust_ident(&protocol_impl.type_name),
-                    rust_ident(&protocol_impl.type_name)
-                ));
-            }
-            out.push_str("}\n\n");
-        }
-    }
-
-    fn lower_capability_impls(&mut self, out: &mut String) {
-        for protocol in &self.program.protocols {
-            let impls = self.protocol_capability_impls(&protocol.name);
-            if impls.is_empty() {
-                continue;
-            }
-            out.push_str(&format!(
-                "impl {} for {} {{\n",
-                rust_ident(&protocol.name),
-                capability_enum_name(&protocol.name)
-            ));
-            for method in protocol_methods(self.program, &protocol.name) {
-                out.push_str("    fn ");
-                out.push_str(&rust_ident(protocol_method_name(&method.name)));
-                out.push('(');
-                out.push_str(&self.lower_protocol_trait_params(method));
-                out.push(')');
-                let returns_unit = method
-                    .return_ty
-                    .as_ref()
-                    .is_none_or(|return_ty| return_ty.name == "Unit");
-                if let Some(return_ty) = &method.return_ty {
-                    out.push_str(" -> ");
-                    out.push_str(&self.lower_return_type(return_ty, method.returns_fresh));
-                }
-                out.push_str(" {\n        ");
-                if !returns_unit {
-                    out.push_str("return ");
-                }
-                out.push_str("match self {\n");
-                for protocol_impl in &impls {
-                    let Some(mapping) = protocol_impl
-                        .mappings
-                        .iter()
-                        .find(|mapping| mapping.method == protocol_method_name(&method.name))
-                    else {
-                        continue;
-                    };
-                    out.push_str(&format!(
-                        "            {}::{}(inner) => {}({}),\n",
-                        capability_enum_name(&protocol.name),
-                        rust_ident(&protocol_impl.type_name),
-                        rust_function_ident(&mapping.target),
-                        method
-                            .params
-                            .iter()
-                            .map(capability_impl_forward_arg)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ));
-                }
-                out.push_str("        }");
-                if returns_unit {
-                    out.push(';');
-                }
-                out.push_str("\n    }\n");
-            }
-            out.push_str("}\n\n");
-        }
-    }
-
-    fn protocol_capability_impls(&self, protocol: &str) -> Vec<&crate::syntax::ast::ProtocolImpl> {
-        self.program
-            .protocol_impls
-            .iter()
-            .filter(|protocol_impl| protocol_impl.protocol == protocol)
-            .collect()
-    }
-
-    fn protocol_impl_namespace(&self, receiver_type: &str, method: &str) -> Option<String> {
-        let mut matches = self
-            .program
-            .protocol_impls
-            .iter()
-            .filter(|protocol_impl| protocol_impl.type_name == receiver_type)
-            .filter(|protocol_impl| {
-                protocol_impl
-                    .mappings
-                    .iter()
-                    .any(|mapping| mapping.method == method)
-            })
-            .map(|protocol_impl| protocol_impl.protocol.clone());
-        let first = matches.next()?;
-        if matches.next().is_some() {
-            return None;
-        }
-        Some(first)
-    }
-
-    fn lower_type_decl(&mut self, ty: &TypeDecl, out: &mut String) {
-        let generated_start = out.len();
-        let marker = self.record_source_marker(out, 0, "type", &ty.span);
-        if ty.kind == TypeKind::Resource {
-            out.push_str("#[must_use]\n");
-        }
-        let has_closure_field = ty
-            .fields
-            .iter()
-            .any(|field| type_ref_holds_closure(&field.ty));
-        let derive_str = self.compute_derive_attr(
-            &ty.derives,
-            ty.kind == TypeKind::Resource,
-            has_closure_field,
-        );
-        out.push_str(&derive_str);
-        out.push_str(&format!(
-            "{}struct {}{} {{\n",
-            visibility(true),
-            rust_ident(&ty.name),
-            lower_generic_params(&ty.type_params)
-        ));
-        for field in &ty.fields {
-            self.lower_field_decl(field, out);
-        }
-        out.push_str("}\n");
-        if has_closure_field {
-            // A stored `owned Fn` (`Rc<dyn Fn..>`) is not `Debug`, so the type
-            // cannot derive `Debug`; emit a manual placeholder impl so generic
-            // `{:?}`-using code (and the auto-`Debug` contract) still holds.
-            out.push_str(&manual_struct_debug_impl(
-                &rust_ident(&ty.name),
-                &ty.type_params,
-                &ty.fields,
-            ));
-        }
-
-        if ty.kind == TypeKind::Resource {
-            out.push_str(&format!(
-                "\nimpl{} rsscript_runtime::Resource for {}{} {{}}\n",
-                lower_impl_generics(&ty.type_params),
-                rust_ident(&ty.name),
-                lower_generic_args(&ty.type_params)
-            ));
-            out.push_str(&format!(
-                "\nimpl{} Drop for {}{} {{\n",
-                lower_impl_generics(&ty.type_params),
-                rust_ident(&ty.name),
-                lower_generic_args(&ty.type_params)
-            ));
-            out.push_str("    fn drop(&mut self) {\n");
-            if let Some(drop_body) = &ty.drop_body {
-                let previous_drop_field_names = std::mem::take(&mut self.drop_field_names);
-                self.drop_field_names = ty.fields.iter().map(|field| field.name.clone()).collect();
-                self.lower_block(drop_body, out, 2);
-                self.drop_field_names = previous_drop_field_names;
-            } else {
-                out.push_str("        // RSScript resource has no explicit drop body.\n");
-            }
-            out.push_str("    }\n");
-            out.push_str("}\n");
-        }
-        self.widen_generated_span(
-            &marker.generated,
-            generated_line_count(&out[generated_start..]),
-        );
-    }
-
-    fn lower_field_decl(&mut self, field: &FieldDecl, out: &mut String) {
-        let rust_ty = self.lower_type_ref(&field.ty, ManagedPosition::Bare);
-        self.source_map.push(RustSourceMapEntry {
-            kind: "field".to_string(),
-            source: field.span.clone(),
-            generated: generated_span_at_end(out, "src/lib.rs", "field"),
-            ..Default::default()
-        });
-        if field.is_weak {
-            out.push_str(&format!(
-                "    pub {}: rsscript_runtime::WeakManaged<{}>,\n",
-                rust_ident(&field.name),
-                rust_ty
-            ));
-        } else if field.is_handle
-            || matches!(self.type_kinds.get(&field.ty.name), Some(TypeKind::Class))
-        {
-            out.push_str(&format!(
-                "    pub {}: rsscript_runtime::Managed<{}>,\n",
-                rust_ident(&field.name),
-                rust_ty
-            ));
-        } else {
-            out.push_str(&format!(
-                "    pub {}: {},\n",
-                rust_ident(&field.name),
-                rust_ty
-            ));
-        }
-    }
-
-    fn lower_sum_type(&mut self, sum: &SumTypeDecl, out: &mut String) {
-        let has_closure_field = sum
-            .variants
-            .iter()
-            .any(|variant| variant.fields.iter().any(|f| type_ref_holds_closure(&f.ty)));
-        let derive_str = self.compute_derive_attr(&sum.derives, false, has_closure_field);
-        out.push_str(&derive_str);
-        out.push_str(&format!(
-            "{}enum {} {{\n",
-            visibility(sum.is_public),
-            rust_ident(&sum.name)
-        ));
-        for variant in &sum.variants {
-            if variant.fields.is_empty() {
-                out.push_str(&format!("    {},\n", rust_ident(&variant.name)));
-            } else {
-                out.push_str(&format!("    {} {{\n", rust_ident(&variant.name)));
-                for field in &variant.fields {
-                    let rust_ty = self.lower_type_ref(&field.ty, ManagedPosition::Bare);
-                    out.push_str(&format!(
-                        "        {}: {},\n",
-                        rust_ident(&field.name),
-                        rust_ty
-                    ));
-                }
-                out.push_str("    },\n");
-            }
-        }
-        out.push_str("}\n");
-    }
-
-    /// Compute the `#[derive(...)]` attribute string.
-    /// If user specified `derives(...)`, use those (always including Debug).
-    /// Otherwise use defaults: Debug + Clone for non-resource, Debug only for resource.
-    fn compute_derive_attr(
-        &self,
-        user_derives: &[String],
-        is_resource: bool,
-        has_closure_field: bool,
-    ) -> String {
-        if user_derives.is_empty() {
-            if is_resource {
-                return "#[derive(Debug)]\n".to_string();
-            } else if has_closure_field {
-                // A stored `owned Fn` (`Rc<dyn Fn>`) is `Clone` but not `Debug`;
-                // a manual `Debug` impl is emitted alongside the type.
-                return "#[derive(Clone)]\n".to_string();
-            } else {
-                return "#[derive(Debug, Clone)]\n".to_string();
-            }
-        }
-        let mut rust_derives = Vec::new();
-        // `Rc<dyn Fn>` is `Clone` but not `Debug`/`PartialEq`/`Eq`/`Hash`/`Ord`.
-        // For a closure-holding type, emit only the traits the closure can
-        // satisfy (`Clone`, serde shims) and provide `Debug` via a manual impl;
-        // the others are genuinely unavailable on a function value.
-        if !has_closure_field {
-            push_unique_derive(&mut rust_derives, "Debug");
-        }
-        for d in user_derives {
-            match d.as_str() {
-                "Debug" => {}
-                "Clone" => push_unique_derive(&mut rust_derives, "Clone"),
-                "Eq" if !has_closure_field => {
-                    push_unique_derive(&mut rust_derives, "PartialEq");
-                    push_unique_derive(&mut rust_derives, "Eq");
-                }
-                "Ord" if !has_closure_field => {
-                    push_unique_derive(&mut rust_derives, "PartialEq");
-                    push_unique_derive(&mut rust_derives, "Eq");
-                    push_unique_derive(&mut rust_derives, "PartialOrd");
-                    push_unique_derive(&mut rust_derives, "Ord");
-                }
-                "Hash" if !has_closure_field => push_unique_derive(&mut rust_derives, "Hash"),
-                "Eq" | "Ord" | "Hash" => {}
-                "JsonEncode" => push_unique_derive(&mut rust_derives, "serde::Serialize"),
-                "JsonDecode" => push_unique_derive(&mut rust_derives, "serde::Deserialize"),
-                "Schema" | "ReviewSchema" => {}
-                _ => {}
-            }
-        }
-        format!("#[derive({})]\n", rust_derives.join(", "))
-    }
-
-    fn lower_type_alias(&mut self, alias: &TypeAliasDecl, out: &mut String) {
-        let vis = visibility(alias.is_public);
-        let generics = lower_generic_params(&alias.type_params);
-        let target = self.lower_type_ref(&alias.target, ManagedPosition::Bare);
-        out.push_str(&format!(
-            "{}type {}{} = {};\n",
-            vis,
-            rust_ident(&alias.name),
-            generics,
-            target
-        ));
-    }
-
-    fn lower_const_decl(&mut self, decl: &ConstDecl, out: &mut String) {
-        let vis = visibility(decl.is_public);
-        let ty_str = if let Some(ty) = &decl.type_annotation {
-            let lowered = self.lower_type_ref(ty, ManagedPosition::Bare);
-            // Rust `const` cannot hold heap-allocated String; use &'static str
-            if lowered == "String" {
-                "&'static str".to_string()
-            } else {
-                lowered
-            }
-        } else {
-            infer_const_type(&decl.value)
-        };
-        let value_str = lower_const_value(&decl.value);
-        out.push_str(&format!(
-            "{}const {}: {} = {};\n",
-            vis,
-            rust_ident(&decl.name).to_uppercase(),
-            ty_str,
-            value_str
-        ));
-    }
-
-    fn lower_function(&mut self, function: &FunctionDecl, out: &mut String) {
-        let previous_param_effects = std::mem::take(&mut self.param_effects);
-        let previous_value_types = std::mem::take(&mut self.value_types);
-        let previous_managed_bindings = std::mem::take(&mut self.managed_bindings);
-        let previous_read_view_bindings = std::mem::take(&mut self.read_view_bindings);
-        let previous_retained_params = std::mem::take(&mut self.current_retained_params);
-        let previous_mutated_bindings = std::mem::take(&mut self.mutated_bindings);
-        let previous_return_type = self.current_return_type.take();
-        let previous_async_executor = self.current_async_executor.take();
-        self.param_effects = function
-            .params
-            .iter()
-            .filter_map(|param| param.effect.map(|effect| (param.name.clone(), effect)))
-            .collect();
-        self.value_types = function
-            .params
-            .iter()
-            .map(|param| (param.name.clone(), param.ty.clone()))
-            .collect();
-        self.generic_protocol_bounds = function
-            .type_params
-            .iter()
-            .filter_map(|tp| match &tp.bound {
-                Some(GenericBound::Protocol(protocol)) => Some((tp.name.clone(), protocol.clone())),
-                _ => None,
-            })
-            .collect();
-        self.managed_bindings = function
-            .params
-            .iter()
-            .filter(|param| self.is_class_type(&param.ty))
-            .map(|param| param.name.clone())
-            .collect();
-        self.current_retained_params = function
-            .effects
-            .iter()
-            .filter_map(|effect| match effect {
-                EffectDecl::Retains(param) => Some(param.clone()),
-                EffectDecl::Name(_) => None,
-            })
-            .collect();
-        self.mutated_bindings = collect_mutated_bindings(&function.body);
-        self.current_return_type = function.return_ty.clone();
-        // A user `async fn` lowers to a pending chain. `task_group` statements
-        // are represented as explicit pending boundaries inside that chain; the
-        // runnable entry point keeps a normal `fn main` that drives the chain
-        // with `run_pending`.
-        let is_runnable = is_runnable_main(function);
-        let lower_as_pending_chain = function.is_async && !is_runnable;
-        let lower_as_async_main = function.is_async && is_runnable;
-        self.current_async_executor = (!function.is_async
-            && block_needs_async_executor(&function.body))
-        .then(|| "__rsscript_async_executor".to_string());
-        let generated_start = out.len();
-        let source_map_start = self.source_map.len();
-        let marker = self.record_source_marker(out, 0, "function", &function.span);
-        let is_public = function.is_public || is_runnable_main(function);
-        out.push_str(&format!(
-            "{}fn {}{}(",
-            visibility(is_public),
-            rust_function_ident(&function.name),
-            lower_generic_params(&function.type_params)
-        ));
-        out.push_str(
-            &function
-                .params
-                .iter()
-                .map(|param| self.lower_param(param))
-                .collect::<Vec<_>>()
-                .join(", "),
-        );
-        out.push(')');
-        if let Some(return_ty) = &function.return_ty {
-            out.push_str(" -> ");
-            let lowered = self.lower_return_type(return_ty, function.returns_fresh);
-            if lower_as_pending_chain {
-                // A leaf async fn returns a pending of its declared return type.
-                out.push_str(&format!("impl rsscript_runtime::Pending<{lowered}>"));
-            } else {
-                out.push_str(&lowered);
-            }
-        }
-        out.push_str(" {\n");
-        if function.effects.iter().any(is_native_boundary) {
-            out.push_str(
-                "    // RSScript native/unsafe boundary: review before binding implementation.\n",
-            );
-        }
-        if lower_as_pending_chain {
-            let chain = self.lower_async_chain(&function.body.statements);
-            out.push_str(&format!("    {chain}\n"));
-        } else if lower_as_async_main {
-            // The entrypoint is the only place that drives a pending to a value.
-            let chain = self.lower_async_chain(&function.body.statements);
-            out.push_str(&format!("    rsscript_runtime::run_pending({chain})\n"));
-        } else {
-            if let Some(executor) = &self.current_async_executor {
-                out.push_str(&format!(
-                    "    let mut {executor} = rsscript_runtime::Executor::new();\n"
-                ));
-            }
-            self.lower_block(&function.body, out, 1);
-        }
-        out.push_str("}\n");
-        self.widen_generated_span(
-            &marker.generated,
-            generated_line_count(&out[generated_start..]),
-        );
-        // Stamp every source-map entry produced while lowering this function with
-        // its source symbol and lowered Rust symbol, so a remapped backend error
-        // can name the declaration (not just the line).
-        let lowered_symbol = rust_function_ident(&function.name);
-        for entry in &mut self.source_map[source_map_start..] {
-            entry.symbol = Some(function.name.clone());
-            entry.lowered_symbol = Some(lowered_symbol.clone());
-        }
-        self.param_effects = previous_param_effects;
-        self.value_types = previous_value_types;
-        self.managed_bindings = previous_managed_bindings;
-        self.read_view_bindings = previous_read_view_bindings;
-        self.current_retained_params = previous_retained_params;
-        self.mutated_bindings = previous_mutated_bindings;
-        self.current_return_type = previous_return_type;
-        self.current_async_executor = previous_async_executor;
-    }
-
-    fn lower_param(&self, param: &Param) -> String {
-        let ty = if param.effect == Some(DataEffect::Read)
-            && self.current_retained_params.contains(&param.name)
-            && !self.is_class_type(&param.ty)
-            && self.type_kinds.contains_key(&param.ty.name)
-        {
-            format!(
-                "rsscript_runtime::Managed<{}>",
-                self.lower_type_ref(&param.ty, ManagedPosition::Bare)
-            )
-        } else {
-            self.lower_type_ref(&param.ty, ManagedPosition::Param)
-        };
-        let rust_ty = match param.effect {
-            // Copy primitives are passed `read` by value (call sites already lower
-            // `read <int>` by value via `read_effect_lowers_by_value`); the param
-            // type must match so the value is owned inside the body.
-            Some(DataEffect::Read) if Self::read_effect_lowers_by_value(&param.ty) => ty,
-            Some(DataEffect::Read) => format!("&{ty}"),
-            Some(DataEffect::Mut) if self.is_class_type(&param.ty) => format!("&{ty}"),
-            Some(DataEffect::Mut) => format!("&mut {ty}"),
-            Some(DataEffect::Take) | None => ty,
-        };
-        let name = rust_value_ident(&param.name);
-        if (param.ty.is_noescape || param.ty.is_owned) && param.ty.name == "Fn" {
-            format!("mut {name}: {rust_ty}")
-        } else {
-            format!("{name}: {rust_ty}")
-        }
-    }
-
-    fn lower_return_type(&self, ty: &TypeRef, returns_fresh: bool) -> String {
-        let position = if returns_fresh {
-            ManagedPosition::FreshReturn
-        } else {
-            ManagedPosition::Return
-        };
-        self.lower_type_ref(ty, position)
-    }
-
-    fn lower_block(&mut self, block: &Block, out: &mut String, indent: usize) {
+    pub(super) fn lower_block(&mut self, block: &Block, out: &mut String, indent: usize) {
         for statement in &block.statements {
             self.lower_stmt(statement, out, indent);
         }
     }
 
-    fn lower_expr_block(&mut self, block: &Block, indent: usize) -> String {
+    pub(super) fn lower_expr_block(&mut self, block: &Block, indent: usize) -> String {
         let pad = "    ".repeat(indent);
         let mut out = String::new();
         out.push_str("{\n");
@@ -818,903 +237,7 @@ impl<'a> RustLowerer<'a> {
         out
     }
 
-    fn lower_task_group_block(&mut self, block: &Block, out: &mut String, indent: usize) {
-        let pad = "    ".repeat(indent);
-        let executor = self
-            .current_async_executor
-            .clone()
-            .unwrap_or_else(|| "__rsscript_async_executor".to_string());
-
-        // The group owns a cancellation guard. It is declared first so it drops
-        // last: on any scope exit (normal, early `return`, or `?` error) it
-        // cancels the group token, stopping cooperative siblings.
-        let guard = "_rsscript_task_group".to_string();
-        out.push_str(&format!(
-            "{pad}let {guard} = rsscript_runtime::TaskGroupScope::new();\n"
-        ));
-        let previous_task_group_token = self.current_task_group_token.replace(guard);
-
-        let async_let_names: Vec<String> = block
-            .statements
-            .iter()
-            .filter_map(|statement| match statement {
-                Stmt::Let(stmt) if stmt.is_async && stmt.name != "_" => {
-                    Some(rust_ident(&stmt.name))
-                }
-                _ => None,
-            })
-            .collect();
-
-        out.push_str(&format!(
-            "{pad}let __rsscript_task_group_trace_started = std::time::Instant::now();\n"
-        ));
-        out.push_str(&format!(
-            "{pad}let __rsscript_task_group_trace_polls = {executor}.poll_count();\n"
-        ));
-        out.push_str(&format!(
-            "{pad}let __rsscript_task_group_trace_yields = {executor}.yield_count();\n"
-        ));
-        out.push_str(&format!(
-            "{pad}let __rsscript_task_group_trace_tasks = {}usize;\n",
-            async_let_names.len()
-        ));
-
-        // Lower statements in source order so an `async let` can reference an
-        // earlier binding. `async let x = f()` constructs (does not run) the
-        // pending; `await x` drives every still-running sibling until x is ready,
-        // then reads x and applies `?` — so an error propagates immediately (the
-        // guard drops and cancels the rest) and a never-completing sibling never
-        // blocks an unrelated await.
-        //
-        // `active` is the set of async-lets that have been *declared* but not yet
-        // awaited. An await only polls this set, so it never forward-references a
-        // pending declared later, and never re-polls a task whose result was
-        // already taken (`take` resets the result slot to `None`).
-        let mut active: Vec<String> = Vec::new();
-        for (statement_index, statement) in block.statements.iter().enumerate() {
-            match statement {
-                Stmt::Let(stmt) if stmt.is_async => {
-                    if let Some(value) = &stmt.value {
-                        let name = if stmt.name == "_" {
-                            format!("discard_{statement_index}")
-                        } else {
-                            rust_ident(&stmt.name)
-                        };
-                        let lowered = self.lower_async_let_pending(value, out, &pad, &name);
-                        out.push_str(&format!(
-                            "{pad}let __rsscript_key_{name} = {statement_index}usize;\n"
-                        ));
-                        out.push_str(&format!(
-                            "{pad}let mut __rsscript_pending_{name} = {lowered};\n"
-                        ));
-                        out.push_str(&format!("{pad}let mut __rsscript_result_{name} = None;\n"));
-                        active.push(name);
-                    }
-                }
-                Stmt::Let(stmt)
-                    if stmt
-                        .value
-                        .as_ref()
-                        .and_then(|value| self.extract_task_group_await(value, &async_let_names))
-                        .is_some() =>
-                {
-                    let value = stmt.value.as_ref().expect("await let value");
-                    let pending = self
-                        .extract_task_group_await(value, &async_let_names)
-                        .expect("await handle");
-                    let try_suffix = if is_try_wrapped(value) { "?" } else { "" };
-                    let mutable = if self.mutated_bindings.contains(&stmt.name) {
-                        "mut "
-                    } else {
-                        ""
-                    };
-                    self.emit_task_group_poll_until(out, &pad, &executor, &active, &pending);
-                    active.retain(|name| name != &pending);
-                    out.push_str(&format!(
-                        "{pad}let {mutable}{} = __rsscript_result_{pending}.take().expect(\"awaited task completed\"){try_suffix};\n",
-                        rust_ident(&stmt.name),
-                    ));
-                }
-                Stmt::Expr(expr)
-                    if self
-                        .extract_task_group_await(expr, &async_let_names)
-                        .is_some() =>
-                {
-                    let pending = self
-                        .extract_task_group_await(expr, &async_let_names)
-                        .expect("await handle");
-                    let try_suffix = if is_try_wrapped(expr) { "?" } else { "" };
-                    self.emit_task_group_poll_until(out, &pad, &executor, &active, &pending);
-                    active.retain(|name| name != &pending);
-                    out.push_str(&format!(
-                        "{pad}__rsscript_result_{pending}.take().expect(\"awaited task completed\"){try_suffix};\n"
-                    ));
-                }
-                _ => self.lower_stmt(statement, out, indent),
-            }
-        }
-
-        if !active.is_empty() {
-            self.emit_task_group_drain(out, &pad, &executor, &active);
-        }
-
-        out.push_str(&format!(
-            "{pad}rsscript_runtime::trace_async_runtime_phase(\n"
-        ));
-        out.push_str(&format!("{pad}    \"task_group_scope\",\n"));
-        out.push_str(&format!(
-            "{pad}    __rsscript_task_group_trace_started.elapsed().as_micros(),\n"
-        ));
-        out.push_str(&format!(
-            "{pad}    {executor}.poll_count().saturating_sub(__rsscript_task_group_trace_polls),\n"
-        ));
-        out.push_str(&format!(
-            "{pad}    {executor}.yield_count().saturating_sub(__rsscript_task_group_trace_yields),\n"
-        ));
-        out.push_str(&format!("{pad}    __rsscript_task_group_trace_tasks,\n"));
-        out.push_str(&format!("{pad});\n"));
-
-        self.current_task_group_token = previous_task_group_token;
-    }
-
-    fn lower_async_let_pending(
-        &mut self,
-        expr: &Expr,
-        out: &mut String,
-        pad: &str,
-        pending_name: &str,
-    ) -> String {
-        let Expr::Call { callee, args, span } = expr else {
-            return self.lower_expr(expr);
-        };
-
-        let mut rewritten_args = args.clone();
-        let mut temp_index = 0usize;
-        for (arg_index, arg) in rewritten_args.iter_mut().enumerate() {
-            let Expr::Effect {
-                effect: DataEffect::Read,
-                value,
-                span: effect_span,
-            } = &arg.value
-            else {
-                continue;
-            };
-            if Self::expr_is_stable_borrow_place(value) {
-                continue;
-            }
-
-            let temp_name = format!("__rsscript_async_arg_{pending_name}_{temp_index}");
-            temp_index += 1;
-            let lowered_value =
-                if let Some(expected) = self.expected_call_arg_type(callee, arg, arg_index) {
-                    self.lower_expr_for_expected_type(value, &expected)
-                } else {
-                    self.lower_owned_expr(value)
-                };
-            out.push_str(&format!("{pad}let {temp_name} = {lowered_value};\n"));
-            arg.value = Expr::Effect {
-                effect: DataEffect::Read,
-                value: Box::new(Expr::Ident(temp_name, effect_span.clone())),
-                span: effect_span.clone(),
-            };
-        }
-
-        let rewritten = Expr::Call {
-            callee: callee.clone(),
-            args: rewritten_args,
-            span: span.clone(),
-        };
-        self.lower_expr(&rewritten)
-    }
-
-    fn expr_is_stable_borrow_place(expr: &Expr) -> bool {
-        match expr {
-            Expr::Ident(..) => true,
-            Expr::Field { base, .. } | Expr::Index { base, .. } => {
-                Self::expr_is_stable_borrow_place(base)
-            }
-            _ => false,
-        }
-    }
-
-    /// Emit a cooperative poll loop that drives every currently-active async-let
-    /// sibling until `target`'s result is ready (so siblings interleave, but the
-    /// await only waits for its own task). `active` holds only async-lets already
-    /// declared and not yet awaited, so the loop never references a pending that
-    /// is declared later or whose result was already taken.
-    fn emit_task_group_poll_until(
-        &self,
-        out: &mut String,
-        pad: &str,
-        executor: &str,
-        active: &[String],
-        target: &str,
-    ) {
-        out.push_str(&format!(
-            "{pad}if __rsscript_result_{target}.is_none() {{\n"
-        ));
-        out.push_str(&format!(
-            "{pad}    let mut __rsscript_ready_keys: Option<Vec<usize>> = None;\n"
-        ));
-        out.push_str(&format!("{pad}    loop {{\n"));
-        for name in active {
-            out.push_str(&format!(
-                "{pad}        if __rsscript_result_{name}.is_none() {{\n"
-            ));
-            out.push_str(&format!(
-                "{pad}            let __rsscript_should_poll = __rsscript_ready_keys.as_ref().map_or(true, |__rsscript_keys| __rsscript_keys.contains(&__rsscript_key_{name}));\n"
-            ));
-            out.push_str(&format!("{pad}            if __rsscript_should_poll {{\n"));
-            out.push_str(&format!(
-                "{pad}                if let rsscript_runtime::AsyncPoll::Ready(__rsscript_value) = {executor}.poll_once_keyed(__rsscript_key_{name}, &mut __rsscript_pending_{name}) {{\n"
-            ));
-            out.push_str(&format!(
-                "{pad}                    __rsscript_result_{name} = Some(__rsscript_value);\n"
-            ));
-            out.push_str(&format!("{pad}                }}\n"));
-            out.push_str(&format!("{pad}            }}\n"));
-            out.push_str(&format!("{pad}        }}\n"));
-        }
-        out.push_str(&format!(
-            "{pad}        if __rsscript_result_{target}.is_some() {{ break; }}\n"
-        ));
-        out.push_str(&format!("{pad}        {executor}.yield_once();\n"));
-        out.push_str(&format!(
-            "{pad}        let __rsscript_woken_keys = {executor}.drain_ready_wake_keys();\n"
-        ));
-        out.push_str(&format!(
-            "{pad}        __rsscript_ready_keys = if __rsscript_woken_keys.is_empty() {{ None }} else {{ Some(__rsscript_woken_keys) }};\n"
-        ));
-        out.push_str(&format!("{pad}    }}\n"));
-        out.push_str(&format!("{pad}}}\n"));
-    }
-
-    fn emit_task_group_drain(
-        &self,
-        out: &mut String,
-        pad: &str,
-        executor: &str,
-        active: &[String],
-    ) {
-        out.push_str(&format!(
-            "{pad}let mut __rsscript_ready_keys: Option<Vec<usize>> = None;\n"
-        ));
-        out.push_str(&format!("{pad}loop {{\n"));
-        out.push_str(&format!("{pad}    let mut __rsscript_all_done = true;\n"));
-        for name in active {
-            out.push_str(&format!(
-                "{pad}    if __rsscript_result_{name}.is_none() {{\n"
-            ));
-            out.push_str(&format!("{pad}        __rsscript_all_done = false;\n"));
-            out.push_str(&format!(
-                "{pad}        let __rsscript_should_poll = __rsscript_ready_keys.as_ref().map_or(true, |__rsscript_keys| __rsscript_keys.contains(&__rsscript_key_{name}));\n"
-            ));
-            out.push_str(&format!("{pad}        if __rsscript_should_poll {{\n"));
-            out.push_str(&format!(
-                "{pad}            if let rsscript_runtime::AsyncPoll::Ready(__rsscript_value) = {executor}.poll_once_keyed(__rsscript_key_{name}, &mut __rsscript_pending_{name}) {{\n"
-            ));
-            out.push_str(&format!(
-                "{pad}                __rsscript_result_{name} = Some(__rsscript_value);\n"
-            ));
-            out.push_str(&format!("{pad}            }}\n"));
-            out.push_str(&format!("{pad}        }}\n"));
-            out.push_str(&format!("{pad}    }}\n"));
-        }
-        out.push_str(&format!("{pad}    if __rsscript_all_done {{ break; }}\n"));
-        out.push_str(&format!("{pad}    {executor}.yield_once();\n"));
-        out.push_str(&format!(
-            "{pad}    let __rsscript_woken_keys = {executor}.drain_ready_wake_keys();\n"
-        ));
-        out.push_str(&format!(
-            "{pad}    __rsscript_ready_keys = if __rsscript_woken_keys.is_empty() {{ None }} else {{ Some(__rsscript_woken_keys) }};\n"
-        ));
-        out.push_str(&format!("{pad}}}\n"));
-    }
-
-    fn lower_select_stmt(
-        &mut self,
-        stmt: &crate::syntax::ast::SelectStmt,
-        out: &mut String,
-        indent: usize,
-    ) {
-        let pad = "    ".repeat(indent);
-        let inner_pad = "    ".repeat(indent + 1);
-        let executor = self
-            .current_async_executor
-            .clone()
-            .unwrap_or_else(|| "__rsscript_async_executor".to_string());
-        let prefix = format!("__rsscript_select_{}_{}", stmt.span.line, stmt.span.column);
-
-        out.push_str(&format!("{pad}{{\n"));
-        for (index, arm) in stmt.arms.iter().enumerate() {
-            let pending = async_await_inner(&arm.operation)
-                .map(|inner| self.lower_expr(inner))
-                .unwrap_or_else(|| unreachable_lowering("select arm operation", &arm.span));
-            out.push_str(&format!(
-                "{inner_pad}let mut {prefix}_pending_{index} = {pending};\n"
-            ));
-            out.push_str(&format!(
-                "{inner_pad}let mut {prefix}_result_{index} = None;\n"
-            ));
-        }
-
-        out.push_str(&format!("{inner_pad}let {prefix}_arm = loop {{\n"));
-        for index in 0..stmt.arms.len() {
-            out.push_str(&format!(
-                "{inner_pad}    if {prefix}_result_{index}.is_none() {{\n"
-            ));
-            out.push_str(&format!(
-                "{inner_pad}        if let rsscript_runtime::AsyncPoll::Ready(__rsscript_value) = {executor}.poll_once(&mut {prefix}_pending_{index}) {{\n"
-            ));
-            out.push_str(&format!(
-                "{inner_pad}            {prefix}_result_{index} = Some(__rsscript_value);\n"
-            ));
-            out.push_str(&format!("{inner_pad}            break {index};\n"));
-            out.push_str(&format!("{inner_pad}        }}\n"));
-            out.push_str(&format!("{inner_pad}    }}\n"));
-        }
-        out.push_str(&format!("{inner_pad}    {executor}.yield_once();\n"));
-        out.push_str(&format!("{inner_pad}}};\n"));
-
-        out.push_str(&format!("{inner_pad}match {prefix}_arm {{\n"));
-        for (index, arm) in stmt.arms.iter().enumerate() {
-            out.push_str(&format!("{inner_pad}    {index} => {{\n"));
-            let take_result =
-                format!("{prefix}_result_{index}.take().expect(\"select arm completed\")");
-            if arm.binding == "_" {
-                if async_await_is_try(&arm.operation) {
-                    out.push_str(&format!("{inner_pad}        {take_result}?;\n"));
-                } else {
-                    out.push_str(&format!("{inner_pad}        let _ = {take_result};\n"));
-                }
-            } else {
-                let try_suffix = if async_await_is_try(&arm.operation) {
-                    "?"
-                } else {
-                    ""
-                };
-                out.push_str(&format!(
-                    "{inner_pad}        let {} = {take_result}{try_suffix};\n",
-                    rust_ident(&arm.binding)
-                ));
-            }
-            self.lower_block(&arm.body, out, indent + 2);
-            out.push_str(&format!("{inner_pad}    }}\n"));
-        }
-        out.push_str(&format!("{inner_pad}    _ => unreachable!(),\n"));
-        out.push_str(&format!("{inner_pad}}}\n"));
-        out.push_str(&format!("{pad}}}\n"));
-    }
-
-    fn extract_task_group_await<'b>(
-        &self,
-        expr: &'b Expr,
-        async_let_names: &[String],
-    ) -> Option<String> {
-        match expr {
-            Expr::Await { value, .. } => match value.as_ref() {
-                Expr::Ident(name, _) if async_let_names.contains(name) => Some(rust_ident(name)),
-                Expr::Effect { value, .. } => {
-                    // await read x / await take x
-                    if let Expr::Ident(name, _) = value.as_ref() {
-                        if async_let_names.contains(name) {
-                            return Some(rust_ident(name));
-                        }
-                    }
-                    None
-                }
-                _ => None,
-            },
-            Expr::Try { value, .. } => self.extract_task_group_await(value, async_let_names),
-            _ => None,
-        }
-    }
-
-    /// Lower a linear `async fn` body into a `pending_try`/`pending_then`/
-    /// `pending_ready` chain — a single `impl Pending<Ret>` expression. Each
-    /// `await op()?` becomes `pending_try(op(), move |x| <rest>)`; non-await
-    /// statements run inside the continuation block; `return e` is `pending_ready(e)`.
-    fn lower_async_chain(&mut self, statements: &[Stmt]) -> String {
-        let Some((head, tail)) = statements.split_first() else {
-            return "rsscript_runtime::pending_ready(())".to_string();
-        };
-        match head {
-            // `return await op` / `return await op?`.
-            Stmt::Return(stmt)
-                if stmt
-                    .value
-                    .as_ref()
-                    .and_then(|value| async_await_inner(value))
-                    .is_some() =>
-            {
-                let value = stmt.value.as_ref().expect("return value");
-                let pending = self.lower_expr(async_await_inner(value).expect("await inner"));
-                if async_await_is_try(value) {
-                    // `return await op?`: drive op (a `Result`-pending), short-circuit
-                    // on `Err`, and re-wrap the `Ok` value as the function's pending so
-                    // the `?` propagation is preserved.
-                    format!(
-                        "rsscript_runtime::pending_try({pending}, move |__rsscript_return_value| {{ rsscript_runtime::pending_ready(Ok(__rsscript_return_value)) }})"
-                    )
-                } else {
-                    // `return await op`: the function's pending IS op's pending.
-                    pending
-                }
-            }
-            Stmt::Return(stmt) => {
-                // Reuse the sync return machinery so a `read` Copy param is deref'd
-                // and a bare value is `Ok`-wrapped to match the declared return type
-                // (the pending must resolve to the function's return type, not `&T`).
-                let value = stmt
-                    .value
-                    .as_ref()
-                    .map(|value| self.lower_return_expr(value))
-                    .unwrap_or_else(|| "()".to_string());
-                format!("rsscript_runtime::pending_ready({value})")
-            }
-            Stmt::Let(stmt)
-                if stmt
-                    .value
-                    .as_ref()
-                    .and_then(|value| async_await_inner(value))
-                    .is_some() =>
-            {
-                let value = stmt.value.as_ref().expect("await let has a value");
-                let combinator = if async_await_is_try(value) {
-                    "pending_try"
-                } else {
-                    "pending_then"
-                };
-                let pending = self.lower_expr(async_await_inner(value).expect("await inner"));
-                let bind = closure_binding(&stmt.name, stmt.is_mut);
-                let binding_ty = awaited_binding_type(
-                    self.infer_expr_type(async_await_inner(value).expect("await inner")),
-                    async_await_is_try(value),
-                );
-                let previous_binding_ty = binding_ty
-                    .clone()
-                    .and_then(|ty| self.value_types.insert(stmt.name.clone(), ty));
-                let rest = self.lower_async_chain(tail);
-                if binding_ty.is_some() {
-                    if let Some(previous) = previous_binding_ty {
-                        self.value_types.insert(stmt.name.clone(), previous);
-                    } else {
-                        self.value_types.remove(&stmt.name);
-                    }
-                }
-                format!("rsscript_runtime::{combinator}({pending}, move |{bind}| {{ {rest} }})")
-            }
-            Stmt::Expr(expr) if async_await_inner(expr).is_some() => {
-                let combinator = if async_await_is_try(expr) {
-                    "pending_try"
-                } else {
-                    "pending_then"
-                };
-                let pending = self.lower_expr(async_await_inner(expr).expect("await inner"));
-                let rest = self.lower_async_chain(tail);
-                format!(
-                    "rsscript_runtime::{combinator}({pending}, move |_rsscript_unit| {{ {rest} }})"
-                )
-            }
-            Stmt::Let(stmt)
-                if stmt.value.as_ref().is_some_and(|value| {
-                    async_await_inner(value).is_none() && is_try_wrapped(value)
-                }) =>
-            {
-                let value = stmt.value.as_ref().expect("try let has a value");
-                let Expr::Try { value: inner, .. } = value else {
-                    unreachable!("is_try_wrapped matched a non-try expression")
-                };
-                let result_ty = self.infer_expr_type(inner);
-                let binding_ty = result_ty.as_ref().and_then(result_ok_type_ref);
-                let pending = if let (Some(ok_ty), Some(error_ty)) =
-                    (binding_ty.as_ref(), self.current_result_error_type_rust())
-                {
-                    let ok_ty = self.lower_type_ref(ok_ty, ManagedPosition::Return);
-                    let inner = self.lower_expr(inner);
-                    format!(
-                        "rsscript_runtime::pending_ready((|| -> Result<{ok_ty}, {error_ty}> {{ Ok({inner}?) }})())"
-                    )
-                } else {
-                    format!(
-                        "rsscript_runtime::pending_ready({})",
-                        self.lower_expr(inner)
-                    )
-                };
-                let bind = closure_binding(&stmt.name, stmt.is_mut);
-                let previous_binding_ty = binding_ty
-                    .clone()
-                    .and_then(|ty| self.value_types.insert(stmt.name.clone(), ty));
-                let rest = self.lower_async_chain(tail);
-                if binding_ty.is_some() {
-                    if let Some(previous) = previous_binding_ty {
-                        self.value_types.insert(stmt.name.clone(), previous);
-                    } else {
-                        self.value_types.remove(&stmt.name);
-                    }
-                }
-                format!("rsscript_runtime::pending_try({pending}, move |{bind}| {{ {rest} }})")
-            }
-            Stmt::Expr(expr) if is_try_wrapped(expr) => {
-                let Expr::Try { value: inner, .. } = expr else {
-                    unreachable!("is_try_wrapped matched a non-try expression")
-                };
-                let pending = if let Some(error_ty) = self.current_result_error_type_rust() {
-                    let inner = self.lower_expr(inner);
-                    format!(
-                        "rsscript_runtime::pending_ready((|| -> Result<(), {error_ty}> {{ {inner}?; Ok(()) }})())"
-                    )
-                } else {
-                    format!(
-                        "rsscript_runtime::pending_ready({})",
-                        self.lower_expr(inner)
-                    )
-                };
-                let rest = self.lower_async_chain(tail);
-                format!(
-                    "rsscript_runtime::pending_try({pending}, move |_rsscript_unit| {{ {rest} }})"
-                )
-            }
-            Stmt::TaskGroup(stmt) => {
-                let boundary = self.lower_async_task_group_boundary(&stmt.body);
-                let rest = self.lower_async_chain(tail);
-                if boundary.returns_result {
-                    format!(
-                        "rsscript_runtime::pending_try({pending}, move |_rsscript_unit| {{ {rest} }})",
-                        pending = boundary.pending
-                    )
-                } else {
-                    format!(
-                        "rsscript_runtime::pending_then({pending}, move |_rsscript_unit| {{ {rest} }})",
-                        pending = boundary.pending
-                    )
-                }
-            }
-            Stmt::Select(_) => {
-                let boundary = self.lower_async_statement_boundary(head);
-                let rest = self.lower_async_chain(tail);
-                if boundary.returns_result {
-                    format!(
-                        "rsscript_runtime::pending_try({pending}, move |_rsscript_unit| {{ {rest} }})",
-                        pending = boundary.pending
-                    )
-                } else {
-                    format!(
-                        "rsscript_runtime::pending_then({pending}, move |_rsscript_unit| {{ {rest} }})",
-                        pending = boundary.pending
-                    )
-                }
-            }
-            Stmt::For(stmt) if stmt.is_async => {
-                let boundary = self.lower_async_statement_boundary(head);
-                let rest = self.lower_async_chain(tail);
-                if boundary.returns_result {
-                    format!(
-                        "rsscript_runtime::pending_try({pending}, move |_rsscript_unit| {{ {rest} }})",
-                        pending = boundary.pending
-                    )
-                } else {
-                    format!(
-                        "rsscript_runtime::pending_then({pending}, move |_rsscript_unit| {{ {rest} }})",
-                        pending = boundary.pending
-                    )
-                }
-            }
-            Stmt::Loop(stmt) if stmt_contains_await(head) => {
-                let boundary = self.lower_async_loop_boundary(stmt);
-                let rest = self.lower_async_chain(tail);
-                if boundary.returns_result {
-                    format!(
-                        "rsscript_runtime::pending_try({pending}, move |_rsscript_unit| {{ {rest} }})",
-                        pending = boundary.pending
-                    )
-                } else {
-                    format!(
-                        "rsscript_runtime::pending_then({pending}, move |_rsscript_unit| {{ {rest} }})",
-                        pending = boundary.pending
-                    )
-                }
-            }
-            Stmt::If(_) | Stmt::Match(_) | Stmt::With(_) if stmt_contains_await(head) => {
-                let boundary = self.lower_async_statement_boundary(head);
-                let rest = self.lower_async_chain(tail);
-                if boundary.returns_result {
-                    format!(
-                        "rsscript_runtime::pending_try({pending}, move |_rsscript_unit| {{ {rest} }})",
-                        pending = boundary.pending
-                    )
-                } else {
-                    format!(
-                        "rsscript_runtime::pending_then({pending}, move |_rsscript_unit| {{ {rest} }})",
-                        pending = boundary.pending
-                    )
-                }
-            }
-            other if stmt_contains_try(other) => {
-                let boundary = self.lower_async_statement_boundary(other);
-                let rest = self.lower_async_chain(tail);
-                if boundary.returns_result {
-                    format!(
-                        "rsscript_runtime::pending_try({pending}, move |_rsscript_unit| {{ {rest} }})",
-                        pending = boundary.pending
-                    )
-                } else {
-                    format!(
-                        "rsscript_runtime::pending_then({pending}, move |_rsscript_unit| {{ {rest} }})",
-                        pending = boundary.pending
-                    )
-                }
-            }
-            other => {
-                let mut statement_out = String::new();
-                self.lower_stmt(other, &mut statement_out, 0);
-                let rest = self.lower_async_chain(tail);
-                format!("{{ {} {rest} }}", statement_out.trim())
-            }
-        }
-    }
-
-    fn lower_async_statement_boundary(&mut self, statement: &Stmt) -> AsyncTaskGroupBoundary {
-        let mut body = String::new();
-        let previous_executor = self
-            .current_async_executor
-            .replace("__rsscript_async_executor".to_string());
-        body.push_str("{\n");
-        body.push_str("let mut __rsscript_async_executor = rsscript_runtime::Executor::new();\n");
-        self.lower_stmt(statement, &mut body, 0);
-        let returns_result = if let Some(error_ty) = self.current_result_error_type_rust() {
-            body.push_str(&format!("Ok::<(), {error_ty}>(())\n"));
-            true
-        } else {
-            body.push_str("()\n");
-            false
-        };
-        body.push('}');
-        self.current_async_executor = previous_executor;
-        AsyncTaskGroupBoundary {
-            pending: format!("rsscript_runtime::pending_defer(move || {body})"),
-            returns_result,
-        }
-    }
-
-    fn lower_async_task_group_boundary(&mut self, block: &Block) -> AsyncTaskGroupBoundary {
-        let mut body = String::new();
-        let previous_executor = self
-            .current_async_executor
-            .replace("__rsscript_async_executor".to_string());
-        body.push_str("{\n");
-        body.push_str("let mut __rsscript_async_executor = rsscript_runtime::Executor::new();\n");
-        body.push_str("// task_group: structured concurrency scope\n");
-        body.push_str("{\n");
-        self.lower_task_group_block(block, &mut body, 1);
-        body.push_str("}\n");
-        let returns_result = if let Some(error_ty) = self.current_result_error_type_rust() {
-            body.push_str(&format!("Ok::<(), {error_ty}>(())\n"));
-            true
-        } else {
-            body.push_str("()\n");
-            false
-        };
-        body.push('}');
-        self.current_async_executor = previous_executor;
-        AsyncTaskGroupBoundary {
-            pending: format!("rsscript_runtime::pending_defer(move || {body})"),
-            returns_result,
-        }
-    }
-
-    fn lower_async_loop_boundary(
-        &mut self,
-        stmt: &crate::syntax::ast::LoopStmt,
-    ) -> AsyncTaskGroupBoundary {
-        let Some(error_ty) = self.current_result_error_type_rust() else {
-            return self.lower_async_statement_boundary(&Stmt::Loop(stmt.clone()));
-        };
-        if let Some(boundary) = self.lower_async_poll_loop_boundary(stmt, &error_ty) {
-            return boundary;
-        }
-        let condition = stmt
-            .condition
-            .as_ref()
-            .map(|condition| self.lower_expr(condition))
-            .unwrap_or_else(|| "true".to_string());
-        let body = self.lower_async_loop_body_chain(&stmt.body.statements, &error_ty);
-        AsyncTaskGroupBoundary {
-            pending: format!(
-                "rsscript_runtime::pending_loop_result::<{error_ty}, _>(move || {{
-                    if !({condition}) {{
-                        Box::new(rsscript_runtime::pending_ready(Ok::<rsscript_runtime::LoopControl, {error_ty}>(rsscript_runtime::LoopControl::Break))) as Box<dyn rsscript_runtime::Pending<Result<rsscript_runtime::LoopControl, {error_ty}>> + '_>
-                    }} else {{
-                        Box::new({body}) as Box<dyn rsscript_runtime::Pending<Result<rsscript_runtime::LoopControl, {error_ty}>> + '_>
-                    }}
-                }})"
-            ),
-            returns_result: true,
-        }
-    }
-
-    fn lower_async_poll_loop_boundary(
-        &mut self,
-        stmt: &crate::syntax::ast::LoopStmt,
-        error_ty: &str,
-    ) -> Option<AsyncTaskGroupBoundary> {
-        let (before_await, await_stmt, rest) =
-            split_loop_body_at_first_await(&stmt.body.statements)?;
-        if rest.iter().any(stmt_contains_await) {
-            return None;
-        }
-        let condition = stmt
-            .condition
-            .as_ref()
-            .map(|condition| self.lower_expr(condition))
-            .unwrap_or_else(|| "true".to_string());
-        let prefix = format!("__rsscript_loop_{}_{}", stmt.span.line, stmt.span.column);
-        let (pending_expr, binding, is_try) = match await_stmt {
-            Stmt::Let(let_stmt) => {
-                let value = let_stmt.value.as_ref()?;
-                let inner = async_await_inner(value)?;
-                let binding_ty =
-                    awaited_binding_type(self.infer_expr_type(inner), async_await_is_try(value));
-                (
-                    self.lower_expr(inner),
-                    Some((
-                        let_stmt.name.clone(),
-                        rust_ident(&let_stmt.name),
-                        binding_ty,
-                    )),
-                    async_await_is_try(value),
-                )
-            }
-            Stmt::Expr(expr) => {
-                let inner = async_await_inner(expr)?;
-                (self.lower_expr(inner), None, async_await_is_try(expr))
-            }
-            _ => return None,
-        };
-        let mut before_body = String::new();
-        for statement in before_await {
-            self.lower_stmt(statement, &mut before_body, 7);
-        }
-        let previous_binding_ty = if let Some((name, _, Some(ty))) = binding.as_ref() {
-            self.value_types.insert(name.clone(), ty.clone())
-        } else {
-            None
-        };
-        let mut rest_body = String::new();
-        for statement in rest {
-            self.lower_stmt(statement, &mut rest_body, 4);
-        }
-        if let Some((name, _, Some(_))) = binding.as_ref() {
-            if let Some(previous) = previous_binding_ty {
-                self.value_types.insert(name.clone(), previous);
-            } else {
-                self.value_types.remove(name);
-            }
-        }
-        let value_bind = match (binding, is_try) {
-            (Some((_, binding, _)), true) => format!(
-                "let {binding} = match {prefix}_value {{
-                    Ok(__rsscript_ok) => __rsscript_ok,
-                    Err(__rsscript_error) => return rsscript_runtime::AsyncPoll::Ready(Err(__rsscript_error)),
-                }};"
-            ),
-            (Some((_, binding, _)), false) => format!("let {binding} = {prefix}_value;"),
-            (None, true) => format!(
-                "if let Err(__rsscript_error) = {prefix}_value {{
-                    return rsscript_runtime::AsyncPoll::Ready(Err(__rsscript_error));
-                }}"
-            ),
-            (None, false) => format!("let _ = {prefix}_value;"),
-        };
-        let pending = format!(
-            "{{
-                let mut {prefix}_pending = None;
-                rsscript_runtime::pending_poll_fn(move |{prefix}_cx| {{
-                    loop {{
-                        if !({condition}) {{
-                            return rsscript_runtime::AsyncPoll::Ready(Ok::<(), {error_ty}>(()));
-                        }}
-                        if {prefix}_pending.is_none() {{
-{before_body}
-                            {prefix}_pending = Some({pending_expr});
-                        }}
-                        match rsscript_runtime::Pending::poll(
-                            {prefix}_pending.as_mut().expect(\"loop await pending exists\"),
-                            {prefix}_cx,
-                        ) {{
-                            rsscript_runtime::AsyncPoll::Ready({prefix}_value) => {{
-                                {prefix}_pending = None;
-                                {value_bind}
-{rest_body}
-                            }}
-                            rsscript_runtime::AsyncPoll::Pending => {{
-                                return rsscript_runtime::AsyncPoll::Pending;
-                            }}
-                        }}
-                    }}
-                }})
-            }}"
-        );
-        Some(AsyncTaskGroupBoundary {
-            pending,
-            returns_result: true,
-        })
-    }
-
-    fn lower_async_loop_body_chain(&mut self, statements: &[Stmt], error_ty: &str) -> String {
-        let Some((head, tail)) = statements.split_first() else {
-            return format!(
-                "rsscript_runtime::pending_ready(Ok::<rsscript_runtime::LoopControl, {error_ty}>(rsscript_runtime::LoopControl::Continue))"
-            );
-        };
-        match head {
-            Stmt::Break(_) => format!(
-                "rsscript_runtime::pending_ready(Ok::<rsscript_runtime::LoopControl, {error_ty}>(rsscript_runtime::LoopControl::Break))"
-            ),
-            Stmt::Continue(_) => format!(
-                "rsscript_runtime::pending_ready(Ok::<rsscript_runtime::LoopControl, {error_ty}>(rsscript_runtime::LoopControl::Continue))"
-            ),
-            Stmt::Let(stmt)
-                if stmt
-                    .value
-                    .as_ref()
-                    .and_then(|value| async_await_inner(value))
-                    .is_some() =>
-            {
-                let value = stmt.value.as_ref().expect("await let has a value");
-                let combinator = if async_await_is_try(value) {
-                    "pending_try"
-                } else {
-                    "pending_then"
-                };
-                let pending = self.lower_expr(async_await_inner(value).expect("await inner"));
-                let bind = closure_binding(&stmt.name, stmt.is_mut);
-                let binding_ty = awaited_binding_type(
-                    self.infer_expr_type(async_await_inner(value).expect("await inner")),
-                    async_await_is_try(value),
-                );
-                let previous_binding_ty = binding_ty
-                    .clone()
-                    .and_then(|ty| self.value_types.insert(stmt.name.clone(), ty));
-                let rest = self.lower_async_loop_body_chain(tail, error_ty);
-                if binding_ty.is_some() {
-                    if let Some(previous) = previous_binding_ty {
-                        self.value_types.insert(stmt.name.clone(), previous);
-                    } else {
-                        self.value_types.remove(&stmt.name);
-                    }
-                }
-                format!("rsscript_runtime::{combinator}({pending}, |{bind}| {{ {rest} }})")
-            }
-            Stmt::Expr(expr) if async_await_inner(expr).is_some() => {
-                let combinator = if async_await_is_try(expr) {
-                    "pending_try"
-                } else {
-                    "pending_then"
-                };
-                let pending = self.lower_expr(async_await_inner(expr).expect("await inner"));
-                let rest = self.lower_async_loop_body_chain(tail, error_ty);
-                format!("rsscript_runtime::{combinator}({pending}, |_rsscript_unit| {{ {rest} }})")
-            }
-            other => {
-                let mut statement_out = String::new();
-                self.lower_stmt(other, &mut statement_out, 0);
-                let rest = self.lower_async_loop_body_chain(tail, error_ty);
-                format!("{{ {} {rest} }}", statement_out.trim())
-            }
-        }
-    }
-
-    fn current_result_error_type_rust(&self) -> Option<String> {
-        let ty = self.current_return_type.as_ref()?;
-        if ty.name == "Result" && ty.args.len() == 2 {
-            Some(self.lower_type_ref(&ty.args[1], ManagedPosition::Return))
-        } else {
-            None
-        }
-    }
-
-    fn lower_stmt(&mut self, statement: &Stmt, out: &mut String, indent: usize) {
+    pub(super) fn lower_stmt(&mut self, statement: &Stmt, out: &mut String, indent: usize) {
         let pad = "    ".repeat(indent);
         let generated_start = out.len();
         let marker = self.record_source_marker(out, indent, "statement", stmt_span(statement));
@@ -1842,7 +365,7 @@ impl<'a> RustLowerer<'a> {
         );
     }
 
-    fn lower_let_stmt(&mut self, stmt: &LetStmt, out: &mut String, pad: &str) {
+    pub(super) fn lower_let_stmt(&mut self, stmt: &LetStmt, out: &mut String, pad: &str) {
         let mutable = if self.mutated_bindings.contains(&stmt.name)
             || stmt
                 .value
@@ -1898,7 +421,7 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    fn lower_for_stmt(&mut self, stmt: &ForStmt, out: &mut String, pad: &str, indent: usize) {
+    pub(super) fn lower_for_stmt(&mut self, stmt: &ForStmt, out: &mut String, pad: &str, indent: usize) {
         let iterable = self.lower_expr(&stmt.iterable);
         let previous_type = self.value_types.get(&stmt.binding).cloned();
         let previous_managed = self.managed_bindings.contains(&stmt.binding);
@@ -1983,7 +506,7 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    fn lower_match_stmt(&mut self, stmt: &MatchStmt, out: &mut String, pad: &str, indent: usize) {
+    pub(super) fn lower_match_stmt(&mut self, stmt: &MatchStmt, out: &mut String, pad: &str, indent: usize) {
         let scrutinee_type = self.infer_expr_type(&stmt.value);
         let mut scrutinee = self.lower_match_scrutinee_expr(&stmt.value, scrutinee_type.as_ref());
         let by_ref = self.match_scrutinee_by_ref(&stmt.value);
@@ -2053,7 +576,7 @@ impl<'a> RustLowerer<'a> {
         out.push_str(&format!("{pad}}}\n"));
     }
 
-    fn record_source_marker(
+    pub(super) fn record_source_marker(
         &mut self,
         out: &mut String,
         indent: usize,
@@ -2065,7 +588,7 @@ impl<'a> RustLowerer<'a> {
         entry
     }
 
-    fn widen_generated_span(&mut self, generated: &Span, line_count: usize) {
+    pub(super) fn widen_generated_span(&mut self, generated: &Span, line_count: usize) {
         for entry in &mut self.source_map {
             if entry.generated.file == generated.file
                 && entry.generated.line == generated.line
@@ -2076,7 +599,7 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    fn record_statement_source_map(&mut self, statement: &Stmt, generated: &Span) {
+    pub(super) fn record_statement_source_map(&mut self, statement: &Stmt, generated: &Span) {
         match statement {
             Stmt::Let(stmt) => {
                 if let Some(value) = &stmt.value {
@@ -2150,7 +673,7 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    fn record_block_source_map(&mut self, block: &Block, generated: &Span) {
+    pub(super) fn record_block_source_map(&mut self, block: &Block, generated: &Span) {
         for statement in &block.statements {
             self.source_map.push(RustSourceMapEntry {
                 kind: "statement".to_string(),
@@ -2162,7 +685,7 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    fn record_expr_source_map(&mut self, expr: &Expr, generated: &Span) {
+    pub(super) fn record_expr_source_map(&mut self, expr: &Expr, generated: &Span) {
         match expr {
             Expr::Binary {
                 left, right, span, ..
@@ -2342,12 +865,12 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    fn is_native_boundary_call(&self, callee: &Callee) -> bool {
+    pub(super) fn is_native_boundary_call(&self, callee: &Callee) -> bool {
         let key = native_boundary_callee_key(callee);
         self.native_boundary_callees.contains(&key) || self.native_bindings.contains_key(&key)
     }
 
-    fn await_call_lowers_to_pending(&self, callee: &Callee) -> bool {
+    pub(super) fn await_call_lowers_to_pending(&self, callee: &Callee) -> bool {
         let key = native_boundary_callee_key(callee);
         is_async_runtime_intrinsic_callee(callee)
             || (self.async_native_boundary_callees.contains(&key)
@@ -2681,7 +1204,7 @@ impl<'a> RustLowerer<'a> {
     }
 
     /// `json_decode`/`json_encode` codec calls.
-    fn lower_call_json_codec(
+    pub(super) fn lower_call_json_codec(
         &mut self,
         callee: &Callee,
         args: &[CallArg],
@@ -2702,7 +1225,7 @@ impl<'a> RustLowerer<'a> {
 
     /// `Task.cancellation_token()` resolves to the enclosing task_group's token,
     /// or a never-cancelled token outside one.
-    fn lower_call_task_cancellation_token(&mut self, callee: &Callee) -> Option<String> {
+    pub(super) fn lower_call_task_cancellation_token(&mut self, callee: &Callee) -> Option<String> {
         if let Callee::Qualified { namespace, name } = callee
             && type_root_name(namespace) == "Task"
             && type_root_name(name) == "cancellation_token"
@@ -2719,7 +1242,7 @@ impl<'a> RustLowerer<'a> {
     /// sum-type payload-variant construction, Rust enum constructors, and
     /// runtime struct constructors. Returns `None` if the callee is not a name
     /// or names no known constructor (so the call falls through to dispatch).
-    fn lower_call_named_constructor(
+    pub(super) fn lower_call_named_constructor(
         &mut self,
         callee: &Callee,
         args: &[CallArg],
@@ -2900,7 +1423,7 @@ impl<'a> RustLowerer<'a> {
     /// type, pick the protocol/facade/native namespace, apply the receiver's
     /// borrow/effect, and emit the qualified call with the receiver as the first
     /// argument. Returns `None` if the callee is not a receiver call.
-    fn lower_call_receiver(&mut self, callee: &Callee, args: &[CallArg]) -> Option<String> {
+    pub(super) fn lower_call_receiver(&mut self, callee: &Callee, args: &[CallArg]) -> Option<String> {
         if let Callee::ReceiverCall {
             receiver,
             method,
@@ -3071,7 +1594,7 @@ impl<'a> RustLowerer<'a> {
     /// native-bound free functions, resource-pool constructors and borrows,
     /// capability-from-protocol, protocol callees, and the default
     /// `callee(args...)` form (including trailing defaulted-parameter fill-in).
-    fn lower_call_dispatch(&mut self, callee: &Callee, args: &[CallArg], span: &Span) -> String {
+    pub(super) fn lower_call_dispatch(&mut self, callee: &Callee, args: &[CallArg], span: &Span) -> String {
         if is_string_concat_callee(callee) {
             return lower_string_concat_call(self, args);
         }
@@ -3187,7 +1710,7 @@ impl<'a> RustLowerer<'a> {
         format!("{lowered_callee}({args})")
     }
 
-    fn lower_binary_operand(&mut self, expr: &Expr, parent: BinaryOp, is_right: bool) -> String {
+    pub(super) fn lower_binary_operand(&mut self, expr: &Expr, parent: BinaryOp, is_right: bool) -> String {
         let lowered = self.lower_expr(expr);
         let Expr::Binary { op: child, .. } = expr else {
             return lowered;
@@ -3206,7 +1729,7 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    fn lower_owned_expr(&mut self, expr: &Expr) -> String {
+    pub(super) fn lower_owned_expr(&mut self, expr: &Expr) -> String {
         match expr {
             Expr::Effect {
                 effect: DataEffect::Read,
@@ -3237,7 +1760,7 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    fn lower_expr_for_expected_type(&mut self, expr: &Expr, expected: &TypeRef) -> String {
+    pub(super) fn lower_expr_for_expected_type(&mut self, expr: &Expr, expected: &TypeRef) -> String {
         if expected.name == "Fn"
             && let Expr::Closure { params, body, .. } = expr
         {
@@ -3329,7 +1852,7 @@ impl<'a> RustLowerer<'a> {
         self.lower_expr(expr)
     }
 
-    fn lower_closure_for_expected_fn(
+    pub(super) fn lower_closure_for_expected_fn(
         &mut self,
         params: &[String],
         body: &Block,
@@ -3349,7 +1872,7 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    fn lower_closure_for_expected_fn_inner(
+    pub(super) fn lower_closure_for_expected_fn_inner(
         &mut self,
         params: &[String],
         body: &Block,
@@ -3425,39 +1948,7 @@ impl<'a> RustLowerer<'a> {
         out
     }
 
-    fn type_ref_is_concrete_for_annotation(&self, ty: &TypeRef) -> bool {
-        let root_is_concrete = matches!(
-            ty.name.as_str(),
-            "Unit"
-                | "Bool"
-                | "Int"
-                | "Float"
-                | "String"
-                | "JsonValue"
-                | "Path"
-                | "List"
-                | "Map"
-                | "Set"
-                | "Option"
-                | "Result"
-        ) || self.type_kinds.contains_key(&ty.name)
-            || capability_protocol_name(&ty.name).is_some();
-        root_is_concrete
-            && ty
-                .args
-                .iter()
-                .all(|arg| self.type_ref_is_concrete_for_annotation(arg))
-            && ty
-                .fn_params
-                .iter()
-                .all(|param| self.type_ref_is_concrete_for_annotation(param))
-            && ty
-                .fn_return
-                .as_deref()
-                .is_none_or(|return_ty| self.type_ref_is_concrete_for_annotation(return_ty))
-    }
-
-    fn lower_json_decode_call(&mut self, callee: &Callee, args: &[CallArg], span: &Span) -> String {
+    pub(super) fn lower_json_decode_call(&mut self, callee: &Callee, args: &[CallArg], span: &Span) -> String {
         let Some(arg) = args
             .iter()
             .find(|arg| {
@@ -3493,7 +1984,7 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    fn lower_decode_read_arg(&mut self, expr: &Expr) -> String {
+    pub(super) fn lower_decode_read_arg(&mut self, expr: &Expr) -> String {
         match expr {
             Expr::Effect {
                 effect: DataEffect::Read,
@@ -3504,23 +1995,7 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    fn lower_await_expr(&mut self, expr: &Expr) -> String {
-        match expr {
-            Expr::Try { value, .. } => format!("{}?", self.lower_await_expr(value)),
-            Expr::Effect { value, .. } => self.lower_await_expr(value),
-            Expr::Call { callee, .. } if self.await_call_lowers_to_pending(callee) => {
-                let pending = self.lower_expr(expr);
-                self.current_async_executor
-                    .as_ref()
-                    .map(|executor| format!("{executor}.run_pending({pending})"))
-                    .unwrap_or_else(|| format!("rsscript_runtime::run_pending({pending})"))
-            }
-            Expr::Call { .. } => self.lower_expr(expr),
-            _ => self.lower_expr(expr),
-        }
-    }
-
-    fn lower_assignment_target(&mut self, expr: &Expr) -> String {
+    pub(super) fn lower_assignment_target(&mut self, expr: &Expr) -> String {
         match expr {
             Expr::Field { base, name, span } => {
                 let base_is_managed_class = self
@@ -3553,82 +2028,7 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    fn expr_is_read_view(&self, expr: &Expr) -> bool {
-        match expr {
-            Expr::Ident(name, _) => self.read_view_bindings.contains(name),
-            Expr::Field { base, .. } => self.expr_is_read_view(base),
-            Expr::Effect { value, .. } | Expr::Try { value, .. } => self.expr_is_read_view(value),
-            _ => false,
-        }
-    }
-
-    fn lower_read_view_base_expr(&mut self, expr: &Expr) -> String {
-        match expr {
-            Expr::Ident(name, _) if self.read_view_bindings.contains(name) => {
-                rust_value_ident(name)
-            }
-            _ => self.lower_expr(expr),
-        }
-    }
-
-    fn lower_read_view_expr(&mut self, expr: &Expr) -> String {
-        match expr {
-            Expr::Ident(name, _) if self.read_view_bindings.contains(name) => {
-                rust_value_ident(name)
-            }
-            Expr::Field { base, name, .. } if self.expr_is_read_view(base) => {
-                format!(
-                    "&{}.{}",
-                    self.lower_read_view_base_expr(base),
-                    rust_ident(name)
-                )
-            }
-            _ => format!("&{}", self.lower_expr(expr)),
-        }
-    }
-
-    /// Apply a `read`/`mut`/`take` effect to a managed-handle argument: `read`
-    /// borrows through the handle's read view, `mut` takes `&mut` of the lowered
-    /// value, and `take` moves the lowered value.
-    fn lower_managed_handle_effect_arg(&mut self, effect: DataEffect, value: &Expr) -> String {
-        match effect {
-            DataEffect::Read => self.lower_managed_read_ref(value),
-            DataEffect::Mut => format!("&mut {}", self.lower_expr(value)),
-            DataEffect::Take => self.lower_expr(value),
-        }
-    }
-
-    /// Whether the callee is a first-class closure VALUE (a local binding whose
-    /// inferred type is an `owned Fn(...)`), rather than a function/constructor.
-    /// Such a call dispatches through the stored `Rc<dyn Fn>`.
-    fn callee_is_closure_value(&self, callee: &Callee) -> bool {
-        let Callee::Name(name) = callee else {
-            return false;
-        };
-        // A real function/constructor takes precedence over a same-named local.
-        if self.function_param_types.contains_key(type_root_name(name)) {
-            return false;
-        }
-        self.value_types
-            .get(name)
-            .is_some_and(|ty| ty.name == "Fn" && ty.is_owned)
-    }
-
-    /// The declared data effect of the `index`-th parameter of a first-class
-    /// closure value's stored `Fn` type, so a call site can pass the argument
-    /// with the matching Rust ABI (`read` -> `&`, `mut` -> `&mut`).
-    fn closure_value_param_effect(&self, callee: &Callee, index: usize) -> Option<DataEffect> {
-        let Callee::Name(name) = callee else {
-            return None;
-        };
-        let ty = self.value_types.get(name)?;
-        if ty.name != "Fn" {
-            return None;
-        }
-        ty.fn_param_effects.get(index).copied().flatten()
-    }
-
-    fn lower_call_arg_for_callee(
+    pub(super) fn lower_call_arg_for_callee(
         &mut self,
         callee: &Callee,
         arg: &CallArg,
@@ -3720,7 +2120,7 @@ impl<'a> RustLowerer<'a> {
         self.lower_expr(&arg.value)
     }
 
-    fn lower_call_arg_for_expected_type(&mut self, value: &Expr, expected: &TypeRef) -> String {
+    pub(super) fn lower_call_arg_for_expected_type(&mut self, value: &Expr, expected: &TypeRef) -> String {
         if expected.name == "Fn" {
             if let Expr::Closure { params, body, .. } = value {
                 // A closure passed to a function PARAMETER typed `owned Fn` (or
@@ -3813,7 +2213,7 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    fn expected_call_arg_type(
+    pub(super) fn expected_call_arg_type(
         &self,
         callee: &Callee,
         arg: &CallArg,
@@ -3831,7 +2231,7 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    fn expected_call_arg_effect(
+    pub(super) fn expected_call_arg_effect(
         &self,
         callee: &Callee,
         arg: &CallArg,
@@ -3849,7 +2249,7 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    fn lower_capability_from_call(&mut self, protocol: &str, args: &[CallArg]) -> String {
+    pub(super) fn lower_capability_from_call(&mut self, protocol: &str, args: &[CallArg]) -> String {
         let Some(value_arg) = args
             .iter()
             .find(|arg| arg.name.as_deref() == Some("value"))
@@ -3871,7 +2271,7 @@ impl<'a> RustLowerer<'a> {
         )
     }
 
-    fn infer_call_return_type(
+    pub(super) fn infer_call_return_type(
         &self,
         callee: &Callee,
         args: &[CallArg],
@@ -3902,7 +2302,7 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    fn collect_explicit_call_type_substitutions(
+    pub(super) fn collect_explicit_call_type_substitutions(
         &self,
         callee: &Callee,
         type_params: &[String],
@@ -3939,7 +2339,7 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    fn collect_arg_type_substitutions(
+    pub(super) fn collect_arg_type_substitutions(
         &self,
         callee: &Callee,
         args: &[CallArg],
@@ -3965,31 +2365,7 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    fn infer_call_arg_type(&self, expr: &Expr) -> Option<TypeRef> {
-        match expr {
-            Expr::Effect { value, .. }
-            | Expr::Manage { value, .. }
-            | Expr::Await { value, .. }
-            | Expr::Try { value, .. } => self.infer_call_arg_type(value),
-            _ => self.infer_expr_type(expr),
-        }
-    }
-
-    // Lower a `read`-effect managed-handle argument to a `&T`. A managed `let` local lowers to
-    // an owned `T`, so it needs a leading `&`. A managed `read`-PARAM already lowers to `&T`
-    // (its Rust param type is a reference), so adding another `&` produced `&&T` and an
-    // ill-typed push into an owned collection (RS1101/RS1102 E0308). Detect the already-ref
-    // case and don't double-borrow.
-    fn lower_managed_read_ref(&mut self, value: &Expr) -> String {
-        if let Expr::Ident(name, _) = value
-            && matches!(self.param_effects.get(name), Some(DataEffect::Read))
-        {
-            return self.lower_expr(value);
-        }
-        format!("&{}", self.lower_expr(value))
-    }
-
-    fn call_arg_is_retained(&self, callee: &Callee, arg: &CallArg, _index: usize) -> bool {
+    pub(super) fn call_arg_is_retained(&self, callee: &Callee, arg: &CallArg, _index: usize) -> bool {
         let Some(name) = arg.name.as_deref() else {
             return false;
         };
@@ -3998,11 +2374,11 @@ impl<'a> RustLowerer<'a> {
             .is_some_and(|retained| retained.contains(name))
     }
 
-    fn is_protocol_callee(&self, callee: &Callee) -> bool {
+    pub(super) fn is_protocol_callee(&self, callee: &Callee) -> bool {
         matches!(callee, Callee::Qualified { namespace, .. } if self.protocol_names.contains(namespace))
     }
 
-    fn lower_return_expr(&mut self, expr: &Expr) -> String {
+    pub(super) fn lower_return_expr(&mut self, expr: &Expr) -> String {
         let lowered = if let Some(expected) = self.current_return_type.clone() {
             self.lower_expr_for_expected_type(expr, &expected)
         } else {
@@ -4021,7 +2397,7 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    fn expr_returns_result(&self, expr: &Expr) -> bool {
+    pub(super) fn expr_returns_result(&self, expr: &Expr) -> bool {
         match expr {
             Expr::Call { callee, .. } => {
                 if let Callee::ReceiverCall {
@@ -4076,132 +2452,7 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    fn infer_expr_type(&self, expr: &Expr) -> Option<TypeRef> {
-        match expr {
-            Expr::Ident(name, span) if name == "true" || name == "false" => {
-                Some(simple_type_ref("Bool", span))
-            }
-            Expr::Ident(name, span) if name == "null" => Some(simple_type_ref("JsonLiteral", span)),
-            Expr::Ident(name, span) => self.value_types.get(name).cloned().or_else(|| {
-                self.find_sum_type_for_variant(name)
-                    .map(|sum_name| simple_type_ref(&sum_name, span))
-            }),
-            Expr::Number(value, span) => Some(simple_type_ref(
-                crate::hir::number_literal_type_name(value),
-                span,
-            )),
-            Expr::String(_, span) => Some(simple_type_ref("String", span)),
-            Expr::Binary { op, span, .. } => {
-                let name = match op {
-                    BinaryOp::Add
-                    | BinaryOp::Subtract
-                    | BinaryOp::Multiply
-                    | BinaryOp::Divide
-                    | BinaryOp::Modulo
-                    | BinaryOp::BitAnd
-                    | BinaryOp::BitOr
-                    | BinaryOp::BitXor
-                    | BinaryOp::ShiftLeft
-                    | BinaryOp::ShiftRight => "Int",
-                    BinaryOp::Equal
-                    | BinaryOp::NotEqual
-                    | BinaryOp::Less
-                    | BinaryOp::LessEqual
-                    | BinaryOp::Greater
-                    | BinaryOp::GreaterEqual
-                    | BinaryOp::LogicalAnd
-                    | BinaryOp::LogicalOr => "Bool",
-                };
-                Some(simple_type_ref(name, span))
-            }
-            Expr::Field { base, name, span } => {
-                let base_ty = self.infer_expr_type(base)?;
-                self.field_type(&base_ty.name, name).map(|ty| TypeRef {
-                    span: span.clone(),
-                    ..ty
-                })
-            }
-            Expr::Call {
-                callee: Callee::Name(name),
-                span,
-                ..
-            } if self.type_kinds.contains_key(name) => Some(simple_type_ref(name, span)),
-            Expr::Call {
-                callee: Callee::Qualified { namespace, name },
-                span,
-                ..
-            } if type_root_name(name) == "new" && type_arg_names(namespace).is_some() => {
-                Some(type_ref_from_display(namespace, span))
-            }
-            Expr::Call { callee, span, .. } if capability_from_protocol(callee).is_some() => {
-                let protocol = capability_from_protocol(callee)?;
-                Some(TypeRef {
-                    args: vec![simple_type_ref(protocol, span)],
-                    ..simple_type_ref("Capability", span)
-                })
-            }
-            Expr::Call {
-                callee, args, span, ..
-            } if let Callee::Name(name) = callee => self
-                .value_types
-                .get(name)
-                .and_then(fn_type_return)
-                .cloned()
-                .or_else(|| self.infer_call_return_type(callee, args, span)),
-            Expr::Call {
-                callee:
-                    Callee::ReceiverCall {
-                        receiver, method, ..
-                    },
-                args,
-                span,
-                ..
-            } => {
-                let receiver_type = self.infer_expr_type(receiver)?;
-                let namespace = self.receiver_call_namespace(&receiver_type, method);
-                self.infer_call_return_type(
-                    &Callee::Qualified {
-                        namespace,
-                        name: method.clone(),
-                    },
-                    args,
-                    span,
-                )
-            }
-            Expr::Call { callee, args, span } => self.infer_call_return_type(callee, args, span),
-            Expr::ObjectLiteral { span, .. } => Some(simple_type_ref("JsonLiteral", span)),
-            Expr::MapLiteral { span, .. } => Some(simple_type_ref("MapLiteral", span)),
-            Expr::ArrayLiteral { items, span } => {
-                let item_ty = items.first().and_then(|item| self.infer_expr_type(item));
-                Some(TypeRef {
-                    args: item_ty.into_iter().collect(),
-                    ..simple_type_ref("List", span)
-                })
-            }
-            Expr::Effect { value, .. } => self.infer_expr_type(value),
-            Expr::Manage { value, .. } => self.infer_expr_type(value),
-            Expr::Try { value, .. } => self
-                .infer_expr_type(value)
-                .and_then(|ty| result_ok_type_ref(&ty)),
-            Expr::Match { arms, .. } => arms.first().and_then(|arm| {
-                arm.body
-                    .statements
-                    .iter()
-                    .next_back()
-                    .and_then(|statement| match statement {
-                        Stmt::Return(stmt) => stmt
-                            .value
-                            .as_ref()
-                            .and_then(|value| self.infer_expr_type(value)),
-                        Stmt::Expr(value) => self.infer_expr_type(value),
-                        _ => None,
-                    })
-            }),
-            _ => None,
-        }
-    }
-
-    fn receiver_call_expected_arg_type(
+    pub(super) fn receiver_call_expected_arg_type(
         &self,
         namespace: &str,
         method: &str,
@@ -4347,7 +2598,7 @@ impl<'a> RustLowerer<'a> {
         None
     }
 
-    fn lower_receiver_positional_arg(&mut self, value: &Expr, expected: &TypeRef) -> String {
+    pub(super) fn lower_receiver_positional_arg(&mut self, value: &Expr, expected: &TypeRef) -> String {
         if expected.name == "String"
             && expected.args.is_empty()
             && let Expr::Ident(name, _) = value
@@ -4358,7 +2609,7 @@ impl<'a> RustLowerer<'a> {
         self.lower_expr_for_expected_type(value, expected)
     }
 
-    fn receiver_call_namespace(&self, receiver_type: &TypeRef, method: &str) -> String {
+    pub(super) fn receiver_call_namespace(&self, receiver_type: &TypeRef, method: &str) -> String {
         let receiver_type_name = type_ref_display_name(receiver_type);
         let receiver_type_root = type_root_name(&receiver_type_name).to_string();
         self.generic_protocol_bounds
@@ -4370,7 +2621,7 @@ impl<'a> RustLowerer<'a> {
             .unwrap_or(receiver_type_root)
     }
 
-    fn receiver_call_expected_arg_effect(
+    pub(super) fn receiver_call_expected_arg_effect(
         &self,
         namespace: &str,
         method: &str,
@@ -4384,118 +2635,6 @@ impl<'a> RustLowerer<'a> {
         self.function_param_effects.get(&key)?.get(arg_index + 1)?.1
     }
 
-    /// True when `expr` is exactly a `read`-effect parameter ident whose type
-    /// lowers to a plain `&T` borrow (managed / non-Copy) — i.e. binding it to a
-    /// `let mut` local would yield `&T` and break a later owned reassignment.
-    /// Excludes Copy scalars (passed by value), retained `Managed<T>` params
-    /// (which lower to `&Managed<T>`, not a plain `&T`), and `read`-view binds
-    /// (already cloned at use sites).
-    fn let_init_is_clonable_read_param_ref(&self, expr: &Expr) -> bool {
-        let Expr::Ident(name, _) = expr else {
-            return false;
-        };
-        if self.param_effects.get(name) != Some(&DataEffect::Read) {
-            return false;
-        }
-        if self.read_view_bindings.contains(name) {
-            return false;
-        }
-        let Some(ty) = self.value_types.get(name) else {
-            return false;
-        };
-        // Copy scalars are passed `read` by value, so the local already owns a `T`.
-        if is_copy_type_ref(ty) || Self::read_effect_lowers_by_value(ty) {
-            return false;
-        }
-        // Retained non-class params lower to `&Managed<T>`, not a plain `&T`;
-        // cloning that would clone the `Managed` handle, not produce an owned `T`.
-        if self.current_retained_params.contains(name)
-            && !self.is_class_type(ty)
-            && self.type_kinds.contains_key(&ty.name)
-        {
-            return false;
-        }
-        true
-    }
-
-    fn expr_lowers_to_managed_handle(&self, expr: &Expr) -> bool {
-        match expr {
-            Expr::Ident(name, _) => self.managed_bindings.contains(name),
-            Expr::Field { base, name, .. } => self
-                .infer_expr_type(base)
-                .is_some_and(|base_ty| self.is_runtime_handle_field(&base_ty.name, name)),
-            Expr::Manage { .. } => true,
-            Expr::Call {
-                callee: Callee::Name(name),
-                ..
-            } => self
-                .type_kinds
-                .get(name)
-                .is_some_and(|kind| *kind == TypeKind::Class),
-            Expr::Effect { value, .. } | Expr::Try { value, .. } => {
-                self.expr_lowers_to_managed_handle(value)
-            }
-            _ => false,
-        }
-    }
-
-    fn expr_lowers_to_managed_non_class_handle(&self, expr: &Expr) -> bool {
-        self.expr_lowers_to_managed_handle(expr)
-            && !self
-                .infer_expr_type(expr)
-                .is_some_and(|ty| self.is_class_type(&ty))
-    }
-
-    /// True when this operand is a `read`-bound parameter whose type is a
-    /// user-defined sum type. Such a parameter lowers to `&Op`, so comparing it
-    /// against a sum *value* (e.g. a bare variant literal) needs a deref.
-    fn is_enum_read_ref_operand(&self, expr: &Expr) -> bool {
-        let Expr::Ident(name, _) = expr else {
-            return false;
-        };
-        if self.param_effects.get(name) != Some(&DataEffect::Read) {
-            return false;
-        }
-        let Some(ty) = self.value_types.get(name) else {
-            return false;
-        };
-        ty.args.is_empty() && self.is_sum_type_name(&ty.name)
-    }
-
-    /// True when this operand is a sum *value* that lowers by value (not behind a
-    /// reference) — most commonly a bare variant literal such as `A`.
-    fn is_enum_value_operand(&self, expr: &Expr) -> bool {
-        match expr {
-            Expr::Ident(name, _) => self.find_sum_type_for_variant(name).is_some(),
-            _ => false,
-        }
-    }
-
-    fn is_sum_type_name(&self, name: &str) -> bool {
-        self.program
-            .items
-            .iter()
-            .any(|item| matches!(item, Item::SumType(sum) if sum.name == name))
-    }
-
-    // Whether a user-declared struct/sum lowers to a Rust type that derives `Clone`. Mirrors
-    // `compute_derive_attr`: an omitted derive list defaults to Debug+Clone (non-resource), and an
-    // explicit list is cloneable only if it includes `Clone`.
-    fn type_derives_clone(&self, name: &str) -> bool {
-        self.program.items.iter().any(|item| match item {
-            Item::Type(decl) => {
-                decl.name == name
-                    && (decl.derives.iter().any(|d| d == "Clone")
-                        || (decl.derives.is_empty() && decl.kind != TypeKind::Resource))
-            }
-            Item::SumType(sum) => {
-                sum.name == name
-                    && (sum.derives.is_empty() || sum.derives.iter().any(|d| d == "Clone"))
-            }
-            _ => false,
-        })
-    }
-
     /// Builtin value types whose `.clone()` the checker resolves (via the `Clone`
     /// protocol) and which lower to a `Clone` Rust type but have no dedicated clone
     /// runtime intrinsic — so `.clone()` must lower to Rust's `.clone()` directly.
@@ -4503,18 +2642,18 @@ impl<'a> RustLowerer<'a> {
     /// `String`/`Json` are excluded (they have their own clone intrinsics);
     /// `Deque`/`Set`/`Map`/resources are rejected at check time, so they never reach
     /// here.
-    fn is_builtin_clone_value(name: &str) -> bool {
+    pub(super) fn is_builtin_clone_value(name: &str) -> bool {
         matches!(name, "List" | "Bytes" | "Buffer")
     }
 
-    fn is_string_comparison_operand(&self, expr: &Expr) -> bool {
+    pub(super) fn is_string_comparison_operand(&self, expr: &Expr) -> bool {
         matches!(expr, Expr::String(_, _) | Expr::MultilineString(_, _))
             || self
                 .infer_expr_type(expr)
                 .is_some_and(|ty| ty.name == "String" && ty.args.is_empty())
     }
 
-    fn lower_string_comparison_operand(&mut self, expr: &Expr) -> String {
+    pub(super) fn lower_string_comparison_operand(&mut self, expr: &Expr) -> String {
         match expr {
             Expr::String(value, _) => format!("{:?}", decode_string_token(value)),
             Expr::MultilineString(value, _) => format!("{value:?}"),
@@ -4525,75 +2664,7 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    fn lower_json_value(&mut self, expr: &Expr) -> String {
-        match expr {
-            Expr::Effect { value, .. } | Expr::Manage { value, .. } => self.lower_json_value(value),
-            Expr::ObjectLiteral { fields, .. } => {
-                let fields = fields
-                    .iter()
-                    .map(|field| self.lower_json_field(&field.name, &field.value))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("rsscript_runtime::json_object(&vec![{fields}])")
-            }
-            Expr::ArrayLiteral { items, .. } => {
-                let items = items
-                    .iter()
-                    .map(|item| self.lower_json_array_item(item))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("rsscript_runtime::json_array(&vec![{items}])")
-            }
-            _ => self.lower_json_array_item(expr),
-        }
-    }
-
-    fn lower_map_literal(&mut self, expr: &Expr, expected: &TypeRef) -> String {
-        let Expr::MapLiteral { entries, .. } = expr else {
-            return self.lower_expr(expr);
-        };
-        let key_type = expected.args.first();
-        let value_type = expected.args.get(1);
-        let entries = entries
-            .iter()
-            .map(|entry| {
-                let key = if let Some(expected) = key_type {
-                    self.lower_retained_expr_for_expected_type(&entry.key, expected)
-                } else {
-                    self.lower_owned_expr(&entry.key)
-                };
-                let value = if let Some(expected) = value_type {
-                    self.lower_retained_expr_for_expected_type(&entry.value, expected)
-                } else {
-                    self.lower_owned_expr(&entry.value)
-                };
-                format!("({key}, {value})")
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!("rsscript_runtime::map_from_entries(vec![{entries}])")
-    }
-
-    fn lower_list_literal(&mut self, expr: &Expr, expected: &TypeRef) -> String {
-        let Expr::ArrayLiteral { items, .. } = expr else {
-            return self.lower_expr(expr);
-        };
-        let item_type = expected.args.first();
-        let items = items
-            .iter()
-            .map(|item| {
-                if let Some(expected) = item_type {
-                    self.lower_retained_expr_for_expected_type(item, expected)
-                } else {
-                    self.lower_owned_expr(item)
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!("vec![{items}]")
-    }
-
-    fn lower_retained_expr_for_expected_type(&mut self, expr: &Expr, expected: &TypeRef) -> String {
+    pub(super) fn lower_retained_expr_for_expected_type(&mut self, expr: &Expr, expected: &TypeRef) -> String {
         match expr {
             Expr::Ident(name, _) if !is_copy_type_ref(expected) => {
                 format!("{}.clone()", rust_value_ident(name))
@@ -4607,7 +2678,7 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    fn lower_owned_expr_for_expected_type(&mut self, expr: &Expr, expected: &TypeRef) -> String {
+    pub(super) fn lower_owned_expr_for_expected_type(&mut self, expr: &Expr, expected: &TypeRef) -> String {
         match expr {
             Expr::Ident(name, _)
                 if !is_copy_type_ref(expected)
@@ -4639,451 +2710,7 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    fn lower_json_field(&mut self, name: &str, value: &Expr) -> String {
-        let key = format!("{:?}.to_string()", decode_string_token(name));
-        match value {
-            Expr::ObjectLiteral { .. } | Expr::ArrayLiteral { .. } => {
-                let lowered = self.lower_json_value(value);
-                format!("rsscript_runtime::json_raw_field(&{key}, &{lowered})")
-            }
-            Expr::Ident(name, _) if name == "true" || name == "false" => {
-                format!("rsscript_runtime::json_bool_field(&{key}, {name})")
-            }
-            Expr::Ident(name, _) if name == "null" => {
-                format!("rsscript_runtime::json_raw_field(&{key}, \"null\")")
-            }
-            _ => match self.infer_expr_type(value).map(|ty| ty.name) {
-                Some(ty) if ty == "Int" => {
-                    format!(
-                        "rsscript_runtime::json_int_field(&{key}, {})",
-                        self.lower_expr(value)
-                    )
-                }
-                Some(ty) if ty == "Bool" => format!(
-                    "rsscript_runtime::json_bool_field(&{key}, {})",
-                    self.lower_expr(value)
-                ),
-                Some(ty) if ty == "JsonLiteral" => {
-                    let lowered = self.lower_expr(value);
-                    format!("rsscript_runtime::json_raw_field(&{key}, &{lowered})")
-                }
-                Some(ty) if ty == "JsonValue" => {
-                    let lowered = self.lower_expr(value);
-                    format!(
-                        "rsscript_runtime::json_raw_field(&{key}, &rsscript_runtime::json_to_string(&{lowered}))"
-                    )
-                }
-                _ => format!(
-                    "rsscript_runtime::json_string_field(&{key}, {})",
-                    self.lower_json_string_value(value)
-                ),
-            },
-        }
-    }
-
-    fn lower_json_array_item(&mut self, value: &Expr) -> String {
-        match value {
-            Expr::ObjectLiteral { .. } | Expr::ArrayLiteral { .. } => self.lower_json_value(value),
-            Expr::Ident(name, _) if name == "true" || name == "false" => name.clone(),
-            Expr::Ident(name, _) if name == "null" => "null".to_string(),
-            _ => match self.infer_expr_type(value).map(|ty| ty.name) {
-                Some(ty) if ty == "Int" || ty == "Bool" => self.lower_expr(value),
-                Some(ty) if ty == "JsonLiteral" => self.lower_expr(value),
-                Some(ty) if ty == "JsonValue" => {
-                    format!(
-                        "rsscript_runtime::json_to_string(&{})",
-                        self.lower_expr(value)
-                    )
-                }
-                _ => format!(
-                    "rsscript_runtime::json_quote_string({})",
-                    self.lower_json_string_value(value)
-                ),
-            },
-        }
-    }
-
-    fn lower_json_string_value(&mut self, value: &Expr) -> String {
-        match value {
-            Expr::Effect {
-                effect: DataEffect::Read,
-                value,
-                ..
-            } => self.lower_json_string_value(value),
-            Expr::Ident(name, _) if self.param_effects.contains_key(name) => self.lower_expr(value),
-            _ => format!("&{}", self.lower_expr(value)),
-        }
-    }
-
-    // The Copy scalar primitives — payloads of these match-bind by value (with a deref-pattern
-    // when the scrutinee is a borrow). Distinct from `read_effect_lowers_by_value` (intrinsic-ABI tuned).
-    fn is_copy_primitive(ty: &TypeRef) -> bool {
-        ty.args.is_empty()
-            && matches!(
-                ty.name.as_str(),
-                "Bool"
-                    | "Byte"
-                    | "Char"
-                    | "Int"
-                    | "Int8"
-                    | "Int16"
-                    | "Int32"
-                    | "Int64"
-                    | "UInt"
-                    | "UInt8"
-                    | "UInt16"
-                    | "UInt32"
-                    | "UInt64"
-                    | "Float"
-                    | "Float32"
-                    | "Float64"
-            )
-    }
-
-    fn read_effect_lowers_by_value(expected: &TypeRef) -> bool {
-        // Whether a `read`-effect param/arg of this type lowers by value vs `&T`.
-        // Tuned to the runtime intrinsic ABI (receiver methods like
-        // `char_is_alpha`/`float_to_string` take `&char`/`&f64`), so `Char`/`Float`
-        // stay by-reference here; user-function by-value Copy params are handled
-        // separately in `lower_call_arg_for_callee`.
-        expected.args.is_empty()
-            && matches!(
-                expected.name.as_str(),
-                "Bool"
-                    | "Byte"
-                    | "Int"
-                    | "Int8"
-                    | "Int16"
-                    | "Int32"
-                    | "Int64"
-                    | "UInt"
-                    | "UInt8"
-                    | "UInt16"
-                    | "UInt32"
-                    | "UInt64"
-            )
-    }
-
-    /// The Rust type annotation to emit on a `let`, when it is needed for
-    /// inference and provably matches the value's owned lowered type.
-    ///
-    /// We only annotate the builtin generic containers (`Channel<T>`, `List<T>`,
-    /// …). For those, `lower_type_ref` produces a concrete type identical to what
-    /// the constructor lowers to, so the annotation is sound and resolves cases
-    /// where a generic param is otherwise unconstrained (e.g.
-    /// `let ch: Channel<Int> = Channel.bounded(capacity: 1)?` → `RssChannel<_>`).
-    /// User types and transparent aliases are intentionally skipped: aliases are
-    /// not resolved here and class types are not wrapped at this position, so
-    /// annotating them could diverge from the value's actual Rust type.
-    fn lower_let_annotation(&self, ty: &TypeRef) -> Option<String> {
-        const GENERIC_CONTAINERS: &[&str] = &[
-            "Channel",
-            "Sender",
-            "Receiver",
-            "Stream",
-            "List",
-            "Map",
-            "Set",
-            "Deque",
-            "SortedMap",
-            "SortedSet",
-            "Option",
-            "Result",
-            "ResourcePool",
-            "Capability",
-        ];
-        if ty.args.is_empty() || !GENERIC_CONTAINERS.contains(&ty.name.as_str()) {
-            return None;
-        }
-        Some(self.lower_type_ref(ty, ManagedPosition::Bare))
-    }
-
-    fn lower_type_ref(&self, ty: &TypeRef, position: ManagedPosition) -> String {
-        if ty.name == "Fn" {
-            // A `Fn`-type parameter's data effect determines how the parameter is
-            // PASSED at the Rust call boundary: `read T` -> `&T` (shared borrow),
-            // `mut T` -> `&mut T` (exclusive borrow, mutation propagates back),
-            // and an omitted effect keeps the value-model default (by value). This
-            // mirrors how regular fn params lower and is what makes a stored
-            // `Rc<dyn Fn(&UOp, &mut Ctx) -> ..>` rule able to mutate `mut Ctx`.
-            let params = ty
-                .fn_params
-                .iter()
-                .enumerate()
-                .map(|(index, param)| {
-                    let lowered = self.lower_type_ref(param, ManagedPosition::Param);
-                    match ty.fn_param_effects.get(index).copied().flatten() {
-                        Some(DataEffect::Read) => format!("&{lowered}"),
-                        Some(DataEffect::Mut) => format!("&mut {lowered}"),
-                        Some(DataEffect::Take) | None => lowered,
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            let return_ty = ty.fn_return.as_ref().map(|return_ty| {
-                format!(
-                    " -> {}",
-                    self.lower_type_ref(return_ty, ManagedPosition::Return)
-                )
-            });
-            let return_ty = return_ty.unwrap_or_default();
-            // `owned Fn` in a STORABLE position (struct field, collection
-            // element, binding, return) is a first-class value. It lowers to
-            // `Rc<dyn Fn(...)>`:
-            //   - `Rc` is `Clone`, so it satisfies `list_get<T: Clone>`,
-            //     `#[derive(Clone)]` on a struct holding the closure, and the
-            //     `Map<K, V>` memo — `Box<dyn Fn>` is NOT `Clone` and would fail
-            //     all three.
-            //   - `Rc<dyn Fn>: Fn` via `Deref`, so a closure fetched behind a
-            //     shared read (`let r = List.get(read rules, i); (r.fxn)(..)`)
-            //     is callable through that shared reference — no `&mut` needed
-            //     (which `FnMut` would have required and which a shared `List`
-            //     read cannot give).
-            // A direct `owned Fn` PARAMETER keeps the existing `impl FnMut`
-            // surface (it is consumed in-place, not stored). `noescape Fn` is
-            // parameter-only (rejected elsewhere) and keeps its prior lowering.
-            if ty.is_owned && position != ManagedPosition::Param {
-                return format!("std::rc::Rc<dyn Fn({params}){return_ty}>");
-            }
-            return match (ty.is_noescape || ty.is_owned, position) {
-                (true, ManagedPosition::Param) => {
-                    format!("impl FnMut({params}){return_ty}")
-                }
-                (true, _) => format!("Box<dyn FnMut({params}){return_ty}>"),
-                (false, ManagedPosition::Param) => format!("dyn Fn({params}){return_ty}"),
-                (false, _) => format!("Box<dyn Fn({params}){return_ty}>"),
-            };
-        }
-        let lowered = match ty.name.as_str() {
-            "Unit" => "()".to_string(),
-            "Bool" => "bool".to_string(),
-            "Byte" => "u8".to_string(),
-            "Char" => "char".to_string(),
-            "Int" => "i64".to_string(),
-            "Int8" => "i8".to_string(),
-            "Int16" => "i16".to_string(),
-            "Int32" => "i32".to_string(),
-            "Int64" => "i64".to_string(),
-            "UInt" => "u64".to_string(),
-            "UInt8" => "u8".to_string(),
-            "UInt16" => "u16".to_string(),
-            "UInt32" => "u32".to_string(),
-            "UInt64" => "u64".to_string(),
-            "Float" => "f64".to_string(),
-            "Float32" => "f32".to_string(),
-            "Float64" => "f64".to_string(),
-            "String" => "String".to_string(),
-            "StringView" if position == ManagedPosition::Nested => "&str".to_string(),
-            "StringView" if position == ManagedPosition::Return => "&str".to_string(),
-            "StringView" => "str".to_string(),
-            "StringBuilder" => "String".to_string(),
-            "Url" => "String".to_string(),
-            "Fd" => "i64".to_string(),
-            "BytesView" | "BufferView" if position == ManagedPosition::Nested => {
-                "&[u8]".to_string()
-            }
-            "BytesView" | "BufferView" if position == ManagedPosition::Return => {
-                "&[u8]".to_string()
-            }
-            "BytesView" | "BufferView" => "[u8]".to_string(),
-            "Bytes" | "Buffer" => "Vec<u8>".to_string(),
-            "Path" => "std::path::PathBuf".to_string(),
-            "Cache" if !self.type_kinds.contains_key("Cache") => {
-                "rsscript_runtime::Cache".to_string()
-            }
-            "Rule" if !self.type_kinds.contains_key("Rule") => "rsscript_runtime::Rule".to_string(),
-            "Config" if !self.type_kinds.contains_key("Config") => {
-                "rsscript_runtime::Config".to_string()
-            }
-            "GlobalConfig" if !self.type_kinds.contains_key("GlobalConfig") => {
-                "rsscript_runtime::GlobalConfig".to_string()
-            }
-            "Environment" => "rsscript_runtime::Environment".to_string(),
-            "FunctionObject" => "rsscript_runtime::FunctionObject".to_string(),
-            "Counter" => "rsscript_runtime::Counter".to_string(),
-            "Instant" => "rsscript_runtime::RssInstant".to_string(),
-            "Duration" => "rsscript_runtime::RssDuration".to_string(),
-            "Deadline" => "rsscript_runtime::RssDeadline".to_string(),
-            "CancellationSource" => "rsscript_runtime::RssCancellationSource".to_string(),
-            "CancellationToken" => "rsscript_runtime::RssCancellationToken".to_string(),
-            "Channel" if ty.args.len() == 1 => format!(
-                "rsscript_runtime::RssChannel<{}>",
-                self.lower_type_ref(&ty.args[0], ManagedPosition::Nested)
-            ),
-            "Sender" if ty.args.len() == 1 => format!(
-                "rsscript_runtime::RssSender<{}>",
-                self.lower_type_ref(&ty.args[0], ManagedPosition::Nested)
-            ),
-            "Receiver" if ty.args.len() == 1 => format!(
-                "rsscript_runtime::RssReceiver<{}>",
-                self.lower_type_ref(&ty.args[0], ManagedPosition::Nested)
-            ),
-            "Stream" if ty.args.len() == 1 => format!(
-                "rsscript_runtime::RssStream<{}>",
-                self.lower_type_ref(&ty.args[0], ManagedPosition::Nested)
-            ),
-            "Pipeline" if ty.args.len() == 1 => format!(
-                "rsscript_runtime::RssPipeline<{}>",
-                self.lower_type_ref(&ty.args[0], ManagedPosition::Nested)
-            ),
-            "FalliblePipeline" if ty.args.len() == 2 => format!(
-                "rsscript_runtime::RssFalliblePipeline<{}, {}>",
-                self.lower_type_ref(&ty.args[0], ManagedPosition::Nested),
-                self.lower_type_ref(&ty.args[1], ManagedPosition::Nested)
-            ),
-            "ChannelError" => "rsscript_runtime::ChannelError".to_string(),
-            "Tensor" => "rsscript_runtime::RssTensor".to_string(),
-            "TensorError" => "rsscript_runtime::TensorError".to_string(),
-            "TcpStream" => "rsscript_runtime::RssTcpStream".to_string(),
-            "TcpError" => "rsscript_runtime::TcpError".to_string(),
-            "WebSocket" => "rsscript_runtime::RssWebSocket".to_string(),
-            "WebSocketError" => "rsscript_runtime::WebSocketError".to_string(),
-            "PoolStats" => "rsscript_runtime::PoolStats".to_string(),
-            "PoolError" => "rsscript_runtime::PoolError".to_string(),
-            "Regex" => "rsscript_runtime::RssRegex".to_string(),
-            "RegexError" => "rsscript_runtime::RegexError".to_string(),
-            "TempDir" => "rsscript_runtime::TempDir".to_string(),
-            "File" => "rsscript_runtime::File".to_string(),
-            "FileMetadata" => "rsscript_runtime::FileMetadata".to_string(),
-            "FileError" => "rsscript_runtime::FileError".to_string(),
-            "IOError" => "std::io::Error".to_string(),
-            "ProcessEnv" => "rsscript_runtime::ProcessEnv".to_string(),
-            "ProcessEvent" => "rsscript_runtime::ProcessEvent".to_string(),
-            "ProcessOutput" => "rsscript_runtime::ProcessOutput".to_string(),
-            "ProcessRequest" => "rsscript_runtime::ProcessRequest".to_string(),
-            "Request" => "rsscript_runtime::Request".to_string(),
-            "HttpRequest" => "rsscript_runtime::HttpRequest".to_string(),
-            "Response" => "rsscript_runtime::Response".to_string(),
-            "HttpResponse" => "rsscript_runtime::Response".to_string(),
-            "HttpError" => "rsscript_runtime::HttpError".to_string(),
-            "TimerError" => "rsscript_runtime::TimerError".to_string(),
-            "ConfigValue" => "rsscript_runtime::ConfigValue".to_string(),
-            "ConfigStore" => "rsscript_runtime::ConfigStore".to_string(),
-            "ConfigError" => "rsscript_runtime::ConfigError".to_string(),
-            "DbConnection" => "rsscript_runtime::DbConnection".to_string(),
-            "DbError" => "rsscript_runtime::DbError".to_string(),
-            "Image" => "rsscript_runtime::Image".to_string(),
-            "ImageError" => "rsscript_runtime::ImageError".to_string(),
-            "JsonValue" => "rsscript_runtime::JsonValue".to_string(),
-            "JsonError" => "rsscript_runtime::JsonError".to_string(),
-            "RowBuffer" => "rsscript_runtime::RowBuffer".to_string(),
-            "Row" => "rsscript_runtime::Row".to_string(),
-            "CsvError" => "rsscript_runtime::CsvError".to_string(),
-            "Result" if ty.args.len() == 2 => format!(
-                "Result<{}, {}>",
-                self.lower_type_ref(&ty.args[0], ManagedPosition::Nested),
-                self.lower_type_ref(&ty.args[1], ManagedPosition::Nested)
-            ),
-            "Option" if ty.args.len() == 1 => {
-                format!(
-                    "Option<{}>",
-                    self.lower_type_ref(&ty.args[0], ManagedPosition::Nested)
-                )
-            }
-            "List" if ty.args.len() == 1 => {
-                format!(
-                    "Vec<{}>",
-                    self.lower_type_ref(&ty.args[0], ManagedPosition::Nested)
-                )
-            }
-            "Deque" if ty.args.len() == 1 => format!(
-                "std::collections::VecDeque<{}>",
-                self.lower_type_ref(&ty.args[0], ManagedPosition::Nested)
-            ),
-            "Map" if ty.args.len() == 2 => format!(
-                "std::collections::HashMap<{}, {}>",
-                self.lower_type_ref(&ty.args[0], ManagedPosition::Nested),
-                self.lower_type_ref(&ty.args[1], ManagedPosition::Nested)
-            ),
-            "SortedMap" if ty.args.len() == 2 => format!(
-                "std::collections::BTreeMap<{}, {}>",
-                self.lower_type_ref(&ty.args[0], ManagedPosition::Nested),
-                self.lower_type_ref(&ty.args[1], ManagedPosition::Nested)
-            ),
-            "PersistentMap" if ty.args.len() == 2 => format!(
-                "rsscript_runtime::RssPersistentMap<{}, {}>",
-                self.lower_type_ref(&ty.args[0], ManagedPosition::Nested),
-                self.lower_type_ref(&ty.args[1], ManagedPosition::Nested)
-            ),
-            "Set" if ty.args.len() == 1 => {
-                format!(
-                    "std::collections::HashSet<{}>",
-                    self.lower_type_ref(&ty.args[0], ManagedPosition::Nested)
-                )
-            }
-            "SortedSet" if ty.args.len() == 1 => {
-                format!(
-                    "std::collections::BTreeSet<{}>",
-                    self.lower_type_ref(&ty.args[0], ManagedPosition::Nested)
-                )
-            }
-            "ResourcePool" if ty.args.len() == 1 => format!(
-                "rsscript_runtime::ResourcePool<{}>",
-                self.lower_type_ref(&ty.args[0], ManagedPosition::Nested)
-            ),
-            "Capability" if ty.args.len() == 1 => capability_enum_name(&ty.args[0].name),
-            _ => {
-                let name = rust_ident(&ty.name);
-                if ty.args.is_empty() {
-                    name
-                } else {
-                    format!(
-                        "{}<{}>",
-                        name,
-                        ty.args
-                            .iter()
-                            .map(|arg| self.lower_type_ref(arg, ManagedPosition::Nested))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
-                }
-            }
-        };
-
-        if self.should_wrap_in_managed_handle(ty, position) {
-            format!("rsscript_runtime::Managed<{lowered}>")
-        } else {
-            lowered
-        }
-    }
-
-    fn should_wrap_in_managed_handle(&self, ty: &TypeRef, position: ManagedPosition) -> bool {
-        if !matches!(
-            position,
-            ManagedPosition::Param | ManagedPosition::Return | ManagedPosition::Nested
-        ) {
-            return false;
-        }
-        matches!(self.type_kinds.get(&ty.name), Some(TypeKind::Class))
-    }
-
-    fn is_class_type(&self, ty: &TypeRef) -> bool {
-        matches!(self.type_kinds.get(&ty.name), Some(TypeKind::Class))
-    }
-
-    fn is_weak_field(&self, type_name: &str, field_name: &str) -> bool {
-        self.program.items.iter().any(|item| match item {
-            Item::Type(ty) if ty.name == type_name => ty
-                .fields
-                .iter()
-                .any(|field| field.name == field_name && field.is_weak),
-            _ => false,
-        })
-    }
-
-    fn is_runtime_handle_field(&self, type_name: &str, field_name: &str) -> bool {
-        self.program.items.iter().any(|item| match item {
-            Item::Type(ty) if ty.name == type_name => ty.fields.iter().any(|field| {
-                field.name == field_name
-                    && !field.is_weak
-                    && (field.is_handle
-                        || matches!(self.type_kinds.get(&field.ty.name), Some(TypeKind::Class)))
-            }),
-            _ => false,
-        })
-    }
-
-    fn constructor_field_arg_name(&self, type_name: &str, arg: &CallArg) -> Option<String> {
+    pub(super) fn constructor_field_arg_name(&self, type_name: &str, arg: &CallArg) -> Option<String> {
         if let Some(name) = arg.name.as_deref() {
             return Some(name.to_string());
         }
@@ -5093,7 +2720,7 @@ impl<'a> RustLowerer<'a> {
         self.field_type(type_name, name).map(|_| name.clone())
     }
 
-    fn field_type(&self, type_name: &str, field_name: &str) -> Option<TypeRef> {
+    pub(super) fn field_type(&self, type_name: &str, field_name: &str) -> Option<TypeRef> {
         self.program.items.iter().find_map(|item| match item {
             Item::Type(ty) if ty.name == type_name => ty
                 .fields
@@ -5104,475 +2731,20 @@ impl<'a> RustLowerer<'a> {
         })
     }
 
-    fn lower_runtime_handle_field_value(
-        &mut self,
-        type_name: &str,
-        field_name: &str,
-        expr: &Expr,
-        span: &Span,
-    ) -> String {
-        let value = self.lower_owned_expr(expr);
-        if self
-            .field_type(type_name, field_name)
-            .is_some_and(|ty| self.is_class_type(&ty))
-        {
-            value
-        } else {
-            format!(
-                "rsscript_runtime::manage_at({value}, {})",
-                lower_source_span(span)
-            )
-        }
-    }
-
-    fn lower_explicit_weak_field_value(&mut self, expr: &Expr) -> String {
-        if let Some(value) = explicit_weak_handle_source(expr) {
-            return self.lower_runtime_weak_from_managed(value);
-        }
-        self.lower_expr(expr)
-    }
-
-    pub(super) fn lower_runtime_weak_from_managed(&mut self, expr: &Expr) -> String {
-        if let Expr::Effect {
-            effect: DataEffect::Read,
-            value,
-            ..
-        } = expr
-        {
-            let value_expr = self.lower_expr(value);
-            if let Expr::Ident(name, _) = &**value
-                && matches!(
-                    self.param_effects.get(name),
-                    Some(DataEffect::Read | DataEffect::Mut)
-                )
-            {
-                return format!("rsscript_runtime::weak({value_expr})");
-            }
-            return format!("rsscript_runtime::weak(&{value_expr})");
-        }
-        format!("rsscript_runtime::weak(&{})", self.lower_expr(expr))
-    }
-
-    fn lower_match_scrutinee_expr(
-        &mut self,
-        value: &Expr,
-        scrutinee_type: Option<&TypeRef>,
-    ) -> String {
-        let lowered = self.lower_expr(value);
-        if scrutinee_type.is_some_and(|ty| ty.name == "String") {
-            format!("{lowered}.as_str()")
-        } else if self.match_scrutinee_is_forced_borrow(value) {
-            format!("&({lowered})")
-        } else {
-            lowered
-        }
-    }
-
-    // A match scrutinee that is a *place* behind a borrow (a field/index of a read-view) has
-    // value type `T` (not `&T`), so matching it would move a non-Copy payload out of a shared
-    // reference. Borrow it so the match binds by reference instead.
-    fn match_scrutinee_is_forced_borrow(&self, value: &Expr) -> bool {
-        matches!(value, Expr::Field { .. } | Expr::Index { .. })
-            && self.match_scrutinee_by_ref(value)
-    }
-
-    // Whether a match scrutinee lowers to a reference (`&T`): a read-view `let` binding, a `read`
-    // param, or a field/index of one. Such matches bind payloads by reference (so non-Copy payloads
-    // don't move out of a shared ref, and Copy payloads need a deref-pattern to come out by value).
-    fn match_scrutinee_by_ref(&self, value: &Expr) -> bool {
-        match value {
-            Expr::Ident(name, _) => {
-                self.read_view_bindings.contains(name)
-                    || self.param_effects.get(name) == Some(&DataEffect::Read)
-            }
-            Expr::Field { base, .. } | Expr::Index { base, .. } => {
-                self.match_scrutinee_by_ref(base)
-            }
-            Expr::Effect { value, .. } | Expr::Try { value, .. } => {
-                self.match_scrutinee_by_ref(value)
-            }
-            _ => false,
-        }
-    }
-
-    fn is_resource_type(&self, ty: &TypeRef) -> bool {
+    pub(super) fn is_resource_type(&self, ty: &TypeRef) -> bool {
         matches!(self.type_kinds.get(&ty.name), Some(TypeKind::Resource))
     }
 
-    // For a match arm that binds a *single* payload field to a name, return
-    // `(binding_name, payload_field_type)`. Covers the built-in `Option<T>` /
-    // `Result<T, E>` variants and single-field user sum-type variants; `None`
-    // otherwise (nullary variant, wildcard payload, multi-field, etc.).
-    fn single_payload_binding(
-        &self,
-        pattern: &MatchPattern,
-        value_type: Option<&TypeRef>,
-    ) -> Option<(String, TypeRef)> {
-        let MatchPattern::Variant { name, binding, .. } = pattern else {
-            return None;
-        };
-        let MatchPattern::Binding {
-            name: bind_name, ..
-        } = binding.as_deref()?
-        else {
-            return None;
-        };
-        let field_ty = match (name.as_str(), value_type) {
-            ("Some", Some(ty)) if ty.name == "Option" => ty.args.first().cloned()?,
-            ("Ok", Some(ty)) if ty.name == "Result" => ty.args.first().cloned()?,
-            ("Err", Some(ty)) if ty.name == "Result" => ty.args.get(1).cloned()?,
-            _ => {
-                let (_, fields) = self.sum_variant_fields_for_type(value_type, name)?;
-                if fields.len() != 1 {
-                    return None;
-                }
-                fields[0].ty.clone()
-            }
-        };
-        Some((bind_name.clone(), field_ty))
-    }
-
-    // When the scrutinee is matched by-ref, a single payload binding is `&T` (match
-    // ergonomics), but RSScript's model is that the arm sees an owned `T` — so using
-    // it by value (`return s`, passing it to a by-value param) must work without the
-    // user knowing the Rust representation. Return `(name, owned_rhs)` pairs so the
-    // arm can shadow the borrowed binding: `*x` for a `Copy` payload, `x.clone()`
-    // for any other cloneable value type. Resources aren't `Clone` and can't be
-    // moved out of a shared `read` view, so they are left as `&T` (the resource
-    // move rules reject using them by value).
-    fn owned_payload_rebindings(
-        &self,
-        pattern: &MatchPattern,
-        value_type: Option<&TypeRef>,
-    ) -> Vec<(String, String)> {
-        // Single-payload variants (`Some(x)`, `Ok(x)`, single-field user variant).
-        if let Some((bind_name, field_ty)) = self.single_payload_binding(pattern, value_type) {
-            return self
-                .owned_rebinding_for(&bind_name, &field_ty)
-                .into_iter()
-                .collect();
-        }
-        // Struct / tuple patterns: each bound field of a by-ref scrutinee is `&T`
-        // under match ergonomics, but the arm should see an owned `T` — so shadow
-        // every binding with its owned form, recursing through nested patterns.
-        if let MatchPattern::Struct { name, fields, .. } = pattern {
-            let declared = self.pattern_declared_field_types(value_type, name);
-            let params = self.pattern_type_params(value_type, name);
-            let args: Vec<TypeRef> = value_type.map(|ty| ty.args.clone()).unwrap_or_default();
-            let mut rebindings = Vec::new();
-            for field in fields {
-                if field.ignored {
-                    continue;
-                }
-                let declared_ty = declared.as_ref().and_then(|fields| {
-                    fields
-                        .iter()
-                        .find(|candidate| candidate.name == field.name)
-                        .map(|field| substitute_generic_type(&field.ty, &params, &args))
-                });
-                if let Some(binding) = &field.binding {
-                    // `mut` bindings stay borrowed: rebinding would discard the
-                    // mutable view the user asked for.
-                    if field.effect == Some(crate::syntax::ast::DataEffect::Mut) {
-                        continue;
-                    }
-                    if let Some(field_ty) = &declared_ty {
-                        rebindings.extend(self.owned_rebinding_for(binding, field_ty));
-                    }
-                } else if let Some(nested) = &field.pattern {
-                    rebindings.extend(self.owned_payload_rebindings(nested, declared_ty.as_ref()));
-                }
-            }
-            return rebindings;
-        }
-        // List slice patterns always bind through a `&[T]` slice (the scrutinee is
-        // matched via `.as_slice()`), so element bindings are `&T` and the rest
-        // binding is `&[T]`; rebind each to its owned `T` / `List<T>` form.
-        if let MatchPattern::List {
-            prefix,
-            rest,
-            suffix,
-            ..
-        } = pattern
-        {
-            let element_ty = value_type.and_then(|ty| ty.args.first());
-            let mut rebindings = Vec::new();
-            for element in prefix.iter().chain(suffix) {
-                if let MatchPattern::Binding { name, .. } = element {
-                    if let Some(element_ty) = element_ty {
-                        rebindings.extend(self.owned_rebinding_for(name, element_ty));
-                    }
-                } else {
-                    rebindings.extend(self.owned_payload_rebindings(element, element_ty));
-                }
-            }
-            if let Some(Some(rest_name)) = rest {
-                let ident = rust_ident(rest_name);
-                rebindings.push((ident.clone(), format!("{ident}.to_vec()")));
-            }
-            return rebindings;
-        }
-        Vec::new()
-    }
-
-    /// The owned rebinding for a single by-ref match binding: `*x` for a `Copy`
-    /// payload, `x.clone()` for any other cloneable value type, and nothing for a
-    /// resource (it can't be moved out of a shared `read` view).
-    fn owned_rebinding_for(&self, bind_name: &str, field_ty: &TypeRef) -> Option<(String, String)> {
-        let ident = rust_ident(bind_name);
-        if Self::is_copy_primitive(field_ty) {
-            Some((ident.clone(), format!("*{ident}")))
-        } else if self.is_resource_type(field_ty) {
-            None
-        } else {
-            Some((ident.clone(), format!("{ident}.clone()")))
-        }
-    }
-
-    /// The generic type parameters declared by the type backing `pattern_name`
-    /// when matched against `value_type` (struct or sum variant), in declaration
-    /// order — so concrete arguments from `value_type` can be substituted in.
-    fn pattern_type_params(&self, value_type: Option<&TypeRef>, pattern_name: &str) -> Vec<String> {
-        let Some(root) = value_type.map(|ty| ty.name.as_str()) else {
-            return Vec::new();
-        };
-        for item in &self.program.items {
-            match item {
-                Item::Type(type_decl) if type_decl.name == root && pattern_name == root => {
-                    return type_decl
-                        .type_params
-                        .iter()
-                        .map(|param| param.name.clone())
-                        .collect();
-                }
-                Item::SumType(sum)
-                    if sum.name == root && sum.variants.iter().any(|v| v.name == pattern_name) =>
-                {
-                    return sum
-                        .type_params
-                        .iter()
-                        .map(|param| param.name.clone())
-                        .collect();
-                }
-                _ => {}
-            }
-        }
-        Vec::new()
-    }
-
-    fn lower_match_pattern_typed(
-        &self,
-        pattern: &MatchPattern,
-        value_type: Option<&TypeRef>,
-        by_ref: bool,
-    ) -> String {
-        match pattern {
-            MatchPattern::Binding { name, .. } => rust_ident(name),
-            MatchPattern::Wildcard(_) => "_".to_string(),
-            MatchPattern::Literal { value, .. } => lower_match_literal(value),
-            MatchPattern::Variant { name, binding, .. }
-                if name == "Some" && value_type.is_some_and(|ty| ty.name == "Option") =>
-            {
-                let inner = value_type.and_then(|ty| ty.args.first());
-                let payload = binding
-                    .as_ref()
-                    .map(|binding| self.lower_match_pattern_typed(binding, inner, by_ref))
-                    .unwrap_or_else(|| "_".to_string());
-                format!("Some({payload})")
-            }
-            MatchPattern::Variant { name, binding, .. }
-                if matches!(name.as_str(), "Ok" | "Err")
-                    && value_type.is_some_and(|ty| ty.name == "Result") =>
-            {
-                let inner = value_type.and_then(|ty| {
-                    if name == "Ok" {
-                        ty.args.first()
-                    } else {
-                        ty.args.get(1)
-                    }
-                });
-                let payload = binding
-                    .as_ref()
-                    .map(|binding| self.lower_match_pattern_typed(binding, inner, by_ref))
-                    .unwrap_or_else(|| "_".to_string());
-                format!("{}({payload})", rust_ident(name))
-            }
-            MatchPattern::Variant { name, binding, .. } => {
-                if let Some((sum_name, fields)) = self.sum_variant_fields_for_type(value_type, name)
-                {
-                    if fields.is_empty() {
-                        return format!("{}::{}", rust_ident(&sum_name), rust_ident(name));
-                    }
-                    let mut parts = Vec::new();
-                    let single_field = fields.len() == 1;
-                    for field in &fields {
-                        let field_pattern = if single_field {
-                            binding
-                                .as_ref()
-                                .map(|binding| {
-                                    self.lower_match_pattern_typed(binding, Some(&field.ty), by_ref)
-                                })
-                                .unwrap_or_else(|| "_".to_string())
-                        } else {
-                            "_".to_string()
-                        };
-                        parts.push(format!("{}: {}", rust_ident(&field.name), field_pattern));
-                    }
-                    return format!(
-                        "{}::{} {{ {} }}",
-                        rust_ident(&sum_name),
-                        rust_ident(name),
-                        parts.join(", ")
-                    );
-                }
-                lower_match_pattern(pattern)
-            }
-            MatchPattern::Struct {
-                name,
-                fields,
-                has_rest,
-                ..
-            } => self.lower_struct_match_pattern_typed(name, fields, *has_rest, value_type, by_ref),
-            MatchPattern::List {
-                prefix,
-                rest,
-                suffix,
-                ..
-            } => {
-                let element_type = value_type.and_then(|ty| ty.args.first());
-                let mut parts: Vec<String> = prefix
-                    .iter()
-                    .map(|pattern| self.lower_match_pattern_typed(pattern, element_type, by_ref))
-                    .collect();
-                if let Some(rest_binding) = rest {
-                    match rest_binding {
-                        Some(name) => parts.push(format!("{} @ ..", rust_ident(name))),
-                        None => parts.push("..".to_string()),
-                    }
-                }
-                parts.extend(
-                    suffix.iter().map(|pattern| {
-                        self.lower_match_pattern_typed(pattern, element_type, by_ref)
-                    }),
-                );
-                format!("[{}]", parts.join(", "))
-            }
-        }
-    }
-
-    fn lower_struct_match_pattern_typed(
-        &self,
-        name: &str,
-        fields: &[crate::syntax::ast::MatchFieldPattern],
-        has_rest: bool,
-        value_type: Option<&TypeRef>,
-        by_ref: bool,
-    ) -> String {
-        let namespace = value_type.and_then(|ty| {
-            self.sum_variant_fields_for_type(Some(ty), name)
-                .map(|(sum_name, _)| sum_name)
-        });
-        let path = namespace
-            .as_ref()
-            .map(|sum_name| format!("{}::{}", rust_ident(sum_name), rust_ident(name)))
-            .unwrap_or_else(|| rust_ident(name));
-        let declared_fields = self.pattern_declared_field_types(value_type, name);
-        let mut parts = Vec::new();
-        for field in fields {
-            if field.ignored {
-                parts.push(format!("{}: _", rust_ident(&field.name)));
-            } else if let Some(pattern) = &field.pattern {
-                let field_type = declared_fields
-                    .as_ref()
-                    .and_then(|fields| fields.iter().find(|candidate| candidate.name == field.name))
-                    .map(|field| &field.ty);
-                parts.push(format!(
-                    "{}: {}",
-                    rust_ident(&field.name),
-                    self.lower_match_pattern_typed(pattern, field_type, by_ref)
-                ));
-            } else if let Some(binding) = &field.binding {
-                let binding_text = if field.effect == Some(crate::syntax::ast::DataEffect::Mut) {
-                    format!("mut {}", rust_ident(binding))
-                } else {
-                    rust_ident(binding)
-                };
-                if binding == &field.name
-                    && field.effect != Some(crate::syntax::ast::DataEffect::Mut)
-                {
-                    parts.push(rust_ident(&field.name));
-                } else {
-                    parts.push(format!("{}: {binding_text}", rust_ident(&field.name)));
-                }
-            }
-        }
-        if has_rest {
-            parts.push("..".to_string());
-        }
-        format!("{path} {{ {} }}", parts.join(", "))
-    }
-
-    fn pattern_declared_field_types(
-        &self,
-        value_type: Option<&TypeRef>,
-        pattern_name: &str,
-    ) -> Option<Vec<FieldDecl>> {
-        let root = value_type?.name.as_str();
-        if let Some((_, fields)) = self.sum_variant_fields_for_type(value_type, pattern_name) {
-            return Some(fields);
-        }
-        if pattern_name == root {
-            return self.program.items.iter().find_map(|item| match item {
-                Item::Type(type_decl) if type_decl.name == root => Some(type_decl.fields.clone()),
-                _ => None,
-            });
-        }
-        None
-    }
-
-    fn sum_variant_fields_for_type(
-        &self,
-        value_type: Option<&TypeRef>,
-        variant_name: &str,
-    ) -> Option<(String, Vec<FieldDecl>)> {
-        let root = &value_type?.name;
-        self.program.items.iter().find_map(|item| match item {
-            Item::SumType(sum) if &sum.name == root => sum
-                .variants
-                .iter()
-                .find(|variant| variant.name == variant_name)
-                .map(|variant| (sum.name.clone(), variant.fields.clone())),
-            _ => None,
-        })
-    }
-
-    fn find_sum_type_for_variant(&self, variant_name: &str) -> Option<String> {
-        // Skip built-in variants
-        if matches!(
-            variant_name,
-            "Some" | "None" | "Ok" | "Err" | "true" | "false"
-        ) {
-            return None;
-        }
-        for item in &self.program.items {
-            if let Item::SumType(sum) = item {
-                if sum.variants.iter().any(|v| v.name == variant_name) {
-                    return Some(sum.name.clone());
-                }
-            }
-        }
-        None
-    }
 }
 
 /// Whether any arm matches with a list slice pattern, so the scrutinee must be
 /// lowered as a `[T]` slice rather than a `Vec<T>`.
-fn arms_have_list_pattern(arms: &[crate::syntax::ast::MatchArm]) -> bool {
+pub(super) fn arms_have_list_pattern(arms: &[crate::syntax::ast::MatchArm]) -> bool {
     arms.iter()
         .any(|arm| matches!(arm.pattern, MatchPattern::List { .. }))
 }
 
-fn match_pattern_span(pattern: &MatchPattern) -> Span {
+pub(super) fn match_pattern_span(pattern: &MatchPattern) -> Span {
     match pattern {
         MatchPattern::Variant { span, .. }
         | MatchPattern::Struct { span, .. }
@@ -5583,11 +2755,11 @@ fn match_pattern_span(pattern: &MatchPattern) -> Span {
     }
 }
 
-fn capability_enum_name(protocol: &str) -> String {
+pub(super) fn capability_enum_name(protocol: &str) -> String {
     format!("Capability{}", rust_ident(protocol))
 }
 
-fn capability_impl_forward_arg(param: &Param) -> String {
+pub(super) fn capability_impl_forward_arg(param: &Param) -> String {
     if param.name == "self" {
         "inner".to_string()
     } else {
@@ -5595,7 +2767,7 @@ fn capability_impl_forward_arg(param: &Param) -> String {
     }
 }
 
-fn capability_from_protocol(callee: &Callee) -> Option<&str> {
+pub(super) fn capability_from_protocol(callee: &Callee) -> Option<&str> {
     let Callee::Qualified { namespace, name } = callee else {
         return None;
     };
@@ -5605,14 +2777,14 @@ fn capability_from_protocol(callee: &Callee) -> Option<&str> {
     type_arg_names(namespace).and_then(|args| args.first().copied())
 }
 
-fn capability_protocol_name(type_name: &str) -> Option<&str> {
+pub(super) fn capability_protocol_name(type_name: &str) -> Option<&str> {
     if type_root_name(type_name) != "Capability" {
         return None;
     }
     type_arg_names(type_name).and_then(|args| args.first().copied())
 }
 
-fn type_ref_display_name(ty: &TypeRef) -> String {
+pub(super) fn type_ref_display_name(ty: &TypeRef) -> String {
     if ty.args.is_empty() {
         return ty.name.clone();
     }
@@ -5627,12 +2799,12 @@ fn type_ref_display_name(ty: &TypeRef) -> String {
     )
 }
 
-fn closure_binding(name: &str, is_mut: bool) -> String {
+pub(super) fn closure_binding(name: &str, is_mut: bool) -> String {
     let name = rust_ident(name);
     if is_mut { format!("mut {name}") } else { name }
 }
 
-fn awaited_binding_type(value_type: Option<TypeRef>, is_try: bool) -> Option<TypeRef> {
+pub(super) fn awaited_binding_type(value_type: Option<TypeRef>, is_try: bool) -> Option<TypeRef> {
     let value_type = value_type?;
     if is_try {
         result_ok_type_ref(&value_type)
@@ -5641,7 +2813,7 @@ fn awaited_binding_type(value_type: Option<TypeRef>, is_try: bool) -> Option<Typ
     }
 }
 
-fn stmt_contains_await(statement: &Stmt) -> bool {
+pub(super) fn stmt_contains_await(statement: &Stmt) -> bool {
     match statement {
         Stmt::Let(stmt) => stmt.value.as_ref().is_some_and(expr_contains_await),
         Stmt::Return(stmt) => stmt.value.as_ref().is_some_and(expr_contains_await),
@@ -5679,11 +2851,11 @@ fn stmt_contains_await(statement: &Stmt) -> bool {
     }
 }
 
-fn block_contains_await(block: &Block) -> bool {
+pub(super) fn block_contains_await(block: &Block) -> bool {
     block.statements.iter().any(stmt_contains_await)
 }
 
-fn stmt_contains_try(statement: &Stmt) -> bool {
+pub(super) fn stmt_contains_try(statement: &Stmt) -> bool {
     match statement {
         Stmt::Let(stmt) => stmt.value.as_ref().is_some_and(expr_contains_try),
         Stmt::Return(stmt) => stmt.value.as_ref().is_some_and(expr_contains_try),
@@ -5719,7 +2891,7 @@ fn stmt_contains_try(statement: &Stmt) -> bool {
     }
 }
 
-fn block_contains_try(block: &Block) -> bool {
+pub(super) fn block_contains_try(block: &Block) -> bool {
     block.statements.iter().any(stmt_contains_try)
 }
 
@@ -5728,7 +2900,7 @@ fn block_contains_try(block: &Block) -> bool {
 /// resolves to the matching argument from the scrutinee's `value_type`; nested
 /// type arguments are substituted recursively. Unresolved names are left as-is
 /// (treated as non-`Copy`, cloneable values).
-fn substitute_generic_type(ty: &TypeRef, params: &[String], args: &[TypeRef]) -> TypeRef {
+pub(super) fn substitute_generic_type(ty: &TypeRef, params: &[String], args: &[TypeRef]) -> TypeRef {
     if ty.args.is_empty()
         && ty.fn_params.is_empty()
         && ty.fn_return.is_none()
@@ -5755,7 +2927,7 @@ fn substitute_generic_type(ty: &TypeRef, params: &[String], args: &[TypeRef]) ->
     resolved
 }
 
-fn match_binding_type_ref(
+pub(super) fn match_binding_type_ref(
     pattern: &MatchPattern,
     value_type: Option<&TypeRef>,
 ) -> Option<(String, TypeRef)> {
@@ -5791,7 +2963,7 @@ fn match_binding_type_ref(
     }
 }
 
-fn split_loop_body_at_first_await(statements: &[Stmt]) -> Option<(&[Stmt], &Stmt, &[Stmt])> {
+pub(super) fn split_loop_body_at_first_await(statements: &[Stmt]) -> Option<(&[Stmt], &Stmt, &[Stmt])> {
     for (index, statement) in statements.iter().enumerate() {
         match statement {
             Stmt::Let(stmt) if stmt.value.as_ref().and_then(async_await_inner).is_some() => {
@@ -5807,7 +2979,7 @@ fn split_loop_body_at_first_await(statements: &[Stmt]) -> Option<(&[Stmt], &Stmt
     None
 }
 
-fn expr_contains_await(expr: &Expr) -> bool {
+pub(super) fn expr_contains_await(expr: &Expr) -> bool {
     match expr {
         Expr::Await { .. } => true,
         Expr::Try { value, .. }
@@ -5837,7 +3009,7 @@ fn expr_contains_await(expr: &Expr) -> bool {
     }
 }
 
-fn expr_contains_try(expr: &Expr) -> bool {
+pub(super) fn expr_contains_try(expr: &Expr) -> bool {
     match expr {
         Expr::Try { .. } => true,
         Expr::Await { value, .. }
@@ -5872,7 +3044,7 @@ fn expr_contains_try(expr: &Expr) -> bool {
 /// than O(n). `&&`/`||` are associative for both value and evaluation order, so
 /// any grouping evaluates the operands left-to-right with identical short-circuit
 /// behavior. Recursion depth here is O(log n), so this helper is itself safe.
-fn balanced_logical_join(leaves: &[String], op: &str) -> String {
+pub(super) fn balanced_logical_join(leaves: &[String], op: &str) -> String {
     match leaves.len() {
         0 => String::new(),
         1 => leaves[0].clone(),
@@ -5887,7 +3059,7 @@ fn balanced_logical_join(leaves: &[String], op: &str) -> String {
     }
 }
 
-fn rust_binary_precedence(op: BinaryOp) -> u8 {
+pub(super) fn rust_binary_precedence(op: BinaryOp) -> u8 {
     match op {
         BinaryOp::LogicalOr => 1,
         BinaryOp::LogicalAnd => 2,
@@ -5906,7 +3078,7 @@ fn rust_binary_precedence(op: BinaryOp) -> u8 {
     }
 }
 
-fn rust_binary_is_comparison(op: BinaryOp) -> bool {
+pub(super) fn rust_binary_is_comparison(op: BinaryOp) -> bool {
     matches!(
         op,
         BinaryOp::Equal
@@ -5918,7 +3090,7 @@ fn rust_binary_is_comparison(op: BinaryOp) -> bool {
     )
 }
 
-fn type_ref_from_display(name: &str, span: &Span) -> TypeRef {
+pub(super) fn type_ref_from_display(name: &str, span: &Span) -> TypeRef {
     let (name, is_fresh) = name
         .trim()
         .strip_prefix("fresh ")
@@ -5941,7 +3113,7 @@ fn type_ref_from_display(name: &str, span: &Span) -> TypeRef {
     }
 }
 
-fn simple_type_ref(name: &str, span: &Span) -> TypeRef {
+pub(super) fn simple_type_ref(name: &str, span: &Span) -> TypeRef {
     TypeRef {
         name: name.to_string(),
         args: Vec::new(),
@@ -5956,7 +3128,7 @@ fn simple_type_ref(name: &str, span: &Span) -> TypeRef {
     }
 }
 
-fn substitute_type_ref(ty: &TypeRef, substitutions: &BTreeMap<String, TypeRef>) -> TypeRef {
+pub(super) fn substitute_type_ref(ty: &TypeRef, substitutions: &BTreeMap<String, TypeRef>) -> TypeRef {
     if ty.args.is_empty()
         && ty.fn_params.is_empty()
         && ty.fn_return.is_none()
@@ -5987,7 +3159,7 @@ fn substitute_type_ref(ty: &TypeRef, substitutions: &BTreeMap<String, TypeRef>) 
     replaced
 }
 
-fn collect_type_ref_substitutions(
+pub(super) fn collect_type_ref_substitutions(
     pattern: &TypeRef,
     actual: &TypeRef,
     substitutions: &mut BTreeMap<String, TypeRef>,
@@ -6027,7 +3199,7 @@ use crate::text_util::builtin_generic_type_params;
 /// the per-package `type_kinds` map even though they appear among the interface
 /// programs — otherwise they would be reclassified as local user types. Parsed
 /// once and cached (the builtin interface set is fixed at compile time).
-fn builtin_interface_type_names() -> &'static std::collections::HashSet<String> {
+pub(super) fn builtin_interface_type_names() -> &'static std::collections::HashSet<String> {
     static NAMES: std::sync::OnceLock<std::collections::HashSet<String>> =
         std::sync::OnceLock::new();
     NAMES.get_or_init(|| {
@@ -6041,7 +3213,7 @@ fn builtin_interface_type_names() -> &'static std::collections::HashSet<String> 
     })
 }
 
-fn fn_type_ref(params: Vec<TypeRef>, return_ty: Option<TypeRef>, span: &Span) -> TypeRef {
+pub(super) fn fn_type_ref(params: Vec<TypeRef>, return_ty: Option<TypeRef>, span: &Span) -> TypeRef {
     TypeRef {
         name: "Fn".to_string(),
         args: Vec::new(),
@@ -6056,7 +3228,7 @@ fn fn_type_ref(params: Vec<TypeRef>, return_ty: Option<TypeRef>, span: &Span) ->
     }
 }
 
-fn is_json_encode_callee(callee: &Callee) -> bool {
+pub(super) fn is_json_encode_callee(callee: &Callee) -> bool {
     matches!(
         callee,
         Callee::Qualified { namespace, name }
@@ -6064,7 +3236,7 @@ fn is_json_encode_callee(callee: &Callee) -> bool {
     )
 }
 
-fn is_json_decode_callee(callee: &Callee) -> bool {
+pub(super) fn is_json_decode_callee(callee: &Callee) -> bool {
     matches!(
         callee,
         Callee::Qualified { namespace, name }
@@ -6073,7 +3245,7 @@ fn is_json_decode_callee(callee: &Callee) -> bool {
     )
 }
 
-fn is_json_decode_text_callee(callee: &Callee) -> bool {
+pub(super) fn is_json_decode_text_callee(callee: &Callee) -> bool {
     matches!(
         callee,
         Callee::Qualified { namespace, name }
@@ -6081,7 +3253,7 @@ fn is_json_decode_text_callee(callee: &Callee) -> bool {
     )
 }
 
-fn json_decode_type_arg(callee: &Callee) -> Option<&str> {
+pub(super) fn json_decode_type_arg(callee: &Callee) -> Option<&str> {
     match callee {
         Callee::Qualified { name, .. } => {
             type_arg_names(name).and_then(|args| args.first().copied())
@@ -6093,7 +3265,7 @@ fn json_decode_type_arg(callee: &Callee) -> Option<&str> {
     }
 }
 
-fn expr_is_json_literal(expr: &Expr) -> bool {
+pub(super) fn expr_is_json_literal(expr: &Expr) -> bool {
     match expr {
         Expr::ObjectLiteral { .. } | Expr::ArrayLiteral { .. } => true,
         Expr::Effect { value, .. } | Expr::Manage { value, .. } => expr_is_json_literal(value),
@@ -6101,7 +3273,7 @@ fn expr_is_json_literal(expr: &Expr) -> bool {
     }
 }
 
-fn receiver_facade_namespace(receiver_root: &str, method: &str) -> Option<&'static str> {
+pub(super) fn receiver_facade_namespace(receiver_root: &str, method: &str) -> Option<&'static str> {
     match receiver_root {
         "JsonValue" | "JsonLiteral" => Some("Json"),
         "String" if method.starts_with("json_") => Some("Json"),
@@ -6109,7 +3281,7 @@ fn receiver_facade_namespace(receiver_root: &str, method: &str) -> Option<&'stat
     }
 }
 
-fn generated_line_count(generated: &str) -> usize {
+pub(super) fn generated_line_count(generated: &str) -> usize {
     generated
         .chars()
         .filter(|character| *character == '\n')
@@ -6117,7 +3289,7 @@ fn generated_line_count(generated: &str) -> usize {
         + 1
 }
 
-fn push_unique_derive(derives: &mut Vec<String>, derive: &str) {
+pub(super) fn push_unique_derive(derives: &mut Vec<String>, derive: &str) {
     if !derives.iter().any(|existing| existing == derive) {
         derives.push(derive.to_string());
     }
@@ -6126,7 +3298,7 @@ fn push_unique_derive(derives: &mut Vec<String>, derive: &str) {
 /// Whether a type reference is (or directly is) a first-class closure value —
 /// an `owned Fn(...)` — which lowers to `Rc<dyn Fn>`. Such a field makes the
 /// containing type underivable for `Debug`/`Eq`/`Hash`/`Ord`.
-fn type_ref_holds_closure(ty: &TypeRef) -> bool {
+pub(super) fn type_ref_holds_closure(ty: &TypeRef) -> bool {
     ty.is_owned && ty.name == "Fn"
 }
 
@@ -6134,7 +3306,7 @@ fn type_ref_holds_closure(ty: &TypeRef) -> bool {
 /// (`Rc<dyn Fn>`) field. Function-value fields print as `<fn>`; every other
 /// field defers to its own `Debug`. Keeps the auto-`Debug` contract for
 /// closure-holding structs (which cannot `#[derive(Debug)]`).
-fn manual_struct_debug_impl(
+pub(super) fn manual_struct_debug_impl(
     name: &str,
     type_params: &[GenericParam],
     fields: &[FieldDecl],
@@ -6171,7 +3343,7 @@ fn manual_struct_debug_impl(
 /// `Int -> "i64"`, `Int32 -> "i32"`. `None` for non-integer types. Used so an
 /// integer literal in a typed context (sized ints, or the default `Int`) lowers
 /// with the matching suffix instead of Rust's untyped-`i32` default.
-fn rust_int_literal_suffix(type_name: &str) -> Option<&'static str> {
+pub(super) fn rust_int_literal_suffix(type_name: &str) -> Option<&'static str> {
     Some(match type_name {
         "Int" | "Int64" | "Fd" => "i64",
         "Int8" => "i8",
@@ -6185,7 +3357,7 @@ fn rust_int_literal_suffix(type_name: &str) -> Option<&'static str> {
     })
 }
 
-fn infer_const_type(expr: &Expr) -> String {
+pub(super) fn infer_const_type(expr: &Expr) -> String {
     match expr {
         Expr::Number(s, _) => {
             if s.contains('.') {
@@ -6202,7 +3374,7 @@ fn infer_const_type(expr: &Expr) -> String {
     }
 }
 
-fn lower_const_value(expr: &Expr) -> String {
+pub(super) fn lower_const_value(expr: &Expr) -> String {
     match expr {
         Expr::Number(value, _) => value.clone(),
         Expr::String(value, _) => {
@@ -6217,7 +3389,7 @@ fn lower_const_value(expr: &Expr) -> String {
     }
 }
 
-fn is_try_wrapped(expr: &Expr) -> bool {
+pub(super) fn is_try_wrapped(expr: &Expr) -> bool {
     matches!(expr, Expr::Try { .. })
 }
 
