@@ -138,11 +138,13 @@ fn write_core_package_index() -> Result<(), String> {
 }
 
 fn write_reg_vm_runtime_intrinsics() -> Result<(), String> {
-    println!("cargo:rerun-if-changed=src/reg_vm/mod.rs");
+    println!("cargo:rerun-if-changed=src/reg_vm/lower.rs");
     println!("cargo:rerun-if-changed=src/runtime_abi.rs");
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest dir"));
-    let source_path = manifest_dir.join("src/reg_vm/mod.rs");
+    // The name->intrinsic lowering table lives in the reg-VM lowerer (`qualified_intrinsic`
+    // and the `call` special-arm), which is in src/reg_vm/lower.rs.
+    let source_path = manifest_dir.join("src/reg_vm/lower.rs");
     let source = fs::read_to_string(&source_path)
         .map_err(|error| format!("failed to read {}: {error}", source_path.display()))?;
     let resolver_signatures = collect_reg_vm_resolver_signatures(&source)?;
