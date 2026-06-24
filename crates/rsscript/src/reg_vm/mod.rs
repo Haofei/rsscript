@@ -7449,8 +7449,17 @@ fn translate_to_native_jit(
             }
             RegInstr::Return { src } => {
                 // The native ABI returns 64 bits boxed by the caller as the
-                // function's return type, which must be `Int` or `Float`.
-                require(numeric(*src))?;
+                // function's return type. A scalar (`Int`/`Float`) return is the
+                // unchanged path. Heap-result return ABI (heap-write S0): also accept
+                // returning a heap **parameter** unchanged (`handle_param`) — a pure
+                // pass-through with NO allocation and NO mutation. The returned i64 is
+                // the input heap-arg table index; the host materializes the result
+                // from its VM-owned output table on a clean completion only, so §7.2's
+                // no-effect-before-bail proof is unaffected. (Returning a Handle
+                // *produced* by a native read — `FieldHandle`/`ListGetHandle` — is NOT
+                // accepted here: those table indices are call-scoped scratch, not a
+                // re-materializable value. That is a later slice.)
+                require(numeric(*src) || handle_param(*src))?;
                 JitInstr::Return { src: r(*src) }
             }
             RegInstr::RuntimeError { .. } => JitInstr::Bail,
@@ -14781,6 +14790,20 @@ fn instr_decline_reason(instr: &RegInstr) -> Option<String> {
 thread_local! {
     /// Heap values for the in-flight native call, indexed by handle.
     static JIT_HEAP_ARGS: RefCell<Vec<VmValue>> = const { RefCell::new(Vec::new()) };
+
+    /// Heap-result return ABI (heap-write S0): the per-call VM-owned **output table**
+    /// from which the host materializes a native call's heap result. Mirrors
+    /// `JIT_HEAP_ARGS` (the input table): VM-owned, per-call, indexed by an opaque
+    /// handle, and cleared on EVERY exit by `JitHeapResultsGuard`.
+    ///
+    /// §7.2-safety: the host populates this table and materializes from it **only**
+    /// after a clean `NativeOutcome::CompletedHandle` (bail flag clear). On **any**
+    /// bail the host never touches it and the guard clears it on exit, so a bailed
+    /// attempt leaves NO value here — the interpreter re-run produces the result
+    /// itself, indistinguishable from never having attempted native. S0 does not let
+    /// native allocate/mutate; it only *returns a heap value it was given*, so no
+    /// observable effect precedes a possible bail and the §7.2 proof holds unchanged.
+    static JIT_HEAP_RESULTS: RefCell<Vec<VmValue>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Clears the per-call heap-arg table on drop, so a native attempt never retains
@@ -14792,6 +14815,21 @@ struct JitHeapArgsGuard;
 impl Drop for JitHeapArgsGuard {
     fn drop(&mut self) {
         JIT_HEAP_ARGS.with(|table| table.borrow_mut().clear());
+    }
+}
+
+/// Clears the per-call heap-**result** output table on drop (heap-write S0), so a
+/// native attempt — clean OR bailed — never leaks a heap result past the call. This
+/// is the §7.2 belt-and-suspenders for the output table: even on a bail (where the
+/// host never populates it) the table is guaranteed empty for the next attempt, so
+/// no stale value can be double-materialized.
+#[cfg(feature = "native-jit")]
+struct JitHeapResultsGuard;
+
+#[cfg(feature = "native-jit")]
+impl Drop for JitHeapResultsGuard {
+    fn drop(&mut self) {
+        JIT_HEAP_RESULTS.with(|table| table.borrow_mut().clear());
     }
 }
 
@@ -15563,6 +15601,10 @@ impl RegVm {
         // the (possibly large) heap table on every exit path so cloned args aren't
         // retained after the call.
         let _heap_guard = JitHeapArgsGuard;
+        // Heap-result return ABI (S0): clear the output table on EVERY exit too, so a
+        // bailed attempt (where the host never populates it) still leaves it empty for
+        // the next call — no stale heap result can be double-materialized (§7.2).
+        let _heap_result_guard = JitHeapResultsGuard;
         // `args[i]` and `lens[i]` are parallel per-param words (TV2 ABI). A scalar
         // unboxes into `args[i]` (with `lens[i] = 0`); a `Handle` is a heap-table
         // index; a `FlatInt`/`FlatFloat` puts the raw buffer pointer in `args[i]`
@@ -15749,10 +15791,63 @@ impl RegVm {
                 // Consecutive-bail semantics: a clean completion clears the
                 // give-up counter, so only *sustained* failure demotes a function.
                 native.bail_counts.insert(native_key, 0);
+                debug_assert_ne!(
+                    ret_type,
+                    NativeTy::Handle,
+                    "a Handle-returning native function must report CompletedHandle, not Completed",
+                );
                 NativeAttempt::Completed(match ret_type {
                     NativeTy::Float => VmValue::Float(f64::from_bits(bits as u64)),
                     _ => VmValue::Int(bits),
                 })
+            }
+            // Heap-result return ABI (heap-write S0): the native call completed
+            // cleanly (the vm-jit `call` reports this variant ONLY when the bail flag
+            // is clear) and its result is a heap value at output-table handle `bits`.
+            // S0's only producer is a pass-through: `bits` is the index of a heap
+            // PARAMETER in the input table (`JIT_HEAP_ARGS`), which native returned
+            // unchanged. We copy that value into the VM-owned OUTPUT table
+            // (`JIT_HEAP_RESULTS`) — exercising the output-table substrate end-to-end —
+            // and materialize the `VmValue` from it. §7.2: this runs ONLY on clean
+            // completion; on any bail vm-jit returns `Deopt` instead and the output
+            // table is left empty (and cleared by its guard on exit), so a bailed
+            // attempt produces no value here and the interpreter re-run is the sole
+            // source of truth — no observable effect precedes a bail.
+            vm_jit::NativeOutcome::CompletedHandle(bits) => {
+                if native.collect_stats {
+                    native.stats.native_calls += 1;
+                }
+                if native.report {
+                    native.report_native_ok.insert(native_key);
+                }
+                native.bail_counts.insert(native_key, 0);
+                // Resolve the input-table handle to its heap value, then publish it
+                // into the output table at index 0. A malformed/out-of-range handle
+                // cannot occur for the S0 pass-through (codegen returns a real param
+                // index), but if it ever did we fall back rather than panic.
+                let materialized = JIT_HEAP_ARGS.with(|args| {
+                    usize::try_from(bits)
+                        .ok()
+                        .and_then(|i| args.borrow().get(i).cloned())
+                });
+                match materialized {
+                    Some(value) => {
+                        let result = JIT_HEAP_RESULTS.with(|out| {
+                            let mut out = out.borrow_mut();
+                            out.push(value);
+                            // Materialize from the output table (the VM-owned home of
+                            // the result), proving the round-trip through it.
+                            out[0].clone()
+                        });
+                        NativeAttempt::Completed(result)
+                    }
+                    None => {
+                        // Treat an unresolvable handle exactly like a bail: re-run on
+                        // the interpreter (always correct, no effect leaked).
+                        native.record_bail(native_key, func);
+                        NativeAttempt::Fallback
+                    }
+                }
             }
             vm_jit::NativeOutcome::Deopt { safepoint_id, live } => {
                 // Bail bookkeeping is identical on both paths (precise or not):
@@ -26531,6 +26626,143 @@ mod register_window_tests {
             0,
             "fallback must leave the frame ip at 0 (re-run from the top)",
         );
+    }
+
+    /// A native pass-through `fn id(xs) { let _ = List.len(xs); return xs }`: the
+    /// `ListLen` types `xs` (reg 0) as a `Handle` parameter, and the function returns
+    /// that handle unchanged. This is the heap-write S0 producer — a heap-result
+    /// return with NO allocation and NO mutation (native just returns a value it was
+    /// given). `dst` reg 1 holds the (discarded) length.
+    #[cfg(feature = "native-jit")]
+    fn list_passthrough_func() -> RegFunction {
+        let code = vec![
+            RegInstr::ListLen { dst: 1, list: 0 },
+            RegInstr::Return { src: 0 },
+        ];
+        RegFunction {
+            name: "id".to_string(),
+            params: 1,
+            captures: 0,
+            regs: 2,
+            local_regs: HashMap::new(),
+            code,
+            jit_analysis: std::cell::Cell::new(None),
+            native_status: std::cell::Cell::new(0),
+            call_count: std::cell::Cell::new(0),
+            profile: RefCell::new(None),
+            osr_state: std::cell::Cell::new(OsrTrigger::Unknown),
+        }
+    }
+
+    /// Heap-result return ABI (heap-write S0) round-trip: a native function that
+    /// returns a heap PARAMETER unchanged produces the interpreter-identical heap
+    /// value through the VM-owned output table. Also asserts the output table is
+    /// cleared on exit (no value retained past the call) — the §7.2 invariant.
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_heap_result_passthrough_round_trips() {
+        let mut vm = empty_vm();
+        // threshold 0 => compile/attempt on the first call.
+        vm.native = Some(NativeState::new(0, false, true).expect("native module"));
+        let func = Rc::new(list_passthrough_func());
+
+        // Distinct list value so identity is observable through the round-trip.
+        let list: Rc<RefCell<TypedVec>> =
+            Rc::new(RefCell::new(TypedVec::from_values(vec![
+                VmValue::Int(11),
+                VmValue::Int(22),
+                VmValue::Int(33),
+            ])));
+        let arg = VmValue::List(Rc::clone(&list));
+
+        vm.prepare_frame(0, func.regs).expect("frame");
+        vm.set_reg(0, arg.clone());
+        vm.push_frame(Frame {
+            func: Rc::clone(&func),
+            ip: 0,
+            base: 0,
+            ret_dst: usize::MAX,
+            mut_writeback: Vec::new(),
+        })
+        .expect("push frame");
+
+        let outcome = vm.try_native(&func, 0);
+        match outcome {
+            NativeAttempt::Completed(value) => {
+                // The native result must equal the interpreter's: the same list (same
+                // backing `Rc`, same contents).
+                match value {
+                    VmValue::List(got) => {
+                        assert!(
+                            Rc::ptr_eq(&got, &list),
+                            "pass-through must return the SAME backing list",
+                        );
+                        assert_eq!(
+                            got.borrow().len(),
+                            3,
+                            "round-tripped list must have its original contents",
+                        );
+                    }
+                    other => panic!("expected a List result, got {other:?}"),
+                }
+            }
+            NativeAttempt::Resumed => {
+                panic!("pass-through must complete with a heap result, got Resumed")
+            }
+            NativeAttempt::Fallback => {
+                panic!("pass-through must complete with a heap result, got Fallback")
+            }
+        }
+
+        // §7.2 invariant: the output table is cleared on EVERY exit, so nothing is
+        // retained past the call (and the input table too).
+        JIT_HEAP_RESULTS.with(|t| {
+            assert!(t.borrow().is_empty(), "output table must be cleared on exit")
+        });
+        JIT_HEAP_ARGS
+            .with(|t| assert!(t.borrow().is_empty(), "input table must be cleared on exit"));
+    }
+
+    /// §7.2 force-deopt twin: the SAME pass-through under the force-bail backend must
+    /// `Fallback` (bail at entry) — NOT produce a heap result — and leave the output
+    /// table empty. The interpreter re-run is then the sole source of the value, so
+    /// the bailed native attempt has no observable effect (no leaked/double-
+    /// materialized heap result). This is the mechanical proof of the §7.2 argument
+    /// for the new return ABI.
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_heap_result_force_deopt_leaves_output_table_empty() {
+        let mut vm = empty_vm();
+        // force_bail = true: pretend native bailed at its first guard (entry).
+        vm.native = Some(NativeState::new(0, true, true).expect("native module"));
+        let func = Rc::new(list_passthrough_func());
+
+        let list: Rc<RefCell<TypedVec>> =
+            Rc::new(RefCell::new(TypedVec::from_values(vec![VmValue::Int(7)])));
+
+        vm.prepare_frame(0, func.regs).expect("frame");
+        vm.set_reg(0, VmValue::List(Rc::clone(&list)));
+        vm.push_frame(Frame {
+            func: Rc::clone(&func),
+            ip: 0,
+            base: 0,
+            ret_dst: usize::MAX,
+            mut_writeback: Vec::new(),
+        })
+        .expect("push frame");
+
+        let outcome = vm.try_native(&func, 0);
+        assert!(
+            matches!(outcome, NativeAttempt::Fallback),
+            "force-deopt must bail (no heap result materialized), got a non-Fallback",
+        );
+        // The decisive §7.2 assertion: a bailed attempt leaves NO heap result behind.
+        JIT_HEAP_RESULTS.with(|t| {
+            assert!(
+                t.borrow().is_empty(),
+                "a bailed attempt must leave the output table empty (no leaked result)",
+            )
+        });
     }
 
     /// Consecutive (not cumulative) semantics: a single successful native

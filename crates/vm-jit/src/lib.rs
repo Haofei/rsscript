@@ -113,7 +113,7 @@ pub struct HostHelpers {
 /// producer (`rsscript`) translates its private bytecode into this stable,
 /// versioned surface, so the two crates are decoupled: a breaking IR change bumps
 /// this and the producer is updated in lock-step.
-pub const IR_VERSION: u32 = 9;
+pub const IR_VERSION: u32 = 10;
 
 /// Signed integer comparison (the four ordered comparisons; equality is its own
 /// instruction so it can also apply to booleans).
@@ -531,6 +531,14 @@ struct CompiledFunc {
     /// not a packed `n_params` arg array, so `call` validates the slice length
     /// against `n_regs` instead of `n_params`.
     osr: bool,
+    /// Heap-result return ABI (heap-write S0): `true` when this function's return
+    /// register is a [`JitValueType::Handle`], so its completed `i64` result is an
+    /// **output-table handle** (the host materializes a heap [`VmValue`] from it)
+    /// rather than a scalar. Computed once at compile time from the function's
+    /// `Return` source register type. A scalar-returning function has this `false`
+    /// and takes the unchanged [`NativeOutcome::Completed`] path. An OSR function
+    /// never has a top-level `Return` (it exits via `OsrExit`), so it is `false`.
+    returns_handle: bool,
 }
 
 /// Process-wide source of per-module identities, so a [`CompiledId`] minted by one
@@ -659,6 +667,20 @@ pub enum NativeOutcome {
     /// The function completed; the payload is the result bits (an `i64`, or an
     /// `f64` bit pattern for a float-returning function).
     Completed(i64),
+    /// The function completed and its result is a **heap value** (a struct/list),
+    /// not a scalar. The payload is an **opaque output-table handle**: the host
+    /// materializes the actual [`VmValue`] (host-side type) from its VM-owned output
+    /// table at this index. Emitted only on a clean completion (bail flag clear) of
+    /// a function whose return register is a [`JitValueType::Handle`]; the scalar
+    /// [`Completed`](NativeOutcome::Completed) path is byte-for-byte unchanged.
+    ///
+    /// **§7.2-safety (heap-write S0):** this variant carries no allocation/mutation
+    /// effect — native code only *returns a heap value it was already given* (a
+    /// pass-through). The host materializes the result **only** on this clean
+    /// completion; **any** bail returns [`Deopt`](NativeOutcome::Deopt) and the
+    /// output table is left untouched/cleared, so a bailed attempt has no observable
+    /// effect and §7.2's fallback-equivalence proof holds unchanged.
+    CompletedHandle(i64),
     /// The function deopted at `safepoint_id` (a guard bail or a host-helper bail)
     /// and the caller must fall back to the interpreter. `live` carries each
     /// register definitely assigned at the resume point with its captured value
@@ -679,7 +701,7 @@ impl NativeOutcome {
     /// only care whether the call produced a value.
     pub fn completed(self) -> Option<i64> {
         match self {
-            NativeOutcome::Completed(value) => Some(value),
+            NativeOutcome::Completed(value) | NativeOutcome::CompletedHandle(value) => Some(value),
             NativeOutcome::Deopt { .. } => None,
         }
     }
@@ -820,6 +842,15 @@ impl NativeModule {
         // fail cleanly here, not panic inside `build_function` (out-of-range index)
         // or trip Cranelift's verifier (a type mismatch) deep in codegen.
         validate(function)?;
+        // Heap-result return ABI (S0): a non-OSR function whose `Return` source is a
+        // `Handle` register returns an output-table handle, not a scalar. Determined
+        // purely from the (validated) IR, before codegen. OSR functions never have a
+        // top-level `Return` (they exit via `OsrExit`), so this stays `false`.
+        let returns_handle = osr_header.is_none()
+            && function.code.iter().any(|instr| {
+                matches!(instr, JitInstr::Return { src }
+                    if function.reg_types[*src as usize] == JitValueType::Handle)
+            });
         let ptr_ty = self.module.target_config().pointer_type();
         self.module.clear_context(&mut self.ctx);
         self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // args ptr
@@ -872,6 +903,7 @@ impl NativeModule {
             n_regs: function.n_regs as usize,
             deopt_map,
             osr: osr_header.is_some(),
+            returns_handle,
         });
         Ok(handle)
     }
@@ -935,6 +967,7 @@ impl NativeModule {
         }
         let f = func.f;
         let n_regs = func.n_regs;
+        let returns_handle = func.returns_handle;
         let deopt_map = &func.deopt_map;
         let mut out: i64 = 0;
         BAIL_FLAG.with(|bail| {
@@ -986,7 +1019,18 @@ impl NativeModule {
                     };
                     if completed != 0 && bail.get() == 0 {
                         // Success: leave the payload buffer untouched, build no Vec.
-                        NativeOutcome::Completed(out)
+                        // Heap-result return ABI (S0): a Handle-returning function's
+                        // `out` is an output-table handle, signalled distinctly so the
+                        // host materializes a heap value from it. The scalar path is
+                        // byte-for-byte unchanged. §7.2: this branch runs ONLY on a
+                        // clean completion (`completed != 0 && bail.get() == 0`); any
+                        // bail takes the `else` (`Deopt`) arm, so no heap result is
+                        // ever reported on a bailed attempt.
+                        if returns_handle {
+                            NativeOutcome::CompletedHandle(out)
+                        } else {
+                            NativeOutcome::Completed(out)
+                        }
                     } else {
                         let safepoint_id = SafepointId(safepoint.get() as u32);
                         // Decode the captured live registers via the J0.1a state-map.
@@ -1278,9 +1322,15 @@ fn validate(program: &JitFunction) -> Result<(), JitError> {
             }
             JitInstr::Return { src } => {
                 check_reg(*src)?;
-                if is_nonscalar(*src) {
+                // Heap-result return ABI (heap-write S0): a scalar (`Int`/`Float`) or a
+                // `Handle` register may be returned. A `Handle` return's i64 is an
+                // opaque output-table handle (the host materializes a heap value from
+                // it); see [`NativeOutcome::CompletedHandle`]. A FLAT-array register is
+                // still rejected — it is a (pointer, length) pair, not a single
+                // returnable word.
+                if matches!(class(*src), JitValueType::FlatInt | JitValueType::FlatFloat) {
                     return Err(JitError(
-                        "Return: cannot return a non-scalar (Handle/flat) register".into(),
+                        "Return: cannot return a flat-array register".into(),
                     ));
                 }
             }
@@ -3045,6 +3095,55 @@ mod tests {
         }
     }
 
+    // Heap-result return ABI (heap-write S0): a function whose `Return` source is a
+    // `Handle` register reports `CompletedHandle` carrying the i64 it returned (an
+    // opaque output-table handle), while the scalar path stays `Completed`. This
+    // pass-through (`fn(h) -> h`) performs no allocation/mutation; the host
+    // materializes from its output table only on this clean completion (§7.2-safe).
+    #[test]
+    fn handle_returning_function_reports_completed_handle() {
+        use JitValueType::Handle;
+        let mut m = module();
+        // fn(h: Handle) -> Handle { return h }
+        let id = m
+            .compile(&ft(1, vec![Handle], vec![JitInstr::Return { src: 0 }]))
+            .unwrap();
+        // The arg is an opaque table index (the host's input-table handle); the call
+        // returns it verbatim via the heap-result variant.
+        match m.call(id, &[7], &[0]) {
+            NativeOutcome::CompletedHandle(h) => assert_eq!(h, 7),
+            other => panic!("expected CompletedHandle, got {other:?}"),
+        }
+        // The scalar-return path is byte-identical: a plain Int return is `Completed`.
+        let sid = m
+            .compile(&f(1, 1, vec![JitInstr::Return { src: 0 }]))
+            .unwrap();
+        match m.call(sid, &[42], &[0]) {
+            NativeOutcome::Completed(v) => assert_eq!(v, 42),
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    // A forced bail of a handle-returning function reports `Deopt`, NOT
+    // `CompletedHandle`: the heap result is materialized only on clean completion, so
+    // a bailed attempt never reports a heap value (§7.2 no-effect-before-bail).
+    #[test]
+    fn handle_returning_function_bails_as_deopt_not_handle() {
+        use JitValueType::Handle;
+        let mut m = module();
+        // fn(h: Handle) -> Handle { bail; return h } — force the (only) site to bail.
+        let func = ft(
+            1,
+            vec![Handle],
+            vec![JitInstr::Bail, JitInstr::Return { src: 0 }],
+        );
+        let id = m.compile(&func).unwrap();
+        match m.call(id, &[7], &[0]) {
+            NativeOutcome::Deopt { .. } => {}
+            other => panic!("expected Deopt on bail, got {other:?}"),
+        }
+    }
+
     #[test]
     fn compiles_and_runs_float_arith() {
         use JitValueType::{Float, Int};
@@ -3681,7 +3780,9 @@ mod tests {
                         .expect("total is live-out");
                     assert_eq!(total, expected, "live-out total for n={n}");
                 }
-                NativeOutcome::Completed(_) => panic!("OSR loop must deopt at exit, not complete"),
+                NativeOutcome::Completed(_) | NativeOutcome::CompletedHandle(_) => {
+                    panic!("OSR loop must deopt at exit, not complete")
+                }
             }
         }
     }
@@ -3734,7 +3835,7 @@ mod tests {
             NativeOutcome::Deopt { live, .. } => {
                 live.iter().find(|r| r.reg == reg).map(|r| r.value)
             }
-            NativeOutcome::Completed(_) => None,
+            NativeOutcome::Completed(_) | NativeOutcome::CompletedHandle(_) => None,
         }
     }
 
@@ -3991,7 +4092,7 @@ mod tests {
                         );
                         live
                     }
-                    NativeOutcome::Completed(_) => {
+                    NativeOutcome::Completed(_) | NativeOutcome::CompletedHandle(_) => {
                         panic!("{}: forced site {} did not bail", case.name, k)
                     }
                 };
