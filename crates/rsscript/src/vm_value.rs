@@ -291,6 +291,7 @@ impl TypedVec {
     /// native tier to index directly. `None` for any other kind. The pointer is
     /// only valid while the backing `Vec` is borrowed and not mutated (the caller's
     /// borrow protocol — see `try_native`).
+    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
     pub(crate) fn as_ints_slice(&self) -> Option<(*const i64, usize)> {
         match self {
             TypedVec::Ints(v) => Some((v.as_ptr(), v.len())),
@@ -300,6 +301,7 @@ impl TypedVec {
 
     /// TV2: the raw flat `f64` buffer of a `Floats` list as `(ptr, len)`. `None`
     /// for any other kind.
+    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
     pub(crate) fn as_floats_slice(&self) -> Option<(*const f64, usize)> {
         match self {
             TypedVec::Floats(v) => Some((v.as_ptr(), v.len())),
@@ -756,6 +758,9 @@ impl TypeLayout {
     }
 }
 
+/// Interner map: a `(name, field_names)` shape to its shared [`TypeLayout`].
+type LayoutInterner = HashMap<(Rc<str>, Vec<Rc<str>>), Rc<TypeLayout>>;
+
 thread_local! {
     /// The per-VM dynamic layout interner (V2.0). Keyed by `(name, field_names)`,
     /// it maps a type shape to its single shared `Rc<TypeLayout>`. First lookup of a
@@ -777,7 +782,7 @@ thread_local! {
     /// observable behavior (including `Map` iteration order) is unchanged. The cache
     /// is process-thread-lifetime; it is never cleared, which is correct because a
     /// `(name, field_names)` shape maps to exactly one immutable layout forever.
-    static LAYOUT_INTERNER: RefCell<HashMap<(Rc<str>, Vec<Rc<str>>), Rc<TypeLayout>>> =
+    static LAYOUT_INTERNER: RefCell<LayoutInterner> =
         RefCell::new(HashMap::new());
 }
 
@@ -1438,6 +1443,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::mutable_key_type)]
     fn map_iteration_order_snapshot_unchanged() {
         // Canary for the determinism hazard (§3): build a map with mixed inline
         // (scalar) and heap (string/list) `Some` keys, plus other key shapes, and
@@ -1445,7 +1451,7 @@ mod tests {
         // `Some` hash ever diverges from the old boxed hash, this order shifts and
         // the snapshot breaks — exactly the parity hazard this slice must avoid.
         let mut map: ValueMap = ValueMap::default();
-        let keys = vec![
+        let keys = [
             VmValue::some(VmValue::Int(1)),
             VmValue::some(VmValue::Int(2)),
             VmValue::some(VmValue::Char('a')),
@@ -1685,11 +1691,12 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::mutable_key_type)]
     fn map_order_with_list_int_keys_is_stable() {
         // `List<Int>` is a hashable map key. Snapshot the iteration order keyed by
         // typed `Ints` lists; a typed-vs-boxed hash divergence would shift it.
         let mut map: ValueMap = ValueMap::default();
-        let keys = vec![
+        let keys = [
             list_value(TypedVec::Ints(vec![3, 1])),
             list_value(TypedVec::Ints(vec![1])),
             list_value(TypedVec::Ints(vec![2, 2, 2])),

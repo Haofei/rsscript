@@ -369,6 +369,7 @@ fn tco_reachable_instructions(code: &[RegInstr]) -> Vec<bool> {
 ///   * the original `CallKnown` is replaced **in place** by `Jump { target: rebind_block }`.
 ///   * the original `Return` becomes unreachable (left as dead code; the
 ///     reachability/native passes ignore it).
+///
 /// Appended instructions only add *forward* edges from the existing body and a
 /// single backward edge to `entry`; every pre-existing index is untouched.
 ///
@@ -491,11 +492,8 @@ fn optimize_self_tail_calls(function: &mut RegFunction, function_id: usize) {
                 src: arg,
             });
         }
-        for param in 0..args.len() {
-            function.code.push(RegInstr::Move {
-                dst: param,
-                src: staging[param],
-            });
+        for (param, &src) in staging.iter().enumerate() {
+            function.code.push(RegInstr::Move { dst: param, src });
         }
         function.code.push(RegInstr::Jump { target: entry });
         // Redirect the original call site into the rebind block. The following
@@ -562,17 +560,17 @@ fn instr_reads_register(instr: &RegInstr, reg: Reg) -> bool {
         RegInstr::MakeMap { entries, .. } => {
             entries.iter().any(|(k, v)| *k == reg || *v == reg)
         }
-        RegInstr::MakeList { items, .. } => items.iter().any(|r| *r == reg),
-        RegInstr::MakeClosure { captures, .. } => captures.iter().any(|r| *r == reg),
+        RegInstr::MakeList { items, .. } => items.contains(&reg),
+        RegInstr::MakeClosure { captures, .. } => captures.contains(&reg),
         RegInstr::ResourceDrop { resource } => *resource == reg,
         RegInstr::CallKnown { args, .. }
         | RegInstr::CallDynamic { args, .. }
         | RegInstr::CallNative { args, .. }
-        | RegInstr::SpawnTask { args, .. } => args.iter().any(|r| *r == reg),
+        | RegInstr::SpawnTask { args, .. } => args.contains(&reg),
         RegInstr::CallClosure { closure, args, .. } => {
-            *closure == reg || args.iter().any(|r| *r == reg)
+            *closure == reg || args.contains(&reg)
         }
-        RegInstr::SelectWait { handles, .. } => handles.iter().any(|r| *r == reg),
+        RegInstr::SelectWait { handles, .. } => handles.contains(&reg),
         // Synthetic native-only ops never appear in lowered code seen by TCO, but
         // enumerate them for completeness.
         RegInstr::NativeGuardClosureId { closure, .. }
@@ -9069,8 +9067,8 @@ const NATIVE_NOAMORTIZE_GIVEUP: u32 = 64;
 const PROFILE_WARMUP: u32 = 50;
 
 /// Per-function dynamic-call count at which J1 stops sampling: once a function's
-/// `call_count` reaches this, [`record_call_site`] freezes (a single `Cell` read
-/// + compare, then return) so a dynamic call driven by a hot loop has an
+/// `call_count` reaches this, [`record_call_site`] freezes (a single `Cell`
+/// read + compare, then return) so a dynamic call driven by a hot loop has an
 /// essentially-free steady state. The window `PROFILE_WARMUP..PROFILE_RECORD_LIMIT`
 /// is more than enough samples to settle every site's mono/poly/mega state.
 const PROFILE_RECORD_LIMIT: u32 = PROFILE_WARMUP + 256;
@@ -10828,7 +10826,7 @@ fn type_name_may_contain_fn(type_name: &str, hir: &Hir) -> bool {
 fn type_name_root(type_name: &str) -> &str {
     let name = type_name.trim();
     let end = name
-        .find(|c: char| c == '<' || c == '(' || c == ' ')
+        .find(['<', '(', ' '])
         .unwrap_or(name.len());
     name[..end].trim()
 }

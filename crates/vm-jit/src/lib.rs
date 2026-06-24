@@ -1586,8 +1586,11 @@ fn definite_assignment(program: &JitFunction) -> Vec<Vec<bool>> {
 
     // Entry set for instruction 0: the parameters are assigned, nothing else.
     let mut entry0 = vec![false; n_regs];
-    for r in 0..(program.n_params as usize).min(n_regs) {
-        entry0[r] = true;
+    for slot in entry0
+        .iter_mut()
+        .take((program.n_params as usize).min(n_regs))
+    {
+        *slot = true;
     }
 
     // `assigned_in[0]` is pinned to the params; every other block starts at the
@@ -1604,10 +1607,10 @@ fn definite_assignment(program: &JitFunction) -> Vec<Vec<bool>> {
 
     let out_of = |in_set: &[bool], i: usize| -> Vec<bool> {
         let mut out = in_set.to_vec();
-        if let Some(d) = instr_def(&program.code[i]) {
-            if (d as usize) < n_regs {
-                out[d as usize] = true;
-            }
+        if let Some(d) = instr_def(&program.code[i])
+            && (d as usize) < n_regs
+        {
+            out[d as usize] = true;
         }
         out
     };
@@ -2849,6 +2852,7 @@ fn build_function(
 /// `NativeModule::call` borrow protocol guarantees point at a live, immovable,
 /// unmutated buffer of `len` elements for the call's duration. So every in-bounds
 /// element address is valid and the read cannot alias a concurrent mutation.
+#[allow(clippy::too_many_arguments)]
 fn emit_direct_get(
     bcx: &mut FunctionBuilder,
     lens_ptr: Value,
@@ -2943,6 +2947,7 @@ impl DeoptCtx<'_> {
 /// *stored* into `payload_ptr[reg]` (`vars[reg]` is its Cranelift variable; an f64
 /// var stores its 8-byte bit pattern into the slot). The hot `cont` path emits no
 /// capture store, so non-bailing iterations are unaffected.
+#[allow(clippy::too_many_arguments)]
 fn bail_if(
     bcx: &mut FunctionBuilder,
     cond: Value,
@@ -2989,6 +2994,7 @@ fn bail_if(
 /// Load the host-helper bail flag and branch to `fallback` if a preceding heap
 /// read flagged failure — checked immediately after each helper call so a bad
 /// read never keeps executing. Returns the continuation block.
+#[allow(clippy::too_many_arguments)]
 fn bail_if_helper_failed(
     bcx: &mut FunctionBuilder,
     bail_ptr: Value,
@@ -3005,6 +3011,7 @@ fn bail_if_helper_failed(
 
 /// Checked division / remainder matching the interpreter: bail on divide-by-zero
 /// and on `i64::MIN / -1` (the only signed-division overflow).
+#[allow(clippy::too_many_arguments)]
 fn emit_checked_divrem(
     bcx: &mut FunctionBuilder,
     lhs: Variable,
@@ -3039,6 +3046,7 @@ fn emit_checked_divrem(
 
 /// Checked shift: bail when the shift amount is negative or `>= 64` (so the
 /// in-range case matches `wrapping_shl`/`wrapping_shr` exactly).
+#[allow(clippy::too_many_arguments)]
 fn emit_checked_shift(
     bcx: &mut FunctionBuilder,
     lhs: Variable,
@@ -5172,7 +5180,7 @@ mod tests {
         let iv = interval_analysis(&prog);
         // After widening, `i` on entry to the Add is TOP ⇒ the increment stays checked.
         assert_eq!(iv[2][0], Interval::TOP);
-        assert!(!arith_cannot_overflow(&iv[2], &prog.code[0 + 2]));
+        assert!(!arith_cannot_overflow(&iv[2], &prog.code[2]));
     }
 
     // --- J4.3+: branch-conditioned range refinement for loop counters ----------
