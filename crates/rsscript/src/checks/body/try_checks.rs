@@ -1,4 +1,5 @@
 use super::*;
+use crate::checks::shared::builtin_value_type_name;
 
 pub(super) fn check_try_value_is_result(analyzer: &mut Analyzer<'_>, value: &HirExpr, span: &Span) {
     let Some(type_name) = hir_expr_type_name(value) else {
@@ -203,39 +204,6 @@ pub(super) fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
         | HirExpr::ArrayLiteral { .. }
         | HirExpr::Closure { .. }
         | HirExpr::Unknown(_) => None,
-    }
-}
-
-pub(super) fn builtin_value_type_name(name: &str) -> Option<&'static str> {
-    match name {
-        "true" | "false" => Some("Bool"),
-        "null" => Some("JsonLiteral"),
-        "Unit" => Some("Unit"),
-        "None" => Some("Option<?>"),
-        _ => None,
-    }
-}
-
-pub(super) fn hir_expr_span(expr: &HirExpr) -> &Span {
-    match expr {
-        HirExpr::Ident { span, .. }
-        | HirExpr::Number { span, .. }
-        | HirExpr::String { span, .. }
-        | HirExpr::ObjectLiteral { span, .. }
-        | HirExpr::MapLiteral { span, .. }
-        | HirExpr::ArrayLiteral { span, .. }
-        | HirExpr::Binary { span, .. }
-        | HirExpr::Field { span, .. }
-        | HirExpr::Index { span, .. }
-        | HirExpr::Call { span, .. }
-        | HirExpr::Effect { span, .. }
-        | HirExpr::Manage { span, .. }
-        | HirExpr::Spawn { span, .. }
-        | HirExpr::Await { span, .. }
-        | HirExpr::Try { span, .. }
-        | HirExpr::Closure { span, .. }
-        | HirExpr::Match { span, .. }
-        | HirExpr::Unknown(span) => span,
     }
 }
 

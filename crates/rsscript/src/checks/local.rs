@@ -1,6 +1,7 @@
 use crate::text_util::{split_top_level_type_args, strip_fresh_type};
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use crate::checks::shared::hir_expr_span;
 use crate::diagnostic::Span;
 use crate::hir::{
     CallResolution, HirBinding, HirBindingKind, HirBlock, HirCallArg, HirEffectEvent,
@@ -1470,29 +1471,6 @@ fn local_expr_label(expr: &Expr) -> String {
             local_expr_label(value)
         }
         _ => "<expr>".to_string(),
-    }
-}
-
-fn hir_expr_span(expr: &HirExpr) -> &Span {
-    match expr {
-        HirExpr::Ident { span, .. }
-        | HirExpr::Number { span, .. }
-        | HirExpr::String { span, .. }
-        | HirExpr::ObjectLiteral { span, .. }
-        | HirExpr::MapLiteral { span, .. }
-        | HirExpr::ArrayLiteral { span, .. }
-        | HirExpr::Binary { span, .. }
-        | HirExpr::Field { span, .. }
-        | HirExpr::Index { span, .. }
-        | HirExpr::Call { span, .. }
-        | HirExpr::Effect { span, .. }
-        | HirExpr::Manage { span, .. }
-        | HirExpr::Spawn { span, .. }
-        | HirExpr::Await { span, .. }
-        | HirExpr::Try { span, .. }
-        | HirExpr::Closure { span, .. }
-        | HirExpr::Match { span, .. }
-        | HirExpr::Unknown(span) => span,
     }
 }
 

@@ -1,4 +1,5 @@
 use crate::analyzer::Analyzer;
+use crate::checks::shared::builtin_value_type_name;
 use crate::diagnostic::{Diagnostic, code};
 use crate::hir::{HirBlock, HirExpr, HirStmt};
 use crate::syntax::ast::{BinaryOp, FunctionDecl, Item};
@@ -559,16 +560,6 @@ fn inferred_operand_type<'a>(analyzer: &'a Analyzer<'_>, expr: &'a HirExpr) -> O
         | HirExpr::ArrayLiteral { .. }
         | HirExpr::Closure { .. }
         | HirExpr::Unknown(_) => None,
-    }
-}
-
-fn builtin_value_type_name(name: &str) -> Option<&'static str> {
-    match name {
-        "true" | "false" => Some("Bool"),
-        "null" => Some("JsonLiteral"),
-        "Unit" => Some("Unit"),
-        "None" => Some("Option<?>"),
-        _ => None,
     }
 }
 

@@ -4,3 +4,4 @@ pub(crate) mod diagnostic_helpers;
 pub(crate) mod features;
 pub(crate) mod forbidden;
 pub(crate) mod local;
+pub(crate) mod shared;

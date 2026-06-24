@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::analyzer::Analyzer;
 use crate::checks::diagnostic_helpers::error_cause_manual_fix;
+use crate::checks::shared::builtin_value_type_name;
 use crate::diagnostic::{Diagnostic, FixEdit, Span, code};
 use crate::hir::{
     CallResolution, FunctionSig, HirBindingKind, HirBlock, HirCallArg, HirExpr, HirStmt, ParamSig,
@@ -4574,16 +4575,6 @@ fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
         | HirExpr::Closure { .. }
         | HirExpr::Match { .. }
         | HirExpr::Unknown(_) => None,
-    }
-}
-
-fn builtin_value_type_name(name: &str) -> Option<&'static str> {
-    match name {
-        "true" | "false" => Some("Bool"),
-        "null" => Some("JsonLiteral"),
-        "Unit" => Some("Unit"),
-        "None" => Some("Option<?>"),
-        _ => None,
     }
 }
 

@@ -41,6 +41,8 @@ use resource_pool::*;
 use semantics::*;
 use try_checks::*;
 
+use crate::checks::shared::hir_expr_span;
+
 pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
     let functions: Vec<FunctionDecl> = analyzer
         .syntax_program
