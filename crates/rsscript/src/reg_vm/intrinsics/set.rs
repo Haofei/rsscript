@@ -1,0 +1,142 @@
+use super::super::*;
+use crate::reg_vm::value_ops::*;
+
+impl RegVm {
+    #[allow(clippy::mutable_key_type)]
+    pub(super) fn exec_set_intrinsics(
+        &mut self,
+        unit: &RegUnit,
+        intrinsic: RegIntrinsic,
+        args: &[Reg],
+        base: usize,
+        next_base: usize,
+    ) -> Result<VmValue, EvalError> {
+        let _ = unit;
+        let _ = next_base;
+        match intrinsic {
+            RegIntrinsic::SetContains => {
+                let set = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let key = map_key_from_value(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::Bool(set.borrow().contains_key(&key)))
+            }
+            RegIntrinsic::SetDifference => {
+                let left = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let right = expect_map_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let right = right.borrow();
+                let result = left
+                    .borrow()
+                    .iter()
+                    .filter(|(key, _)| !right.contains_key(key))
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect::<ValueMap>();
+                Ok(VmValue::Map(Rc::new(RefCell::new(result))))
+            }
+            RegIntrinsic::SetIntersection => {
+                let left = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let right = expect_map_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let right = right.borrow();
+                let result = left
+                    .borrow()
+                    .iter()
+                    .filter(|(key, _)| right.contains_key(key))
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect::<ValueMap>();
+                Ok(VmValue::Map(Rc::new(RefCell::new(result))))
+            }
+            RegIntrinsic::SetIsEmpty => {
+                let set = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Bool(set.borrow().is_empty()))
+            }
+            RegIntrinsic::SetIsSubset => {
+                let left = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let right = expect_map_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let right = right.borrow();
+                Ok(VmValue::Bool(
+                    left.borrow().keys().all(|key| right.contains_key(key)),
+                ))
+            }
+            RegIntrinsic::SetLen => {
+                let set = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Int(set.borrow().len() as i64))
+            }
+            RegIntrinsic::SetNew => Ok(VmValue::Map(Rc::new(RefCell::new(ValueMap::default())))),
+            RegIntrinsic::SetToList => {
+                let set = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let values = set
+                    .borrow()
+                    .keys()
+                    .map(vm_value_from_map_key)
+                    .collect::<Vec<_>>();
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(values)))))
+            }
+            RegIntrinsic::SetUnion => {
+                let left = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let right = expect_map_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let mut result = left.borrow().clone();
+                for (key, value) in right.borrow().iter() {
+                    result.entry(key.clone()).or_insert_with(|| value.clone());
+                }
+                Ok(VmValue::Map(Rc::new(RefCell::new(result))))
+            }
+            RegIntrinsic::SortedSetContains => {
+                let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let value = intrinsic_arg(&self.stack, base, args, 1)?;
+                Ok(VmValue::Bool(sorted_contains_vm(&set.borrow(), value)?))
+            }
+            RegIntrinsic::SortedSetIsEmpty => {
+                let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Bool(set.borrow().is_empty()))
+            }
+            RegIntrinsic::SortedSetLen => {
+                let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Int(set.borrow().len() as i64))
+            }
+            RegIntrinsic::SortedSetNew => Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::new())))),
+            RegIntrinsic::SortedSetToList => {
+                let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::List(Rc::new(RefCell::new(set.borrow().clone()))))
+            }
+            RegIntrinsic::SortedMapContainsKey => {
+                let map = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let key = intrinsic_arg(&self.stack, base, args, 1)?;
+                Ok(VmValue::Bool(
+                    sorted_map_get_in_place(&map.borrow(), key)?.is_some(),
+                ))
+            }
+            RegIntrinsic::SortedMapGet => {
+                let map = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let key = intrinsic_arg(&self.stack, base, args, 1)?;
+                Ok(sorted_map_get_in_place(&map.borrow(), key)?
+                    .map(|value| VmValue::some(value))
+                    .unwrap_or(VmValue::OptionNone))
+            }
+            RegIntrinsic::SortedMapIsEmpty => {
+                let entries =
+                    expect_sorted_map_entries(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Bool(entries.is_empty()))
+            }
+            RegIntrinsic::SortedMapKeys => {
+                let entries =
+                    expect_sorted_map_entries(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let keys = entries.into_iter().map(|(key, _)| key).collect::<Vec<_>>();
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(keys)))))
+            }
+            RegIntrinsic::SortedMapLen => {
+                let entries =
+                    expect_sorted_map_entries(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Int(entries.len() as i64))
+            }
+            RegIntrinsic::SortedMapNew => Ok(sorted_map_value(Vec::new())),
+            RegIntrinsic::SortedMapValues => {
+                let entries =
+                    expect_sorted_map_entries(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let values = entries
+                    .into_iter()
+                    .map(|(_, value)| value)
+                    .collect::<Vec<_>>();
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(values)))))
+            }
+            other => unreachable!("exec_set_intrinsics called with non-set intrinsic: {other:?}"),
+        }
+    }
+}
