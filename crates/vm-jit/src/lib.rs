@@ -876,7 +876,7 @@ impl NativeModule {
         // `JitFunction` is a public, versioned surface: a malformed producer must
         // fail cleanly here, not panic inside `build_function` (out-of-range index)
         // or trip Cranelift's verifier (a type mismatch) deep in codegen.
-        validate(function)?;
+        validate(function, osr_header.is_some())?;
         // Heap-result return ABI (S0): a non-OSR function whose `Return` source is a
         // `Handle` register returns an output-table handle, not a scalar. Determined
         // purely from the (validated) IR, before codegen. OSR functions never have a
@@ -1164,7 +1164,7 @@ pub fn signal_bail() {
 /// operand class (and forbids `Handle`), the int-only ops (`Mod`, bit/shift) require
 /// `Int`, comparisons yield an `Int` boolean, and `Handle` registers are only valid
 /// as the `base` of a heap read.
-fn validate(program: &JitFunction) -> Result<(), JitError> {
+fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
     let n_regs = program.n_regs as usize;
     let n = program.code.len();
 
@@ -1272,11 +1272,22 @@ fn validate(program: &JitFunction) -> Result<(), JitError> {
         }
         Ok(())
     };
-    // A flat-array base must be the expected flat class *and* a parameter (flat
-    // pointers only enter via the caller's args/lens, never produced internally).
+    // A flat-array base must be the expected flat class *and* enter through the
+    // caller's args/lens window (never produced internally). For a normal compile the
+    // window is the packed params (`0..n_params`); for an OSR-entry the window is the
+    // full `n_regs`-wide register file (args/lens are both `n_regs`-wide and loaded by
+    // register index — see the OSR `load_set`), so any window register may carry a
+    // flat pointer the host marshalled and bounds-checked against the parallel `lens`
+    // slot. The host's borrow protocol pins the buffer for the call's duration either
+    // way.
     let require_flat_param = |r: u32, want: JitValueType, op: &str| -> Result<(), JitError> {
         require_class(r, want, op)?;
-        if (r as usize) >= program.n_params as usize {
+        let window = if osr {
+            program.n_regs as usize
+        } else {
+            program.n_params as usize
+        };
+        if (r as usize) >= window {
             return Err(JitError(format!("{op}: register {r} is not a parameter")));
         }
         Ok(())
@@ -1409,7 +1420,12 @@ fn validate(program: &JitFunction) -> Result<(), JitError> {
                         class(*base)
                     )));
                 }
-                if (*base as usize) >= program.n_params as usize {
+                let window = if osr {
+                    program.n_regs as usize
+                } else {
+                    program.n_params as usize
+                };
+                if (*base as usize) >= window {
                     return Err(JitError(format!(
                         "ListLenDirect base: register {base} is not a parameter"
                     )));
@@ -3055,6 +3071,12 @@ fn emit_checked_shift(
 mod tests {
     use super::*;
 
+    /// Test shim: validate as a non-OSR program (the common case for these IR
+    /// validation tests). OSR-specific validation is exercised via `compile_osr`.
+    fn validate(program: &JitFunction) -> Result<(), JitError> {
+        super::validate(program, false)
+    }
+
     /// Test-only convenience over [`NativeModule::call`]: pass a zeroed `lens`
     /// (length-matched to `args`) for tests that use no flat-array params.
     trait CallScalar {
@@ -3846,6 +3868,197 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn osr_window_flat_list_direct_read_and_len() {
+        // OSR loop summing a flat List<Int> that lives in a NON-param window slot
+        // (reg index >= n_params). Models a loop-invariant typed list marshalled into
+        // the OSR live-in window as a flat buffer: in-loop `List.get` lowers to
+        // `ListGetIntDirect` and `List.len` to `ListLenDirect`, both basing off the
+        // window register. This exercises the relaxed flat-base gate (admits an
+        // OSR-window register, not only a top-level param).
+        //
+        // regs: 0=xs(FlatInt, NON-param window slot), 1=len, 2=i, 3=acc, 4=one, 5=elem
+        // n_params=0. The flat list and every loop-carried value enter via the live-in
+        // window (definite-assignment includes a register read-but-never-written in the
+        // loop, exactly as `translate_osr_loop` produces for a pre-loop-built list whose
+        // pre-header init instructions become `Bail` — no linear pred excludes it). The
+        // pre-loop region is `Bail` (never run under OSR), so the header's only preds are
+        // the loop backedge, keeping `xs`/`len`/`i`/`acc`/`one` definitely-assigned there.
+        use JitValueType::{FlatInt, Int};
+        let mut m = module();
+        let code = vec![
+            JitInstr::Bail, // 0 pre-loop (never run under OSR; no successor)
+            JitInstr::Bail, // 1
+            JitInstr::Bail, // 2
+            JitInstr::Bail, // 3
+            // 4: loop head (OSR header): if !(i < len) goto end(9)
+            JitInstr::JumpIfIntCompare {
+                lhs: 2,
+                rhs: 1,
+                op: JitCompare::Lt,
+                expected: false,
+                target: 9,
+            },
+            JitInstr::ListGetIntDirect { dst: 5, base: 0, index: 2 }, // 5 elem = xs[i]
+            JitInstr::Add { dst: 3, lhs: 3, rhs: 5 },                 // 6 acc += elem
+            JitInstr::Add { dst: 2, lhs: 2, rhs: 4 },                 // 7 i += 1
+            JitInstr::Jump { target: 4 },                             // 8 loop
+            JitInstr::OsrExit,                                        // 9 exit (live-out: acc)
+        ];
+        let prog = ft(
+            0,
+            vec![FlatInt, Int, Int, Int, Int, Int],
+            code,
+        );
+        // OSR header at the loop head (ip 4). regs 0,1,2,3,4 are definitely assigned
+        // there (read-only live-ins, never written in-loop).
+        let id = m.compile_osr(&prog, 4).unwrap();
+
+        let data: Vec<i64> = vec![10, 20, 30, 40];
+        // The window is n_regs-wide; reg0's args slot holds the raw data pointer and
+        // reg0's lens slot holds the element count (the flat-buffer ABI, by register).
+        // Seed the loop live-in: len=4 (reg1), i=0 (reg2), acc=0 (reg3), one=1 (reg4).
+        let mut window = [0i64; 6];
+        window[0] = data.as_ptr() as i64;
+        window[1] = data.len() as i64; // len (hoisted, live-in)
+        window[2] = 0; // i
+        window[3] = 0; // acc
+        window[4] = 1; // one
+        let mut lens = [0i64; 6];
+        lens[0] = data.len() as i64;
+        match m.call(id, &window, &lens) {
+            NativeOutcome::Deopt { safepoint_id, live } => {
+                let site = m.deopt_map(id).unwrap().sites[safepoint_id.0 as usize - 1].clone();
+                assert_eq!(site.resume_ip, 9, "exits at post-loop ip");
+                let acc = live
+                    .iter()
+                    .find(|r| r.reg == 3)
+                    .map(|r| match r.value {
+                        DeoptValue::Int(v) => v,
+                        DeoptValue::Float(_) => panic!("acc is Int"),
+                    })
+                    .expect("acc is live-out");
+                assert_eq!(acc, 100, "sum of [10,20,30,40] via direct reads");
+            }
+            other => panic!("OSR loop must deopt at exit, got {other:?}"),
+        }
+        // OOB safety: a window whose lens claims more elements than the buffer has
+        // would read OOB — but every direct read is bounds-checked against lens, so a
+        // shorter real loop bound (len) keeps every index in range. To prove the OOB
+        // guard itself bails, force an index past the buffer by lying about len upward
+        // is unsound for the test buffer; instead, an empty buffer (len 0) must make
+        // the very first `i < len` false and exit immediately with acc=0.
+        let mut empty_window = [0i64; 6];
+        let empty: Vec<i64> = vec![];
+        empty_window[0] = empty.as_ptr() as i64;
+        empty_window[1] = 0; // len = 0
+        empty_window[4] = 1; // one
+        let mut empty_lens = [0i64; 6];
+        empty_lens[0] = 0;
+        match m.call(id, &empty_window, &empty_lens) {
+            NativeOutcome::Deopt { safepoint_id, live } => {
+                let site = m.deopt_map(id).unwrap().sites[safepoint_id.0 as usize - 1].clone();
+                assert_eq!(site.resume_ip, 9);
+                let acc = live.iter().find(|r| r.reg == 3).map(|r| match r.value {
+                    DeoptValue::Int(v) => v,
+                    DeoptValue::Float(_) => panic!(),
+                });
+                assert_eq!(acc, Some(0), "empty list sums to 0");
+            }
+            other => panic!("empty OSR loop must deopt at exit, got {other:?}"),
+        }
+
+        // ListLenDirect in-loop off a NON-param flat window register + OOB direct read.
+        // regs: 0=xs(FlatInt), 1=i, 2=acc, 3=one, 4=len, 5=elem. The loop reads len
+        // directly each iteration (ListLenDirect base=0) and indexes xs[i]; an `i`
+        // pushed past `len` (here we drive the loop bound from a SEPARATE register `b`
+        // larger than the buffer) makes the direct read OOB ⇒ a bounds-check bail/deopt
+        // (NOT UB), matching the host helper's OOB bail.
+        // regs: 0=xs, 1=i, 2=acc, 3=one, 4=len(unused-here), 5=elem, 6=bound
+        let code2 = vec![
+            JitInstr::Bail, // 0 pre-loop
+            JitInstr::Bail, // 1
+            JitInstr::Bail, // 2
+            JitInstr::Bail, // 3
+            // 4: header: if !(i < bound) goto end(10)
+            JitInstr::JumpIfIntCompare {
+                lhs: 1,
+                rhs: 6,
+                op: JitCompare::Lt,
+                expected: false,
+                target: 10,
+            },
+            JitInstr::ListLenDirect { dst: 4, base: 0 }, // 5 len = len(xs)  (direct)
+            JitInstr::ListGetIntDirect { dst: 5, base: 0, index: 1 }, // 6 elem = xs[i] (OOB once i>=len)
+            JitInstr::Add { dst: 2, lhs: 2, rhs: 5 },    // 7 acc += elem
+            JitInstr::Add { dst: 1, lhs: 1, rhs: 3 },    // 8 i += 1
+            JitInstr::Jump { target: 4 },                // 9 loop
+            JitInstr::OsrExit,                           // 10 exit
+        ];
+        let prog2 = ft(
+            0,
+            vec![
+                JitValueType::FlatInt,
+                Int,
+                Int,
+                Int,
+                Int,
+                Int,
+                Int,
+            ],
+            code2,
+        );
+        let id2 = m.compile_osr(&prog2, 4).unwrap();
+        // Drive bound=8 but the buffer only has 4 elements ⇒ at i==4 the direct read is
+        // OOB and must deopt (a bounds bail), never reading past the buffer.
+        let mut w2 = [0i64; 7];
+        w2[0] = data.as_ptr() as i64; // xs
+        w2[1] = 0; // i
+        w2[2] = 0; // acc
+        w2[3] = 1; // one
+        w2[6] = 8; // bound (> len 4)
+        let mut l2 = [0i64; 7];
+        l2[0] = data.len() as i64; // lens[xs] = 4 — the bounds-check source
+        match m.call(id2, &w2, &l2) {
+            NativeOutcome::Deopt { safepoint_id, .. } => {
+                let site = m.deopt_map(id2).unwrap().sites[safepoint_id.0 as usize - 1].clone();
+                // The OOB read bails at the ListGetIntDirect ip (6), NOT the exit (10):
+                // a precise mid-loop deopt, so the interpreter re-runs and raises the
+                // real out-of-bounds behavior itself.
+                assert_eq!(site.resume_ip, 6, "OOB direct read bails at its own ip (not UB)");
+            }
+            other => panic!("OOB direct read must deopt, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn osr_flat_base_gate_rejects_nonwindow_non_osr() {
+        // The relaxed flat-base gate: under OSR a flat base may be any register in the
+        // n_regs-wide window (index >= n_params); under a NORMAL compile it must still
+        // be a packed param (index < n_params). A non-OSR program with a flat base at a
+        // non-param register is rejected by validation.
+        use JitValueType::{FlatInt, Int};
+        // n_params=1 (reg0 the only param), reg2 is a FlatInt non-param ⇒ illegal base
+        // for a normal compile.
+        let prog = ft(
+            1,
+            vec![Int, Int, FlatInt, Int],
+            vec![
+                JitInstr::ListGetIntDirect { dst: 1, base: 2, index: 0 },
+                JitInstr::Return { src: 1 },
+            ],
+        );
+        assert!(
+            super::validate(&prog, false).is_err(),
+            "non-param flat base must be rejected by a normal compile"
+        );
+        // Under OSR the same shape validates (the window is n_regs-wide).
+        assert!(
+            super::validate(&prog, true).is_ok(),
+            "an OSR-window flat base (index >= n_params) must validate"
+        );
     }
 
     #[test]

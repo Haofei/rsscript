@@ -4013,3 +4013,159 @@ fn main() -> Unit {
     );
     assert!(stats.osr_entries >= 1, "accuracy: combinator chain really OSR'd: {stats:?}");
 }
+
+/// Direct typed-list reads on the OSR path (perf win): a hot loop indexing a
+/// loop-invariant **non-param** `List<Int>` built before the loop, read in-loop only
+/// via `List.get`/`List.len`, inside an I/O-tangled (native-INELIGIBLE) function. The
+/// list is marshalled into the OSR live-in window as a borrow-pinned flat buffer and
+/// its `List.get`/`List.len` lower to bounds-checked direct loads (no per-iteration
+/// host helper). Output must be byte-identical to the interpreter AND the loop must
+/// genuinely OSR (`osr_entries > 0`).
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_direct_invariant_list_read_matches_interpreter() {
+    let source = "\
+features: local
+
+fn main() -> Unit {
+    Log.write(message: read \"begin\")
+    let mut index = 0
+    let mut step_index = 0
+    let mut total = 0
+    local steps = List<Int>.new()
+    List.push<Int>(list: mut steps, value: read 2)
+    List.push<Int>(list: mut steps, value: read 3)
+    List.push<Int>(list: mut steps, value: read 5)
+    List.push<Int>(list: mut steps, value: read 7)
+    while index < 8000 {
+        let step = List.get<Int>(list: read steps, index: step_index)
+        total = total + index * step
+        index = index + 1
+        step_index = step_index + 1
+        if step_index == List.len<Int>(list: read steps) {
+            step_index = 0
+        }
+    }
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+";
+    let file = "jit-osr-direct-invariant-list.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "OSR direct invariant-list loop must be byte-identical to the interpreter"
+    );
+    // total = sum over index 0..7999 of index * steps[index % 4] (steps = [2,3,5,7]).
+    // The byte-identity assertion above is the correctness net; we additionally pin the
+    // shape (a "begin" line then the numeric total) to catch a silently-empty run.
+    assert!(
+        osr.stdout.starts_with("begin\n") && osr.stdout.trim_end().lines().count() == 2,
+        "expected a begin line then the numeric total, got: {:?}",
+        osr.stdout
+    );
+    // The loop must genuinely OSR: under the direct typed-list path the in-loop
+    // `List.get`/`List.len` are bounds-checked direct loads (no per-iteration host
+    // helper) and `List.len` is hoisted to the marshalled length. (The helper-call
+    // elimination itself is exercised by the vm-jit `ListGetIntDirect`/`ListLenDirect`
+    // OSR-window unit test and confirmed by the int-arith benchmark.)
+    assert!(
+        stats.osr_entries > 0,
+        "the loop-invariant typed-list loop must OSR natively: {stats:?}",
+    );
+}
+
+/// Negative: a list MUTATED inside the loop (`List.push` in-loop) must NOT take the
+/// direct flat path (a `List.push` is not in the native subset, so the loop is not
+/// OSR-eligible at all) and must stay interpreter-identical. Guards against a future
+/// edit wrongly classifying a mutated list as a fixed flat buffer.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_mutated_list_in_loop_stays_correct() {
+    let source = "\
+features: local
+
+fn main() -> Unit {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    local xs = List<Int>.new()
+    List.push<Int>(list: mut xs, value: read 1)
+    while i < 3000 {
+        total = total + List.get<Int>(list: read xs, index: 0)
+        List.push<Int>(list: mut xs, value: read i)
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    Log.write(message: read String.from_int(value: List.len<Int>(list: read xs)))
+    return Unit
+}
+";
+    let file = "jit-osr-mutated-list.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "a list mutated in-loop must stay interpreter-identical"
+    );
+    // xs[0] is always 1 ⇒ total = 3000; final len = 1 + 3000 = 3001. The loop runs well
+    // past the OSR backedge threshold, so a non-zero osr_entries here could only come
+    // from wrongly treating the mutated list as a fixed flat buffer — it must stay 0.
+    assert_eq!(osr.stdout.trim_end(), "begin\n3000\n3001");
+    // The in-loop List.push leaves the native subset ⇒ the loop never OSRs.
+    assert_eq!(
+        stats.osr_entries, 0,
+        "a loop with an in-loop list mutation must NOT OSR (not native-subset): {stats:?}",
+    );
+}
+
+/// Out-of-bounds direct read: a loop-invariant typed list indexed past its length
+/// must deopt to interpreter-identical behavior (a real out-of-bounds error), NOT UB.
+/// The bounds-checked direct load bails at the OOB index and the interpreter re-runs
+/// the loop and raises the out-of-bounds itself, so the program's observable result
+/// matches the pure interpreter exactly.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_direct_list_oob_deopts_like_interpreter() {
+    let source = "\
+features: local
+
+fn main() -> Unit {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    local xs = List<Int>.new()
+    List.push<Int>(list: mut xs, value: read 10)
+    List.push<Int>(list: mut xs, value: read 20)
+    while i < 100 {
+        total = total + List.get<Int>(list: read xs, index: i)
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+";
+    let file = "jit-osr-direct-list-oob.rss";
+    // Sanity: the program compiles (a malformed source, not an OOB, would fail here).
+    rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let interp = common::run_vm_source(file, source, &[]);
+    let osr = rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>());
+    // Both must agree: an out-of-bounds index at i==2 raises the SAME error (or same
+    // partial output) under OSR as under the interpreter. The direct read bounds-check
+    // deopts at the OOB index; the interpreter then raises the real OOB.
+    match (interp, osr) {
+        (Ok(interp), Ok(osr)) => assert_eq!(
+            interp.stdout, osr.stdout,
+            "OOB direct read must be interpreter-identical (stdout)"
+        ),
+        (Err(_), Err(_)) => { /* both error the same way: OOB raised */ }
+        (i, o) => panic!("interpreter/OSR disagree on OOB outcome: interp={i:?} osr={o:?}"),
+    }
+}

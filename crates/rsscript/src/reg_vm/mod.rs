@@ -1023,6 +1023,46 @@ fn native_subset_instruction(instr: &RegInstr) -> bool {
     )
 }
 
+/// The register a native-subset instruction definitely writes (its `dst`), if any.
+/// Control/jump instructions and pure side-effect-free reads-with-no-dst write
+/// nothing. Used by the OSR flat-list pass to detect loop-invariant (never-written)
+/// list registers. Conservative: an instruction whose write shape isn't modeled here
+/// (i.e. not in the native subset) never appears in a translated OSR loop, so a
+/// `None` for it cannot cause a non-invariant register to be misclassified.
+#[cfg(feature = "native-jit")]
+fn native_subset_dst(instr: &RegInstr) -> Option<usize> {
+    match instr {
+        RegInstr::LoadInt { dst, .. }
+        | RegInstr::LoadFloat { dst, .. }
+        | RegInstr::LoadBool { dst, .. }
+        | RegInstr::Move { dst, .. }
+        | RegInstr::DeepCopy { reg: dst, .. }
+        | RegInstr::AddInt { dst, .. }
+        | RegInstr::SubInt { dst, .. }
+        | RegInstr::MulInt { dst, .. }
+        | RegInstr::DivInt { dst, .. }
+        | RegInstr::ModInt { dst, .. }
+        | RegInstr::BitAndInt { dst, .. }
+        | RegInstr::BitOrInt { dst, .. }
+        | RegInstr::BitXorInt { dst, .. }
+        | RegInstr::ShiftLeftInt { dst, .. }
+        | RegInstr::ShiftRightInt { dst, .. }
+        | RegInstr::LessInt { dst, .. }
+        | RegInstr::LessEqualInt { dst, .. }
+        | RegInstr::GreaterInt { dst, .. }
+        | RegInstr::GreaterEqualInt { dst, .. }
+        | RegInstr::Equal { dst, .. }
+        | RegInstr::NotEqual { dst, .. }
+        | RegInstr::GetFieldSlot { dst, .. }
+        | RegInstr::ListLen { dst, .. }
+        | RegInstr::ListGet { dst, .. }
+        | RegInstr::NativeClosureId { dst, .. }
+        | RegInstr::NativeClosureCapture { dst, .. }
+        | RegInstr::CallIntrinsic { dst, .. } => Some(*dst),
+        _ => None,
+    }
+}
+
 /// Assign type `t` to register `reg`; return `false` on a conflicting reassignment.
 #[cfg(feature = "native-jit")]
 fn native_set_ty(ty: &mut [Option<NativeTy>], reg: usize, t: NativeTy, changed: &mut bool) -> bool {
@@ -8025,12 +8065,102 @@ fn translate_osr_loop(
         }
     }
 
+    // TV2 flat-array classification on the OSR path. A `Handle` register that is
+    // (a) **loop-invariant** — never the `dst` of any in-loop instruction, so the
+    // list value it holds is fixed for the loop's whole native run (and, because the
+    // native subset has NO list-mutating instruction — no `ListSet`/`ListPush` — a
+    // list whose register is invariant cannot have its contents mutated in-loop
+    // either; any such mutation would have left the subset and declined OSR), and
+    // (b) read in-loop ONLY via `ListGet`/`ListLen` with a *consistent* element kind
+    // (never a `GetFieldSlot` struct base, never a heap-element `ListGetHandle` /
+    // closure read), is reclassified `FlatInt`/`FlatFloat`. Its `ListGet`/`ListLen`
+    // then lower to bounds-checked direct in-register loads (no per-iteration host
+    // call) and `try_osr` marshals it into the live-in window as a borrow-pinned flat
+    // buffer (pointer + length). Anything ambiguous (mixed-kind, mutated/rewritten,
+    // struct-aliased, heap element) BAILS to the `Handle` host-helper path, which is
+    // always correct. Read-only (§7.2 holds; OOB still bails).
+    let flat_osr_kind: Vec<Option<NativeTy>> = {
+        #[derive(Clone, Copy, PartialEq)]
+        enum S {
+            Unseen,
+            Flat(NativeTy),
+            Disq,
+        }
+        // A register written by ANY in-loop instruction is not loop-invariant.
+        let mut written_in_loop = vec![false; n_regs];
+        for i in lp.header..lp.exit {
+            if let Some(dst) = native_subset_dst(&code[i]) {
+                if dst < n_regs {
+                    written_in_loop[dst] = true;
+                }
+            }
+        }
+        let is_handle_reg = |reg: usize| ty[reg] == Some(NativeTy::Handle);
+        let mut st = vec![S::Unseen; n_regs];
+        for i in lp.header..lp.exit {
+            match &code[i] {
+                // A struct read disqualifies the base (it is not a flat list).
+                RegInstr::GetFieldSlot { base, .. } if is_handle_reg(*base) => {
+                    st[*base] = S::Disq;
+                }
+                RegInstr::ListGet { dst, list, .. } if is_handle_reg(*list) => {
+                    // A heap-valued element (e.g. a stored closure/struct) means the
+                    // list is NOT a flat scalar buffer ⇒ disqualify.
+                    if is_handle_reg(*dst) {
+                        st[*list] = S::Disq;
+                    } else {
+                        let kind = if ty[*dst] == Some(NativeTy::Float) {
+                            NativeTy::FlatFloat
+                        } else {
+                            NativeTy::FlatInt
+                        };
+                        st[*list] = match st[*list] {
+                            S::Unseen => S::Flat(kind),
+                            S::Flat(k) if k == kind => S::Flat(kind),
+                            _ => S::Disq,
+                        };
+                    }
+                }
+                // `ListLen` is kind-neutral — neither pins nor disqualifies.
+                // Any closure read off a handle disqualifies (not a flat list).
+                RegInstr::NativeGuardClosureId { closure, .. }
+                | RegInstr::NativeClosureId { closure, .. }
+                | RegInstr::NativeClosureCapture { closure, .. }
+                    if is_handle_reg(*closure) =>
+                {
+                    st[*closure] = S::Disq;
+                }
+                _ => {}
+            }
+        }
+        (0..n_regs)
+            .map(|reg| match st[reg] {
+                // Only a loop-invariant (never-rewritten) handle qualifies. A handle
+                // produced INSIDE the loop (ListGetHandle/FieldHandle dst) is written
+                // in-loop ⇒ excluded here, staying on the Handle path.
+                S::Flat(k) if !written_in_loop[reg] => Some(k),
+                _ => None,
+            })
+            .collect()
+    };
+    for reg in 0..n_regs {
+        if let Some(kind) = flat_osr_kind[reg] {
+            ty[reg] = Some(kind);
+        }
+    }
+
     let int = |reg: usize| ty[reg] == Some(NativeTy::Int);
     let int_or_free = |reg: usize| matches!(ty[reg], None | Some(NativeTy::Int));
     let float = |reg: usize| ty[reg] == Some(NativeTy::Float);
     let bool_ty = |reg: usize| ty[reg] == Some(NativeTy::Bool);
     let numeric = |reg: usize| matches!(ty[reg], Some(NativeTy::Int | NativeTy::Float));
     let same = |a: usize, b: usize| ty[a].is_some() && ty[a] == ty[b];
+    // A TV2 flat-array register (pointer + length, read directly in-register). On the
+    // OSR path a flat base may be any loop-invariant live-in register (not only a
+    // param): it is marshalled into the `n_regs`-wide window by register index.
+    let flat_reg = |reg: usize| {
+        matches!(ty[reg], Some(NativeTy::FlatInt | NativeTy::FlatFloat))
+    };
     // Handles only enter via the caller's heap-arg window; for OSR the window
     // carries whatever the interpreter has, so a Handle base must be a *parameter*
     // register (consistent with `translate_to_native_jit`, and marshalled the same).
@@ -8175,19 +8305,36 @@ fn translate_osr_loop(
                 }
             }
             RegInstr::ListLen { dst, list } => {
-                require(int(*dst) && handle_reg(*list))?;
-                JitInstr::ListLen { dst: r(*dst), base: r(*list) }
+                require(int(*dst))?;
+                // A flat-classified (loop-invariant typed) list reads its length
+                // directly from the marshalled `lens` slot — hoisted to a single load,
+                // no per-iteration host call.
+                if flat_reg(*list) {
+                    JitInstr::ListLenDirect { dst: r(*dst), base: r(*list) }
+                } else {
+                    require(handle_reg(*list))?;
+                    JitInstr::ListLen { dst: r(*dst), base: r(*list) }
+                }
             }
             RegInstr::ListGet { dst, list, index } => {
-                require(int(*index) && handle_reg(*list))?;
-                if handle_reg(*dst) {
+                require(int(*index))?;
+                // TV2 flat (loop-invariant typed) list ⇒ bounds-checked direct read.
+                if ty[*list] == Some(NativeTy::FlatFloat) {
+                    require(float(*dst))?;
+                    JitInstr::ListGetFloatDirect { dst: r(*dst), base: r(*list), index: r(*index) }
+                } else if ty[*list] == Some(NativeTy::FlatInt) {
+                    require(int_or_free(*dst))?;
+                    JitInstr::ListGetIntDirect { dst: r(*dst), base: r(*list), index: r(*index) }
+                } else if handle_reg(*dst) {
                     // A heap-valued element (a struct holding a stored closure)
                     // fetched as a fresh handle for a downstream field/closure read.
+                    require(handle_reg(*list))?;
                     JitInstr::ListGetHandle { dst: r(*dst), base: r(*list), index: r(*index) }
                 } else if float(*dst) {
+                    require(handle_reg(*list))?;
                     JitInstr::ListGetFloat { dst: r(*dst), base: r(*list), index: r(*index) }
                 } else {
-                    require(int_or_free(*dst))?;
+                    require(handle_reg(*list) && int_or_free(*dst))?;
                     JitInstr::ListGetInt { dst: r(*dst), base: r(*list), index: r(*index) }
                 }
             }
@@ -16014,7 +16161,11 @@ impl RegVm {
         // then gate on being at the loop header. This runs at every instruction when
         // OSR is armed, so it must be cheap on the common (not-at-header) path: the
         // cache lookup + header compare returns without cloning anything.
-        let (id, trans_exit, orig_exit, n_jit_regs, param_types, reg_types) = {
+        // `param_types` (the param-prefix of `reg_types`) is no longer consulted here:
+        // OSR marshalling now classifies every live-in by the full per-register
+        // `reg_types` (so a non-param flat list is marshalled correctly). It stays in
+        // the cache entry for the non-OSR `try_native` path.
+        let (id, trans_exit, orig_exit, n_jit_regs, _param_types, reg_types) = {
             // Fast path: cached and NOT at the header ⇒ nothing to do (no clone).
             if let Some(native) = self.native.as_ref() {
                 if let Some(entry) = native.osr_cache.get(&native_key) {
@@ -16393,13 +16544,51 @@ impl RegVm {
         let _heap_guard = JitHeapArgsGuard;
         let n_regs = func.regs;
         let mut window = vec![0i64; n_jit_regs];
-        let lens = vec![0i64; n_jit_regs];
+        let mut lens = vec![0i64; n_jit_regs];
+        // TV2 flat live-in lists: each loop-invariant typed list classified
+        // `FlatInt`/`FlatFloat` is marshalled as a raw (pointer, length) pair, with a
+        // shared `Ref` borrow pinned for the whole `module.call` so the backing buffer
+        // cannot reallocate/mutate under native code (see the borrow protocol in
+        // `try_native`). `flat_owned` keeps the `Rc`s alive; `flat_slots` records each
+        // pinned list's window slot and flat kind so the pin pass can fill ptr+len once
+        // all borrows are held. If the runtime value is not the expected flat kind
+        // (e.g. a `Boxed`/heap-element list, or not a list at all), we BAIL the whole
+        // OSR attempt — the interpreter runs the loop, always correct.
+        let mut flat_owned: Vec<Rc<RefCell<TypedVec>>> = Vec::new();
+        let mut flat_slots: Vec<(usize, NativeTy)> = Vec::new();
         for reg in 0..n_regs {
             if !self.written.get(base + reg).copied().unwrap_or(false) {
                 continue; // not live here; native won't read it
             }
             let value = self.reg(base + reg);
-            let ty = param_types.get(reg).copied().unwrap_or(NativeTy::Int);
+            // Classify by the full per-register native type (not only params): a flat
+            // live-in list may be a non-param register on the OSR path.
+            let ty = reg_types.get(reg).copied().unwrap_or(NativeTy::Int);
+            if matches!(ty, NativeTy::FlatInt | NativeTy::FlatFloat) {
+                let want_int = ty == NativeTy::FlatInt;
+                match value {
+                    VmValue::List(list) => {
+                        let ok = {
+                            let borrowed = list.borrow();
+                            if want_int {
+                                borrowed.as_ints_slice().is_some()
+                            } else {
+                                borrowed.as_floats_slice().is_some()
+                            }
+                        };
+                        if !ok {
+                            // Not the canonical flat kind ⇒ bail this OSR attempt.
+                            return false;
+                        }
+                        flat_owned.push(Rc::clone(list));
+                        flat_slots.push((reg, ty));
+                        // window[reg]/lens[reg] filled in the pin pass below.
+                        continue;
+                    }
+                    // A flat-classified register that isn't a List at runtime ⇒ bail.
+                    _ => return false,
+                }
+            }
             let bits = match (ty, value) {
                 (NativeTy::Float, VmValue::Float(f)) => f.to_bits() as i64,
                 (NativeTy::Float, VmValue::Int(i)) => (*i as f64).to_bits() as i64,
@@ -16416,6 +16605,33 @@ impl RegVm {
             window[reg] = bits;
         }
 
+        // SAFETY (TV2 borrow protocol — the same audited core as `try_native`): pin a
+        // shared `Ref` borrow of every flat list's `RefCell<TypedVec>` for the entire
+        // `module.call` below. While these shared borrows are held no `borrow_mut` can
+        // succeed, so the backing `Vec` cannot reallocate/mutate — the raw `as_ptr()`
+        // we hand to native stays valid and immovable for the call. The list register
+        // is loop-invariant (never rewritten in-loop) and the native subset has no
+        // list-mutating instruction, so the loop never even attempts a write; the
+        // pinned borrow is belt-and-suspenders. Every index is bounds-checked against
+        // the matching `lens` slot (→ deopt on OOB). The pointer is not retained past
+        // the call; `flat_guards`/`flat_owned` drop right after.
+        let flat_guards: Vec<std::cell::Ref<'_, TypedVec>> =
+            flat_owned.iter().map(|rc| rc.borrow()).collect();
+        for (i, &(reg, kind)) in flat_slots.iter().enumerate() {
+            let (ptr, len) = match kind {
+                NativeTy::FlatInt => {
+                    let (p, l) = flat_guards[i].as_ints_slice().expect("Ints pinned");
+                    (p as i64, l)
+                }
+                _ => {
+                    let (p, l) = flat_guards[i].as_floats_slice().expect("Floats pinned");
+                    (p as i64, l)
+                }
+            };
+            window[reg] = ptr;
+            lens[reg] = len as i64;
+        }
+
         // Phase 3: run the OSR loop body natively.
         let Some(native_ref) = self.native.as_ref() else {
             return false;
@@ -16424,6 +16640,8 @@ impl RegVm {
         let started = collect_stats.then(std::time::Instant::now);
         let result = native_ref.module.call(id, &window, &lens);
         let elapsed = started.map(|started| started.elapsed().as_nanos());
+        // The pinned borrows are no longer needed once the native call returns.
+        drop(flat_guards);
         if let Some(native) = self.native.as_mut() {
             if let Some(elapsed) = elapsed {
                 native.stats.run_nanos += elapsed;
@@ -16468,7 +16686,15 @@ impl RegVm {
                     if (reg as usize) < n_params || (reg as usize) >= n_orig_regs {
                         continue;
                     }
-                    if reg_types.get(reg as usize) == Some(&NativeTy::Handle) {
+                    // Skip Handle (heap-table index) AND flat-array (raw buffer
+                    // pointer bits) registers: neither's deopt payload word is a VM
+                    // value; writing it back would corrupt the interpreter slot. A
+                    // flat list is loop-invariant, so the original List already sits in
+                    // its slot unchanged.
+                    if matches!(
+                        reg_types.get(reg as usize),
+                        Some(&NativeTy::Handle | &NativeTy::FlatInt | &NativeTy::FlatFloat)
+                    ) {
                         continue;
                     }
                     let vm_value = match value {
