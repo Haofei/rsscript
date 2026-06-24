@@ -1,0 +1,1730 @@
+use super::*;
+
+impl RegVm {
+    pub(super) fn new(
+        unit: Rc<RegUnit>,
+        args: Vec<String>,
+        native_bindings: HashMap<String, NativeInterpreterFn>,
+    ) -> Self {
+        Self {
+            unit,
+            args,
+            native_bindings,
+            stdout: String::new(),
+            stream_stdout: false,
+            stream_flushed: 0,
+            stderr: String::new(),
+            stack: Vec::new(),
+            written: Vec::new(),
+            frames: Vec::new(),
+            suspension: None,
+            tasks: HashMap::new(),
+            ready_queue: VecDeque::new(),
+            next_task_id: 0,
+            current_task: 0,
+            next_cancellation_id: 1,
+            cancellation_flags: HashMap::new(),
+            next_channel_id: 1,
+            channels: HashMap::new(),
+            next_tcp_stream_id: 1,
+            tcp_streams: HashMap::new(),
+            next_websocket_id: 1,
+            websockets: HashMap::new(),
+            next_pool_id: 1,
+            pools: HashMap::new(),
+            next_tensor_id: 1,
+            tensors: HashMap::new(),
+            jit_enabled: false,
+            jit_force_all: false,
+            limits: VmLimits::default(),
+            steps: 0,
+            live_bytes: 0,
+            host_calls: 0,
+            #[cfg(feature = "native-jit")]
+            native: None,
+            noncapturing_closure_cache: Vec::new(),
+        }
+    }
+
+    /// Return the canonical non-capturing `Rc<VmClosure>` for `function`,
+    /// allocating it once on first use and cloning the `Rc` (refcount bump)
+    /// thereafter. Only called when `unit.closure_identity_observable` is `false`,
+    /// so the resulting pointer-sharing is unobservable (see the field doc on
+    /// `noncapturing_closure_cache`).
+    pub(super) fn cached_noncapturing_closure(&mut self, function: usize) -> Rc<VmClosure> {
+        if function >= self.noncapturing_closure_cache.len() {
+            self.noncapturing_closure_cache.resize(function + 1, None);
+        }
+        if let Some(existing) = &self.noncapturing_closure_cache[function] {
+            return Rc::clone(existing);
+        }
+        let closure = Rc::new(VmClosure {
+            function,
+            captures: Vec::new(),
+        });
+        self.noncapturing_closure_cache[function] = Some(Rc::clone(&closure));
+        closure
+    }
+
+    /// Apply sandbox resource limits to this VM before it runs. Replaces the
+    /// defaults wholesale (default construction already uses [`VmLimits::default`]
+    /// — depth cap on, step/memory budgets off — so existing callers are
+    /// unaffected and only agent-facing entry points need call this).
+    pub(super) fn set_limits(&mut self, limits: VmLimits) {
+        self.limits = limits;
+    }
+
+    /// Push a call frame, enforcing the recursion-depth cap first. `frames.len()`
+    /// is the current depth; a successful push would make it `len + 1`, so we
+    /// reject when that would exceed `limits.max_depth`. Centralizes the check so
+    /// every frame-push site (sync `run_frame`, `CallKnown`, `CallDynamic`) is
+    /// covered identically. Returns the depth error as a value, never panics.
+    pub(super) fn push_frame(&mut self, frame: Frame) -> Result<(), EvalError> {
+        if self.frames.len() + 1 > self.limits.max_depth {
+            let max_depth = self.limits.max_depth;
+            return Err(EvalError::Runtime(format!(
+                "recursion depth limit exceeded ({max_depth} frames)"
+            )));
+        }
+        self.frames.push(frame);
+        Ok(())
+    }
+
+    /// Charge one instruction against the step budget. Always increments the
+    /// fuel gauge (the single unconditional add is the whole cost when the budget
+    /// is off), and — only when `limits.step_budget` is `Some` — trips once the
+    /// count exceeds the limit. This is what stops an infinite loop (`while true
+    /// {}`) from hanging the host: it returns a clean error instead.
+    ///
+    /// It is also the host-level *preemption* hook. When `limits.cancel` is
+    /// `Some`, every `CANCEL_POLL_INTERVAL` steps we load the ambient
+    /// `AtomicBool` (`Relaxed` — we only need eventual visibility, not ordering)
+    /// and, if set, abort the eval with `EvalError::Runtime("evaluation
+    /// cancelled")`. The throttle keeps both the off path (no atomic touched at
+    /// all) and the on path (one relaxed load per 1024 instructions) cheap, so a
+    /// tight loop stays fast while still being interruptible by a watchdog.
+    ///
+    /// Limitation: this stops the *entire* evaluation. Preemptively cancelling a
+    /// single *sibling* task stuck in a tight loop — so a `select`/`task_group`
+    /// can reach its winner while one branch spins — would require the scheduler
+    /// to yield mid-instruction-stream (snapshot a `SavedTask` at an arbitrary
+    /// `ip` and reschedule), a deeper redesign that is out of scope here. The RSS
+    /// `CancellationToken` remains the cooperative, per-task mechanism (it only
+    /// preempts at await points); this ambient flag is the blunt host-level kill.
+    #[inline]
+    pub(super) fn tick(&mut self) -> Result<(), EvalError> {
+        self.steps += 1;
+        if let Some(limit) = self.limits.step_budget
+            && self.steps > limit
+        {
+            return Err(EvalError::Runtime(format!(
+                "step budget exceeded ({limit} instructions)"
+            )));
+        }
+        if self.steps.is_multiple_of(CANCEL_POLL_INTERVAL)
+            && let Some(flag) = self.limits.cancel.as_ref()
+            && flag.load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(EvalError::Runtime("evaluation cancelled".into()));
+        }
+        Ok(())
+    }
+
+    /// Account `bytes` of container growth against the memory ceiling. A no-op
+    /// (no add, no check) when `limits.mem_budget` is `None`, so the off path is
+    /// near-free. When a budget is set and the cumulative estimate exceeds it,
+    /// returns the memory-limit error. Best-effort: see [`RegVm::live_bytes`].
+    #[inline]
+    pub(super) fn account_bytes(&mut self, bytes: usize) -> Result<(), EvalError> {
+        if let Some(limit) = self.limits.mem_budget {
+            self.live_bytes = self.live_bytes.saturating_add(bytes);
+            if self.live_bytes > limit {
+                return Err(EvalError::Runtime(format!(
+                    "memory limit exceeded ({limit} bytes)"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Charge one stdlib/runtime intrinsic dispatch against `host_call_budget`.
+    /// Always increments the counter (the single unconditional add is the whole
+    /// cost when the budget is off), and — only when `limits.host_call_budget` is
+    /// `Some` — trips once the count exceeds the limit. Called once at the entry of
+    /// both intrinsic dispatch functions, so it caps the number of host-library
+    /// calls (file/process/net/clock/log effects all enter here) independently of
+    /// raw instruction count.
+    #[inline]
+    pub(super) fn charge_host_call(&mut self) -> Result<(), EvalError> {
+        self.host_calls += 1;
+        if let Some(limit) = self.limits.host_call_budget
+            && self.host_calls > limit
+        {
+            return Err(EvalError::Runtime(format!(
+                "host call budget exceeded ({limit} stdlib calls)"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Append program output to the captured `stdout` buffer, and — when live
+    /// streaming is enabled (`rss dev --run`) — flush newly completed lines to the
+    /// real process stdout immediately. The captured buffer is appended to exactly
+    /// the same way regardless, so callers that read `EvalOutput.stdout` see no
+    /// difference.
+    ///
+    /// Enforces `stdout_budget`: when set, a write that would push cumulative
+    /// output past the ceiling fails with a clean error *before* appending, so the
+    /// captured buffer never exceeds the budget and a flood of output can't exhaust
+    /// host memory.
+    pub(super) fn push_stdout(&mut self, text: &str) -> Result<(), EvalError> {
+        if let Some(limit) = self.limits.stdout_budget
+            && self.stdout.len().saturating_add(text.len()) > limit
+        {
+            return Err(EvalError::Runtime(format!(
+                "stdout budget exceeded ({limit} bytes)"
+            )));
+        }
+        self.stdout.push_str(text);
+        if self.stream_stdout {
+            self.flush_stdout_stream();
+        }
+        Ok(())
+    }
+
+    /// Write every complete (newline-terminated) line appended since the last
+    /// flush to the real process stdout, then advance the streamed cursor. A
+    /// partial trailing line is left buffered until its newline arrives.
+    pub(super) fn flush_stdout_stream(&mut self) {
+        if let Some(offset) = self.stdout[self.stream_flushed..].rfind('\n') {
+            let end = self.stream_flushed + offset + 1;
+            let chunk = &self.stdout[self.stream_flushed..end];
+            let mut out = std::io::stdout();
+            let _ = out.write_all(chunk.as_bytes());
+            let _ = out.flush();
+            self.stream_flushed = end;
+        }
+    }
+
+    /// Whether `func` should run on the tier-0 JIT. Reads the analysis cached on
+    /// the function (`(eligible, has_loop)`, computed once for the whole unit by
+    /// [`compute_jit_eligibility`], which already accounts for cross-function
+    /// calls). A function is JIT'd only if (a) it is eligible — non-suspending and
+    /// non-recursive — and (b) it contains a back-edge (a loop): straight-line
+    /// functions gain nothing from the specializing executor, so JIT-ing them in a
+    /// hot call would only add overhead. This keeps the JIT at-least-parity with
+    /// the interpreter.
+    pub(super) fn is_jit_eligible(&self, func: &RegFunction) -> bool {
+        let (eligible, has_loop) = func.jit_analysis.get().unwrap_or_else(|| {
+            // Defensive: every unit function has its analysis pre-set in `lower`.
+            // A function with no cross-call context can only be the pure subset.
+            (
+                func.code.iter().all(jit_supported_instruction),
+                jit_function_has_loop(&func.code),
+            )
+        });
+        // Production: only JIT functions with a loop (where the specializing
+        // executor pays off). `jit_force_all` (tests) JITs every eligible function
+        // so the differential verifies the whole covered subset.
+        eligible && (self.jit_force_all || has_loop)
+    }
+
+    /// Execute one *pure* instruction (no frame push, no suspend, no call). This
+    /// is the single source of truth for the tier-0 subset's semantics, shared by
+    /// the interpreter (`drive`) and the JIT executor (`run_jit`), so the two can
+    /// never silently diverge. Jumps update `*ip`; `Return` is handed back to the
+    /// caller (which owns frame unwinding); everything else is [`PureStep::NotPure`].
+    // `VmMapKey` is interior-mutable (List/struct keys hold `Rc<RefCell<…>>`),
+    // but `Map.insert`'s `retains(key)` effect makes mutating a live key
+    // unreachable in well-typed RSScript, so the lint's hazard cannot occur.
+    #[allow(clippy::mutable_key_type)]
+    // perf-plan §1.1 (interpreter dispatch — inline the match, minimal form):
+    // force this single-instruction executor to expand into BOTH callers
+    // (`drive`'s hot loop and `run_jit`), so VM state (ip/base/register ptr)
+    // stays in registers across the hot arms without a manual match rewrite.
+    // This is an empirical probe; §1.1 may not pay off until the §1.3 hot/cold
+    // split, so the win (if any) is judged against run-to-run spread per §0.4.
+    #[inline(always)]
+    pub(super) fn try_exec_pure(
+        &mut self,
+        instr: &RegInstr,
+        base: usize,
+        ip: &mut usize,
+    ) -> Result<PureStep, EvalError> {
+        match instr {
+            RegInstr::LoadUnit { dst } => self.set_reg(base + *dst, VmValue::Unit),
+            RegInstr::LoadInt { dst, value } => self.set_reg(base + *dst, VmValue::Int(*value)),
+            RegInstr::LoadFloat { dst, value } => self.set_reg(base + *dst, VmValue::Float(*value)),
+            RegInstr::LoadBool { dst, value } => self.set_reg(base + *dst, VmValue::Bool(*value)),
+            RegInstr::Move { dst, src } => {
+                let value = self.reg(base + *src).clone();
+                self.set_reg(base + *dst, value);
+            }
+            RegInstr::DeepCopy { reg } => {
+                let copied = deep_copy_value(self.reg(base + *reg));
+                self.set_reg(base + *reg, copied);
+            }
+            RegInstr::LoadString { dst, value } => {
+                self.set_reg(base + *dst, VmValue::String(Rc::clone(value)));
+            }
+            RegInstr::Manage { dst, src } => {
+                let value = self.reg(base + *src).clone();
+                // `manage` wraps a value in a shared mutable cell so it can be
+                // retained (stored in a collection/field) and mutated in place.
+                // Immutable scalars cannot be mutated in place and have value (not
+                // reference) semantics, so wrapping them is a no-op that only leaks
+                // an opaque `Managed` into reads — borrow-returning accessors
+                // (`String`/`Bytes`/`Json`) can't peel it. Store them directly.
+                let managed = if value.is_immutable_scalar() {
+                    value
+                } else {
+                    VmValue::Managed(Rc::new(RefCell::new(value)))
+                };
+                self.set_reg(base + *dst, managed);
+            }
+            RegInstr::GetField {
+                dst,
+                base: obj,
+                name,
+            } => {
+                let value = read_field_ref(self.reg(base + *obj), name)?;
+                self.set_reg(base + *dst, value);
+            }
+            RegInstr::SetField {
+                dst,
+                base: obj,
+                name,
+                value,
+            } => {
+                let obj_reg = base + *obj;
+                let new_value = self.reg(base + *value).clone();
+                // Take the struct out so its `Rc` count reflects only other live
+                // holders; `write_field_value_owned` then mutates in place when
+                // uniquely owned, or copy-on-writes when shared.
+                let current = self.take_reg(obj_reg);
+                let updated = write_field_value_owned(current, name, new_value)?;
+                self.set_reg(obj_reg, updated);
+                self.set_reg(base + *dst, VmValue::Unit);
+            }
+            RegInstr::GetFieldSlot {
+                dst,
+                base: obj,
+                slot,
+            } => {
+                let value = read_field_slot(self.reg(base + *obj), *slot)?;
+                self.set_reg(base + *dst, value);
+            }
+            RegInstr::SetFieldSlot {
+                dst,
+                base: obj,
+                slot,
+                value,
+            } => {
+                let obj_reg = base + *obj;
+                let new_value = self.reg(base + *value).clone();
+                let current = self.take_reg(obj_reg);
+                let updated = write_field_slot_owned(current, *slot, new_value)?;
+                self.set_reg(obj_reg, updated);
+                self.set_reg(base + *dst, VmValue::Unit);
+            }
+            RegInstr::MakeStruct { dst, layout, fields } => {
+                // Hot path: the layout is interned once at lowering time, so this is
+                // a refcount bump + a field-value gather — no per-construction
+                // `(name, field_names)` hashing. Field values are in canonical slot
+                // order (the lowerer canonicalized them to match the layout).
+                let mut values: Vec<VmValue> = Vec::with_capacity(fields.len());
+                for (_field, reg) in fields {
+                    values.push(self.reg(base + *reg).clone());
+                }
+                self.set_reg(
+                    base + *dst,
+                    VmValue::Struct(Rc::new(VmStruct::with_layout(Rc::clone(layout), values))),
+                );
+            }
+            RegInstr::MakeVariant { dst, layout, fields } => {
+                let mut values: Vec<VmValue> = Vec::with_capacity(fields.len());
+                for (_field, reg) in fields {
+                    values.push(self.reg(base + *reg).clone());
+                }
+                self.set_reg(
+                    base + *dst,
+                    VmValue::Variant(Rc::new(VmStruct::with_layout(Rc::clone(layout), values))),
+                );
+            }
+            RegInstr::MakeList { dst, items } => {
+                let mut list = Vec::with_capacity(items.len());
+                for reg in items {
+                    list.push(self.reg(base + *reg).clone());
+                }
+                let typed = TypedVec::from_values(list);
+                // Per-kind accounting (TV1): charge the flat buffer cost of the kind
+                // the literal specialized to (8 B/elem for a scalar list).
+                self.account_bytes(typed.len() * typed.elem_bytes())?;
+                self.set_reg(base + *dst, VmValue::List(Rc::new(RefCell::new(typed))));
+            }
+            RegInstr::MakeObject { dst, fields } => {
+                let mut object = serde_json::Map::new();
+                for (field, reg) in fields {
+                    let value = vm_value_to_json_literal(self.reg(base + *reg))?;
+                    object.insert(field.clone(), value);
+                }
+                self.set_reg(
+                    base + *dst,
+                    VmValue::Json(Rc::new(serde_json::Value::Object(object))),
+                );
+            }
+            RegInstr::MakeMap { dst, entries } => {
+                self.account_bytes(entries.len() * MAP_ENTRY_BYTES)?;
+                let mut map = ValueMap::with_capacity_and_hasher(entries.len(), Default::default());
+                for (key, value) in entries {
+                    let key = map_key_from_value(self.reg(base + *key))?;
+                    map.insert(key, self.reg(base + *value).clone());
+                }
+                self.set_reg(base + *dst, VmValue::Map(Rc::new(RefCell::new(map))));
+            }
+            RegInstr::AddInt { dst, lhs, rhs } => {
+                let value = eval_numeric_binary(
+                    BinaryOp::Add,
+                    self.reg(base + *lhs),
+                    self.reg(base + *rhs),
+                )?;
+                self.set_reg(base + *dst, value);
+            }
+            RegInstr::SubInt { dst, lhs, rhs } => {
+                let value = eval_numeric_binary(
+                    BinaryOp::Subtract,
+                    self.reg(base + *lhs),
+                    self.reg(base + *rhs),
+                )?;
+                self.set_reg(base + *dst, value);
+            }
+            RegInstr::MulInt { dst, lhs, rhs } => {
+                let value = eval_numeric_binary(
+                    BinaryOp::Multiply,
+                    self.reg(base + *lhs),
+                    self.reg(base + *rhs),
+                )?;
+                self.set_reg(base + *dst, value);
+            }
+            RegInstr::DivInt { dst, lhs, rhs } => {
+                let value = eval_numeric_binary(
+                    BinaryOp::Divide,
+                    self.reg(base + *lhs),
+                    self.reg(base + *rhs),
+                )?;
+                self.set_reg(base + *dst, value);
+            }
+            RegInstr::ModInt { dst, lhs, rhs } => {
+                let value = eval_numeric_binary(
+                    BinaryOp::Modulo,
+                    self.reg(base + *lhs),
+                    self.reg(base + *rhs),
+                )?;
+                self.set_reg(base + *dst, value);
+            }
+            RegInstr::BitAndInt { dst, lhs, rhs } => {
+                let l = expect_int_ref(self.reg(base + *lhs))?;
+                let r = expect_int_ref(self.reg(base + *rhs))?;
+                self.set_reg(base + *dst, VmValue::Int(l & r));
+            }
+            RegInstr::BitOrInt { dst, lhs, rhs } => {
+                let l = expect_int_ref(self.reg(base + *lhs))?;
+                let r = expect_int_ref(self.reg(base + *rhs))?;
+                self.set_reg(base + *dst, VmValue::Int(l | r));
+            }
+            RegInstr::BitXorInt { dst, lhs, rhs } => {
+                let l = expect_int_ref(self.reg(base + *lhs))?;
+                let r = expect_int_ref(self.reg(base + *rhs))?;
+                self.set_reg(base + *dst, VmValue::Int(l ^ r));
+            }
+            RegInstr::ShiftLeftInt { dst, lhs, rhs } => {
+                let l = expect_int_ref(self.reg(base + *lhs))?;
+                let r = expect_int_ref(self.reg(base + *rhs))?;
+                self.set_reg(base + *dst, VmValue::Int(l.wrapping_shl(r.max(0) as u32)));
+            }
+            RegInstr::ShiftRightInt { dst, lhs, rhs } => {
+                let l = expect_int_ref(self.reg(base + *lhs))?;
+                let r = expect_int_ref(self.reg(base + *rhs))?;
+                self.set_reg(base + *dst, VmValue::Int(l.wrapping_shr(r.max(0) as u32)));
+            }
+            RegInstr::LessInt { dst, lhs, rhs } => {
+                let value = eval_numeric_compare(
+                    RegIntCompare::Less,
+                    self.reg(base + *lhs),
+                    self.reg(base + *rhs),
+                )?;
+                self.set_reg(base + *dst, VmValue::Bool(value));
+            }
+            RegInstr::LessEqualInt { dst, lhs, rhs } => {
+                let value = eval_numeric_compare(
+                    RegIntCompare::LessEqual,
+                    self.reg(base + *lhs),
+                    self.reg(base + *rhs),
+                )?;
+                self.set_reg(base + *dst, VmValue::Bool(value));
+            }
+            RegInstr::GreaterInt { dst, lhs, rhs } => {
+                let value = eval_numeric_compare(
+                    RegIntCompare::Greater,
+                    self.reg(base + *lhs),
+                    self.reg(base + *rhs),
+                )?;
+                self.set_reg(base + *dst, VmValue::Bool(value));
+            }
+            RegInstr::GreaterEqualInt { dst, lhs, rhs } => {
+                let value = eval_numeric_compare(
+                    RegIntCompare::GreaterEqual,
+                    self.reg(base + *lhs),
+                    self.reg(base + *rhs),
+                )?;
+                self.set_reg(base + *dst, VmValue::Bool(value));
+            }
+            RegInstr::Equal { dst, lhs, rhs } => {
+                let eq = self.reg(base + *lhs) == self.reg(base + *rhs);
+                self.set_reg(base + *dst, VmValue::Bool(eq));
+            }
+            RegInstr::NotEqual { dst, lhs, rhs } => {
+                let ne = self.reg(base + *lhs) != self.reg(base + *rhs);
+                self.set_reg(base + *dst, VmValue::Bool(ne));
+            }
+            RegInstr::Jump { target } => *ip = *target,
+            RegInstr::JumpIfBool {
+                cond,
+                expected,
+                target,
+            } => {
+                if expect_bool_ref(self.reg(base + *cond))? == *expected {
+                    *ip = *target;
+                }
+            }
+            RegInstr::JumpIfIntCompare {
+                lhs,
+                rhs,
+                op,
+                expected,
+                target,
+            } => {
+                let l = self.reg(base + *lhs);
+                let r = self.reg(base + *rhs);
+                if eval_numeric_compare(*op, l, r)? == *expected {
+                    *ip = *target;
+                }
+            }
+            RegInstr::MakeSome { dst, value } => {
+                let value = self.reg(base + *value).clone();
+                self.set_reg(base + *dst, VmValue::some(value));
+            }
+            RegInstr::LoadNone { dst } => {
+                self.set_reg(base + *dst, VmValue::OptionNone);
+            }
+            RegInstr::MakeClosure {
+                dst,
+                function: callee,
+                captures,
+            } => {
+                // Non-capturing closures of the same function are value-identical
+                // every time, so when closure identity is provably unobservable
+                // (see `noncapturing_closure_cache`) we reuse one cached `Rc`
+                // instead of heap-allocating a fresh one each iteration.
+                let closure = if captures.is_empty() && !self.unit.closure_identity_observable {
+                    self.cached_noncapturing_closure(*callee)
+                } else {
+                    let mut captured = Vec::with_capacity(captures.len());
+                    for reg in captures {
+                        captured.push(self.reg(base + *reg).clone());
+                    }
+                    Rc::new(VmClosure {
+                        function: *callee,
+                        captures: captured,
+                    })
+                };
+                self.set_reg(base + *dst, VmValue::Closure(closure));
+            }
+            RegInstr::MatchOption {
+                src,
+                some_ip,
+                none_ip,
+            } => match self.reg(base + *src) {
+                VmValue::OptionSomeScalar(_) | VmValue::OptionSomeHeap(_) => *ip = *some_ip,
+                VmValue::OptionNone => *ip = *none_ip,
+                other => {
+                    return Err(EvalError::Runtime(format!(
+                        "reg VM Option match expected Option, got `{}`.",
+                        other.display()
+                    )));
+                }
+            },
+            RegInstr::MatchResult { src, ok_ip, err_ip } => match self.reg(base + *src) {
+                VmValue::Variant(data) if data.name().as_ref() == "Ok" => *ip = *ok_ip,
+                VmValue::Variant(data) if data.name().as_ref() == "Err" => *ip = *err_ip,
+                other => {
+                    return Err(EvalError::Runtime(format!(
+                        "reg VM Result match expected Result, got `{}`.",
+                        other.display()
+                    )));
+                }
+            },
+            RegInstr::MatchVariant {
+                src,
+                expected,
+                match_ip,
+                else_ip,
+            } => match self.reg(base + *src) {
+                VmValue::Variant(data) if data.name().as_ref() == expected.as_str() => {
+                    *ip = *match_ip
+                }
+                VmValue::Variant(_) => *ip = *else_ip,
+                other => {
+                    return Err(EvalError::Runtime(format!(
+                        "reg VM variant match expected `{expected}`, got `{}`.",
+                        other.display()
+                    )));
+                }
+            },
+            RegInstr::MatchMapGet {
+                map,
+                key,
+                value_dst,
+                some_ip,
+                none_ip,
+            } => {
+                let map = expect_map_ref(self.reg(base + *map))?;
+                let key = map_key_from_value(self.reg(base + *key))?;
+                if let Some(value) = map.borrow().get(&key).cloned() {
+                    self.set_reg(base + *value_dst, value);
+                    *ip = *some_ip;
+                } else {
+                    *ip = *none_ip;
+                }
+            }
+            RegInstr::UnwrapSome { dst, src } => {
+                let value = match self.reg(base + *src) {
+                    some @ (VmValue::OptionSomeScalar(_) | VmValue::OptionSomeHeap(_)) => {
+                        some.unwrap_some().expect("Some arm yields a payload")
+                    }
+                    other => {
+                        return Err(EvalError::Runtime(format!(
+                            "reg VM Some binding expected Some, got `{}`.",
+                            other.display()
+                        )));
+                    }
+                };
+                self.set_reg(base + *dst, value);
+            }
+            RegInstr::UnwrapVariantValue { dst, src, expected } => {
+                let value = match self.reg(base + *src) {
+                    VmValue::Variant(data) if data.name().as_ref() == expected.as_str() => data
+                        .get("value")
+                        .cloned()
+                        .or_else(|| {
+                            (data.fields.len() == 1)
+                                .then(|| data.fields.first().cloned())
+                                .flatten()
+                        })
+                        .ok_or_else(|| {
+                            EvalError::Runtime(format!(
+                                "reg VM `{expected}` variant is missing value."
+                            ))
+                        })?,
+                    other => {
+                        return Err(EvalError::Runtime(format!(
+                            "reg VM expected `{expected}` variant, got `{}`.",
+                            other.display()
+                        )));
+                    }
+                };
+                self.set_reg(base + *dst, value);
+            }
+            RegInstr::RuntimeError { message } => {
+                return Err(EvalError::Runtime(message.clone()));
+            }
+            // Collection get/set/index ops: pure (no frame push, no closure
+            // call), so they belong to the tier-0 subset. Closure-driven
+            // collection ops (map/filter/fold/sort-by) stay on the interpreter.
+            // TV2.2 hot/cold split (perf-plan §1.3): `try_exec_pure` is
+            // `#[inline(always)]` and inlines into `drive()`'s hot dispatch loop.
+            // TV1+TV2 enlarged these list arms (TypedVec dispatch + accounting),
+            // which bloated the inlined loop and taxed I-cache/regalloc on EVERY
+            // kernel — including non-list scalar ones. Each heavy list arm is now a
+            // thin call into an `#[inline(never)]` cold helper so the inlined hot
+            // loop shrinks back to its scalar core (arith/compare/branch/move/load).
+            RegInstr::ListGet { dst, list, index } => {
+                self.exec_list_get(base, *dst, *list, *index)?
+            }
+            RegInstr::ListLen { dst, list } => self.exec_list_len(base, *dst, *list)?,
+            RegInstr::ListPush { dst, list, value } => {
+                self.exec_list_push(base, *dst, *list, *value)?
+            }
+            RegInstr::ListAppend { dst, list, values } => {
+                self.exec_list_append(base, *dst, *list, *values)?
+            }
+            RegInstr::ListClear { dst, list } => self.exec_list_clear(base, *dst, *list)?,
+            RegInstr::ListPop { dst, list } => self.exec_list_pop(base, *dst, *list)?,
+            RegInstr::ListRemoveAt { dst, list, index } => {
+                self.exec_list_remove_at(base, *dst, *list, *index)?
+            }
+            RegInstr::ListSet {
+                dst,
+                list,
+                index,
+                value,
+            } => self.exec_list_set(base, *dst, *list, *index, *value)?,
+            RegInstr::MapGet { dst, map, key } => {
+                let map = expect_map_ref(self.reg(base + *map))?;
+                let key = map_key_from_value(self.reg(base + *key))?;
+                let value = map
+                    .borrow()
+                    .get(&key)
+                    .cloned()
+                    .map(|value| VmValue::some(value))
+                    .unwrap_or(VmValue::OptionNone);
+                self.set_reg(base + *dst, value);
+            }
+            RegInstr::MapClear { dst, map } => {
+                expect_map_ref(self.reg(base + *map))?.borrow_mut().clear();
+                self.set_reg(base + *dst, VmValue::Unit);
+            }
+            RegInstr::MapInsert {
+                dst,
+                map,
+                key,
+                value,
+            } => {
+                let map = expect_map_ref(self.reg(base + *map))?;
+                let key = map_key_from_value(self.reg(base + *key))?;
+                let value = self.reg(base + *value).clone();
+                map.borrow_mut().insert(key, value);
+                self.set_reg(base + *dst, VmValue::Unit);
+            }
+            RegInstr::MapInsertOld {
+                dst,
+                map,
+                key,
+                value,
+            } => {
+                let map = expect_map_ref(self.reg(base + *map))?;
+                let key = map_key_from_value(self.reg(base + *key))?;
+                let value = self.reg(base + *value).clone();
+                let old = map.borrow_mut().insert(key, value);
+                self.set_reg(
+                    base + *dst,
+                    old.map(|value| VmValue::some(value))
+                        .unwrap_or(VmValue::OptionNone),
+                );
+            }
+            RegInstr::MapRemove { dst, map, key } => {
+                let map = expect_map_ref(self.reg(base + *map))?;
+                let key = map_key_from_value(self.reg(base + *key))?;
+                let old = map.borrow_mut().remove(&key);
+                self.set_reg(
+                    base + *dst,
+                    old.map(|value| VmValue::some(value))
+                        .unwrap_or(VmValue::OptionNone),
+                );
+            }
+            RegInstr::Return { src } => {
+                return Ok(PureStep::Return(self.take_reg(base + *src)));
+            }
+            // Anything else is outside the pure subset; the caller handles it.
+            _ => return Ok(PureStep::NotPure),
+        }
+        Ok(PureStep::Next)
+    }
+
+    // ── TV2.2 cold list-opcode bodies (perf-plan §1.3 hot/cold split) ──
+    // These are the heavy/cold bodies the TV1+TV2 TypedVec work added to the
+    // `try_exec_pure` list arms. `try_exec_pure` is `#[inline(always)]` and
+    // inlines into `drive()`'s hot dispatch loop; keeping these bodies inline
+    // bloated the loop and taxed I-cache/regalloc on every kernel (including
+    // non-list scalar ones). Marked `#[inline(never)]` so each arm is a thin
+    // call and the inlined hot loop stays at its scalar core. Semantics are
+    // byte-for-byte identical to the previous inline arms.
+
+    #[inline(never)]
+    pub(super) fn exec_list_get(
+        &mut self,
+        base: usize,
+        dst: usize,
+        list: usize,
+        index: usize,
+    ) -> Result<(), EvalError> {
+        let list = expect_list_ref(self.reg(base + list))?;
+        let index = expect_usize_ref(self.reg(base + index))?;
+        let value = list.borrow().get(index).ok_or_else(|| {
+            EvalError::Runtime(format!("reg VM List.get index {index} out of bounds."))
+        })?;
+        self.set_reg(base + dst, value);
+        Ok(())
+    }
+
+    #[inline(never)]
+    pub(super) fn exec_list_len(&mut self, base: usize, dst: usize, list: usize) -> Result<(), EvalError> {
+        let len = expect_list_ref(self.reg(base + list))?.borrow().len();
+        self.set_reg(base + dst, VmValue::Int(len as i64));
+        Ok(())
+    }
+
+    #[inline(never)]
+    pub(super) fn exec_list_push(
+        &mut self,
+        base: usize,
+        dst: usize,
+        list: usize,
+        value: usize,
+    ) -> Result<(), EvalError> {
+        // TV2.1 hot path: a single mutable borrow that fuses the typed direct
+        // push with amortized capacity-growth accounting. The push operates
+        // straight on the flat `i64`/`f64` buffer with no intermediate `VmValue`
+        // materialization, and `account_bytes` is only reached on the (geometric,
+        // amortized O(1)) reallocations — not once per element. The adversarial
+        // `while true { list.push(x) }` still trips the ceiling: capacity (>= len)
+        // growth is charged, so the bound is conservative.
+        let list = expect_list_ref(self.reg(base + list))?;
+        let value = self.reg(base + value).clone();
+        let grew = list.borrow_mut().checked_push_accounted(value).map_err(|v| {
+            EvalError::Runtime(format!(
+                "reg VM List.push element kind mismatch (got `{}`).",
+                v.display()
+            ))
+        })?;
+        if grew != 0 {
+            self.account_bytes(grew)?;
+        }
+        self.set_reg(base + dst, VmValue::Unit);
+        Ok(())
+    }
+
+    #[inline(never)]
+    pub(super) fn exec_list_append(
+        &mut self,
+        base: usize,
+        dst: usize,
+        list: usize,
+        values: usize,
+    ) -> Result<(), EvalError> {
+        // In-place to mirror `List.append(mut list, ...)`: clone the source first
+        // (handles append-to-self), then extend the receiver's existing buffer so
+        // a `mut` param propagates.
+        let append_values = expect_list_ref(self.reg(base + values))?.borrow().clone();
+        // Account against the *destination's* real layout, not the source's: a flat
+        // `Ints`/`Floats` source extended into a `Boxed` receiver stores 16 B
+        // `VmValue` slots, which `extend_accounted` bills correctly (the old
+        // source-`elem_bytes` charge under-counted that mixed-layout case).
+        let grew = expect_list_ref(self.reg(base + list))?
+            .borrow_mut()
+            .extend_accounted(append_values);
+        if grew != 0 {
+            self.account_bytes(grew)?;
+        }
+        self.set_reg(base + dst, VmValue::Unit);
+        Ok(())
+    }
+
+    #[inline(never)]
+    pub(super) fn exec_list_clear(&mut self, base: usize, dst: usize, list: usize) -> Result<(), EvalError> {
+        expect_list_ref(self.reg(base + list))?.borrow_mut().clear();
+        self.set_reg(base + dst, VmValue::Unit);
+        Ok(())
+    }
+
+    #[inline(never)]
+    pub(super) fn exec_list_pop(&mut self, base: usize, dst: usize, list: usize) -> Result<(), EvalError> {
+        let value = expect_list_ref(self.reg(base + list))?
+            .borrow_mut()
+            .pop()
+            .map(|value| VmValue::some(value))
+            .unwrap_or(VmValue::OptionNone);
+        self.set_reg(base + dst, value);
+        Ok(())
+    }
+
+    #[inline(never)]
+    pub(super) fn exec_list_remove_at(
+        &mut self,
+        base: usize,
+        dst: usize,
+        list: usize,
+        index: usize,
+    ) -> Result<(), EvalError> {
+        let index = expect_int_ref(self.reg(base + index))?;
+        let list = expect_list_ref(self.reg(base + list))?.clone();
+        let mut borrowed = list.borrow_mut();
+        let value = if index < 0 || index as usize >= borrowed.len() {
+            VmValue::OptionNone
+        } else {
+            VmValue::some(borrowed.remove(index as usize))
+        };
+        drop(borrowed);
+        self.set_reg(base + dst, value);
+        Ok(())
+    }
+
+    #[inline(never)]
+    pub(super) fn exec_list_set(
+        &mut self,
+        base: usize,
+        dst: usize,
+        list: usize,
+        index: usize,
+        value: usize,
+    ) -> Result<(), EvalError> {
+        let index = expect_int_ref(self.reg(base + index))?;
+        let new_value = self.reg(base + value).clone();
+        let list = expect_list_ref(self.reg(base + list))?.clone();
+        let mut borrowed = list.borrow_mut();
+        if index < 0 || index as usize >= borrowed.len() {
+            return Err(EvalError::Runtime(format!(
+                "reg VM List.set index {index} out of bounds for length {}.",
+                borrowed.len()
+            )));
+        }
+        borrowed.checked_set(index as usize, new_value).map_err(|v| {
+            EvalError::Runtime(format!(
+                "reg VM List.set element kind mismatch (got `{}`).",
+                v.display()
+            ))
+        })?;
+        drop(borrowed);
+        self.set_reg(base + dst, VmValue::Unit);
+        Ok(())
+    }
+
+    /// Grow the shared register stack so that `stack[..upto]` is addressable.
+    /// The stack only ever grows; frames are reused in place.
+    pub(super) fn ensure_regs(&mut self, upto: usize) -> Result<(), EvalError> {
+        if self.stack.len() < upto {
+            let grew = upto - self.stack.len();
+            self.stack.resize(upto, VmValue::Unit);
+            self.written.resize(upto, false);
+            // Account the shared register stack's growth: one `VmValue` slot plus
+            // the `written` bool per new register. Deep recursion that slips under
+            // the depth cap (huge per-frame register windows) is still bounded.
+            self.account_bytes(grew * (std::mem::size_of::<VmValue>() + 1))?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn prepare_frame(&mut self, base: usize, regs: usize) -> Result<(), EvalError> {
+        self.ensure_regs(base + regs)?;
+        // Clear the new window's written bits AND release any stale value left in a
+        // reused slot. The register stack is append-only and reuses windows in
+        // place (execution spec §4 rule 4), so a slot may still physically hold the
+        // previous frame's `VmValue` — including an `Rc` to a heap list/map/string/
+        // closure. The written bit alone only blocks stale *reads*; dropping the
+        // value here is what makes an unwritten slot non-retaining for ownership and
+        // memory accounting (execution spec §4.1). Args are written immediately
+        // after `prepare_frame` via `set_reg`, so this never clobbers live inputs.
+        for index in base..base + regs {
+            self.written[index] = false;
+            // Assigning `Unit` drops whatever the reused slot held; `Unit` owns
+            // nothing, so heap refcounts fall here rather than at next overwrite.
+            self.stack[index] = VmValue::Unit;
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    pub(super) fn reg(&self, index: usize) -> &VmValue {
+        // Reading an unwritten register is a lowering/codegen invariant violation,
+        // never a user-level runtime error. Assert in release too so we fail loudly
+        // instead of silently observing a stale value left in the reused frame
+        // window (the stack only grows and frames are reused in place).
+        assert!(
+            self.written.get(index).copied().unwrap_or(false),
+            "reg VM internal error: read uninitialized register {index}"
+        );
+        &self.stack[index]
+    }
+
+    #[inline(always)]
+    pub(super) fn set_reg(&mut self, index: usize, value: VmValue) {
+        self.stack[index] = value;
+        self.written[index] = true;
+    }
+
+    /// Propagate a completing frame's `mut` parameters back to the caller: each
+    /// `(caller_reg, callee_reg)` copies the parameter's final value out. A no-op
+    /// for the common call with no `mut` args (empty `mut_writeback`).
+    pub(super) fn apply_mut_writeback(&mut self, frame: &Frame) {
+        for &(caller_reg, callee_reg) in &frame.mut_writeback {
+            let value = self.reg(callee_reg).clone();
+            self.set_reg(caller_reg, value);
+        }
+    }
+
+    #[inline(always)]
+    pub(super) fn take_reg(&mut self, index: usize) -> VmValue {
+        assert!(
+            self.written.get(index).copied().unwrap_or(false),
+            "reg VM internal error: take uninitialized register {index}"
+        );
+        self.written[index] = false;
+        std::mem::replace(&mut self.stack[index], VmValue::Unit)
+    }
+
+    // Shared register stack with frame windows. Each frame owns
+    // `stack[base .. base + function.regs]`; a callee is placed immediately
+    // above the caller at `base + function.regs`. The stack only grows
+    // (`ensure_regs`) so recursion is bounded only by memory. Debug builds keep
+    // a written-register bitmap so stale slots cannot mask lowering bugs.
+    /// Synchronous call entry used by contexts that cannot suspend (closure
+    /// callbacks, resource drops, the program root before the scheduler owns it).
+    /// Pushes `function`'s frame and drives to completion; a suspension here is a
+    /// lowering/runtime invariant violation (only `async` code awaits, and that
+    /// always runs under the task scheduler).
+    pub(super) fn run_frame(
+        &mut self,
+        unit: &RegUnit,
+        function: Rc<RegFunction>,
+        base: usize,
+    ) -> Result<VmValue, EvalError> {
+        self.ensure_regs(base + function.regs)?;
+        let floor = self.frames.len();
+        self.push_frame(Frame {
+            func: function,
+            ip: 0,
+            base,
+            ret_dst: usize::MAX,
+            mut_writeback: Vec::new(),
+        })?;
+        match self.drive(unit, floor)? {
+            Outcome::Completed(value) => Ok(value),
+            Outcome::Suspended => Err(EvalError::Runtime(
+                "reg VM cannot suspend (await/blocking op) inside a synchronous context."
+                    .to_string(),
+            )),
+        }
+    }
+
+    /// Drive the explicit call stack until the frame at depth `floor` returns
+    /// (`Completed`) or a blocking operation parks the current task
+    /// (`Suspended`, with the wait recorded in `self.suspension`). `floor` is
+    /// the stack depth below the frame we are running.
+    pub(super) fn drive(&mut self, unit: &RegUnit, floor: usize) -> Result<Outcome, EvalError> {
+        'frames: loop {
+            // Hoist the current (top) frame into fast locals. The instruction
+            // body below only references `base`/`next_base`/`ip`/`unit`, so it is
+            // byte-for-byte the recursive interpreter; only `CallKnown`/`Return`
+            // (and falling off the end) manipulate the frame stack.
+            let func = {
+                let frame = self.frames.last().expect("active frame");
+                Rc::clone(&frame.func)
+            };
+            let base = self.frames.last().expect("active frame").base;
+            let next_base = base + func.regs;
+            let mut ip = self.frames.last().expect("active frame").ip;
+
+            // Native JIT tier: a fresh frame whose function compiles to machine
+            // code runs there first (the integer/control core). Completes exactly
+            // like the `Return` arm. Falls through if not native-eligible or the
+            // native code bailed on an edge.
+            #[cfg(feature = "native-jit")]
+            if ip == 0
+                && self.native.is_some()
+                // Inline negative check: skip the `try_native` call entirely for
+                // functions already known not native-eligible (just a `Cell` read).
+                && func.native_status.get() != NATIVE_STATUS_NOT_ELIGIBLE
+            {
+                match self.try_native(&func, base) {
+                    NativeAttempt::Completed(value) => {
+                        let frame = self.frames.pop().expect("active frame");
+                        self.apply_mut_writeback(&frame);
+                        if self.frames.len() == floor {
+                            return Ok(Outcome::Completed(value));
+                        }
+                        self.set_reg(frame.ret_dst, value);
+                        continue 'frames;
+                    }
+                    // J0.2 precise resume: `try_native` already restored the live
+                    // register window and set this frame's `ip` to the safepoint
+                    // `resume_ip`. Re-enter the interpreter loop; because `ip != 0`
+                    // the re-entry skips the native/tier-0 dispatch and resumes
+                    // interpretation mid-function.
+                    NativeAttempt::Resumed => continue 'frames,
+                    // Fall through to tier-0 + the interpreter loop. The frame's
+                    // `ip` is still `0`, so the function re-runs from the top.
+                    NativeAttempt::Fallback => {}
+                }
+            }
+
+            // Tier-0 JIT: a fresh JIT-eligible frame runs via the specializing
+            // executor (which reuses the interpreter's semantics), then completes
+            // exactly like the `Return` arm. Eligible functions never suspend, so
+            // they are always entered at `ip == 0`.
+            if self.jit_enabled && ip == 0 && self.is_jit_eligible(&func) {
+                let value = self.run_jit(unit, &func, base)?;
+                let frame = self.frames.pop().expect("active frame");
+                self.apply_mut_writeback(&frame);
+                if self.frames.len() == floor {
+                    return Ok(Outcome::Completed(value));
+                }
+                self.set_reg(frame.ret_dst, value);
+                continue 'frames;
+            }
+
+            // OSR auto-trigger (Pending #2): resolve this function's OSR-candidate
+            // state ONCE (lazy, cached in `func.osr_state`) and hoist the candidate
+            // loop header into a single per-frame local. For the overwhelming common
+            // case — a function with no analyzable natural loop — this is a single
+            // `Cell` read that yields `None`, and the per-instruction guard below is
+            // then EXACTLY today's hoisted never-taken branch (`if let Some(..)`),
+            // so the non-candidate interpreter hot path is byte-for-byte unchanged.
+            // Only a candidate function pays the per-`ip` header compare, and only
+            // until OSR fires (after which the loop runs native).
+            //
+            // `osr_eager` (set by `RSS_JIT_OSR` / a test override) keeps the forced
+            // path: threshold 0, so the FIRST header hit triggers `try_osr` — this
+            // preserves the differential OSR backend and the deterministic
+            // forced-OSR tests. NOTE: candidacy is NOT gated on `native_status`: OSR
+            // targets functions that are native-INELIGIBLE as a whole (the loop is
+            // wrapped by non-native I/O); the verdict is cached in `native.osr_cache`.
+            #[cfg(feature = "native-jit")]
+            let (osr_candidate, osr_eager) = if self.native.is_some() {
+                (
+                    self.resolve_osr_candidate(&func),
+                    self.native.as_ref().is_some_and(|n| n.osr_enabled),
+                )
+            } else {
+                (None, false)
+            };
+            #[cfg(not(feature = "native-jit"))]
+            let _osr_candidate: Option<usize> = None;
+
+            while let Some(instr) = func.code.get(ip) {
+                // OSR trigger: only candidate functions enter this arm (`None` for
+                // every non-loop / unanalyzable function ⇒ a hoisted never-taken
+                // branch, no per-instruction work). When the interpreter reaches the
+                // candidate header, count the backedge; at the threshold (or
+                // immediately when eager) fire `try_osr`. `try_osr` is total — on any
+                // non-applicability it leaves the frame untouched and returns `false`,
+                // and we mark `GaveUp` so we never recompile-probe in a tight loop.
+                #[cfg(feature = "native-jit")]
+                if let Some(header) = osr_candidate {
+                    if ip == header {
+                        let fire = if osr_eager {
+                            true
+                        } else {
+                            // Count this backedge/header hit; fire at threshold.
+                            match func.osr_state.get() {
+                                OsrTrigger::Counting {
+                                    header_ip,
+                                    count,
+                                    probe_cc,
+                                } => {
+                                    let next = count.saturating_add(1);
+                                    if next >= osr_backedge_threshold() {
+                                        true
+                                    } else {
+                                        func.osr_state.set(OsrTrigger::Counting {
+                                            header_ip,
+                                            count: next,
+                                            probe_cc,
+                                        });
+                                        false
+                                    }
+                                }
+                                // Already fired/gave up: stop probing.
+                                _ => false,
+                            }
+                        };
+                        if fire {
+                            self.frames.last_mut().expect("active frame").ip = ip;
+                            if self.try_osr(&func, base, ip) {
+                                continue 'frames;
+                            }
+                            // Declined. In COUNTING (auto) mode we must NOT give up
+                            // forever if the decline is only because a profile-guided
+                            // closure-inline site is still PENDING — `try_osr` leaves
+                            // that verdict uncached (re-probable) so a warmer retry can
+                            // succeed. But we must also not re-probe forever: a
+                            // structurally-present but **dynamically dead** (never-taken)
+                            // `CallClosure` stays `pending` indefinitely (no profile
+                            // entry), and its `call_count` never advances toward the
+                            // `PROFILE_RECORD_LIMIT` freeze. So re-probe ONLY when the
+                            // profile has made PROGRESS — `call_count` (the dynamic-call
+                            // count) increased since the previous probe. That is
+                            // intrinsically bounded: `call_count` is capped at
+                            // `PROFILE_RECORD_LIMIT`, so there can be at most that many
+                            // progress-resets before the profile freezes (⇒ not pending
+                            // ⇒ stable) or stalls (⇒ no progress ⇒ GaveUp here).
+                            //   - PENDING **and** progressed ⇒ reset (record the new
+                            //     progress point as `probe_cc`).
+                            //   - STABLE decline, OR pending-but-stalled/dead ⇒ `GaveUp`.
+                            // EAGER mode keeps firing every header hit (the cached `None`
+                            // makes a stable retry cheap; a pending profile is re-probed).
+                            if !osr_eager {
+                                let cc = func.call_count.get();
+                                let prev_probe_cc = match func.osr_state.get() {
+                                    OsrTrigger::Counting { probe_cc, .. } => probe_cc,
+                                    _ => cc,
+                                };
+                                if cc > prev_probe_cc
+                                    && native_translation_pending_on_profile(&self.unit, &func)
+                                {
+                                    func.osr_state.set(OsrTrigger::Counting {
+                                        header_ip: ip,
+                                        count: 0,
+                                        probe_cc: cc,
+                                    });
+                                } else {
+                                    func.osr_state.set(OsrTrigger::GaveUp);
+                                }
+                            }
+                        }
+                    }
+                }
+                self.tick()?;
+                ip += 1;
+                // Pure instructions (loads, arithmetic, jumps, matches, heap
+                // construction, …) run through the shared `try_exec_pure`, the one
+                // copy of their semantics that the JIT executor also uses — so the
+                // two can never diverge. Only frame/suspension/call-shaped
+                // instructions need the interpreter-specific handling below.
+                match self.try_exec_pure(instr, base, &mut ip)? {
+                    PureStep::Next => {}
+                    PureStep::Return(value) => {
+                        let frame = self.frames.pop().expect("active frame");
+                        self.apply_mut_writeback(&frame);
+                        if self.frames.len() == floor {
+                            return Ok(Outcome::Completed(value));
+                        }
+                        self.set_reg(frame.ret_dst, value);
+                        continue 'frames;
+                    }
+                    PureStep::NotPure => match instr {
+                        RegInstr::ResourceDrop { resource } => {
+                            let value = self.reg(base + *resource).clone();
+                            self.run_resource_drop(unit, value, next_base)?;
+                        }
+                        RegInstr::CallKnown {
+                            dst,
+                            function: callee_id,
+                            args,
+                            mut_args,
+                        } => {
+                            let callee = Rc::clone(&unit.functions[*callee_id]);
+                            self.prepare_frame(next_base, callee.regs)?;
+                            for (index, reg) in args.iter().enumerate() {
+                                let value = self.reg(base + *reg).clone();
+                                self.set_reg(next_base + index, value);
+                            }
+                            // `mut` args: when this frame completes, write each
+                            // parameter's final value back to the caller's register
+                            // so mutations propagate (caller_abs_reg, callee_abs_reg).
+                            let mut_writeback = mut_args
+                                .iter()
+                                .map(|&pos| (base + args[pos], next_base + pos))
+                                .collect();
+                            // Stackless call: save our resume point, push the callee, and
+                            // re-enter the driver loop instead of recursing on the host
+                            // stack — so an `await` deep in this chain can later suspend it.
+                            self.frames.last_mut().expect("active frame").ip = ip;
+                            self.push_frame(Frame {
+                                func: callee,
+                                ip: 0,
+                                base: next_base,
+                                ret_dst: base + *dst,
+                                mut_writeback,
+                            })?;
+                            continue 'frames;
+                        }
+                        RegInstr::CallDynamic {
+                            dst,
+                            dispatch,
+                            args,
+                            mut_args,
+                        } => {
+                            // Select the concrete impl by the runtime struct type of
+                            // the receiver (args[0]), then call it like `CallKnown`.
+                            let receiver = self.reg(base + args[0]).clone();
+                            let type_name = match &receiver {
+                                VmValue::Struct(data) => Some(data.name().clone()),
+                                _ => None,
+                            };
+                            let callee_id = type_name.as_ref().and_then(|name| {
+                                dispatch
+                                    .iter()
+                                    .find(|(struct_name, _)| struct_name.as_str() == &**name)
+                                    .map(|(_, id)| *id)
+                            });
+                            let Some(callee_id) = callee_id else {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM dynamic protocol dispatch found no impl for receiver `{}`.",
+                                    type_name.as_deref().unwrap_or("<non-struct value>")
+                                )));
+                            };
+                            // J1 type feedback (warm-gated + bounded inside the
+                            // helper): record the resolved callee identity at this
+                            // site. The dispatch DECISION above (`callee_id`) is
+                            // unchanged — we only observe it. `ip` was already
+                            // advanced past this instruction, so its index is
+                            // `ip - 1`.
+                            record_call_site(&func, ip - 1, callee_id as u64, true);
+                            let callee = Rc::clone(&unit.functions[callee_id]);
+                            self.prepare_frame(next_base, callee.regs)?;
+                            for (index, reg) in args.iter().enumerate() {
+                                let value = self.reg(base + *reg).clone();
+                                self.set_reg(next_base + index, value);
+                            }
+                            let mut_writeback = mut_args
+                                .iter()
+                                .map(|&pos| (base + args[pos], next_base + pos))
+                                .collect();
+                            self.frames.last_mut().expect("active frame").ip = ip;
+                            self.push_frame(Frame {
+                                func: callee,
+                                ip: 0,
+                                base: next_base,
+                                ret_dst: base + *dst,
+                                mut_writeback,
+                            })?;
+                            continue 'frames;
+                        }
+                        RegInstr::SpawnTask {
+                            dst,
+                            function: callee_id,
+                            args,
+                        } => {
+                            let callee = Rc::clone(&unit.functions[*callee_id]);
+                            let arg_values = args
+                                .iter()
+                                .map(|reg| self.reg(base + *reg).clone())
+                                .collect::<Vec<_>>();
+                            let tid = self.create_task(callee, arg_values);
+                            self.set_reg(base + *dst, task_handle_value(tid));
+                        }
+                        RegInstr::AwaitJoin { dst, src } => {
+                            let value = self.reg(base + *src).clone();
+                            match as_task_handle(&value) {
+                                Some(task) => {
+                                    match self.tasks.get(&task).and_then(|s| s.done.clone()) {
+                                        // Already finished: take its value, no park.
+                                        // Reap the slot — a handle is awaited at most
+                                        // once (RS0030), so its value is now consumed
+                                        // and the slot must not linger (else the task
+                                        // table grows unboundedly across loop rounds,
+                                        // turning the scheduler's per-step scans O(n²)).
+                                        Some(result) => {
+                                            self.tasks.remove(&task);
+                                            self.set_reg(base + *dst, result);
+                                        }
+                                        // Park until the joined task completes.
+                                        None => {
+                                            self.suspension = Some(Suspension {
+                                                wait: Wait::Join { task },
+                                                resume_dst: base + *dst,
+                                            });
+                                        }
+                                    }
+                                }
+                                // Not a handle: `await` of an already-evaluated value.
+                                None => self.set_reg(base + *dst, value),
+                            }
+                        }
+                        RegInstr::SelectWait {
+                            handles,
+                            winner,
+                            value,
+                        } => {
+                            let tids = handles
+                                .iter()
+                                .map(|reg| {
+                                    as_task_handle(self.reg(base + *reg)).ok_or_else(|| {
+                                        EvalError::Runtime(
+                                            "reg VM select arm did not produce a task.".to_string(),
+                                        )
+                                    })
+                                })
+                                .collect::<Result<Vec<_>, _>>()?;
+                            // If an arm already finished, resolve immediately; else park.
+                            let ready = tids
+                                .iter()
+                                .enumerate()
+                                .find(|(_, tid)| {
+                                    self.tasks.get(tid).is_some_and(|s| s.done.is_some())
+                                })
+                                .map(|(index, tid)| (index, *tid));
+                            match ready {
+                                Some((index, won_tid)) => {
+                                    let won = self
+                                        .tasks
+                                        .get(&won_tid)
+                                        .and_then(|s| s.done.clone())
+                                        .expect("done");
+                                    self.cancel_select_losers(&tids, won_tid);
+                                    self.set_reg(base + *winner, VmValue::Int(index as i64));
+                                    self.set_reg(base + *value, won);
+                                }
+                                None => {
+                                    self.suspension = Some(Suspension {
+                                        wait: Wait::Select {
+                                            handles: tids,
+                                            winner_dst: base + *winner,
+                                            value_dst: base + *value,
+                                        },
+                                        resume_dst: usize::MAX,
+                                    });
+                                }
+                            }
+                        }
+                        RegInstr::CallNative {
+                            dst,
+                            key,
+                            args,
+                            mut_args,
+                        } => {
+                            let result = self.call_native_key(key, args, mut_args, base)?;
+                            self.set_reg(base + *dst, result);
+                        }
+                        RegInstr::CallClosure {
+                            dst,
+                            closure,
+                            args,
+                            mut_args,
+                        } => {
+                            let closure = match self.reg(base + *closure) {
+                                VmValue::Closure(closure) => Rc::clone(closure),
+                                other => {
+                                    return Err(EvalError::Runtime(format!(
+                                        "reg VM expected Closure, got `{}`.",
+                                        other.display()
+                                    )));
+                                }
+                            };
+                            // J1 type feedback (warm-gated + bounded inside the
+                            // helper): the closure's underlying function id is its
+                            // stable identity (one callee ⇒ monomorphic). Recording
+                            // does not change which closure runs; `ip` already
+                            // points past this instruction, so its index is
+                            // `ip - 1`.
+                            record_call_site(
+                                &func,
+                                ip - 1,
+                                closure.function as u64,
+                                closure_captures_all_scalar(&closure),
+                            );
+                            let result = self.call_closure_from_regs(
+                                unit, &closure, args, mut_args, base, next_base,
+                            )?;
+                            self.set_reg(base + *dst, result);
+                        }
+                        RegInstr::ListFilter {
+                            dst,
+                            list,
+                            predicate,
+                        } => {
+                            let list = expect_list_ref(self.reg(base + *list))?;
+                            let predicate = expect_closure_rc(self.reg(base + *predicate))?;
+                            let result = self.filter_list(unit, list, &predicate, next_base)?;
+                            self.set_reg(base + *dst, result);
+                        }
+                        RegInstr::ListFold {
+                            dst,
+                            list,
+                            state,
+                            folder,
+                        } => {
+                            let list = expect_list_ref(self.reg(base + *list))?;
+                            let state = self.reg(base + *state).clone();
+                            let folder = expect_closure_rc(self.reg(base + *folder))?;
+                            let result = self.fold_list(unit, list, state, &folder, next_base)?;
+                            self.set_reg(base + *dst, result);
+                        }
+                        RegInstr::ListMap { dst, list, mapper } => {
+                            let list = expect_list_ref(self.reg(base + *list))?;
+                            let mapper = expect_closure_rc(self.reg(base + *mapper))?;
+                            let result = self.map_list(unit, list, &mapper, next_base)?;
+                            self.set_reg(base + *dst, result);
+                        }
+                        RegInstr::ListSort { dst, list } => {
+                            let list = expect_list_ref(self.reg(base + *list))?.clone();
+                            let mut borrowed = list.borrow_mut();
+                            // Sort a flat `Ints` list in place (kind-preserving); any
+                            // other kind promotes to the boxed view and sorts via the
+                            // shared `VmValue` comparator (parity-identical).
+                            if let TypedVec::Ints(values) = &mut *borrowed {
+                                values.sort_unstable();
+                            } else {
+                                sort_vm_values(borrowed.as_boxed_mut())?;
+                            }
+                            drop(borrowed);
+                            self.set_reg(base + *dst, VmValue::Unit);
+                        }
+                        RegInstr::ListSortBy {
+                            dst,
+                            list,
+                            key,
+                            compare,
+                        } => {
+                            let values = expect_list_ref(self.reg(base + *list))?.borrow().to_vec();
+                            let key = expect_closure_rc(self.reg(base + *key))?;
+                            let compare = expect_closure_rc(self.reg(base + *compare))?;
+                            let sorted =
+                                self.sort_list_by_closure(unit, values, &key, &compare, next_base)?;
+                            self.set_reg(base + *dst, VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(sorted)))));
+                        }
+                        RegInstr::ListSortWith { dst, list, compare } => {
+                            // Sort a detached copy first so the comparator closure can read
+                            // the list without a RefCell double-borrow, then overwrite the
+                            // receiver's buffer in place so `mut list` propagates.
+                            let mut values =
+                                expect_list_ref(self.reg(base + *list))?.borrow().to_vec();
+                            let compare = expect_closure_rc(self.reg(base + *compare))?;
+                            self.sort_list_with_closure(unit, &mut values, &compare, next_base)?;
+                            *expect_list_ref(self.reg(base + *list))?.borrow_mut() =
+                                TypedVec::from_values(values);
+                            self.set_reg(base + *dst, VmValue::Unit);
+                        }
+                        RegInstr::DequeClear { dst, deque } => {
+                            expect_deque_ref(self.reg(base + *deque))?
+                                .borrow_mut()
+                                .clear();
+                            self.set_reg(base + *dst, VmValue::Unit);
+                        }
+                        RegInstr::DequePopBack { dst, deque } => {
+                            let value = expect_deque_ref(self.reg(base + *deque))?
+                                .borrow_mut()
+                                .pop_back()
+                                .map(|value| VmValue::some(value))
+                                .unwrap_or(VmValue::OptionNone);
+                            self.set_reg(base + *dst, value);
+                        }
+                        RegInstr::DequePopFront { dst, deque } => {
+                            let value = expect_deque_ref(self.reg(base + *deque))?
+                                .borrow_mut()
+                                .pop_front() // O(1), unlike the old `Vec::remove(0)`
+                                .map(|value| VmValue::some(value))
+                                .unwrap_or(VmValue::OptionNone);
+                            self.set_reg(base + *dst, value);
+                        }
+                        RegInstr::DequePushBack { dst, deque, value } => {
+                            let value = self.reg(base + *value).clone();
+                            expect_deque_ref(self.reg(base + *deque))?
+                                .borrow_mut()
+                                .push_back(value);
+                            self.set_reg(base + *dst, VmValue::Unit);
+                        }
+                        RegInstr::DequePushFront { dst, deque, value } => {
+                            let value = self.reg(base + *value).clone();
+                            expect_deque_ref(self.reg(base + *deque))?
+                                .borrow_mut()
+                                .push_front(value); // O(1), unlike the old `Vec::insert(0, _)`
+                            self.set_reg(base + *dst, VmValue::Unit);
+                        }
+                        RegInstr::SetClear { dst, set } => {
+                            expect_map_ref(self.reg(base + *set))?.borrow_mut().clear();
+                            self.set_reg(base + *dst, VmValue::Unit);
+                        }
+                        RegInstr::SetForEach { dst, set, callback } => {
+                            let set = expect_map_ref(self.reg(base + *set))?;
+                            let callback = expect_closure_rc(self.reg(base + *callback))?;
+                            let values = set
+                                .borrow()
+                                .keys()
+                                .map(vm_value_from_map_key)
+                                .collect::<Vec<_>>();
+                            for value in values {
+                                let _ = self.call_closure_one(unit, &callback, value, next_base)?;
+                            }
+                            self.set_reg(base + *dst, VmValue::Unit);
+                        }
+                        RegInstr::SetInsert { dst, set, value } => {
+                            let key = map_key_from_value(self.reg(base + *value))?;
+                            let map = expect_map_ref(self.reg(base + *set))?;
+                            let inserted = map.borrow_mut().insert(key, VmValue::Unit).is_none();
+                            self.set_reg(base + *dst, VmValue::Bool(inserted));
+                        }
+                        RegInstr::SetRemove { dst, set, value } => {
+                            let key = map_key_from_value(self.reg(base + *value))?;
+                            let map = expect_map_ref(self.reg(base + *set))?;
+                            let removed = map.borrow_mut().remove(&key).is_some();
+                            self.set_reg(base + *dst, VmValue::Bool(removed));
+                        }
+                        RegInstr::SortedSetClear { dst, set } => {
+                            expect_list_ref(self.reg(base + *set))?.borrow_mut().clear();
+                            self.set_reg(base + *dst, VmValue::Unit);
+                        }
+                        RegInstr::SortedSetInsert { dst, set, value } => {
+                            let value = self.reg(base + *value).clone();
+                            let list = expect_list_ref(self.reg(base + *set))?;
+                            let inserted = sorted_insert_vm(list.borrow_mut().as_boxed_mut(), value)?;
+                            self.set_reg(base + *dst, VmValue::Bool(inserted));
+                        }
+                        RegInstr::SortedSetRemove { dst, set, value } => {
+                            let value = self.reg(base + *value).clone();
+                            let list = expect_list_ref(self.reg(base + *set))?;
+                            let removed = sorted_remove_vm(list.borrow_mut().as_boxed_mut(), &value)?;
+                            self.set_reg(base + *dst, VmValue::Bool(removed));
+                        }
+                        RegInstr::SortedMapClear { dst, map } => {
+                            expect_list_ref(self.reg(base + *map))?.borrow_mut().clear();
+                            self.set_reg(base + *dst, VmValue::Unit);
+                        }
+                        RegInstr::SortedMapInsert {
+                            dst,
+                            map,
+                            key,
+                            value,
+                        } => {
+                            let key = self.reg(base + *key).clone();
+                            let value = self.reg(base + *value).clone();
+                            let list = expect_list_ref(self.reg(base + *map))?;
+                            sorted_map_insert_in_place(list.borrow_mut().as_boxed_mut(), key, value)?;
+                            self.set_reg(base + *dst, VmValue::Unit);
+                        }
+                        RegInstr::SortedMapRemove { dst, map, key } => {
+                            let key = self.reg(base + *key).clone();
+                            let list = expect_list_ref(self.reg(base + *map))?;
+                            let removed = sorted_map_remove_in_place(list.borrow_mut().as_boxed_mut(), &key)?;
+                            self.set_reg(
+                                base + *dst,
+                                removed
+                                    .map(|value| VmValue::some(value))
+                                    .unwrap_or(VmValue::OptionNone),
+                            );
+                        }
+                        RegInstr::BufferClear { dst, buffer } => {
+                            expect_bytes_ref(self.reg(base + *buffer))?;
+                            self.set_reg(base + *buffer, VmValue::Bytes(Rc::new(Vec::new())));
+                            self.set_reg(base + *dst, VmValue::Unit);
+                        }
+                        RegInstr::CounterAdd {
+                            dst,
+                            counter,
+                            amount,
+                        } => {
+                            let counter_reg = base + *counter;
+                            let value = expect_counter_value(self.reg(counter_reg))?
+                                + expect_int_ref(self.reg(base + *amount))?;
+                            self.set_reg(counter_reg, counter_value(value));
+                            self.set_reg(base + *dst, VmValue::Unit);
+                        }
+                        RegInstr::ConfigStoreReplace { dst, store, value } => {
+                            let store_reg = base + *store;
+                            let name = expect_config_value_name(self.reg(base + *value))?;
+                            self.set_reg(store_reg, config_store_value(name));
+                            self.set_reg(base + *dst, VmValue::Unit);
+                        }
+                        RegInstr::GlobalConfigReplace { dst, global, value } => {
+                            let global_reg = base + *global;
+                            let rule_count = expect_config_rule_count(self.reg(base + *value))?;
+                            self.set_reg(global_reg, global_config_value(rule_count));
+                            self.set_reg(base + *dst, VmValue::Unit);
+                        }
+                        RegInstr::StringBuilderPush {
+                            dst,
+                            builder,
+                            value,
+                        } => {
+                            let mut builder_value =
+                                expect_string_ref(self.reg(base + *builder))?.to_string();
+                            let value = expect_string_ref(self.reg(base + *value))?;
+                            builder_value.push_str(value);
+                            self.set_reg(base + *builder, VmValue::string(builder_value));
+                            self.set_reg(base + *dst, VmValue::Unit);
+                        }
+                        RegInstr::StringConcat { dst, left, right } => {
+                            let value = {
+                                let left = expect_string_ref(self.reg(base + *left))?;
+                                let right = expect_string_ref(self.reg(base + *right))?;
+                                let mut value = String::with_capacity(left.len() + right.len());
+                                value.push_str(left);
+                                value.push_str(right);
+                                value
+                            };
+                            self.set_reg(base + *dst, VmValue::string(value));
+                        }
+                        RegInstr::CallIntrinsic {
+                            dst,
+                            intrinsic,
+                            args,
+                        } => {
+                            let value =
+                                self.call_intrinsic(unit, *intrinsic, args, base, next_base)?;
+                            // A blocking intrinsic (channel/sleep) parked the task and left
+                            // `resume_dst` unfilled; record where its result must land. The
+                            // end-of-loop check then yields to the scheduler.
+                            if let Some(suspension) = self.suspension.as_mut() {
+                                suspension.resume_dst = base + *dst;
+                            } else {
+                                self.set_reg(base + *dst, value);
+                            }
+                        }
+                        RegInstr::CallTypedIntrinsic {
+                            dst,
+                            intrinsic,
+                            type_arg,
+                            args,
+                        } => {
+                            let value =
+                                self.call_typed_intrinsic(unit, *intrinsic, type_arg, args, base)?;
+                            self.set_reg(base + *dst, value);
+                        }
+                        RegInstr::TryResult { dst, src, cleanup } => {
+                            let value = self.reg(base + *src).clone();
+                            // `?` keeps the success payload (`Ok(x)`/`Some(x)`) and
+                            // short-circuits on failure (`Err(e)`/`None`), returning
+                            // that failure from the current frame. Option support
+                            // mirrors Result so `?` works in `Option`-returning fns.
+                            let short_circuit = match &value {
+                                VmValue::OptionSomeScalar(_) | VmValue::OptionSomeHeap(_) => {
+                                    self.set_reg(
+                                        base + *dst,
+                                        value.unwrap_some().expect("Some arm yields a payload"),
+                                    );
+                                    None
+                                }
+                                VmValue::OptionNone => Some(VmValue::OptionNone),
+                                _ => match result_variant_payload(&value)? {
+                                    Ok(payload) => {
+                                        self.set_reg(base + *dst, payload);
+                                        None
+                                    }
+                                    Err(error) => Some(value_err(error)),
+                                },
+                            };
+                            if let Some(return_value) = short_circuit {
+                                for resource in cleanup {
+                                    let resource_value = self.reg(base + *resource).clone();
+                                    self.run_resource_drop(unit, resource_value, next_base)?;
+                                }
+                                // Short-circuit: return the failure from the *current*
+                                // frame only (pop one frame like `Return`), not out of
+                                // the whole stackless driver.
+                                let frame = self.frames.pop().expect("active frame");
+                                self.apply_mut_writeback(&frame);
+                                if self.frames.len() == floor {
+                                    return Ok(Outcome::Completed(return_value));
+                                }
+                                self.set_reg(frame.ret_dst, return_value);
+                                continue 'frames;
+                            }
+                        }
+                        // `Return` and the rest of the pure subset are handled above by
+                        // `try_exec_pure`; reaching this arm means an instruction is in
+                        // neither the pure subset nor the impure arms — a lowering bug.
+                        _ => unreachable!(
+                            "reg VM instruction handled by neither try_exec_pure nor the interpreter: {instr:?}"
+                        ),
+                    },
+                }
+                // A blocking op (channel/sleep/join) parked the task: save the
+                // resume point (`ip` already points past the instruction, so on
+                // wake the scheduler writes the result into `resume_dst` and we
+                // continue here) and hand control back to the scheduler.
+                if self.suspension.is_some() {
+                    self.frames.last_mut().expect("active frame").ip = ip;
+                    return Ok(Outcome::Suspended);
+                }
+            }
+            // Fell off the end of the function body without an explicit `Return`.
+            // Lowering always appends one, so this is a defensive `Unit` return.
+            let frame = self.frames.pop().expect("active frame");
+            self.apply_mut_writeback(&frame);
+            if self.frames.len() == floor {
+                return Ok(Outcome::Completed(VmValue::Unit));
+            }
+            self.set_reg(frame.ret_dst, VmValue::Unit);
+        }
+    }
+}
