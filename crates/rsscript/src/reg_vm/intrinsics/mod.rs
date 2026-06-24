@@ -2355,7 +2355,8 @@ impl RegVm {
                         "stream collect_list would block on an open channel stream",
                     )));
                 }
-                let values = stream.items.borrow_mut().drain(..).collect::<Vec<_>>();
+                let values = stream.items.borrow().to_vec();
+                stream.items.borrow_mut().clear();
                 Ok(value_ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(values))))))
             }
             RegIntrinsic::StreamFromList => {

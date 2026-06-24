@@ -218,14 +218,15 @@ pub(super) fn expect_resource_pool_ref(value: &VmValue) -> Result<VmResourcePool
 pub(super) fn expect_stream_ref(value: &VmValue) -> Result<VmStreamState, EvalError> {
     match value {
         VmValue::Struct(data) if data.name().as_ref() == "Stream" => {
-            let items_list = data
+            // Share the struct's underlying items list (an `Rc<RefCell<TypedVec>>`)
+            // rather than copying it: `Stream.next` removes the head element, and a
+            // `read stream` clone of the struct shares this same `Rc`, so the cursor
+            // advance must write back through it to be visible to a later
+            // `collect_list`/`next` on the same stream.
+            let items = data
                 .get("items")
                 .ok_or_else(|| EvalError::Runtime("Stream value is missing items.".to_string()))
                 .and_then(expect_list_ref)?;
-            // The stream buffer is a plain `Vec<VmValue>`; materialize the typed
-            // list's logical values into one (TV1: a `Floats`/`Ints` list yields the
-            // same `VmValue` sequence a `Boxed` list would).
-            let items = Rc::new(RefCell::new(items_list.borrow().to_vec()));
             let collect_error = data
                 .get("collect_error")
                 .map(option_payload_value)

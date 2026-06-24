@@ -408,7 +408,7 @@ pub(super) fn stream_collect_error_value(message: impl Into<String>) -> VmValue 
 
 #[derive(Debug, Clone)]
 pub(super) struct VmStreamState {
-    pub(super) items: Rc<RefCell<Vec<VmValue>>>,
+    pub(super) items: Rc<RefCell<TypedVec>>,
     pub(super) collect_error: Option<String>,
     pub(super) channel_id: Option<i64>,
 }

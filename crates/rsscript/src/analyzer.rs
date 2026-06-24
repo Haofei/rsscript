@@ -1814,7 +1814,7 @@ fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
             name, type_name, ..
         } => type_name
             .as_deref()
-            .or_else(|| builtin_value_type_name(name)),
+            .or_else(|| crate::checks::shared::builtin_value_type_name(name)),
         HirExpr::Call { type_name, .. }
         | HirExpr::Effect { type_name, .. }
         | HirExpr::Manage { type_name, .. }
@@ -1831,15 +1831,6 @@ fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
         | HirExpr::ArrayLiteral { .. }
         | HirExpr::Closure { .. }
         | HirExpr::Unknown(_) => None,
-    }
-}
-
-fn builtin_value_type_name(name: &str) -> Option<&'static str> {
-    match name {
-        "true" | "false" => Some("Bool"),
-        "null" => Some("JsonLiteral"),
-        "Unit" => Some("Unit"),
-        _ => None,
     }
 }
 

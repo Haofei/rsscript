@@ -1253,6 +1253,31 @@ fn pick() -> Int {
 }
 
 #[test]
+fn checker_accepts_wildcard_match_on_bare_none_literal() {
+    // A bare `None` scrutinee resolves to `Option`, so a wildcard arm is
+    // exhaustive. Regression: the analyzer's exhaustiveness helper formerly
+    // failed to classify `None` as `Option` (its `builtin_value_type_name`
+    // copy lacked the `None` arm the canonical `checks::shared` copy carries),
+    // so it fell back to the constructor-name path and spuriously reported the
+    // wildcard match as non-exhaustive.
+    let source = r#"
+fn pick() -> Int {
+    match None {
+        _ => return 0
+    }
+}
+"#;
+    let diagnostics = analyze_source("match-bare-none-wildcard.rss", source);
+
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0021"),
+        "wildcard arm covers a bare `None` scrutinee; got {diagnostics:?}"
+    );
+}
+
+#[test]
 fn checker_reports_non_exhaustive_sum_type_match() {
     let source = r#"
 sum Color {
