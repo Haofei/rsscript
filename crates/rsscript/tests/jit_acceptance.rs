@@ -3799,6 +3799,55 @@ fn main() -> Unit {
     );
 }
 
+/// BUG-1 REGRESSION (Bytes.len in the loop CONDITION): a folded `Bytes.len` read in the
+/// header itself (`while index < Bytes.len(data)`) over a non-escaping constant-source
+/// Bytes, in an I/O-tangled fn. The fold materializes the constant length register at the
+/// header so it is definitely-assigned on entry to the native OSR header block; without
+/// that, OSR entry (which lands AT the header) reads the length register BEFORE it is
+/// initialized ⇒ uninitialized/garbage loop bound ⇒ wrong total. The loop MUST OSR
+/// (`osr_entries > 0`) AND be byte-identical to the interpreter.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_bytes_length_fold_in_condition_osrs_and_matches_interpreter() {
+    // `data = "the quick brown fox"` is 19 bytes; `Bytes.len(data)` in the condition
+    // folds to the constant 19. The loop runs 19 times, adding 7 each iteration ⇒
+    // total = 19 * 7 = 133. The leading `Log.write("begin")` makes the function
+    // native-INELIGIBLE as a whole, so only the hot loop can OSR.
+    let source = "\
+fn scan() -> Int {
+    Log.write(message: read \"begin\")
+    let data = Bytes.from_string(value: read \"the quick brown fox\")
+    let mut index = 0
+    let mut total = 0
+    while index < Bytes.len(value: read data) {
+        total = total + 7
+        index = index + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: scan()))
+    return Unit
+}
+";
+    let file = "jit-osr-bytes-fold-condition.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "Bytes.len-in-condition loop must be byte-identical to the interpreter (stdout)"
+    );
+    assert_eq!(osr.stdout.trim_end(), "begin\n133");
+    assert!(
+        stats.osr_entries > 0,
+        "the constant-source Bytes.len-in-condition loop must OSR after the fold: {stats:?}",
+    );
+}
+
 /// NEGATIVE Bytes-fold test (escape): the same constant-source Bytes value, but the
 /// `head` slice ESCAPES the measurement — it is also passed to `Log.write` (an opaque
 /// non-fold consumer). The escape analysis must refuse to dissolve `head` (its

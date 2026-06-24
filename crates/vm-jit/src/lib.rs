@@ -697,9 +697,44 @@ pub enum NativeOutcome {
 }
 
 impl NativeOutcome {
-    /// The completed result, or `None` on a deopt. Convenience for callers that
-    /// only care whether the call produced a value.
+    /// The completed **scalar** result bits, or `None` otherwise. `Some` ONLY for
+    /// [`Completed`](NativeOutcome::Completed) (a genuine `i64`/`f64`-bits scalar);
+    /// [`CompletedHandle`](NativeOutcome::CompletedHandle) and
+    /// [`Deopt`](NativeOutcome::Deopt) both yield `None`. A `CompletedHandle` payload
+    /// is an OPAQUE output-table handle, not a scalar value, so conflating it here
+    /// would let a caller misread a heap-table index as a result — hence this method
+    /// is deliberately scalar-only. Use [`completed_handle`](NativeOutcome::completed_handle)
+    /// for the handle, or [`completed_any_bits`](NativeOutcome::completed_any_bits)
+    /// when you only need the raw bits of either completed variant.
     pub fn completed(self) -> Option<i64> {
+        match self {
+            NativeOutcome::Completed(value) => Some(value),
+            NativeOutcome::CompletedHandle(_) | NativeOutcome::Deopt { .. } => None,
+        }
+    }
+
+    /// The completed **heap-value handle**, or `None` otherwise. `Some` ONLY for
+    /// [`CompletedHandle`](NativeOutcome::CompletedHandle) — the opaque output-table
+    /// index the host materializes the [`VmValue`] from. [`Completed`](NativeOutcome::Completed)
+    /// (a scalar) and [`Deopt`](NativeOutcome::Deopt) yield `None`. The returned value
+    /// is NOT a scalar result; it is meaningful only as an output-table handle.
+    pub fn completed_handle(self) -> Option<i64> {
+        match self {
+            NativeOutcome::CompletedHandle(handle) => Some(handle),
+            NativeOutcome::Completed(_) | NativeOutcome::Deopt { .. } => None,
+        }
+    }
+
+    /// The raw 64-bit payload of EITHER completed variant, or `None` on a deopt.
+    /// `Some` for both [`Completed`](NativeOutcome::Completed) (scalar result bits)
+    /// and [`CompletedHandle`](NativeOutcome::CompletedHandle) (an opaque output-table
+    /// handle); `None` only for [`Deopt`](NativeOutcome::Deopt). The two cases are
+    /// indistinguishable in the returned `i64`, so this is for callers that genuinely
+    /// only need "did it complete, give me the raw bits" and disambiguate elsewhere
+    /// (e.g. by the return register's [`JitValueType`]). When the scalar/handle
+    /// distinction matters, use [`completed`](NativeOutcome::completed) /
+    /// [`completed_handle`](NativeOutcome::completed_handle) instead.
+    pub fn completed_any_bits(self) -> Option<i64> {
         match self {
             NativeOutcome::Completed(value) | NativeOutcome::CompletedHandle(value) => Some(value),
             NativeOutcome::Deopt { .. } => None,
@@ -3030,6 +3065,32 @@ mod tests {
             let lens = vec![0i64; args.len()];
             self.call(id, args, &lens).completed()
         }
+    }
+
+    /// `NativeOutcome`'s scalar/handle/any-bits accessors must keep a scalar result
+    /// and an opaque heap-output-table handle distinct: `completed()` is scalar-only,
+    /// `completed_handle()` is handle-only, and `completed_any_bits()` accepts either
+    /// completed variant. A `Deopt` is `None` for all three.
+    #[test]
+    fn native_outcome_completed_accessors_separate_scalar_and_handle() {
+        let scalar = NativeOutcome::Completed(10);
+        assert_eq!(scalar.clone().completed(), Some(10));
+        assert_eq!(scalar.clone().completed_handle(), None);
+        assert_eq!(scalar.completed_any_bits(), Some(10));
+
+        let handle = NativeOutcome::CompletedHandle(7);
+        // A handle is NOT a scalar result, so `completed()` must hide it.
+        assert_eq!(handle.clone().completed(), None);
+        assert_eq!(handle.clone().completed_handle(), Some(7));
+        assert_eq!(handle.completed_any_bits(), Some(7));
+
+        let deopt = NativeOutcome::Deopt {
+            safepoint_id: SafepointId(0),
+            live: Vec::new(),
+        };
+        assert_eq!(deopt.clone().completed(), None);
+        assert_eq!(deopt.clone().completed_handle(), None);
+        assert_eq!(deopt.completed_any_bits(), None);
     }
 
     extern "C" fn noop_field_int(_handle: i64, _slot: i64) -> i64 {

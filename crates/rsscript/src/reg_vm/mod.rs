@@ -3839,14 +3839,17 @@ fn native_bytes_length_fold_in_region(
     let mut fixups: Vec<(usize, Fix)> = Vec::new();
     for (i, instr) in code.iter().enumerate() {
         index_map[i] = new_code.len();
-        // Materialize the constant-length sources as the FIRST instructions of the
-        // loop BODY (just after the header condition at `header`), so they (a) dominate
-        // every in-region use and (b) are re-run each iteration AFTER the native OSR
-        // entry — which lands AT `header`, so anything emitted before `header` would be
-        // skipped on resume. The header itself (the `index < limit` test) never uses a
-        // Bytes length, so the body start is a safe, dominating insertion point.
-        // Re-running these `LoadInt`s per iteration is idempotent and cheap.
-        if i == header + 1 {
+        // Materialize the constant-length sources AT the header position, emitted BEFORE
+        // the header instruction is pushed but AFTER `index_map[header]` is set — so
+        // `index_map[header]` points at these `LoadInt`s. This makes them dominate EVERY
+        // in-region use INCLUDING the header's own folded instruction: a loop whose
+        // CONDITION reads a folded `Bytes.len` (e.g. `while i < Bytes.len(data)`) lowers
+        // the header to read `len_reg[src]`, which must already be initialized when the
+        // header runs. Native OSR entry lands at the header's mapped ip
+        // (`index_map[header]`), and the loop back-edge also targets it, so on every
+        // iteration (incl. the first OSR one) these constants run before the condition.
+        // Re-running these idempotent `LoadInt`s per iteration is cheap.
+        if i == header {
             for &r in &const_sources {
                 if let Some(value) = const_len[r] {
                     new_code.push(RegInstr::LoadInt { dst: len_reg[r], value });
@@ -7766,10 +7769,44 @@ fn detect_single_natural_loop(code: &[RegInstr]) -> Option<OsrLoop> {
         return None;
     }
     let body_end = backedges.iter().map(|&(from, _)| from).max().unwrap();
-    // The header must be a conditional branch that *exits* the loop on one edge: a
-    // `JumpIfIntCompare`/`JumpIfBool` whose `target` is the post-loop exit (the
-    // fall-through stays in the loop body). The exit must lie outside the body.
-    let exit = match &code[header] {
+    // The header BLOCK is a (possibly empty) leading run of STRAIGHT-LINE instructions
+    // (no jump/branch/match/return) followed by the loop's conditional branch. This
+    // admits a `while cond { body }` whose CONDITION computes a value before the
+    // compare — e.g. `while i < Bytes.len(data)` lowers to `BytesLen -> t; JumpIf i <
+    // t` with the backedge targeting the `BytesLen`. The Bytes length-fold then (a)
+    // rewrites that in-header `Bytes.len` to a `Move` from a constant length register
+    // and (b) materializes the constant length as a `LoadInt` AT the header, so the
+    // value is definitely-assigned on entry to the native OSR header block (which is
+    // where OSR-entry lands) and dominates the condition's read. Because the prefix is
+    // straight-line, the block is single-entry (the backedge targets `header`, the
+    // sole entry); if the prefix is not foldable to the native subset, `translate_osr_
+    // loop` rejects it and the loop simply stays on the interpreter (safe). A loop
+    // whose condition is a bare compare has `cond_ip == header`, exactly as before, so
+    // ordinary loops are unaffected.
+    let mut cond_ip = header;
+    while cond_ip < n
+        && !matches!(
+            code[cond_ip],
+            RegInstr::Jump { .. }
+                | RegInstr::JumpIfBool { .. }
+                | RegInstr::JumpIfIntCompare { .. }
+                | RegInstr::MatchOption { .. }
+                | RegInstr::MatchResult { .. }
+                | RegInstr::MatchVariant { .. }
+                | RegInstr::MatchMapGet { .. }
+                | RegInstr::Return { .. }
+                | RegInstr::RuntimeError { .. }
+        )
+    {
+        cond_ip += 1;
+    }
+    if cond_ip > body_end {
+        return None;
+    }
+    // The condition must be a `JumpIfIntCompare`/`JumpIfBool` whose `target` is the
+    // post-loop exit (the fall-through stays in the loop body). The exit must lie
+    // outside the body.
+    let exit = match &code[cond_ip] {
         RegInstr::JumpIfIntCompare { target, .. } | RegInstr::JumpIfBool { target, .. } => *target,
         _ => return None,
     };
@@ -7796,8 +7833,9 @@ fn detect_single_natural_loop(code: &[RegInstr]) -> Option<OsrLoop> {
                 }
             }
             RegInstr::JumpIfBool { target, .. } | RegInstr::JumpIfIntCompare { target, .. } => {
-                // The header's exit edge to `exit` is the sole permitted escape.
-                if i == header {
+                // The header condition's exit edge to `exit` is the sole permitted
+                // escape (the condition sits at `cond_ip`, after any `LoadInt` prefix).
+                if i == cond_ip {
                     continue;
                 }
                 if !in_region(*target) {
