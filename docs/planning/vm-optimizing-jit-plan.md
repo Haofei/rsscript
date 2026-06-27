@@ -123,10 +123,41 @@ machinery **engage real program shapes and prove it**, not new subsystems. In pr
    still-at-parity cohorts: `string_text` (1.35 — `split` allocates), `json` (1.01), `string-map`
    (0.98), `recursion-tree` (1.04), async — see Pending #7.
 3. **Full precise deopt beyond the leaf/scalar subset (J0.1 frame-chain, J0.2, J0.4,
-   J0.5).** Full inlined logical frame-chain state maps; side-effecting / native-heap-
-   write deopt + deopt-after-write correctness; generated-code `VmLimits` accounting
-   instead of the "refuse native while limits/cancel armed" fallback. Becomes necessary
-   once J2/J3-in-OSR or heap writes make frames non-trivial.
+   J0.5).** Side-effecting / native-heap-write deopt + deopt-after-write correctness;
+   generated-code `VmLimits` accounting instead of the "refuse native while
+   limits/cancel armed" fallback. Becomes necessary once J2/J3-in-OSR or heap writes
+   make frames non-trivial.
+
+   **J0.1 remaining — design (the heap-aware-reg-reconstruction core + precise-default
+   shipped 2026-06-27; these three slices remain, each a deliberate change to the
+   deopt state-map format / OSR-exit, NOT a one-liner — and none has a *correctness*
+   driver today, so the differential cannot gate a reconstruction bug by output alone;
+   they must be driven by dedicated repro tests):**
+   - **(a) Live-out SCALAR aggregate reconstruction (most tractable; do first).**
+     `native_loop_carried_struct_in_region` / the variant+struct SR passes bail when
+     the aggregate is read after the loop (`passes.rs:7430`, the live-after / escape
+     check). To lift that: when every field is scalar, record a *reconstruction recipe*
+     `(orig_reg, layout/tag, [leaf_reg per field])` from the SR pass, thread it through
+     `translate` into the OSR result, and at **OSR-exit** (reg_vm, before resuming the
+     interpreter on the live-out window) rebuild `VmValue::Struct`/`Variant` from the
+     leaf regs and write it into `orig_reg`. No `handle→VmValue` problem (all scalar);
+     the differential validates correctness once a live-out-struct kernel is added.
+   - **(b) Composite HEAP-payload reconstruction.** A variant/struct field that is a
+     heap value (`Handle`) currently bails (`passes.rs:6205/6210`). The blocker: a heap
+     field in a native reg is an opaque handle, and the interpreter frame no longer
+     holds the dissolved value. Approach: extend the recipe so a heap field references
+     its **interpreter-visible SOURCE register** (the reg the `MakeVariant`/`MakeStruct`
+     read it from), provided that reg stays live + unclobbered to the reconstruction
+     point (needs a liveness proof); reconstruction reads `frame.reg(source)`. Fields
+     with no live source reg still bail.
+   - **(c) Inlined logical-frame-chain format.** A deopt inside a `native_inline_leaf_calls`
+     region resumes at the caller's `CallKnown` and re-runs the (side-effect-free)
+     callee — *correct today*. Full J0.1 reconstructs the logical callee frame in place
+     (reusing the `DeoptChildSite`/`DeoptFrame` machinery that already serves
+     `CallNative`), by recording `(callee_id, callee_ip)` per inlined safepoint and
+     threading it through the OSR ip-map composition. Pure refinement (perf + a
+     prerequisite for side-effecting inlined deopt); lowest priority, highest
+     ip-map-composition risk.
 4. **Checked-`Int` arithmetic (J4.3) — SHIPPED with a measured win.** Proof-only interval
    elision **and** J4.3b induction-bounded refinement are landed: a counter under `i < N`
    now emits `i + 1` unchecked (**~16% on `native_scalar_loop`**, the canonical
