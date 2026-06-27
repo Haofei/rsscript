@@ -1269,7 +1269,13 @@ impl RegVmExecutable {
             tier_up_threshold,
             false,
             std::env::var_os("RSS_JIT_STATS").is_some(),
-            false,
+            // J0.1: precise resume is the production DEFAULT. A native guard bail
+            // reconstructs the live interpreter window (heap-aware: scalars restored,
+            // heap/flat regs left to the frame) and resumes at the safepoint. It is
+            // byte-identical to re-run-from-top (validated corpus-wide), which remains
+            // the fallback when a heap write disables precise resume and is kept under
+            // differential coverage by the force-deopt backend.
+            true,
             false,
             None,
             false,
@@ -1293,7 +1299,9 @@ impl RegVmExecutable {
             tier_up_threshold,
             false,
             true,
-            false,
+            // J0.1: precise resume is the production default (see
+            // `eval_main_with_args_native`).
+            true,
             false,
             None,
             false,
@@ -1493,13 +1501,15 @@ impl RegVmExecutable {
         // compiled subset, host helpers, and deopt oracle are identical, so the
         // differential (which never sets this var) is undisturbed.
         let baseline = std::env::var_os("RSS_JIT_BASELINE").is_some();
-        // `RSS_JIT_PRECISE_DEOPT=1` (J0.2) makes a native bail resume the
-        // interpreter at the safepoint's `resume_ip` (reconstructing the live
-        // register window) instead of re-running from the function top. Default
-        // (unset) keeps the byte-identical re-run-from-top baseline, so the
-        // differential (which never sets this var) keeps full coverage. A caller
-        // may also force it on deterministically (test entry points) via
-        // `precise_deopt_override`, avoiding a racy process env var.
+        // Precise resume (J0.1/J0.2): a native bail resumes the interpreter at the
+        // safepoint's `resume_ip` (reconstructing the live register window —
+        // heap-aware: scalar regs restored, heap/flat regs left to the frame)
+        // instead of re-running from the function top. This is now the production
+        // DEFAULT (`eval_main_with_args_native` passes `precise_deopt_override`);
+        // re-run-from-top remains the byte-identical fallback when a heap write
+        // disables precise resume (`can_precise_deopt_resume`) and is kept under
+        // differential coverage by the force-deopt backend. `RSS_JIT_PRECISE_DEOPT`
+        // still forces it on for entry points that default it off.
         let precise_deopt =
             precise_deopt_override || std::env::var_os("RSS_JIT_PRECISE_DEOPT").is_some();
         // `RSS_JIT_OSR=1` (J5.2) selects the eager OSR path: a function with a
