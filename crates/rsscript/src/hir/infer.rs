@@ -385,7 +385,11 @@ fn collect_type_substitutions(
 /// The type of `field` accessed on a value of type `base_type`, with the type's
 /// generic parameters replaced by `base_type`'s concrete arguments — so `item0`
 /// on `__Tuple2<Int, String>` resolves to `Int`, not the declared parameter `A`.
-pub(super) fn substituted_field_type(type_info: &TypeInfo, base_type: &str, field: &FieldInfo) -> String {
+pub(super) fn substituted_field_type(
+    type_info: &TypeInfo,
+    base_type: &str,
+    field: &FieldInfo,
+) -> String {
     let args = type_arg_names(base_type).unwrap_or_default();
     if args.is_empty() || type_info.type_params.is_empty() {
         return field.type_name.clone();

@@ -105,7 +105,9 @@ impl RegVm {
             RegIntrinsic::StringLines => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let lines = value.lines().map(VmValue::string).collect::<Vec<VmValue>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(lines)))))
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
+                    lines,
+                )))))
             }
             RegIntrinsic::StringLen => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -171,7 +173,9 @@ impl RegVm {
                     .split(delimiter)
                     .map(VmValue::string)
                     .collect::<Vec<VmValue>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(parts)))))
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
+                    parts,
+                )))))
             }
             RegIntrinsic::StringStartsWith => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;

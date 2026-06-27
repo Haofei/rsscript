@@ -155,14 +155,20 @@ impl RegLowerer<'_> {
     }
 
     fn patch_map_match_some(&mut self, match_ip: usize, target: usize) {
-        if let RegInstr::MatchMapGet { some_ip, .. } = &mut self.function.code[match_ip] {
-            *some_ip = target;
+        match &mut self.function.code[match_ip] {
+            RegInstr::MatchMapGet { some_ip, .. } | RegInstr::MatchSortedMapGet { some_ip, .. } => {
+                *some_ip = target
+            }
+            _ => {}
         }
     }
 
     fn patch_map_match_none(&mut self, match_ip: usize, target: usize) {
-        if let RegInstr::MatchMapGet { none_ip, .. } = &mut self.function.code[match_ip] {
-            *none_ip = target;
+        match &mut self.function.code[match_ip] {
+            RegInstr::MatchMapGet { none_ip, .. } | RegInstr::MatchSortedMapGet { none_ip, .. } => {
+                *none_ip = target
+            }
+            _ => {}
         }
     }
 
@@ -786,13 +792,12 @@ impl RegLowerer<'_> {
                 if matches!(op, BinaryOp::Equal | BinaryOp::NotEqual)
                     && !self.closure_identity_observable.get()
                 {
-                    let observable =
-                        [left.as_ref(), right.as_ref()].iter().any(|operand| {
-                            match reg_expr_type_name(operand) {
-                                Some(type_name) => type_name_may_contain_fn(type_name, self.hir),
-                                None => true,
-                            }
-                        });
+                    let observable = [left.as_ref(), right.as_ref()].iter().any(|operand| {
+                        match reg_expr_type_name(operand) {
+                            Some(type_name) => type_name_may_contain_fn(type_name, self.hir),
+                            None => true,
+                        }
+                    });
                     if observable {
                         self.closure_identity_observable.set(true);
                     }
@@ -904,8 +909,10 @@ impl RegLowerer<'_> {
                             local_regs: HashMap::new(),
                             code: Vec::new(),
                             jit_analysis: std::cell::Cell::new(None),
+                            jit_self_recursive_int: std::cell::Cell::new(None),
                             native_status: std::cell::Cell::new(0),
                             call_count: std::cell::Cell::new(0),
+                            branch_count: std::cell::Cell::new(0),
                             profile: RefCell::new(None),
                             osr_state: std::cell::Cell::new(OsrTrigger::Unknown),
                         },
@@ -1868,7 +1875,8 @@ impl RegLowerer<'_> {
                     // the matching flat typed kind. The type arg is optional (a bare
                     // `List.new()` with no annotation falls back to `Boxed`).
                     RegIntrinsic::ListNew => {
-                        let type_arg = type_arg_names(name)
+                        let type_arg = type_arg_names(namespace)
+                            .or_else(|| type_arg_names(name))
                             .and_then(|args| args.first().copied())
                             .map(|arg| type_root_name(arg).to_string())
                             .unwrap_or_default();
@@ -2486,7 +2494,11 @@ impl RegLowerer<'_> {
         else {
             return Ok(false);
         };
-        if type_root_name(namespace) != "Map" || type_root_name(name) != "get" || args.len() != 2 {
+        let collection = type_root_name(namespace);
+        if !matches!(collection, "Map" | "SortedMap")
+            || type_root_name(name) != "get"
+            || args.len() != 2
+        {
             return Ok(false);
         }
         if arms.len() != 2 {
@@ -2523,13 +2535,23 @@ impl RegLowerer<'_> {
         let map = self.expr(&args[0].value)?;
         let key = self.expr(&args[1].value)?;
         let value_dst = self.local(&some_binding);
-        let match_ip = self.emit(RegInstr::MatchMapGet {
-            map,
-            key,
-            value_dst,
-            some_ip: usize::MAX,
-            none_ip: usize::MAX,
-        });
+        let match_ip = if collection == "SortedMap" {
+            self.emit(RegInstr::MatchSortedMapGet {
+                map,
+                key,
+                value_dst,
+                some_ip: usize::MAX,
+                none_ip: usize::MAX,
+            })
+        } else {
+            self.emit(RegInstr::MatchMapGet {
+                map,
+                key,
+                value_dst,
+                some_ip: usize::MAX,
+                none_ip: usize::MAX,
+            })
+        };
         let mut some_ip = None;
         let mut none_ip = None;
         let mut end_jumps = Vec::new();
@@ -2547,20 +2569,24 @@ impl RegLowerer<'_> {
                     self.block(&arm.body)?;
                     end_jumps.push(self.emit(RegInstr::Jump { target: usize::MAX }));
                 }
-                _ => unreachable!("Map.get match arms were validated before lowering"),
+                _ => unreachable!("map get match arms were validated before lowering"),
             }
         }
         let end_ip = self.function.code.len();
         self.patch_map_match_some(
             match_ip,
             some_ip.ok_or_else(|| {
-                EvalError::Runtime("reg VM Map.get match is missing Some arm.".to_string())
+                EvalError::Runtime(format!(
+                    "reg VM {collection}.get match is missing Some arm."
+                ))
             })?,
         );
         self.patch_map_match_none(
             match_ip,
             none_ip.ok_or_else(|| {
-                EvalError::Runtime("reg VM Map.get match is missing None arm.".to_string())
+                EvalError::Runtime(format!(
+                    "reg VM {collection}.get match is missing None arm."
+                ))
             })?,
         );
         for jump in end_jumps {

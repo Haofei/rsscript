@@ -7,7 +7,7 @@
 #   rss check                 — effect-annotated closures parse; bad category flagged
 #   reir report-pr            — reconcile required vs granted with a policy, emit SARIF
 #   rss pkg review --markdown — PR-facing review render
-#   rss native audit          — native adapter risk facts
+#   rss pkg review --json     — native adapter risk facts
 #   rss pkg metadata          — fail closed: invalid source yields no evidence
 #   rss check --explain --json— machine-readable diagnostic for agents
 #
@@ -95,24 +95,27 @@ work="$(mktemp -d)"
   --out "$work/required.reir.json" >/dev/null
 # The deployment grants the package's powers EXCEPT the new outbound network the
 # PR introduced (infra wasn't updated) — derived from the real required facts.
-python3 - "$work/required.reir.json" "$work/granted.reir.json" <<'PY'
-import json, sys
-req = json.load(open(sys.argv[1]))
-facts = []
-for fact in req.get("facts", []):
-    cap = fact.get("capability") or {}
-    if cap.get("category") == "network.client":
-        continue  # infra did not grant the new power
-    if fact.get("role") == "required":
-        fact = dict(fact, role="granted")
-    facts.append(fact)
-json.dump({**req, "facts": facts}, open(sys.argv[2], "w"))
-PY
+perl -MJSON::PP -e '
+  my ($in, $out) = @ARGV;
+  open my $fh, "<", $in or die $!;
+  local $/;
+  my $req = decode_json(<$fh>);
+  my @facts;
+  for my $fact (@{$req->{facts} // []}) {
+    my $cap = $fact->{capability} // {};
+    next if ($cap->{category} // "") eq "network.client";
+    $fact = { %$fact, role => "granted" } if ($fact->{role} // "") eq "required";
+    push @facts, $fact;
+  }
+  $req->{facts} = \@facts;
+  open my $out_fh, ">", $out or die $!;
+  print {$out_fh} encode_json($req);
+' "$work/required.reir.json" "$work/granted.reir.json"
 echo "\$ reir report-pr --policy examples/rss-policy.toml --target prod --sarif"
 set +e
 "$REIR" report-pr --required "$work/required.reir.json" --granted "$work/granted.reir.json" \
   --policy "$root/examples/rss-policy.toml" --target prod --sarif 2>/dev/null \
-  | python3 -c "import sys,json; d=json.load(sys.stdin); [print('  ', r['level'], r['ruleId'], '-', r['message']['text']) for r in d['runs'][0]['results']]"
+  | perl -MJSON::PP -e 'local $/; my $d = decode_json(<>); for my $r (@{$d->{runs}[0]{results} // []}) { print "  ", $r->{level}, " ", $r->{ruleId}, " - ", $r->{message}{text}, "\n"; }'
 "$REIR" report-pr --required "$work/required.reir.json" --granted "$work/granted.reir.json" \
   --policy "$root/examples/rss-policy.toml" --target prod >/dev/null 2>&1
 echo "  gate exit code: $?  (non-zero = blocked)"
@@ -122,9 +125,10 @@ rule "RENDER — markdown review for a PR"
 echo "\$ rss pkg review --markdown after"
 "$RSS" pkg review --markdown "$after" | sed -n '1,14p'
 
-rule "NATIVE AUDIT — adapter risk facts"
-echo "\$ rss native audit after"
-"$RSS" native audit "$after" 2>/dev/null || true
+rule "NATIVE REVIEW — adapter risk facts"
+echo "\$ rss pkg review --json after"
+"$RSS" pkg review --json "$after" \
+  | perl -MJSON::PP -e 'my $d = decode_json(join "", <STDIN>); print encode_json($d->{native_rust}), "\n";'
 
 rule "FAIL CLOSED — invalid source yields no authoritative evidence"
 broken="$(mktemp -d)/broken"

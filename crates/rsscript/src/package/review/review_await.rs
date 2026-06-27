@@ -1,6 +1,8 @@
 use super::*;
 
-pub(super) fn collect_package_await_sites(sources: &[PackageSource]) -> Vec<PackageReviewAwaitSite> {
+pub(super) fn collect_package_await_sites(
+    sources: &[PackageSource],
+) -> Vec<PackageReviewAwaitSite> {
     let context = collect_await_site_context(sources);
     let mut await_sites = sources
         .iter()
@@ -718,7 +720,10 @@ pub(super) fn is_builtin_value_ident(name: &str) -> bool {
     matches!(name, "Unit" | "true" | "false")
 }
 
-pub(super) fn await_boundary(callee: Option<&str>, context: &AwaitSiteContext) -> PackageReviewAwaitBoundary {
+pub(super) fn await_boundary(
+    callee: Option<&str>,
+    context: &AwaitSiteContext,
+) -> PackageReviewAwaitBoundary {
     let Some(callee) = callee else {
         return PackageReviewAwaitBoundary::Unknown;
     };
@@ -788,7 +793,10 @@ pub(super) fn remove_stmt_bindings(statement: &Stmt, uses: &mut BTreeSet<String>
     }
 }
 
-pub(super) fn awaited_callee(expr: &Expr, pending_callees: &BTreeMap<String, String>) -> Option<String> {
+pub(super) fn awaited_callee(
+    expr: &Expr,
+    pending_callees: &BTreeMap<String, String>,
+) -> Option<String> {
     match expr {
         Expr::Call { callee, .. } => Some(callee_label(callee)),
         Expr::Ident(name, _) => pending_callees.get(name).cloned(),

@@ -1,7 +1,6 @@
 # VM/JIT performance baseline
 
-The **baseline suite** for the VM/JIT performance work in
-[`docs/planning/vm-jit-perf-plan.md`](../../docs/planning/vm-jit-perf-plan.md).
+The **baseline suite** for VM/JIT performance work.
 Its job: pin a stable, slow-path-complete set of micro-kernels and a repeatable
 way to measure them across every execution tier, so any optimization can be
 proven against a committed "before" number.
@@ -13,87 +12,82 @@ the native Cranelift tier does not cover) and run across all four tiers.
 
 ## How to run
 
-From the repo root, inside the dev container:
+The supported fast gate is a Rust test run through the Docker dev container:
+
+The command below is the lighter gate for day-to-day JIT work. It runs a
+selected set of kernels in the current tree through the existing Rust test
+harness, compares their median wall time to an existing baseline JSON, and fails
+on either a large regression or unexpected native bails:
 
 ```sh
-docker compose run --rm dev ./benchmarks/vm-jit/run-baseline.sh
-# options: --iterations N  --warmup N  --timeout SECS  --out PATH
+docker compose run --rm dev cargo test --release -p rsscript --test runtime jit_perf_gate_against_baseline --features native-jit -- --test-threads=1 --nocapture
 ```
 
-`--timeout` (default 180 s) caps each mode per case: a pathological kernel — e.g.
-a super-linear runtime path like `task_group_spawn` at large sizes — degrades to
-an `n/a` cell instead of hanging the whole suite. `--timeout 0` disables it.
+Defaults are intentionally tolerant and fast: `jit-native`, 3 iterations, 1
+warmup, a 75% regression threshold, one retry for timing-only regression
+candidates, and native/OSR smoke kernels including the native-call ABI cases and
+profile-guided closure/branch cases. Override the defaults with environment
+variables when needed: `RSS_JIT_PERF_BASELINE`, `RSS_JIT_PERF_CASES`
+(comma-separated case basenames), `RSS_JIT_PERF_ITERATIONS`,
+`RSS_JIT_PERF_WARMUP`, `RSS_JIT_PERF_THRESHOLD_PCT`,
+`RSS_JIT_PERF_TIMING_RETRIES`, `RSS_JIT_PERF_ALLOW_BAILS=1`, or
+`RSS_JIT_PERF_SKIP_TELEMETRY=1`. Telemetry failures and native bails are not
+retried; those are mechanism failures, not timing noise. Benchmark subprocess
+failures, including RSScript compile/runtime errors, are reported as per-case
+gate failures with compact stdout/stderr context. The table includes the native
+telemetry fields `bails`, `native_call_edges`, `native_call_depth_max`, and
+`compiled_code_bytes`, so a performance result also shows whether the intended
+native path compiled and whether native call edges and chains were emitted.
 
-Each case runs through four modes and reports mean ms + tier ratios:
+The gate reads those counters from both the steady-state JIT stats block and the
+benchmark harness's `cold_start` block. That keeps compile/speculation telemetry
+visible even when a kernel compiles during the first run and the measured loop
+only observes already-cached code.
 
-| column | mode | meaning |
-|---|---|---|
-| `reg_vm_ms` | `vm-internal --vm reg` | register VM, no JIT |
-| `jit_ms`    | `jit-internal --vm reg` | tier-0 in-process JIT |
-| `native_ms` | `jit-native --vm reg` | Cranelift native tier (built with `native-jit`) |
-| `rust_ms`   | `release-internal` | generated release Rust (the ceiling) |
-| `reg/rust`  | — | how far the VM is from native Rust (lower = closer) |
-| `jit/reg`, `nat/reg` | — | speedup of each JIT tier over the plain VM (<1 = faster) |
+In the table, `try` is the number of timing attempts used for that row.
 
-A row prints `n/a` for any tier that does not support the kernel (e.g. native
-bails on heap-heavy code) — gaps are shown, never hidden. The run also writes a
-machine-readable `baseline/baseline-<date>.json`; **commit that file** as the
-reference point for the plan's Phase 0.
+The JSON files under `baseline/` are archived comparison points. The old
+script/Python baseline runner was removed with the public benchmark CLI; any new
+full-baseline runner should be a Rust harness or Make target, not a `rss`
+subcommand.
 
-### Baseline JSON schema (median + spread)
-
-Each case row keeps the legacy mean fields **unchanged** — `reg_vm_ms`, `jit_ms`,
-`native_ms`, `rust_ms` are still that mode's mean ms (or `null` for an
-unsupported tier) — so anything reading the old schema keeps working. In
-addition, each mode now carries a nested object with the noise statistics
-computed from the N per-run samples the `rss bench --json` output exposes
-(`samples_ms`); the runner only **reshapes** that already-measured data, it never
-re-times anything:
-
-```json
-"native": {
-  "mean":   29.6, "median": 29.4,
-  "min":    28.9, "max":    31.2,
-  "p25":    29.1, "p75":    29.8,
-  "samples": [28.9, 29.1, 29.4, 29.8, 31.2]
-}
-```
-
-`median` is the §0.4 comparison statistic; `min`/`max` and the `p25`/`p75` IQR
-give the per-kernel **spread band** the comparator uses to tell a real
-regression from run-to-run noise. (`row_stats.py` is the small `python3` helper
-the runner shells out to for this assembly.)
-
-### Comparing two baselines (plan §0.4 — the win metric / CI gate)
-
-`compare-baselines.py` implements the §0.4 regression rule and is the PR/CI gate:
+For focused Docker smokes around the telemetry mechanisms themselves, use:
 
 ```sh
-python3 benchmarks/vm-jit/compare-baselines.py REF.json CUR.json \
-    [--threshold-pct 10] [--mode reg_vm|jit|native|rust|all] \
-    [--cohort CATEGORY] [--json]
+docker compose run --rm dev cargo test -p rsscript --test runtime native_jit_precompiles_cold_scalar_call_chains --features native-jit -- --test-threads=1
+docker compose run --rm dev cargo test -p rsscript --test runtime report_profile_guided_pic_shows_hottest_first_order --features native-jit -- --test-threads=1
+docker compose run --rm dev cargo test --release -p rsscript --test runtime jit_perf_gate_against_baseline --features native-jit -- --test-threads=1 --nocapture
 ```
 
-For each kernel in both files, for each requested mode, it compares on the
-**median** (falling back to the mean / `*_ms` against the old schema) and applies:
+The first command exercises compiled native-to-native call edges and call-depth
+telemetry. The second exercises profile-guided PIC and branch-feedback
+reporting. The release test command runs the tolerant Docker perf gate over the
+scalar, native-call, profile-guided PIC, profile-guided branch cold-layout,
+profile-guided branch side-exit, OSR closure, and native Bytes slice/len smoke
+kernels. The scheduled JIT hardening workflow runs the broader Docker command
+set directly. The dedicated `JIT perf gate` GitHub workflow also runs the Docker
+perf-gate command on pull requests and pushes that touch the native JIT,
+VM-JIT crate, or benchmark baselines/kernels.
 
-> A kernel **regresses** iff `delta% > threshold` (default 10%) **AND**
-> `delta% > spread-band%`, where `delta% = (cur − ref) / ref · 100` and the
-> spread band is the current run's relative spread,
-> `max((max−min)/median, IQR/median) · 100`.
-> A delta over the threshold but **inside** the spread band is `within-noise`,
-> not a regression. Improvements (negative delta) are reported, never fail. If a
-> run carries no spread fields (old schema) the band is 0, so the rule collapses
-> to the bare `>threshold` check — conservative, never hiding a regression.
-
-Verdicts: `OK`, `REGRESSION`, `improved`, `within-noise` (or `n/a` when a mode is
-absent in either file). Output is grouped per cohort (category) with a per-cohort
-and overall summary; `--json` emits machine-readable results.
-
-**Exit code:** non-zero iff any `REGRESSION` in the requested mode/cohort, zero
-otherwise — this is what wires it as a CI/PR gate. Use `--mode native` to check
-the Phase-3.0 criterion specifically (known native-bail kernels must not get
-slower under jit-native).
+Some smoke kernels also carry minimum telemetry expectations: the native-call
+ABI cases, including Bool, Float, flat Int/Float lists, Handle, mut-Handle, and nested
+chains, must emit at least one `native_call_edges` site and a
+`native_call_depth_max` of at least one. The profiled closure OSR case must emit
+at least one `profile_closure_guard_sites` site. The profile-guided PIC case
+must emit at least one `profile_closure_pic_sites` site and at least three
+`profile_closure_pic_arms`. The profiled closure OSR and PIC smoke kernels must
+also report nonzero `profile_branch_sites` and `profile_branch_samples`, proving
+the branch-feedback PGO substrate stayed active. The branch cold-layout smoke
+kernel must additionally report nonzero `profile_branch_cold_blocks`, proving
+the compiler consumed a strong branch profile as backend layout metadata. The
+branch side-exit smoke kernel must additionally report nonzero
+`profile_branch_side_exits`, proving whole-function lowering converted a cold
+profiled edge into a native side exit. Those new branch fixtures are
+telemetry-only until the next full baseline refresh; the older smoke kernels
+remain baseline-regression checked. The smoke kernels must also report nonzero
+`compiled_code_bytes`. That keeps the gate from passing when the wall time is
+noisy but the mechanism under test, or the code-size telemetry itself, stopped
+firing. Use `RSS_JIT_PERF_SKIP_TELEMETRY=1` only for exploratory diagnostics.
 
 ## Coverage matrix (slow paths)
 

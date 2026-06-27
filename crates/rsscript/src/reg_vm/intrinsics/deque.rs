@@ -27,7 +27,9 @@ impl RegVm {
             RegIntrinsic::DequeToList => {
                 let deque = expect_deque_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let list = deque.borrow().iter().cloned().collect::<Vec<_>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(list)))))
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
+                    list,
+                )))))
             }
             other => {
                 unreachable!("exec_deque_intrinsics called with non-deque intrinsic: {other:?}")

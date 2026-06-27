@@ -1,7 +1,11 @@
 use super::*;
 
 impl Analyzer<'_> {
-    pub(super) fn check_supported_derives(&mut self, derives: &[String], span: &crate::diagnostic::Span) {
+    pub(super) fn check_supported_derives(
+        &mut self,
+        derives: &[String],
+        span: &crate::diagnostic::Span,
+    ) {
         for derive in derives {
             if supported_compiler_derive(derive) {
                 continue;
@@ -19,7 +23,11 @@ impl Analyzer<'_> {
     /// expand into generated Rust that copies or compares the resource — which
     /// contradicts the move-only model and can leak a backend trait-bound error
     /// — so only the implicit `Debug` and the review-only markers are allowed.
-    pub(super) fn check_resource_derives(&mut self, derives: &[String], span: &crate::diagnostic::Span) {
+    pub(super) fn check_resource_derives(
+        &mut self,
+        derives: &[String],
+        span: &crate::diagnostic::Span,
+    ) {
         for derive in derives {
             // Unknown names are already reported by `check_supported_derives`.
             if !supported_compiler_derive(derive)
@@ -172,7 +180,6 @@ impl Analyzer<'_> {
         }
         map
     }
-
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -472,7 +472,9 @@ pub(super) fn field_sig(field: &FieldDecl) -> FieldSig {
     }
 }
 
-pub(super) fn collect_protocol_impl_sigs(impls: &[ProtocolImpl]) -> BTreeMap<String, ProtocolImplSig> {
+pub(super) fn collect_protocol_impl_sigs(
+    impls: &[ProtocolImpl],
+) -> BTreeMap<String, ProtocolImplSig> {
     impls
         .iter()
         .map(|protocol_impl| {
@@ -638,7 +640,11 @@ pub(super) fn param_sig(param: &Param) -> ParamSig {
     }
 }
 
-pub(super) fn compare_function(old: &FunctionSig, new: &FunctionSig, findings: &mut Vec<ReviewFinding>) {
+pub(super) fn compare_function(
+    old: &FunctionSig,
+    new: &FunctionSig,
+    findings: &mut Vec<ReviewFinding>,
+) {
     if old.is_async != new.is_async {
         findings.push(review_finding(
             code::REVIEW_FUNCTION_KIND_CHANGED,
@@ -805,7 +811,12 @@ pub(super) fn review_span(span: &Span, label: &str) -> ReviewSpan {
     }
 }
 
-pub(super) fn paired_spans(old: &Span, new: &Span, old_label: &str, new_label: &str) -> Vec<ReviewSpan> {
+pub(super) fn paired_spans(
+    old: &Span,
+    new: &Span,
+    old_label: &str,
+    new_label: &str,
+) -> Vec<ReviewSpan> {
     vec![review_span(old, old_label), review_span(new, new_label)]
 }
 

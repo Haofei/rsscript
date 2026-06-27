@@ -20,8 +20,10 @@ Raw-bytes (front-end robustness):
 
 Generative (driven by `rss-testgen`):
 - **`differential`** — seed -> well-typed program -> every in-process backend
-  (VM / JIT / native) must agree. Counterpart of `tests/generative.rs`'s full
-  N-way (which adds the compiled backend, bounded).
+  must agree. By default this is VM interpreter + tier-0 JIT; with
+  `--features native-jit` it also runs native, force-deopt, forced-safepoint,
+  deopt-every-safepoint, and OSR backends. Counterpart of
+  `tests/generative.rs`'s full N-way (which adds the compiled backend, bounded).
 - **`fail_closed`** — seed -> program -> inject one targeted defect -> the checker
   must reject it (with the expected diagnostic) and produce no Rust. Counterpart
   of `tests/fixtures/fail` and `generated_programs_fail_closed_when_mutated`.
@@ -35,6 +37,39 @@ cargo +nightly fuzz run format_idempotent
 cargo +nightly fuzz run differential
 cargo +nightly fuzz run fail_closed
 ```
+
+Native-JIT/deopt/OSR differential smoke:
+
+```sh
+cargo +nightly fuzz run differential --features native-jit -- -runs=5000 -max_total_time=60
+```
+
+The Makefile wraps the bounded CI-friendly forms:
+
+```sh
+make fuzz-no-panic
+make fuzz-jit-differential
+make sanitize-jit-boundary
+```
+
+Those Makefile targets run through the Docker dev container. On the first run
+they install the required nightly toolchain (and `cargo-fuzz` for fuzz targets)
+into Docker's cargo/rustup volumes, so later runs reuse the toolchain cache.
+
+Hardening scope:
+- `make miri` runs Miri over the pure `rss-testgen` library subset. Miri cannot
+  execute Cranelift-generated machine code or real FFI/syscall boundaries.
+- `make fuzz-no-panic` runs the raw-byte robustness fuzzer over the front-end
+  parse/check/lower pipeline and is part of the scheduled JIT hardening sweep so
+  parser/checker panics do not mask JIT differential signal.
+- `make fuzz-jit-differential` runs the structured differential fuzzer with the
+  native backend set enabled: native, force-deopt, forced safepoints,
+  deopt-every-safepoint, and OSR.
+- `make sanitize-jit-boundary` runs a bounded AddressSanitizer smoke over
+  selected native/JIT boundary tests: compiled native calls, RSScript child-frame
+  deopt resume, deopt-every child-frame resume, closure-id guards, and direct
+  flat-list access. ASan does not prove JIT code memory safety by itself, but it
+  catches host-side raw-pointer and FFI boundary mistakes that Miri cannot cover.
 
 Replay / triage a generative crash deterministically (the seed reproduces both
 the program and, for `fail_closed`, the mutation):

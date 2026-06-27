@@ -1,8 +1,5 @@
-
 use crate::diagnostic::Span;
-use crate::syntax::ast::{
-    Callee, DataEffect, Expr, Item, TypeKind, TypeRef,
-};
+use crate::syntax::ast::{Callee, DataEffect, Expr, Item, TypeKind, TypeRef};
 
 use super::helpers::*;
 
@@ -18,7 +15,6 @@ impl RustLowerer<'_> {
         }
     }
 
-
     pub(super) fn lower_read_view_base_expr(&mut self, expr: &Expr) -> String {
         match expr {
             Expr::Ident(name, _) if self.read_view_bindings.contains(name) => {
@@ -27,7 +23,6 @@ impl RustLowerer<'_> {
             _ => self.lower_expr(expr),
         }
     }
-
 
     pub(super) fn lower_read_view_expr(&mut self, expr: &Expr) -> String {
         match expr {
@@ -45,18 +40,20 @@ impl RustLowerer<'_> {
         }
     }
 
-
     /// Apply a `read`/`mut`/`take` effect to a managed-handle argument: `read`
     /// borrows through the handle's read view, `mut` takes `&mut` of the lowered
     /// value, and `take` moves the lowered value.
-    pub(super) fn lower_managed_handle_effect_arg(&mut self, effect: DataEffect, value: &Expr) -> String {
+    pub(super) fn lower_managed_handle_effect_arg(
+        &mut self,
+        effect: DataEffect,
+        value: &Expr,
+    ) -> String {
         match effect {
             DataEffect::Read => self.lower_managed_read_ref(value),
             DataEffect::Mut => format!("&mut {}", self.lower_expr(value)),
             DataEffect::Take => self.lower_expr(value),
         }
     }
-
 
     /// Whether the callee is a first-class closure VALUE (a local binding whose
     /// inferred type is an `owned Fn(...)`), rather than a function/constructor.
@@ -74,11 +71,14 @@ impl RustLowerer<'_> {
             .is_some_and(|ty| ty.name == "Fn" && ty.is_owned)
     }
 
-
     /// The declared data effect of the `index`-th parameter of a first-class
     /// closure value's stored `Fn` type, so a call site can pass the argument
     /// with the matching Rust ABI (`read` -> `&`, `mut` -> `&mut`).
-    pub(super) fn closure_value_param_effect(&self, callee: &Callee, index: usize) -> Option<DataEffect> {
+    pub(super) fn closure_value_param_effect(
+        &self,
+        callee: &Callee,
+        index: usize,
+    ) -> Option<DataEffect> {
         let Callee::Name(name) = callee else {
             return None;
         };
@@ -88,7 +88,6 @@ impl RustLowerer<'_> {
         }
         ty.fn_param_effects.get(index).copied().flatten()
     }
-
 
     // Lower a `read`-effect managed-handle argument to a `&T`. A managed `let` local lowers to
     // an owned `T`, so it needs a leading `&`. A managed `read`-PARAM already lowers to `&T`
@@ -103,7 +102,6 @@ impl RustLowerer<'_> {
         }
         format!("&{}", self.lower_expr(value))
     }
-
 
     /// True when `expr` is exactly a `read`-effect parameter ident whose type
     /// lowers to a plain `&T` borrow (managed / non-Copy) — i.e. binding it to a
@@ -139,7 +137,6 @@ impl RustLowerer<'_> {
         true
     }
 
-
     pub(super) fn expr_lowers_to_managed_handle(&self, expr: &Expr) -> bool {
         match expr {
             Expr::Ident(name, _) => self.managed_bindings.contains(name),
@@ -161,14 +158,12 @@ impl RustLowerer<'_> {
         }
     }
 
-
     pub(super) fn expr_lowers_to_managed_non_class_handle(&self, expr: &Expr) -> bool {
         self.expr_lowers_to_managed_handle(expr)
             && !self
                 .infer_expr_type(expr)
                 .is_some_and(|ty| self.is_class_type(&ty))
     }
-
 
     /// True when this operand is a `read`-bound parameter whose type is a
     /// user-defined sum type. Such a parameter lowers to `&Op`, so comparing it
@@ -186,7 +181,6 @@ impl RustLowerer<'_> {
         ty.args.is_empty() && self.is_sum_type_name(&ty.name)
     }
 
-
     /// True when this operand is a sum *value* that lowers by value (not behind a
     /// reference) — most commonly a bare variant literal such as `A`.
     pub(super) fn is_enum_value_operand(&self, expr: &Expr) -> bool {
@@ -196,14 +190,12 @@ impl RustLowerer<'_> {
         }
     }
 
-
     pub(super) fn is_sum_type_name(&self, name: &str) -> bool {
         self.program
             .items
             .iter()
             .any(|item| matches!(item, Item::SumType(sum) if sum.name == name))
     }
-
 
     // Whether a user-declared struct/sum lowers to a Rust type that derives `Clone`. Mirrors
     // `compute_derive_attr`: an omitted derive list defaults to Debug+Clone (non-resource), and an
@@ -222,7 +214,6 @@ impl RustLowerer<'_> {
             _ => false,
         })
     }
-
 
     // The Copy scalar primitives — payloads of these match-bind by value (with a deref-pattern
     // when the scrutinee is a borrow). Distinct from `read_effect_lowers_by_value` (intrinsic-ABI tuned).
@@ -249,7 +240,6 @@ impl RustLowerer<'_> {
             )
     }
 
-
     pub(super) fn read_effect_lowers_by_value(expected: &TypeRef) -> bool {
         // Whether a `read`-effect param/arg of this type lowers by value vs `&T`.
         // Tuned to the runtime intrinsic ABI (receiver methods like
@@ -274,7 +264,6 @@ impl RustLowerer<'_> {
             )
     }
 
-
     pub(super) fn is_weak_field(&self, type_name: &str, field_name: &str) -> bool {
         self.program.items.iter().any(|item| match item {
             Item::Type(ty) if ty.name == type_name => ty
@@ -284,7 +273,6 @@ impl RustLowerer<'_> {
             _ => false,
         })
     }
-
 
     pub(super) fn is_runtime_handle_field(&self, type_name: &str, field_name: &str) -> bool {
         self.program.items.iter().any(|item| match item {
@@ -297,7 +285,6 @@ impl RustLowerer<'_> {
             _ => false,
         })
     }
-
 
     pub(super) fn lower_runtime_handle_field_value(
         &mut self,
@@ -320,14 +307,12 @@ impl RustLowerer<'_> {
         }
     }
 
-
     pub(super) fn lower_explicit_weak_field_value(&mut self, expr: &Expr) -> String {
         if let Some(value) = explicit_weak_handle_source(expr) {
             return self.lower_runtime_weak_from_managed(value);
         }
         self.lower_expr(expr)
     }
-
 
     pub(super) fn lower_runtime_weak_from_managed(&mut self, expr: &Expr) -> String {
         if let Expr::Effect {
@@ -349,5 +334,4 @@ impl RustLowerer<'_> {
         }
         format!("rsscript_runtime::weak(&{})", self.lower_expr(expr))
     }
-
 }

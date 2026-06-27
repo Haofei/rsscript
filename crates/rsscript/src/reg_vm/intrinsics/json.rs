@@ -16,6 +16,11 @@ impl RegVm {
     ) -> Result<VmValue, EvalError> {
         let _ = next_base;
         match intrinsic {
+            RegIntrinsic::JsonParseOk
+            | RegIntrinsic::JsonFieldOk
+            | RegIntrinsic::JsonFieldIntOk => Err(EvalError::Runtime(format!(
+                "internal native JSON intrinsic {intrinsic:?} reached the interpreter"
+            ))),
             RegIntrinsic::JsonArray => {
                 let items = expect_string_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::string(format!("[{}]", items.join(","))))

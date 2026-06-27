@@ -28,7 +28,9 @@ impl RegVm {
                             .collect::<Vec<_>>()
                     })
                     .unwrap_or_default();
-                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(captures)))))
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
+                    captures,
+                )))))
             }
             RegIntrinsic::RegexCompile => {
                 let pattern = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -65,7 +67,9 @@ impl RegVm {
                 let regex = expect_regex_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 let parts = regex.split(value).map(VmValue::string).collect::<Vec<_>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(parts)))))
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
+                    parts,
+                )))))
             }
             other => {
                 unreachable!("exec_regex_intrinsics called with non-regex intrinsic: {other:?}")

@@ -11,14 +11,14 @@ else is either already shipped or a recorded non-goal.
 Four committed, design-compatible directions. All are large; each extends the
 model without reversing a review-first tenet. Ordered by readiness/value.
 
-- [x] **Two-tier execution: dev interpreter + AOT** (§20.1-C, §20.2-4) — _done._
-  `rss dev --run` now routes through the **reg-VM dev tier** by default (fast inner
-  edit→run loop, no rustc) and switches to the **Rust-lowering AOT tier** with
-  `--release`. Both tiers observe identical semantics/diagnostics (the existing
-  VM↔compiled parity invariant), so the fast tier is trustworthy. Single files run
-  through the source VM; package directories through the package VM with native host
-  bindings loaded. Measured: ~54 ms (VM) vs ~14 s (AOT) for the same program.
-  Tested: tier-label unit test + `cli_dev_two_tier.rs` end-to-end.
+- [x] **Two-tier execution substrate: interpreter + AOT** (§20.1-C, §20.2-4) —
+  _done._ `rss run --vm` and the reg-VM test/benchmark harness give a fast
+  no-rustc path, while `rss run --release` remains the Rust-lowering AOT
+  authority. Both tiers observe identical semantics/diagnostics (the existing
+  VM↔compiled parity invariant), so the fast tier is trustworthy. Single files
+  run through the source VM; package directories through the package VM with
+  native host bindings loaded.
+  Measured: ~54 ms (VM) vs ~14 s (AOT) for the same program.
 
 - [x] **Scoped views / slices** (zero-copy borrowed regions) (§3.2, §20.1-I, §20.2-1)
   — _done._ The borrowed-view *types* already existed and ran at parity
@@ -79,7 +79,7 @@ than kept as future work (spec §20.2 "Removed, not deferred"; §21 non-goals).
 - [x] **`await` in expression position** (§14.6.2) — await-hoisting pass; VM↔compiled
   parity. Short-circuit `&&`/`||` RHS stays `RS0411` by design.
 - [x] **Structured-fix tooling** (§20.1-D) — `FixEdit` payload + `rss fix
-  [--write] [--json]`; request/response analysis server is `rss ide --json`.
+  [--write] [--json]`; editor integration belongs in `rss-lsp`.
 - [x] **FFI / native-ABI adapter contracts** (§20.1-N) — compact
   `[adapter.<Namespace>]` whole-boundary binding (pkg §9.5), single expansion point.
 - [x] **`Stream<T>` + `await for`** (§20.1-H) — in the executable MVP; parity-tested.
@@ -95,7 +95,7 @@ than kept as future work (spec §20.2 "Removed, not deferred"; §21 non-goals).
 Small/medium add-ons to shipped features; pick up if a real driver demands it.
 
 - **`Fix` edits for the remaining machine-applicable fixes** (extend `rss fix`).
-- **LSP-protocol daemon (stdio)** — `rss ide` is request/response today.
+- **LSP-protocol daemon (stdio)** — use `rss-lsp` rather than expanding `rss`.
 - **`pub use` re-export** — re-export a dependency's item as a package's own.
 - **Sum named payload fields** — `Variant { field: T }` alongside positional.
 - **Stream combinators / user-defined async generators** — `.map`/`.filter`, custom

@@ -59,6 +59,27 @@ pub(crate) fn string_pad(value: &str, width: i64, fill: &str, left: bool) -> Str
     }
 }
 
+/// Byte length of [`string_pad`] without materializing the padded string.
+pub(crate) fn string_pad_len(value: &str, width: i64, fill: &str) -> Option<i64> {
+    let target = width.max(0) as usize;
+    if value.len() >= target || fill.is_empty() {
+        return i64::try_from(value.len()).ok();
+    }
+
+    let missing = target - value.len();
+    let mut padding_len = 0usize;
+    while padding_len < missing {
+        padding_len = padding_len.checked_add(fill.len())?;
+    }
+
+    let mut rev_char_lens = fill.chars().rev().map(char::len_utf8).cycle();
+    while padding_len > missing {
+        padding_len = padding_len.checked_sub(rev_char_lens.next()?)?;
+    }
+
+    i64::try_from(value.len().checked_add(padding_len)?).ok()
+}
+
 /// Substitute `{}` placeholders in `template` with successive `args` (`{{`/`}}`
 /// are literal braces; a `{}` with no remaining argument is left as-is).
 pub(crate) fn string_format(template: &str, args: &[String]) -> String {
@@ -188,5 +209,30 @@ pub(crate) fn builtin_generic_type_params(root: &str) -> Option<Vec<&'static str
         "Map" => Some(vec!["K", "V"]),
         "Result" => Some(vec!["T", "E"]),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn string_pad_len_matches_materialized_padding() {
+        let cases = [
+            ("a", 2, "é"),
+            ("a", 2, "aé"),
+            ("a", 3, "éa"),
+            ("abc", 2, "0"),
+            ("abc", 8, ""),
+            ("abc", 8, "01"),
+            ("é", 5, "🙂x"),
+        ];
+        for (value, width, fill) in cases {
+            assert_eq!(
+                string_pad_len(value, width, fill),
+                i64::try_from(string_pad(value, width, fill, true).len()).ok(),
+                "value={value:?} width={width} fill={fill:?}",
+            );
+        }
     }
 }

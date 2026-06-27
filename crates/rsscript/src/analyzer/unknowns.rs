@@ -65,7 +65,11 @@ impl Analyzer<'_> {
         }
     }
 
-    pub(super) fn check_capability_type_ref(&mut self, ty: &TypeRef, generic_params: &HashSet<&str>) {
+    pub(super) fn check_capability_type_ref(
+        &mut self,
+        ty: &TypeRef,
+        generic_params: &HashSet<&str>,
+    ) {
         if ty.args.len() != 1 {
             self.unknown_type_name_diagnostic(&type_ref_name(ty), &ty.span);
             return;
@@ -150,7 +154,11 @@ impl Analyzer<'_> {
         }
     }
 
-    pub(super) fn check_unknown_bindings_in_block(&mut self, block: &HirBlock, visible: &mut HashSet<String>) {
+    pub(super) fn check_unknown_bindings_in_block(
+        &mut self,
+        block: &HirBlock,
+        visible: &mut HashSet<String>,
+    ) {
         for statement in &block.statements {
             self.check_unknown_bindings_in_stmt(statement, visible);
         }
@@ -252,7 +260,11 @@ impl Analyzer<'_> {
         }
     }
 
-    pub(super) fn check_unknown_bindings_in_expr(&mut self, expr: &HirExpr, visible: &HashSet<String>) {
+    pub(super) fn check_unknown_bindings_in_expr(
+        &mut self,
+        expr: &HirExpr,
+        visible: &HashSet<String>,
+    ) {
         match expr {
             HirExpr::Ident { name, span, .. } => {
                 if !visible.contains(name) && !builtin_value_ident(name) {
@@ -391,5 +403,4 @@ impl Analyzer<'_> {
             self.check_resource_type_param_field(arg, bounds, next_in_resource_pool);
         }
     }
-
 }

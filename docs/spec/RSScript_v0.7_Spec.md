@@ -739,9 +739,9 @@ lowering, Cargo invocation, or native build execution. `rss check
 environment; for packages with multiple source files, `src/main.rss` is the
 runnable entry source but `rss check` may check the package source set.
 
-`rss run <file.rss>` lowers the file to a Rust package and invokes Cargo on that package. `rss run <package-directory>` uses the package manifest, package source set, and interface environment. For packages with multiple source files, `src/main.rss` is the runnable entry source.
+`rss run <file.rss>` lowers the file to a Rust package and invokes Cargo on that package. `rss run --vm <file.rss>` executes the same file through the register VM for fast feedback. `rss run <package-directory>` uses the package manifest, package source set, and interface environment; `--vm` runs that package through the package VM with native host bindings loaded. For packages with multiple source files, `src/main.rss` is the runnable entry source.
 
-`rss verify-rust <file.rss>` performs the same lowering and asks rustc to check the generated package. With `--out-dir`, the generated package and `rsscript-source-map.json` are retained for inspection.
+`rss run --dry-run --out-dir <directory> <file.rss>` performs the same lowering and retains the generated package and `rsscript-source-map.json` for inspection without executing it.
 
 The RSScript frontend is responsible for RSScript semantics. rustc is responsible for Rust type checking of generated code, optimization, machine code generation, linking, and platform integration.
 
@@ -3686,7 +3686,7 @@ dynamic fallback           (no runtime dispatch without explicit protocol-dynami
 
 ##### Review metadata for receiver-call shorthand
 
-The review map and `rss review --map` JSON must record the canonical expansion
+Review-map JSON must record the canonical expansion
 for every receiver-call expression:
 
 ```json
@@ -3879,7 +3879,7 @@ use rss.review.ReviewMap
 The module path is the file's declared package/module identity. A `use` path
 names an imported contract or module symbol and must be fully qualified. These
 declarations are parsed, preserved by formatting, and available to package/review
-tooling as organization metadata. `rss review map --json` includes them in a
+tooling as organization metadata. Package review-map JSON includes them in a
 top-level `modules` array with exact source locations so downstream REIR tooling
 can emit `module_declaration` and `use_declaration` facts. Package tooling must
 not infer hidden effects or implicit receiver methods from them.
@@ -4179,11 +4179,11 @@ enforced and must not be, so v0.7 code never writes `unsafe` at a call site.
 ### 16.1 Review modes
 
 ```text
-rss review --diff
-rss review --map
+rss pkg diff
+rss pkg review
 ```
 
-`rss review --diff` compares two checked RSScript programs and reports semantic changes. `rss review --map` classifies a single file/module/directory by review risk.
+`rss pkg diff` compares two checked RSScript packages and reports semantic changes. `rss pkg review` classifies a package by review risk and may include an embedded review map.
 
 ### 16.2 Review map categories
 
@@ -4413,7 +4413,7 @@ sit in RS01xx with the other feature/boundary codes.
 Every diagnostic class listed in §17.1 is allocated a stable code within the
 range matching its concern above (for example the new ResourcePool/`?` classes
 sit in RS07xx and RS02xx respectively). Review-map *facts* that are not
-diagnostics — such as a "removed guarantee" surfaced by `rss review --diff`
+diagnostics — such as a "removed guarantee" surfaced by package diff
 (§16.3) — are review metadata, not RS-coded diagnostics, and do not consume a
 code. A complete class→code table is a conformance artifact to be generated from
 the implemented code constants, so it cannot drift from the registry.
@@ -4502,8 +4502,8 @@ part of the specification contract: implementations must not present a
 | Fixed native parallel facades marked `effects(native, parallel)` | review-only boundary + package/native metadata | package/native metadata, trusted signatures, and audits |
 | User-provided parallel closures, parallel iterators, joins/scopes, and thread-pool configuration | unsupported | future `features: parallel` capability |
 | Native wrapper semantic behavior beyond declared `.rssi` effects | review-only | package/native metadata, audits, and policy |
-| Restricted executable `async` bodies, direct `await`, and isolate-local `task_group { async let ... }` | static + dynamic runtime polling | frontend checker, Rust lowering, runtime pending ABI |
-| Unstructured `spawn`, select, timeout, cancellation, async streams, channels, async closures, and public future/task handles | unsupported | frontend diagnostic before lowering |
+| Restricted executable `async` bodies, direct `await`, isolate-local `task_group { async let ... }`, `select`, `await for`, bounded channels, streams, deadlines, timers, and cooperative cancellation APIs | static + dynamic runtime polling | frontend checker, Rust lowering, runtime pending ABI, and `rss-async` package contracts |
+| Unstructured `spawn`, async closures, public future/task handles, and cross-isolate task execution | unsupported | frontend diagnostic before lowering |
 | Rust build scripts, proc macros, native links, and transitive native facts | package review-only unless specifically scanned or checked | package metadata and policy |
 
 ---
@@ -5432,10 +5432,10 @@ B. Cross-isolate message API with zero-copy transfer
      Single ownership is enforced statically rather than by runtime convention.
    - managed handles never cross isolates; only explicit messages do.
 
-C. Two-tier execution: dev interpreter + Rust-lowering AOT
-   - implemented (§20.2-4): `rss dev --run` runs the inner edit→run loop through the
-     reg-VM dev tier (no rustc cost) and switches to the Rust-lowering AOT tier with
-     `--release`; both run at VM↔compiled parity.
+C. Two-tier execution substrate: interpreter + Rust-lowering AOT
+   - implemented (§20.2-4): `rss run --vm` and VM/JIT test harnesses run
+     through the reg-VM tier (no rustc cost), while `rss run --release` remains
+     the Rust-lowering AOT tier; both run at VM↔compiled parity.
    - a HIR-level interpreter for the managed subset for a fast edit-run loop,
      since rustc compilation cost is poor for inner-loop iteration.
    - the Rust-lowering path remains the production/AOT target.
@@ -5767,7 +5767,7 @@ Reviewers should evaluate v0.7 by asking:
 12. Does Rust lowering preserve RSScript diagnostics?
 13. Are runtime crate surfaces defined before lowering?
 14. Are generated Rust diagnostics source-mapped?
-15. Does rss review support both diff and map modes?
+15. Do package review/diff artifacts cover both diff and map modes?
 16. Is the spec free of domain-specific agent/GPU core pollution?
 ```
 

@@ -75,7 +75,11 @@ impl RegVm {
         self.tasks.get_mut(&tid).expect("task slot").saved = Some(saved);
     }
 
-    pub(super) fn run_scheduler(&mut self, unit: &RegUnit, root: TaskId) -> Result<VmValue, EvalError> {
+    pub(super) fn run_scheduler(
+        &mut self,
+        unit: &RegUnit,
+        root: TaskId,
+    ) -> Result<VmValue, EvalError> {
         loop {
             let Some(tid) = self.ready_queue.pop_front() else {
                 // Nothing runnable: advance the clock to the earliest sleep

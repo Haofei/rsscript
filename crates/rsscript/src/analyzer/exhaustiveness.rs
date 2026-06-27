@@ -115,7 +115,11 @@ impl Analyzer<'_> {
         }
     }
 
-    pub(super) fn match_is_exhaustive_with_context(&self, value: &HirExpr, arms: &[HirMatchArm]) -> bool {
+    pub(super) fn match_is_exhaustive_with_context(
+        &self,
+        value: &HirExpr,
+        arms: &[HirMatchArm],
+    ) -> bool {
         let Some(type_name) = hir_expr_type_name(value) else {
             let arm_names = arms
                 .iter()
@@ -431,7 +435,11 @@ impl Analyzer<'_> {
             })
     }
 
-    pub(super) fn pattern_matches_witness(&self, pattern: &MatchPattern, witness: &PatternWitness) -> bool {
+    pub(super) fn pattern_matches_witness(
+        &self,
+        pattern: &MatchPattern,
+        witness: &PatternWitness,
+    ) -> bool {
         match pattern {
             MatchPattern::Binding { .. } | MatchPattern::Wildcard(_) => true,
             MatchPattern::Literal {
@@ -496,7 +504,10 @@ impl Analyzer<'_> {
         }
     }
 
-    pub(super) fn sum_variants_for_type(&self, root: &str) -> Option<Vec<(String, Vec<FieldInfo>)>> {
+    pub(super) fn sum_variants_for_type(
+        &self,
+        root: &str,
+    ) -> Option<Vec<(String, Vec<FieldInfo>)>> {
         for item in &self.syntax_program.items {
             if let Item::SumType(sum) = item
                 && sum.name == root
@@ -579,5 +590,4 @@ impl Analyzer<'_> {
             | HirExpr::Unknown(_) => {}
         }
     }
-
 }

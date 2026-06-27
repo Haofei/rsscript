@@ -130,7 +130,11 @@ impl Analyzer<'_> {
     }
 
     /// Protocol methods must declare `self: read|mut|take Self` first.
-    pub(super) fn check_protocol_self_parameter(&mut self, function: &FunctionDecl, is_protocol_method: bool) {
+    pub(super) fn check_protocol_self_parameter(
+        &mut self,
+        function: &FunctionDecl,
+        is_protocol_method: bool,
+    ) {
         if !is_protocol_method {
             return;
         }
@@ -649,7 +653,11 @@ impl Analyzer<'_> {
             .collect()
     }
 
-    pub(super) fn check_protocol_bound(&mut self, param: &GenericParam, protocol_names: &HashSet<String>) {
+    pub(super) fn check_protocol_bound(
+        &mut self,
+        param: &GenericParam,
+        protocol_names: &HashSet<String>,
+    ) {
         let Some(GenericBound::Protocol(protocol)) = &param.bound else {
             return;
         };
@@ -657,5 +665,4 @@ impl Analyzer<'_> {
             self.unknown_protocol_diagnostic(protocol, &param.span);
         }
     }
-
 }

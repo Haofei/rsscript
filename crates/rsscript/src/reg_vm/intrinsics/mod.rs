@@ -5,23 +5,23 @@ use crate::reg_vm::value_access::*;
 use crate::reg_vm::value_convert::*;
 use crate::reg_vm::value_ops::*;
 
+mod bytes;
+mod char;
+mod date;
+mod deque;
+mod hex;
 mod json;
-mod string;
 mod list;
 mod map;
-mod bytes;
-mod date;
 mod math;
-mod char;
-mod path;
 mod option;
-mod result;
-mod set;
-mod deque;
+mod path;
 mod regex;
-mod hex;
-mod url;
+mod result;
 mod scalar;
+mod set;
+mod string;
+mod url;
 
 impl RegVm {
     // See `try_exec_pure`: interior-mutable `VmMapKey` is safe because
@@ -1332,7 +1332,9 @@ impl RegVm {
                             let value = items.borrow().get(index).expect("index in bounds");
                             mapped.push(self.call_closure_one(unit, &mapper, value, next_base)?);
                         }
-                        value_ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(mapped)))))
+                        value_ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
+                            mapped,
+                        )))))
                     }
                     Err(error) => value_err(error),
                 })
@@ -1353,7 +1355,9 @@ impl RegVm {
                                 filtered.push(value);
                             }
                         }
-                        value_ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(filtered)))))
+                        value_ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
+                            filtered,
+                        )))))
                     }
                     Err(error) => value_err(error),
                 })
@@ -1390,7 +1394,9 @@ impl RegVm {
                                 Err(error) => return Ok(value_err(error)),
                             }
                         }
-                        value_ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(mapped)))))
+                        value_ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
+                            mapped,
+                        )))))
                     }
                     Err(error) => value_err(error),
                 })
@@ -1747,6 +1753,9 @@ impl RegVm {
             | RegIntrinsic::JsonField
             | RegIntrinsic::JsonFieldBool
             | RegIntrinsic::JsonFieldInt
+            | RegIntrinsic::JsonParseOk
+            | RegIntrinsic::JsonFieldOk
+            | RegIntrinsic::JsonFieldIntOk
             | RegIntrinsic::JsonFieldOptional
             | RegIntrinsic::JsonFieldOptionalBool
             | RegIntrinsic::JsonFieldOptionalInt
@@ -1835,7 +1844,9 @@ impl RegVm {
                         Err(error) => return Ok(value_err(error)),
                     }
                 }
-                Ok(value_ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(mapped))))))
+                Ok(value_ok(VmValue::List(Rc::new(RefCell::new(
+                    TypedVec::from_values(mapped),
+                )))))
             }
             RegIntrinsic::LogError => {
                 let line =
@@ -2299,7 +2310,11 @@ impl RegVm {
                 let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(json_result(
                     std::fs::read_to_string(path)
-                        .map(|text| VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(rules_from_text(&text))))))
+                        .map(|text| {
+                            VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
+                                rules_from_text(&text),
+                            ))))
+                        })
                         .map_err(|error| config_error_value(error.to_string())),
                 ))
             }
@@ -2349,7 +2364,9 @@ impl RegVm {
                     let state = self.channel_state_mut(channel_id)?;
                     let values = state.queue.drain(..).collect::<Vec<_>>();
                     if state.senders == 0 {
-                        return Ok(value_ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(values))))));
+                        return Ok(value_ok(VmValue::List(Rc::new(RefCell::new(
+                            TypedVec::from_values(values),
+                        )))));
                     }
                     return Ok(value_err(channel_error_value(
                         "stream collect_list would block on an open channel stream",
@@ -2357,7 +2374,9 @@ impl RegVm {
                 }
                 let values = stream.items.borrow().to_vec();
                 stream.items.borrow_mut().clear();
-                Ok(value_ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(values))))))
+                Ok(value_ok(VmValue::List(Rc::new(RefCell::new(
+                    TypedVec::from_values(values),
+                )))))
             }
             RegIntrinsic::StreamFromList => {
                 let items = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?

@@ -1,0 +1,44 @@
+features: local
+
+fn bench_size(default: Int) -> Int {
+    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
+    match String.parse_int(value: read raw) {
+        Some(value) => {
+            return value
+        }
+        None => {
+            return default
+        }
+    }
+}
+
+fn len_loop(table: read Map<Int, Int>, set: read Set<Int>, reps: Int) -> Int {
+    let mut i = 0
+    let mut total = 0
+    while i < reps {
+        total = total + Map.len<Int, Int>(map: read table)
+        total = total + Set.len<Int>(set: read set)
+        i = i + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    let reps = bench_size(default: 2000000)
+    local table = Map<Int, Int>.new()
+    local set = Set.new<Int>()
+    let mut i = 0
+    while i < 32 {
+        let value = i * 2
+        Map.insert<Int, Int>(map: mut table, key: read i, value: read value)
+        Set.insert(set: mut set, value: read i)
+        i = i + 1
+    }
+
+    Log.write(message: read String.from_int(value: len_loop(
+        table: read table,
+        set: read set,
+        reps: reps
+    )))
+    return Unit
+}

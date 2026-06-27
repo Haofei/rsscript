@@ -363,15 +363,16 @@ bail must leave **no** observable trace, and budget consumption is observable
 (it can change success-vs-failure).
 
 **Current implementation (Model A — ineligibility).** The engine takes rule 1's
-fallback branch directly: `try_native` refuses to dispatch to native code whenever
-`step_budget` or `cancel` is armed, so a preemptible function always runs on the
-tier-0/interpreter path that `tick()`s every instruction. `mem_budget` is *not* in
-this gate because a native-eligible function is a side-effect-free pure-scalar /
-read-heap leaf that allocates no VM-managed container and so cannot grow the
-accounted live-set. Rule 2 holds by construction: a native attempt never calls
-`tick()` and never touches the step/mem counters, so it runs entirely "off the
-meter" — a bail leaves the budget at its pre-attempt value and the interpreter
-re-run charges it exactly once. Emitting per-backedge checks in Cranelift (rule 1's
+fallback branch directly: `try_native`/`try_osr` refuse to dispatch to native code
+whenever `step_budget`, `cancel`, **or `mem_budget`** is armed, so a preemptible or
+memory-limited function always runs on the tier-0/interpreter path that `tick()`s
+every instruction. `mem_budget` is in this gate because the native subset can now
+mutate/allocate heap (§7.1 rule 9 write helpers): an allocating native attempt runs
+off the meter and would otherwise grow the accounted live-set past the limit without
+erroring. Rule 2 holds by construction: a native attempt never calls `tick()` and
+never touches the step/mem counters, so it runs entirely "off the meter" — a bail
+leaves the budget at its pre-attempt value and the interpreter re-run charges it
+exactly once. Emitting per-backedge checks in Cranelift (rule 1's
 first branch, which would let hot loops stay native under an active budget) is a
 future optimization; until then preemptible runs simply forgo the native tier.
 
@@ -418,7 +419,7 @@ compilation until a function is hot.
 **OSR (on-stack replacement) — specified, staged.** The method-at-a-time model
 leaves one class unserved: a function called once (or rarely) whose *inner loop*
 is hot never crosses a per-call threshold, so the hot loop stays interpreted (a
-measured cliff — see `vm-jit-perf-plan.md` §3.4). OSR-entry addresses it: when a
+measured cliff in the VM/JIT benchmark suite). OSR-entry addresses it: when a
 loop backedge is observed hot mid-execution, control transfers from the
 interpreter into native code **at the loop header**, not only at function entry.
 
@@ -446,11 +447,13 @@ Native code cannot hold heap values in scalar registers, so it reads them by
 calling **host helpers** (`vm-jit::HostHelpers`, implemented in `reg_vm`). The
 contract is normative:
 
-1. **Reads only.** A helper looks a handle up in a per-call table and returns one
-   `Int` (a struct `Int` field, a list length, or an `Int` list element). A
-   helper MUST NOT mutate heap, allocate observable state, call back into user
-   code, or perform I/O. This is what makes the compiled subset side-effect-free
-   — the premise of the fallback proof (§7.2).
+1. **Read helpers are side-effect-free.** A *read* helper looks a handle up in a
+   per-call table and returns one `Int` (a struct `Int` field, a list length, or
+   an `Int` list element). A read helper MUST NOT mutate heap, allocate observable
+   state, call back into user code, or perform I/O. *Write* helpers (rule 9) are
+   the sole exception and are confined to the transactional boundary defined there;
+   together these keep the compiled subset **transactionally** side-effect-free —
+   the premise of the fallback proof (§7.2).
 2. **Handles are opaque, call-scoped indices.** A `handle` is only ever an index
    into the *current* call's heap-argument table, populated before the call and
    cleared by a drop guard on every exit path. A handle MUST NOT outlive its call
@@ -492,6 +495,20 @@ contract is normative:
    it later MUST replace the flat table with an explicitly stacked table/bail
    context and re-establish rule 2's call-scoping for each level.
 
+9. **Write helpers are transactional (journaled, commit-on-success).** A *write*
+   helper may mutate heap state (a struct field, a list element/length, a
+   map/set/deque) ONLY through the heap-write transaction. Before the first
+   mutation of a container it MUST record an undo entry — a snapshot of the
+   pre-attempt container, keyed by its root — into the per-call transaction
+   journal, and stage the resulting handle as a deferred write-back. The mutation
+   is NOT observable to the rest of the VM until the transaction **commits**, which
+   happens only when the native attempt completes cleanly. On **bail** the
+   transaction **aborts**: every journaled undo is restored, so the heap returns to
+   its exact pre-attempt state. A native attempt that performed any heap write
+   therefore disables precise mid-function deopt resume (it re-runs the whole
+   function on the interpreter from the top), making commit-or-abort whole-attempt
+   atomic. This is the §7.2 checkpoint/rollback equivalence argument made concrete.
+
 The bail signal is a **binary flag**, not a `HelperStatus` enum. Rationale: the
 interpreter re-run *is* the exact error (single source of truth), so
 distinguishing failure kinds buys nothing today. Promote to a status enum only
@@ -500,17 +517,23 @@ if/when native code reconstructs errors itself.
 ### 7.2 Fallback equivalence (the proof obligation)
 
 Because the native subset only **reads** (scalars + the read-only helpers above)
-and has **no side effects**, a bail at *any* point — an arithmetic guard, a
-divide-by-zero edge, a helper that cannot satisfy a read — has produced **no
-observable effect** before bailing. Re-running the whole function on the
-interpreter is therefore indistinguishable from never having attempted native
-execution: same inputs, same (unmutated) heap, same result or same error.
+and confines every **write** to the commit-on-success transaction of §7.1 rule 9,
+a bail at *any* point — an arithmetic guard, a divide-by-zero edge, a helper that
+cannot satisfy a read, or one that has already journaled a heap mutation — leaves
+**no observable effect** behind: the transaction aborts and restores any touched
+heap to its pre-attempt state. Re-running the whole function on the interpreter is
+therefore indistinguishable from never having attempted native execution: same
+inputs, same (restored) heap, same result or same error.
 
 This is why a binary bail flag suffices and why the native tier **can only ever
-be faster, never semantically different**. Any future extension that lets native
-code perform a side effect before a possible bail BREAKS this proof and MUST NOT
-land without a replacement equivalence argument (checkpoint/rollback or
-effect-after-commit ordering) and its own differential coverage.
+be faster, never semantically different**. The original read-only subset met this
+trivially; the heap-write extension meets it via the §7.1 rule 9
+checkpoint/rollback transaction (journaled undo, commit-on-clean-completion,
+abort-on-bail) plus its differential + force-deopt coverage. Any *further*
+extension that lets native code perform an effect the transaction cannot undo —
+I/O, observable allocation visible before commit, or a call back into user code —
+BREAKS this proof and MUST NOT land without its own replacement equivalence
+argument and differential coverage.
 
 **"No observable effect" includes VM bookkeeping.** Any state a failed native
 attempt touched before bailing — most importantly `step_budget`/`mem_budget`
@@ -581,8 +604,10 @@ Within the engine (distinct from the language §21 list):
   OSR-entry contract (dual of deopt) is normative; implementation is staged
   (`vm-optimizing-jit-plan.md` J5.2), method-at-a-time entry is the default until
   it lands.
-- **Native side effects before a bail** — forbidden; breaks the §7.2 fallback
-  proof.
+- **Un-journaled native side effects before a bail** — forbidden; breaks the §7.2
+  fallback proof. Heap *writes* are permitted only through the §7.1 rule 9
+  commit-on-success transaction, which restores them on bail; I/O, observable
+  allocation, and callbacks into user code remain forbidden before commit.
 - **A `HelperStatus` failure-kind enum** — not until native code reconstructs
   errors itself (§7.1).
 - **Independently defining instruction semantics in any faster tier** — forbidden by §2 consequence 1.

@@ -6,6 +6,12 @@ pub(crate) struct RegUnit {
     pub(crate) function_ids: HashMap<String, usize>,
     pub(crate) resource_drop_functions: HashMap<String, usize>,
     pub(crate) types: HashMap<String, TypeInfo>,
+    /// Declared HIR signatures keyed by lowered function name. The register VM
+    /// bytecode remains untyped, but native lowering can use this as a conservative
+    /// seed for scalar/handle ABI inference when a function body is otherwise
+    /// polymorphic (for example `Float` parameters used only in arithmetic).
+    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    pub(crate) native_signatures: HashMap<String, RegNativeSignature>,
     /// Whether the program can ever *observe closure identity* — i.e. whether any
     /// user-source `==`/`!=` could compare operands whose static type is, or
     /// transitively contains, a `Fn`/closure value. Computed conservatively at
@@ -23,8 +29,11 @@ pub(crate) struct RegUnit {
     pub(crate) closure_identity_observable: bool,
 }
 
-
-
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RegNativeSignature {
+    pub(crate) params: Vec<String>,
+    pub(crate) return_type: Option<String>,
+}
 
 /// Call count at which a function becomes "warm" and starts collecting a
 /// [`FunctionProfile`] (J1). Below this threshold a function allocates and
@@ -41,6 +50,15 @@ pub(crate) const PROFILE_WARMUP: u32 = 50;
 /// is more than enough samples to settle every site's mono/poly/mega state.
 pub(crate) const PROFILE_RECORD_LIMIT: u32 = PROFILE_WARMUP + 256;
 
+/// Minimum branch samples before branch feedback is strong enough to guide J2
+/// speculation. Reporting can show smaller samples, but codegen should not treat
+/// them as a stable bias.
+pub(crate) const PROFILE_BRANCH_MIN_SAMPLES: u32 = 16;
+
+/// Branch edge share required before a direction is considered hot.
+pub(crate) const PROFILE_BRANCH_HOT_NUMERATOR: u32 = 9;
+pub(crate) const PROFILE_BRANCH_HOT_DENOMINATOR: u32 = 10;
+
 /// Maximum number of distinct callee identities tracked at one dynamic call
 /// site before it is declared megamorphic. Past this the observed list stops
 /// growing (bounded memory) and [`MonoState::Megamorphic`] sticks.
@@ -51,8 +69,8 @@ pub(crate) const PROFILE_MAX_CALLEES: usize = 4;
 ///
 /// Feeds J2 monomorphic-inlining COMPILE DECISIONS ONLY; it never feeds a
 /// computed value and never alters control flow or results (determinism).
-// Read by the J1 tests and (forthcoming) J2 inliner; not yet consumed by
-// production interpreter code, which only *writes* feedback.
+// Read by the J1 tests and J2 profile-guided native inliner; not consumed by
+// production interpreter dispatch, which only *writes* feedback.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MonoState {
@@ -62,6 +80,46 @@ pub(crate) enum MonoState {
     Polymorphic,
     /// More than [`PROFILE_MAX_CALLEES`] distinct callees — not inlinable.
     Megamorphic,
+}
+
+/// Compiler-facing classification of dynamic branch feedback.
+///
+/// Only `TakenHot` and `FallthroughHot` are actionable for speculative native
+/// transforms. The other states are still useful in reports and tests, but should
+/// not drive codegen decisions.
+#[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BranchBias {
+    NoSamples,
+    UnderSampled,
+    TakenHot,
+    FallthroughHot,
+    Mixed,
+}
+
+#[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+impl BranchBias {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            BranchBias::NoSamples => "none",
+            BranchBias::UnderSampled => "undersampled",
+            BranchBias::TakenHot => "taken-hot",
+            BranchBias::FallthroughHot => "fallthrough-hot",
+            BranchBias::Mixed => "mixed",
+        }
+    }
+
+    /// Returns the hot dynamic edge when this bias is strong enough for
+    /// speculative native codegen. `true` means the explicit jump target is hot;
+    /// `false` means the fallthrough edge is hot.
+    #[allow(dead_code)]
+    pub(crate) fn hot_edge(self) -> Option<bool> {
+        match self {
+            BranchBias::TakenHot => Some(true),
+            BranchBias::FallthroughHot => Some(false),
+            BranchBias::NoSamples | BranchBias::UnderSampled | BranchBias::Mixed => None,
+        }
+    }
 }
 
 /// Type feedback recorded at a single dynamic call site (`CallDynamic` /
@@ -129,6 +187,68 @@ impl CallSiteFeedback {
     }
 }
 
+/// Dynamic branch feedback for one conditional branch site. `taken` means the
+/// branch jumped to its explicit target; `fallthrough` means execution continued
+/// at the next instruction.
+#[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+#[derive(Debug, Clone, Default)]
+pub(crate) struct BranchFeedback {
+    pub(crate) taken: u32,
+    pub(crate) fallthrough: u32,
+}
+
+#[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+impl BranchFeedback {
+    pub(crate) fn record(&mut self, taken: bool) {
+        if taken {
+            self.taken = self.taken.saturating_add(1);
+        } else {
+            self.fallthrough = self.fallthrough.saturating_add(1);
+        }
+    }
+
+    pub(crate) fn total(&self) -> u32 {
+        self.taken.saturating_add(self.fallthrough)
+    }
+
+    pub(crate) fn taken_percent(&self) -> f64 {
+        let total = self.total();
+        if total == 0 {
+            0.0
+        } else {
+            (self.taken as f64 * 100.0) / total as f64
+        }
+    }
+
+    pub(crate) fn bias(&self) -> BranchBias {
+        let total = self.total();
+        if total == 0 {
+            return BranchBias::NoSamples;
+        }
+        if total < PROFILE_BRANCH_MIN_SAMPLES {
+            return BranchBias::UnderSampled;
+        }
+
+        let hot_num = u64::from(PROFILE_BRANCH_HOT_NUMERATOR);
+        let hot_den = u64::from(PROFILE_BRANCH_HOT_DENOMINATOR);
+        let total = u64::from(total);
+        if u64::from(self.taken).saturating_mul(hot_den) >= total.saturating_mul(hot_num) {
+            BranchBias::TakenHot
+        } else if u64::from(self.fallthrough).saturating_mul(hot_den)
+            >= total.saturating_mul(hot_num)
+        {
+            BranchBias::FallthroughHot
+        } else {
+            BranchBias::Mixed
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn hot_edge(&self) -> Option<bool> {
+        self.bias().hot_edge()
+    }
+}
+
 /// Per-function type-feedback profile (J1): feedback for each dynamic call site,
 /// keyed by the site's instruction index within the function's `code`.
 ///
@@ -139,6 +259,8 @@ impl CallSiteFeedback {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct FunctionProfile {
     pub(crate) call_sites: HashMap<usize, CallSiteFeedback>,
+    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    pub(crate) branch_sites: HashMap<usize, BranchFeedback>,
 }
 
 impl FunctionProfile {
@@ -149,6 +271,33 @@ impl FunctionProfile {
             .entry(instr_idx)
             .or_default()
             .record(callee_key, captures_scalar);
+    }
+
+    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    fn record_branch(&mut self, instr_idx: usize, taken: bool) {
+        self.branch_sites
+            .entry(instr_idx)
+            .or_default()
+            .record(taken);
+    }
+
+    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    pub(crate) fn branch_feedback(&self, instr_idx: usize) -> Option<&BranchFeedback> {
+        self.branch_sites.get(&instr_idx)
+    }
+
+    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    pub(crate) fn branch_bias(&self, instr_idx: usize) -> BranchBias {
+        self.branch_feedback(instr_idx)
+            .map(BranchFeedback::bias)
+            .unwrap_or(BranchBias::NoSamples)
+    }
+
+    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    pub(crate) fn branch_feedback_sites(&self) -> impl Iterator<Item = (usize, &BranchFeedback)> {
+        self.branch_sites
+            .iter()
+            .map(|(instr_idx, feedback)| (*instr_idx, feedback))
     }
 }
 
@@ -173,7 +322,12 @@ impl FunctionProfile {
 /// `PROFILE_RECORD_LIMIT` samples are far more than enough to settle the
 /// mono/poly/mega classification J2 needs. Observation only: feeds J2 compile
 /// decisions, never a computed value and never control flow (determinism).
-pub(crate) fn record_call_site(func: &RegFunction, instr_idx: usize, callee_key: u64, captures_scalar: bool) {
+pub(crate) fn record_call_site(
+    func: &RegFunction,
+    instr_idx: usize,
+    callee_key: u64,
+    captures_scalar: bool,
+) {
     let count = func.call_count.get();
     if count >= PROFILE_RECORD_LIMIT {
         // Frozen: enough samples collected. Cheapest possible steady state.
@@ -200,6 +354,33 @@ pub(crate) fn record_call_site(func: &RegFunction, instr_idx: usize, callee_key:
     }
 }
 
+/// Warm-gated, bounded branch-feedback recording. This is deliberately separate
+/// from [`record_call_site`]: branch profiling must not advance the dynamic-call
+/// counter used by profile-guided closure inlining and OSR re-probe logic.
+#[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+pub(crate) fn record_branch_site(func: &RegFunction, instr_idx: usize, taken: bool) {
+    let count = func.branch_count.get();
+    if count >= PROFILE_RECORD_LIMIT {
+        return;
+    }
+    func.branch_count.set(count.saturating_add(1));
+    if count < PROFILE_WARMUP {
+        if count + 1 == PROFILE_WARMUP {
+            if let Ok(mut slot) = func.profile.try_borrow_mut() {
+                if slot.is_none() {
+                    *slot = Some(Box::new(FunctionProfile::default()));
+                }
+            }
+        }
+        return;
+    }
+    if let Ok(mut slot) = func.profile.try_borrow_mut() {
+        if let Some(profile) = slot.as_mut() {
+            profile.record_branch(instr_idx, taken);
+        }
+    }
+}
+
 /// Whether every capture of `closure` is a scalar (`Int`/`Float`/`Bool`) — the
 /// precondition for materializing captures into an inlined native body via the
 /// `closure_capture` host helper. A non-scalar (heap) capture makes the
@@ -215,6 +396,29 @@ pub(crate) fn closure_captures_all_scalar(closure: &VmClosure) -> bool {
         }
         scalar(c)
     })
+}
+
+fn scalar_param_type_needs_no_deep_copy(type_name: &str) -> bool {
+    matches!(
+        type_name,
+        "Bool"
+            | "Byte"
+            | "Char"
+            | "Float"
+            | "Float32"
+            | "Float64"
+            | "Int"
+            | "Int8"
+            | "Int16"
+            | "Int32"
+            | "Int64"
+            | "UInt"
+            | "UInt8"
+            | "UInt16"
+            | "UInt32"
+            | "UInt64"
+            | "Unit"
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -233,6 +437,10 @@ pub(crate) struct RegFunction {
     /// Cached tier-0 JIT analysis `(all_instructions_supported, has_loop)`,
     /// computed once after `code` is emitted.
     pub(crate) jit_analysis: std::cell::Cell<Option<(bool, bool)>>,
+    /// Cached tier-0 verdict for the flat scalar self-recursive executor. `None`
+    /// means not inspected yet; `Some(false)` is the hot-path negative cache for
+    /// ordinary call-heavy functions.
+    pub(crate) jit_self_recursive_int: std::cell::Cell<Option<bool>>,
     /// Cached native-tier verdict, an invariant property of the function:
     /// `0` unknown, `1` known not native-eligible. Lets `try_native` skip all
     /// per-call tiering/cache/name-hash work once a function is known to never
@@ -246,9 +454,15 @@ pub(crate) struct RegFunction {
     /// never reaches the helper, so its counter stays `0` and it pays nothing.
     /// Below `PROFILE_WARMUP` no profile is allocated.
     pub(crate) call_count: std::cell::Cell<u32>,
+    /// J1 conditional-branch counter, bumped ONLY inside [`record_branch_site`].
+    /// Kept separate from `call_count` so branch feedback cannot perturb closure
+    /// speculation warm-up or OSR profile-progress checks.
+    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    pub(crate) branch_count: std::cell::Cell<u32>,
     /// Lazily-allocated type-feedback profile, populated once `call_count`
-    /// crosses [`PROFILE_WARMUP`]. `None` for cold functions (zero allocation).
-    /// Feeds J2 compile decisions only — never a value (determinism).
+    /// or `branch_count` crosses [`PROFILE_WARMUP`]. `None` for cold functions
+    /// (zero allocation). Feeds J2/J4 compile decisions only — never a value
+    /// (determinism).
     pub(crate) profile: RefCell<Option<Box<FunctionProfile>>>,
     /// OSR hot-backedge auto-trigger state (Pending #2). Lazily resolved ONCE on
     /// first `drive` entry into this function: a cheap single-natural-loop
@@ -300,8 +514,6 @@ pub(crate) enum OsrTrigger {
     Unknown,
 }
 
-
-
 impl RegFunction {
     pub(crate) fn placeholder(name: String) -> Self {
         Self {
@@ -312,8 +524,10 @@ impl RegFunction {
             local_regs: HashMap::new(),
             code: Vec::new(),
             jit_analysis: std::cell::Cell::new(None),
+            jit_self_recursive_int: std::cell::Cell::new(None),
             native_status: std::cell::Cell::new(0),
             call_count: std::cell::Cell::new(0),
+            branch_count: std::cell::Cell::new(0),
             profile: RefCell::new(None),
             osr_state: std::cell::Cell::new(OsrTrigger::Unknown),
         }
@@ -537,6 +751,13 @@ pub(crate) enum RegInstr {
         some_ip: usize,
         none_ip: usize,
     },
+    MatchSortedMapGet {
+        map: Reg,
+        key: Reg,
+        value_dst: Reg,
+        some_ip: usize,
+        none_ip: usize,
+    },
     UnwrapSome {
         dst: Reg,
         src: Reg,
@@ -652,15 +873,41 @@ pub(crate) enum RegInstr {
     /// closure inlining). NEVER emitted by the lowerer and NEVER executed by the
     /// interpreter — synthesized only inside [`native_inline_leaf_calls`] (right
     /// after a [`NativeGuardClosureId`]) and consumed solely by
-    /// [`translate_to_native_jit`]. Lowers to a [`vm_jit::JitInstr::ClosureCapture`]:
-    /// reads the scalar bits of capture `index` of the param-handle `closure` into
-    /// `dst` (the inlined callee body's capture register `base + index`). A
+    /// [`translate_to_native_jit`]. Lowers to a [`vm_jit::JitInstr::HostCall`] with
+    /// [`vm_jit::HostHelper::ClosureCapture`]: reads the scalar bits of capture
+    /// `index` of the param-handle `closure` into `dst` (the inlined callee body's
+    /// capture register `base + index`). A
     /// non-scalar/out-of-range capture bails out-of-band (defensive — the inline
     /// gate only fires for profiled-scalar captures).
     #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
     NativeClosureCapture {
         dst: Reg,
         closure: Reg,
+        index: usize,
+    },
+    /// Synthetic, native-JIT-only fused closure-id read from a heap struct/variant
+    /// field. This is equivalent to:
+    ///
+    /// ```text
+    /// tmp = GetFieldSlot(base, slot)   // heap-valued closure field
+    /// dst = NativeClosureId(tmp)
+    /// ```
+    ///
+    /// but avoids materializing the intermediate heap handle when `tmp` is only used
+    /// for closure metadata reads.
+    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    NativeFieldClosureId {
+        dst: Reg,
+        base: Reg,
+        slot: usize,
+    },
+    /// Synthetic, native-JIT-only fused closure-capture read from a heap
+    /// struct/variant field. See [`RegInstr::NativeFieldClosureId`].
+    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    NativeFieldClosureCapture {
+        dst: Reg,
+        base: Reg,
+        slot: usize,
         index: usize,
     },
     ListFilter {
@@ -1249,6 +1496,12 @@ pub(crate) enum RegIntrinsic {
     JsonField,
     JsonFieldBool,
     JsonFieldInt,
+    /// Native-JIT internal: checked `Json.parse(...)?` payload helper.
+    JsonParseOk,
+    /// Native-JIT internal: checked `Json.field(...)?` payload helper.
+    JsonFieldOk,
+    /// Native-JIT internal: checked `Json.field_int(...)?` payload helper.
+    JsonFieldIntOk,
     JsonFieldOptional,
     JsonFieldOptionalBool,
     JsonFieldOptionalInt,
@@ -1569,6 +1822,7 @@ impl RegUnit {
             .cloned()
             .map(RegFunction::placeholder)
             .collect::<Vec<_>>();
+        let mut native_signatures = HashMap::new();
         // Whole-program closure-identity gate, OR-accumulated across every
         // function (and drop-body) lowering below.
         let closure_identity_observable = std::cell::Cell::new(false);
@@ -1582,6 +1836,17 @@ impl RegUnit {
             let signature = hir.resolve_function(None, &name).ok_or_else(|| {
                 EvalError::Runtime(format!("reg VM cannot resolve function `{name}`."))
             })?;
+            native_signatures.insert(
+                name.clone(),
+                RegNativeSignature {
+                    params: signature
+                        .params
+                        .iter()
+                        .map(|param| param.type_name.clone())
+                        .collect(),
+                    return_type: signature.return_type.clone(),
+                },
+            );
             let mut lowerer = RegLowerer {
                 hir,
                 function_ids: &function_ids,
@@ -1594,8 +1859,10 @@ impl RegUnit {
                     local_regs: HashMap::new(),
                     code: Vec::new(),
                     jit_analysis: std::cell::Cell::new(None),
+                    jit_self_recursive_int: std::cell::Cell::new(None),
                     native_status: std::cell::Cell::new(0),
                     call_count: std::cell::Cell::new(0),
+                    branch_count: std::cell::Cell::new(0),
                     profile: RefCell::new(None),
                     osr_state: std::cell::Cell::new(OsrTrigger::Unknown),
                 },
@@ -1606,9 +1873,11 @@ impl RegUnit {
             for param in &signature.params {
                 let reg = lowerer.local(&param.name);
                 // `mut` params alias the caller's value (the backend lowers them to
-                // `&mut`), so mutations must propagate; every other effect is
-                // by-value/`&`, so the callee gets an isolated deep copy.
-                if param.effect != Some(ParamEffect::Mut) {
+                // `&mut`), so mutations must propagate. Non-mut heap/value params
+                // keep copy isolation; primitive scalars are already independent.
+                if param.effect != Some(ParamEffect::Mut)
+                    && !scalar_param_type_needs_no_deep_copy(&param.type_name)
+                {
                     lowerer.emit(RegInstr::DeepCopy { reg });
                 }
             }
@@ -1634,8 +1903,10 @@ impl RegUnit {
                     local_regs: HashMap::new(),
                     code: Vec::new(),
                     jit_analysis: std::cell::Cell::new(None),
+                    jit_self_recursive_int: std::cell::Cell::new(None),
                     native_status: std::cell::Cell::new(0),
                     call_count: std::cell::Cell::new(0),
+                    branch_count: std::cell::Cell::new(0),
                     profile: RefCell::new(None),
                     osr_state: std::cell::Cell::new(OsrTrigger::Unknown),
                 },
@@ -1686,6 +1957,7 @@ impl RegUnit {
                 .types()
                 .map(|type_info| (type_info.name.clone(), type_info.clone()))
                 .collect(),
+            native_signatures,
             closure_identity_observable: closure_identity_observable.get(),
         })
     }

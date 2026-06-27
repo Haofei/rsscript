@@ -1,9 +1,9 @@
-use super::*;
 use super::items::*;
 use super::pattern::*;
 use super::scan::*;
 use super::stmt::*;
 use super::types::*;
+use super::*;
 
 pub(super) fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
     // A tuple literal must be detected before `trim_outer` strips the wrapping
@@ -690,7 +690,12 @@ fn symbols_match(tokens: &[Token], index: usize, end: usize, symbols: &[&str]) -
             .all(|(offset, symbol)| tokens[index + offset].symbol(symbol))
 }
 
-pub(super) fn is_generic_angle_open(tokens: &[Token], start: usize, end: usize, open: usize) -> bool {
+pub(super) fn is_generic_angle_open(
+    tokens: &[Token],
+    start: usize,
+    end: usize,
+    open: usize,
+) -> bool {
     if open <= start
         || tokens.get(open - 1).and_then(ident_name).is_none()
         || !tokens[open].symbol("<")
@@ -1190,4 +1195,3 @@ fn parse_call_args(tokens: &[Token], start: usize, end: usize) -> Vec<CallArg> {
         })
         .collect()
 }
-

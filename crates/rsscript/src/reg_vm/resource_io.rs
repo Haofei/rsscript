@@ -142,7 +142,12 @@ impl RegVm {
             .ok_or_else(|| websocket_error_value(format!("unknown WebSocket id `{id}`")))
     }
 
-    pub(super) fn websocket_send(&mut self, id: i64, opcode: u8, payload: &[u8]) -> Result<(), VmValue> {
+    pub(super) fn websocket_send(
+        &mut self,
+        id: i64,
+        opcode: u8,
+        payload: &[u8],
+    ) -> Result<(), VmValue> {
         websocket_write_frame(self.websocket_stream_mut(id)?, opcode, payload)
     }
 

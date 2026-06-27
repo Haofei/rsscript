@@ -549,7 +549,10 @@ pub(super) fn hir_capture_path(expr: &HirExpr) -> Option<(&str, String)> {
     }
 }
 
-pub(super) fn hir_expr_writes_to_managed_state(expr: &HirExpr, local_bindings: &BTreeSet<&str>) -> bool {
+pub(super) fn hir_expr_writes_to_managed_state(
+    expr: &HirExpr,
+    local_bindings: &BTreeSet<&str>,
+) -> bool {
     match expr {
         HirExpr::Effect {
             effect: ParamEffect::Mut | ParamEffect::Take,
@@ -618,4 +621,3 @@ pub(super) fn hir_place_path_crosses_handle_field(expr: &HirExpr) -> bool {
         | HirExpr::Unknown(_) => false,
     }
 }
-

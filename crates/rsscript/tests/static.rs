@@ -24,7 +24,5 @@ mod core_index;
 mod execution_coverage;
 #[path = "generate.rs"]
 mod generate;
-#[path = "native_audit.rs"]
-mod native_audit;
 #[path = "vscode_grammar.rs"]
 mod vscode_grammar;

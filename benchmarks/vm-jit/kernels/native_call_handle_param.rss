@@ -1,0 +1,37 @@
+// JIT hot path: native parent allocates a String handle and passes it to a
+// read-only native child. This exercises the staged native-call ABI's Handle
+// parameter path without flat-array or mutating helper arguments.
+
+fn bench_size(default: Int) -> Int {
+    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
+    match String.parse_int(value: read raw) {
+        Some(value) => {
+            return value
+        }
+        None => {
+            return default
+        }
+    }
+}
+
+fn len_text(text: read String) -> Int {
+    return String.len(value: read text)
+}
+
+fn hot(limit: Int) -> Int {
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        let text = String.from_int(value: i)
+        total = total + len_text(text: read text)
+        i = i + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    let limit = bench_size(default: 250000)
+    let result = hot(limit: limit)
+    Log.write(message: read String.from_int(value: result))
+    return Unit
+}

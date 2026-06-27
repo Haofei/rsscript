@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::diagnostic::Span;
 use crate::syntax::ast::{
-    BinaryOp, Block, CallArg, Callee, DataEffect, Expr, FieldDecl, ForStmt, GenericParam, Item, LetStmt, MatchPattern, MatchStmt, Param,
-    Program, Stmt, TypeKind, TypeRef,
+    BinaryOp, Block, CallArg, Callee, DataEffect, Expr, FieldDecl, ForStmt, GenericParam, Item,
+    LetStmt, MatchPattern, MatchStmt, Param, Program, Stmt, TypeKind, TypeRef,
 };
 
 use super::helpers::*;
@@ -420,7 +420,13 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    pub(super) fn lower_for_stmt(&mut self, stmt: &ForStmt, out: &mut String, pad: &str, indent: usize) {
+    pub(super) fn lower_for_stmt(
+        &mut self,
+        stmt: &ForStmt,
+        out: &mut String,
+        pad: &str,
+        indent: usize,
+    ) {
         let iterable = self.lower_expr(&stmt.iterable);
         let previous_type = self.value_types.get(&stmt.binding).cloned();
         let previous_managed = self.managed_bindings.contains(&stmt.binding);
@@ -505,7 +511,13 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    pub(super) fn lower_match_stmt(&mut self, stmt: &MatchStmt, out: &mut String, pad: &str, indent: usize) {
+    pub(super) fn lower_match_stmt(
+        &mut self,
+        stmt: &MatchStmt,
+        out: &mut String,
+        pad: &str,
+        indent: usize,
+    ) {
         let scrutinee_type = self.infer_expr_type(&stmt.value);
         let mut scrutinee = self.lower_match_scrutinee_expr(&stmt.value, scrutinee_type.as_ref());
         let by_ref = self.match_scrutinee_by_ref(&stmt.value);
@@ -574,7 +586,6 @@ impl<'a> RustLowerer<'a> {
         }
         out.push_str(&format!("{pad}}}\n"));
     }
-
 
     pub(super) fn is_native_boundary_call(&self, callee: &Callee) -> bool {
         let key = native_boundary_callee_key(callee);
@@ -1134,7 +1145,11 @@ impl<'a> RustLowerer<'a> {
     /// type, pick the protocol/facade/native namespace, apply the receiver's
     /// borrow/effect, and emit the qualified call with the receiver as the first
     /// argument. Returns `None` if the callee is not a receiver call.
-    pub(super) fn lower_call_receiver(&mut self, callee: &Callee, args: &[CallArg]) -> Option<String> {
+    pub(super) fn lower_call_receiver(
+        &mut self,
+        callee: &Callee,
+        args: &[CallArg],
+    ) -> Option<String> {
         if let Callee::ReceiverCall {
             receiver,
             method,
@@ -1305,7 +1320,12 @@ impl<'a> RustLowerer<'a> {
     /// native-bound free functions, resource-pool constructors and borrows,
     /// capability-from-protocol, protocol callees, and the default
     /// `callee(args...)` form (including trailing defaulted-parameter fill-in).
-    pub(super) fn lower_call_dispatch(&mut self, callee: &Callee, args: &[CallArg], span: &Span) -> String {
+    pub(super) fn lower_call_dispatch(
+        &mut self,
+        callee: &Callee,
+        args: &[CallArg],
+        span: &Span,
+    ) -> String {
         if is_string_concat_callee(callee) {
             return lower_string_concat_call(self, args);
         }
@@ -1421,7 +1441,12 @@ impl<'a> RustLowerer<'a> {
         format!("{lowered_callee}({args})")
     }
 
-    pub(super) fn lower_binary_operand(&mut self, expr: &Expr, parent: BinaryOp, is_right: bool) -> String {
+    pub(super) fn lower_binary_operand(
+        &mut self,
+        expr: &Expr,
+        parent: BinaryOp,
+        is_right: bool,
+    ) -> String {
         let lowered = self.lower_expr(expr);
         let Expr::Binary { op: child, .. } = expr else {
             return lowered;
@@ -1471,7 +1496,11 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    pub(super) fn lower_expr_for_expected_type(&mut self, expr: &Expr, expected: &TypeRef) -> String {
+    pub(super) fn lower_expr_for_expected_type(
+        &mut self,
+        expr: &Expr,
+        expected: &TypeRef,
+    ) -> String {
         if expected.name == "Fn"
             && let Expr::Closure { params, body, .. } = expr
         {
@@ -1659,7 +1688,12 @@ impl<'a> RustLowerer<'a> {
         out
     }
 
-    pub(super) fn lower_json_decode_call(&mut self, callee: &Callee, args: &[CallArg], span: &Span) -> String {
+    pub(super) fn lower_json_decode_call(
+        &mut self,
+        callee: &Callee,
+        args: &[CallArg],
+        span: &Span,
+    ) -> String {
         let Some(arg) = args
             .iter()
             .find(|arg| {
@@ -1831,7 +1865,11 @@ impl<'a> RustLowerer<'a> {
         self.lower_expr(&arg.value)
     }
 
-    pub(super) fn lower_call_arg_for_expected_type(&mut self, value: &Expr, expected: &TypeRef) -> String {
+    pub(super) fn lower_call_arg_for_expected_type(
+        &mut self,
+        value: &Expr,
+        expected: &TypeRef,
+    ) -> String {
         if expected.name == "Fn" {
             if let Expr::Closure { params, body, .. } = value {
                 // A closure passed to a function PARAMETER typed `owned Fn` (or
@@ -1960,7 +1998,11 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    pub(super) fn lower_capability_from_call(&mut self, protocol: &str, args: &[CallArg]) -> String {
+    pub(super) fn lower_capability_from_call(
+        &mut self,
+        protocol: &str,
+        args: &[CallArg],
+    ) -> String {
         let Some(value_arg) = args
             .iter()
             .find(|arg| arg.name.as_deref() == Some("value"))
@@ -2076,7 +2118,12 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    pub(super) fn call_arg_is_retained(&self, callee: &Callee, arg: &CallArg, _index: usize) -> bool {
+    pub(super) fn call_arg_is_retained(
+        &self,
+        callee: &Callee,
+        arg: &CallArg,
+        _index: usize,
+    ) -> bool {
         let Some(name) = arg.name.as_deref() else {
             return false;
         };
@@ -2309,7 +2356,11 @@ impl<'a> RustLowerer<'a> {
         None
     }
 
-    pub(super) fn lower_receiver_positional_arg(&mut self, value: &Expr, expected: &TypeRef) -> String {
+    pub(super) fn lower_receiver_positional_arg(
+        &mut self,
+        value: &Expr,
+        expected: &TypeRef,
+    ) -> String {
         if expected.name == "String"
             && expected.args.is_empty()
             && let Expr::Ident(name, _) = value
@@ -2375,7 +2426,11 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    pub(super) fn lower_retained_expr_for_expected_type(&mut self, expr: &Expr, expected: &TypeRef) -> String {
+    pub(super) fn lower_retained_expr_for_expected_type(
+        &mut self,
+        expr: &Expr,
+        expected: &TypeRef,
+    ) -> String {
         match expr {
             Expr::Ident(name, _) if !is_copy_type_ref(expected) => {
                 format!("{}.clone()", rust_value_ident(name))
@@ -2389,7 +2444,11 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    pub(super) fn lower_owned_expr_for_expected_type(&mut self, expr: &Expr, expected: &TypeRef) -> String {
+    pub(super) fn lower_owned_expr_for_expected_type(
+        &mut self,
+        expr: &Expr,
+        expected: &TypeRef,
+    ) -> String {
         match expr {
             Expr::Ident(name, _)
                 if !is_copy_type_ref(expected)
@@ -2421,7 +2480,11 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    pub(super) fn constructor_field_arg_name(&self, type_name: &str, arg: &CallArg) -> Option<String> {
+    pub(super) fn constructor_field_arg_name(
+        &self,
+        type_name: &str,
+        arg: &CallArg,
+    ) -> Option<String> {
         if let Some(name) = arg.name.as_deref() {
             return Some(name.to_string());
         }
@@ -2445,7 +2508,6 @@ impl<'a> RustLowerer<'a> {
     pub(super) fn is_resource_type(&self, ty: &TypeRef) -> bool {
         matches!(self.type_kinds.get(&ty.name), Some(TypeKind::Resource))
     }
-
 }
 
 /// Whether any arm matches with a list slice pattern, so the scrutinee must be
@@ -2611,7 +2673,11 @@ pub(super) fn block_contains_try(block: &Block) -> bool {
 /// resolves to the matching argument from the scrutinee's `value_type`; nested
 /// type arguments are substituted recursively. Unresolved names are left as-is
 /// (treated as non-`Copy`, cloneable values).
-pub(super) fn substitute_generic_type(ty: &TypeRef, params: &[String], args: &[TypeRef]) -> TypeRef {
+pub(super) fn substitute_generic_type(
+    ty: &TypeRef,
+    params: &[String],
+    args: &[TypeRef],
+) -> TypeRef {
     if ty.args.is_empty()
         && ty.fn_params.is_empty()
         && ty.fn_return.is_none()
@@ -2674,7 +2740,9 @@ pub(super) fn match_binding_type_ref(
     }
 }
 
-pub(super) fn split_loop_body_at_first_await(statements: &[Stmt]) -> Option<(&[Stmt], &Stmt, &[Stmt])> {
+pub(super) fn split_loop_body_at_first_await(
+    statements: &[Stmt],
+) -> Option<(&[Stmt], &Stmt, &[Stmt])> {
     for (index, statement) in statements.iter().enumerate() {
         match statement {
             Stmt::Let(stmt) if stmt.value.as_ref().and_then(async_await_inner).is_some() => {
@@ -2839,7 +2907,10 @@ pub(super) fn simple_type_ref(name: &str, span: &Span) -> TypeRef {
     }
 }
 
-pub(super) fn substitute_type_ref(ty: &TypeRef, substitutions: &BTreeMap<String, TypeRef>) -> TypeRef {
+pub(super) fn substitute_type_ref(
+    ty: &TypeRef,
+    substitutions: &BTreeMap<String, TypeRef>,
+) -> TypeRef {
     if ty.args.is_empty()
         && ty.fn_params.is_empty()
         && ty.fn_return.is_none()
@@ -2924,7 +2995,11 @@ pub(super) fn builtin_interface_type_names() -> &'static std::collections::HashS
     })
 }
 
-pub(super) fn fn_type_ref(params: Vec<TypeRef>, return_ty: Option<TypeRef>, span: &Span) -> TypeRef {
+pub(super) fn fn_type_ref(
+    params: Vec<TypeRef>,
+    return_ty: Option<TypeRef>,
+    span: &Span,
+) -> TypeRef {
     TypeRef {
         name: "Fn".to_string(),
         args: Vec::new(),

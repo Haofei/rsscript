@@ -1,0 +1,36 @@
+features: local
+
+struct Point {
+    x: Int,
+    y: Int
+}
+
+fn bench_size(default: Int) -> Int {
+    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
+    match String.parse_int(value: read raw) {
+        Some(value) => {
+            return value
+        }
+        None => {
+            return default
+        }
+    }
+}
+
+fn hot(limit: Int, seed: Int) -> Int {
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        let point = Point(x: i + seed, y: i - seed)
+        total = total + point.x + point.y
+        i = i + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    let limit = bench_size(default: 300000)
+    let result = hot(limit: limit, seed: 7)
+    Log.write(message: read String.from_int(value: result))
+    return Unit
+}

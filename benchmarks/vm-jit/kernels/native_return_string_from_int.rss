@@ -1,0 +1,33 @@
+// JIT hot path with a final heap allocation: the loop is pure scalar work, and the
+// result function returns `String.from_int(total)`. This proves the native tier can
+// now keep allocation-at-return code native instead of rejecting the function solely
+// because the final return value is heap-backed.
+
+fn bench_size(default: Int) -> Int {
+    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
+    match String.parse_int(value: read raw) {
+        Some(value) => {
+            return value
+        }
+        None => {
+            return default
+        }
+    }
+}
+
+fn hot(limit: Int, seed: Int) -> String {
+    let mut i = 0
+    let mut total = seed
+    while i < limit {
+        total = total + i * 3 - i / 2 + 7
+        i = i + 1
+    }
+    return String.from_int(value: total)
+}
+
+fn main() -> Unit {
+    let limit = bench_size(default: 2000000)
+    let result = hot(limit: limit, seed: 0)
+    Log.write(message: read result)
+    return Unit
+}

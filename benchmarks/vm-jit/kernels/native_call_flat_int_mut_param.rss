@@ -1,0 +1,47 @@
+features: local
+
+// JIT hot path: a native parent repeatedly calls a native child that mutates a
+// flat `List<Int>` parameter. This exercises the native-to-native ABI for
+// `FlatIntMut`: the caller forwards the raw pointer and length, and the child
+// performs a direct bounds-checked store.
+
+fn bench_size(default: Int) -> Int {
+    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
+    match String.parse_int(value: read raw) {
+        Some(value) => {
+            return value
+        }
+        None => {
+            return default
+        }
+    }
+}
+
+fn write_at(values: mut List<Int>, index: Int, value: Int) -> Int {
+    List.set<Int>(list: mut values, index: index, value: read value)
+    return List.get<Int>(list: read values, index: index)
+}
+
+fn hot(values: mut List<Int>, limit: Int) -> Int {
+    let mut i = 0
+    let mut total = 0
+    let n = List.len<Int>(list: read values)
+    while i < limit {
+        let slot = i % n
+        total = total + write_at(values: mut values, index: read slot, value: read i)
+        i = i + 1
+    }
+    return total + List.get<Int>(list: read values, index: 3)
+}
+
+fn main() -> Unit {
+    let limit = bench_size(default: 500000)
+    local values = List.new<Int>()
+    List.push<Int>(list: mut values, value: read 0)
+    List.push<Int>(list: mut values, value: read 0)
+    List.push<Int>(list: mut values, value: read 0)
+    List.push<Int>(list: mut values, value: read 0)
+    let result = hot(values: mut values, limit: limit)
+    Log.write(message: read String.from_int(value: result))
+    return Unit
+}

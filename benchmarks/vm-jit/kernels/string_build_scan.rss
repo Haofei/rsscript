@@ -1,9 +1,9 @@
 features: local
 
-// Slow path: String construction/inspection in a hot loop.
+// String construction/inspection in a hot loop.
 // Exercises String.concat (allocation + copy), String.from_int (formatting),
-// String.slice, and String.len every iteration. None of these reach the native
-// tier; they run on the interpreter dispatch path the perf plan targets.
+// String.slice, and String.len every iteration. This is a regression anchor for
+// helper coverage: native/OSR should keep the slice/len chain out of dispatch.
 
 fn bench_size(default: Int) -> Int {
     let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))

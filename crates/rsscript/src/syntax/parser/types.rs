@@ -1,6 +1,6 @@
-use super::*;
 use super::items::*;
 use super::scan::*;
+use super::*;
 
 /// A tuple type `(T, U, ...)` desugars to the synthetic generic struct
 /// `__TupleN<T, U, ...>`. `(T)` is grouping, not a tuple.
@@ -265,4 +265,3 @@ pub(super) fn file_feature_name(feature: FileFeature) -> &'static str {
         FileFeature::Reflection => "reflection",
     }
 }
-

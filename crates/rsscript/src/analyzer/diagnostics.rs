@@ -46,7 +46,11 @@ impl Analyzer<'_> {
         self.unknown_type_name_diagnostic(&type_ref_name(ty), &ty.span);
     }
 
-    pub(super) fn unknown_type_name_diagnostic(&mut self, name: &str, span: &crate::diagnostic::Span) {
+    pub(super) fn unknown_type_name_diagnostic(
+        &mut self,
+        name: &str,
+        span: &crate::diagnostic::Span,
+    ) {
         self.diagnostics.push(
             Diagnostic::error(
                 code::UNKNOWN_TYPE,
@@ -66,7 +70,11 @@ impl Analyzer<'_> {
         );
     }
 
-    pub(super) fn unknown_protocol_diagnostic(&mut self, name: &str, span: &crate::diagnostic::Span) {
+    pub(super) fn unknown_protocol_diagnostic(
+        &mut self,
+        name: &str,
+        span: &crate::diagnostic::Span,
+    ) {
         self.diagnostics.push(
             Diagnostic::error(
                 code::UNKNOWN_PROTOCOL,
@@ -132,7 +140,11 @@ impl Analyzer<'_> {
         );
     }
 
-    pub(super) fn unknown_binding_diagnostic(&mut self, name: &str, span: &crate::diagnostic::Span) {
+    pub(super) fn unknown_binding_diagnostic(
+        &mut self,
+        name: &str,
+        span: &crate::diagnostic::Span,
+    ) {
         self.diagnostics.push(
             Diagnostic::error(
                 code::UNKNOWN_BINDING,
@@ -284,7 +296,11 @@ impl Analyzer<'_> {
         ));
     }
 
-    pub(super) fn pure_manage_diagnostic(&mut self, function_name: &str, span: &crate::diagnostic::Span) {
+    pub(super) fn pure_manage_diagnostic(
+        &mut self,
+        function_name: &str,
+        span: &crate::diagnostic::Span,
+    ) {
         self.diagnostics.push(checks::diagnostic_helpers::error_cause_manual_fix(
             code::INVALID_PURE_EFFECT,
             format!("`{function_name}` is declared pure but uses `manage`."),

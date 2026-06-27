@@ -1,0 +1,105 @@
+// Profile-guided whole-function branch side-exit kernel.
+//
+// The perf gate runs this case with RSS_JIT_TIER_THRESHOLD=66. The first 66
+// calls to `branchy` stay interpreted, which is enough to collect 16 strong
+// post-warmup branch samples. Later calls compile `branchy` as a whole function
+// and should lower the cold branch edge as a profile-guided side exit, exposed
+// as `profile_branch_side_exits` / `br_x` telemetry.
+
+fn branchy(value: Int) -> Int {
+    if value < 1000000000 {
+        return value + 1
+    }
+    return 0
+}
+
+fn warm(total: Int) -> Int {
+    let mut out = total
+    out = out + branchy(value: 1)
+    out = out + branchy(value: 2)
+    out = out + branchy(value: 3)
+    out = out + branchy(value: 4)
+    out = out + branchy(value: 5)
+    out = out + branchy(value: 6)
+    out = out + branchy(value: 7)
+    out = out + branchy(value: 8)
+    out = out + branchy(value: 9)
+    out = out + branchy(value: 10)
+    out = out + branchy(value: 11)
+    out = out + branchy(value: 12)
+    out = out + branchy(value: 13)
+    out = out + branchy(value: 14)
+    out = out + branchy(value: 15)
+    out = out + branchy(value: 16)
+    out = out + branchy(value: 17)
+    out = out + branchy(value: 18)
+    out = out + branchy(value: 19)
+    out = out + branchy(value: 20)
+    out = out + branchy(value: 21)
+    out = out + branchy(value: 22)
+    out = out + branchy(value: 23)
+    out = out + branchy(value: 24)
+    out = out + branchy(value: 25)
+    out = out + branchy(value: 26)
+    out = out + branchy(value: 27)
+    out = out + branchy(value: 28)
+    out = out + branchy(value: 29)
+    out = out + branchy(value: 30)
+    out = out + branchy(value: 31)
+    out = out + branchy(value: 32)
+    out = out + branchy(value: 33)
+    out = out + branchy(value: 34)
+    out = out + branchy(value: 35)
+    out = out + branchy(value: 36)
+    out = out + branchy(value: 37)
+    out = out + branchy(value: 38)
+    out = out + branchy(value: 39)
+    out = out + branchy(value: 40)
+    out = out + branchy(value: 41)
+    out = out + branchy(value: 42)
+    out = out + branchy(value: 43)
+    out = out + branchy(value: 44)
+    out = out + branchy(value: 45)
+    out = out + branchy(value: 46)
+    out = out + branchy(value: 47)
+    out = out + branchy(value: 48)
+    out = out + branchy(value: 49)
+    out = out + branchy(value: 50)
+    out = out + branchy(value: 51)
+    out = out + branchy(value: 52)
+    out = out + branchy(value: 53)
+    out = out + branchy(value: 54)
+    out = out + branchy(value: 55)
+    out = out + branchy(value: 56)
+    out = out + branchy(value: 57)
+    out = out + branchy(value: 58)
+    out = out + branchy(value: 59)
+    out = out + branchy(value: 60)
+    out = out + branchy(value: 61)
+    out = out + branchy(value: 62)
+    out = out + branchy(value: 63)
+    out = out + branchy(value: 64)
+    out = out + branchy(value: 65)
+    out = out + branchy(value: 66)
+    out = out + branchy(value: 67)
+    out = out + branchy(value: 68)
+    out = out + branchy(value: 69)
+    out = out + branchy(value: 70)
+    out = out + branchy(value: 71)
+    out = out + branchy(value: 72)
+    out = out + branchy(value: 73)
+    out = out + branchy(value: 74)
+    out = out + branchy(value: 75)
+    out = out + branchy(value: 76)
+    out = out + branchy(value: 77)
+    out = out + branchy(value: 78)
+    out = out + branchy(value: 79)
+    out = out + branchy(value: 80)
+    Log.write(message: read String.from_int(value: out))
+    return out
+}
+
+fn main() -> Unit {
+    let total = warm(total: 0)
+    return Unit
+}

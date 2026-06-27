@@ -15,7 +15,32 @@
 native-scalar       benchmarks/vm-jit/kernels/native_scalar_loop.rss             2000000   pure-Int scalar loop (native core)
 native-read-heap    benchmarks/vm-jit/kernels/native_read_heap.rss               2000000   read-heap helpers (list_len/get)
 native-read-heap-float  benchmarks/vm-jit/kernels/native_read_heap_float.rss     2000000   read-heap Float helpers (list_len/get_float)
+native-heap-alloc   benchmarks/vm-jit/kernels/native_return_string_from_int.rss   2000000   final String.from_int allocation
+native-heap-read    benchmarks/vm-jit/kernels/native_string_len_from_int.rss      2000000   read native-created String handle
+native-heap-concat  benchmarks/vm-jit/kernels/native_string_concat_len.rss        2000000   concat native-created String handle
+native-option-sr    benchmarks/vm-jit/kernels/native_option_scalar_replace.rss    2000000   whole-function Option scalar replacement
+native-result-sr    benchmarks/vm-jit/kernels/native_result_scalar_replace.rss    2000000   whole-function Result scalar replacement
+native-variant-sr   benchmarks/vm-jit/kernels/native_variant_scalar_replace.rss   2000000   whole-function variant scalar replacement
+native-struct-sr    benchmarks/vm-jit/kernels/native_struct_scalar_replace.rss    2000000   whole-function struct scalar replacement
+native-closure-sink benchmarks/vm-jit/kernels/native_closure_sinking.rss          2000000   whole-function closure allocation sinking
+profile-closure-pic benchmarks/vm-jit/kernels/profile_closure_pic.rss            600000    profile-guided polymorphic closure inline cache
+profile-branch-cold benchmarks/vm-jit/kernels/profile_branch_cold_blocks.rss      250000    profile-guided branch cold-block layout
+profile-branch-side-exit benchmarks/vm-jit/kernels/profile_branch_side_exits.rss  1         profile-guided whole-function branch side exits
 native-call         benchmarks/vm-jit/kernels/native_call_chain.rss              1500000   native cross-function call
+native-call-nested  benchmarks/vm-jit/kernels/native_call_nested_chain.rss       250000    nested native cross-function call chain
+native-call-bool    benchmarks/vm-jit/kernels/native_call_bool_param.rss         750000    native cross-function call with Bool param/return
+native-call-float   benchmarks/vm-jit/kernels/native_call_float_param.rss        750000    native cross-function call with Float param/return
+native-call-flat-int benchmarks/vm-jit/kernels/native_call_flat_int_param.rss     750000    native cross-function call with flat List<Int> param
+native-call-flat-float benchmarks/vm-jit/kernels/native_call_flat_float_param.rss 750000    native cross-function call with flat List<Float> param
+native-call-flat-int-mut benchmarks/vm-jit/kernels/native_call_flat_int_mut_param.rss 500000 native cross-function call with mutable flat List<Int> param
+native-call-handle  benchmarks/vm-jit/kernels/native_call_handle_param.rss       250000    native cross-function call with Handle param
+native-call-mut-handle benchmarks/vm-jit/kernels/native_call_mut_handle_param.rss 250000    native cross-function call with mutable Handle param
+native-list-write   benchmarks/vm-jit/kernels/native_list_write_loop.rss          500000    transactional List.set helper loop
+native-map-get      benchmarks/vm-jit/kernels/native_map_get_match_loop.rss       200000    fused Map.get match helper loop
+native-sorted-set-len benchmarks/vm-jit/kernels/native_sorted_set_len_loop.rss     2000000   SortedSet.len host-helper loop
+native-is-empty     benchmarks/vm-jit/kernels/native_collection_is_empty_loop.rss  2000000   collection is_empty host-helper loop
+native-map-set-len  benchmarks/vm-jit/kernels/native_map_set_len_loop.rss         2000000   Map.len/Set.len host-helper loop
+native-bytes        benchmarks/vm-jit/kernels/native_bytes_slice_len_loop.rss      2000000   Bytes.slice/len host-helper loop
 int-divmod          benchmarks/vm-jit/kernels/int_divmod_loop.rss                2000000   DivInt/ModInt + div-by-zero guard
 bool-logic          benchmarks/vm-jit/kernels/bool_logic_loop.rss                2000000   &&/|| short-circuit + branches
 #
@@ -30,6 +55,8 @@ recursion-linear    benchmarks/vm-jit/kernels/linear_recursion.rss              
 float               benchmarks/vm-jit/kernels/float_loop_sum.rss                 1000000   Float arithmetic + conversions
 string              benchmarks/vm-jit/kernels/string_build_scan.rss              200000    String concat/slice/format
 string-text         benchmarks/vm-jit/kernels/string_text_processing.rss         100000    String split/pad_left/starts_with
+string-split        benchmarks/vm-jit/kernels/string_split_only.rss              100000    diagnostic: String.split only
+string-pad-left     benchmarks/vm-jit/kernels/string_pad_left_only.rss           100000    diagnostic: String.pad_left only
 string-map          benchmarks/micro/map_string_keys.rss                         16000     String-keyed Map (hash strings)
 variant-user        benchmarks/vm-jit/kernels/variant_match_loop.rss             300000    user sum-type make/match
 variant-option      benchmarks/micro/match_option_loop.rss                       200000    Option match
@@ -49,10 +76,13 @@ bytes               benchmarks/vm-jit/kernels/bytes_scan.rss                    
 deep-copy           benchmarks/vm-jit/kernels/deep_copy_list.rss                 100000    deep List copy (Rc/clone traffic)
 closure-dynamic     benchmarks/vm-jit/kernels/dynamic_closure_call.rss           200000    stored owned Fn dynamic call
 json                benchmarks/micro/json_parse_access.rss                       50000     Json parse/field access
+json-parse          benchmarks/vm-jit/kernels/json_parse_only.rss                50000     diagnostic: Json.parse only
+json-field          benchmarks/vm-jit/kernels/json_field_access_only.rss         500000    diagnostic: Json.field_int on parsed object
 async               benchmarks/micro/async_call_loop.rss                         200000    async call/await park/resume
 async-taskgroup     benchmarks/vm-jit/kernels/task_group_spawn.rss               20000     structured concurrency spawn+join
 selfhost-manifest   benchmarks/micro/selfhost_manifest_inspector.rss             benchmarks/micro/fixtures/package-medium/rsspkg.toml   realistic mixed (parse+collections)
 selfhost-mailbox    benchmarks/micro/selfhost_mailbox_bench.rss                  60000     realistic async actor loop
+mailbox-ring        benchmarks/vm-jit/kernels/mailbox_ring_only.rss              60000     diagnostic: mailbox O(1) send/take ring
 #
 # --- OSR (on-stack replacement) kernels: hot loop in an I/O-tangled (native-INELIGIBLE)
 # function; jit-native auto-OSRs. The whole function never reaches the native tier (the

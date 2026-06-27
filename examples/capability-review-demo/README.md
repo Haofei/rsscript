@@ -107,7 +107,7 @@ The SARIF output uploads to GitHub code scanning for inline PR annotations.
 
 ```
 $ rss pkg review --markdown after     # PR-facing review (capabilities table, native, diagnostics)
-$ rss native audit after              # native adapter risk (Cargo.lock/build.rs/scan; transitive = not_audited)
+$ rss pkg review --json after         # native adapter risk is included in package review JSON
 $ rss pkg metadata <broken package>   # exit 1, no REIR written — evidence withheld for invalid source
 $ rss check --explain RS0015 --json   # machine-readable diagnostic + repair guidance for agents
 ```
@@ -122,6 +122,6 @@ declare capabilities (rsspkg.toml)
   -> reir collect | report-pr      reconcile required vs granted under rss-policy.toml
        --policy --target               fail on missing / unknown / excess / unverified
        --sarif                         inline PR annotations via GitHub code scanning
-  -> rss native audit              native adapter risk facts (transitive = not_audited)
+  -> rss pkg review --json         native adapter risk facts (transitive = not_audited)
   fail closed: invalid source (rss pkg metadata / reir collect --strict) emits no evidence
 ```

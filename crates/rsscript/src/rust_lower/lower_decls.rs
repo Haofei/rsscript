@@ -1,7 +1,6 @@
-
 use crate::syntax::ast::{
-    ConstDecl, DataEffect, EffectDecl, FieldDecl,
-    FunctionDecl, GenericBound, Param, SumTypeDecl, TypeAliasDecl, TypeDecl, TypeKind, TypeRef,
+    ConstDecl, DataEffect, EffectDecl, FieldDecl, FunctionDecl, GenericBound, Param, SumTypeDecl,
+    TypeAliasDecl, TypeDecl, TypeKind, TypeRef,
 };
 
 use super::helpers::*;
@@ -31,7 +30,6 @@ impl RustLowerer<'_> {
         }
     }
 
-
     pub(super) fn lower_protocol_trait_params(&self, method: &FunctionDecl) -> String {
         method
             .params
@@ -49,7 +47,6 @@ impl RustLowerer<'_> {
             .collect::<Vec<_>>()
             .join(", ")
     }
-
 
     pub(super) fn lower_protocol_impls(&mut self, out: &mut String) {
         for protocol_impl in &self.program.protocol_impls {
@@ -98,7 +95,6 @@ impl RustLowerer<'_> {
         }
     }
 
-
     pub(super) fn lower_capability_enums(&mut self, out: &mut String) {
         for protocol in &self.program.protocols {
             let impls = self.protocol_capability_impls(&protocol.name);
@@ -119,7 +115,6 @@ impl RustLowerer<'_> {
             out.push_str("}\n\n");
         }
     }
-
 
     pub(super) fn lower_capability_impls(&mut self, out: &mut String) {
         for protocol in &self.program.protocols {
@@ -182,8 +177,10 @@ impl RustLowerer<'_> {
         }
     }
 
-
-    pub(super) fn protocol_capability_impls(&self, protocol: &str) -> Vec<&crate::syntax::ast::ProtocolImpl> {
+    pub(super) fn protocol_capability_impls(
+        &self,
+        protocol: &str,
+    ) -> Vec<&crate::syntax::ast::ProtocolImpl> {
         self.program
             .protocol_impls
             .iter()
@@ -191,8 +188,11 @@ impl RustLowerer<'_> {
             .collect()
     }
 
-
-    pub(super) fn protocol_impl_namespace(&self, receiver_type: &str, method: &str) -> Option<String> {
+    pub(super) fn protocol_impl_namespace(
+        &self,
+        receiver_type: &str,
+        method: &str,
+    ) -> Option<String> {
         let mut matches = self
             .program
             .protocol_impls
@@ -211,7 +211,6 @@ impl RustLowerer<'_> {
         }
         Some(first)
     }
-
 
     pub(super) fn lower_type_decl(&mut self, ty: &TypeDecl, out: &mut String) {
         let generated_start = out.len();
@@ -281,7 +280,6 @@ impl RustLowerer<'_> {
         );
     }
 
-
     pub(super) fn lower_field_decl(&mut self, field: &FieldDecl, out: &mut String) {
         let rust_ty = self.lower_type_ref(&field.ty, ManagedPosition::Bare);
         self.source_map.push(RustSourceMapEntry {
@@ -313,7 +311,6 @@ impl RustLowerer<'_> {
         }
     }
 
-
     pub(super) fn lower_sum_type(&mut self, sum: &SumTypeDecl, out: &mut String) {
         let has_closure_field = sum
             .variants
@@ -344,7 +341,6 @@ impl RustLowerer<'_> {
         }
         out.push_str("}\n");
     }
-
 
     /// Compute the `#[derive(...)]` attribute string.
     /// If user specified `derives(...)`, use those (always including Debug).
@@ -399,7 +395,6 @@ impl RustLowerer<'_> {
         format!("#[derive({})]\n", rust_derives.join(", "))
     }
 
-
     pub(super) fn lower_type_alias(&mut self, alias: &TypeAliasDecl, out: &mut String) {
         let vis = visibility(alias.is_public);
         let generics = lower_generic_params(&alias.type_params);
@@ -412,7 +407,6 @@ impl RustLowerer<'_> {
             target
         ));
     }
-
 
     pub(super) fn lower_const_decl(&mut self, decl: &ConstDecl, out: &mut String) {
         let vis = visibility(decl.is_public);
@@ -436,7 +430,6 @@ impl RustLowerer<'_> {
             value_str
         ));
     }
-
 
     pub(super) fn lower_function(&mut self, function: &FunctionDecl, out: &mut String) {
         let previous_param_effects = std::mem::take(&mut self.param_effects);
@@ -564,7 +557,6 @@ impl RustLowerer<'_> {
         self.current_async_executor = previous_async_executor;
     }
 
-
     pub(super) fn lower_param(&self, param: &Param) -> String {
         let ty = if param.effect == Some(DataEffect::Read)
             && self.current_retained_params.contains(&param.name)
@@ -596,7 +588,6 @@ impl RustLowerer<'_> {
         }
     }
 
-
     pub(super) fn lower_return_type(&self, ty: &TypeRef, returns_fresh: bool) -> String {
         let position = if returns_fresh {
             ManagedPosition::FreshReturn
@@ -605,5 +596,4 @@ impl RustLowerer<'_> {
         };
         self.lower_type_ref(ty, position)
     }
-
 }

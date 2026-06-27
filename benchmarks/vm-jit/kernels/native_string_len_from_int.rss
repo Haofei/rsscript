@@ -1,0 +1,33 @@
+// JIT hot path with a native-created heap value consumed before return: the scalar
+// loop runs natively, then `String.from_int(total)` allocates in the native
+// transaction table and `String.len` reads that output handle before returning Int.
+
+fn bench_size(default: Int) -> Int {
+    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
+    match String.parse_int(value: read raw) {
+        Some(value) => {
+            return value
+        }
+        None => {
+            return default
+        }
+    }
+}
+
+fn hot(limit: Int, seed: Int) -> Int {
+    let mut i = 0
+    let mut total = seed
+    while i < limit {
+        total = total + i * 3 - i / 2 + 7
+        i = i + 1
+    }
+    let text = String.from_int(value: total)
+    return String.len(value: read text)
+}
+
+fn main() -> Unit {
+    let limit = bench_size(default: 2000000)
+    let result = hot(limit: limit, seed: 0)
+    Log.write(message: read String.from_int(value: result))
+    return Unit
+}

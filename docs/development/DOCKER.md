@@ -21,10 +21,14 @@ reproducible across platforms.
 # Build the dev image (first run downloads the toolchain; later runs are cached).
 docker compose build
 
-# Run the normal Docker-backed test targets from the host.
-make test-fast
-make test-full
-make test-soak
+# Normal edit loop.
+docker compose run --rm dev cargo test -p rsscript
+
+# Pre-commit compile gate with the native-JIT feature set.
+docker compose run --rm dev cargo test -p rsscript --features native-jit --no-run
+
+# Slow release/demo parity checks.
+docker compose run --rm dev cargo test -p rsscript --test soak -- --ignored
 
 # Open an interactive shell in the toolchain.
 docker compose run --rm dev bash
@@ -34,10 +38,9 @@ Inside the shell (or via `docker compose run --rm dev <cmd>`) every normal
 workflow is available:
 
 ```sh
-make test-compile                          # compile rsscript tests only
-make test-fast                             # normal edit loop
-make test-full                             # pre-commit local gate
-make test-soak                             # slow parity/demo/release checks
+cargo test -p rsscript                     # normal edit loop
+cargo test -p rsscript --no-run            # compile rsscript tests only
+cargo test -p rsscript --features native-jit --no-run
 cargo clippy --all-targets                 # lints
 cargo fmt --all                            # format
 cargo run --bin rss -- <args>              # drive the rss CLI

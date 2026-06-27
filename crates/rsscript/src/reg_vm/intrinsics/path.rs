@@ -25,18 +25,14 @@ impl RegVm {
                 let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(Path::new(path)
                     .extension()
-                    .map(|extension| {
-                        VmValue::some(VmValue::string(extension.to_string_lossy()))
-                    })
+                    .map(|extension| VmValue::some(VmValue::string(extension.to_string_lossy())))
                     .unwrap_or(VmValue::OptionNone))
             }
             RegIntrinsic::PathFileName => {
                 let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(Path::new(path)
                     .file_name()
-                    .map(|name| {
-                        VmValue::some(VmValue::string(name.to_string_lossy()))
-                    })
+                    .map(|name| VmValue::some(VmValue::string(name.to_string_lossy())))
                     .unwrap_or(VmValue::OptionNone))
             }
             RegIntrinsic::PathFromString | RegIntrinsic::PathToString => {
@@ -95,9 +91,7 @@ impl RegVm {
                 let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(Path::new(path)
                     .parent()
-                    .map(|parent| {
-                        VmValue::some(VmValue::string(parent.to_string_lossy()))
-                    })
+                    .map(|parent| VmValue::some(VmValue::string(parent.to_string_lossy())))
                     .unwrap_or(VmValue::OptionNone))
             }
             RegIntrinsic::PathReadString => {

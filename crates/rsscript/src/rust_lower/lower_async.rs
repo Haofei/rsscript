@@ -1,14 +1,16 @@
-
-use crate::syntax::ast::{
-    Block, DataEffect, Expr, Stmt,
-};
+use crate::syntax::ast::{Block, DataEffect, Expr, Stmt};
 
 use super::helpers::*;
 
 use super::lowerer::*;
 
 impl RustLowerer<'_> {
-    pub(super) fn lower_task_group_block(&mut self, block: &Block, out: &mut String, indent: usize) {
+    pub(super) fn lower_task_group_block(
+        &mut self,
+        block: &Block,
+        out: &mut String,
+        indent: usize,
+    ) {
         let pad = "    ".repeat(indent);
         let executor = self
             .current_async_executor
@@ -147,7 +149,6 @@ impl RustLowerer<'_> {
         self.current_task_group_token = previous_task_group_token;
     }
 
-
     pub(super) fn lower_async_let_pending(
         &mut self,
         expr: &Expr,
@@ -198,7 +199,6 @@ impl RustLowerer<'_> {
         self.lower_expr(&rewritten)
     }
 
-
     pub(super) fn expr_is_stable_borrow_place(expr: &Expr) -> bool {
         match expr {
             Expr::Ident(..) => true,
@@ -208,7 +208,6 @@ impl RustLowerer<'_> {
             _ => false,
         }
     }
-
 
     /// Emit a cooperative poll loop that drives every currently-active async-let
     /// sibling until `target`'s result is ready (so siblings interleave, but the
@@ -262,7 +261,6 @@ impl RustLowerer<'_> {
         out.push_str(&format!("{pad}}}\n"));
     }
 
-
     pub(super) fn emit_task_group_drain(
         &self,
         out: &mut String,
@@ -304,7 +302,6 @@ impl RustLowerer<'_> {
         ));
         out.push_str(&format!("{pad}}}\n"));
     }
-
 
     pub(super) fn lower_select_stmt(
         &mut self,
@@ -381,7 +378,6 @@ impl RustLowerer<'_> {
         out.push_str(&format!("{pad}}}\n"));
     }
 
-
     pub(super) fn extract_task_group_await<'b>(
         &self,
         expr: &'b Expr,
@@ -405,7 +401,6 @@ impl RustLowerer<'_> {
             _ => None,
         }
     }
-
 
     /// Lower a linear `async fn` body into a `pending_try`/`pending_then`/
     /// `pending_ready` chain — a single `impl Pending<Ret>` expression. Each
@@ -651,8 +646,10 @@ impl RustLowerer<'_> {
         }
     }
 
-
-    pub(super) fn lower_async_statement_boundary(&mut self, statement: &Stmt) -> AsyncTaskGroupBoundary {
+    pub(super) fn lower_async_statement_boundary(
+        &mut self,
+        statement: &Stmt,
+    ) -> AsyncTaskGroupBoundary {
         let mut body = String::new();
         let previous_executor = self
             .current_async_executor
@@ -675,8 +672,10 @@ impl RustLowerer<'_> {
         }
     }
 
-
-    pub(super) fn lower_async_task_group_boundary(&mut self, block: &Block) -> AsyncTaskGroupBoundary {
+    pub(super) fn lower_async_task_group_boundary(
+        &mut self,
+        block: &Block,
+    ) -> AsyncTaskGroupBoundary {
         let mut body = String::new();
         let previous_executor = self
             .current_async_executor
@@ -701,7 +700,6 @@ impl RustLowerer<'_> {
             returns_result,
         }
     }
-
 
     pub(super) fn lower_async_loop_boundary(
         &mut self,
@@ -732,7 +730,6 @@ impl RustLowerer<'_> {
             returns_result: true,
         }
     }
-
 
     pub(super) fn lower_async_poll_loop_boundary(
         &mut self,
@@ -842,8 +839,11 @@ impl RustLowerer<'_> {
         })
     }
 
-
-    pub(super) fn lower_async_loop_body_chain(&mut self, statements: &[Stmt], error_ty: &str) -> String {
+    pub(super) fn lower_async_loop_body_chain(
+        &mut self,
+        statements: &[Stmt],
+        error_ty: &str,
+    ) -> String {
         let Some((head, tail)) = statements.split_first() else {
             return format!(
                 "rsscript_runtime::pending_ready(Ok::<rsscript_runtime::LoopControl, {error_ty}>(rsscript_runtime::LoopControl::Continue))"
@@ -907,7 +907,6 @@ impl RustLowerer<'_> {
         }
     }
 
-
     pub(super) fn current_result_error_type_rust(&self) -> Option<String> {
         let ty = self.current_return_type.as_ref()?;
         if ty.name == "Result" && ty.args.len() == 2 {
@@ -916,7 +915,6 @@ impl RustLowerer<'_> {
             None
         }
     }
-
 
     pub(super) fn lower_await_expr(&mut self, expr: &Expr) -> String {
         match expr {
@@ -933,5 +931,4 @@ impl RustLowerer<'_> {
             _ => self.lower_expr(expr),
         }
     }
-
 }

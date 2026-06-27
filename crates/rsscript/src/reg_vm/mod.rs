@@ -20,6 +20,7 @@ use sha3::{
     digest::{ExtendableOutput, Update, XofReader},
 };
 
+use self::calls::PureClosurePlan;
 use crate::diagnostic::Severity;
 use crate::eval_types::{EvalError, EvalOutput, NativeInterpreterFn, NativeValue};
 use crate::hir::{
@@ -32,42 +33,47 @@ use crate::syntax::ast::{
     BinaryOp, Callee, MatchFieldPattern, MatchLiteral, MatchPattern, merge_programs,
 };
 use crate::syntax::parse_source;
+#[cfg(feature = "native-jit")]
+use crate::text_util::string_pad_len;
 use crate::text_util::{
     decode_string_token, string_format, string_pad, string_slice_range, type_arg_names,
     type_root_name,
 };
 use crate::vm_value::{
-    intern_layout, TypeLayout, TypedVec, ValueMap, VmClosure, VmMapKey, VmNative, VmStruct, VmValue,
+    TypeLayout, TypedVec, ValueMap, VmClosure, VmMapKey, VmNative, VmStruct, VmValue, intern_layout,
 };
 
 /// Intern the layout for a struct/variant whose canonical field order is given by
 /// `fields` (slot order). Used at lowering time so `MakeStruct`/`MakeVariant` carry
 /// a precomputed `Rc<TypeLayout>` and never re-hash per construction (V2.0).
 fn intern_struct_layout(name: &str, fields: &[(String, Reg)]) -> Rc<TypeLayout> {
-    let field_names: Vec<Rc<str>> = fields.iter().map(|(name, _)| Rc::from(name.as_str())).collect();
+    let field_names: Vec<Rc<str>> = fields
+        .iter()
+        .map(|(name, _)| Rc::from(name.as_str()))
+        .collect();
     intern_layout(Rc::from(name), field_names)
 }
 
 mod calls;
+mod exec;
 mod intrinsics;
 mod lower;
 mod model;
-mod exec;
+#[cfg(feature = "native-jit")]
+mod native;
 mod resource_io;
 mod resources;
-mod scheduler;
-mod tier;
 mod runtime_resources;
 mod runtime_values;
+mod scheduler;
+mod tier;
 mod value_access;
 mod value_convert;
 mod value_ops;
-#[cfg(feature = "native-jit")]
-mod native;
+pub(crate) use lower::*;
+pub(crate) use model::*;
 #[cfg(feature = "native-jit")]
 use native::*;
-pub(crate) use model::*;
-pub(crate) use lower::*;
 use resources::*;
 use runtime_resources::*;
 use runtime_values::*;
@@ -152,6 +158,35 @@ pub fn reg_vm_eval_source_main_native_force_deopt(
     reg_vm_compile_source(file, source)?.eval_main_with_args_native_force_deopt(args)
 }
 
+/// Native-tier entry point that forces one generated safepoint to deopt
+/// unconditionally. Used by differential/deopt-stress tests to exercise precise
+/// safepoint payloads at sites that may not naturally bail for the chosen input.
+#[cfg(feature = "native-jit")]
+#[allow(dead_code)]
+pub fn reg_vm_eval_source_main_native_force_safepoint(
+    file: &str,
+    source: &str,
+    args: impl IntoIterator<Item = impl Into<String>>,
+    safepoint: u32,
+) -> Result<EvalOutput, EvalError> {
+    reg_vm_compile_source(file, source)?.eval_main_with_args_native_force_safepoint(args, safepoint)
+}
+
+/// Native-tier entry point that forces every generated safepoint to deopt
+/// unconditionally. This is the deterministic test/fuzz equivalent of
+/// `RSS_JIT_DEOPT_EVERY=1`: native code still executes far enough to capture each
+/// safepoint payload, then precise-resumes/falls back through production deopt
+/// machinery.
+#[cfg(feature = "native-jit")]
+#[allow(dead_code)]
+pub fn reg_vm_eval_source_main_native_force_all_safepoints(
+    file: &str,
+    source: &str,
+    args: impl IntoIterator<Item = impl Into<String>>,
+) -> Result<EvalOutput, EvalError> {
+    reg_vm_compile_source(file, source)?.eval_main_with_args_native_force_all_safepoints(args)
+}
+
 /// Native-tier entry point with J0.2 **precise resume** forced on: a real native
 /// guard bail reconstructs the interpreter register window and resumes at the
 /// safepoint instead of re-running from the function top. Must equal every other
@@ -218,6 +253,9 @@ fn jit_function_has_loop(code: &[RegInstr]) -> bool {
             match_ip, else_ip, ..
         } => *match_ip <= index || *else_ip <= index,
         RegInstr::MatchMapGet {
+            some_ip, none_ip, ..
+        }
+        | RegInstr::MatchSortedMapGet {
             some_ip, none_ip, ..
         } => *some_ip <= index || *none_ip <= index,
         _ => false,
@@ -341,6 +379,9 @@ fn tco_reachable_instructions(code: &[RegInstr]) -> Vec<bool> {
             }
             | RegInstr::MatchMapGet {
                 some_ip, none_ip, ..
+            }
+            | RegInstr::MatchSortedMapGet {
+                some_ip, none_ip, ..
             } => {
                 stack.push(*some_ip);
                 stack.push(*none_ip);
@@ -457,9 +498,10 @@ fn optimize_self_tail_calls(function: &mut RegFunction, function_id: usize) {
         // No other instruction may read the call's result (nothing observes it
         // between the call and the return). The `Return` at `return_ip` is the
         // only legitimate reader.
-        let used_elsewhere = code.iter().enumerate().any(|(other_ip, instr)| {
-            other_ip != return_ip && instr_reads_register(instr, *dst)
-        });
+        let used_elsewhere = code
+            .iter()
+            .enumerate()
+            .any(|(other_ip, instr)| other_ip != return_ip && instr_reads_register(instr, *dst));
         if used_elsewhere {
             continue;
         }
@@ -479,9 +521,7 @@ fn optimize_self_tail_calls(function: &mut RegFunction, function_id: usize) {
     let reachable = tco_reachable_instructions(&function.code);
     let tail_return_ips: Vec<usize> = sites.iter().map(|(call_ip, _, _)| call_ip + 1).collect();
     let has_base_case = function.code.iter().enumerate().any(|(ip, instr)| {
-        reachable[ip]
-            && matches!(instr, RegInstr::Return { .. })
-            && !tail_return_ips.contains(&ip)
+        reachable[ip] && matches!(instr, RegInstr::Return { .. }) && !tail_return_ips.contains(&ip)
     });
     if !has_base_case {
         return;
@@ -572,14 +612,14 @@ fn instr_reads_register(instr: &RegInstr, reg: Reg) -> bool {
         RegInstr::MatchOption { src, .. }
         | RegInstr::MatchResult { src, .. }
         | RegInstr::MatchVariant { src, .. } => *src == reg,
-        RegInstr::MatchMapGet { map, key, .. } => *map == reg || *key == reg,
+        RegInstr::MatchMapGet { map, key, .. } | RegInstr::MatchSortedMapGet { map, key, .. } => {
+            *map == reg || *key == reg
+        }
         RegInstr::MakeStruct { fields, .. } | RegInstr::MakeVariant { fields, .. } => {
             fields.iter().any(|(_, r)| *r == reg)
         }
         RegInstr::MakeObject { fields, .. } => fields.iter().any(|(_, r)| *r == reg),
-        RegInstr::MakeMap { entries, .. } => {
-            entries.iter().any(|(k, v)| *k == reg || *v == reg)
-        }
+        RegInstr::MakeMap { entries, .. } => entries.iter().any(|(k, v)| *k == reg || *v == reg),
         RegInstr::MakeList { items, .. } => items.contains(&reg),
         RegInstr::MakeClosure { captures, .. } => captures.contains(&reg),
         RegInstr::ResourceDrop { resource } => *resource == reg,
@@ -587,9 +627,7 @@ fn instr_reads_register(instr: &RegInstr, reg: Reg) -> bool {
         | RegInstr::CallDynamic { args, .. }
         | RegInstr::CallNative { args, .. }
         | RegInstr::SpawnTask { args, .. } => args.contains(&reg),
-        RegInstr::CallClosure { closure, args, .. } => {
-            *closure == reg || args.contains(&reg)
-        }
+        RegInstr::CallClosure { closure, args, .. } => *closure == reg || args.contains(&reg),
         RegInstr::SelectWait { handles, .. } => handles.contains(&reg),
         // Synthetic native-only ops never appear in lowered code seen by TCO, but
         // enumerate them for completeness.
@@ -632,14 +670,16 @@ fn jit_supported_instruction(instr: &RegInstr) -> bool {
             | RegInstr::MatchResult { .. }
             | RegInstr::MatchVariant { .. }
             | RegInstr::MatchMapGet { .. }
+            | RegInstr::MatchSortedMapGet { .. }
             | RegInstr::UnwrapSome { .. }
             | RegInstr::UnwrapVariantValue { .. }
             | RegInstr::RuntimeError { .. }
             // Collection get/set/index ops (closure-free; closure-driven
-            // map/filter/fold/sort still fall back to the interpreter).
+            // map/filter/fold/sort_by/sort_with still fall back to the interpreter).
             | RegInstr::ListGet { .. }
             | RegInstr::ListLen { .. }
             | RegInstr::ListPush { .. }
+            | RegInstr::ListSort { .. }
             | RegInstr::ListAppend { .. }
             | RegInstr::ListClear { .. }
             | RegInstr::ListPop { .. }
@@ -672,8 +712,6 @@ fn jit_supported_instruction(instr: &RegInstr) -> bool {
             | RegInstr::Return { .. }
     )
 }
-
-
 
 // ============================================================================
 // Central intrinsic/effect registry (JIT descriptor table)
@@ -760,9 +798,8 @@ struct IntrinsicDescriptor {
     /// a read-only query (e.g. `String.from_int`/`String.slice` feeding `String.len`).
     /// Also marks the pure heap value-builders a deopt cold arm may re-run.
     can_fold: bool,
-    /// Whether the intrinsic can be emitted directly in the native subset (today:
-    /// only `IntToFloat`, in its single-Int-arg form — the shape check stays at the
-    /// call site).
+    /// Whether the intrinsic can be emitted directly in the native subset. The shape
+    /// check stays at the call site.
     native_lowerable: bool,
     /// RESERVED for the future view work (zero-copy slice/borrow lowering). Set
     /// `false` for every intrinsic today; it exists only so the table shape is right
@@ -820,7 +857,7 @@ fn intrinsic_descriptor(intrinsic: RegIntrinsic) -> IntrinsicDescriptor {
     use IntrinsicEffect::*;
     let d = IntrinsicDescriptor::default;
     match intrinsic {
-        // --- native_subset_instruction: the single native-lowerable intrinsic ---
+        // --- native_subset_instruction: native-lowerable intrinsics ---
         // `Int.to_float` lowers to a native signed-int→f64 conversion (the single-Int
         // -arg shape check stays at the call site).
         RegIntrinsic::IntToFloat => IntrinsicDescriptor {
@@ -879,6 +916,7 @@ fn intrinsic_descriptor(intrinsic: RegIntrinsic) -> IntrinsicDescriptor {
         RegIntrinsic::StringLen => IntrinsicDescriptor {
             effect: Read,
             can_fold: true,
+            native_lowerable: true,
             string_fold_role: Some(StringFoldRole::LengthQuery),
             notes: "byte-length query (foldable to arithmetic)",
             ..d()
@@ -889,9 +927,10 @@ fn intrinsic_descriptor(intrinsic: RegIntrinsic) -> IntrinsicDescriptor {
         RegIntrinsic::StringFromInt => IntrinsicDescriptor {
             effect: Allocate,
             can_fold: true,
+            native_lowerable: true,
             string_fold_role: Some(StringFoldRole::ProducerFromInt),
             cold_arm_pure_builder: true,
-            notes: "allocates ASCII decimal string; byte length foldable; pure cold-arm builder",
+            notes: "allocates ASCII decimal string; native-lowerable for final return",
             ..d()
         },
         // `String.slice` allocates a substring; foldable only when the source is
@@ -899,8 +938,27 @@ fn intrinsic_descriptor(intrinsic: RegIntrinsic) -> IntrinsicDescriptor {
         RegIntrinsic::StringSlice => IntrinsicDescriptor {
             effect: Allocate,
             can_fold: true,
+            native_lowerable: true,
             string_fold_role: Some(StringFoldRole::ProducerSlice),
-            notes: "allocates substring; byte length foldable only when source is ASCII",
+            notes: "allocates substring; native-lowerable and byte length foldable only when source is ASCII",
+            ..d()
+        },
+        RegIntrinsic::StringPadLeft => IntrinsicDescriptor {
+            effect: Allocate,
+            native_lowerable: true,
+            notes: "allocates padded string; native-lowerable as a typed host helper",
+            ..d()
+        },
+        RegIntrinsic::StringSplit => IntrinsicDescriptor {
+            effect: Allocate,
+            native_lowerable: true,
+            notes: "allocates List<String>; native-lowerable and split+len elidable",
+            ..d()
+        },
+        RegIntrinsic::StringStartsWith => IntrinsicDescriptor {
+            effect: Read,
+            native_lowerable: true,
+            notes: "string prefix query; native-lowerable as a typed host helper",
             ..d()
         },
 
@@ -910,8 +968,9 @@ fn intrinsic_descriptor(intrinsic: RegIntrinsic) -> IntrinsicDescriptor {
         RegIntrinsic::BytesLen => IntrinsicDescriptor {
             effect: Read,
             can_fold: true,
+            native_lowerable: true,
             bytes_fold_role: Some(BytesFoldRole::LengthQuery),
-            notes: "raw byte-length query (foldable to arithmetic)",
+            notes: "raw byte-length query (foldable to arithmetic; native-lowerable as a typed host helper)",
             ..d()
         },
         // `Bytes.from_string` allocates raw bytes from a String; its byte length is
@@ -929,8 +988,9 @@ fn intrinsic_descriptor(intrinsic: RegIntrinsic) -> IntrinsicDescriptor {
         RegIntrinsic::BytesSlice => IntrinsicDescriptor {
             effect: Allocate,
             can_fold: true,
+            native_lowerable: true,
             bytes_fold_role: Some(BytesFoldRole::ProducerSlice),
-            notes: "allocates byte-index substring; byte length foldable (exact clamp, no ASCII gate)",
+            notes: "allocates byte-index substring; native-lowerable and byte length foldable",
             ..d()
         },
 
@@ -938,46 +998,20 @@ fn intrinsic_descriptor(intrinsic: RegIntrinsic) -> IntrinsicDescriptor {
         // These allocate a fresh String from read-only operands and observe/mutate
         // nothing else, so a native Bail can discard the arm and the interpreter
         // re-runs it faithfully. (`StringFromInt` above already carries can_fold.)
-        RegIntrinsic::StringCopy
-        | RegIntrinsic::StringFromBool
-        | RegIntrinsic::StringFromFloat => IntrinsicDescriptor {
-            effect: Allocate,
-            cold_arm_pure_builder: true,
-            notes: "pure String builder (re-runnable after a native cold-arm bail)",
-            ..d()
-        },
+        RegIntrinsic::StringCopy | RegIntrinsic::StringFromBool | RegIntrinsic::StringFromFloat => {
+            IntrinsicDescriptor {
+                effect: Allocate,
+                cold_arm_pure_builder: true,
+                notes: "pure String builder (re-runnable after a native cold-arm bail)",
+                ..d()
+            }
+        }
 
         // Everything else: conservative default (opaque allocator). Intentionally the
         // common case for the ~637 intrinsics; see the module note.
         _ => d(),
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 // Not `native-jit`-gated: the intrinsic descriptor table (always compiled, for the
 // table unit test and lever-2) embeds `Option<CombinatorKind>`. Read by the
@@ -992,29 +1026,6 @@ enum CombinatorKind {
     ResultAndThen,
     ResultUnwrapOr,
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 /// Argument positions of a closure call site that carry a `mut` effect marker
 /// (`f(read u, mut ctx)`), so a `CallClosure` can write the mutated values back
@@ -1064,7 +1075,7 @@ pub fn reg_vm_eval_source_main_with_args_and_native_bindings(
         .eval_main_with_args_and_native_bindings(args, native_bindings)
 }
 
-/// Streaming-stdout source entry point for `rss dev --run`: evaluates `main` and
+/// Streaming-stdout source entry point: evaluates `main` and
 /// writes `Log.write` output live (line-flushed) to the real process stdout as it
 /// runs. The captured stdout in the returned `EvalOutput` is unchanged, so it must
 /// not be re-printed by the caller. Other callers and the tests keep using the
@@ -1080,7 +1091,7 @@ pub fn reg_vm_eval_source_main_with_args_streaming_stdout(
     )
 }
 
-/// Streaming-stdout package entry point for `rss dev --run`. See
+/// Streaming-stdout package entry point. See
 /// [`reg_vm_eval_source_main_with_args_streaming_stdout`].
 pub fn reg_vm_eval_package_main_with_args_and_native_bindings_streaming_stdout(
     package_dir: &Path,
@@ -1260,6 +1271,8 @@ impl RegVmExecutable {
             std::env::var_os("RSS_JIT_STATS").is_some(),
             false,
             false,
+            None,
+            false,
         )
         .map(|(output, _stats)| output)
     }
@@ -1271,7 +1284,20 @@ impl RegVmExecutable {
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<(EvalOutput, NativeStats), EvalError> {
-        self.eval_main_with_args_native_inner(args, 0, false, true, false, false)
+        let tier_up_threshold = std::env::var("RSS_JIT_TIER_THRESHOLD")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(0);
+        self.eval_main_with_args_native_inner(
+            args,
+            tier_up_threshold,
+            false,
+            true,
+            false,
+            false,
+            None,
+            false,
+        )
     }
 
     /// Like [`Self::eval_main_with_args_native_osr`] but also returns the
@@ -1281,7 +1307,7 @@ impl RegVmExecutable {
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<(EvalOutput, NativeStats), EvalError> {
-        self.eval_main_with_args_native_inner(args, 0, false, true, true, true)
+        self.eval_main_with_args_native_inner(args, 0, false, true, true, true, None, false)
     }
 
     /// Run `main` with the native tier AND J5.2 OSR forced on (deterministically,
@@ -1302,6 +1328,8 @@ impl RegVmExecutable {
             // OSR-exit resumes via the precise-deopt path, so OSR implies precise.
             true,
             true,
+            None,
+            false,
         )
         .map(|(output, _stats)| output)
     }
@@ -1325,6 +1353,8 @@ impl RegVmExecutable {
             std::env::var_os("RSS_JIT_STATS").is_some(),
             true,
             false,
+            None,
+            false,
         )
         .map(|(output, _stats)| output)
     }
@@ -1345,6 +1375,52 @@ impl RegVmExecutable {
             std::env::var_os("RSS_JIT_STATS").is_some(),
             false,
             false,
+            None,
+            false,
+        )
+        .map(|(output, _stats)| output)
+    }
+
+    /// Run `main` while forcing the selected native safepoint to deopt. Unlike
+    /// [`Self::eval_main_with_args_native_force_deopt`], this still enters native
+    /// code and captures the safepoint's live register payload before falling back
+    /// or precise-resuming, so it exercises the real deopt machinery.
+    #[cfg(feature = "native-jit")]
+    pub fn eval_main_with_args_native_force_safepoint(
+        &self,
+        args: impl IntoIterator<Item = impl Into<String>>,
+        safepoint: u32,
+    ) -> Result<EvalOutput, EvalError> {
+        self.eval_main_with_args_native_inner(
+            args,
+            0,
+            false,
+            std::env::var_os("RSS_JIT_STATS").is_some(),
+            true,
+            false,
+            Some(safepoint),
+            false,
+        )
+        .map(|(output, _stats)| output)
+    }
+
+    /// Run `main` while forcing every generated native safepoint to deopt.
+    /// Unlike process-env `RSS_JIT_DEOPT_EVERY`, this is deterministic and safe
+    /// for in-process differential tests and fuzzers.
+    #[cfg(feature = "native-jit")]
+    pub fn eval_main_with_args_native_force_all_safepoints(
+        &self,
+        args: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Result<EvalOutput, EvalError> {
+        self.eval_main_with_args_native_inner(
+            args,
+            0,
+            false,
+            std::env::var_os("RSS_JIT_STATS").is_some(),
+            true,
+            false,
+            None,
+            true,
         )
         .map(|(output, _stats)| output)
     }
@@ -1360,7 +1436,9 @@ impl RegVmExecutable {
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<(EvalOutput, NativeStats, Vec<String>), EvalError> {
-        self.eval_main_with_args_native_inner_reported(args, 0, false, true, true, true, true)
+        self.eval_main_with_args_native_inner_reported(
+            args, 0, false, true, true, true, true, None, false,
+        )
     }
 
     #[cfg(feature = "native-jit")]
@@ -1372,6 +1450,8 @@ impl RegVmExecutable {
         collect_stats: bool,
         precise_deopt_override: bool,
         osr_override: bool,
+        forced_safepoint: Option<u32>,
+        force_all_safepoints_override: bool,
     ) -> Result<(EvalOutput, NativeStats), EvalError> {
         self.eval_main_with_args_native_inner_reported(
             args,
@@ -1381,6 +1461,8 @@ impl RegVmExecutable {
             precise_deopt_override,
             osr_override,
             false,
+            forced_safepoint,
+            force_all_safepoints_override,
         )
         .map(|(output, stats, _lines)| (output, stats))
     }
@@ -1396,6 +1478,8 @@ impl RegVmExecutable {
         precise_deopt_override: bool,
         osr_override: bool,
         report_override: bool,
+        forced_safepoint: Option<u32>,
+        force_all_safepoints_override: bool,
     ) -> Result<(EvalOutput, NativeStats, Vec<String>), EvalError> {
         let mut vm = RegVm::new(
             Rc::clone(&self.unit),
@@ -1418,11 +1502,12 @@ impl RegVmExecutable {
         // `precise_deopt_override`, avoiding a racy process env var.
         let precise_deopt =
             precise_deopt_override || std::env::var_os("RSS_JIT_PRECISE_DEOPT").is_some();
-        // `RSS_JIT_OSR=1` (J5.2) arms on-stack replacement: a function with a
-        // qualifying native-subset hot loop runs that loop natively mid-function.
-        // OSR-exit resumes via the precise-deopt path, so OSR implies precise. A
-        // caller may force it deterministically via `osr_override` (test/bench
-        // entry). Default (unset, not overridden) leaves the OSR hook unarmed.
+        // `RSS_JIT_OSR=1` (J5.2) selects the eager OSR path: a function with a
+        // qualifying native-subset hot loop attempts OSR on the first header hit.
+        // Without it, eligible loops still use the default hot-backedge
+        // auto-trigger. OSR-exit resumes via the precise-deopt path, so OSR
+        // implies precise. A caller may force the eager path deterministically via
+        // `osr_override` (test/bench entry).
         let osr_enabled = osr_override || std::env::var_os("RSS_JIT_OSR").is_some();
         let precise_deopt = precise_deopt || osr_enabled;
         // `RSS_JIT_REPORT=1` (lever 2) arms the developer-facing missed-optimization
@@ -1430,7 +1515,14 @@ impl RegVmExecutable {
         // after the run. It changes NO compile decision (the differential is byte-
         // identical with it on or off); when unset the report machinery is inert.
         let report = report_override || std::env::var_os("RSS_JIT_REPORT").is_some();
-        vm.native = Some(NativeState::new_with_opt(
+        // `RSS_JIT_DEOPT_EVERY=1` is a developer/deopt-stress knob: every generated
+        // native safepoint bails unconditionally, exercising the real deopt capture
+        // and fallback/resume machinery from normal CLI/bench entry points. Test
+        // entry points that pass a concrete `forced_safepoint` keep their narrower
+        // single-site behavior.
+        let force_all_safepoints = forced_safepoint.is_none()
+            && (force_all_safepoints_override || jit_native_deopt_every_from_env());
+        vm.native = Some(NativeState::new_with_opt_and_forced_safepoint(
             tier_up_threshold,
             force_bail,
             collect_stats,
@@ -1438,10 +1530,18 @@ impl RegVmExecutable {
             precise_deopt,
             osr_enabled,
             report,
+            forced_safepoint,
+            force_all_safepoints,
         )?);
         vm.jit_enabled = true;
         vm.jit_force_all = true;
         let value = vm.run_program("main")?;
+        if let Some(native) = &mut vm.native
+            && native.collect_stats
+        {
+            native.stats.add_profile_feedback(&self.unit);
+            native.stats.add_native_decline_reasons(&self.unit);
+        }
         // Telemetry: `RSS_JIT_STATS=1` prints where native-tier attempts went, so
         // the next coverage win is measurable.
         if std::env::var_os("RSS_JIT_STATS").is_some()
@@ -1527,8 +1627,8 @@ impl RegVmExecutable {
 
     /// Like [`Self::eval_main_with_args_and_native_bindings`] but streams program
     /// stdout (`Log.write` output) live to the real process stdout, line-flushed,
-    /// as the program runs. Used ONLY by `rss dev --run` so a slow/looping program
-    /// shows output immediately instead of buffering until exit. The returned
+    /// as the program runs. This lets a library caller show output immediately
+    /// instead of buffering until exit. The returned
     /// `EvalOutput.stdout` is still the full captured buffer (identical to the
     /// non-streaming call), so the program output has already been written to the
     /// terminal — the caller must NOT print it a second time.
@@ -1703,12 +1803,9 @@ fn type_name_may_contain_fn(type_name: &str, hir: &Hir) -> bool {
 /// scalars and to look named user types up in the `types` table.
 fn type_name_root(type_name: &str) -> &str {
     let name = type_name.trim();
-    let end = name
-        .find(['<', '(', ' '])
-        .unwrap_or(name.len());
+    let end = name.find(['<', '(', ' ']).unwrap_or(name.len());
     name[..end].trim()
 }
-
 
 /// One activation record on the explicit call stack. The interpreter is
 /// stackless: instead of `run_frame` recursing into itself for each RSScript
@@ -1882,9 +1979,8 @@ struct RegVm {
     native_bindings: HashMap<String, NativeInterpreterFn>,
     stdout: String,
     /// When set, complete lines appended to `stdout` are also written live to the
-    /// real process stdout (line-flushed). Used ONLY by `rss dev --run` so a slow
-    /// or looping program shows output as it runs instead of buffering until exit.
-    /// `stream_flushed` tracks how many bytes of `stdout` have been streamed so a
+    /// real process stdout (line-flushed). `stream_flushed` tracks how many bytes
+    /// of `stdout` have been streamed so a
     /// partial trailing line is not emitted twice. The captured `stdout` String is
     /// built identically whether or not streaming is on, so every other caller
     /// (and the parity/differential tests) is unaffected.
@@ -1967,6 +2063,11 @@ struct RegVm {
     /// immutable after construction (its `captures` Vec is never mutated in
     /// place — verified by grep), so a shared `Rc` can never diverge.
     noncapturing_closure_cache: Vec<Option<Rc<VmClosure>>>,
+    /// Compiled plans for captureless pure closures, keyed by `(function, arity)`.
+    /// Stores negative results too so repeated `List.map/filter/fold` calls do
+    /// not re-walk unsupported closure bytecode. Captured closures are excluded
+    /// because their behavior depends on per-allocation captures.
+    pure_closure_plan_cache: HashMap<(usize, usize), Option<PureClosurePlan>>,
 }
 
 /// Outcome of a [`RegVm::try_native`] attempt.
@@ -1987,21 +2088,31 @@ enum NativeAttempt {
     Fallback,
 }
 
+#[cfg(feature = "native-jit")]
+type NativeCompiledEntry = (
+    vm_jit::CompiledId,
+    NativeTy,
+    Vec<NativeTy>,
+    bool,
+    bool,
+    Vec<Rc<String>>,
+    bool,
+);
+
 /// State for the native JIT tier: the Cranelift module owning the compiled code,
 /// a per-function cache (`None` = known not native-eligible), and the tiering /
 /// deopt knobs.
 #[cfg(feature = "native-jit")]
 struct NativeState {
     module: vm_jit::NativeModule,
-    // `None` = known not native-eligible; `Some((id, ret, params, has_backedge))`
+    // `None` = known not native-eligible; `Some((id, ret, params, has_backedge, scalar_leaf_callable, literals, precise_resume_safe))`
     // = compiled handle, return type (to box the 64-bit result), parameter types
     // (to unbox each argument: `Int`/`Bool` from their VM value, `Float` as bits),
     // and whether the function's body contains an internal back-edge (a loop). The
     // back-edge bit drives the no-amortization profitability gate
     // (`NATIVE_NOAMORTIZE_GIVEUP`): a loop-free body dispatched per loop iteration
     // can never amortize FFI cost, so it is demoted after `K` dispatches.
-    #[allow(clippy::type_complexity)]
-    cache: HashMap<usize, Option<(vm_jit::CompiledId, NativeTy, Vec<NativeTy>, bool)>>,
+    cache: HashMap<usize, Option<NativeCompiledEntry>>,
     /// Per-function call counts, for tiering: a function is compiled and run
     /// natively only once it has been entered more than `tier_up_threshold` times
     /// (a hot-function heuristic). `0` means "compile on first call" (force-all).
@@ -2011,7 +2122,7 @@ struct NativeState {
     /// guard), reset to 0 on a successful native completion. At
     /// `NATIVE_BAIL_GIVEUP_THRESHOLD` the function is demoted to `NOT_ELIGIBLE` and
     /// dropped from `cache`, so the predict-and-skip path stops the wasted
-    /// compile-marshal-bail churn (vm-jit-perf-plan §3.0).
+    /// compile-marshal-bail churn.
     bail_counts: HashMap<usize, u32>,
     /// Per-function count of *native dispatches of a back-edge-free body*, keyed
     /// like `counts`/`cache`. Only loop-free bodies are counted here; at
@@ -2024,6 +2135,14 @@ struct NativeState {
     /// native-eligible function exercises the fallback path. Used to verify
     /// `{interp, tier0, native, force-deopt, compiled}` all agree.
     force_bail: bool,
+    /// Deopt stress mode for a real native safepoint. When set, the translator
+    /// compiles each native function with that safepoint id forced to bail,
+    /// exercising the generated deopt payload and resume map instead of rejecting
+    /// native execution before entry.
+    forced_safepoint: Option<u32>,
+    /// Env-gated deopt stress mode (`RSS_JIT_DEOPT_EVERY`): when set, every
+    /// generated native safepoint bails unconditionally.
+    force_all_safepoints: bool,
     /// Telemetry: where native-tier attempts go (so the next coverage win is
     /// measurable rather than guessed).
     stats: NativeStats,
@@ -2040,10 +2159,9 @@ struct NativeState {
     /// native-subset hot loop (see [`detect_single_natural_loop`]) runs that loop
     /// natively *mid-function* — the interpreter reaches the loop header, hands the
     /// register window to an OSR-compiled loop body, then resumes at the post-loop
-    /// ip with the live-out window (OSR-exit / precise-deopt resume). Forced trigger
-    /// only (fires whenever the interpreter reaches a qualifying header); wired from
-    /// `RSS_JIT_OSR` or a deterministic test override. Default `false` ⇒ the OSR
-    /// hook is never armed and the interpreter hot path is untouched.
+    /// ip with the live-out window (OSR-exit / precise-deopt resume). Default
+    /// execution uses the hot-backedge auto-trigger; this flag selects the eager
+    /// trigger used by `RSS_JIT_OSR` and deterministic test/bench entry points.
     osr_enabled: bool,
     /// Per-function OSR compile cache, keyed like `cache`. `Some((id, loop, params))`
     /// is a compiled OSR-entry handle plus the loop it covers and the live-in param
@@ -2060,6 +2178,15 @@ struct NativeState {
     scratch_args: Vec<i64>,
     scratch_lens: Vec<i64>,
     scratch_flat_owned: Vec<Rc<RefCell<TypedVec>>>,
+    scratch_flat_mut_owned: Vec<Rc<RefCell<TypedVec>>>,
+    scratch_heap_input_slots: Vec<(usize, usize)>,
+    scratch_osr_window: Vec<i64>,
+    scratch_osr_lens: Vec<i64>,
+    scratch_osr_flat_owned: Vec<Rc<RefCell<TypedVec>>>,
+    scratch_osr_flat_mut_owned: Vec<Rc<RefCell<TypedVec>>>,
+    scratch_osr_flat_slots: Vec<(usize, NativeTy)>,
+    scratch_osr_flat_mut_slots: Vec<(usize, usize)>,
+    scratch_osr_heap_input_slots: Vec<(usize, usize)>,
     /// Lever 2: `RSS_JIT_REPORT` missed-optimization report armed. Read ONCE from
     /// the env at construction (mirrors `collect_stats`), so the hot path pays only
     /// a single hoisted bool read. When `false` the report machinery does nothing —
@@ -2074,6 +2201,10 @@ struct NativeState {
     /// Per-function set of `native_key`s that actually OSR-entered at least once.
     /// Populated ONLY when `report` is on. Accurate positive for `osr: entered`.
     report_osr_ok: std::collections::HashSet<usize>,
+    /// True when the most recent failed OSR attempt entered native code and hit a
+    /// dynamic uncommon trap. The auto-trigger uses this to back off and retry later
+    /// instead of permanently marking the loop `GaveUp`.
+    osr_dynamic_bail: bool,
 }
 
 /// Native-JIT telemetry. The VM is single-threaded, so plain counters suffice.
@@ -2088,8 +2219,41 @@ pub struct NativeStats {
     pub translated: u64,
     /// Functions rejected by translation (outside the native subset).
     pub not_eligible: u64,
+    /// Stable native translation decline reasons, grouped by the same explanation
+    /// used by the human `RSS_JIT_REPORT` missed-optimization report.
+    pub native_decline_reasons: BTreeMap<String, u64>,
     /// Functions Cranelift compiled to machine code.
     pub compiled: u64,
+    /// Total native IR instructions accepted by Cranelift across compiled regions.
+    pub compiled_ir_instrs: u64,
+    /// Total machine-code bytes emitted by Cranelift across compiled regions.
+    pub compiled_code_bytes: u64,
+    /// Total deopt/guard sites emitted across compiled regions.
+    pub deopt_sites: u64,
+    /// Native-to-native call sites emitted across compiled regions.
+    pub native_call_edges: u64,
+    /// Deepest native-to-native call chain emitted across compiled regions.
+    pub native_call_depth_max: u64,
+    /// Profile-guided monomorphic closure guards emitted across compiled regions.
+    pub profile_closure_guard_sites: u64,
+    /// Profile-guided polymorphic closure dispatch id reads emitted across compiled regions.
+    pub profile_closure_id_reads: u64,
+    /// Profile-guided polymorphic inline-cache dispatch sites emitted.
+    pub profile_closure_pic_sites: u64,
+    /// Profile-guided polymorphic inline-cache arms emitted across all PIC sites.
+    pub profile_closure_pic_arms: u64,
+    /// Conditional branch sites with collected profile feedback.
+    pub profile_branch_sites: u64,
+    /// Total conditional branch samples collected across profiled branch sites.
+    pub profile_branch_samples: u64,
+    /// Samples where a profiled conditional branch jumped to its explicit target.
+    pub profile_branch_taken: u64,
+    /// Samples where a profiled conditional branch fell through to the next ip.
+    pub profile_branch_fallthrough: u64,
+    /// Backend blocks marked cold from strong profile-guided branch bias.
+    pub profile_branch_cold_blocks: u64,
+    /// Conditional branch edges compiled as profile-guided side exits.
+    pub profile_branch_side_exits: u64,
     /// Functions that translated but failed to compile.
     pub compile_failed: u64,
     /// Native calls whose runtime args didn't match the inferred parameter types.
@@ -2098,6 +2262,10 @@ pub struct NativeStats {
     pub native_calls: u64,
     /// Native calls that bailed at a guard (overflow/div-by-zero/…) → interpreter.
     pub native_bails: u64,
+    /// Native bails that originated in a nested native callee frame.
+    pub native_child_bails: u64,
+    /// Nested native callee bails reconstructed into an interpreter frame chain.
+    pub native_child_resumes: u64,
     /// Total nanoseconds spent in Cranelift compilation.
     pub compile_nanos: u128,
     /// Total nanoseconds spent executing native code.
@@ -2111,16 +2279,34 @@ pub struct NativeStats {
 impl NativeStats {
     fn summary(&self) -> String {
         format!(
-            "native-jit: considered={} translated={} compiled={} not_eligible={} \
-compile_failed={} calls={} bails={} arg_mismatch={} tier_deferred={} \
+            "native-jit: considered={} translated={} compiled={} ir_instrs={} code_bytes={} deopt_sites={} native_call_edges={} native_call_depth_max={} profile_closure_guards={} profile_closure_id_reads={} profile_closure_pic_sites={} profile_closure_pic_arms={} profile_branch_sites={} profile_branch_samples={} profile_branch_taken={} profile_branch_fallthrough={} profile_branch_cold_blocks={} profile_branch_side_exits={} not_eligible={} top_decline={} \
+compile_failed={} calls={} bails={} child_bails={} child_resumes={} arg_mismatch={} tier_deferred={} \
 compile_ms={:.3} run_ms={:.3} osr_entries={}",
             self.considered,
             self.translated,
             self.compiled,
+            self.compiled_ir_instrs,
+            self.compiled_code_bytes,
+            self.deopt_sites,
+            self.native_call_edges,
+            self.native_call_depth_max,
+            self.profile_closure_guard_sites,
+            self.profile_closure_id_reads,
+            self.profile_closure_pic_sites,
+            self.profile_closure_pic_arms,
+            self.profile_branch_sites,
+            self.profile_branch_samples,
+            self.profile_branch_taken,
+            self.profile_branch_fallthrough,
+            self.profile_branch_cold_blocks,
+            self.profile_branch_side_exits,
             self.not_eligible,
+            self.top_native_decline_reason(),
             self.compile_failed,
             self.native_calls,
             self.native_bails,
+            self.native_child_bails,
+            self.native_child_resumes,
             self.arg_mismatch,
             self.tier_deferred,
             self.compile_nanos as f64 / 1.0e6,
@@ -2129,16 +2315,73 @@ compile_ms={:.3} run_ms={:.3} osr_entries={}",
         )
     }
 
-    /// Telemetry as JSON, for the `jit` field of `rss bench --json` output.
+    fn top_native_decline_reason(&self) -> String {
+        self.native_decline_reasons
+            .iter()
+            .max_by(|(lhs_reason, lhs_count), (rhs_reason, rhs_count)| {
+                lhs_count
+                    .cmp(rhs_count)
+                    .then_with(|| rhs_reason.cmp(lhs_reason))
+            })
+            .map(|(reason, count)| format!("{count}x {reason}"))
+            .unwrap_or_else(|| "none".to_string())
+    }
+
+    fn add_native_decline_reasons(&mut self, unit: &RegUnit) {
+        self.native_decline_reasons = native_decline_reason_counts(unit);
+    }
+
+    fn add_profile_feedback(&mut self, unit: &RegUnit) {
+        let mut sites = 0u64;
+        let mut taken = 0u64;
+        let mut fallthrough = 0u64;
+        for func in &unit.functions {
+            let Ok(profile) = func.profile.try_borrow() else {
+                continue;
+            };
+            let Some(profile) = profile.as_ref() else {
+                continue;
+            };
+            for (_, feedback) in profile.branch_feedback_sites() {
+                sites += 1;
+                taken += u64::from(feedback.taken);
+                fallthrough += u64::from(feedback.fallthrough);
+            }
+        }
+        self.profile_branch_sites = sites;
+        self.profile_branch_taken = taken;
+        self.profile_branch_fallthrough = fallthrough;
+        self.profile_branch_samples = taken.saturating_add(fallthrough);
+    }
+
+    /// Telemetry as JSON for VM/JIT benchmark and reporting harnesses.
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::json!({
             "considered": self.considered,
             "translated": self.translated,
             "compiled": self.compiled,
+            "compiled_ir_instrs": self.compiled_ir_instrs,
+            "compiled_code_bytes": self.compiled_code_bytes,
+            "deopt_sites": self.deopt_sites,
+            "native_call_edges": self.native_call_edges,
+            "native_call_depth_max": self.native_call_depth_max,
+            "profile_closure_guard_sites": self.profile_closure_guard_sites,
+            "profile_closure_id_reads": self.profile_closure_id_reads,
+            "profile_closure_pic_sites": self.profile_closure_pic_sites,
+            "profile_closure_pic_arms": self.profile_closure_pic_arms,
+            "profile_branch_sites": self.profile_branch_sites,
+            "profile_branch_samples": self.profile_branch_samples,
+            "profile_branch_taken": self.profile_branch_taken,
+            "profile_branch_fallthrough": self.profile_branch_fallthrough,
+            "profile_branch_cold_blocks": self.profile_branch_cold_blocks,
+            "profile_branch_side_exits": self.profile_branch_side_exits,
             "not_eligible": self.not_eligible,
+            "native_decline_reasons": &self.native_decline_reasons,
             "compile_failed": self.compile_failed,
             "native_calls": self.native_calls,
             "bails": self.native_bails,
+            "child_bails": self.native_child_bails,
+            "child_resumes": self.native_child_resumes,
             "arg_mismatch": self.arg_mismatch,
             "tier_deferred": self.tier_deferred,
             "compile_ms": self.compile_nanos as f64 / 1.0e6,
@@ -2165,12 +2408,16 @@ compile_ms={:.3} run_ms={:.3} osr_entries={}",
 /// One block per function (deduped by construction — each function is visited once).
 #[cfg(feature = "native-jit")]
 fn jit_missed_opt_report(unit: &RegUnit, native: &NativeState) -> Vec<String> {
-    let mut out = Vec::new();
+    let mut out = vec![format!("jit-report: summary\n  {}", native.stats.summary())];
+    let native_decline_counts = native_decline_reason_counts(unit);
     for func in &unit.functions {
+        let profile_lines = jit_profile_report_lines(unit, func);
         // Skip the synthetic/placeholder/trivial bodies: a body that is only the
         // lowerer's defensive `LoadUnit; Return` (≤ 2 instructions, no real work) is
-        // not a "hot region" worth a block. Everything with real code gets one.
-        if func.code.len() <= 2 {
+        // not a "hot region" worth a block unless it accumulated profile feedback.
+        // Tiny higher-order dispatchers often contain only `CallClosure; Return`,
+        // and their profile is exactly the data J2 speculation consumes.
+        if func.code.len() <= 2 && profile_lines.is_empty() {
             continue;
         }
         let key = Rc::as_ptr(func) as usize;
@@ -2188,7 +2435,8 @@ fn jit_missed_opt_report(unit: &RegUnit, native: &NativeState) -> Vec<String> {
                 }
             }
             None => {
-                block.push(format!("  not native: {}", native_decline_reason(unit, func)));
+                let reason = native_decline_reason(unit, func);
+                block.push(format!("  not native: {reason}"));
             }
         }
 
@@ -2209,20 +2457,26 @@ fn jit_missed_opt_report(unit: &RegUnit, native: &NativeState) -> Vec<String> {
                 None => {
                     if jit_function_has_loop(&func.code) {
                         block.push(
-                            "  not osr: loop shape not a single reducible natural loop"
-                                .to_string(),
+                            "  not osr: loop shape not a single reducible natural loop".to_string(),
                         );
                     } else {
                         block.push("  not osr: no loop".to_string());
                     }
                 }
                 Some(lp) => {
+                    let checked = native_lower_checked_payload_intrinsics_in_region(
+                        &func.code, func.regs, lp.header, lp.exit,
+                    );
+                    let (code, header, exit) = checked
+                        .as_ref()
+                        .map(|(code, _, _)| (code.as_slice(), lp.header, lp.exit))
+                        .unwrap_or((func.code.as_slice(), lp.header, lp.exit));
                     // A candidate loop exists but it did not OSR. Surface the first
-                    // disqualifier in the RAW loop body (registry-sourced for
-                    // intrinsics) as the likely cause; if the raw body is already in
-                    // the native subset, the decline was a downstream
-                    // type/marshalling reason.
-                    match first_non_subset_reason(&func.code[lp.header..lp.exit]) {
+                    // disqualifier after cheap native-only checked-payload rewrites
+                    // (registry-sourced for intrinsics) as the likely cause; if the
+                    // body is already in the native subset, the decline was a
+                    // downstream type/marshalling reason.
+                    match first_non_subset_reason(&code[header..exit]) {
                         Some(reason) => block.push(format!("  not osr: loop body {reason}")),
                         None if native.report_native_ok.contains(&key) => block.push(
                             "  osr: n/a (whole function ran native; no mid-function OSR needed)"
@@ -2236,9 +2490,136 @@ fn jit_missed_opt_report(unit: &RegUnit, native: &NativeState) -> Vec<String> {
             }
         }
 
+        block.extend(profile_lines);
         out.push(block.join("\n"));
     }
+    out.insert(1, jit_native_decline_summary_block(native_decline_counts));
     out
+}
+
+#[cfg(feature = "native-jit")]
+fn native_decline_reason_counts(unit: &RegUnit) -> BTreeMap<String, u64> {
+    let mut counts = BTreeMap::<String, u64>::new();
+    for func in &unit.functions {
+        let profile_lines = jit_profile_report_lines(unit, func);
+        if func.code.len() <= 2 && profile_lines.is_empty() {
+            continue;
+        }
+        if translate_to_native_jit(unit, func).is_none() {
+            let reason = native_decline_reason(unit, func);
+            *counts.entry(reason).or_default() += 1;
+        }
+    }
+    counts
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_native_decline_summary_block(counts: BTreeMap<String, u64>) -> String {
+    let mut lines = vec!["jit-report: native decline summary".to_string()];
+    if counts.is_empty() {
+        lines.push("  none".to_string());
+        return lines.join("\n");
+    }
+
+    let mut counts: Vec<(String, u64)> = counts.into_iter().collect();
+    counts.sort_by(|(lhs_reason, lhs_count), (rhs_reason, rhs_count)| {
+        rhs_count
+            .cmp(lhs_count)
+            .then_with(|| lhs_reason.cmp(rhs_reason))
+    });
+    for (reason, count) in counts {
+        lines.push(format!("  {count}x {reason}"));
+    }
+    lines.join("\n")
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_profile_report_lines(unit: &RegUnit, func: &RegFunction) -> Vec<String> {
+    let Ok(profile) = func.profile.try_borrow() else {
+        return vec!["  profile: unavailable (profile borrow busy)".to_string()];
+    };
+    let Some(profile) = profile.as_ref() else {
+        return Vec::new();
+    };
+    let function_name = |id: usize| {
+        unit.functions
+            .get(id)
+            .map(|func| func.name.as_str())
+            .unwrap_or("<unknown>")
+            .to_string()
+    };
+    let mut lines = Vec::new();
+    for (ip, instr) in func.code.iter().enumerate() {
+        if !matches!(instr, RegInstr::CallClosure { .. }) {
+            continue;
+        }
+        let Some(feedback) = profile.call_sites.get(&ip) else {
+            continue;
+        };
+        let state = match feedback.state() {
+            MonoState::Monomorphic => "monomorphic",
+            MonoState::Polymorphic => "polymorphic",
+            MonoState::Megamorphic => "megamorphic",
+        };
+        let observed = feedback
+            .observed
+            .iter()
+            .map(|(key, count)| {
+                let name = usize::try_from(*key)
+                    .ok()
+                    .map(&function_name)
+                    .unwrap_or_else(|| "<invalid>".to_string());
+                format!("{name}:{count}")
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let mut line = format!("  profile: closure@{ip} {state} observed=[{observed}]");
+        if !feedback.captures_all_scalar {
+            line.push_str(" scalar-captures=false");
+        }
+        if let Some(target) = monomorphic_closure_inline_target(unit, func, ip) {
+            line.push_str(&format!(" guard={}", function_name(target)));
+        } else if let Some(targets) = polymorphic_closure_inline_targets(unit, func, ip) {
+            let arm_count = targets.len();
+            let order = targets
+                .into_iter()
+                .map(&function_name)
+                .collect::<Vec<_>>()
+                .join(",");
+            line.push_str(&format!(" pic=hottest-first[{order}] pic_arms={arm_count}"));
+        }
+        lines.push(line);
+    }
+    for (ip, instr) in func.code.iter().enumerate() {
+        if !matches!(
+            instr,
+            RegInstr::JumpIfBool { .. } | RegInstr::JumpIfIntCompare { .. }
+        ) {
+            continue;
+        }
+        let Some(feedback) = profile.branch_feedback(ip) else {
+            continue;
+        };
+        let mut line = format!(
+            "  profile: branch@{ip} taken={} fallthrough={} taken_pct={:.1} bias={}",
+            feedback.taken,
+            feedback.fallthrough,
+            feedback.taken_percent(),
+            profile.branch_bias(ip).as_str(),
+        );
+        if let Some(hot_target) = feedback.hot_edge() {
+            let (hot_edge, cold_edge) = if hot_target {
+                ("target", "fallthrough")
+            } else {
+                ("fallthrough", "target")
+            };
+            line.push_str(&format!(
+                " hot_edge={hot_edge} side_exit_candidate={cold_edge}"
+            ));
+        }
+        lines.push(line);
+    }
+    lines
 }
 
 /// Re-derive, observationally, the first reason whole-function native translation
@@ -2250,16 +2631,33 @@ fn native_decline_reason(unit: &RegUnit, func: &RegFunction) -> String {
     if func.captures != 0 {
         return "function has captures (closure body, not a native leaf)".to_string();
     }
-    // Re-run leaf inlining + Option scalar-replacement exactly as translation does, so
-    // the reason reflects the FINAL body the native subset check sees. If either bails,
-    // report that — these are the structural reasons (un-inlinable call / escaping
-    // Option) the real pass declines on.
+    // Re-run leaf inlining + aggregate scalar-replacement exactly as translation does,
+    // so the reason reflects the FINAL body the native subset check sees. If any pass
+    // bails, report that — these are the structural reasons the real pass declines on.
     let Some((code, _n_regs, _ip_map)) = native_inline_leaf_calls(unit, func, false, None) else {
         return "contains a non-inlinable call (callee not native-inlinable)".to_string();
     };
+    let region_exit = native_whole_function_region_exit(&code);
+    let Some((code, _n_regs, _ip_map)) =
+        native_scalar_replace_results_in_region(&code, _n_regs, 0, region_exit)
+    else {
+        return "not scalar-replaced: Result escapes the region".to_string();
+    };
     let Some((code, _n_regs, _payload, _ip_map)) = native_scalar_replace_options(&code, _n_regs)
     else {
-        return "not scalar-replaced: Option/variant/struct escapes the region".to_string();
+        return "not scalar-replaced: Option escapes the region".to_string();
+    };
+    let region_exit = native_whole_function_region_exit(&code);
+    let Some((code, _n_regs, _ip_map)) =
+        native_scalar_replace_variants_in_region(&code, _n_regs, 0, region_exit)
+    else {
+        return "not scalar-replaced: variant escapes the region".to_string();
+    };
+    let region_exit = native_whole_function_region_exit(&code);
+    let Some((code, _n_regs, _ip_map)) =
+        native_scalar_replace_structs_in_region(&code, _n_regs, 0, region_exit)
+    else {
+        return "not scalar-replaced: struct escapes the region".to_string();
     };
     let reachable = native_reachable_instructions(&code);
     for (i, instr) in code.iter().enumerate() {
@@ -2358,50 +2756,745 @@ fn instr_decline_reason(instr: &RegInstr) -> Option<String> {
 // `unsafe` (the indirect call) lives in `vm-jit`.
 
 #[cfg(feature = "native-jit")]
-thread_local! {
-    /// Heap values for the in-flight native call, indexed by handle.
-    static JIT_HEAP_ARGS: RefCell<Vec<VmValue>> = const { RefCell::new(Vec::new()) };
+struct JitCallCtxState {
+    active_depth: usize,
+    active_token: vm_jit::HostCtx,
+    next_token: vm_jit::HostCtx,
+    heap_args: Vec<VmValue>,
+    heap_results: Vec<VmValue>,
+    heap_result_roots: Vec<Option<usize>>,
+    heap_writebacks: Vec<(usize, i64)>,
+    map_get_match_found: bool,
+    sorted_map_get_found: bool,
+}
 
-    /// Heap-result return ABI (heap-write S0): the per-call VM-owned **output table**
-    /// from which the host materializes a native call's heap result. Mirrors
-    /// `JIT_HEAP_ARGS` (the input table): VM-owned, per-call, indexed by an opaque
-    /// handle, and cleared on EVERY exit by `JitHeapResultsGuard`.
+#[cfg(feature = "native-jit")]
+impl JitCallCtxState {
+    const fn new() -> Self {
+        Self {
+            active_depth: 0,
+            active_token: 0,
+            next_token: 1,
+            heap_args: Vec::new(),
+            heap_results: Vec::new(),
+            heap_result_roots: Vec::new(),
+            heap_writebacks: Vec::new(),
+            map_get_match_found: false,
+            sorted_map_get_found: false,
+        }
+    }
+
+    fn reset_inputs_and_flags(&mut self) {
+        self.heap_args.clear();
+        self.map_get_match_found = false;
+        self.sorted_map_get_found = false;
+    }
+
+    fn clear_results(&mut self) {
+        self.heap_results.clear();
+        self.heap_result_roots.clear();
+    }
+
+    fn clear_writebacks(&mut self) {
+        self.heap_writebacks.clear();
+    }
+
+    fn allocate_token(&mut self) -> vm_jit::HostCtx {
+        let token = self.next_token.max(1);
+        self.next_token = self.next_token.wrapping_add(1).max(1);
+        token
+    }
+}
+
+#[cfg(feature = "native-jit")]
+thread_local! {
+    /// Native call ABI state: heap input handles, speculative heap result handles,
+    /// pending heap writebacks, and small match-helper side-channel flags for the
+    /// in-flight native call.
     ///
-    /// §7.2-safety: the host populates this table and materializes from it **only**
-    /// after a clean `NativeOutcome::CompletedHandle` (bail flag clear). On **any**
-    /// bail the host never touches it and the guard clears it on exit, so a bailed
-    /// attempt leaves NO value here — the interpreter re-run produces the result
-    /// itself, indistinguishable from never having attempted native. S0 does not let
-    /// native allocate/mutate; it only *returns a heap value it was given*, so no
-    /// observable effect precedes a possible bail and the §7.2 proof holds unchanged.
-    static JIT_HEAP_RESULTS: RefCell<Vec<VmValue>> = const { RefCell::new(Vec::new()) };
+    /// Heap results and writebacks remain speculative until a clean native completion.
+    /// On every bail/drop path the transaction/frame clears this context before the
+    /// interpreter re-runs, so no helper result becomes observable accidentally.
+    static JIT_CALL_CTX: RefCell<JitCallCtxState> =
+        const { RefCell::new(JitCallCtxState::new()) };
+    static JIT_STRING_LITERALS: RefCell<Vec<Rc<String>>> = const { RefCell::new(Vec::new()) };
+    static JIT_HEAP_WRITE_UNDO: RefCell<Vec<JitHeapWriteUndo>> = const { RefCell::new(Vec::new()) };
+    static JIT_HEAP_WRITE_SNAPSHOT_KEYS: RefCell<Vec<JitHeapSnapshotKey>> =
+        const { RefCell::new(Vec::new()) };
+    static JIT_HEAP_VALUE_CACHE: RefCell<Vec<JitHeapValueCache>> = const { RefCell::new(Vec::new()) };
+    static JIT_SORTED_MAP_SCAN_CACHE: RefCell<Option<JitSortedMapScanCache>> =
+        const { RefCell::new(None) };
+    static JIT_LIST_HANDLE_CACHE: RefCell<Option<JitListHandleCache>> =
+        const { RefCell::new(None) };
+    static JIT_MAP_HANDLE_CACHE: RefCell<Option<JitMapHandleCache>> =
+        const { RefCell::new(None) };
+    static JIT_DEQUE_HANDLE_CACHE: RefCell<Option<JitDequeHandleCache>> =
+        const { RefCell::new(None) };
+}
+
+#[cfg(feature = "native-jit")]
+#[derive(Clone, Copy)]
+struct JitSortedMapScanCache {
+    handle: i64,
+    next_index: usize,
+}
+
+#[cfg(feature = "native-jit")]
+struct JitListHandleCache {
+    handle: i64,
+    list: Rc<RefCell<TypedVec>>,
+}
+
+#[cfg(feature = "native-jit")]
+struct JitMapHandleCache {
+    handle: i64,
+    map: Rc<RefCell<ValueMap>>,
+}
+
+#[cfg(feature = "native-jit")]
+struct JitDequeHandleCache {
+    handle: i64,
+    deque: Rc<RefCell<VecDeque<VmValue>>>,
+}
+
+#[cfg(feature = "native-jit")]
+struct JitHeapValueCache {
+    handle: i64,
+    value: VmValue,
+}
+
+#[cfg(feature = "native-jit")]
+enum JitHeapWriteUndo {
+    List(Rc<RefCell<TypedVec>>, TypedVec),
+    Map(Rc<RefCell<ValueMap>>, ValueMap),
+    Deque(Rc<RefCell<VecDeque<VmValue>>>, VecDeque<VmValue>),
+}
+
+#[cfg(feature = "native-jit")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum JitHeapSnapshotKey {
+    List(*const RefCell<TypedVec>),
+    Map(*const RefCell<ValueMap>),
+    Deque(*const RefCell<VecDeque<VmValue>>),
 }
 
 /// Clears the per-call heap-arg table on drop, so a native attempt never retains
 /// its cloned struct/list arguments past the call (on success, bail, or error).
 #[cfg(feature = "native-jit")]
-struct JitHeapArgsGuard;
+struct JitCallCtx;
 
 #[cfg(feature = "native-jit")]
-impl Drop for JitHeapArgsGuard {
-    fn drop(&mut self) {
-        JIT_HEAP_ARGS.with(|table| table.borrow_mut().clear());
+impl JitCallCtx {
+    fn enter_frame() {
+        JIT_CALL_CTX.with(|ctx| {
+            let mut ctx = ctx.borrow_mut();
+            if ctx.active_depth == 0 {
+                ctx.reset_inputs_and_flags();
+                ctx.clear_results();
+                ctx.clear_writebacks();
+                ctx.active_token = ctx.allocate_token();
+            }
+            ctx.active_depth = ctx.active_depth.saturating_add(1);
+        });
+        jit_clear_heap_handle_caches();
+    }
+
+    fn exit_frame() -> bool {
+        let became_inactive = JIT_CALL_CTX.with(|ctx| {
+            let mut ctx = ctx.borrow_mut();
+            debug_assert!(
+                ctx.active_depth > 0,
+                "native call context exited without an active frame"
+            );
+            if ctx.active_depth > 0 {
+                ctx.active_depth -= 1;
+            }
+            if ctx.active_depth == 0 {
+                ctx.reset_inputs_and_flags();
+                ctx.clear_results();
+                ctx.clear_writebacks();
+                ctx.active_token = 0;
+                true
+            } else {
+                false
+            }
+        });
+        if became_inactive {
+            jit_clear_heap_write_undo();
+            jit_clear_heap_handle_caches();
+        }
+        became_inactive
+    }
+
+    fn is_active() -> bool {
+        JIT_CALL_CTX.with(|ctx| ctx.borrow().active_depth > 0)
+    }
+
+    fn active_token() -> vm_jit::HostCtx {
+        JIT_CALL_CTX.with(|ctx| {
+            let ctx = ctx.borrow();
+            if ctx.active_depth > 0 {
+                ctx.active_token
+            } else {
+                0
+            }
+        })
+    }
+
+    fn token_is_active(token: vm_jit::HostCtx) -> bool {
+        token != 0
+            && JIT_CALL_CTX.with(|ctx| {
+                let ctx = ctx.borrow();
+                ctx.active_depth > 0 && ctx.active_token == token
+            })
+    }
+
+    fn push_heap_arg(value: VmValue) -> usize {
+        JIT_CALL_CTX.with(|ctx| {
+            let mut ctx = ctx.borrow_mut();
+            assert!(
+                ctx.active_depth > 0,
+                "native heap arg registered outside an active native call context",
+            );
+            ctx.heap_args.push(value);
+            ctx.heap_args.len() - 1
+        })
+    }
+
+    fn with_heap_arg<R>(index: usize, read: impl FnOnce(&VmValue) -> Option<R>) -> Option<R> {
+        JIT_CALL_CTX.with(|ctx| {
+            let ctx = ctx.borrow();
+            if ctx.active_depth == 0 {
+                return None;
+            }
+            ctx.heap_args.get(index).and_then(read)
+        })
+    }
+
+    fn clone_heap_arg(index: usize) -> Option<VmValue> {
+        JIT_CALL_CTX.with(|ctx| {
+            let ctx = ctx.borrow();
+            if ctx.active_depth == 0 {
+                return None;
+            }
+            ctx.heap_args.get(index).cloned()
+        })
+    }
+
+    fn clear_heap_results() {
+        JIT_CALL_CTX.with(|ctx| ctx.borrow_mut().clear_results());
+    }
+
+    fn push_heap_result(value: VmValue, root: Option<usize>) -> Option<i64> {
+        JIT_CALL_CTX.with(|ctx| {
+            let mut ctx = ctx.borrow_mut();
+            if ctx.active_depth == 0 {
+                return None;
+            }
+            ctx.heap_results.push(value);
+            match JitHeapHandle::encode_output(ctx.heap_results.len() - 1) {
+                Some(index) => {
+                    ctx.heap_result_roots.push(root);
+                    Some(index)
+                }
+                None => {
+                    ctx.heap_results.pop();
+                    None
+                }
+            }
+        })
+    }
+
+    fn clone_heap_result(index: usize) -> Option<VmValue> {
+        JIT_CALL_CTX.with(|ctx| {
+            let ctx = ctx.borrow();
+            if ctx.active_depth == 0 {
+                return None;
+            }
+            ctx.heap_results.get(index).cloned()
+        })
+    }
+
+    fn heap_result_root(index: usize) -> Option<usize> {
+        JIT_CALL_CTX.with(|ctx| {
+            let ctx = ctx.borrow();
+            if ctx.active_depth == 0 {
+                return None;
+            }
+            ctx.heap_result_roots.get(index).copied().flatten()
+        })
+    }
+
+    fn heap_results_empty() -> bool {
+        JIT_CALL_CTX.with(|ctx| {
+            let ctx = ctx.borrow();
+            ctx.heap_results.is_empty() && ctx.heap_result_roots.is_empty()
+        })
+    }
+
+    fn clear_heap_writebacks() {
+        JIT_CALL_CTX.with(|ctx| ctx.borrow_mut().clear_writebacks());
+    }
+
+    fn push_heap_writeback(root: usize, handle: i64) {
+        JIT_CALL_CTX.with(|ctx| {
+            let mut ctx = ctx.borrow_mut();
+            if ctx.active_depth > 0 {
+                ctx.heap_writebacks.push((root, handle));
+            }
+        });
+    }
+
+    fn heap_writebacks_empty() -> bool {
+        JIT_CALL_CTX.with(|ctx| ctx.borrow().heap_writebacks.is_empty())
+    }
+
+    fn with_heap_writebacks<R>(read: impl FnOnce(&[(usize, i64)]) -> R) -> R {
+        JIT_CALL_CTX.with(|ctx| {
+            let ctx = ctx.borrow();
+            if ctx.active_depth == 0 {
+                return read(&[]);
+            }
+            read(ctx.heap_writebacks.as_slice())
+        })
+    }
+
+    fn set_map_get_match_found(value: bool) {
+        JIT_CALL_CTX.with(|ctx| {
+            let mut ctx = ctx.borrow_mut();
+            if ctx.active_depth > 0 {
+                ctx.map_get_match_found = value;
+            }
+        });
+    }
+
+    fn map_get_match_found() -> bool {
+        JIT_CALL_CTX.with(|ctx| ctx.borrow().map_get_match_found)
+    }
+
+    fn set_sorted_map_get_found(value: bool) {
+        JIT_CALL_CTX.with(|ctx| {
+            let mut ctx = ctx.borrow_mut();
+            if ctx.active_depth > 0 {
+                ctx.sorted_map_get_found = value;
+            }
+        });
+    }
+
+    fn sorted_map_get_found() -> bool {
+        JIT_CALL_CTX.with(|ctx| ctx.borrow().sorted_map_get_found)
     }
 }
 
-/// Clears the per-call heap-**result** output table on drop (heap-write S0), so a
-/// native attempt — clean OR bailed — never leaks a heap result past the call. This
-/// is the §7.2 belt-and-suspenders for the output table: even on a bail (where the
-/// host never populates it) the table is guaranteed empty for the next attempt, so
-/// no stale value can be double-materialized.
 #[cfg(feature = "native-jit")]
-struct JitHeapResultsGuard;
+#[derive(Clone, Copy)]
+struct JitHostCallCtx;
 
 #[cfg(feature = "native-jit")]
-impl Drop for JitHeapResultsGuard {
-    fn drop(&mut self) {
-        JIT_HEAP_RESULTS.with(|table| table.borrow_mut().clear());
+impl JitHostCallCtx {
+    fn active() -> Option<Self> {
+        JitCallCtx::is_active().then_some(Self)
     }
+
+    fn from_token(token: vm_jit::HostCtx) -> Option<Self> {
+        JitCallCtx::token_is_active(token).then_some(Self)
+    }
+
+    fn push_heap_arg(self, value: VmValue) -> usize {
+        JitCallCtx::push_heap_arg(value)
+    }
+
+    fn with_heap_arg<R>(self, index: usize, read: impl FnOnce(&VmValue) -> Option<R>) -> Option<R> {
+        JitCallCtx::with_heap_arg(index, read)
+    }
+
+    fn clone_heap_arg(self, index: usize) -> Option<VmValue> {
+        JitCallCtx::clone_heap_arg(index)
+    }
+
+    fn push_heap_result(self, value: VmValue, root: Option<usize>) -> Option<i64> {
+        JitCallCtx::push_heap_result(value, root)
+    }
+
+    fn publish_heap_result(self, value: VmValue) -> i64 {
+        jit_push_heap_result_with_root_with_ctx(self, value, None)
+    }
+
+    fn publish_heap_handle(self, value: Option<VmValue>) -> i64 {
+        match value {
+            Some(value) => self.push_heap_arg(value) as i64,
+            None => {
+                vm_jit::signal_bail();
+                0
+            }
+        }
+    }
+
+    fn clone_heap_result(self, index: usize) -> Option<VmValue> {
+        JitCallCtx::clone_heap_result(index)
+    }
+
+    fn heap_result_root(self, index: usize) -> Option<usize> {
+        JitCallCtx::heap_result_root(index)
+    }
+
+    fn push_heap_writeback(self, root: usize, handle: i64) {
+        JitCallCtx::push_heap_writeback(root, handle);
+    }
+
+    fn with_heap_writebacks<R>(self, read: impl FnOnce(&[(usize, i64)]) -> R) -> R {
+        JitCallCtx::with_heap_writebacks(read)
+    }
+
+    fn set_map_get_match_found(self, value: bool) {
+        JitCallCtx::set_map_get_match_found(value);
+    }
+
+    fn map_get_match_found(self) -> bool {
+        JitCallCtx::map_get_match_found()
+    }
+
+    fn set_sorted_map_get_found(self, value: bool) {
+        JitCallCtx::set_sorted_map_get_found(value);
+    }
+
+    fn sorted_map_get_found(self) -> bool {
+        JitCallCtx::sorted_map_get_found()
+    }
+
+    fn heap_read<R>(self, handle: i64, read: impl FnOnce(&VmValue) -> Option<R>) -> Option<R> {
+        let index = usize::try_from(handle).ok()?;
+        self.with_heap_arg(index, read)
+    }
+
+    fn heap_read_handle<R>(
+        self,
+        handle: i64,
+        read: impl FnOnce(&VmValue) -> Option<R>,
+    ) -> Option<R> {
+        let value = jit_cached_heap_value_with_ctx(self, handle)?;
+        read(&value)
+    }
+
+    fn heap_list_handle(self, handle: i64) -> Option<Rc<RefCell<TypedVec>>> {
+        jit_heap_list_handle_with_ctx(self, handle)
+    }
+
+    fn heap_map_handle(self, handle: i64) -> Option<Rc<RefCell<ValueMap>>> {
+        jit_heap_map_handle_with_ctx(self, handle)
+    }
+
+    fn heap_deque_handle(self, handle: i64) -> Option<Rc<RefCell<VecDeque<VmValue>>>> {
+        jit_heap_deque_handle_with_ctx(self, handle)
+    }
+
+    fn with_journaled_list_write<R>(
+        self,
+        handle: i64,
+        write: impl FnOnce(&mut TypedVec) -> Option<R>,
+    ) -> Option<R> {
+        jit_with_journaled_list_write_with_ctx(self, handle, write)
+    }
+
+    fn with_journaled_map_write<R>(
+        self,
+        handle: i64,
+        write: impl FnOnce(&mut ValueMap) -> Option<R>,
+    ) -> Option<R> {
+        jit_with_journaled_map_write_with_ctx(self, handle, write)
+    }
+
+    fn with_journaled_deque_write<R>(
+        self,
+        handle: i64,
+        write: impl FnOnce(&mut VecDeque<VmValue>) -> Option<R>,
+    ) -> Option<R> {
+        jit_with_journaled_deque_write_with_ctx(self, handle, write)
+    }
+}
+
+#[cfg(feature = "native-jit")]
+struct JitCallCtxGuard;
+
+#[cfg(feature = "native-jit")]
+impl JitCallCtxGuard {
+    fn enter() -> Self {
+        JitCallCtx::enter_frame();
+        Self
+    }
+}
+
+#[cfg(feature = "native-jit")]
+impl Drop for JitCallCtxGuard {
+    fn drop(&mut self) {
+        if JitCallCtx::exit_frame() {
+            jit_debug_assert_call_ctx_clean();
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+struct JitNativeCallFrame {
+    heap_tx: JitHeapTransactionGuard,
+    _ctx: JitCallCtxGuard,
+}
+
+#[cfg(feature = "native-jit")]
+impl JitNativeCallFrame {
+    fn begin() -> Self {
+        let ctx = JitCallCtxGuard::enter();
+        let heap_tx = JitHeapTransactionGuard::begin_after_context_clear();
+        Self { heap_tx, _ctx: ctx }
+    }
+
+    fn push_heap_arg(&self, value: VmValue) -> usize {
+        JitCallCtx::push_heap_arg(value)
+    }
+
+    fn host_ctx(&self) -> vm_jit::HostCtx {
+        JitCallCtx::active_token()
+    }
+
+    fn commit_scalar_with_writebacks(
+        &mut self,
+        input_slots: &[(usize, usize)],
+    ) -> Option<Vec<(usize, VmValue)>> {
+        self.heap_tx.commit_scalar_with_writebacks(input_slots)
+    }
+
+    fn commit_handle_with_writebacks(
+        &mut self,
+        handle: i64,
+        input_slots: &[(usize, usize)],
+    ) -> Option<(VmValue, Vec<(usize, VmValue)>)> {
+        self.heap_tx
+            .commit_handle_with_writebacks(handle, input_slots)
+    }
+
+    fn abort(&mut self) {
+        self.heap_tx.abort();
+    }
+
+    fn can_precise_deopt_resume(&self) -> bool {
+        self.heap_tx.can_precise_deopt_resume()
+    }
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_debug_assert_call_ctx_clean() {
+    debug_assert!(
+        JIT_CALL_CTX.with(|ctx| ctx.borrow().active_depth == 0),
+        "native call context leaked an active frame",
+    );
+    debug_assert!(
+        JIT_CALL_CTX.with(|ctx| ctx.borrow().active_token == 0),
+        "native call context leaked an active token",
+    );
+    debug_assert!(
+        JIT_CALL_CTX.with(|ctx| ctx.borrow().heap_args.is_empty()),
+        "native call context leaked heap arguments",
+    );
+    debug_assert!(
+        JIT_CALL_CTX.with(|ctx| ctx.borrow().heap_results.is_empty()),
+        "native call context leaked heap results",
+    );
+    debug_assert!(
+        JIT_CALL_CTX.with(|ctx| ctx.borrow().heap_result_roots.is_empty()),
+        "native call context leaked heap result roots",
+    );
+    debug_assert!(
+        JIT_CALL_CTX.with(|ctx| ctx.borrow().heap_writebacks.is_empty()),
+        "native call context leaked heap writebacks",
+    );
+    debug_assert!(
+        JIT_HEAP_WRITE_UNDO.with(|undo| undo.borrow().is_empty()),
+        "native call context leaked heap write undo entries",
+    );
+    debug_assert!(
+        JIT_HEAP_WRITE_SNAPSHOT_KEYS.with(|keys| keys.borrow().is_empty()),
+        "native call context leaked heap write snapshot keys",
+    );
+    debug_assert!(
+        JIT_HEAP_VALUE_CACHE.with(|cache| cache.borrow().is_empty()),
+        "native call context leaked heap value cache entries",
+    );
+    debug_assert!(
+        JIT_LIST_HANDLE_CACHE.with(|cache| cache.borrow().is_none()),
+        "native call context leaked list handle cache",
+    );
+    debug_assert!(
+        JIT_MAP_HANDLE_CACHE.with(|cache| cache.borrow().is_none()),
+        "native call context leaked map handle cache",
+    );
+    debug_assert!(
+        JIT_DEQUE_HANDLE_CACHE.with(|cache| cache.borrow().is_none()),
+        "native call context leaked deque handle cache",
+    );
+    debug_assert!(
+        !JIT_CALL_CTX.with(|ctx| ctx.borrow().map_get_match_found),
+        "native call context leaked map-get found flag",
+    );
+    debug_assert!(
+        !JIT_CALL_CTX.with(|ctx| ctx.borrow().sorted_map_get_found),
+        "native call context leaked sorted-map-get found flag",
+    );
+}
+
+/// Transaction guard for heap values allocated by native host helpers. Helpers
+/// publish into the call context's heap-result table, but those values stay speculative until the
+/// native call completes without a bail. Dropping an uncommitted transaction aborts
+/// it, so every early return/fallback path preserves the interpreter's visible
+/// heap state.
+#[cfg(feature = "native-jit")]
+struct JitHeapTransactionGuard {
+    finished: bool,
+    owns_ctx_frame: bool,
+}
+
+#[cfg(feature = "native-jit")]
+impl JitHeapTransactionGuard {
+    #[allow(dead_code)]
+    fn begin() -> Self {
+        let owns_ctx_frame = !JitCallCtx::is_active();
+        if owns_ctx_frame {
+            JitCallCtx::enter_frame();
+        }
+        JitCallCtx::clear_heap_results();
+        JitCallCtx::clear_heap_writebacks();
+        jit_clear_heap_write_undo();
+        jit_clear_heap_handle_caches();
+        Self {
+            finished: false,
+            owns_ctx_frame,
+        }
+    }
+
+    fn begin_after_context_clear() -> Self {
+        debug_assert!(
+            JitCallCtx::is_active(),
+            "native heap transaction must run inside an active native call context",
+        );
+        JitCallCtx::clear_heap_results();
+        JitCallCtx::clear_heap_writebacks();
+        jit_clear_heap_write_undo();
+        Self {
+            finished: false,
+            owns_ctx_frame: false,
+        }
+    }
+
+    fn commit_scalar_with_writebacks(
+        &mut self,
+        input_slots: &[(usize, usize)],
+    ) -> Option<Vec<(usize, VmValue)>> {
+        let writebacks = jit_materialize_heap_writebacks(input_slots)?;
+        JitCallCtx::clear_heap_results();
+        JitCallCtx::clear_heap_writebacks();
+        jit_clear_heap_write_undo();
+        jit_clear_heap_handle_caches();
+        self.finished = true;
+        Some(writebacks)
+    }
+
+    fn commit_handle_with_writebacks(
+        &mut self,
+        handle: i64,
+        input_slots: &[(usize, usize)],
+    ) -> Option<(VmValue, Vec<(usize, VmValue)>)> {
+        let value = jit_materialize_heap_result(handle)?;
+        let writebacks = jit_materialize_heap_writebacks(input_slots)?;
+        JitCallCtx::clear_heap_results();
+        JitCallCtx::clear_heap_writebacks();
+        jit_clear_heap_write_undo();
+        jit_clear_heap_handle_caches();
+        self.finished = true;
+        Some((value, writebacks))
+    }
+
+    fn abort(&mut self) {
+        jit_restore_heap_writes();
+        JitCallCtx::clear_heap_results();
+        JitCallCtx::clear_heap_writebacks();
+        jit_clear_heap_write_undo();
+        jit_clear_heap_handle_caches();
+        self.finished = true;
+    }
+
+    fn can_precise_deopt_resume(&self) -> bool {
+        let no_heap_results = JitCallCtx::heap_results_empty();
+        let no_heap_writebacks = JitCallCtx::heap_writebacks_empty();
+        let no_heap_writes = JIT_HEAP_WRITE_UNDO.with(|undo| undo.borrow().is_empty())
+            && JIT_HEAP_WRITE_SNAPSHOT_KEYS.with(|keys| keys.borrow().is_empty());
+        no_heap_results && no_heap_writebacks && no_heap_writes
+    }
+}
+
+#[cfg(feature = "native-jit")]
+impl Drop for JitHeapTransactionGuard {
+    fn drop(&mut self) {
+        if !self.finished {
+            jit_restore_heap_writes();
+            JitCallCtx::clear_heap_results();
+            JitCallCtx::clear_heap_writebacks();
+            jit_clear_heap_write_undo();
+            jit_clear_heap_handle_caches();
+        }
+        if self.owns_ctx_frame && JitCallCtx::exit_frame() {
+            jit_debug_assert_call_ctx_clean();
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+struct JitStringLiteralsGuard;
+
+#[cfg(feature = "native-jit")]
+impl Drop for JitStringLiteralsGuard {
+    fn drop(&mut self) {
+        JIT_STRING_LITERALS.with(|table| table.borrow_mut().clear());
+    }
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_install_string_literals(literals: &[Rc<String>]) -> JitStringLiteralsGuard {
+    JIT_STRING_LITERALS.with(|table| {
+        *table.borrow_mut() = literals.to_vec();
+    });
+    JitStringLiteralsGuard
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_clear_heap_handle_caches() {
+    JIT_HEAP_VALUE_CACHE.with(|cache| {
+        cache.borrow_mut().clear();
+    });
+    JIT_LIST_HANDLE_CACHE.with(|cache| {
+        *cache.borrow_mut() = None;
+    });
+    JIT_MAP_HANDLE_CACHE.with(|cache| {
+        *cache.borrow_mut() = None;
+    });
+    JIT_DEQUE_HANDLE_CACHE.with(|cache| {
+        *cache.borrow_mut() = None;
+    });
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_clear_heap_write_undo() {
+    JIT_HEAP_WRITE_UNDO.with(|undo| undo.borrow_mut().clear());
+    JIT_HEAP_WRITE_SNAPSHOT_KEYS.with(|keys| keys.borrow_mut().clear());
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_mark_heap_snapshot(key: JitHeapSnapshotKey) -> bool {
+    JIT_HEAP_WRITE_SNAPSHOT_KEYS.with(|keys| {
+        let mut keys = keys.borrow_mut();
+        if keys.contains(&key) {
+            return false;
+        }
+        keys.push(key);
+        true
+    })
 }
 
 #[cfg(feature = "native-jit")]
@@ -2411,23 +3504,636 @@ fn jit_host_helpers() -> vm_jit::HostHelpers {
     // `#![forbid(unsafe_code)]` honest without an unsound safe API on the boundary.
     vm_jit::HostHelpers {
         field_int: rss_jit_field_int,
+        field_set_int: rss_jit_field_set_int,
         list_len: rss_jit_list_len,
+        list_is_empty: rss_jit_list_is_empty,
         list_get_int: rss_jit_list_get_int,
+        list_set_int: rss_jit_list_set_int,
+        list_push_int: rss_jit_list_push_int,
+        list_sort_int: rss_jit_list_sort_int,
+        list_new_int: rss_jit_list_new_int,
         field_float: rss_jit_field_float,
         list_get_float: rss_jit_list_get_float,
         closure_id: rss_jit_closure_id,
         closure_capture: rss_jit_closure_capture,
+        field_closure_id: rss_jit_field_closure_id,
+        field_closure_capture: rss_jit_field_closure_capture,
         field_handle: rss_jit_field_handle,
         list_get_handle: rss_jit_list_get_handle,
+        string_from_int: rss_jit_string_from_int,
+        string_len: rss_jit_string_len,
+        string_concat: rss_jit_string_concat,
+        string_slice: rss_jit_string_slice,
+        string_pad_left: rss_jit_string_pad_left,
+        string_pad_left_len: rss_jit_string_pad_left_len,
+        string_split: rss_jit_string_split,
+        string_starts_with: rss_jit_string_starts_with,
+        string_split_count: rss_jit_string_split_count,
+        string_literal: rss_jit_string_literal,
+        json_parse: rss_jit_json_parse,
+        json_field: rss_jit_json_field,
+        json_field_int: rss_jit_json_field_int,
+        bytes_len: rss_jit_bytes_len,
+        bytes_slice: rss_jit_bytes_slice,
+        map_insert_int: rss_jit_map_insert_int,
+        map_get_int: rss_jit_map_get_int,
+        map_get_match_int: rss_jit_map_get_match_int,
+        map_get_match_found: rss_jit_map_get_match_found,
+        map_contains_int: rss_jit_map_contains_int,
+        map_len: rss_jit_map_len,
+        map_is_empty: rss_jit_map_is_empty,
+        set_insert_int: rss_jit_set_insert_int,
+        set_len: rss_jit_set_len,
+        set_is_empty: rss_jit_set_is_empty,
+        sorted_set_insert_int: rss_jit_sorted_set_insert_int,
+        sorted_set_contains_int: rss_jit_sorted_set_contains_int,
+        sorted_set_is_empty: rss_jit_sorted_set_is_empty,
+        sorted_map_insert_int: rss_jit_sorted_map_insert_int,
+        sorted_map_get_int: rss_jit_sorted_map_get_int,
+        sorted_map_get_found: rss_jit_sorted_map_get_found,
+        sorted_map_contains_key_int: rss_jit_sorted_map_contains_key_int,
+        sorted_map_is_empty: rss_jit_sorted_map_is_empty,
+        sorted_map_len: rss_jit_sorted_map_len,
+        deque_len: rss_jit_deque_len,
+        deque_is_empty: rss_jit_deque_is_empty,
+        deque_push_back_int: rss_jit_deque_push_back_int,
+        deque_push_front_int: rss_jit_deque_push_front_int,
+        deque_pop_front_int: rss_jit_deque_pop_front_int,
+        deque_pop_back_int: rss_jit_deque_pop_back_int,
     }
 }
 
-/// Look up the heap value for `handle` and apply `read`; `None` (→ bail) if the
-/// handle is invalid or the read fails.
 #[cfg(feature = "native-jit")]
-fn jit_heap_read<R>(handle: i64, read: impl FnOnce(&VmValue) -> Option<R>) -> Option<R> {
-    let index = usize::try_from(handle).ok()?;
-    JIT_HEAP_ARGS.with(|args| args.borrow().get(index).and_then(|value| read(value)))
+fn jit_verify_deopt_map(
+    module: &vm_jit::NativeModule,
+    id: vm_jit::CompiledId,
+    jit_fn: &vm_jit::JitFunction,
+    forced_safepoint: Option<u32>,
+    required_resume_ip: Option<usize>,
+) -> Result<(), String> {
+    let map = module
+        .deopt_map(id)
+        .ok_or_else(|| "compiled function has no deopt map".to_string())?;
+    let n_regs = usize::try_from(jit_fn.n_regs).map_err(|_| "n_regs overflow".to_string())?;
+    if n_regs != jit_fn.reg_types.len() {
+        return Err(format!(
+            "n_regs/reg_types mismatch: n_regs={} reg_types={}",
+            n_regs,
+            jit_fn.reg_types.len()
+        ));
+    }
+    if let Some(compiled_n_regs) = module.n_regs(id)
+        && compiled_n_regs != n_regs
+    {
+        return Err(format!(
+            "compiled n_regs mismatch: module={} jit_fn={}",
+            compiled_n_regs, n_regs
+        ));
+    }
+    if let Some(site) = forced_safepoint
+        && site > 0
+        && (site as usize) <= map.sites.len()
+        && map.sites[(site - 1) as usize].resume_ip as usize >= jit_fn.code.len()
+    {
+        return Err(format!(
+            "forced safepoint {site} resumes outside translated code"
+        ));
+    }
+
+    let mut saw_required_resume = required_resume_ip.is_none();
+    for (site_index, site) in map.sites.iter().enumerate() {
+        let resume_ip = site.resume_ip as usize;
+        if resume_ip >= jit_fn.code.len() {
+            return Err(format!(
+                "deopt site {} resumes at {}, outside translated code len {}",
+                site_index + 1,
+                resume_ip,
+                jit_fn.code.len()
+            ));
+        }
+        if required_resume_ip == Some(resume_ip) {
+            saw_required_resume = true;
+        }
+        for (reg, ty) in &site.live {
+            let reg = *reg as usize;
+            let Some(actual_ty) = jit_fn.reg_types.get(reg) else {
+                return Err(format!(
+                    "deopt site {} has out-of-range live reg {}",
+                    site_index + 1,
+                    reg
+                ));
+            };
+            if actual_ty != ty {
+                return Err(format!(
+                    "deopt site {} live reg {} type mismatch: map={:?} reg_types={:?}",
+                    site_index + 1,
+                    reg,
+                    ty,
+                    actual_ty
+                ));
+            }
+        }
+    }
+    if !saw_required_resume {
+        return Err(format!(
+            "compiled OSR function has no deopt site for required resume ip {}",
+            required_resume_ip.expect("checked above")
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_verify_compiled_native(
+    module: &vm_jit::NativeModule,
+    id: vm_jit::CompiledId,
+    jit_fn: &vm_jit::JitFunction,
+    forced_safepoint: Option<u32>,
+) -> Result<(), String> {
+    jit_verify_deopt_map(module, id, jit_fn, forced_safepoint, None)
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_verify_compiled_osr(
+    module: &vm_jit::NativeModule,
+    id: vm_jit::CompiledId,
+    jit_fn: &vm_jit::JitFunction,
+    trans_exit: usize,
+) -> Result<(), String> {
+    jit_verify_deopt_map(module, id, jit_fn, None, Some(trans_exit))
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_native_verify_is_strict() -> bool {
+    std::env::var_os("RSS_JIT_VERIFY").is_some()
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_native_deopt_every_from_env_value(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        let value = value.trim();
+        !value.is_empty() && value != "0" && !value.eq_ignore_ascii_case("false")
+    })
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_native_deopt_every_from_env() -> bool {
+    jit_native_deopt_every_from_env_value(std::env::var("RSS_JIT_DEOPT_EVERY").ok().as_deref())
+}
+
+#[cfg(feature = "native-jit")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum JitHeapHandle {
+    Input(usize),
+    Output(usize),
+}
+
+#[cfg(feature = "native-jit")]
+impl JitHeapHandle {
+    fn encode_output(index: usize) -> Option<i64> {
+        let index = i64::try_from(index).ok()?;
+        index.checked_add(1)?.checked_neg()
+    }
+
+    fn decode(bits: i64) -> Option<Self> {
+        if bits >= 0 {
+            return usize::try_from(bits).ok().map(JitHeapHandle::Input);
+        }
+        let index = bits.checked_add(1)?.checked_neg()?;
+        usize::try_from(index).ok().map(JitHeapHandle::Output)
+    }
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_cached_heap_value_with_ctx(ctx: JitHostCallCtx, handle: i64) -> Option<VmValue> {
+    if let Some(value) = JIT_HEAP_VALUE_CACHE.with(|cache| {
+        cache
+            .borrow()
+            .iter()
+            .find(|entry| entry.handle == handle)
+            .map(|entry| entry.value.clone())
+    }) {
+        return Some(value);
+    }
+
+    let value = match JitHeapHandle::decode(handle)? {
+        JitHeapHandle::Input(index) => ctx.clone_heap_arg(index),
+        JitHeapHandle::Output(index) => ctx.clone_heap_result(index),
+    }?;
+
+    JIT_HEAP_VALUE_CACHE.with(|cache| {
+        const CACHE_LIMIT: usize = 4;
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= CACHE_LIMIT {
+            cache.remove(0);
+        }
+        cache.push(JitHeapValueCache {
+            handle,
+            value: value.clone(),
+        });
+    });
+    Some(value)
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_materialize_heap_result(handle: i64) -> Option<VmValue> {
+    match JitHeapHandle::decode(handle)? {
+        JitHeapHandle::Input(index) => JitHostCallCtx::active()?.clone_heap_arg(index),
+        JitHeapHandle::Output(index) => JitHostCallCtx::active()?.clone_heap_result(index),
+    }
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_heap_result_root_with_ctx(ctx: JitHostCallCtx, handle: i64) -> Option<usize> {
+    match JitHeapHandle::decode(handle)? {
+        JitHeapHandle::Input(index) => Some(index),
+        JitHeapHandle::Output(index) => ctx.heap_result_root(index),
+    }
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_heap_handle_needs_write_undo(handle: i64) -> bool {
+    matches!(JitHeapHandle::decode(handle), Some(JitHeapHandle::Input(_)))
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_materialize_heap_writebacks(
+    input_slots: &[(usize, usize)],
+) -> Option<Vec<(usize, VmValue)>> {
+    JitHostCallCtx::active()?.with_heap_writebacks(|writebacks| {
+        let mut materialized = Vec::new();
+        for (input, slot) in input_slots {
+            if let Some((_, handle)) = writebacks
+                .iter()
+                .rev()
+                .find(|(updated_input, _)| updated_input == input)
+            {
+                materialized.push((*slot, jit_materialize_heap_result(*handle)?));
+            }
+        }
+        Some(materialized)
+    })
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_heap_list_handle_with_ctx(
+    ctx: JitHostCallCtx,
+    handle: i64,
+) -> Option<Rc<RefCell<TypedVec>>> {
+    if let Some(cached) = JIT_LIST_HANDLE_CACHE.with(|cache| {
+        let cache = cache.borrow();
+        cache
+            .as_ref()
+            .and_then(|cached| (cached.handle == handle).then(|| Rc::clone(&cached.list)))
+    }) {
+        return Some(cached);
+    }
+
+    ctx.heap_read_handle(handle, |value| match value {
+        VmValue::List(list) => Some(Rc::clone(list)),
+        VmValue::Managed(inner) => match &*inner.borrow() {
+            VmValue::List(list) => Some(Rc::clone(list)),
+            _ => None,
+        },
+        _ => None,
+    })
+    .inspect(|list| {
+        JIT_LIST_HANDLE_CACHE.with(|cache| {
+            *cache.borrow_mut() = Some(JitListHandleCache {
+                handle,
+                list: Rc::clone(list),
+            });
+        });
+    })
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_heap_map_handle_with_ctx(ctx: JitHostCallCtx, handle: i64) -> Option<Rc<RefCell<ValueMap>>> {
+    if let Some(cached) = JIT_MAP_HANDLE_CACHE.with(|cache| {
+        let cache = cache.borrow();
+        cache
+            .as_ref()
+            .and_then(|cached| (cached.handle == handle).then(|| Rc::clone(&cached.map)))
+    }) {
+        return Some(cached);
+    }
+
+    ctx.heap_read_handle(handle, |value| match value {
+        VmValue::Map(map) => Some(Rc::clone(map)),
+        VmValue::Managed(inner) => match &*inner.borrow() {
+            VmValue::Map(map) => Some(Rc::clone(map)),
+            _ => None,
+        },
+        _ => None,
+    })
+    .inspect(|map| {
+        JIT_MAP_HANDLE_CACHE.with(|cache| {
+            *cache.borrow_mut() = Some(JitMapHandleCache {
+                handle,
+                map: Rc::clone(map),
+            });
+        });
+    })
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_heap_deque_handle_with_ctx(
+    ctx: JitHostCallCtx,
+    handle: i64,
+) -> Option<Rc<RefCell<VecDeque<VmValue>>>> {
+    if handle >= 0 {
+        if let Some(cached) = JIT_DEQUE_HANDLE_CACHE.with(|cache| {
+            let cache = cache.borrow();
+            cache
+                .as_ref()
+                .and_then(|cached| (cached.handle == handle).then(|| Rc::clone(&cached.deque)))
+        }) {
+            return Some(cached);
+        }
+    }
+    ctx.heap_read_handle(handle, |value| match value {
+        VmValue::Deque(deque) => Some(Rc::clone(deque)),
+        VmValue::Managed(inner) => match &*inner.borrow() {
+            VmValue::Deque(deque) => Some(Rc::clone(deque)),
+            _ => None,
+        },
+        _ => None,
+    })
+    .inspect(|deque| {
+        if handle >= 0 {
+            JIT_DEQUE_HANDLE_CACHE.with(|cache| {
+                *cache.borrow_mut() = Some(JitDequeHandleCache {
+                    handle,
+                    deque: Rc::clone(deque),
+                });
+            });
+        }
+    })
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_snapshot_list_before_write(handle: i64, list: &Rc<RefCell<TypedVec>>) -> bool {
+    if !JitCallCtx::is_active() {
+        return false;
+    }
+    if !jit_heap_handle_needs_write_undo(handle) {
+        return true;
+    }
+    jit_snapshot_input_list_before_write(list)
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_snapshot_input_list_before_write(list: &Rc<RefCell<TypedVec>>) -> bool {
+    if !JitCallCtx::is_active() {
+        return false;
+    }
+    if !jit_mark_heap_snapshot(JitHeapSnapshotKey::List(Rc::as_ptr(list))) {
+        return true;
+    }
+    JIT_HEAP_WRITE_UNDO.with(|undo| {
+        undo.borrow_mut().push(JitHeapWriteUndo::List(
+            Rc::clone(list),
+            list.borrow().clone(),
+        ));
+    });
+    true
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_struct_field_list(value: &VmValue, slot: usize) -> Option<Rc<RefCell<TypedVec>>> {
+    match value {
+        VmValue::Struct(data) | VmValue::Variant(data) => match data.fields.get(slot)? {
+            VmValue::List(list) => Some(Rc::clone(list)),
+            VmValue::Managed(inner) => match &*inner.borrow() {
+                VmValue::List(list) => Some(Rc::clone(list)),
+                _ => None,
+            },
+            _ => None,
+        },
+        VmValue::Managed(inner) => jit_struct_field_list(&inner.borrow(), slot),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_value_may_contain_list(value: &VmValue) -> bool {
+    matches!(
+        value,
+        VmValue::List(_)
+            | VmValue::Deque(_)
+            | VmValue::Map(_)
+            | VmValue::OptionSomeHeap(_)
+            | VmValue::Struct(_)
+            | VmValue::Variant(_)
+            | VmValue::Managed(_)
+            | VmValue::Closure(_)
+    )
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_value_contains_list_rc(value: &VmValue, needle: &Rc<RefCell<TypedVec>>) -> bool {
+    fn contains(
+        value: &VmValue,
+        needle: &Rc<RefCell<TypedVec>>,
+        seen_managed: &mut Vec<*const RefCell<VmValue>>,
+    ) -> bool {
+        match value {
+            VmValue::List(list) => {
+                Rc::ptr_eq(list, needle) || {
+                    let borrowed = list.borrow();
+                    borrowed
+                        .iter()
+                        .any(|item| contains(&item, needle, seen_managed))
+                }
+            }
+            VmValue::Deque(deque) => deque
+                .borrow()
+                .iter()
+                .any(|item| contains(item, needle, seen_managed)),
+            VmValue::Map(map) => map.borrow().iter().any(|(key, value)| {
+                contains(key.value(), needle, seen_managed) || contains(value, needle, seen_managed)
+            }),
+            VmValue::OptionSomeHeap(value) => contains(value, needle, seen_managed),
+            VmValue::Struct(data) | VmValue::Variant(data) => data
+                .fields
+                .iter()
+                .any(|field| contains(field, needle, seen_managed)),
+            VmValue::Managed(inner) => {
+                let ptr = Rc::as_ptr(inner);
+                if seen_managed.contains(&ptr) {
+                    return false;
+                }
+                seen_managed.push(ptr);
+                contains(&inner.borrow(), needle, seen_managed)
+            }
+            VmValue::Closure(closure) => closure
+                .captures
+                .iter()
+                .any(|capture| contains(capture, needle, seen_managed)),
+            _ => false,
+        }
+    }
+
+    if !jit_value_may_contain_list(value) {
+        return false;
+    }
+    contains(value, needle, &mut Vec::new())
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_heap_inputs_alias_flat_mut(
+    input_slots: &[(usize, usize)],
+    flat_mut_owned: &[Rc<RefCell<TypedVec>>],
+) -> bool {
+    if flat_mut_owned.is_empty() || input_slots.is_empty() {
+        return false;
+    }
+    let Some(ctx) = JitHostCallCtx::active() else {
+        return false;
+    };
+    input_slots.iter().any(|(input, _)| {
+        ctx.with_heap_arg(*input, |value| {
+            if !jit_value_may_contain_list(value) {
+                return Some(false);
+            }
+            Some(
+                flat_mut_owned
+                    .iter()
+                    .any(|list| jit_value_contains_list_rc(value, list)),
+            )
+        })
+        .unwrap_or(false)
+    })
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_selected_heap_inputs_alias_flat_mut(
+    input_slots: &[(usize, usize)],
+    flat_mut_owned: &[Rc<RefCell<TypedVec>>],
+    frame_base: usize,
+    heap_input_regs: &[usize],
+) -> bool {
+    if flat_mut_owned.is_empty() || input_slots.is_empty() || heap_input_regs.is_empty() {
+        return false;
+    }
+    let Some(ctx) = JitHostCallCtx::active() else {
+        return false;
+    };
+    input_slots.iter().any(|(input, absolute_reg)| {
+        let Some(reg) = absolute_reg.checked_sub(frame_base) else {
+            return false;
+        };
+        if !heap_input_regs.contains(&reg) {
+            return false;
+        }
+        ctx.with_heap_arg(*input, |value| {
+            if !jit_value_may_contain_list(value) {
+                return Some(false);
+            }
+            Some(
+                flat_mut_owned
+                    .iter()
+                    .any(|list| jit_value_contains_list_rc(value, list)),
+            )
+        })
+        .unwrap_or(false)
+    })
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_snapshot_map_before_write(handle: i64, map: &Rc<RefCell<ValueMap>>) -> bool {
+    if !JitCallCtx::is_active() {
+        return false;
+    }
+    if !jit_heap_handle_needs_write_undo(handle) {
+        return true;
+    }
+    if !jit_mark_heap_snapshot(JitHeapSnapshotKey::Map(Rc::as_ptr(map))) {
+        return true;
+    }
+    JIT_HEAP_WRITE_UNDO.with(|undo| {
+        undo.borrow_mut()
+            .push(JitHeapWriteUndo::Map(Rc::clone(map), map.borrow().clone()));
+    });
+    true
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_snapshot_deque_before_write(handle: i64, deque: &Rc<RefCell<VecDeque<VmValue>>>) -> bool {
+    if !JitCallCtx::is_active() {
+        return false;
+    }
+    if !jit_heap_handle_needs_write_undo(handle) {
+        return true;
+    }
+    if !jit_mark_heap_snapshot(JitHeapSnapshotKey::Deque(Rc::as_ptr(deque))) {
+        return true;
+    }
+    JIT_HEAP_WRITE_UNDO.with(|undo| {
+        undo.borrow_mut().push(JitHeapWriteUndo::Deque(
+            Rc::clone(deque),
+            deque.borrow().clone(),
+        ));
+    });
+    true
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_with_journaled_list_write_with_ctx<R>(
+    ctx: JitHostCallCtx,
+    handle: i64,
+    write: impl FnOnce(&mut TypedVec) -> Option<R>,
+) -> Option<R> {
+    let list = ctx.heap_list_handle(handle)?;
+    if !jit_snapshot_list_before_write(handle, &list) {
+        return None;
+    }
+    write(&mut list.borrow_mut())
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_with_journaled_map_write_with_ctx<R>(
+    ctx: JitHostCallCtx,
+    handle: i64,
+    write: impl FnOnce(&mut ValueMap) -> Option<R>,
+) -> Option<R> {
+    let map = ctx.heap_map_handle(handle)?;
+    if !jit_snapshot_map_before_write(handle, &map) {
+        return None;
+    }
+    write(&mut map.borrow_mut())
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_with_journaled_deque_write_with_ctx<R>(
+    ctx: JitHostCallCtx,
+    handle: i64,
+    write: impl FnOnce(&mut VecDeque<VmValue>) -> Option<R>,
+) -> Option<R> {
+    let deque = ctx.heap_deque_handle(handle)?;
+    if !jit_snapshot_deque_before_write(handle, &deque) {
+        return None;
+    }
+    write(&mut deque.borrow_mut())
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_restore_heap_writes() {
+    JIT_HEAP_WRITE_UNDO.with(|undo| {
+        for entry in undo.borrow_mut().drain(..).rev() {
+            match entry {
+                JitHeapWriteUndo::List(list, original) => {
+                    *list.borrow_mut() = original;
+                }
+                JitHeapWriteUndo::Map(map, original) => {
+                    *map.borrow_mut() = original;
+                }
+                JitHeapWriteUndo::Deque(deque, original) => {
+                    *deque.borrow_mut() = original;
+                }
+            }
+        }
+    });
 }
 
 #[cfg(feature = "native-jit")]
@@ -2443,25 +4149,37 @@ fn jit_struct_field_int(value: &VmValue, slot: usize) -> Option<i64> {
 }
 
 #[cfg(feature = "native-jit")]
-fn jit_list_len(value: &VmValue) -> Option<i64> {
+fn jit_struct_with_int_field_updates(value: &VmValue, updates: &[(usize, i64)]) -> Option<VmValue> {
     match value {
-        VmValue::List(list) => i64::try_from(list.borrow().len()).ok(),
-        VmValue::Managed(inner) => jit_list_len(&inner.borrow()),
-        _ => None,
-    }
-}
-
-#[cfg(feature = "native-jit")]
-fn jit_list_get_int(value: &VmValue, index: i64) -> Option<i64> {
-    match value {
-        VmValue::List(list) => {
-            let index = usize::try_from(index).ok()?;
-            match list.borrow().get(index)? {
-                VmValue::Int(v) => Some(v),
-                _ => None,
+        VmValue::Struct(data) => {
+            let mut fields = data.fields.clone();
+            for (slot, updated) in updates {
+                let field = fields.get_mut(*slot)?;
+                if !matches!(field, VmValue::Int(_)) {
+                    return None;
+                }
+                *field = VmValue::Int(*updated);
             }
+            Some(VmValue::Struct(Rc::new(VmStruct::with_layout(
+                Rc::clone(&data.layout),
+                fields,
+            ))))
         }
-        VmValue::Managed(inner) => jit_list_get_int(&inner.borrow(), index),
+        VmValue::Variant(data) => {
+            let mut fields = data.fields.clone();
+            for (slot, updated) in updates {
+                let field = fields.get_mut(*slot)?;
+                if !matches!(field, VmValue::Int(_)) {
+                    return None;
+                }
+                *field = VmValue::Int(*updated);
+            }
+            Some(VmValue::Variant(Rc::new(VmStruct::with_layout(
+                Rc::clone(&data.layout),
+                fields,
+            ))))
+        }
+        VmValue::Managed(inner) => jit_struct_with_int_field_updates(&inner.borrow(), updates),
         _ => None,
     }
 }
@@ -2479,25 +4197,14 @@ fn jit_struct_field_float(value: &VmValue, slot: usize) -> Option<f64> {
 }
 
 #[cfg(feature = "native-jit")]
-fn jit_list_get_float(value: &VmValue, index: i64) -> Option<f64> {
-    match value {
-        VmValue::List(list) => {
-            let index = usize::try_from(index).ok()?;
-            match list.borrow().get(index)? {
-                VmValue::Float(v) => Some(v),
-                _ => None,
-            }
-        }
-        VmValue::Managed(inner) => jit_list_get_float(&inner.borrow(), index),
-        _ => None,
-    }
-}
-
-#[cfg(feature = "native-jit")]
-extern "C" fn rss_jit_field_int(handle: i64, slot: i64) -> i64 {
+extern "C" fn rss_jit_field_int(_ctx: vm_jit::HostCtx, handle: i64, slot: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
     match usize::try_from(slot)
         .ok()
-        .and_then(|slot| jit_heap_read(handle, |value| jit_struct_field_int(value, slot)))
+        .and_then(|slot| _ctx.heap_read_handle(handle, |value| jit_struct_field_int(value, slot)))
     {
         Some(value) => value,
         None => {
@@ -2508,8 +4215,164 @@ extern "C" fn rss_jit_field_int(handle: i64, slot: i64) -> i64 {
 }
 
 #[cfg(feature = "native-jit")]
-extern "C" fn rss_jit_list_len(handle: i64) -> i64 {
-    match jit_heap_read(handle, jit_list_len) {
+extern "C" fn rss_jit_field_set_int(
+    _ctx: vm_jit::HostCtx,
+    handle: i64,
+    slot: i64,
+    value: i64,
+) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    rss_jit_field_set_int_with_ctx(_ctx, handle, slot, value)
+}
+
+#[cfg(feature = "native-jit")]
+fn rss_jit_field_set_int_with_ctx(ctx: JitHostCallCtx, handle: i64, slot: i64, value: i64) -> i64 {
+    let Some(slot) = usize::try_from(slot).ok() else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let root = jit_heap_result_root_with_ctx(ctx, handle);
+    let updated = ctx.heap_read_handle(handle, |heap| match heap {
+        VmValue::Struct(data) => {
+            let mut fields = data.fields.clone();
+            let field = fields.get_mut(slot)?;
+            if !matches!(field, VmValue::Int(_)) {
+                return None;
+            }
+            *field = VmValue::Int(value);
+            Some(VmValue::Struct(Rc::new(VmStruct::with_layout(
+                Rc::clone(&data.layout),
+                fields,
+            ))))
+        }
+        VmValue::Variant(data) => {
+            let mut fields = data.fields.clone();
+            let field = fields.get_mut(slot)?;
+            if !matches!(field, VmValue::Int(_)) {
+                return None;
+            }
+            *field = VmValue::Int(value);
+            Some(VmValue::Variant(Rc::new(VmStruct::with_layout(
+                Rc::clone(&data.layout),
+                fields,
+            ))))
+        }
+        _ => None,
+    });
+    match updated {
+        Some(value) => {
+            let handle = jit_push_heap_result_with_root_with_ctx(ctx, value, root);
+            if let Some(root) = root {
+                ctx.push_heap_writeback(root, handle);
+            }
+            handle
+        }
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_list_len(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let Some(list) = _ctx.heap_list_handle(handle) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    match i64::try_from(list.borrow().len()) {
+        Ok(value) => value,
+        Err(_) => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_list_is_empty(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let Some(list) = _ctx.heap_list_handle(handle) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    i64::from(list.borrow().is_empty())
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_list_get_int(_ctx: vm_jit::HostCtx, handle: i64, index: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let Some(index) = usize::try_from(index).ok() else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let Some(list) = _ctx.heap_list_handle(handle) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let borrowed = list.borrow();
+    match &*borrowed {
+        TypedVec::Ints(values) => match values.get(index) {
+            Some(value) => *value,
+            None => {
+                vm_jit::signal_bail();
+                0
+            }
+        },
+        TypedVec::Boxed(values) => match values.get(index) {
+            Some(VmValue::Int(value)) => *value,
+            Some(_) | None => {
+                vm_jit::signal_bail();
+                0
+            }
+        },
+        TypedVec::Floats(_) => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_list_set_int(
+    _ctx: vm_jit::HostCtx,
+    handle: i64,
+    index: i64,
+    value: i64,
+) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    rss_jit_list_set_int_with_ctx(_ctx, handle, index, value)
+}
+
+#[cfg(feature = "native-jit")]
+fn rss_jit_list_set_int_with_ctx(ctx: JitHostCallCtx, handle: i64, index: i64, value: i64) -> i64 {
+    let Some(index) = usize::try_from(index).ok() else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    match ctx.with_journaled_list_write(handle, |list| {
+        if index >= list.len() {
+            return None;
+        }
+        list.checked_set(index, VmValue::Int(value)).ok()?;
+        Some(0)
+    }) {
         Some(value) => value,
         None => {
             vm_jit::signal_bail();
@@ -2519,8 +4382,20 @@ extern "C" fn rss_jit_list_len(handle: i64) -> i64 {
 }
 
 #[cfg(feature = "native-jit")]
-extern "C" fn rss_jit_list_get_int(handle: i64, index: i64) -> i64 {
-    match jit_heap_read(handle, |value| jit_list_get_int(value, index)) {
+extern "C" fn rss_jit_list_push_int(_ctx: vm_jit::HostCtx, handle: i64, value: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    rss_jit_list_push_int_with_ctx(_ctx, handle, value)
+}
+
+#[cfg(feature = "native-jit")]
+fn rss_jit_list_push_int_with_ctx(ctx: JitHostCallCtx, handle: i64, value: i64) -> i64 {
+    match ctx.with_journaled_list_write(handle, |list| {
+        list.checked_push(VmValue::Int(value)).ok()?;
+        Some(0)
+    }) {
         Some(value) => value,
         None => {
             vm_jit::signal_bail();
@@ -2530,10 +4405,630 @@ extern "C" fn rss_jit_list_get_int(handle: i64, index: i64) -> i64 {
 }
 
 #[cfg(feature = "native-jit")]
-extern "C" fn rss_jit_field_float(handle: i64, slot: i64) -> f64 {
+extern "C" fn rss_jit_list_sort_int(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    rss_jit_list_sort_int_with_ctx(_ctx, handle)
+}
+
+#[cfg(feature = "native-jit")]
+fn rss_jit_list_sort_int_with_ctx(ctx: JitHostCallCtx, handle: i64) -> i64 {
+    match ctx.with_journaled_list_write(handle, |list| {
+        let TypedVec::Ints(values) = list else {
+            return None;
+        };
+        values.sort_unstable();
+        Some(0)
+    }) {
+        Some(value) => value,
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_list_new_int(_ctx: vm_jit::HostCtx) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    _ctx.publish_heap_result(VmValue::List(Rc::new(RefCell::new(TypedVec::Ints(
+        Vec::new(),
+    )))))
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_int_key(value: i64) -> VmMapKey {
+    VmMapKey::new(VmValue::Int(value))
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_map_insert_int(
+    _ctx: vm_jit::HostCtx,
+    handle: i64,
+    key: i64,
+    value: i64,
+) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    rss_jit_map_insert_int_with_ctx(_ctx, handle, key, value)
+}
+
+#[cfg(feature = "native-jit")]
+fn rss_jit_map_insert_int_with_ctx(ctx: JitHostCallCtx, handle: i64, key: i64, value: i64) -> i64 {
+    match ctx.with_journaled_map_write(handle, |map| {
+        map.insert(jit_int_key(key), VmValue::Int(value));
+        Some(0)
+    }) {
+        Some(value) => value,
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_map_get_int(_ctx: vm_jit::HostCtx, handle: i64, key: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let Some(map) = _ctx.heap_map_handle(handle) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    match map.borrow().get(&jit_int_key(key)) {
+        Some(VmValue::Int(value)) => *value,
+        _ => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_map_get_match_int(_ctx: vm_jit::HostCtx, handle: i64, key: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    _ctx.set_map_get_match_found(false);
+    let Some(map) = _ctx.heap_map_handle(handle) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    match map.borrow().get(&jit_int_key(key)) {
+        Some(VmValue::Int(value)) => {
+            _ctx.set_map_get_match_found(true);
+            *value
+        }
+        None => 0,
+        _ => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_map_get_match_found(_ctx: vm_jit::HostCtx) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    i64::from(_ctx.map_get_match_found())
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_map_contains_int(_ctx: vm_jit::HostCtx, handle: i64, key: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let Some(map) = _ctx.heap_map_handle(handle) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    i64::from(map.borrow().contains_key(&jit_int_key(key)))
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_map_len(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let Some(map) = _ctx.heap_map_handle(handle) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    match i64::try_from(map.borrow().len()) {
+        Ok(len) => len,
+        Err(_) => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_map_is_empty(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let Some(map) = _ctx.heap_map_handle(handle) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    i64::from(map.borrow().is_empty())
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_set_insert_int(_ctx: vm_jit::HostCtx, handle: i64, value: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    rss_jit_set_insert_int_with_ctx(_ctx, handle, value)
+}
+
+#[cfg(feature = "native-jit")]
+fn rss_jit_set_insert_int_with_ctx(ctx: JitHostCallCtx, handle: i64, value: i64) -> i64 {
+    match ctx.with_journaled_map_write(handle, |map| {
+        Some(i64::from(
+            map.insert(jit_int_key(value), VmValue::Unit).is_none(),
+        ))
+    }) {
+        Some(value) => value,
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_set_len(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let Some(map) = _ctx.heap_map_handle(handle) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    match i64::try_from(map.borrow().len()) {
+        Ok(len) => len,
+        Err(_) => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_set_is_empty(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let Some(map) = _ctx.heap_map_handle(handle) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    i64::from(map.borrow().is_empty())
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_sorted_set_insert_int(_ctx: vm_jit::HostCtx, handle: i64, value: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    rss_jit_sorted_set_insert_int_with_ctx(_ctx, handle, value)
+}
+
+#[cfg(feature = "native-jit")]
+fn rss_jit_sorted_set_insert_int_with_ctx(ctx: JitHostCallCtx, handle: i64, value: i64) -> i64 {
+    match ctx.with_journaled_list_write(handle, |list| {
+        sorted_insert_vm(list.as_boxed_mut(), VmValue::Int(value))
+            .ok()
+            .map(i64::from)
+    }) {
+        Some(value) => value,
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_sorted_set_contains_int(
+    _ctx: vm_jit::HostCtx,
+    handle: i64,
+    value: i64,
+) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    match _ctx.heap_read_handle(handle, |heap| match heap {
+        VmValue::List(list) => Some(Rc::clone(list)),
+        VmValue::Managed(inner) => match &*inner.borrow() {
+            VmValue::List(list) => Some(Rc::clone(list)),
+            _ => None,
+        },
+        _ => None,
+    }) {
+        Some(list) => match sorted_contains_vm(&list.borrow(), &VmValue::Int(value)) {
+            Ok(found) => i64::from(found),
+            Err(_) => {
+                vm_jit::signal_bail();
+                0
+            }
+        },
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_sorted_set_is_empty(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let Some(list) = _ctx.heap_list_handle(handle) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    i64::from(list.borrow().is_empty())
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_sorted_map_entry_int(
+    backing: &TypedVec,
+    index: usize,
+) -> Result<Option<(i64, i64)>, EvalError> {
+    let Some(entry) = backing.get(index) else {
+        return Ok(None);
+    };
+    let pair = expect_list_ref(&entry)?;
+    let pair = pair.borrow();
+    let entry_key = pair
+        .first()
+        .ok_or_else(|| EvalError::Runtime("reg VM SortedMap entry missing key.".to_string()))?;
+    let entry_value = pair
+        .get(1)
+        .ok_or_else(|| EvalError::Runtime("reg VM SortedMap entry missing value.".to_string()))?;
+    match (entry_key, entry_value) {
+        (VmValue::Int(entry_key), VmValue::Int(entry_value)) => Ok(Some((entry_key, entry_value))),
+        _ => Err(EvalError::Runtime(
+            "reg VM SortedMap<Int, Int> native helper saw non-Int entry.".to_string(),
+        )),
+    }
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_sorted_map_find_int(
+    backing: &TypedVec,
+    key: i64,
+) -> Result<Option<(usize, i64)>, EvalError> {
+    let mut lo = 0;
+    let mut hi = backing.len();
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        let Some((entry_key, entry_value)) = jit_sorted_map_entry_int(backing, mid)? else {
+            return Err(EvalError::Runtime(
+                "reg VM SortedMap entry missing during native lookup.".to_string(),
+            ));
+        };
+        match entry_key.cmp(&key) {
+            Ordering::Less => lo = mid + 1,
+            Ordering::Greater => hi = mid,
+            Ordering::Equal => return Ok(Some((mid, entry_value))),
+        }
+    }
+    Ok(None)
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_sorted_map_insert_int(
+    _ctx: vm_jit::HostCtx,
+    handle: i64,
+    key: i64,
+    value: i64,
+) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    rss_jit_sorted_map_insert_int_with_ctx(_ctx, handle, key, value)
+}
+
+#[cfg(feature = "native-jit")]
+fn rss_jit_sorted_map_insert_int_with_ctx(
+    ctx: JitHostCallCtx,
+    handle: i64,
+    key: i64,
+    value: i64,
+) -> i64 {
+    match ctx.with_journaled_list_write(handle, |list| {
+        sorted_map_insert_in_place(list.as_boxed_mut(), VmValue::Int(key), VmValue::Int(value))
+            .ok()?;
+        Some(0)
+    }) {
+        Some(value) => value,
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_sorted_map_get_int(_ctx: vm_jit::HostCtx, handle: i64, key: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    _ctx.set_sorted_map_get_found(false);
+    let Some(list) = _ctx.heap_list_handle(handle) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let backing = list.borrow();
+    if let Some(cached) = JIT_SORTED_MAP_SCAN_CACHE.with(|cache| {
+        let cache_value = *cache.borrow();
+        let cache_value = cache_value.filter(|cache| cache.handle == handle)?;
+        match jit_sorted_map_entry_int(&backing, cache_value.next_index) {
+            Ok(Some((entry_key, entry_value))) if entry_key == key => {
+                cache.borrow_mut().replace(JitSortedMapScanCache {
+                    handle,
+                    next_index: cache_value.next_index.saturating_add(1),
+                });
+                Some(Ok(entry_value))
+            }
+            Ok(_) => None,
+            Err(err) => Some(Err(err)),
+        }
+    }) {
+        return match cached {
+            Ok(value) => {
+                _ctx.set_sorted_map_get_found(true);
+                value
+            }
+            Err(_) => {
+                JIT_SORTED_MAP_SCAN_CACHE.with(|cache| {
+                    cache.borrow_mut().take();
+                });
+                vm_jit::signal_bail();
+                0
+            }
+        };
+    }
+    match jit_sorted_map_find_int(&backing, key) {
+        Ok(Some((index, value))) => {
+            _ctx.set_sorted_map_get_found(true);
+            JIT_SORTED_MAP_SCAN_CACHE.with(|cache| {
+                cache.borrow_mut().replace(JitSortedMapScanCache {
+                    handle,
+                    next_index: index.saturating_add(1),
+                });
+            });
+            value
+        }
+        Ok(None) => {
+            JIT_SORTED_MAP_SCAN_CACHE.with(|cache| {
+                cache.borrow_mut().take();
+            });
+            0
+        }
+        _ => {
+            JIT_SORTED_MAP_SCAN_CACHE.with(|cache| {
+                cache.borrow_mut().take();
+            });
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_sorted_map_get_found(_ctx: vm_jit::HostCtx) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    i64::from(_ctx.sorted_map_get_found())
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_sorted_map_contains_key_int(
+    _ctx: vm_jit::HostCtx,
+    handle: i64,
+    key: i64,
+) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let Some(list) = _ctx.heap_list_handle(handle) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    match jit_sorted_map_find_int(&list.borrow(), key) {
+        Ok(found) => i64::from(found.is_some()),
+        Err(_) => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_sorted_map_is_empty(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let Some(list) = _ctx.heap_list_handle(handle) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    i64::from(list.borrow().is_empty())
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_sorted_map_len(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let Some(list) = _ctx.heap_list_handle(handle) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    match i64::try_from(list.borrow().len()) {
+        Ok(len) => len,
+        Err(_) => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_deque_len(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let Some(deque) = _ctx.heap_deque_handle(handle) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    match i64::try_from(deque.borrow().len()) {
+        Ok(len) => len,
+        Err(_) => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_deque_is_empty(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let Some(deque) = _ctx.heap_deque_handle(handle) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    i64::from(deque.borrow().is_empty())
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_deque_push_back_int(_ctx: vm_jit::HostCtx, handle: i64, value: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    rss_jit_deque_push_back_int_with_ctx(_ctx, handle, value)
+}
+
+#[cfg(feature = "native-jit")]
+fn rss_jit_deque_push_back_int_with_ctx(ctx: JitHostCallCtx, handle: i64, value: i64) -> i64 {
+    match ctx.with_journaled_deque_write(handle, |deque| {
+        deque.push_back(VmValue::Int(value));
+        Some(0)
+    }) {
+        Some(value) => value,
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_deque_push_front_int(_ctx: vm_jit::HostCtx, handle: i64, value: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    rss_jit_deque_push_front_int_with_ctx(_ctx, handle, value)
+}
+
+#[cfg(feature = "native-jit")]
+fn rss_jit_deque_push_front_int_with_ctx(ctx: JitHostCallCtx, handle: i64, value: i64) -> i64 {
+    match ctx.with_journaled_deque_write(handle, |deque| {
+        deque.push_front(VmValue::Int(value));
+        Some(0)
+    }) {
+        Some(value) => value,
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_deque_pop_int(
+    ctx: JitHostCallCtx,
+    handle: i64,
+    pop: impl FnOnce(&mut VecDeque<VmValue>) -> Option<VmValue>,
+) -> i64 {
+    match ctx.with_journaled_deque_write(handle, pop) {
+        Some(VmValue::Int(value)) => value,
+        _ => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_deque_pop_front_int(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    jit_deque_pop_int(_ctx, handle, VecDeque::pop_front)
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_deque_pop_back_int(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    jit_deque_pop_int(_ctx, handle, VecDeque::pop_back)
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_field_float(_ctx: vm_jit::HostCtx, handle: i64, slot: i64) -> f64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0.0;
+    };
     match usize::try_from(slot)
         .ok()
-        .and_then(|slot| jit_heap_read(handle, |value| jit_struct_field_float(value, slot)))
+        .and_then(|slot| _ctx.heap_read_handle(handle, |value| jit_struct_field_float(value, slot)))
     {
         Some(value) => value,
         None => {
@@ -2544,10 +5039,36 @@ extern "C" fn rss_jit_field_float(handle: i64, slot: i64) -> f64 {
 }
 
 #[cfg(feature = "native-jit")]
-extern "C" fn rss_jit_list_get_float(handle: i64, index: i64) -> f64 {
-    match jit_heap_read(handle, |value| jit_list_get_float(value, index)) {
-        Some(value) => value,
-        None => {
+extern "C" fn rss_jit_list_get_float(_ctx: vm_jit::HostCtx, handle: i64, index: i64) -> f64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0.0;
+    };
+    let Some(index) = usize::try_from(index).ok() else {
+        vm_jit::signal_bail();
+        return 0.0;
+    };
+    let Some(list) = _ctx.heap_list_handle(handle) else {
+        vm_jit::signal_bail();
+        return 0.0;
+    };
+    let borrowed = list.borrow();
+    match &*borrowed {
+        TypedVec::Floats(values) => match values.get(index) {
+            Some(value) => *value,
+            None => {
+                vm_jit::signal_bail();
+                0.0
+            }
+        },
+        TypedVec::Boxed(values) => match values.get(index) {
+            Some(VmValue::Float(value)) => *value,
+            Some(_) | None => {
+                vm_jit::signal_bail();
+                0.0
+            }
+        },
+        TypedVec::Ints(_) => {
             vm_jit::signal_bail();
             0.0
         }
@@ -2569,14 +5090,18 @@ fn jit_closure_function_id(value: &VmValue) -> Option<i64> {
 }
 
 #[cfg(feature = "native-jit")]
-extern "C" fn rss_jit_closure_id(handle: i64) -> i64 {
-    jit_heap_read(handle, jit_closure_function_id).unwrap_or(-1)
+extern "C" fn rss_jit_closure_id(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        return -1;
+    };
+    _ctx.heap_read(handle, jit_closure_function_id)
+        .unwrap_or(-1)
 }
 
 /// The scalar bits of capture `index` of the closure behind `handle`, as `i64` (an
 /// `Int` directly, a `Float` reinterpreted via [`f64::to_bits`], a `Bool` as 0/1).
 /// Used by the capturing-closure inline support
-/// ([`vm_jit::JitInstr::ClosureCapture`]) to materialize a scalar capture into the
+/// ([`vm_jit::HostHelper::ClosureCapture`]) to materialize a scalar capture into the
 /// inlined callee body. A non-scalar (heap) capture, an out-of-range index, or a
 /// non-closure handle signals the out-of-band bail flag — defensive, since the
 /// producer only emits `ClosureCapture` for captures it proved scalar.
@@ -2595,11 +5120,84 @@ fn jit_closure_capture_scalar(value: &VmValue, index: usize) -> Option<i64> {
 }
 
 #[cfg(feature = "native-jit")]
-extern "C" fn rss_jit_closure_capture(handle: i64, index: i64) -> i64 {
+extern "C" fn rss_jit_closure_capture(_ctx: vm_jit::HostCtx, handle: i64, index: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
     match usize::try_from(index)
         .ok()
-        .and_then(|index| jit_heap_read(handle, |value| jit_closure_capture_scalar(value, index)))
+        .and_then(|index| _ctx.heap_read(handle, |value| jit_closure_capture_scalar(value, index)))
     {
+        Some(value) => value,
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_struct_field_closure_function_id(value: &VmValue, slot: usize) -> Option<i64> {
+    match value {
+        VmValue::Struct(data) | VmValue::Variant(data) => {
+            jit_closure_function_id(data.fields.get(slot)?)
+        }
+        VmValue::Managed(inner) => jit_struct_field_closure_function_id(&inner.borrow(), slot),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_field_closure_id(_ctx: vm_jit::HostCtx, handle: i64, slot: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        return -1;
+    };
+    usize::try_from(slot)
+        .ok()
+        .and_then(|slot| {
+            _ctx.heap_read(handle, |value| {
+                jit_struct_field_closure_function_id(value, slot)
+            })
+        })
+        .unwrap_or(-1)
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_struct_field_closure_capture_scalar(
+    value: &VmValue,
+    slot: usize,
+    index: usize,
+) -> Option<i64> {
+    match value {
+        VmValue::Struct(data) | VmValue::Variant(data) => {
+            jit_closure_capture_scalar(data.fields.get(slot)?, index)
+        }
+        VmValue::Managed(inner) => {
+            jit_struct_field_closure_capture_scalar(&inner.borrow(), slot, index)
+        }
+        _ => None,
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_field_closure_capture(
+    _ctx: vm_jit::HostCtx,
+    handle: i64,
+    slot: i64,
+    index: i64,
+) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    match usize::try_from(slot).ok().and_then(|slot| {
+        usize::try_from(index).ok().and_then(|index| {
+            _ctx.heap_read(handle, |value| {
+                jit_struct_field_closure_capture_scalar(value, slot, index)
+            })
+        })
+    }) {
         Some(value) => value,
         None => {
             vm_jit::signal_bail();
@@ -2658,13 +5256,13 @@ fn jit_heap_value_clone(value: &VmValue) -> Option<VmValue> {
 /// index, or signal the standard re-run-from-top bail (returning 0) when the field/
 /// element was not a heap value the helper could fetch.
 #[cfg(feature = "native-jit")]
-fn jit_push_heap_handle(value: Option<VmValue>) -> i64 {
-    match value {
-        Some(value) => JIT_HEAP_ARGS.with(|table| {
-            let mut table = table.borrow_mut();
-            table.push(value);
-            (table.len() - 1) as i64
-        }),
+fn jit_push_heap_result_with_root_with_ctx(
+    ctx: JitHostCallCtx,
+    value: VmValue,
+    root: Option<usize>,
+) -> i64 {
+    match ctx.push_heap_result(value, root) {
+        Some(handle) => handle,
         None => {
             vm_jit::signal_bail();
             0
@@ -2673,17 +5271,371 @@ fn jit_push_heap_handle(value: Option<VmValue>) -> i64 {
 }
 
 #[cfg(feature = "native-jit")]
-extern "C" fn rss_jit_field_handle(handle: i64, slot: i64) -> i64 {
-    let value = usize::try_from(slot)
-        .ok()
-        .and_then(|slot| jit_heap_read(handle, |value| jit_struct_field_heap_value(value, slot)));
-    jit_push_heap_handle(value)
+extern "C" fn rss_jit_string_from_int(_ctx: vm_jit::HostCtx, value: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    _ctx.publish_heap_result(VmValue::String(Rc::new(value.to_string())))
 }
 
 #[cfg(feature = "native-jit")]
-extern "C" fn rss_jit_list_get_handle(handle: i64, index: i64) -> i64 {
-    let value = jit_heap_read(handle, |value| jit_list_get_heap_value(value, index));
-    jit_push_heap_handle(value)
+fn jit_string_len(value: &VmValue) -> Option<i64> {
+    match value {
+        VmValue::String(value) => i64::try_from(value.len()).ok(),
+        VmValue::Managed(inner) => jit_string_len(&inner.borrow()),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_string_clone(value: &VmValue) -> Option<Rc<String>> {
+    match value {
+        VmValue::String(value) => Some(Rc::clone(value)),
+        VmValue::Managed(inner) => jit_string_clone(&inner.borrow()),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_string_len(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    match _ctx.heap_read_handle(handle, jit_string_len) {
+        Some(value) => value,
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_string_concat(_ctx: vm_jit::HostCtx, left: i64, right: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let left = _ctx.heap_read_handle(left, jit_string_clone);
+    let right = _ctx.heap_read_handle(right, jit_string_clone);
+    match (left, right) {
+        (Some(left), Some(right)) => {
+            let mut value = String::with_capacity(left.len() + right.len());
+            value.push_str(&left);
+            value.push_str(&right);
+            _ctx.publish_heap_result(VmValue::string(value))
+        }
+        _ => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_string_slice(_ctx: vm_jit::HostCtx, value: i64, start: i64, len: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    match _ctx.heap_read_handle(value, jit_string_clone) {
+        Some(value) => {
+            _ctx.publish_heap_result(VmValue::string(string_slice_range(&value, start, len)))
+        }
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_string_pad_left(
+    _ctx: vm_jit::HostCtx,
+    value: i64,
+    width: i64,
+    fill: i64,
+) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let value = _ctx.heap_read_handle(value, jit_string_clone);
+    let fill = _ctx.heap_read_handle(fill, jit_string_clone);
+    match (value, fill) {
+        (Some(value), Some(fill)) => {
+            _ctx.publish_heap_result(VmValue::string(string_pad(&value, width, &fill, true)))
+        }
+        _ => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_string_pad_left_len(
+    _ctx: vm_jit::HostCtx,
+    value: i64,
+    width: i64,
+    fill: i64,
+) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let value = _ctx.heap_read_handle(value, jit_string_clone);
+    let fill = _ctx.heap_read_handle(fill, jit_string_clone);
+    match (value, fill) {
+        (Some(value), Some(fill)) => match string_pad_len(&value, width, &fill) {
+            Some(len) => len,
+            None => {
+                vm_jit::signal_bail();
+                0
+            }
+        },
+        _ => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_string_split(_ctx: vm_jit::HostCtx, value: i64, delimiter: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let value = _ctx.heap_read_handle(value, jit_string_clone);
+    let delimiter = _ctx.heap_read_handle(delimiter, jit_string_clone);
+    match (value, delimiter) {
+        (Some(value), Some(delimiter)) => {
+            let parts = value
+                .split(delimiter.as_str())
+                .map(VmValue::string)
+                .collect::<Vec<_>>();
+            _ctx.publish_heap_result(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
+                parts,
+            )))))
+        }
+        _ => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_string_starts_with(_ctx: vm_jit::HostCtx, value: i64, prefix: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let value = _ctx.heap_read_handle(value, jit_string_clone);
+    let prefix = _ctx.heap_read_handle(prefix, jit_string_clone);
+    match (value, prefix) {
+        (Some(value), Some(prefix)) => i64::from(value.starts_with(prefix.as_str())),
+        _ => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_string_split_count(_ctx: vm_jit::HostCtx, value: i64, delimiter: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let value = _ctx.heap_read_handle(value, jit_string_clone);
+    let delimiter = _ctx.heap_read_handle(delimiter, jit_string_clone);
+    match (value, delimiter) {
+        (Some(value), Some(delimiter)) => {
+            match i64::try_from(value.split(delimiter.as_str()).count()) {
+                Ok(count) => count,
+                Err(_) => {
+                    vm_jit::signal_bail();
+                    0
+                }
+            }
+        }
+        _ => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_string_literal(_ctx: vm_jit::HostCtx, literal_id: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let value = usize::try_from(literal_id)
+        .ok()
+        .and_then(|index| JIT_STRING_LITERALS.with(|table| table.borrow().get(index).cloned()));
+    match value {
+        Some(value) => _ctx.publish_heap_result(VmValue::String(value)),
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_bytes_len(value: &VmValue) -> Option<i64> {
+    match value {
+        VmValue::Bytes(value) => i64::try_from(value.len()).ok(),
+        VmValue::Managed(inner) => jit_bytes_len(&inner.borrow()),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_bytes_clone(value: &VmValue) -> Option<Rc<Vec<u8>>> {
+    match value {
+        VmValue::Bytes(value) => Some(Rc::clone(value)),
+        VmValue::Managed(inner) => jit_bytes_clone(&inner.borrow()),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_bytes_len(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    match _ctx.heap_read_handle(handle, jit_bytes_len) {
+        Some(value) => value,
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_bytes_slice(_ctx: vm_jit::HostCtx, handle: i64, start: i64, len: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    match _ctx.heap_read_handle(handle, jit_bytes_clone) {
+        Some(value) => {
+            _ctx.publish_heap_result(VmValue::Bytes(Rc::new(bytes_slice(&value, start, len))))
+        }
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+fn jit_json_clone(value: &VmValue) -> Option<Rc<serde_json::Value>> {
+    match value {
+        VmValue::Json(value) => Some(Rc::clone(value)),
+        VmValue::Managed(inner) => jit_json_clone(&inner.borrow()),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_json_parse(_ctx: vm_jit::HostCtx, text: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    match _ctx
+        .heap_read_handle(text, jit_string_clone)
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+    {
+        Some(value) => _ctx.publish_heap_result(VmValue::Json(Rc::new(value))),
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_json_field(_ctx: vm_jit::HostCtx, value: i64, name: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let value = _ctx.heap_read_handle(value, jit_json_clone);
+    let name = _ctx.heap_read_handle(name, jit_string_clone);
+    match (value, name) {
+        (Some(value), Some(name)) => match value.as_object().and_then(|obj| obj.get(name.as_str()))
+        {
+            Some(field) => _ctx.publish_heap_result(VmValue::Json(Rc::new(field.clone()))),
+            None => {
+                vm_jit::signal_bail();
+                0
+            }
+        },
+        _ => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_json_field_int(_ctx: vm_jit::HostCtx, value: i64, name: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let value = _ctx.heap_read_handle(value, jit_json_clone);
+    let name = _ctx.heap_read_handle(name, jit_string_clone);
+    match (value, name) {
+        (Some(value), Some(name)) => match value
+            .as_object()
+            .and_then(|obj| obj.get(name.as_str()))
+            .and_then(serde_json::Value::as_i64)
+        {
+            Some(value) => value,
+            None => {
+                vm_jit::signal_bail();
+                0
+            }
+        },
+        _ => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_field_handle(_ctx: vm_jit::HostCtx, handle: i64, slot: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let value = usize::try_from(slot).ok().and_then(|slot| {
+        _ctx.heap_read_handle(handle, |value| jit_struct_field_heap_value(value, slot))
+    });
+    _ctx.publish_heap_handle(value)
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_list_get_handle(_ctx: vm_jit::HostCtx, handle: i64, index: i64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let value = _ctx.heap_read_handle(handle, |value| jit_list_get_heap_value(value, index));
+    _ctx.publish_heap_handle(value)
 }
 
 #[cfg(feature = "native-jit")]
@@ -2697,7 +5649,15 @@ impl NativeState {
         force_bail: bool,
         collect_stats: bool,
     ) -> Result<Self, EvalError> {
-        Self::new_with_opt(tier_up_threshold, force_bail, collect_stats, false, false, false, false)
+        Self::new_with_opt(
+            tier_up_threshold,
+            force_bail,
+            collect_stats,
+            false,
+            false,
+            false,
+            false,
+        )
     }
 
     /// Build the native state at a selectable optimization level. `baseline ==
@@ -2715,6 +5675,30 @@ impl NativeState {
         osr_enabled: bool,
         report: bool,
     ) -> Result<Self, EvalError> {
+        Self::new_with_opt_and_forced_safepoint(
+            tier_up_threshold,
+            force_bail,
+            collect_stats,
+            baseline,
+            precise_deopt,
+            osr_enabled,
+            report,
+            None,
+            false,
+        )
+    }
+
+    fn new_with_opt_and_forced_safepoint(
+        tier_up_threshold: u32,
+        force_bail: bool,
+        collect_stats: bool,
+        baseline: bool,
+        precise_deopt: bool,
+        osr_enabled: bool,
+        report: bool,
+        forced_safepoint: Option<u32>,
+        force_all_safepoints: bool,
+    ) -> Result<Self, EvalError> {
         Ok(Self {
             module: vm_jit::NativeModule::new_with_opt(jit_host_helpers(), baseline)
                 .map_err(|e| EvalError::Runtime(e.to_string()))?,
@@ -2724,6 +5708,8 @@ impl NativeState {
             noamortize_counts: HashMap::new(),
             tier_up_threshold,
             force_bail,
+            forced_safepoint,
+            force_all_safepoints,
             stats: NativeStats::default(),
             collect_stats,
             precise_deopt,
@@ -2732,9 +5718,19 @@ impl NativeState {
             scratch_args: Vec::new(),
             scratch_lens: Vec::new(),
             scratch_flat_owned: Vec::new(),
+            scratch_flat_mut_owned: Vec::new(),
+            scratch_heap_input_slots: Vec::new(),
+            scratch_osr_window: Vec::new(),
+            scratch_osr_lens: Vec::new(),
+            scratch_osr_flat_owned: Vec::new(),
+            scratch_osr_flat_mut_owned: Vec::new(),
+            scratch_osr_flat_slots: Vec::new(),
+            scratch_osr_flat_mut_slots: Vec::new(),
+            scratch_osr_heap_input_slots: Vec::new(),
             report,
             report_native_ok: std::collections::HashSet::new(),
             report_osr_ok: std::collections::HashSet::new(),
+            osr_dynamic_bail: false,
         })
     }
 
@@ -2793,7 +5789,6 @@ struct VmResourcePoolLease {
     discarded: bool,
     value: VmValue,
 }
-
 
 fn intrinsic_arg<'a>(
     stack: &'a [VmValue],
@@ -3023,7 +6018,10 @@ fn split_pool_lease(value: VmValue) -> Result<Option<VmResourcePoolLease>, EvalE
     Ok(Some(VmResourcePoolLease {
         pool_id: expect_int_ref(&pool_id)?,
         discarded,
-        value: VmValue::Struct(Rc::new(VmStruct::from_named(Rc::clone(data.name()), fields))),
+        value: VmValue::Struct(Rc::new(VmStruct::from_named(
+            Rc::clone(data.name()),
+            fields,
+        ))),
     }))
 }
 

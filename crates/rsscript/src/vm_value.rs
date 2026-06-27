@@ -258,6 +258,17 @@ impl TypedVec {
         }
     }
 
+    /// TV2 write path: mutable `i64` buffer of an `Ints` list. Native marshalling
+    /// converts this slice to a raw pointer while holding the mutable borrow and
+    /// protecting the write with the heap transaction rollback guard.
+    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    pub(crate) fn as_ints_mut_slice(&mut self) -> Option<&mut [i64]> {
+        match self {
+            TypedVec::Ints(v) => Some(v.as_mut_slice()),
+            _ => None,
+        }
+    }
+
     /// TV2: the raw flat `f64` buffer of a `Floats` list as `(ptr, len)`. `None`
     /// for any other kind.
     #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
@@ -485,11 +496,7 @@ impl TypedVec {
     /// The last element as a logical value, or `None` if empty.
     pub(crate) fn last(&self) -> Option<VmValue> {
         let len = self.len();
-        if len == 0 {
-            None
-        } else {
-            self.get(len - 1)
-        }
+        if len == 0 { None } else { self.get(len - 1) }
     }
 
     /// Reverse the elements in place (kind-preserving — a flat scalar list reverses
@@ -1384,8 +1391,14 @@ mod tests {
         // *bytes* hashed/compared/displayed are unchanged: hash mixes `name()` +
         // fields, eq compares `name()` + fields, display uses `name()`. Two equal
         // structs (built independently) stay equal, hash-equal, and display-equal.
-        let a = VmStruct::from_named("Pair", [("a", VmValue::Int(1)), ("b", VmValue::string("z"))]);
-        let b = VmStruct::from_named("Pair", [("a", VmValue::Int(1)), ("b", VmValue::string("z"))]);
+        let a = VmStruct::from_named(
+            "Pair",
+            [("a", VmValue::Int(1)), ("b", VmValue::string("z"))],
+        );
+        let b = VmStruct::from_named(
+            "Pair",
+            [("a", VmValue::Int(1)), ("b", VmValue::string("z"))],
+        );
         let va = VmValue::Struct(Rc::new(a));
         let vb = VmValue::Struct(Rc::new(b));
         assert_eq!(va, vb);
@@ -1474,7 +1487,11 @@ mod tests {
             VmValue::Int(3),
         ]));
         assert_eq!(ints_typed, ints_boxed, "Ints ≡ Boxed eq");
-        assert_eq!(ints_typed.display(), ints_boxed.display(), "Ints ≡ Boxed display");
+        assert_eq!(
+            ints_typed.display(),
+            ints_boxed.display(),
+            "Ints ≡ Boxed display"
+        );
         assert_eq!(
             fnv_hash(&ints_typed),
             fnv_hash(&ints_boxed),
@@ -1519,9 +1536,16 @@ mod tests {
         // Empty is Boxed (no element to specialize on).
         assert!(matches!(TypedVec::from_values(vec![]), TypedVec::Boxed(_)));
         // ElemKind constructs an empty typed kind for a `List<Float>.new()`.
-        assert!(matches!(ElemKind::from_type_name("Float").empty(), TypedVec::Floats(v) if v.is_empty()));
-        assert!(matches!(ElemKind::from_type_name("Int").empty(), TypedVec::Ints(v) if v.is_empty()));
-        assert!(matches!(ElemKind::from_type_name("String").empty(), TypedVec::Boxed(_)));
+        assert!(
+            matches!(ElemKind::from_type_name("Float").empty(), TypedVec::Floats(v) if v.is_empty())
+        );
+        assert!(
+            matches!(ElemKind::from_type_name("Int").empty(), TypedVec::Ints(v) if v.is_empty())
+        );
+        assert!(matches!(
+            ElemKind::from_type_name("String").empty(),
+            TypedVec::Boxed(_)
+        ));
     }
 
     #[test]
@@ -1613,7 +1637,10 @@ mod tests {
                 events += 1;
             }
         }
-        assert!(events < 20, "expected amortized O(log n) charge events, got {events}");
+        assert!(
+            events < 20,
+            "expected amortized O(log n) charge events, got {events}"
+        );
         // Kind mismatch returns Err and charges nothing.
         let mut ints = TypedVec::Ints(vec![1]);
         assert!(ints.checked_push_accounted(VmValue::Float(1.0)).is_err());

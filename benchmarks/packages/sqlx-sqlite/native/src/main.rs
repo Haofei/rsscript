@@ -1,8 +1,7 @@
 //! Hand-written Rust baseline for the sqlx + SQLite benchmark. Runs the exact
 //! same workload as `benchmarks/packages/sqlx-sqlite/src/main.rss` (setup of `rows` rows +
 //! `limit` pooled `query_strings` calls), calling `rss_sqlx_native` directly with
-//! no RSS layer in between, and prints a result line in the same format as
-//! `rss bench`.
+//! no RSS layer in between, and prints a result line for comparison.
 //!
 //! Usage: native_baseline [limit] [rows] [iterations] [warmup]
 

@@ -1789,8 +1789,7 @@ pub fn rsscript_to_bundle(
     bundle
 }
 
-/// Build a REIR bundle from the JSON emitted by `rss review --map --json` and
-/// `rss pkg review --json`.
+/// Build a REIR bundle from RSScript review-map JSON and package-review JSON.
 pub fn rsscript_json_to_bundle(
     review_map_json: Option<&str>,
     package_review_json: Option<&str>,

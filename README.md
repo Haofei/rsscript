@@ -177,7 +177,7 @@ The demo lives in [`examples/demos/s3-iam-reir`](examples/demos/s3-iam-reir): RS
 
 ```text
 Toolchain crate version: 0.1.x
-Language spec target: v0.6
+Language spec target: v0.7
 Artifact schemas: unstable unless explicitly marked
 ```
 
@@ -233,7 +233,7 @@ let response = Response.ok(body: read user)
 
 Managed values are easy to share, store, and drop into long-lived graphs. This is the default for business logic, agent memory, configuration, caches, ASTs, request/response objects — the broad layer outside hot paths.
 
-Under the hood, the v0.6 managed runtime is single-isolate reference counting — think Swift's ARC inside one isolate — and uses Rust `Rc`/`RefCell`-like primitives internally. Managed handles are intentionally not `Send` or `Sync`; they do not cross Rust threads or RSScript isolates. Managed `class` and `struct` values have no user-observable destructor; deterministic cleanup is expressed only through `resource`, `with`, and `ResourcePool`, which are orthogonal to how managed memory is reclaimed. Because managed objects expose no user-visible finalization order, reference counting versus a future tracing collector is a backend decision rather than a language guarantee — a later major version could swap it without changing observable semantics. For v0.6 the tradeoffs are the usual refcounting ones: a per-access dynamic borrow check, and reference cycles do not collect on their own, so they are broken with a `weak` keyword the same way Swift does it. Future cross-isolate or cross-thread transfer should be explicit message passing, not implicit shared heap access.
+Under the hood, the v0.7 managed runtime is single-isolate reference counting — think Swift's ARC inside one isolate — and uses Rust `Rc`/`RefCell`-like primitives internally. Managed handles are intentionally not `Send` or `Sync`; they do not cross Rust threads or RSScript isolates. Managed `class` and `struct` values have no user-observable destructor; deterministic cleanup is expressed only through `resource`, `with`, and `ResourcePool`, which are orthogonal to how managed memory is reclaimed. Because managed objects expose no user-visible finalization order, reference counting versus a future tracing collector is a backend decision rather than a language guarantee — a later major version could swap it without changing observable semantics. For v0.7 the tradeoffs are the usual refcounting ones: a per-access dynamic borrow check, and reference cycles do not collect on their own, so they are broken with a `weak` keyword the same way Swift does it. Future cross-isolate or cross-thread transfer should be explicit message passing, not implicit shared heap access.
 
 That per-access cost is relative to native Rust, not to other managed languages. Primitives (`Int`, `Bool`, `Float`, etc.) stay on the stack; refcount only touches heap objects you actually share; there's no GIL, no interpreter loop, no per-object dict header. Managed-only RSScript still lowers to monomorphic Rust through LLVM — typically an order of magnitude faster than Python without ever opting into `local`. `local` is for when you want to compete with hand-tuned Rust, not for routine performance.
 
@@ -269,7 +269,7 @@ Files are managed-only unless they declare otherwise:
 features: local
 ```
 
-`local`, `native`, `unsafe`, and `async` are recognized as review capability gates today. `local` enables local ownership features; `native`, `unsafe`, and `async` must be declared before a file can expose those boundaries. Bodyless `native fn` declarations are native-wrapper bindings; executable `native fn` bodies remain outside the v0.6 runtime and are reported before Rust lowering. `async fn` bodies support the restricted v0.6 executable MVP: direct `await` inside an async function, isolate-local `task_group { async let ... }`, single-isolate cooperative runtime polling, and no public `Future`/`Waker` surface. Unstructured `spawn`, streams, channels, async closures, and public task handles remain future work. Runtime-only scheduler hooks for native pending operations are implementation ABI. The reference runtime can host Tokio-backed Rust IO futures behind that ABI, so high-concurrency native IO does not leak Tokio, `Future`, `Pin`, `Poll`, or `Waker` into RSScript source. `device`, `ffi`, and `reflection` are reserved review markers: they raise review risk when present, but they do not unlock syntax, lowering, or runtime behavior in v0.6. Ordinary libraries (JSON, File, Image, HTTP, Map, Regex) stay as libraries. Repeated or unknown names are diagnostics so capability boundaries stay explicit.
+`local`, `native`, `unsafe`, and `async` are recognized as review capability gates today. `local` enables local ownership features; `native`, `unsafe`, and `async` must be declared before a file can expose those boundaries. Bodyless `native fn` declarations are native-wrapper bindings; executable `native fn` bodies remain outside the v0.7 runtime and are reported before Rust lowering. `async fn` bodies support the v0.7 executable surface: direct `await`, structured `task_group { async let ... }`, `select`, bounded channels, streams, and `await for` inside the single-isolate cooperative model, with no public `Future`/`Waker` surface. Unstructured `spawn`, async closures, public task handles, and cross-isolate task execution remain future work. Runtime-only scheduler hooks for native pending operations are implementation ABI. The reference runtime can host Tokio-backed Rust IO futures behind that ABI, so high-concurrency native IO does not leak Tokio, `Future`, `Pin`, `Poll`, or `Waker` into RSScript source. `device`, `ffi`, and `reflection` are reserved review markers: they raise review risk when present, but they do not unlock syntax, lowering, or runtime behavior in v0.7. Ordinary libraries (JSON, File, Image, HTTP, Map, Regex) stay as libraries. Repeated or unknown names are diagnostics so capability boundaries stay explicit.
 
 ---
 
@@ -350,25 +350,19 @@ Internals can use local scratch and `*_into` forms for low-allocation paths, whi
 
 ## Semantic review
 
-Review is meant to be semantic and stronger than textual diff.
-
-```sh
-rss review --diff old.rss new.rss
-```
-
-answers *what changed* — a function now mutates a parameter, retains a value, lost its `fresh` guarantee, opened a new resource scope, or crossed a native boundary.
-
-For package-level directory changes, use package review/diff commands instead:
+Package review is meant to be semantic and stronger than textual diff.
 
 ```sh
 rss pkg diff base-package/ changed-package/
 ```
 
+answers *what changed* — a function now mutates a parameter, retains a value, lost its `fresh` guarantee, opened a new resource scope, or crossed a native boundary.
+
 ```sh
-rss review --map generated.rss
+rss pkg review generated-package/
 ```
 
-answers *what do I actually need to read?* For a 400-line AI-generated file, the reviewer sees a map first:
+answers *what do I actually need to read?* For a large generated package, the reviewer sees a risk-ranked surface first:
 
 ```text
 FILE FEATURES
@@ -412,7 +406,7 @@ This makes RSScript a review-first source format with a deliberately borrowed ba
 
 Experimental. The current implementation is a Rust-based front-end prototype: lexer, parser, semantic checker with the review-oriented rules, deterministic formatting for the supported AST surface, structured diagnostics, review-map metadata, package review/diff/lock metadata, Rust source lowering with source maps, rustc diagnostic remapping, a small single-isolate runtime crate with `Managed<T>` and `WeakManaged<T>` handles backed by Rust `Rc`/`RefCell`, and core `.rssi` interface signatures parsed through the ordinary interface path. CI gates formatting, lint, tests, and generated-Rust fixtures; golden tests cover lowering and source-map shape.
 
-The v0.6 milestone is a runnable review-first frontend over Rust: strong enough to check real examples, lower them to inspectable Rust, map backend diagnostics back to RSScript source, and keep review risk visible. Self-hosting is a separate experiment, not a v0.6 requirement.
+The v0.7 milestone is a runnable review-first frontend over Rust: strong enough to check real examples, lower them to inspectable Rust, map backend diagnostics back to RSScript source, and keep review risk visible. Self-hosting is a separate experiment, not a v0.7 requirement.
 
 The spec includes a semantic guarantee table that marks each promise as `static`, `dynamic`, `review-only`, or `unsupported`. In short: read/mut/take, retains(local), resource escape, freshness, local move/use, and handle restrictions are frontend obligations; managed alias conflicts are runtime obligations through `Managed<T>`; native/runtime guarantees remain explicit review boundaries unless their signatures carry matching guarantees.
 
@@ -432,19 +426,14 @@ The spec includes a semantic guarantee table that marks each promise as `static`
 ## CLI
 
 ```sh
-rss check    [--json] [--core|--no-core] [--interface <f.rssi> ...] <file.rss>
+rss check    [--json] [--lint] [--core|--no-core] [--interface <f.rssi> ...] <file.rss>
 rss check    [--json] <package-directory>
 rss check    --explain <code>
-rss lint     [--json] [--core|--no-core] [--interface <f.rssi> ...] <file.rss>
-rss dev      [--once] [--core|--no-core] [--interface <f.rssi> ...] <file-or-package-directory>
-rss dev      --lint [--once] [--core|--no-core] [--interface <f.rssi> ...] <file-or-package-directory>
-rss dev      --run [--release] [--once] <file-or-package-directory>
-rss dev      --json --once [...]   # --json requires --once
-rss eval     <file.rss>
+rss fix      [--write] [--json] [--interface <f.rssi> ...] <file.rss>
 rss fmt      <file.rss>
-rss review   [--json] --diff <old.rss> <new.rss>
-rss review   [--json] --map  <file-or-directory>
+rss new      <package-name>
 rss pkg      [--json] [package-directory]
+rss pkg      add <dependency|dependency@version|path-to-package>
 rss pkg      review [--json] [package-directory]
 rss pkg      diff   [--json] <old-package-directory> <new-package-directory>
 rss pkg      ci     [--json] [package-directory]
@@ -453,25 +442,25 @@ rss pkg      lock     [--json|--reir] [package-directory]
 rss pkg      tree     [--json|--reir] [package-directory]
 rss pkg      metadata [--verify|--dry-run] [--json|--reir] [package-directory]
 rss pkg      vendor   [--dry-run] [--json|--reir] [package-directory]
-rss run      [--json] <file-or-package-directory> [--out-dir <directory>] [-- <args>...]
+rss run      [--json] --vm <file-or-package-directory> [-- <args>...]
+rss run      [--json] [--release] [--dry-run] <file-or-package-directory> [--out-dir <directory>] [-- <args>...]
 rss test     [--all] [--json] [--filter <substring>]
 ```
 
 ### Command notes
 
 - `rss check` loads bundled core `.rssi` signatures by default for single files; pointed at a directory with `rsspkg.toml`, it runs package check.
-- `rss lint` reuses the frontend checks and emits warnings. The first lint is `RSL001` — public signatures over the review budget for parameter count, generics, effects, or nested-type depth.
-- `rss dev` is the inner-loop watcher: it reruns `rss check` (add `--lint`, or `--run` for the cargo-backed run path) on every save, polling source modification times with no extra dependency. The default `check` loop never invokes cargo, so frontend feedback stays in the tens-of-milliseconds range; `--once` runs a single pass for scripts and CI. It watches `.rss`, `.rssi`, `.toml`, and `.lock` files, skipping `target/`, `.git/`, and generated directories. To keep behavior unambiguous, `rss dev` rejects flag combinations it would otherwise ignore: `--json` requires `--once` (watch mode interleaves human status lines that would corrupt JSON); `--lint` runs the lint loop alone and is mutually exclusive with `--run`; `--release` applies only to `--run`; and `--run` does not accept `--core`/`--no-core`/`--interface` (those apply only to the check loop).
-- `rss eval` runs the checked in-process register-VM interpreter for pure local feedback. It supports scalar/control-flow/user-function/struct/sum-pattern programs plus a runtime-intrinsic subset; unsupported native, host, async, and resource boundaries fail closed with a diagnostic instead of falling back to Rust lowering or producing a wrong answer.
+- `rss check --lint` reuses the frontend checks and emits warnings. The first lint is `RSL001` — public signatures over the review budget for parameter count, generics, effects, or nested-type depth.
+- `rss fix` applies machine-applicable fixes, writing to stdout by default and editing the file only with `--write`.
 - `rss test` runs the default test set; `--all` runs the full test set. `--filter` selects tests by name substring, and `--json` emits a machine-readable summary.
 - Human diagnostics render the offending source line in a rustc-style gutter with an aligned caret and inline label (falling back to a caret-only view when the source file is unavailable, e.g. synthetic spans). `--json` output is unchanged.
-- `rss review --map` validates inputs first, so files with frontend errors get diagnostics instead of misleading classifications. `--json` reports `unknown_ratio` and `unknown_function_ratio` directly.
 - `rss pkg` validates the current package: dependency contracts, implementation/native bindings, package review, semantic lock freshness, and native wrapper metadata. It is the default package health check.
+- `rss pkg add` updates the package manifest with a dependency spec or local package path.
 - `rss pkg review` shows the review surface for public contracts, dependencies, mutating/retaining/resource/native/unsafe APIs, and unknown risk.
 - `rss pkg diff` compares two local package directories and reports semantic package changes.
 - `rss pkg ci` is the CI-facing package check entrypoint. It uses the same package health rules as `rss pkg`, with stable `--json` output for automation.
 - `rss pkg publish --dry-run` runs pre-publish checks without uploading and reports whether the package is ready.
-- `rss run` lowers a single file (or a package with `src/main.rss`) to a temporary Rust package and delegates to `cargo run`; package lowering carries enabled `[native.rust]` wrappers through as generated Cargo path dependencies and maps `native/bindings.rssbind.toml` call bindings into generated Rust calls. `--dry-run` prints the generated `Cargo.toml`, lowered Rust, and cargo invocation without executing it; `--release` delegates to Cargo's release profile, `--out-dir` keeps the generated package, and arguments after `--` reach the program through the core `Args` API.
+- `rss run` lowers a single file (or a package with `src/main.rss`) to a temporary Rust package and delegates to `cargo run`; package lowering carries enabled `[native.rust]` wrappers through as generated Cargo path dependencies and maps `native/bindings.rssbind.toml` call bindings into generated Rust calls. `--vm` runs the same input through the register VM for fast feedback instead of invoking Cargo; it cannot be combined with AOT-only flags (`--release`, `--dry-run`, or `--out-dir`). `--dry-run` prints the generated `Cargo.toml`, lowered Rust, and cargo invocation without executing it; `--release` delegates to Cargo's release profile, `--out-dir` keeps the generated package, and arguments after `--` reach the program through the core `Args` API.
 
 > **Performance — use a release-built `rss` for package-scale checking.** On large, generics-heavy packages, `rss check` / `rss pkg` can be noticeably slow when run from a **debug** build of the compiler, because generic type-argument substitution currently re-parses type strings at each nesting level (a known, deferred ~O(n³) path in generic substitution). The debug build leaves that path unoptimized; a release build optimizes it enough to be comfortable. For repeated package-wide validation (e.g. an inner edit→check loop on a big codebase), build the compiler once in release and use that binary:
 >
@@ -488,18 +477,18 @@ These are **not equivalent backends** — they cover different slices of the lan
 
 | Backend | Entry point | Executes | Outside its subset |
 | --- | --- | --- | --- |
-| Frontend check | `rss check` / `rss lint` / `rss dev` | nothing — type / effect / conflict / review checking only | n/a (reports diagnostics) |
+| Frontend check | `rss check` / `rss check --lint` | nothing — type / effect / conflict / review checking only | n/a (reports diagnostics) |
 | **Rust lowering (reference)** | `rss run [--release]` | the **full** language, via generated Rust + `rustc` | — (this is the reference semantics) |
-| Register-VM interpreter | `rss eval`, `rss bench --mode vm` | scalar / control-flow / user functions / structs / sum patterns / collections / a runtime-intrinsic subset | **fails closed** with a diagnostic on unsupported native / host / async / resource boundaries |
-| Tier-0 JIT | `rss bench --mode jit-internal` | the register VM's numeric / control core plus side-effect-free heap reads | per-function **fallback** to the interpreter (gap-free) |
-| Native JIT (Cranelift) | `rss bench --mode jit-native` (feature `native-jit`) | unboxed `Int` / `Float` / `Bool` arithmetic + control flow + `Int` heap reads | **bails** to the interpreter (gap-free) |
+| Register-VM interpreter | `rss run --vm` / Rust test harnesses | scalar / control-flow / user functions / structs / sum patterns / collections / a runtime-intrinsic subset | **fails closed** with a diagnostic on unsupported native / host / async / resource boundaries |
+| Tier-0 JIT | Rust test/benchmark harnesses | the register VM's numeric / control core plus side-effect-free heap reads | per-function **fallback** to the interpreter (gap-free) |
+| Native JIT (Cranelift) | Rust test/benchmark harnesses (feature `native-jit`) | unboxed `Int` / `Float` / `Bool` arithmetic + control flow + `Int` heap reads | **bails** to the interpreter (gap-free) |
 
-The supported/unsupported surface of the VM tiers is tracked mechanically: `vm_coverage_report()` enumerates every HIR statement/expression and runtime intrinsic versus the supported set, and `tests/execution_coverage.rs` fails if anything leaves the supported set without being on a documented, shrinking allowlist (desugared constructs and scheduler-run async). So "works in `rss eval`" and "works via `rss run`" are distinct, checked claims — not assumed equivalences.
+The supported/unsupported surface of the VM tiers is tracked mechanically: `vm_coverage_report()` enumerates every HIR statement/expression and runtime intrinsic versus the supported set, and `tests/execution_coverage.rs` fails if anything leaves the supported set without being on a documented, shrinking allowlist (desugared constructs and scheduler-run async). VM/JIT harnesses and `rss run` are distinct, checked claims — not assumed equivalences.
 
 ### Hello world
 
 ```sh
-cargo run -- run examples/scripts/basic/hello.rss
+cargo run -- run --vm examples/scripts/basic/hello.rss
 ```
 
 ```rust
@@ -515,29 +504,20 @@ Prefer a containerized toolchain? [DOCKER.md](docs/development/DOCKER.md) gives 
 
 ```sh
 docker compose build
-make test-fast
-make test-full
-make test-soak
+docker compose run --rm dev cargo test -p rsscript
+docker compose run --rm dev cargo test -p rsscript --features native-jit --no-run
+docker compose run --rm dev cargo test -p rsscript --test soak -- --ignored
 ```
 
 ---
 
 ## Roadmap
 
-Near term for v0.6 hardening: close remaining static-checker gaps against the spec, keep `.rssi` normalization compiler-owned, tighten package/source/interface consistency checks, expand self-hosted validation that exercises review and package tooling, and keep Rust lowering, source maps, and runtime diagnostics aligned with the documented semantic guarantee table.
+Near term for v0.7 hardening: close remaining static-checker gaps against the spec, keep `.rssi` normalization compiler-owned, tighten package/source/interface consistency checks, expand self-hosted validation that exercises review and package tooling, and keep Rust lowering, source maps, and runtime diagnostics aligned with the documented semantic guarantee table.
 
 Package-management hardening: keep implemented commands documented under their actual `--json` surface, treat dependency updates as review events, preserve unknown risk instead of downgrading it, and land design-only graph-audit/native-ABI/semver workflows only after their underlying interface and native facts are available without weakening review semantics. The package manager itself should be implemented in RSScript as the language core becomes capable enough — package review, dependency-risk classification, semantic lock diffing, and registry metadata shaping are exactly the application-layer systems code RSScript is meant to make reviewable. Any part that still needs Rust should mark the missing RSScript capability clearly instead of growing a parallel Rust-only model.
 
-Longer term: deeper semantic review tooling, a larger core library, agent and runtime examples, stronger optimization paths, optional native ABI adapter checks, graph-level audit-surface reporting, and an experimental self-hosted frontend.
-
-Post-v0.6 design directions (see spec §20.1) build on the single-isolate, non-`Send` managed model, which is what lets RSScript extend async without exposing Rust's `Pin`/`Poll`/`Waker`:
-
-- **Extended async packages.** The implemented `rss-async` package is the base surface; future packages should add custom TLS policy, async queue, semaphore, and broader IO abstractions without exposing Rust's `Future`/`Pin`/`Poll` model to RSScript users. Public task handles, async closures, and cross-isolate task execution remain future work. Read/mut guards may not cross `await`; current `task_group` remains isolate-local structured async, not Rust-style threaded spawning.
-- **Cross-isolate messaging with zero-copy transfer.** Explicit typed channels between isolates; `take`-based moves are the zero-copy transfer path, with single ownership enforced at compile time. Managed handles never cross isolates — only explicit messages do.
-- **Two-tier execution.** A HIR-level interpreter for the managed subset gives a fast edit-run loop; Rust lowering stays the production/AOT path. Both observe identical semantics and diagnostics.
-- **Structured-fix tooling.** An `rss fix` command applying machine-applicable fixes, plus an analysis server streaming diagnostics and fixes to both human editors and AI repair agents.
-- **Sum type hardening.** Current `sum` declarations are closed and exhaustively checked before lowering; future work should strengthen package/interface metadata without importing Rust enum complexity.
-- **Registry review-risk badges.** The package registry surfaces review-risk signals (native, unsafe, unknown, mutating/retaining ratios) as first-class quality badges, reusing existing package review metadata.
+Longer term: deeper semantic review tooling, a larger core library, agent and runtime examples, stronger optimization paths, optional native ABI adapter checks, graph-level audit-surface reporting, and an experimental self-hosted frontend. Current active roadmaps and historical evidence logs are consolidated in [docs/planning/README.md](docs/planning/README.md); use that index instead of treating older standalone plans as current.
 
 These intentionally exclude Dart-style conveniences that conflict with review-first semantics: cascade (`..`), extension methods / implicit method resolution, and positional records / implicit flow promotion.
 
@@ -547,7 +527,7 @@ These intentionally exclude Dart-style conveniences that conflict with review-fi
 
 RSScript prioritizes reviewable semantics over syntactic cleverness or maximal expressiveness. It deliberately avoids implicit conversions, user-defined operator overloading, hidden allocation, hidden retention, macro-heavy metaprogramming, complex public signatures, Rust-style lifetime syntax, C++-style implicit magic, and TypeScript-style type gymnastics.
 
-RSScript also does not own a separate build graph or build executor. `rss run` lowers to a Rust package and delegates execution to Cargo; fast edit-run feedback belongs to the HIR interpreter, while Cargo remains the Rust build substrate.
+RSScript also does not own a separate build graph or build executor. `rss run` lowers to a Rust package and delegates execution to Cargo by default; `rss run --vm` is the fast edit-run path through the HIR/register-VM interpreter, while Cargo remains the Rust build substrate.
 
 RSScript deliberately holds the lower-to-Rust niche. It is not trying to be a
 multi-target/full-stack language that also emits JavaScript, mobile UI code, or

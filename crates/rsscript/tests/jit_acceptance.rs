@@ -2,8 +2,8 @@
 //!
 //! These tests intentionally stay in the `runtime` target and use only the
 //! in-process backend set: interpreter, tier-0 JIT, and, with `native-jit`,
-//! native plus force-deopt. The slower generated-Rust backend remains covered by
-//! the `differential` target.
+//! native plus deopt/OSR stress backends. The slower generated-Rust backend
+//! remains covered by the `differential` target.
 
 mod common;
 
@@ -11,6 +11,121 @@ use common::differential::{assert_backends_agree_on, fast_backends};
 
 fn assert_fast_jit_backends_agree(file: &str, source: &str) {
     assert_backends_agree_on(file, source, &[], &fast_backends());
+}
+
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_jit_fast_backends_include_deopt_every_safepoint() {
+    let names: Vec<&'static str> = fast_backends()
+        .into_iter()
+        .map(|backend| backend.name())
+        .collect();
+    assert!(
+        names.contains(&"vm-jit-native-force-all-safepoints"),
+        "native differential backend set must include deopt-every-safepoint stress; got {names:?}",
+    );
+}
+
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_jit_precompiles_cold_scalar_call_chains() {
+    let source = "\
+fn inc(n: Int) -> Int {
+    return n + 1
+}
+
+fn twice(n: Int) -> Int {
+    return inc(n: read n) + inc(n: read n)
+}
+
+fn caller(n: Int) -> Int {
+    return twice(n: read n) + twice(n: read n)
+}
+
+fn main() -> Unit {
+    let value = caller(n: read 10)
+    Log.write(message: read String.from_int(value: read value))
+    return Unit
+}
+";
+    let executable =
+        rsscript::reg_vm_compile_source("native-call-edge.rss", source).expect("source compiles");
+    let (output, stats) = executable
+        .eval_main_with_args_native_with_stats(std::iter::empty::<&str>())
+        .expect("native eval succeeds");
+
+    assert_eq!(output.stdout, "44\n");
+    assert!(
+        stats.native_call_edges >= 2,
+        "expected caller chain to compile with native call edges, stats={stats:?}"
+    );
+    assert!(
+        stats.native_call_depth_max >= 2,
+        "expected caller chain to report nested native call depth, stats={stats:?}"
+    );
+
+    let (_reported_output, reported_stats, lines) =
+        rsscript::reg_vm_eval_source_main_native_osr_report(
+            "native-call-edge-report.rss",
+            source,
+            std::iter::empty::<&str>(),
+        )
+        .expect("reported native eval succeeds");
+    assert!(
+        reported_stats.native_call_edges >= 2 && reported_stats.native_call_depth_max >= 2,
+        "reported run should compile the native call chain, stats={reported_stats:?}"
+    );
+    let report = lines.join("\n");
+    assert!(
+        report.contains("jit-report: summary")
+            && report.contains(&format!(
+                "native_call_edges={}",
+                reported_stats.native_call_edges
+            ))
+            && report.contains(&format!(
+                "native_call_depth_max={}",
+                reported_stats.native_call_depth_max
+            )),
+        "RSS_JIT_REPORT should expose native call ABI telemetry, got:\n{report}"
+    );
+}
+
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_jit_precompiles_handle_return_call_chains() {
+    let source = "\
+fn make_text(value: Int) -> String {
+    return String.from_int(value: value + 100)
+}
+
+fn text_len(value: Int) -> Int {
+    let text = make_text(value: read value)
+    return String.len(value: read text)
+}
+
+fn relay_text(value: Int) -> String {
+    return make_text(value: read value)
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: text_len(value: read 20)))
+    Log.write(message: read relay_text(value: read 20))
+    Log.write(message: read String.from_int(value: text_len(value: read 23)))
+    Log.write(message: read relay_text(value: read 23))
+    return Unit
+}
+";
+    let executable = rsscript::reg_vm_compile_source("native-call-handle-edge.rss", source)
+        .expect("source compiles");
+    let (output, stats) = executable
+        .eval_main_with_args_native_with_stats(std::iter::empty::<&str>())
+        .expect("native eval succeeds");
+
+    assert_eq!(output.stdout, "3\n120\n3\n123\n");
+    assert!(
+        stats.native_calls > 0,
+        "expected native tier to execute at least one function, stats={stats:?}"
+    );
 }
 
 #[test]
@@ -439,9 +554,12 @@ fn main() -> Unit {
 ";
     let file = "jit-precise-clean.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
-    let precise =
-        rsscript::reg_vm_eval_source_main_native_precise(file, source, std::iter::empty::<String>())
-            .expect("precise native run");
+    let precise = rsscript::reg_vm_eval_source_main_native_precise(
+        file,
+        source,
+        std::iter::empty::<String>(),
+    )
+    .expect("precise native run");
     assert_eq!(interp.stdout, precise.stdout);
     assert_eq!(precise.stdout.trim(), "97664");
 }
@@ -477,8 +595,9 @@ fn main() -> Unit {
 ";
     let file = "jit-osr-scalar.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
-    let osr = rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
-        .expect("osr native run");
+    let osr =
+        rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+            .expect("osr native run");
     assert_eq!(
         interp.stdout, osr.stdout,
         "OSR loop must be byte-identical to the interpreter (stdout)"
@@ -517,8 +636,9 @@ fn main() -> Unit {
 ";
     let file = "jit-osr-readheap.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
-    let osr = rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
-        .expect("osr native run");
+    let osr =
+        rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+            .expect("osr native run");
     assert_eq!(
         interp.stdout, osr.stdout,
         "OSR read-heap loop must be byte-identical to the interpreter (stdout)"
@@ -1270,15 +1390,15 @@ fn main() -> Unit {
     );
 }
 
-/// OSR × J3 loop-carried struct NEGATIVE test — live-after-loop bail. Identical to the
-/// positive case except `p` is READ AFTER the loop (`p.x`). The struct is now live
-/// across the loop exit, so dissolving it into loop-carried scalars would require
-/// reconstructing the heap struct at the OSR boundary — out of scope. The pass MUST
-/// refuse and the loop MUST NOT OSR (`osr_entries == 0`); the program still runs
-/// correctly on the interpreter. Guards the dead-after-loop requirement.
+/// OSR × native heap writes for a loop-carried struct that is LIVE after the loop.
+/// The scalar loop-carried-struct pass must not dissolve this shape into registers
+/// because `p.x` is read after the loop and would require heap reconstruction. The
+/// native heap-write layer can still compile the original `SetFieldSlot` loop by
+/// journaling the heap writes directly, so the program should remain interpreter-
+/// identical AND OSR natively.
 #[cfg(feature = "native-jit")]
 #[test]
-fn native_osr_j3_loop_carried_struct_live_after_loop_does_not_osr() {
+fn native_osr_loop_carried_struct_live_after_loop_uses_heap_writes() {
     let source = "\
 struct Particle {
     x: Int,
@@ -1320,20 +1440,19 @@ fn main() -> Unit {
         interp.stdout, osr.stdout,
         "a loop-carried struct read after the loop must still be interpreter-identical"
     );
-    assert_eq!(
-        stats.osr_entries, 0,
-        "a loop-carried struct LIVE after the loop must NOT OSR (live-out bail): {stats:?}",
+    assert!(
+        stats.osr_entries > 0,
+        "a loop-carried struct LIVE after the loop should OSR through native heap writes: {stats:?}",
     );
 }
 
-/// OSR × J3 loop-carried struct NEGATIVE test — escape bail. Here the mutated struct
-/// `p` ESCAPES: it is RETURNED out of `f` (and also read by `main`). An escaping struct
-/// cannot be dissolved into registers (the heap value is observed), so the pass MUST
-/// refuse and the loop MUST NOT OSR (`osr_entries == 0`). The program remains correct
-/// on the interpreter. Guards the non-escaping requirement.
+/// OSR × native heap writes for a loop-carried struct that ESCAPES. The scalar
+/// loop-carried-struct pass must not dissolve the returned heap object into dead
+/// registers, but the native heap-write path can still update the original heap
+/// struct directly. The program should remain interpreter-identical AND OSR natively.
 #[cfg(feature = "native-jit")]
 #[test]
-fn native_osr_j3_loop_carried_struct_escaping_does_not_osr() {
+fn native_osr_loop_carried_struct_escaping_uses_heap_writes() {
     let source = "\
 struct Particle {
     x: Int,
@@ -1372,9 +1491,9 @@ fn main() -> Unit {
         interp.stdout, osr.stdout,
         "an escaping (returned) loop-carried struct must still be interpreter-identical"
     );
-    assert_eq!(
-        stats.osr_entries, 0,
-        "a loop-carried struct that ESCAPES (returned) must NOT OSR: {stats:?}",
+    assert!(
+        stats.osr_entries > 0,
+        "a loop-carried struct that ESCAPES should OSR through native heap writes: {stats:?}",
     );
 }
 
@@ -2011,7 +2130,7 @@ fn dispatch(f: read Fn(Int) -> Int, x: Int) -> Int {
 fn main() -> Unit {
     let mut total = 0
     let mut i = 0
-    while i < 200 {
+    while i < 400 {
         let a: Fn(Int) -> Int = |x| { return x * 2 - 1 }
         total = total + dispatch(f: read a, x: read i)
         i = i + 1
@@ -2021,6 +2140,19 @@ fn main() -> Unit {
 }
 ";
     assert_fast_jit_backends_agree("jit-accept-mono-closure-inline.rss", source);
+    #[cfg(feature = "native-jit")]
+    {
+        let executable =
+            rsscript::reg_vm_compile_source("jit-accept-mono-closure-inline.rss", source)
+                .expect("source compiles");
+        let (_native, stats) = executable
+            .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
+            .expect("native JIT run should succeed");
+        assert!(
+            stats.profile_closure_guard_sites > 0,
+            "monomorphic closure inline must emit a profile-guided guard: {stats:?}",
+        );
+    }
 }
 
 /// J2.1 GUARD-BAIL (forced polymorphic): warm `dispatch` to a monomorphic profile
@@ -2040,9 +2172,9 @@ fn dispatch(f: read Fn(Int) -> Int, x: Int) -> Int {
 fn main() -> Unit {
     let mut total = 0
     let mut i = 0
-    // Warm phase: 150 calls, all closure A (x * 2). Far past PROFILE_WARMUP, so the
-    // dispatch site profiles monomorphic on A and is inlined+compiled to native.
-    while i < 150 {
+    // Warm phase: 400 calls, all closure A (x * 2). Past PROFILE_RECORD_LIMIT, so
+    // the dispatch site freezes monomorphic on A and is inlined+compiled to native.
+    while i < 400 {
         let a: Fn(Int) -> Int = |x| { return x * 2 }
         total = total + dispatch(f: read a, x: read i)
         i = i + 1
@@ -2070,8 +2202,7 @@ fn main() -> Unit {
     #[cfg(feature = "native-jit")]
     {
         let interp = common::run_vm_source(file, source, &[]).expect("interp run");
-        let executable =
-            rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+        let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
         let (native, stats) = executable
             .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
             .expect("native JIT run should succeed");
@@ -2105,7 +2236,7 @@ fn dispatch(f: read Fn(Int) -> Int, x: Int) -> Int {
 fn main() -> Unit {
     let mut total = 0
     let mut i = 0
-    while i < 200 {
+    while i < 400 {
         if i % 2 == 0 {
             let a: Fn(Int) -> Int = |x| { return x * 2 - 1 }
             total = total + dispatch(f: read a, x: read i)
@@ -2141,7 +2272,7 @@ fn dispatch(f: read Fn(Int) -> Int, x: Int) -> Int {
 fn main() -> Unit {
     let mut total = 0
     let mut i = 0
-    while i < 300 {
+    while i < 400 {
         if i % 3 == 0 {
             let a: Fn(Int) -> Int = |x| { return x * 2 - 1 }
             total = total + dispatch(f: read a, x: read i)
@@ -2177,6 +2308,18 @@ fn main() -> Unit {
         assert!(
             stats.translated > 0 && stats.native_calls > 0,
             "the polymorphic dispatch site must reach native (inline cache): {stats:?}",
+        );
+        assert!(
+            stats.profile_closure_id_reads > 0,
+            "polymorphic closure inline must emit a profile-guided closure-id dispatch: {stats:?}",
+        );
+        assert!(
+            stats.profile_closure_pic_sites > 0,
+            "polymorphic closure inline must report PIC sites: {stats:?}",
+        );
+        assert!(
+            stats.profile_closure_pic_arms >= 3,
+            "three-way polymorphic closure inline must report at least three PIC arms: {stats:?}",
         );
         assert_eq!(
             stats.compile_failed, 0,
@@ -2326,7 +2469,7 @@ fn main() -> Unit {
     let mut i = 0
     // Warm phase: rotate A/B/C so the dispatch site profiles Polymorphic (3 keys),
     // gets a 3-arm inline cache, and tiers up to native.
-    while i < 300 {
+    while i < 400 {
         if i % 3 == 0 {
             let a: Fn(Int) -> Int = |x| { return x * 2 - 1 }
             total = total + dispatch(f: read a, x: read i)
@@ -2370,6 +2513,10 @@ fn main() -> Unit {
         assert!(
             stats.translated > 0 && stats.native_calls > 0,
             "the polymorphic dispatch site must reach native (inline cache + bail): {stats:?}",
+        );
+        assert!(
+            stats.profile_closure_id_reads > 0,
+            "polymorphic closure inline must emit a profile-guided closure-id dispatch: {stats:?}",
         );
         assert_eq!(
             stats.compile_failed, 0,
@@ -2778,32 +2925,17 @@ fn main() -> Unit {
 /// Adaptive-tiering knob: `RSS_JIT_OSR_THRESHOLD` overrides the OSR auto-trigger
 /// (counting `jit-native`) backedge threshold for sweeps WITHOUT recompiling per
 /// value, mirroring `RSS_JIT_OSR`. Default behavior is unchanged (unset ⇒ 1000).
-/// This test drives the real `rss bench --mode jit-native --json` binary as a
-/// subprocess (so env is set safely via `Command::env`, respecting the crate's
-/// `#![forbid(unsafe_code)]`) on a fixed medium-loop kernel whose trip count
-/// (600) sits BELOW the default 1000: at the default threshold the counting
-/// auto-trigger must NOT fire (`osr_entries == 0`), but with the override lowered
-/// to 100 the SAME loop must OSR (`osr_entries > 0`). Deterministic: trip count,
-/// kernel, and thresholds are all fixed.
+/// Fixed medium-loop kernel whose trip count (600) sits BELOW the default 1000:
+/// at the default threshold the counting auto-trigger must NOT fire
+/// (`osr_entries == 0`), but with the override lowered to 100 the SAME loop must
+/// OSR (`osr_entries > 0`). Deterministic: trip count, kernel, and thresholds
+/// are all fixed.
 #[cfg(feature = "native-jit")]
 #[test]
 fn rss_jit_osr_threshold_env_overrides_auto_trigger_fire_point() {
-    use std::process::Command;
-
-    let bin = env!("CARGO_BIN_EXE_rss");
-    let kernel = std::env::temp_dir().join(format!(
-        "rss_osr_threshold_probe_{}_{}.rss",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0),
-    ));
     // Native-INELIGIBLE function (Log.write tangled around it) with one hot scalar
     // loop of 600 iterations: only OSR can run the loop natively.
-    std::fs::write(
-        &kernel,
-        "\
+    let source = "\
 fn hot(limit: Int, seed: Int) -> Int {
     Log.write(message: read \"begin\")
     let mut i = 0
@@ -2820,56 +2952,60 @@ fn main() -> Unit {
     Log.write(message: read String.from_int(value: hot(limit: read 600, seed: read 0)))
     return Unit
 }
-",
-    )
-    .expect("write kernel");
+";
 
     let osr_entries = |threshold: Option<&str>| -> u64 {
-        let mut cmd = Command::new(bin);
-        cmd.args([
-            "bench",
-            "--json",
-            "--mode",
-            "jit-native",
-            "--iterations",
-            "1",
-            "--warmup",
-            "0",
-        ])
-        .arg(&kernel);
-        cmd.env_remove("RSS_JIT_OSR");
-        match threshold {
-            Some(t) => {
-                cmd.env("RSS_JIT_OSR_THRESHOLD", t);
+        let _osr_guard = EnvGuard::remove("RSS_JIT_OSR");
+        let _threshold_guard = EnvGuard::set_or_remove("RSS_JIT_OSR_THRESHOLD", threshold);
+        let executable = rsscript::reg_vm_compile_source("rss-osr-threshold-probe.rss", source)
+            .expect("threshold probe compiles");
+        let (_output, stats) = executable
+            .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
+            .expect("native run with stats");
+        stats.osr_entries
+    };
+
+    struct EnvGuard {
+        key: &'static str,
+        old: Option<std::ffi::OsString>,
+    }
+
+    impl EnvGuard {
+        fn remove(key: &'static str) -> Self {
+            let old = std::env::var_os(key);
+            unsafe {
+                std::env::remove_var(key);
             }
-            None => {
-                cmd.env_remove("RSS_JIT_OSR_THRESHOLD");
+            Self { key, old }
+        }
+
+        fn set_or_remove(key: &'static str, value: Option<&str>) -> Self {
+            let old = std::env::var_os(key);
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+            Self { key, old }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            unsafe {
+                match self.old.take() {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
             }
         }
-        let out = cmd.output().expect("run rss bench");
-        assert!(
-            out.status.success(),
-            "rss bench failed: {}",
-            String::from_utf8_lossy(&out.stderr),
-        );
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        // Pull "osr_entries":<n> out of the JSON line (no serde dep in this test).
-        let key = "\"osr_entries\":";
-        let pos = stdout
-            .find(key)
-            .unwrap_or_else(|| panic!("no osr_entries in bench json: {stdout}"));
-        let rest = &stdout[pos + key.len()..];
-        let end = rest
-            .find(|c: char| !c.is_ascii_digit())
-            .unwrap_or(rest.len());
-        rest[..end].parse::<u64>().expect("parse osr_entries")
-    };
+    }
 
     // Default threshold (1000): trip=600 < 1000 ⇒ counting auto-trigger never fires.
     let default_entries = osr_entries(None);
     // Override lowered to 100: trip=600 > 100 ⇒ the same loop now OSRs.
     let lowered_entries = osr_entries(Some("100"));
-    let _ = std::fs::remove_file(&kernel);
 
     assert_eq!(
         default_entries, 0,
@@ -3325,7 +3461,10 @@ fn main() -> Unit {
     let (native, stats) = executable
         .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
         .expect("native run should succeed");
-    assert_eq!(interp.stdout, native.stdout, "result must match interpreter");
+    assert_eq!(
+        interp.stdout, native.stdout,
+        "result must match interpreter"
+    );
     assert_eq!(native.stdout.trim(), "6765");
     assert_eq!(
         stats.native_calls, 0,
@@ -3370,7 +3509,10 @@ fn main() -> Unit {
     let (native, stats) = executable
         .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
         .expect("native run should succeed");
-    assert_eq!(interp.stdout, native.stdout, "result must match interpreter");
+    assert_eq!(
+        interp.stdout, native.stdout,
+        "result must match interpreter"
+    );
     assert_eq!(native.stdout.trim(), "true");
     assert_eq!(
         stats.native_calls, 0,
@@ -3671,6 +3813,111 @@ fn report_block<'a>(lines: &'a [String], name: &str) -> &'a str {
         .unwrap_or_else(|| panic!("no report block for fn `{name}` in {lines:#?}"))
 }
 
+#[cfg(feature = "native-jit")]
+#[test]
+fn report_profile_guided_pic_shows_hottest_first_order() {
+    let source = "\
+fn dispatch(f: read Fn(Int) -> Int, x: Int) -> Int {
+    return f(x)
+}
+
+fn main() -> Unit {
+    let mut i = 0
+    let mut total = 0
+    while i < 400 {
+        if i % 6 == 0 {
+            let c: Fn(Int) -> Int = |x| { return 0 - x }
+            total = total + dispatch(f: read c, x: read i)
+        } else if i % 6 < 3 {
+            let b: Fn(Int) -> Int = |x| { return x + 7 }
+            total = total + dispatch(f: read b, x: read i)
+        } else {
+            let a: Fn(Int) -> Int = |x| { return x * 2 - 1 }
+            total = total + dispatch(f: read a, x: read i)
+        }
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+";
+    let file = "jit-report-profile-pic.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let (out, stats, lines) = rsscript::reg_vm_eval_source_main_native_osr_report(
+        file,
+        source,
+        std::iter::empty::<String>(),
+    )
+    .expect("osr+report run");
+    assert_eq!(
+        interp.stdout, out.stdout,
+        "report run must be byte-identical"
+    );
+    let block = report_block(&lines, "dispatch");
+    assert!(
+        block.contains("profile: closure@")
+            && block.contains("polymorphic")
+            && block.contains("observed=[")
+            && block.contains("pic=hottest-first[")
+            && block.contains("pic_arms=3"),
+        "weighted closure dispatcher should report profile-guided PIC details, got:\n{block}",
+    );
+    assert!(
+        stats.profile_closure_id_reads > 0,
+        "report fixture should compile a polymorphic closure PIC: {stats:?}",
+    );
+}
+
+#[cfg(feature = "native-jit")]
+#[test]
+fn report_shows_profile_guided_branch_feedback() {
+    let source = "\
+fn branchy(i: Int) -> Int {
+    let marker = Path.from_string(value: read \"branch-profile\")
+    if i % 4 == 0 {
+        return 10
+    }
+    return 1
+}
+
+fn main() -> Unit {
+    let mut i = 0
+    let mut total = 0
+    while i < 400 {
+        total = total + branchy(i: read i)
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+";
+    let file = "jit-report-branch-feedback.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let (out, stats, lines) = rsscript::reg_vm_eval_source_main_native_osr_report(
+        file,
+        source,
+        std::iter::empty::<String>(),
+    )
+    .expect("osr+report run");
+    assert_eq!(
+        interp.stdout, out.stdout,
+        "branch-profile report run must be byte-identical"
+    );
+    let block = report_block(&lines, "branchy");
+    assert!(
+        block.contains("profile: branch@")
+            && block.contains("taken=")
+            && block.contains("fallthrough=")
+            && block.contains("taken_pct=")
+            && block.contains("bias="),
+        "branch-heavy loop should report branch feedback, got:\n{block}",
+    );
+    assert!(
+        stats.profile_branch_sites > 0 && stats.profile_branch_samples > 0,
+        "branch feedback should also be exposed through NativeStats: {stats:?}",
+    );
+}
+
 /// A winning pure-Int scalar loop: the whole function is in the native subset, so it
 /// compiles+runs as one native body (`native: ok`) and OSR never has to fire. The
 /// report must say `native: ok` and `osr: eligible` (the loop body IS in the subset),
@@ -3696,28 +3943,33 @@ fn main() -> Unit {
 ";
     let file = "jit-report-native-scalar.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
-    let (out, stats, lines) =
-        rsscript::reg_vm_eval_source_main_native_osr_report(file, source, std::iter::empty::<String>())
-            .expect("osr+report run");
-    assert_eq!(interp.stdout, out.stdout, "report run must be byte-identical");
+    let (out, stats, lines) = rsscript::reg_vm_eval_source_main_native_osr_report(
+        file,
+        source,
+        std::iter::empty::<String>(),
+    )
+    .expect("osr+report run");
+    assert_eq!(
+        interp.stdout, out.stdout,
+        "report run must be byte-identical"
+    );
     let block = report_block(&lines, "hot");
     assert!(
         block.contains("native: ok") && block.contains("osr: n/a"),
         "scalar loop should report native: ok + osr: n/a, got:\n{block}"
     );
-    assert!(stats.native_calls >= 1, "accuracy: function really ran native: {stats:?}");
+    assert!(
+        stats.native_calls >= 1,
+        "accuracy: function really ran native: {stats:?}"
+    );
 }
 
-/// NEGATIVE Bytes-fold test: a `Bytes.slice` (allocating) loop whose source `data` is a
-/// FUNCTION PARAMETER (no constant byte length, no in-region producer). The Bytes
-/// length-fold cannot prove a length law for a parameter source, so it bails — the
-/// allocating `Bytes.slice` survives and the loop does NOT OSR. The report must say
-/// `not osr` and surface the `Bytes.slice` intrinsic (effect=allocate) from the
-/// registry; the stats must confirm NO OSR entry (accuracy). (Contrast with the
-/// constant-source `bytes_scan` kernel / the positive test below, which DOES fold.)
+/// Native Bytes-slice test: `Bytes.slice` + `Bytes.len` now lower through the
+/// helper-backed native path, so this whole function can run native. The report
+/// must say `native: ok` and `osr: n/a`, and stats must confirm native execution.
 #[cfg(feature = "native-jit")]
 #[test]
-fn report_bytes_scan_says_not_osr_bytes_slice_allocate() {
+fn report_bytes_scan_says_native_ok() {
     let source = "\
 fn scan(data: read Bytes, limit: Int) -> Int {
     let mut index = 0
@@ -3738,16 +3990,25 @@ fn main() -> Unit {
 ";
     let file = "jit-report-bytes-scan.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
-    let (out, stats, lines) =
-        rsscript::reg_vm_eval_source_main_native_osr_report(file, source, std::iter::empty::<String>())
-            .expect("osr+report run");
-    assert_eq!(interp.stdout, out.stdout, "report run must be byte-identical");
+    let (out, stats, lines) = rsscript::reg_vm_eval_source_main_native_osr_report(
+        file,
+        source,
+        std::iter::empty::<String>(),
+    )
+    .expect("osr+report run");
+    assert_eq!(
+        interp.stdout, out.stdout,
+        "report run must be byte-identical"
+    );
     let block = report_block(&lines, "scan");
     assert!(
-        block.contains("not osr") && block.contains("BytesSlice") && block.contains("allocate"),
-        "bytes loop should report not osr w/ BytesSlice allocate, got:\n{block}"
+        block.contains("native: ok") && block.contains("osr: n/a"),
+        "bytes helper loop should report native: ok + osr: n/a, got:\n{block}"
     );
-    assert_eq!(stats.osr_entries, 0, "accuracy: bytes loop must NOT osr: {stats:?}");
+    assert!(
+        stats.native_calls >= 1 && stats.osr_entries == 0,
+        "accuracy: bytes loop should run whole-function native, not OSR: {stats:?}"
+    );
 }
 
 /// POSITIVE Bytes-fold test: a non-escaping Bytes value built ONLY to be measured
@@ -3892,15 +4153,12 @@ fn main() -> Unit {
     );
 }
 
-/// A `String.slice` of a RUNTIME (not provably-ASCII) string source: the
-/// length-law fold bails (the ASCII gate fails), so the loop does NOT OSR. The report
-/// must say `not osr` and surface the allocating `StringSlice` intrinsic from the
-/// registry (effect=allocate + its ASCII-gated note); the stats must confirm NO OSR
-/// entry (accuracy). This is the registry-driven "not folded: string slice source not
-/// provably ASCII" case.
+/// `String.slice` with a runtime source parameter now lowers through the
+/// helper-backed native path, so this whole function can run native. The report
+/// must say `native: ok` and `osr: n/a`; stats confirm native execution.
 #[cfg(feature = "native-jit")]
 #[test]
-fn report_string_slice_runtime_source_says_not_osr() {
+fn report_string_slice_runtime_source_says_native_ok() {
     let source = "\
 fn build(text: read String, limit: Int) -> Int {
     let mut index = 0
@@ -3920,18 +4178,25 @@ fn main() -> Unit {
 ";
     let file = "jit-report-string-slice.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
-    let (out, stats, lines) =
-        rsscript::reg_vm_eval_source_main_native_osr_report(file, source, std::iter::empty::<String>())
-            .expect("osr+report run");
-    assert_eq!(interp.stdout, out.stdout, "report run must be byte-identical");
+    let (out, stats, lines) = rsscript::reg_vm_eval_source_main_native_osr_report(
+        file,
+        source,
+        std::iter::empty::<String>(),
+    )
+    .expect("osr+report run");
+    assert_eq!(
+        interp.stdout, out.stdout,
+        "report run must be byte-identical"
+    );
     let block = report_block(&lines, "build");
     assert!(
-        block.contains("not osr")
-            && block.contains("StringSlice")
-            && block.contains("allocate"),
-        "string-slice loop should report not osr w/ StringSlice allocate, got:\n{block}"
+        block.contains("native: ok") && block.contains("osr: n/a"),
+        "string helper loop should report native: ok + osr: n/a, got:\n{block}"
     );
-    assert_eq!(stats.osr_entries, 0, "accuracy: string-slice loop must NOT osr: {stats:?}");
+    assert!(
+        stats.native_calls >= 1 && stats.osr_entries == 0,
+        "accuracy: string helper loop should run whole-function native, not OSR: {stats:?}"
+    );
 }
 
 /// A non-loop function (no back-edge): the report must say `not osr: no loop`, and
@@ -3953,10 +4218,16 @@ fn main() -> Unit {
 ";
     let file = "jit-report-loopless.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
-    let (out, _stats, lines) =
-        rsscript::reg_vm_eval_source_main_native_osr_report(file, source, std::iter::empty::<String>())
-            .expect("osr+report run");
-    assert_eq!(interp.stdout, out.stdout, "report run must be byte-identical");
+    let (out, _stats, lines) = rsscript::reg_vm_eval_source_main_native_osr_report(
+        file,
+        source,
+        std::iter::empty::<String>(),
+    )
+    .expect("osr+report run");
+    assert_eq!(
+        interp.stdout, out.stdout,
+        "report run must be byte-identical"
+    );
     let block = report_block(&lines, "add3");
     assert!(
         block.contains("not osr: no loop"),
@@ -3964,13 +4235,72 @@ fn main() -> Unit {
     );
 }
 
-/// `option_result_chain` positive: a hot loop chaining Option/Result combinators that
-/// the combinator-expansion + scalar-replacement passes dissolve so the loop OSRs. The
-/// report must say `osr: entered` for the loop function, and the stats must confirm an
-/// actual OSR entry (accuracy: a positive verdict is backed by the real outcome).
 #[cfg(feature = "native-jit")]
 #[test]
-fn report_option_result_chain_says_osr_entered() {
+fn report_groups_native_decline_reasons_by_count() {
+    let source = "\
+fn blocked_a() -> Int {
+    let path = Path.from_string(value: read \"alpha\")
+    return String.len(value: read Path.to_string(path: read path))
+}
+
+fn blocked_b() -> Int {
+    let path = Path.from_string(value: read \"beta\")
+    return String.len(value: read Path.to_string(path: read path))
+}
+
+fn main() -> Unit {
+    let mut i = 0
+    let mut total = 0
+    while i < 8 {
+        total = total + blocked_a() + blocked_b()
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+";
+    let file = "jit-report-decline-summary.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let (out, stats, lines) = rsscript::reg_vm_eval_source_main_native_osr_report(
+        file,
+        source,
+        std::iter::empty::<String>(),
+    )
+    .expect("osr+report run");
+    assert_eq!(
+        interp.stdout, out.stdout,
+        "report run must be byte-identical"
+    );
+    let block = report_block(&lines, "blocked_a");
+    let reason = block
+        .lines()
+        .find_map(|line| line.strip_prefix("  not native: "))
+        .expect("blocked_a should have a native decline reason");
+    let summary = lines
+        .iter()
+        .find(|line| line.starts_with("jit-report: native decline summary"))
+        .unwrap_or_else(|| panic!("missing native decline summary in {lines:#?}"));
+    assert!(
+        summary.contains(&format!("  2x {reason}")),
+        "decline summary should group equivalent blocked functions; reason={reason:?}; summary:\n{summary}",
+    );
+    let stats_json = stats.to_json();
+    assert_eq!(
+        stats_json["native_decline_reasons"][reason].as_u64(),
+        Some(2),
+        "NativeStats JSON should expose grouped decline reasons for perf tooling; stats={stats_json}",
+    );
+}
+
+/// `option_result_chain` report: the combinator mappers and the scalar+`Option`
+/// leaf `maybe_even` inline into the OSR region and the `Option`s dissolve, so the
+/// loop OSRs even though the enclosing function is NOT whole-function native. The
+/// report accurately notes BOTH the whole-function decline (a non-inlinable call)
+/// and the OSR entry; stats confirm the OSR.
+#[cfg(feature = "native-jit")]
+#[test]
+fn report_option_result_chain_osrs_via_combinator_expansion() {
     let source = "\
 fn maybe_even(value: Int) -> Option<Int> {
     let half = value / 2
@@ -4002,16 +4332,29 @@ fn main() -> Unit {
 ";
     let file = "jit-report-option-result-chain.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
-    let (out, stats, lines) =
-        rsscript::reg_vm_eval_source_main_native_osr_report(file, source, std::iter::empty::<String>())
-            .expect("osr+report run");
-    assert_eq!(interp.stdout, out.stdout, "report run must be byte-identical");
+    let (out, stats, lines) = rsscript::reg_vm_eval_source_main_native_osr_report(
+        file,
+        source,
+        std::iter::empty::<String>(),
+    )
+    .expect("osr+report run");
+    assert_eq!(
+        interp.stdout, out.stdout,
+        "report run must be byte-identical"
+    );
     let block = report_block(&lines, "f");
     assert!(
         block.contains("osr: entered"),
-        "combinator chain loop should report osr: entered, got:\n{block}"
+        "combinator chain loop should OSR after combinator expansion + inline, got:\n{block}"
     );
-    assert!(stats.osr_entries >= 1, "accuracy: combinator chain really OSR'd: {stats:?}");
+    assert!(
+        block.contains("non-inlinable call"),
+        "report should accurately note the whole-function native decline, got:\n{block}"
+    );
+    assert!(
+        stats.osr_entries > 0,
+        "accuracy: combinator chain OSRs in the current pipeline: {stats:?}"
+    );
 }
 
 /// Direct typed-list reads on the OSR path (perf win): a hot loop indexing a
@@ -4156,7 +4499,8 @@ fn main() -> Unit {
     // Sanity: the program compiles (a malformed source, not an OOB, would fail here).
     rsscript::reg_vm_compile_source(file, source).expect("source compiles");
     let interp = common::run_vm_source(file, source, &[]);
-    let osr = rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>());
+    let osr =
+        rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>());
     // Both must agree: an out-of-bounds index at i==2 raises the SAME error (or same
     // partial output) under OSR as under the interpreter. The direct read bounds-check
     // deopts at the OOB index; the interpreter then raises the real OOB.

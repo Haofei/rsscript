@@ -686,7 +686,7 @@ Rules:
 4. rsspkg.lock records provider resolution for executable builds only after the
    selected provider has been matched against the selected interface contract.
 5. A dependency on an interface-only package without a valid implementation
-   provider is a diagnostic for rss run and rss verify-rust.
+   provider is a diagnostic for executable package runs.
 6. Interface-only packages publish the contract only. Executable consumers must
    either mark that dependency `platform_provided`, `compile_only`, or
    `test_only`, or select a package provider in `[providers]`.
@@ -1778,7 +1778,6 @@ rss pkg review
 rss pkg metadata
 rss pkg diff
 rss pkg tree
-rss pkg audit-surface
 rss pkg lock --check
 ```
 
@@ -1786,9 +1785,7 @@ Commands that may execute the Cargo build pipeline:
 
 ```text
 rss run
-rss verify-rust
-rss pkg check --native-abi
-rss pkg publish --dry-run --native-abi
+future native ABI validation tooling
 ```
 
 Before a command executes native build code, it must apply native risk policy and
@@ -1829,7 +1826,7 @@ transitive_unsafe_blocks
   graph; otherwise unknown.
 
 adapter_typechecked
-  known only after rss pkg check --native-abi or equivalent build execution;
+  known only after native ABI validation or equivalent build execution;
   otherwise not_run.
 ```
 
@@ -2001,7 +1998,7 @@ fn __rss_bind_Json_parse(
 Command:
 
 ```sh
-rss pkg check --native-abi
+native ABI validation
 ```
 
 This command may run Cargo and therefore may execute build scripts or proc macros
@@ -2264,8 +2261,8 @@ and explain the reasons and evidence.
 Planned canonical command once graph-audit output is implemented:
 
 ```sh
-rss pkg audit-surface
-rss pkg audit-surface --json
+rss pkg review
+rss pkg review --json
 ```
 
 ### 11.2 Minimum risk summary
@@ -2373,11 +2370,11 @@ may experiment, but they must report raw facts separately from any score.
 
 ## 12. Package Check and Build Workflow
 
-### 12.1 `rss pkg check`
+### 12.1 `rss pkg`
 
 Canonical command namespace is `rss pkg`. v0.6 does not define command aliases.
 
-Default `rss pkg check` runs:
+Default `rss pkg` runs:
 
 ```text
 manifest validation
@@ -2394,16 +2391,12 @@ rsspkg.lock consistency check
 policy checks that do not require native build execution
 ```
 
-Default `rss pkg check` must not execute native build scripts or proc macros.
+Default `rss pkg` must not execute native build scripts or proc macros.
 
-To run generated native adapter type-checking:
-
-```sh
-rss pkg check --native-abi
-```
-
-This command may invoke Cargo and therefore may execute build-time Rust code.
-Policy must be applied before execution.
+Generated native adapter type-checking is future native ABI validation tooling,
+not part of the current user-facing `rss` command surface. It may invoke Cargo
+and therefore may execute build-time Rust code. Policy must be applied before
+execution.
 
 When `[review.policy].deny_unknown = true`, any package review result with
 unknown risk makes package check fail even if the lock is current and there are
@@ -2448,28 +2441,28 @@ rss run
 Recommended review-first CI:
 
 ```sh
-rss pkg check
+rss pkg
 rss pkg tree
 rss pkg review --json
 rss pkg metadata --dry-run --json
 rss pkg diff old-package-dir new-package-dir
 rss check src/main.rss
-rss review --map src/
+rss pkg review src/
 ```
 
 Native ABI CI:
 
 ```sh
 # planned native ABI extension:
-# rss pkg check --native-abi
-rss verify-rust src/main.rss
+# native ABI validation
+rss run --dry-run --out-dir generated src/main.rss
 ```
 
 Strict dependency policy:
 
 ```sh
 # planned policy-flag extension; today use manifest policy plus --json output:
-rss pkg check --json
+rss pkg --json
 rss pkg review --json
 rss pkg diff --json old-package-dir new-package-dir
 ```
@@ -2493,9 +2486,6 @@ Examples:
 
 ```sh
 rss pkg diff --json old-package-dir new-package-dir
-rss pkg diff --reir old-package-dir new-package-dir
-rss pkg review update --json --from old/rsspkg.lock --to rsspkg.lock
-rss pkg reir diff --json --fail-on-change --from review/reir-baseline.json --to review/reir/rsscript.json
 ```
 
 Registry-coordinate diffs, `--lockfile`/`--new-lockfile`, and update-plan diff
@@ -2690,7 +2680,7 @@ patch allowed:
 Planned command:
 
 ```sh
-rss pkg semver-check --since 0.3.1
+semver check tooling
 ```
 
 Semver remains a convention. The normalized interface diff is the review source
@@ -2706,8 +2696,8 @@ contract and risk compatibility.
 Planned canonical command once replacement review is implemented:
 
 ```sh
-rss pkg compare rss-json rss-fast-json
-rss pkg compare rss-json rss-fast-json --json
+rss pkg diff rss-json rss-fast-json
+rss pkg diff rss-json rss-fast-json --json
 ```
 
 It should report:
@@ -2875,16 +2865,16 @@ native conformance summaries, but those fields are not part of the implemented
 `rss.review.package.v1` artifact and must not be required by v0.6 registry or CI
 consumers.
 
-The implemented CLI also provides a direct REIR projection:
+Package review artifacts can be converted into REIR by package metadata tooling:
 
 ```sh
-rss pkg review --reir <package-directory>
-rss pkg reir diff --from <baseline-reir.json> --to <current-reir.json>
+rss pkg review --json <package-directory> > review/package-review.json
+rss pkg metadata --reir <package-directory> > review/reir/rsscript.json
 reir collect --producer rsscript --package-review review/package-review.json --package-check review/package-check.json --out review/reir/rsscript-ci.json
 ```
 
-This command emits a `reir.bundle.v0.1` JSON bundle derived from the package
-review and embedded language review map. It preserves package risk, native
+The REIR bundle derived from package review and embedded language review map
+preserves package risk, native
 capability facts, native boundary facts, source `module` / `use` organization
 facts, and native crossing edges so REIR tools can consume package-manager
 evidence without an extra conversion step. The
@@ -2895,12 +2885,8 @@ stdlib capability projection includes known file/data façades such as
 the returned handle to one direction. The bundle includes derived review slices
 such as `package_risk_slice` and
 `native_unsafe_slice` so CI and registry views can start from review-focused
-subsets without recomputing them. `rss pkg reir diff` compares two already
-generated `reir.bundle.v0.1` artifacts and emits a `reir.diff.v0.1` result,
-letting CI compare a locked baseline artifact against the current
-`review/reir/rsscript.json` without re-running package review for the baseline.
-By default this reports differences without failing; `--fail-on-change` returns
-non-zero when any REIR diff item is present.
+subsets without recomputing them. Comparing already-generated REIR artifacts is
+repo/CI tooling, not part of the current `rss` user command surface.
 When package REIR artifacts are merged with other producer bundles, `reir merge`
 dedupes stable ids, rebuilds the subject index, and recomputes derived slices so
 registry and CI views do not rely on stale per-package slices.
@@ -3028,11 +3014,11 @@ Human-readable reports are views over structured facts. The implemented package
 commands with stable machine-readable output are:
 
 ```text
-rss pkg check --json
+rss pkg --json
 rss pkg metadata --json
 rss pkg diff --json
-rss review --map --json
-rss review --diff --json
+rss pkg review --json
+rss pkg diff --json
 ```
 
 Planned package-management commands and flags should use the same stable
@@ -3040,8 +3026,8 @@ machine-readable style once implemented and tested:
 
 ```text
 rss pkg diff --update-plan --json
-rss pkg audit-surface --json
-rss pkg compare --json
+rss pkg review --json
+rss pkg diff --json
 ```
 
 Machine-readable formats must distinguish:
@@ -3193,8 +3179,8 @@ package archive reproducible
 unknown package review risk blocks publish readiness unless explicitly allowed
 ```
 
-In the implemented prototype, `rss pkg publish --dry-run --reir` converts the
-publish preview into REIR `supply_chain` facts for archive checksum, registry
+In the implemented prototype, the publish dry-run JSON preview can be converted
+into REIR `supply_chain` facts for archive checksum, registry
 checksum, effective-interface hash, review metadata hash, and native wrapper
 hash when present. It also emits publish readiness/check facts with
 `registry_metadata` evidence and maps the registry preview's `native` and
@@ -3210,9 +3196,9 @@ corresponding REIR `supply_chain` fact is `unknown`; the adapter must not turn a
 missing hash into verified supply-chain evidence.
 
 Planned native ABI validation, once implemented and policy-gated, may add
-`rss pkg publish --dry-run --native-abi` to run generated native adapter
+`rss pkg publish --dry-run native ABI validation` to run generated native adapter
 type-checking and native build code. The current prototype rejects
-`--native-abi` rather than silently executing build-time native code.
+native ABI validation rather than silently executing build-time native code.
 
 Yanking should not break existing lockfile builds, but new resolution should
 avoid yanked versions unless explicitly allowed.
@@ -3261,69 +3247,61 @@ must be displayed and included in semantic dependency diff.
 ## 17. CLI Design
 
 Canonical package-management commands live under `rss pkg`, with `--json` for
-package-manager JSON and `--reir` for REIR bundle or diff JSON where listed. The
+package-manager JSON and `--reir` only where listed in the implemented CLI. The
 subcommands wired into the CLI **today** are `rss pkg [dir]` (the default check),
 `rss pkg review`, `rss pkg diff`, `rss pkg ci`, `rss pkg publish --dry-run`,
-`rss pkg lock`, `rss pkg tree`, `rss pkg metadata`, and `rss pkg vendor`. The two
-remaining forms below — `rss pkg review update` and `rss pkg reir diff` — are part
-of the canonical design and backed by library functions, but are not yet exposed
-as their own CLI subcommands. The full canonical surface:
+`rss pkg lock`, `rss pkg tree`, `rss pkg metadata`, and `rss pkg vendor`. The
+implemented user-facing surface is:
 
 ```sh
-rss pkg check    [--json|--reir] [package-directory]
-rss pkg review   [--json|--reir] [package-directory]
-rss pkg review update [--json|--reir] --from <old-rsspkg.lock> --to <new-rsspkg.lock>
-rss pkg lock     [--json|--reir] <package-directory>
+rss pkg          [--json] [package-directory]
+rss pkg add      <dependency|dependency@version|path-to-package>
+rss pkg review   [--json] [package-directory]
+rss pkg diff     [--json] <old-package-directory> <new-package-directory>
+rss pkg ci       [--json] [package-directory]
+rss pkg publish  --dry-run [--json] [--registry <directory>] [package-directory]
+rss pkg lock     [--json|--reir] [package-directory]
 rss pkg tree     [--json|--reir] [package-directory]
-rss pkg publish  --dry-run [--json|--reir] [--registry <directory>] [package-directory]
 rss pkg vendor   [--dry-run] [--json|--reir] [package-directory]
 rss pkg metadata [--dry-run|--verify] [--json|--reir] [package-directory]
-rss pkg diff     [--json|--reir] <old-package-directory> <new-package-directory>
-rss pkg reir diff [--json] [--fail-on-change] --from <baseline-reir.json> --to <current-reir.json>
 ```
 
-No `rss package ...` command is defined for v0.6 tooling. No `rss review deps`
+No `rss package ...` command is defined for v0.6 tooling. No top-level review
 alias is normative in v0.6. New dependency-review workflows should stay under
-`rss pkg diff`, `rss pkg review`, `rss pkg review update`, or future tested
-`rss pkg` subcommands; they should not introduce parallel command namespaces.
+`rss pkg diff`, `rss pkg review`, or future tested `rss pkg` subcommands; they
+should not introduce parallel command namespaces.
 
-Design-target commands such as `rss pkg audit-surface`, `rss pkg semver-check`,
-`rss pkg compare`, and `rss pkg check --native-abi` remain planned until their
-underlying graph-risk, semver, replacement-review, or adapter-check facts are
-implemented and tested.
+Design-target capabilities such as audit-surface reporting, semver checks,
+replacement review, and native ABI validation remain planned until their
+underlying facts are implemented and tested. They should stay under existing
+`rss pkg` workflows or repo tooling rather than expanding the top-level CLI.
 
-### 17.1 `rss pkg check`
+### 17.1 `rss pkg`
 
 Runs manifest, interface, source, lockfile, graph summary, and non-executing
 native checks.
 
 ```sh
-rss pkg check [--json|--reir] [package-directory]
+rss pkg [--json] [package-directory]
 ```
 
-In the implemented prototype, `--reir` converts the package check result into a
-REIR bundle for CI gates. It emits the overall check status, graph/lock/native
-policy results, stale lock package-change facts and their changed lock fields,
-native unsafe/build-time facts, provider implementation declarations from
-`[implements]`, and diagnostics. This makes `rss pkg check` failures mergeable
-with package review, tree, lock, metadata, vendor, and publish evidence. Overall
-status and graph policy facts use the package directory as their evidence file.
-The lock policy fact uses `lockfile_entry` evidence at the reported semantic lock
-path. The native policy fact and native unsafe/build-time facts use the
-`native_rust.path` directory as their evidence file, keeping the review boundary
-directly navigable in CI output. Provider implementation facts from
-`[implements]` use `rsspkg.toml` as their evidence file.
+In the implemented prototype, `rss pkg` emits the overall package health status,
+graph/lock/native policy results, stale lock package-change facts and their
+changed lock fields, native unsafe/build-time facts, provider implementation
+declarations from `[implements]`, and diagnostics. This makes package health
+failures mergeable with package review, tree, lock, metadata, vendor, and publish
+evidence. Overall status and graph policy facts use the package directory as
+their evidence file. The lock policy fact uses `lockfile_entry` evidence at the
+reported semantic lock path. The native policy fact and native unsafe/build-time
+facts use the `native_rust.path` directory as their evidence file, keeping the
+review boundary directly navigable in CI output. Provider implementation facts
+from `[implements]` use `rsspkg.toml` as their evidence file.
 Diagnostic facts keep their source-span line and column; relative diagnostic
 paths are resolved under the checked package directory so CI output links to the
 actual manifest, source, interface, native metadata, or policy file.
 
-Planned policy/native-ABI extensions, once implemented and tested:
-
-```sh
-rss pkg check --deny-unknown
-rss pkg check --deny-high-risk
-rss pkg check --native-abi
-```
+Planned policy/native-ABI extensions should be exposed only after they are
+implemented and tested, and should not create parallel command namespaces.
 
 ### 17.2 `rss pkg tree`
 
@@ -3344,13 +3322,13 @@ my-app
 └── rss-http 0.4.0 [high, native, build.rs, resource]
 ```
 
-### 17.3 `rss pkg audit-surface` (planned)
+### 17.3 `rss pkg review` (planned)
 
-Summarizes the current graph as a review surface. Until this subcommand is implemented, the same facts should be surfaced through `rss pkg review`, `rss pkg tree`, `rss pkg check`, and metadata output where available.
+Summarizes the current graph as a review surface. Until this subcommand is implemented, the same facts should be surfaced through `rss pkg review`, `rss pkg tree`, `rss pkg`, and metadata output where available.
 
 ```sh
-rss pkg audit-surface
-rss pkg audit-surface --json
+rss pkg review
+rss pkg review --json
 ```
 
 It reports risk distribution, highest-risk packages, dependency paths, reasons,
@@ -3361,14 +3339,12 @@ evidence, and policy result. It must not execute native build code by default.
 Generates package-level review report for the current package or workspace.
 
 ```sh
-rss pkg review [--json|--reir] [package-directory]
+rss pkg review [--json] [package-directory]
 ```
 
-In the implemented prototype, `--reir` converts the package review report into a
-REIR bundle with package risk, public contract, protocol, dependency, native
-boundary, capability, diagnostic, and async-boundary facts. This is the primary
-package-local producer for `reir show`, `reir merge`, `reir slice`, and
-bundle-mode `reir reconcile`.
+In the implemented prototype, `--json` emits the package review report. REIR
+projection belongs to `rss pkg metadata --reir` or repo/CI tooling, not this
+subcommand.
 
 Design extensions may add:
 
@@ -3408,23 +3384,13 @@ package-review REIR bundle written to `review/reir/rsscript.json`.
 Compares package versions, lockfiles, or update plans.
 
 ```sh
-rss pkg diff [--json|--reir] <old-package-directory> <new-package-directory>
-rss pkg reir diff [--json] [--fail-on-change] --from <baseline-reir.json> --to <current-reir.json>
-rss pkg review update [--json|--reir] --from <old-rsspkg.lock> --to <new-rsspkg.lock>
+rss pkg diff [--json] <old-package-directory> <new-package-directory>
 ```
 
-`--reir` emits a `reir.diff.v0.1` JSON diff over the REIR bundles derived from
-each package review. This is the package-manager convenience path for CI jobs
-that want REIR-native review diffs without separately invoking `reir diff`.
-`rss pkg reir diff` uses already-written REIR bundles instead of package
-directories, which is the baseline-artifact path for registries and CI caches.
-`--fail-on-change` makes the artifact diff suitable as a CI gate while leaving
-plain diff usable for local inspection.
-`rss pkg review update --reir` emits a REIR bundle from the semantic lock update
-itself: update-risk facts, package-risk facts, and changed-field facts with
-`lockfile_entry` evidence. This complements `rss pkg lock --reir`, which emits
-the accepted lock state rather than the update decision. The top-level
-update-risk fact uses the `/risk` JSON pointer. Evidence for added or changed
+REIR-native review diffs are repo/CI tooling. `rss pkg diff` stays the
+user-facing semantic package diff. Future update-risk facts can complement
+`rss pkg lock --reir`, which emits the accepted lock state rather than the update
+decision. The top-level update-risk fact uses the `/risk` JSON pointer. Evidence for added or changed
 lock entries points at the new lockfile, while evidence for removed packages or
 removed fields points at the old lockfile.
 
@@ -3497,9 +3463,9 @@ rss pkg add <package>
 rss pkg add <package> --apply
 rss pkg remove <package>
 rss pkg update [package]
-rss pkg audit-surface
-rss pkg semver-check --since <version>
-rss pkg compare <old-package> <new-package>
+rss pkg review
+semver check tooling
+rss pkg diff <old-package> <new-package>
 rss pkg explain <package>
 rss pkg why <package>
 rss pkg clean
@@ -3652,7 +3618,7 @@ error[PKG1001]: dependency graph contains unknown-risk packages
   policy maximum: 0
 
 Run `rss pkg review --json` or `rss pkg tree --json` to see which packages are
-unknown and why. A dedicated `rss pkg audit-surface` command is a design target.
+unknown and why. A dedicated `rss pkg review` command is a design target.
 ```
 
 Native wrapper compile errors may not map to RSScript source. Diagnostics should
@@ -3776,7 +3742,7 @@ unsafe RSScript APIs: 0
 build.rs: false, source=cargo_metadata_nonexecuting
 proc macros: false, source=cargo_metadata_nonexecuting
 wrapper unsafe blocks: false, source=source_scan_best_effort
-adapter typechecked: not_run unless rss pkg check --native-abi is used
+adapter typechecked: not_run unless native ABI validation is used
 ```
 
 ### 20.2 HTTP wrapper risk
@@ -3987,7 +3953,7 @@ MVP 0: Local package format and review-without-execution
   rsspkg.toml
   local path dependencies
   interface path loading
-  safe default rss pkg check
+  safe default rss pkg
   rss pkg metadata without native build execution
 
 MVP 1: Compiler-owned interface normalization
@@ -4011,7 +3977,7 @@ MVP 3: Package review metadata and risk policy
   CI policy checks
 
 MVP 4: Graph risk summary
-  rss pkg audit-surface
+  rss pkg review
   risk distribution
   highest-risk package list
   dependency paths
@@ -4026,7 +3992,7 @@ MVP 5: Cargo native wrapper metadata integration
 
 MVP 6: Optional native ABI adapter check
   generated bridge adapters
-  cargo check under --native-abi
+  cargo check under native ABI validation
   native conformance level reporting
   source-map-aware native boundary diagnostics
 

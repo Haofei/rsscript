@@ -99,7 +99,9 @@ impl RegVm {
                     .keys()
                     .map(vm_value_from_map_key)
                     .collect::<Vec<_>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(keys)))))
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
+                    keys,
+                )))))
             }
             RegIntrinsic::MapLen => {
                 let map = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -174,7 +176,9 @@ impl RegVm {
             RegIntrinsic::MapValues => {
                 let map = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let values = map.borrow().values().cloned().collect::<Vec<_>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(values)))))
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
+                    values,
+                )))))
             }
             other => unreachable!("exec_map_intrinsics called with non-map intrinsic: {other:?}"),
         }

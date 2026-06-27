@@ -10,6 +10,8 @@ mod hostile;
 mod jit_acceptance;
 #[path = "jit_arithmetic_edges.rs"]
 mod jit_arithmetic_edges;
+#[path = "jit_perf_gate.rs"]
+mod jit_perf_gate;
 #[path = "jit_plan.rs"]
 mod jit_plan;
 #[path = "properties.rs"]

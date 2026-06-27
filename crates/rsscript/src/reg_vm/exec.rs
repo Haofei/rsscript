@@ -43,6 +43,7 @@ impl RegVm {
             #[cfg(feature = "native-jit")]
             native: None,
             noncapturing_closure_cache: Vec::new(),
+            pure_closure_plan_cache: HashMap::new(),
         }
     }
 
@@ -168,10 +169,10 @@ impl RegVm {
     }
 
     /// Append program output to the captured `stdout` buffer, and — when live
-    /// streaming is enabled (`rss dev --run`) — flush newly completed lines to the
-    /// real process stdout immediately. The captured buffer is appended to exactly
-    /// the same way regardless, so callers that read `EvalOutput.stdout` see no
-    /// difference.
+    /// streaming is enabled by a library caller — flush newly completed lines to
+    /// the real process stdout immediately. The captured buffer is appended to
+    /// exactly the same way regardless, so callers that read `EvalOutput.stdout`
+    /// see no difference.
     ///
     /// Enforces `stdout_budget`: when set, a write that would push cumulative
     /// output past the ceiling fails with a clean error *before* appending, so the
@@ -327,7 +328,11 @@ impl RegVm {
                 self.set_reg(obj_reg, updated);
                 self.set_reg(base + *dst, VmValue::Unit);
             }
-            RegInstr::MakeStruct { dst, layout, fields } => {
+            RegInstr::MakeStruct {
+                dst,
+                layout,
+                fields,
+            } => {
                 // Hot path: the layout is interned once at lowering time, so this is
                 // a refcount bump + a field-value gather — no per-construction
                 // `(name, field_names)` hashing. Field values are in canonical slot
@@ -341,7 +346,11 @@ impl RegVm {
                     VmValue::Struct(Rc::new(VmStruct::with_layout(Rc::clone(layout), values))),
                 );
             }
-            RegInstr::MakeVariant { dst, layout, fields } => {
+            RegInstr::MakeVariant {
+                dst,
+                layout,
+                fields,
+            } => {
                 let mut values: Vec<VmValue> = Vec::with_capacity(fields.len());
                 for (_field, reg) in fields {
                     values.push(self.reg(base + *reg).clone());
@@ -597,6 +606,22 @@ impl RegVm {
                     *ip = *none_ip;
                 }
             }
+            RegInstr::MatchSortedMapGet {
+                map,
+                key,
+                value_dst,
+                some_ip,
+                none_ip,
+            } => {
+                let map = expect_list_ref(self.reg(base + *map))?;
+                let key = self.reg(base + *key).clone();
+                if let Some(value) = sorted_map_get_in_place(&map.borrow(), &key)? {
+                    self.set_reg(base + *value_dst, value);
+                    *ip = *some_ip;
+                } else {
+                    *ip = *none_ip;
+                }
+            }
             RegInstr::UnwrapSome { dst, src } => {
                 let value = match self.reg(base + *src) {
                     some @ (VmValue::OptionSomeScalar(_) | VmValue::OptionSomeHeap(_)) => {
@@ -731,6 +756,40 @@ impl RegVm {
         Ok(PureStep::Next)
     }
 
+    #[cfg(feature = "native-jit")]
+    #[inline(always)]
+    pub(super) fn record_native_branch_feedback(
+        &self,
+        func: &RegFunction,
+        instr: &RegInstr,
+        base: usize,
+        instr_ip: usize,
+    ) -> Result<(), EvalError> {
+        if self.native.is_none() {
+            return Ok(());
+        }
+        match instr {
+            RegInstr::JumpIfBool { cond, expected, .. } => {
+                let taken = expect_bool_ref(self.reg(base + *cond))? == *expected;
+                record_branch_site(func, instr_ip, taken);
+            }
+            RegInstr::JumpIfIntCompare {
+                lhs,
+                rhs,
+                op,
+                expected,
+                ..
+            } => {
+                let taken =
+                    eval_numeric_compare(*op, self.reg(base + *lhs), self.reg(base + *rhs))?
+                        == *expected;
+                record_branch_site(func, instr_ip, taken);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     // ── TV2.2 cold list-opcode bodies (perf-plan §1.3 hot/cold split) ──
     // These are the heavy/cold bodies the TV1+TV2 TypedVec work added to the
     // `try_exec_pure` list arms. `try_exec_pure` is `#[inline(always)]` and
@@ -758,7 +817,12 @@ impl RegVm {
     }
 
     #[inline(never)]
-    pub(super) fn exec_list_len(&mut self, base: usize, dst: usize, list: usize) -> Result<(), EvalError> {
+    pub(super) fn exec_list_len(
+        &mut self,
+        base: usize,
+        dst: usize,
+        list: usize,
+    ) -> Result<(), EvalError> {
         let len = expect_list_ref(self.reg(base + list))?.borrow().len();
         self.set_reg(base + dst, VmValue::Int(len as i64));
         Ok(())
@@ -781,12 +845,15 @@ impl RegVm {
         // growth is charged, so the bound is conservative.
         let list = expect_list_ref(self.reg(base + list))?;
         let value = self.reg(base + value).clone();
-        let grew = list.borrow_mut().checked_push_accounted(value).map_err(|v| {
-            EvalError::Runtime(format!(
-                "reg VM List.push element kind mismatch (got `{}`).",
-                v.display()
-            ))
-        })?;
+        let grew = list
+            .borrow_mut()
+            .checked_push_accounted(value)
+            .map_err(|v| {
+                EvalError::Runtime(format!(
+                    "reg VM List.push element kind mismatch (got `{}`).",
+                    v.display()
+                ))
+            })?;
         if grew != 0 {
             self.account_bytes(grew)?;
         }
@@ -821,14 +888,24 @@ impl RegVm {
     }
 
     #[inline(never)]
-    pub(super) fn exec_list_clear(&mut self, base: usize, dst: usize, list: usize) -> Result<(), EvalError> {
+    pub(super) fn exec_list_clear(
+        &mut self,
+        base: usize,
+        dst: usize,
+        list: usize,
+    ) -> Result<(), EvalError> {
         expect_list_ref(self.reg(base + list))?.borrow_mut().clear();
         self.set_reg(base + dst, VmValue::Unit);
         Ok(())
     }
 
     #[inline(never)]
-    pub(super) fn exec_list_pop(&mut self, base: usize, dst: usize, list: usize) -> Result<(), EvalError> {
+    pub(super) fn exec_list_pop(
+        &mut self,
+        base: usize,
+        dst: usize,
+        list: usize,
+    ) -> Result<(), EvalError> {
         let value = expect_list_ref(self.reg(base + list))?
             .borrow_mut()
             .pop()
@@ -878,12 +955,14 @@ impl RegVm {
                 borrowed.len()
             )));
         }
-        borrowed.checked_set(index as usize, new_value).map_err(|v| {
-            EvalError::Runtime(format!(
-                "reg VM List.set element kind mismatch (got `{}`).",
-                v.display()
-            ))
-        })?;
+        borrowed
+            .checked_set(index as usize, new_value)
+            .map_err(|v| {
+                EvalError::Runtime(format!(
+                    "reg VM List.set element kind mismatch (got `{}`).",
+                    v.display()
+                ))
+            })?;
         drop(borrowed);
         self.set_reg(base + dst, VmValue::Unit);
         Ok(())
@@ -1047,11 +1126,28 @@ impl RegVm {
                 }
             }
 
+            // If native OSR has a candidate loop, let the interpreter reach that
+            // header instead of consuming the whole frame in tier-0. Whole-function
+            // native has already had first refusal above; this only changes the
+            // native-active, function-ineligible-but-loop-eligible shape.
+            #[cfg(feature = "native-jit")]
+            let osr_pre_candidate = if ip == 0 && self.native.is_some() {
+                self.resolve_osr_candidate(&func)
+            } else {
+                None
+            };
+            #[cfg(not(feature = "native-jit"))]
+            let osr_pre_candidate: Option<usize> = None;
+
             // Tier-0 JIT: a fresh JIT-eligible frame runs via the specializing
             // executor (which reuses the interpreter's semantics), then completes
             // exactly like the `Return` arm. Eligible functions never suspend, so
             // they are always entered at `ip == 0`.
-            if self.jit_enabled && ip == 0 && self.is_jit_eligible(&func) {
+            if self.jit_enabled
+                && ip == 0
+                && osr_pre_candidate.is_none()
+                && self.is_jit_eligible(&func)
+            {
                 let value = self.run_jit(unit, &func, base)?;
                 let frame = self.frames.pop().expect("active frame");
                 self.apply_mut_writeback(&frame);
@@ -1081,7 +1177,7 @@ impl RegVm {
             #[cfg(feature = "native-jit")]
             let (osr_candidate, osr_eager) = if self.native.is_some() {
                 (
-                    self.resolve_osr_candidate(&func),
+                    osr_pre_candidate.or_else(|| self.resolve_osr_candidate(&func)),
                     self.native.as_ref().is_some_and(|n| n.osr_enabled),
                 )
             } else {
@@ -1128,10 +1224,18 @@ impl RegVm {
                             }
                         };
                         if fire {
+                            let prev_probe_cc = match func.osr_state.get() {
+                                OsrTrigger::Counting { probe_cc, .. } => probe_cc,
+                                _ => func.call_count.get(),
+                            };
                             self.frames.last_mut().expect("active frame").ip = ip;
                             if self.try_osr(&func, base, ip) {
                                 continue 'frames;
                             }
+                            let dynamic_osr_bail = self
+                                .native
+                                .as_ref()
+                                .is_some_and(|native| native.osr_dynamic_bail);
                             // Declined. In COUNTING (auto) mode we must NOT give up
                             // forever if the decline is only because a profile-guided
                             // closure-inline site is still PENDING — `try_osr` leaves
@@ -1154,11 +1258,13 @@ impl RegVm {
                             // makes a stable retry cheap; a pending profile is re-probed).
                             if !osr_eager {
                                 let cc = func.call_count.get();
-                                let prev_probe_cc = match func.osr_state.get() {
-                                    OsrTrigger::Counting { probe_cc, .. } => probe_cc,
-                                    _ => cc,
-                                };
-                                if cc > prev_probe_cc
+                                if dynamic_osr_bail {
+                                    func.osr_state.set(OsrTrigger::Counting {
+                                        header_ip: ip,
+                                        count: 0,
+                                        probe_cc: cc,
+                                    });
+                                } else if cc > prev_probe_cc
                                     && native_translation_pending_on_profile(&self.unit, &func)
                                 {
                                     func.osr_state.set(OsrTrigger::Counting {
@@ -1174,6 +1280,8 @@ impl RegVm {
                     }
                 }
                 self.tick()?;
+                #[cfg(feature = "native-jit")]
+                self.record_native_branch_feedback(&func, instr, base, ip)?;
                 ip += 1;
                 // Pure instructions (loads, arithmetic, jumps, matches, heap
                 // construction, …) run through the shared `try_exec_pure`, the one
@@ -1202,6 +1310,15 @@ impl RegVm {
                             args,
                             mut_args,
                         } => {
+                            if self.jit_enabled
+                                && mut_args.is_empty()
+                                && self.limits.mem_budget.is_none()
+                                && let Some(value) =
+                                    self.run_jit_self_recursive_int(unit, *callee_id, base, args)?
+                            {
+                                self.set_reg(base + *dst, value);
+                                continue;
+                            }
                             let callee = Rc::clone(&unit.functions[*callee_id]);
                             self.prepare_frame(next_base, callee.regs)?;
                             for (index, reg) in args.iter().enumerate() {
@@ -1413,6 +1530,12 @@ impl RegVm {
                             list,
                             predicate,
                         } => {
+                            if let Some(next_ip) =
+                                self.try_fuse_int_list_pipeline_at(unit, &func.code, ip - 1, base)?
+                            {
+                                ip = next_ip;
+                                continue;
+                            }
                             let list = expect_list_ref(self.reg(base + *list))?;
                             let predicate = expect_closure_rc(self.reg(base + *predicate))?;
                             let result = self.filter_list(unit, list, &predicate, next_base)?;
@@ -1431,6 +1554,12 @@ impl RegVm {
                             self.set_reg(base + *dst, result);
                         }
                         RegInstr::ListMap { dst, list, mapper } => {
+                            if let Some(next_ip) =
+                                self.try_fuse_int_list_pipeline_at(unit, &func.code, ip - 1, base)?
+                            {
+                                ip = next_ip;
+                                continue;
+                            }
                             let list = expect_list_ref(self.reg(base + *list))?;
                             let mapper = expect_closure_rc(self.reg(base + *mapper))?;
                             let result = self.map_list(unit, list, &mapper, next_base)?;
@@ -1461,7 +1590,10 @@ impl RegVm {
                             let compare = expect_closure_rc(self.reg(base + *compare))?;
                             let sorted =
                                 self.sort_list_by_closure(unit, values, &key, &compare, next_base)?;
-                            self.set_reg(base + *dst, VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(sorted)))));
+                            self.set_reg(
+                                base + *dst,
+                                VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(sorted)))),
+                            );
                         }
                         RegInstr::ListSortWith { dst, list, compare } => {
                             // Sort a detached copy first so the comparator closure can read
@@ -1547,13 +1679,15 @@ impl RegVm {
                         RegInstr::SortedSetInsert { dst, set, value } => {
                             let value = self.reg(base + *value).clone();
                             let list = expect_list_ref(self.reg(base + *set))?;
-                            let inserted = sorted_insert_vm(list.borrow_mut().as_boxed_mut(), value)?;
+                            let inserted =
+                                sorted_insert_vm(list.borrow_mut().as_boxed_mut(), value)?;
                             self.set_reg(base + *dst, VmValue::Bool(inserted));
                         }
                         RegInstr::SortedSetRemove { dst, set, value } => {
                             let value = self.reg(base + *value).clone();
                             let list = expect_list_ref(self.reg(base + *set))?;
-                            let removed = sorted_remove_vm(list.borrow_mut().as_boxed_mut(), &value)?;
+                            let removed =
+                                sorted_remove_vm(list.borrow_mut().as_boxed_mut(), &value)?;
                             self.set_reg(base + *dst, VmValue::Bool(removed));
                         }
                         RegInstr::SortedMapClear { dst, map } => {
@@ -1569,13 +1703,18 @@ impl RegVm {
                             let key = self.reg(base + *key).clone();
                             let value = self.reg(base + *value).clone();
                             let list = expect_list_ref(self.reg(base + *map))?;
-                            sorted_map_insert_in_place(list.borrow_mut().as_boxed_mut(), key, value)?;
+                            sorted_map_insert_in_place(
+                                list.borrow_mut().as_boxed_mut(),
+                                key,
+                                value,
+                            )?;
                             self.set_reg(base + *dst, VmValue::Unit);
                         }
                         RegInstr::SortedMapRemove { dst, map, key } => {
                             let key = self.reg(base + *key).clone();
                             let list = expect_list_ref(self.reg(base + *map))?;
-                            let removed = sorted_map_remove_in_place(list.borrow_mut().as_boxed_mut(), &key)?;
+                            let removed =
+                                sorted_map_remove_in_place(list.borrow_mut().as_boxed_mut(), &key)?;
                             self.set_reg(
                                 base + *dst,
                                 removed

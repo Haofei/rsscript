@@ -131,13 +131,19 @@ pub(super) fn walk_ast_expr_children(expr: &Expr, visit: &mut dyn FnMut(AstChild
     }
 }
 
-pub(super) fn collect_review_map_local_closure_bindings_block(block: &Block, bindings: &mut BTreeSet<String>) {
+pub(super) fn collect_review_map_local_closure_bindings_block(
+    block: &Block,
+    bindings: &mut BTreeSet<String>,
+) {
     for statement in &block.statements {
         collect_review_map_local_closure_bindings_stmt(statement, bindings);
     }
 }
 
-pub(super) fn collect_review_map_local_closure_bindings_stmt(stmt: &Stmt, bindings: &mut BTreeSet<String>) {
+pub(super) fn collect_review_map_local_closure_bindings_stmt(
+    stmt: &Stmt,
+    bindings: &mut BTreeSet<String>,
+) {
     if let Stmt::Let(let_stmt) = stmt
         && let_stmt.kind == LetKind::Local
         && matches!(let_stmt.value, Some(Expr::Closure { .. }))
@@ -150,7 +156,10 @@ pub(super) fn collect_review_map_local_closure_bindings_stmt(stmt: &Stmt, bindin
     });
 }
 
-pub(super) fn collect_review_map_local_closure_bindings_expr(expr: &Expr, bindings: &mut BTreeSet<String>) {
+pub(super) fn collect_review_map_local_closure_bindings_expr(
+    expr: &Expr,
+    bindings: &mut BTreeSet<String>,
+) {
     walk_ast_expr_children(expr, &mut |child| match child {
         AstChild::Expr(value) => collect_review_map_local_closure_bindings_expr(value, bindings),
         AstChild::Block(block) => collect_review_map_local_closure_bindings_block(block, bindings),

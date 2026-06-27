@@ -1185,13 +1185,6 @@ impl Analyzer<'_> {
         }
     }
 
-
-
-
-
-
-
-
     /// A user `async fn` lowers to a `Pending` chain. Control-flow statements
     /// with awaits lower as explicit statement boundaries; keep rejecting
     /// awaits embedded in ordinary expression positions where the lowering
@@ -1241,15 +1234,6 @@ impl Analyzer<'_> {
         };
         self.diagnostics.extend(diagnostics);
     }
-
-
-
-
-
-
-
-
-
 }
 
 fn resource_pool_namespace_arg(namespace: &str) -> Option<&str> {
@@ -1641,7 +1625,6 @@ fn async_block_nonlinear_await(block: &Block) -> Option<crate::diagnostic::Span>
     }
     None
 }
-
 
 fn protocol_method_names(items: &[Item], protocol: &str) -> HashSet<String> {
     items

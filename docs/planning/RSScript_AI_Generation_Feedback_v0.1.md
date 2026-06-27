@@ -23,7 +23,7 @@ RSScript has almost no model pretraining prior. A prompt-sized guide can teach t
 - invalid receiver methods
 - unbound names
 - wrong error type after `?`
-- slow behavioral feedback because `rss run` pays the Rust compiler cost
+- slow behavioral feedback when every run goes through the Rust compiler
 
 The intended loop is:
 
@@ -31,7 +31,7 @@ The intended loop is:
 AGENT.md                 raises the model's prior
 generation oracle         prevents many invalid prefixes while code is emitted
 rss check                 verifies type/effect contracts
-rss eval / interpreter    gives ms-level behavioral feedback
+rss run --vm              gives ms-level behavioral feedback
 rss run / Rust backend    remains the final execution authority
 review / REIR             remains the product boundary
 ```
@@ -111,9 +111,9 @@ The oracle should understand:
 The interpreter executes checked RSScript without lowering to a temporary Rust package and invoking `cargo run`.
 
 ```text
-rss check   type/effect feedback in ms
-rss eval    behavioral feedback in ms
-rss run     backend-authoritative execution in seconds
+rss check     type/effect feedback in ms
+rss run --vm  behavioral feedback in ms
+rss run       backend-authoritative execution in seconds
 ```
 
 It is a tree-walker over checked HIR/user code and dispatches built-in calls through the same runtime crate used by lowered Rust.
@@ -799,9 +799,6 @@ EvalResult {
 CLI:
 
 ```text
-rss eval --pure <file>      # P2 pure-only local eval
-rss eval <file>             # P3+ sandbox-backed eval once host support exists
-rss run --interp <file>     # optional compatibility route
 rss test                    # may use interpreter by default once parity is good
 ```
 
@@ -923,8 +920,8 @@ P2 pure interpreter:
   only pure core intrinsics
   DeniedHost or default-deny stubs
 
-P2 local CLI:
-  rss eval --pure for explicit developer use
+P2 local harness:
+  pure interpreter execution for tests/agents
 
 P3 agent-facing eval:
   sandbox host required
@@ -1334,7 +1331,7 @@ ExecutionState
 stderr capture
 DeniedHost or default-deny host stubs
 map iteration parity policy
-CLI: rss eval --pure
+Harness: pure interpreter execution
 ```
 
 P2 is complete when:

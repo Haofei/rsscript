@@ -1,8 +1,8 @@
-use super::*;
 use super::expr::*;
 use super::scan::*;
 use super::stmt::*;
 use super::types::*;
+use super::*;
 
 pub(super) struct ParsedFields {
     pub(super) fields: Vec<FieldDecl>,
@@ -261,7 +261,11 @@ pub(super) fn parse_effects(tokens: &[Token], start: usize, end: usize) -> Parse
     }
 }
 
-pub(super) fn parse_generic_params(tokens: &[Token], start: usize, end: usize) -> ParsedGenericParams {
+pub(super) fn parse_generic_params(
+    tokens: &[Token],
+    start: usize,
+    end: usize,
+) -> ParsedGenericParams {
     let mut params = Vec::new();
     let mut malformed_spans = Vec::new();
     for range in split_param_ranges(tokens, start, end) {
@@ -314,4 +318,3 @@ fn parse_generic_bound(token: &Token) -> Option<GenericBound> {
         ident_name(token).map(|name| GenericBound::Protocol(name.to_string()))
     }
 }
-

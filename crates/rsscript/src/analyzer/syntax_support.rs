@@ -586,7 +586,12 @@ impl Analyzer<'_> {
         }
     }
 
-    pub(super) fn unsupported_syntax(&mut self, span: crate::diagnostic::Span, label: &str, cause: &str) {
+    pub(super) fn unsupported_syntax(
+        &mut self,
+        span: crate::diagnostic::Span,
+        label: &str,
+        cause: &str,
+    ) {
         self.diagnostics.push(
             Diagnostic::error(
                 code::UNSUPPORTED_SYNTAX,
@@ -602,5 +607,4 @@ impl Analyzer<'_> {
             ),
         );
     }
-
 }

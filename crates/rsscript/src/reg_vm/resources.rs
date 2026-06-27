@@ -64,7 +64,12 @@ pub(super) fn resource_pool_value(id: i64) -> VmValue {
     )))
 }
 
-pub(super) fn pool_stats_value(capacity: i64, created: i64, available: i64, in_use: i64) -> VmValue {
+pub(super) fn pool_stats_value(
+    capacity: i64,
+    created: i64,
+    available: i64,
+    in_use: i64,
+) -> VmValue {
     let fields: Vec<(String, VmValue)> = vec![
         ("capacity".to_string(), VmValue::Int(capacity)),
         ("created".to_string(), VmValue::Int(created)),

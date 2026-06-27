@@ -67,7 +67,9 @@ impl RegVm {
                     .keys()
                     .map(vm_value_from_map_key)
                     .collect::<Vec<_>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(values)))))
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
+                    values,
+                )))))
             }
             RegIntrinsic::SetUnion => {
                 let left = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -119,7 +121,9 @@ impl RegVm {
                 let entries =
                     expect_sorted_map_entries(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let keys = entries.into_iter().map(|(key, _)| key).collect::<Vec<_>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(keys)))))
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
+                    keys,
+                )))))
             }
             RegIntrinsic::SortedMapLen => {
                 let entries =
@@ -134,7 +138,9 @@ impl RegVm {
                     .into_iter()
                     .map(|(_, value)| value)
                     .collect::<Vec<_>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(values)))))
+                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
+                    values,
+                )))))
             }
             other => unreachable!("exec_set_intrinsics called with non-set intrinsic: {other:?}"),
         }

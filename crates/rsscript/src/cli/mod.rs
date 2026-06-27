@@ -8,17 +8,10 @@ use rsscript::{
     lower_sources_to_rust_package_with_options, package_lowering_input,
 };
 
-mod bench;
 mod check;
-mod dev;
-mod eval;
 mod fix;
 mod fmt;
-mod ide;
-mod lint;
-mod native;
 mod package;
-mod review;
 mod run_cmd;
 mod test_cmd;
 
@@ -30,17 +23,10 @@ pub fn run() -> ExitCode {
     };
 
     match command {
-        "bench" => bench::run_bench(&args[2..]),
         "check" => check::run_check(&args[2..]),
-        "dev" => dev::run_dev(&args[2..]),
-        "eval" => eval::run_eval(&args[2..]),
         "fix" => fix::run_fix(&args[2..]),
-        "ide" => ide::run_ide(&args[2..]),
-        "lint" => lint::run_lint(&args[2..]),
-        "native" => native::run_native(&args[2..]),
         "fmt" => fmt::run_fmt(&args[2..]),
         "new" => package::run_new_package(&args[2..]),
-        "review" => review::run_review(&args[2..]),
         "pkg" => package::run_package(&args[2..]),
         "run" => run_cmd::run_generated_rust(&args[2..]),
         "test" => test_cmd::run_test(&args[2..]),
@@ -351,36 +337,20 @@ pub(crate) fn is_package_directory(path: &str) -> bool {
 pub(crate) fn print_usage() {
     eprintln!("usage:");
     eprintln!(
-        "  rss bench [--json] [--mode eval|vm|vm-internal|run|release|release-internal] [--vm reg] [--iterations <n>] [--warmup <n>] <file-or-package-directory> [-- <args>...]"
+        "  rss check [--json] [--lint] [--core|--no-core] [--interface <file.rssi> ...] <file.rss>"
     );
-    eprintln!("  rss check [--json] [--core|--no-core] [--interface <file.rssi> ...] <file.rss>");
     eprintln!("  rss check [--json] <package-directory>");
-    eprintln!("  rss lint [--json] [--core|--no-core] [--interface <file.rssi> ...] <file.rss>");
     eprintln!("  rss check --explain <code>");
-    eprintln!(
-        "  rss dev [--lint] [--run] [--release] [--json] [--once] [--core|--no-core] [--interface <file.rssi> ...] <file-or-package-directory>"
-    );
-    eprintln!(
-        "         # --run uses the fast reg-VM dev tier; add --release for the Rust-lowering AOT tier"
-    );
-    eprintln!("  rss eval [--json] <file.rss> [-- <args>...]");
     eprintln!(
         "  rss fix [--write] [--json] [--interface <file.rssi> ...] <file.rss>  # apply machine-applicable fixes"
     );
     eprintln!("  rss fmt <file.rss>  # writes formatted source to stdout");
     eprintln!("  rss new <package-name>");
+    eprintln!("  rss run [--json] --vm <file-or-package-directory> [-- <args>...]");
     eprintln!(
-        "  rss ide --json <diagnostics|symbols|outline|hover|definition|references|generate> <file-or-package-directory> [--line <n>] [--column <n>] [--query <text>] [--max <n>]"
-    );
-    eprintln!(
-        "  rss run [--json] [--release] [--dry-run] <file-or-package-directory> [-- <args>...]"
-    );
-    eprintln!(
-        "  rss run [--json] [--release] [--dry-run] <file-or-package-directory> --out-dir <directory> [-- <args>...]"
+        "  rss run [--json] [--release] [--dry-run] <file-or-package-directory> [--out-dir <directory>] [-- <args>...]"
     );
     eprintln!("  rss test [--all] [--json] [--filter <substring>]");
-    eprintln!("  rss review [--json] --diff <old.rss> <new.rss>");
-    eprintln!("  rss review [--json] --map <file-or-directory>");
     eprintln!("  rss pkg [--json] [package-directory]");
     eprintln!("  rss pkg add <dependency|dependency@version|path-to-package>");
     eprintln!("  rss pkg review [--json] [package-directory]");

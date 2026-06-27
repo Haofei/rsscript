@@ -1,9 +1,9 @@
-use super::*;
 use super::expr::*;
 use super::items::*;
 use super::pattern::*;
 use super::scan::*;
 use super::types::*;
+use super::*;
 
 pub(super) fn parse_block(tokens: &[Token], open: usize, close: usize) -> Block {
     Block {
@@ -972,4 +972,3 @@ fn parse_match_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usiz
         close + 1,
     )
 }
-

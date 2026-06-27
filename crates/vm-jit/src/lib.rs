@@ -7,8 +7,9 @@
 //! A [`JitFunction`] is a stable, versioned slice of the VM's bytecode: the subset
 //! that operates on unboxed scalar registers — `i64` (integers, and booleans as
 //! `0`/`1`) and `f64` (floats) — plus *side-effect-free* heap **reads** of `Int`
-//! struct fields and list elements (via [`HostHelpers`]). It has no heap writes,
-//! no general calls, no async, and no other side effects. The main `rsscript` crate
+//! struct fields and list elements (via [`HostHelpers`]) and narrow VM-owned
+//! transactional heap helper calls. It has no general heap mutation, no general
+//! calls, no async, and no other side effects. The main `rsscript` crate
 //! translates an eligible `RegFunction` into this IR; everything outside the subset
 //! stays on the interpreter (per-function fallback). [`NativeModule::compile`]
 //! re-validates the IR ([`validate`]) before codegen, so a malformed producer fails
@@ -38,31 +39,54 @@
 
 use cranelift_codegen::Context;
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
-use cranelift_codegen::ir::{AbiParam, Block, InstBuilder, MemFlags, Value, types};
+use cranelift_codegen::ir::{
+    AbiParam, Block, InstBuilder, MemFlags, StackSlotData, StackSlotKind, Value, types,
+};
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{FuncId, Linkage, Module, default_libcall_names};
 
+/// Opaque VM-owned native helper context. The JIT never interprets this value; it
+/// just forwards it from [`NativeModule::call`] to every imported host helper.
+pub type HostCtx = i64;
+
 /// `(struct_handle, slot) -> i64`: the struct's `slot`-th field as an `Int`.
-pub type FieldIntFn = extern "C" fn(i64, i64) -> i64;
+pub type FieldIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
+/// `(struct_handle, slot, value) -> i64`: copy-on-write set of an `Int` field,
+/// returning a VM-owned output-table handle for the updated struct/variant.
+pub type FieldSetIntFn = extern "C" fn(HostCtx, i64, i64, i64) -> i64;
 /// `(list_handle) -> i64`: list length.
-pub type ListLenFn = extern "C" fn(i64) -> i64;
+pub type ListLenFn = extern "C" fn(HostCtx, i64) -> i64;
+/// `(handle) -> i64`: return `1` when a collection is empty, else `0`.
+pub type IsEmptyFn = extern "C" fn(HostCtx, i64) -> i64;
 /// `(list_handle, index) -> i64`: the list element at `index` as an `Int`.
-pub type ListGetIntFn = extern "C" fn(i64, i64) -> i64;
+pub type ListGetIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
+/// `(list_handle, index, value) -> i64`: set an `Int` list element. Returns `0`
+/// on success; a wrong-type/out-of-bounds write signals a bail out-of-band.
+pub type ListSetIntFn = extern "C" fn(HostCtx, i64, i64, i64) -> i64;
+/// `(list_handle, value) -> i64`: push an `Int` list element. Returns `0` on
+/// success; a wrong-type/invalid handle signals a bail out-of-band.
+pub type ListPushIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
+/// `(list_handle) -> i64`: sort a flat `List<Int>` in place. Returns `0` on
+/// success; a wrong-type/invalid handle signals a bail out-of-band.
+pub type ListSortIntFn = extern "C" fn(HostCtx, i64) -> i64;
+/// `() -> i64`: allocate a fresh empty flat `List<Int>` and return its VM-owned
+/// output-table handle. A failure signals a bail out-of-band.
+pub type ListNewIntFn = extern "C" fn(HostCtx) -> i64;
 /// `(struct_handle, slot) -> f64`: the struct's `slot`-th field as a `Float`.
 /// A wrong-type/out-of-range field signals a bail out-of-band (the f64 return
 /// channel needs no tagging — the bail flag is separate), so the returned value
 /// is unused on failure.
-pub type FieldFloatFn = extern "C" fn(i64, i64) -> f64;
+pub type FieldFloatFn = extern "C" fn(HostCtx, i64, i64) -> f64;
 /// `(list_handle, index) -> f64`: the list element at `index` as a `Float`.
 /// Like [`FieldFloatFn`], a wrong-type/out-of-bounds element signals a bail.
-pub type ListGetFloatFn = extern "C" fn(i64, i64) -> f64;
+pub type ListGetFloatFn = extern "C" fn(HostCtx, i64, i64) -> f64;
 /// `(closure_handle) -> i64`: the closure's underlying function id (its stable
 /// callee identity). Returns `-1` for a non-closure / invalid handle, which never
 /// matches a real (`>= 0`) function id, so the identity guard then bails. Total —
 /// it never sets the out-of-band bail flag.
-pub type ClosureIdFn = extern "C" fn(i64) -> i64;
+pub type ClosureIdFn = extern "C" fn(HostCtx, i64) -> i64;
 /// `(closure_handle, index) -> i64`: the scalar bits of capture `index` of the
 /// closure handle (an `Int` directly, a `Float` reinterpreted via `to_bits`, or a
 /// `Bool` as 0/1). A non-scalar (heap) capture, an out-of-range index, or a
@@ -70,19 +94,127 @@ pub type ClosureIdFn = extern "C" fn(i64) -> i64;
 /// returned value is unused on failure — exactly like [`FieldIntFn`]. The producer
 /// only emits this for captures it has already proven scalar, so the bail path is a
 /// defensive backstop.
-pub type ClosureCaptureFn = extern "C" fn(i64, i64) -> i64;
+pub type ClosureCaptureFn = extern "C" fn(HostCtx, i64, i64) -> i64;
+/// `(struct_handle, slot) -> i64`: read the closure function id directly from a
+/// heap struct/variant field. Total like [`ClosureIdFn`]: invalid/non-closure
+/// fields return `-1` and do not set the bail flag.
+pub type FieldClosureIdFn = extern "C" fn(HostCtx, i64, i64) -> i64;
+/// `(struct_handle, slot, index) -> i64`: read scalar capture `index` directly
+/// from a closure stored in a heap struct/variant field. Failure signals bail.
+pub type FieldClosureCaptureFn = extern "C" fn(HostCtx, i64, i64, i64) -> i64;
 /// `(struct_handle, slot) -> i64`: a fresh **handle** (heap-table index) for the
 /// struct's `slot`-th field, when that field is itself a heap value (e.g. a stored
 /// closure). The helper clones the nested value into the per-call heap table and
 /// returns its index, so a subsequent closure read (`closure_id`/`closure_capture`)
 /// can address it like any other handle. A wrong-type/out-of-range field (or a
 /// non-heap field) signals a bail out-of-band — exactly like [`FieldIntFn`].
-pub type FieldHandleFn = extern "C" fn(i64, i64) -> i64;
+pub type FieldHandleFn = extern "C" fn(HostCtx, i64, i64) -> i64;
 /// `(list_handle, index) -> i64`: a fresh **handle** for the list element at
 /// `index`, when that element is a heap value (e.g. a struct holding a closure).
 /// Clones the nested value into the per-call heap table and returns its index; an
 /// out-of-bounds index or non-heap element signals a bail out-of-band.
-pub type ListGetHandleFn = extern "C" fn(i64, i64) -> i64;
+pub type ListGetHandleFn = extern "C" fn(HostCtx, i64, i64) -> i64;
+/// `(value) -> i64`: allocate a fresh String from an Int and return its
+/// VM-owned output-table handle. A failure signals a bail out-of-band.
+pub type StringFromIntFn = extern "C" fn(HostCtx, i64) -> i64;
+/// `(string_handle) -> i64`: string byte length. A wrong-type/invalid handle
+/// signals a bail out-of-band.
+pub type StringLenFn = extern "C" fn(HostCtx, i64) -> i64;
+/// `(left_handle, right_handle) -> i64`: allocate `left + right` and return its
+/// VM-owned output-table handle. A wrong-type/invalid handle signals a bail.
+pub type StringConcatFn = extern "C" fn(HostCtx, i64, i64) -> i64;
+/// `(string_handle, start, len) -> i64`: allocate the sliced string and return
+/// its VM-owned output-table handle. A wrong-type/invalid handle signals a bail.
+pub type StringSliceFn = extern "C" fn(HostCtx, i64, i64, i64) -> i64;
+/// `(value_handle, width, fill_handle) -> i64`: allocate the padded string and
+/// return its VM-owned output-table handle. A wrong-type/invalid handle signals a
+/// bail.
+pub type StringPadLeftFn = extern "C" fn(HostCtx, i64, i64, i64) -> i64;
+/// `(value_handle, width, fill_handle) -> i64`: return the byte length of
+/// `String.pad_left(value, width, fill)` without materializing the padded string.
+/// A wrong-type/invalid handle signals a bail.
+pub type StringPadLeftLenFn = extern "C" fn(HostCtx, i64, i64, i64) -> i64;
+/// `(value_handle, delimiter_handle) -> i64`: allocate `value.split(delimiter)`
+/// as a `List<String>` and return its VM-owned output-table handle. A
+/// wrong-type/invalid handle signals a bail.
+pub type StringSplitFn = extern "C" fn(HostCtx, i64, i64) -> i64;
+/// `(value_handle, prefix_handle) -> i64`: return `1` when `value` starts with
+/// `prefix`, else `0`. A wrong-type/invalid handle signals a bail.
+pub type StringStartsWithFn = extern "C" fn(HostCtx, i64, i64) -> i64;
+/// `(value_handle, delimiter_handle) -> i64`: return
+/// `value.split(delimiter).count()` without materializing the intermediate list.
+/// A wrong-type/invalid handle signals a bail.
+pub type StringSplitCountFn = extern "C" fn(HostCtx, i64, i64) -> i64;
+/// `(literal_id) -> i64`: allocate a string literal from the VM-installed
+/// per-call literal table and return its VM-owned output-table handle.
+pub type StringLiteralFn = extern "C" fn(HostCtx, i64) -> i64;
+/// `(text_handle) -> i64`: parse JSON text and return a VM-owned output-table
+/// Json handle. A parse/type failure signals a bail out-of-band.
+pub type JsonParseFn = extern "C" fn(HostCtx, i64) -> i64;
+/// `(json_handle, name_handle) -> i64`: read an object field and return a
+/// VM-owned output-table Json handle. A missing/non-object field signals a bail.
+pub type JsonFieldFn = extern "C" fn(HostCtx, i64, i64) -> i64;
+/// `(json_handle, name_handle) -> i64`: read an object integer field. A
+/// missing/non-integer field signals a bail.
+pub type JsonFieldIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
+/// `(bytes_handle) -> i64`: byte length. A wrong-type/invalid handle signals a
+/// bail out-of-band.
+pub type BytesLenFn = extern "C" fn(HostCtx, i64) -> i64;
+/// `(bytes_handle, start, len) -> i64`: allocate a sliced Bytes value and return
+/// its VM-owned output-table handle. A wrong-type/invalid handle signals a bail.
+pub type BytesSliceFn = extern "C" fn(HostCtx, i64, i64, i64) -> i64;
+/// `(map_handle, key) -> i64`: insert/update an Int-keyed, Int-valued map.
+/// A wrong container/key/value shape signals a bail.
+pub type MapInsertIntFn = extern "C" fn(HostCtx, i64, i64, i64) -> i64;
+/// `(map_handle, key) -> i64`: return an Int payload for an existing map key.
+/// Missing keys or non-Int payloads signal a bail.
+pub type MapGetIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
+/// `(map_handle, key) -> i64`: return an Int payload for a map key, or 0 for a
+/// missing key. Call `map_get_match_found` to distinguish missing from a real
+/// zero payload. Wrong shape/non-Int payloads signal a bail.
+pub type MapGetMatchIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
+/// `() -> i64`: return whether the previous map-get-match helper found its key.
+pub type MapGetMatchFoundFn = extern "C" fn(HostCtx) -> i64;
+/// `(map_handle, key) -> i64`: return `1` when the Int key exists, else `0`.
+/// A wrong container/key shape signals a bail.
+pub type MapContainsIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
+/// `(handle) -> i64`: collection length. A wrong container shape signals a bail.
+pub type CollectionLenFn = extern "C" fn(HostCtx, i64) -> i64;
+/// `(set_handle, value) -> i64`: insert an Int into a set, returning whether it
+/// was newly inserted. A wrong container/value shape signals a bail.
+pub type SetInsertIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
+/// `(set_handle, value) -> i64`: insert an Int into a sorted set, returning whether
+/// it was newly inserted. A wrong container/value shape signals a bail.
+pub type SortedSetInsertIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
+/// `(set_handle, value) -> i64`: return whether an Int exists in a sorted set.
+/// A wrong container/value shape signals a bail.
+pub type SortedSetContainsIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
+/// `(map_handle, key, value) -> i64`: insert/update an Int-keyed, Int-valued
+/// sorted map. A wrong container/key/value shape signals a bail.
+pub type SortedMapInsertIntFn = extern "C" fn(HostCtx, i64, i64, i64) -> i64;
+/// `(map_handle, key) -> i64`: return an Int payload for an existing sorted-map
+/// key, or 0 for a missing key. Call `sorted_map_get_found` to distinguish
+/// missing from a real zero payload. Wrong shape/non-Int payloads signal a bail.
+pub type SortedMapGetIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
+/// `() -> i64`: return whether the previous sorted-map get helper found its key.
+pub type SortedMapGetFoundFn = extern "C" fn(HostCtx) -> i64;
+/// `(map_handle, key) -> i64`: return `1` when the Int key exists, else `0`.
+/// A wrong container/key shape signals a bail.
+pub type SortedMapContainsKeyIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
+/// `(map_handle) -> i64`: sorted map length. A wrong container shape signals a bail.
+pub type SortedMapLenFn = extern "C" fn(HostCtx, i64) -> i64;
+/// `(deque_handle) -> i64`: deque length. A wrong container shape signals a bail.
+pub type DequeLenFn = extern "C" fn(HostCtx, i64) -> i64;
+/// `(deque_handle, value) -> i64`: push an Int to the back of a deque.
+pub type DequePushBackIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
+/// `(deque_handle, value) -> i64`: push an Int to the front of a deque.
+pub type DequePushFrontIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
+/// `(deque_handle) -> i64`: pop an Int from the front of a deque. Empty or non-Int
+/// payloads signal a bail; RSScript's interpreter then executes the `None` path.
+pub type DequePopFrontIntFn = extern "C" fn(HostCtx, i64) -> i64;
+/// `(deque_handle) -> i64`: pop an Int from the back of a deque. Empty or non-Int
+/// payloads signal a bail; RSScript's interpreter then executes the `None` path.
+pub type DequePopBackIntFn = extern "C" fn(HostCtx, i64) -> i64;
 
 /// Host helper functions the compiled code calls to read heap values (struct
 /// fields, list elements) that don't fit in a scalar register. The `rsscript`
@@ -99,21 +231,655 @@ pub type ListGetHandleFn = extern "C" fn(i64, i64) -> i64;
 #[derive(Clone, Copy)]
 pub struct HostHelpers {
     pub field_int: FieldIntFn,
+    pub field_set_int: FieldSetIntFn,
     pub list_len: ListLenFn,
+    pub list_is_empty: IsEmptyFn,
     pub list_get_int: ListGetIntFn,
+    pub list_set_int: ListSetIntFn,
+    pub list_push_int: ListPushIntFn,
+    pub list_sort_int: ListSortIntFn,
+    pub list_new_int: ListNewIntFn,
     pub field_float: FieldFloatFn,
     pub list_get_float: ListGetFloatFn,
     pub closure_id: ClosureIdFn,
     pub closure_capture: ClosureCaptureFn,
+    pub field_closure_id: FieldClosureIdFn,
+    pub field_closure_capture: FieldClosureCaptureFn,
     pub field_handle: FieldHandleFn,
     pub list_get_handle: ListGetHandleFn,
+    pub string_from_int: StringFromIntFn,
+    pub string_len: StringLenFn,
+    pub string_concat: StringConcatFn,
+    pub string_slice: StringSliceFn,
+    pub string_pad_left: StringPadLeftFn,
+    pub string_pad_left_len: StringPadLeftLenFn,
+    pub string_split: StringSplitFn,
+    pub string_starts_with: StringStartsWithFn,
+    pub string_split_count: StringSplitCountFn,
+    pub string_literal: StringLiteralFn,
+    pub json_parse: JsonParseFn,
+    pub json_field: JsonFieldFn,
+    pub json_field_int: JsonFieldIntFn,
+    pub bytes_len: BytesLenFn,
+    pub bytes_slice: BytesSliceFn,
+    pub map_insert_int: MapInsertIntFn,
+    pub map_get_int: MapGetIntFn,
+    pub map_get_match_int: MapGetMatchIntFn,
+    pub map_get_match_found: MapGetMatchFoundFn,
+    pub map_contains_int: MapContainsIntFn,
+    pub map_len: CollectionLenFn,
+    pub map_is_empty: IsEmptyFn,
+    pub set_insert_int: SetInsertIntFn,
+    pub set_len: CollectionLenFn,
+    pub set_is_empty: IsEmptyFn,
+    pub sorted_set_insert_int: SortedSetInsertIntFn,
+    pub sorted_set_contains_int: SortedSetContainsIntFn,
+    pub sorted_set_is_empty: IsEmptyFn,
+    pub sorted_map_insert_int: SortedMapInsertIntFn,
+    pub sorted_map_get_int: SortedMapGetIntFn,
+    pub sorted_map_get_found: SortedMapGetFoundFn,
+    pub sorted_map_contains_key_int: SortedMapContainsKeyIntFn,
+    pub sorted_map_is_empty: IsEmptyFn,
+    pub sorted_map_len: SortedMapLenFn,
+    pub deque_len: DequeLenFn,
+    pub deque_is_empty: IsEmptyFn,
+    pub deque_push_back_int: DequePushBackIntFn,
+    pub deque_push_front_int: DequePushFrontIntFn,
+    pub deque_pop_front_int: DequePopFrontIntFn,
+    pub deque_pop_back_int: DequePopBackIntFn,
 }
 
 /// Version of the [`JitInstr`]/[`JitFunction`] IR this crate consumes. The
 /// producer (`rsscript`) translates its private bytecode into this stable,
 /// versioned surface, so the two crates are decoupled: a breaking IR change bumps
 /// this and the producer is updated in lock-step.
-pub const IR_VERSION: u32 = 10;
+pub const IR_VERSION: u32 = 21;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostFailureMode {
+    CannotFail,
+    BailFlag,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostHeapEffect {
+    ReadOnly,
+    ExtendsInputHandles,
+    AllocatesResult,
+    MutatesInput,
+    ReplacesInput,
+}
+
+impl HostHeapEffect {
+    pub fn requires_transaction(self) -> bool {
+        !matches!(self, HostHeapEffect::ReadOnly)
+    }
+
+    pub fn writes_existing_heap(self) -> bool {
+        matches!(
+            self,
+            HostHeapEffect::MutatesInput | HostHeapEffect::ReplacesInput
+        )
+    }
+
+    pub fn extends_input_handles(self) -> bool {
+        matches!(self, HostHeapEffect::ExtendsInputHandles)
+    }
+
+    pub fn produces_heap_result(self) -> bool {
+        matches!(
+            self,
+            HostHeapEffect::AllocatesResult | HostHeapEffect::ReplacesInput
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct HostHelperSig {
+    args: &'static [JitValueType],
+    result: HostResult,
+    failure: HostFailureMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HostResult {
+    Exact(JitValueType),
+    IntOrFloatBits,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct HostHelperDescriptor {
+    helper: HostHelper,
+    symbol: &'static str,
+    sig: HostHelperSig,
+    heap_effect: HostHeapEffect,
+}
+
+macro_rules! host_heap_effect {
+    () => {
+        HostHeapEffect::ReadOnly
+    };
+    ($effect:expr) => {
+        $effect
+    };
+}
+
+macro_rules! host_helpers {
+    ($(
+        $helper:ident => {
+            field: $field:ident,
+            symbol: $symbol:literal,
+            args: [$($arg:expr),* $(,)?],
+            result: $result:expr,
+            failure: $failure:expr,
+            $(heap_effect: $heap_effect:expr,)?
+        }
+    ),+ $(,)?) => {
+        /// Generic host helper a [`JitInstr::HostCall`] can invoke. Adding a helper
+        /// is one row in `host_helpers!`; the enum, import symbol, ABI signature,
+        /// address lookup, and declaration order are generated together.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub enum HostHelper {
+            $($helper),+
+        }
+
+        impl HostHelpers {
+            fn addr(self, helper: HostHelper) -> *const u8 {
+                match helper {
+                    $(HostHelper::$helper => self.$field as *const u8),+
+                }
+            }
+        }
+
+        impl HostHelper {
+            const ALL: &'static [HostHelper] = &[
+                $(HostHelper::$helper),+
+            ];
+
+            const DESCRIPTORS: &'static [HostHelperDescriptor] = &[
+                $(HostHelperDescriptor {
+                    helper: HostHelper::$helper,
+                    symbol: $symbol,
+                    sig: HostHelperSig {
+                        args: &[$($arg),*],
+                        result: $result,
+                        failure: $failure,
+                    },
+                    heap_effect: host_heap_effect!($($heap_effect)?),
+                }),+
+            ];
+
+            fn all() -> &'static [HostHelper] {
+                Self::ALL
+            }
+
+            fn descriptor(self) -> &'static HostHelperDescriptor {
+                Self::DESCRIPTORS
+                    .iter()
+                    .find(|descriptor| descriptor.helper == self)
+                    .expect("host helper descriptor missing")
+            }
+
+            fn symbol(self) -> &'static str {
+                self.descriptor().symbol
+            }
+
+            pub fn arg_types(self) -> &'static [JitValueType] {
+                self.signature().args
+            }
+
+            pub fn result_type(self) -> Option<JitValueType> {
+                match self.signature().result {
+                    HostResult::Exact(ty) => Some(ty),
+                    HostResult::IntOrFloatBits => None,
+                }
+            }
+
+            pub fn heap_effect(self) -> HostHeapEffect {
+                self.descriptor().heap_effect
+            }
+
+            fn signature(self) -> HostHelperSig {
+                self.descriptor().sig
+            }
+        }
+    };
+}
+
+host_helpers! {
+    FieldInt => {
+        field: field_int,
+        symbol: "rss_jit_field_int",
+        args: [JitValueType::Handle, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+    },
+    FieldSetInt => {
+        field: field_set_int,
+        symbol: "rss_jit_field_set_int",
+        args: [JitValueType::Handle, JitValueType::Int, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Handle),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::ReplacesInput,
+    },
+    ListLen => {
+        field: list_len,
+        symbol: "rss_jit_list_len",
+        args: [JitValueType::Handle],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+    },
+    ListIsEmpty => {
+        field: list_is_empty,
+        symbol: "rss_jit_list_is_empty",
+        args: [JitValueType::Handle],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+    },
+    ListGetInt => {
+        field: list_get_int,
+        symbol: "rss_jit_list_get_int",
+        args: [JitValueType::Handle, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+    },
+    ListSetInt => {
+        field: list_set_int,
+        symbol: "rss_jit_list_set_int",
+        args: [JitValueType::Handle, JitValueType::Int, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::MutatesInput,
+    },
+    ListPushInt => {
+        field: list_push_int,
+        symbol: "rss_jit_list_push_int",
+        args: [JitValueType::Handle, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::MutatesInput,
+    },
+    ListSortInt => {
+        field: list_sort_int,
+        symbol: "rss_jit_list_sort_int",
+        args: [JitValueType::Handle],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::MutatesInput,
+    },
+    ListNewInt => {
+        field: list_new_int,
+        symbol: "rss_jit_list_new_int",
+        args: [],
+        result: HostResult::Exact(JitValueType::Handle),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::AllocatesResult,
+    },
+    FieldFloat => {
+        field: field_float,
+        symbol: "rss_jit_field_float",
+        args: [JitValueType::Handle, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Float),
+        failure: HostFailureMode::BailFlag,
+    },
+    ListGetFloat => {
+        field: list_get_float,
+        symbol: "rss_jit_list_get_float",
+        args: [JitValueType::Handle, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Float),
+        failure: HostFailureMode::BailFlag,
+    },
+    ClosureId => {
+        field: closure_id,
+        symbol: "rss_jit_closure_id",
+        args: [JitValueType::Handle],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::CannotFail,
+    },
+    ClosureCapture => {
+        field: closure_capture,
+        symbol: "rss_jit_closure_capture",
+        args: [JitValueType::Handle, JitValueType::Int],
+        result: HostResult::IntOrFloatBits,
+        failure: HostFailureMode::BailFlag,
+    },
+    FieldClosureId => {
+        field: field_closure_id,
+        symbol: "rss_jit_field_closure_id",
+        args: [JitValueType::Handle, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::CannotFail,
+    },
+    FieldClosureCapture => {
+        field: field_closure_capture,
+        symbol: "rss_jit_field_closure_capture",
+        args: [JitValueType::Handle, JitValueType::Int, JitValueType::Int],
+        result: HostResult::IntOrFloatBits,
+        failure: HostFailureMode::BailFlag,
+    },
+    FieldHandle => {
+        field: field_handle,
+        symbol: "rss_jit_field_handle",
+        args: [JitValueType::Handle, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Handle),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::ExtendsInputHandles,
+    },
+    ListGetHandle => {
+        field: list_get_handle,
+        symbol: "rss_jit_list_get_handle",
+        args: [JitValueType::Handle, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Handle),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::ExtendsInputHandles,
+    },
+    StringFromInt => {
+        field: string_from_int,
+        symbol: "rss_jit_string_from_int",
+        args: [JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Handle),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::AllocatesResult,
+    },
+    StringLen => {
+        field: string_len,
+        symbol: "rss_jit_string_len",
+        args: [JitValueType::Handle],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+    },
+    StringConcat => {
+        field: string_concat,
+        symbol: "rss_jit_string_concat",
+        args: [JitValueType::Handle, JitValueType::Handle],
+        result: HostResult::Exact(JitValueType::Handle),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::AllocatesResult,
+    },
+    StringSlice => {
+        field: string_slice,
+        symbol: "rss_jit_string_slice",
+        args: [JitValueType::Handle, JitValueType::Int, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Handle),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::AllocatesResult,
+    },
+    StringPadLeft => {
+        field: string_pad_left,
+        symbol: "rss_jit_string_pad_left",
+        args: [JitValueType::Handle, JitValueType::Int, JitValueType::Handle],
+        result: HostResult::Exact(JitValueType::Handle),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::AllocatesResult,
+    },
+    StringPadLeftLen => {
+        field: string_pad_left_len,
+        symbol: "rss_jit_string_pad_left_len",
+        args: [JitValueType::Handle, JitValueType::Int, JitValueType::Handle],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+    },
+    StringSplit => {
+        field: string_split,
+        symbol: "rss_jit_string_split",
+        args: [JitValueType::Handle, JitValueType::Handle],
+        result: HostResult::Exact(JitValueType::Handle),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::AllocatesResult,
+    },
+    StringStartsWith => {
+        field: string_starts_with,
+        symbol: "rss_jit_string_starts_with",
+        args: [JitValueType::Handle, JitValueType::Handle],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+    },
+    StringSplitCount => {
+        field: string_split_count,
+        symbol: "rss_jit_string_split_count",
+        args: [JitValueType::Handle, JitValueType::Handle],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+    },
+    StringLiteral => {
+        field: string_literal,
+        symbol: "rss_jit_string_literal",
+        args: [JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Handle),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::AllocatesResult,
+    },
+    JsonParse => {
+        field: json_parse,
+        symbol: "rss_jit_json_parse",
+        args: [JitValueType::Handle],
+        result: HostResult::Exact(JitValueType::Handle),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::AllocatesResult,
+    },
+    JsonField => {
+        field: json_field,
+        symbol: "rss_jit_json_field",
+        args: [JitValueType::Handle, JitValueType::Handle],
+        result: HostResult::Exact(JitValueType::Handle),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::AllocatesResult,
+    },
+    JsonFieldInt => {
+        field: json_field_int,
+        symbol: "rss_jit_json_field_int",
+        args: [JitValueType::Handle, JitValueType::Handle],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+    },
+    BytesLen => {
+        field: bytes_len,
+        symbol: "rss_jit_bytes_len",
+        args: [JitValueType::Handle],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+    },
+    BytesSlice => {
+        field: bytes_slice,
+        symbol: "rss_jit_bytes_slice",
+        args: [JitValueType::Handle, JitValueType::Int, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Handle),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::AllocatesResult,
+    },
+    MapInsertInt => {
+        field: map_insert_int,
+        symbol: "rss_jit_map_insert_int",
+        args: [JitValueType::Handle, JitValueType::Int, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::MutatesInput,
+    },
+    MapGetInt => {
+        field: map_get_int,
+        symbol: "rss_jit_map_get_int",
+        args: [JitValueType::Handle, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+    },
+    MapGetMatchInt => {
+        field: map_get_match_int,
+        symbol: "rss_jit_map_get_match_int",
+        args: [JitValueType::Handle, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+    },
+    MapGetMatchFound => {
+        field: map_get_match_found,
+        symbol: "rss_jit_map_get_match_found",
+        args: [],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::CannotFail,
+    },
+    MapContainsInt => {
+        field: map_contains_int,
+        symbol: "rss_jit_map_contains_int",
+        args: [JitValueType::Handle, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+    },
+    MapLen => {
+        field: map_len,
+        symbol: "rss_jit_map_len",
+        args: [JitValueType::Handle],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+    },
+    MapIsEmpty => {
+        field: map_is_empty,
+        symbol: "rss_jit_map_is_empty",
+        args: [JitValueType::Handle],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+    },
+    SetInsertInt => {
+        field: set_insert_int,
+        symbol: "rss_jit_set_insert_int",
+        args: [JitValueType::Handle, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::MutatesInput,
+    },
+    SetLen => {
+        field: set_len,
+        symbol: "rss_jit_set_len",
+        args: [JitValueType::Handle],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+    },
+    SetIsEmpty => {
+        field: set_is_empty,
+        symbol: "rss_jit_set_is_empty",
+        args: [JitValueType::Handle],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+    },
+    SortedSetInsertInt => {
+        field: sorted_set_insert_int,
+        symbol: "rss_jit_sorted_set_insert_int",
+        args: [JitValueType::Handle, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::MutatesInput,
+    },
+    SortedSetContainsInt => {
+        field: sorted_set_contains_int,
+        symbol: "rss_jit_sorted_set_contains_int",
+        args: [JitValueType::Handle, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+    },
+    SortedSetIsEmpty => {
+        field: sorted_set_is_empty,
+        symbol: "rss_jit_sorted_set_is_empty",
+        args: [JitValueType::Handle],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+    },
+    SortedMapInsertInt => {
+        field: sorted_map_insert_int,
+        symbol: "rss_jit_sorted_map_insert_int",
+        args: [JitValueType::Handle, JitValueType::Int, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::MutatesInput,
+    },
+    SortedMapGetInt => {
+        field: sorted_map_get_int,
+        symbol: "rss_jit_sorted_map_get_int",
+        args: [JitValueType::Handle, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+    },
+    SortedMapGetFound => {
+        field: sorted_map_get_found,
+        symbol: "rss_jit_sorted_map_get_found",
+        args: [],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::CannotFail,
+    },
+    SortedMapContainsKeyInt => {
+        field: sorted_map_contains_key_int,
+        symbol: "rss_jit_sorted_map_contains_key_int",
+        args: [JitValueType::Handle, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+    },
+    SortedMapIsEmpty => {
+        field: sorted_map_is_empty,
+        symbol: "rss_jit_sorted_map_is_empty",
+        args: [JitValueType::Handle],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+    },
+    SortedMapLen => {
+        field: sorted_map_len,
+        symbol: "rss_jit_sorted_map_len",
+        args: [JitValueType::Handle],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+    },
+    DequeLen => {
+        field: deque_len,
+        symbol: "rss_jit_deque_len",
+        args: [JitValueType::Handle],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+    },
+    DequeIsEmpty => {
+        field: deque_is_empty,
+        symbol: "rss_jit_deque_is_empty",
+        args: [JitValueType::Handle],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+    },
+    DequePushBackInt => {
+        field: deque_push_back_int,
+        symbol: "rss_jit_deque_push_back_int",
+        args: [JitValueType::Handle, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::MutatesInput,
+    },
+    DequePushFrontInt => {
+        field: deque_push_front_int,
+        symbol: "rss_jit_deque_push_front_int",
+        args: [JitValueType::Handle, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::MutatesInput,
+    },
+    DequePopFrontInt => {
+        field: deque_pop_front_int,
+        symbol: "rss_jit_deque_pop_front_int",
+        args: [JitValueType::Handle],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::MutatesInput,
+    },
+    DequePopBackInt => {
+        field: deque_pop_back_int,
+        symbol: "rss_jit_deque_pop_back_int",
+        args: [JitValueType::Handle],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::MutatesInput,
+    },
+}
+
+/// Argument to a generic host-helper call. Most helper operands are registers; field
+/// slots and capture indices are compile-time immediates that still flow through the
+/// same shared call/bail machinery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostArg {
+    Reg(u32),
+    ImmI64(i64),
+}
 
 /// Signed integer comparison (the four ordered comparisons; equality is its own
 /// instruction so it can also apply to booleans).
@@ -203,6 +969,57 @@ pub enum JitInstr {
         dst: u32,
         src: u32,
     },
+    /// Generic i64-returning host helper call. Helpers use the shared out-of-band
+    /// bail flag protocol: if the helper cannot satisfy the operation, native
+    /// deopts and the interpreter re-runs the function. Helper signatures are
+    /// validated by [`HostHelper::signature`].
+    HostCall {
+        helper: HostHelper,
+        dst: u32,
+        args: Vec<HostArg>,
+    },
+    /// A pure scalar host helper whose arguments are loop-invariant. The first
+    /// executed visit calls the helper, stores its result in `cache`, and flips
+    /// `flag` to true. Later visits copy `cache` into `dst`. This keeps the IR
+    /// source-index aligned: the memoization expands inside codegen, so deopt
+    /// resume IPs still point at the original helper instruction.
+    MemoizedHostCall {
+        helper: HostHelper,
+        dst: u32,
+        args: Vec<HostArg>,
+        cache: u32,
+        flag: u32,
+    },
+    /// Staged native-call ABI: call another function already compiled in the same
+    /// [`NativeModule`]. Callee params/results may be scalar or heap `Handle`s
+    /// carried in the shared host context; flat-array params stay top-level only.
+    /// If a callee
+    /// deopts, the caller deopts at this call site and chains the child
+    /// safepoint/payload into its own deopt payload, preserving the native-frame
+    /// stack for embedders that can consume it.
+    CallNative {
+        callee: CompiledId,
+        dst: u32,
+        args: Vec<u32>,
+    },
+    /// `Map.get` fused with an Option match for Int-keyed maps. The helper first
+    /// tests membership; on `Some`, it loads the Int payload into `value_dst` and
+    /// jumps to `some_ip`, otherwise it jumps to `none_ip`.
+    MatchMapGetInt {
+        map: u32,
+        key: u32,
+        value_dst: u32,
+        some_ip: u32,
+        none_ip: u32,
+    },
+    /// `SortedMap.get` fused with an Option match for Int-keyed sorted maps.
+    MatchSortedMapGetInt {
+        map: u32,
+        key: u32,
+        value_dst: u32,
+        some_ip: u32,
+        none_ip: u32,
+    },
     BitAnd {
         dst: u32,
         lhs: u32,
@@ -253,6 +1070,16 @@ pub enum JitInstr {
         expected: bool,
         target: u32,
     },
+    /// Profile-guided conditional branch. The branch follows only the edge that
+    /// was hot in interpreter feedback; the opposite edge deopts to the
+    /// interpreter. `hot_target == true` means the explicit `target` edge is hot,
+    /// otherwise the fallthrough edge is hot.
+    ProfiledJumpIfBool {
+        cond: u32,
+        expected: bool,
+        target: u32,
+        hot_target: bool,
+    },
     JumpIfIntCompare {
         lhs: u32,
         rhs: u32,
@@ -260,48 +1087,25 @@ pub enum JitInstr {
         expected: bool,
         target: u32,
     },
+    /// Profile-guided integer/float compare branch. See
+    /// [`JitInstr::ProfiledJumpIfBool`] for the hot/cold edge contract.
+    ProfiledJumpIfIntCompare {
+        lhs: u32,
+        rhs: u32,
+        op: JitCompare,
+        expected: bool,
+        target: u32,
+        hot_target: bool,
+    },
     Return {
         src: u32,
     },
     /// Unconditionally bail to the interpreter (e.g. a `RuntimeError` instruction:
     /// re-running on the interpreter reproduces the exact error).
     Bail,
-    /// `dst = field[slot]` of the struct/variant handle in `base`, read as `Int`.
-    /// Compiles to a call to [`HostHelpers::field_int`].
-    FieldInt {
-        dst: u32,
-        base: u32,
-        slot: u32,
-    },
-    /// `dst = len` of the list handle in `base`. Calls [`HostHelpers::list_len`].
-    ListLen {
-        dst: u32,
-        base: u32,
-    },
-    /// `dst = list[index]` (as `Int`) of the list handle in `base`. Calls
-    /// [`HostHelpers::list_get_int`]; an out-of-bounds/non-int element makes the
-    /// helper flag a fallback (the VM re-runs on the interpreter).
-    ListGetInt {
-        dst: u32,
-        base: u32,
-        index: u32,
-    },
-    /// `dst = field[slot]` of the struct/variant handle in `base`, read as a
-    /// `Float`. Compiles to a call to [`HostHelpers::field_float`]; a wrong-type
-    /// field makes the helper flag a fallback. `dst` is a Float-class register.
-    FieldFloat {
-        dst: u32,
-        base: u32,
-        slot: u32,
-    },
-    /// `dst = list[index]` (as `Float`) of the list handle in `base`. Calls
-    /// [`HostHelpers::list_get_float`]; an out-of-bounds/non-float element makes
-    /// the helper flag a fallback. `dst` is a Float-class register.
-    ListGetFloat {
-        dst: u32,
-        base: u32,
-        index: u32,
-    },
+    // Heap-reading host helpers (`field_int`, `list_len`, `list_get_*`,
+    // `closure_capture`, handle fetches, and string helpers) are represented by
+    // `HostCall` plus `HostHelper` metadata.
     /// TV2 direct read: `dst = base_ptr[index]` where `base` is a **`FlatInt`**
     /// param register holding the raw `*const i64` of a flat `List<Int>` buffer.
     /// Bounds-checked against the param's length (the `lens` slot for `base`); an
@@ -311,6 +1115,15 @@ pub enum JitInstr {
         dst: u32,
         base: u32,
         index: u32,
+    },
+    /// TV2 direct write: `base_ptr[index] = value` where `base` is a mutable
+    /// flat `List<Int>` param. Bounds-checked against `lens[base]`; OOB bails and
+    /// the VM-side heap transaction restores the list snapshot.
+    ListSetIntDirect {
+        dst: u32,
+        base: u32,
+        index: u32,
+        value: u32,
     },
     /// TV2 direct read: `dst = base_ptr[index]` where `base` is a **`FlatFloat`**
     /// param register holding the raw `*const f64` of a flat `List<Float>` buffer.
@@ -338,55 +1151,6 @@ pub enum JitInstr {
     GuardClosureId {
         base: u32,
         expected: i64,
-    },
-    /// Profile-guided polymorphic inline cache (J2.2). `base` is a `Handle`
-    /// register holding a closure handle; reads its underlying function id via
-    /// [`HostHelpers::closure_id`] (a single, total helper call — `-1` for a
-    /// non-closure handle) into the `Int` register `dst`. The id is then compared
-    /// against each speculated callee key with ordinary integer
-    /// compare/branch instructions; the no-match arm reuses the standard
-    /// re-run-from-top [`Bail`]. Unlike [`GuardClosureId`] (which bails on the
-    /// spot), this only materializes the id so the dispatcher can select among
-    /// 2–3 inlined callee bodies. Writes `dst`.
-    ClosureId {
-        dst: u32,
-        base: u32,
-    },
-    /// Capturing-closure inline support (OSR × J2). `base` is a `Handle` register
-    /// holding a closure handle; `dst` is an `Int`-class register receiving the
-    /// scalar bits of capture `index` (read via [`HostHelpers::closure_capture`]).
-    /// Used at a monomorphic param-handle closure-inline site (right after the
-    /// `GuardClosureId`) to materialize each scalar capture into the inlined callee
-    /// body's capture register, so the body addresses captures as ordinary scalars.
-    /// A non-scalar/out-of-range capture makes the helper flag the standard
-    /// re-run-from-top fallback (defensive — the producer only emits this for
-    /// captures it proved scalar). `dst` is written.
-    ClosureCapture {
-        dst: u32,
-        base: u32,
-        index: u32,
-    },
-    /// `dst = handle(field[slot])` of the struct/variant handle in `base`, read as a
-    /// raw **`Handle`** (a fresh heap-table index) via [`HostHelpers::field_handle`].
-    /// Used to fetch a stored heap value (notably a closure stored in a struct
-    /// field) into a `Handle` register so a downstream closure read
-    /// (`GuardClosureId`/`ClosureId`/`ClosureCapture`) can address it. A wrong-type/
-    /// out-of-range field makes the helper flag the standard re-run-from-top
-    /// fallback. `dst` is a `Handle`-class register.
-    FieldHandle {
-        dst: u32,
-        base: u32,
-        slot: u32,
-    },
-    /// `dst = handle(list[index])` of the list handle in `base`, read as a raw
-    /// **`Handle`** (a fresh heap-table index) via [`HostHelpers::list_get_handle`].
-    /// Like [`FieldHandle`] but for a list element that is itself a heap value (e.g.
-    /// a struct holding a stored closure). An out-of-bounds/non-heap element flags
-    /// the standard fallback. `dst` is a `Handle`-class register.
-    ListGetHandle {
-        dst: u32,
-        base: u32,
-        index: u32,
     },
     /// OSR-exit (J5.2). Marks the post-loop instruction at the loop's exit edge: a
     /// function compiled with an OSR-entry (see [`NativeModule::compile_osr`]) runs
@@ -433,6 +1197,10 @@ pub struct JitFunction {
     /// Storage class per register index (length `n_regs`).
     pub reg_types: Vec<JitValueType>,
     pub code: Vec<JitInstr>,
+    /// Instruction indices that should start cold blocks. Producers may populate
+    /// this from dynamic profile feedback; codegen treats it as a layout hint only.
+    /// It never changes control flow or values.
+    pub cold_blocks: Vec<u32>,
 }
 
 impl JitFunction {
@@ -454,14 +1222,17 @@ impl JitFunction {
 /// host-owned `i64` cell into which the generated code *stores* the unique
 /// [`SafepointId`] of the bail site on the bail edge (and only there — the hot
 /// fall-through path never touches it); `0` means no bail was recorded.
-/// `payload_ptr` points at a host-owned `i64` array of width `n_regs` into which
-/// the generated code *stores* each live register's value on the bail edge only
-/// (slot `reg` ← that register's 8-byte word; an f64 register's bit pattern lands
-/// in its slot). The hot fall-through path never writes it.
+/// `payload_ptr` points at a host-owned `i64` array of width
+/// `deopt_map.payload_words` into which the generated code *stores* each live
+/// register's value on the bail edge only (slot `reg` ← that register's 8-byte
+/// word; an f64 register's bit pattern lands in its slot). Native-call bail edges
+/// also chain the callee safepoint id and payload after the caller register
+/// window. The hot fall-through path never writes it.
 type CompiledAbi = unsafe extern "C" fn(
     *const i64,
     usize,
     *const i64,
+    HostCtx,
     *mut i64,
     *const u8,
     *mut i64,
@@ -482,9 +1253,65 @@ fn err(context: &str, e: impl std::fmt::Display) -> JitError {
     JitError(format!("{context}: {e}"))
 }
 
-/// Declare an imported host helper with `n_args` `i64` params and an `i64` result.
+fn native_scalar_leaf_callable(function: &JitFunction, osr: bool, _returns_handle: bool) -> bool {
+    !osr && function.reg_types.iter().all(|ty| {
+        matches!(
+            ty,
+            JitValueType::Int
+                | JitValueType::Float
+                | JitValueType::Handle
+                | JitValueType::FlatInt
+                | JitValueType::FlatFloat
+        )
+    }) && function.code.iter().all(|instr| {
+        matches!(
+            instr,
+            JitInstr::Nop
+                | JitInstr::LoadInt { .. }
+                | JitInstr::LoadFloat { .. }
+                | JitInstr::LoadBool { .. }
+                | JitInstr::Move { .. }
+                | JitInstr::Add { .. }
+                | JitInstr::Sub { .. }
+                | JitInstr::Mul { .. }
+                | JitInstr::Div { .. }
+                | JitInstr::Mod { .. }
+                | JitInstr::IntToFloat { .. }
+                | JitInstr::BitAnd { .. }
+                | JitInstr::BitOr { .. }
+                | JitInstr::BitXor { .. }
+                | JitInstr::Shl { .. }
+                | JitInstr::Shr { .. }
+                | JitInstr::Compare { .. }
+                | JitInstr::Equal { .. }
+                | JitInstr::NotEqual { .. }
+                | JitInstr::Jump { .. }
+                | JitInstr::JumpIfBool { .. }
+                | JitInstr::JumpIfIntCompare { .. }
+                | JitInstr::ProfiledJumpIfBool { .. }
+                | JitInstr::ProfiledJumpIfIntCompare { .. }
+                | JitInstr::CallNative { .. }
+                | JitInstr::HostCall { .. }
+                | JitInstr::MemoizedHostCall { .. }
+                | JitInstr::Return { .. }
+                | JitInstr::Bail
+                | JitInstr::ListGetIntDirect { .. }
+                | JitInstr::ListSetIntDirect { .. }
+                | JitInstr::ListGetFloatDirect { .. }
+                | JitInstr::ListLenDirect { .. }
+        ) && !matches!(
+            instr,
+            JitInstr::HostCall { helper, .. } | JitInstr::MemoizedHostCall { helper, .. }
+                if helper.heap_effect().extends_input_handles()
+        )
+    })
+}
+
+/// Declare an imported host helper with one opaque `HostCtx` word plus `n_args`
+/// logical `i64` params and an `i64` result.
 fn declare_import(module: &mut JITModule, name: &str, n_args: usize) -> Result<FuncId, JitError> {
     let mut sig = module.make_signature();
+    sig.params.push(AbiParam::new(types::I64));
     for _ in 0..n_args {
         sig.params.push(AbiParam::new(types::I64));
     }
@@ -494,15 +1321,17 @@ fn declare_import(module: &mut JITModule, name: &str, n_args: usize) -> Result<F
         .map_err(|e| err("declare import", e))
 }
 
-/// Declare an imported host helper with `n_args` `i64` params and an `f64` result
-/// (the Float read helpers). The bail signal stays out-of-band (the shared bail
-/// flag), so the f64 return channel carries only the value.
+/// Declare an imported host helper with one opaque `HostCtx` word plus `n_args`
+/// logical `i64` params and an `f64` result (the Float read helpers). The bail
+/// signal stays out-of-band (the shared bail flag), so the f64 return channel
+/// carries only the value.
 fn declare_import_f64(
     module: &mut JITModule,
     name: &str,
     n_args: usize,
 ) -> Result<FuncId, JitError> {
     let mut sig = module.make_signature();
+    sig.params.push(AbiParam::new(types::I64));
     for _ in 0..n_args {
         sig.params.push(AbiParam::new(types::I64));
     }
@@ -518,9 +1347,16 @@ fn declare_import_f64(
 /// not bound-check against `n_args`).
 struct CompiledFunc {
     f: CompiledAbi,
+    id: FuncId,
+    /// Machine-code bytes emitted by Cranelift for this function, including any
+    /// constant data reported by `CompiledCode::code_info`.
+    code_size_bytes: u64,
+    /// Longest native-to-native call chain reachable from this function. A function
+    /// with no `CallNative` edges has depth 0; a direct native leaf call has depth 1.
+    native_call_depth: u32,
     n_params: usize,
     /// Register count of the source [`JitFunction`] (the width of each site's
-    /// register space; future slices size their payload by it).
+    /// register space).
     n_regs: usize,
     /// Per-safepoint deopt state-map (resume_ip + live registers), built host-side
     /// during `compile`. See [`DeoptMap`].
@@ -531,7 +1367,7 @@ struct CompiledFunc {
     /// not a packed `n_params` arg array, so `call` validates the slice length
     /// against `n_regs` instead of `n_params`.
     osr: bool,
-    /// Heap-result return ABI (heap-write S0): `true` when this function's return
+    /// Heap-result return ABI: `true` when this function's return
     /// register is a [`JitValueType::Handle`], so its completed `i64` result is an
     /// **output-table handle** (the host materializes a heap [`VmValue`] from it)
     /// rather than a scalar. Computed once at compile time from the function's
@@ -539,6 +1375,19 @@ struct CompiledFunc {
     /// and takes the unchanged [`NativeOutcome::Completed`] path. An OSR function
     /// never has a top-level `Return` (it exits via `OsrExit`), so it is `false`.
     returns_handle: bool,
+    param_types: Vec<JitValueType>,
+    return_type: Option<JitValueType>,
+    scalar_leaf_callable: bool,
+}
+
+#[derive(Clone)]
+struct NativeCallee {
+    handle: CompiledId,
+    func_id: FuncId,
+    n_params: usize,
+    param_types: Vec<JitValueType>,
+    deopt_payload_words: usize,
+    return_type: JitValueType,
 }
 
 /// Process-wide source of per-module identities, so a [`CompiledId`] minted by one
@@ -563,17 +1412,18 @@ pub struct NativeModule {
 
 /// `FuncId`s of the declared host helpers, resolved into per-function `FuncRef`s
 /// at codegen time.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct HostFuncs {
-    field_int: FuncId,
-    list_len: FuncId,
-    list_get_int: FuncId,
-    field_float: FuncId,
-    list_get_float: FuncId,
-    closure_id: FuncId,
-    closure_capture: FuncId,
-    field_handle: FuncId,
-    list_get_handle: FuncId,
+    funcs: Vec<(HostHelper, FuncId)>,
+}
+
+impl HostFuncs {
+    fn get(&self, helper: HostHelper) -> FuncId {
+        self.funcs
+            .iter()
+            .find_map(|(candidate, id)| (*candidate == helper).then_some(*id))
+            .expect("host helper import declared")
+    }
 }
 
 /// Handle to a function compiled into a [`NativeModule`]. Carries the minting
@@ -622,6 +1472,24 @@ pub struct DeoptSite {
     pub resume_ip: u32,
     /// Registers definitely assigned on entry to `resume_ip`, each `(reg, type)`.
     pub live: Vec<(u32, JitValueType)>,
+    /// If this safepoint is a native-call edge, the callee's deopt payload is
+    /// chained into this function's payload buffer so the host can inspect the
+    /// complete native call stack.
+    pub child: Option<DeoptChildSite>,
+}
+
+/// Location of a child native frame's deopt payload inside its caller's payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeoptChildSite {
+    /// The compiled callee that produced the nested payload.
+    pub callee: CompiledId,
+    /// Slot containing the child [`SafepointId`] as an `i64`.
+    pub safepoint_slot: u32,
+    /// First slot of the child's payload buffer, copied verbatim from the child
+    /// call. The child deopt map interprets this region.
+    pub payload_slot: u32,
+    /// Number of payload words copied from the child call.
+    pub payload_words: u32,
 }
 
 /// Per-function deopt state-map, indexed by safepoint id.
@@ -636,6 +1504,9 @@ pub struct DeoptSite {
 pub struct DeoptMap {
     /// `sites[id - 1]` is the site for `safepoint_id == id` (ids start at 1).
     pub sites: Vec<DeoptSite>,
+    /// Total width of the deopt payload buffer required by this function: its own
+    /// register window plus any chained child native-call payload regions.
+    pub payload_words: usize,
 }
 
 /// The runtime value of a live register captured at a deopt, typed by its storage
@@ -659,6 +1530,22 @@ pub struct DeoptReg {
     pub value: DeoptValue,
 }
 
+/// A nested native frame captured when a `CallNative` callee deopts. The top-level
+/// [`NativeOutcome::Deopt`] still names the caller safepoint; this chain preserves
+/// the callee safepoint and live payload so embedders can build a full native-frame
+/// deopt later instead of losing the child frame at the call edge.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeoptFrame {
+    /// Compiled function whose frame deopted.
+    pub function: CompiledId,
+    /// Safepoint in `function`.
+    pub safepoint_id: SafepointId,
+    /// Live registers decoded with `function`'s [`DeoptMap`].
+    pub live: Vec<DeoptReg>,
+    /// Further nested child, when native calls are chained.
+    pub child: Option<Box<DeoptFrame>>,
+}
+
 /// Outcome of running a compiled function via [`NativeModule::call`]: either the
 /// function ran to completion with a 64-bit result, or it deopted at a named
 /// safepoint and the interpreter should re-run it.
@@ -674,12 +1561,10 @@ pub enum NativeOutcome {
     /// a function whose return register is a [`JitValueType::Handle`]; the scalar
     /// [`Completed`](NativeOutcome::Completed) path is byte-for-byte unchanged.
     ///
-    /// **§7.2-safety (heap-write S0):** this variant carries no allocation/mutation
-    /// effect — native code only *returns a heap value it was already given* (a
-    /// pass-through). The host materializes the result **only** on this clean
+    /// **§7.2-safety:** the host materializes the result **only** on this clean
     /// completion; **any** bail returns [`Deopt`](NativeOutcome::Deopt) and the
-    /// output table is left untouched/cleared, so a bailed attempt has no observable
-    /// effect and §7.2's fallback-equivalence proof holds unchanged.
+    /// output table is cleared by the VM-side guard, so a bailed attempt has no
+    /// observable heap result and §7.2's fallback-equivalence proof holds.
     CompletedHandle(i64),
     /// The function deopted at `safepoint_id` (a guard bail or a host-helper bail)
     /// and the caller must fall back to the interpreter. `live` carries each
@@ -689,10 +1574,14 @@ pub enum NativeOutcome {
     /// default it re-runs the function from the top and ignores `live` (sound for the
     /// side-effect-free subset); with precise deopt enabled (`RSS_JIT_PRECISE_DEOPT`)
     /// it consumes `live` to reconstruct the interpreter window and resumes at the
-    /// safepoint's `resume_ip` instead.
+    /// safepoint's `resume_ip` instead. `child` is populated when this deopt came
+    /// from a nested [`JitInstr::CallNative`] callee; embedders that support full
+    /// native frame-chain deopt can inspect it, while conservative embedders may
+    /// still resume/re-run at this caller safepoint.
     Deopt {
         safepoint_id: SafepointId,
         live: Vec<DeoptReg>,
+        child: Option<Box<DeoptFrame>>,
     },
 }
 
@@ -742,6 +1631,21 @@ impl NativeOutcome {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ForcedDeopt {
+    Site(u32),
+    All,
+}
+
+impl ForcedDeopt {
+    fn forces(self, site_id: i64) -> bool {
+        match self {
+            ForcedDeopt::Site(site) => i64::from(site) == site_id,
+            ForcedDeopt::All => true,
+        }
+    }
+}
+
 impl NativeModule {
     /// Optimizing native tier (back-compat default): `opt_level="speed"`.
     pub fn new(helpers: HostHelpers) -> Result<Self, JitError> {
@@ -785,26 +1689,23 @@ impl NativeModule {
         // The typed `extern "C"` pointers become the `*const u8` Cranelift's symbol
         // table wants here, where this crate owns the obligation that the address
         // matches the imported signature declared just below.
-        builder.symbol("rss_jit_field_int", helpers.field_int as *const u8);
-        builder.symbol("rss_jit_list_len", helpers.list_len as *const u8);
-        builder.symbol("rss_jit_list_get_int", helpers.list_get_int as *const u8);
-        builder.symbol("rss_jit_field_float", helpers.field_float as *const u8);
-        builder.symbol("rss_jit_list_get_float", helpers.list_get_float as *const u8);
-        builder.symbol("rss_jit_closure_id", helpers.closure_id as *const u8);
-        builder.symbol("rss_jit_closure_capture", helpers.closure_capture as *const u8);
-        builder.symbol("rss_jit_field_handle", helpers.field_handle as *const u8);
-        builder.symbol("rss_jit_list_get_handle", helpers.list_get_handle as *const u8);
+        for &helper in HostHelper::all() {
+            builder.symbol(helper.symbol(), helpers.addr(helper));
+        }
         let mut module = JITModule::new(builder);
         let imports = HostFuncs {
-            field_int: declare_import(&mut module, "rss_jit_field_int", 2)?,
-            list_len: declare_import(&mut module, "rss_jit_list_len", 1)?,
-            list_get_int: declare_import(&mut module, "rss_jit_list_get_int", 2)?,
-            field_float: declare_import_f64(&mut module, "rss_jit_field_float", 2)?,
-            list_get_float: declare_import_f64(&mut module, "rss_jit_list_get_float", 2)?,
-            closure_id: declare_import(&mut module, "rss_jit_closure_id", 1)?,
-            closure_capture: declare_import(&mut module, "rss_jit_closure_capture", 2)?,
-            field_handle: declare_import(&mut module, "rss_jit_field_handle", 2)?,
-            list_get_handle: declare_import(&mut module, "rss_jit_list_get_handle", 2)?,
+            funcs: HostHelper::all()
+                .iter()
+                .map(|&helper| {
+                    let sig = helper.signature();
+                    let id = if matches!(sig.result, HostResult::Exact(JitValueType::Float)) {
+                        declare_import_f64(&mut module, helper.symbol(), sig.args.len())
+                    } else {
+                        declare_import(&mut module, helper.symbol(), sig.args.len())
+                    }?;
+                    Ok((helper, id))
+                })
+                .collect::<Result<Vec<_>, JitError>>()?,
         };
         let ctx = module.make_context();
         Ok(Self {
@@ -838,7 +1739,19 @@ impl NativeModule {
         function: &JitFunction,
         force_site: u32,
     ) -> Result<CompiledId, JitError> {
-        self.compile_inner(function, Some(force_site), None)
+        self.compile_inner(function, Some(ForcedDeopt::Site(force_site)), None)
+    }
+
+    /// Compile `function` while forcing every generated safepoint to bail
+    /// unconditionally. This is a diagnostic/deopt-stress hook: any executed guard
+    /// edge exercises the real deopt capture path regardless of the guard's natural
+    /// condition. The default [`compile`](Self::compile) path emits byte-identical
+    /// guarded code and never sets this mode.
+    pub fn compile_forcing_all_bails(
+        &mut self,
+        function: &JitFunction,
+    ) -> Result<CompiledId, JitError> {
+        self.compile_inner(function, Some(ForcedDeopt::All), None)
     }
 
     /// Compile `function` as an **OSR (on-stack replacement) entry** at `header_ip`
@@ -870,14 +1783,14 @@ impl NativeModule {
     fn compile_inner(
         &mut self,
         function: &JitFunction,
-        forced: Option<u32>,
+        forced: Option<ForcedDeopt>,
         osr_header: Option<u32>,
     ) -> Result<CompiledId, JitError> {
         // `JitFunction` is a public, versioned surface: a malformed producer must
         // fail cleanly here, not panic inside `build_function` (out-of-range index)
         // or trip Cranelift's verifier (a type mismatch) deep in codegen.
         validate(function, osr_header.is_some())?;
-        // Heap-result return ABI (S0): a non-OSR function whose `Return` source is a
+        // Heap-result return ABI: a non-OSR function whose `Return` source is a
         // `Handle` register returns an output-table handle, not a scalar. Determined
         // purely from the (validated) IR, before codegen. OSR functions never have a
         // top-level `Return` (they exit via `OsrExit`), so this stays `false`.
@@ -886,11 +1799,36 @@ impl NativeModule {
                 matches!(instr, JitInstr::Return { src }
                     if function.reg_types[*src as usize] == JitValueType::Handle)
             });
+        let return_type = if osr_header.is_none() {
+            function.code.iter().find_map(|instr| {
+                if let JitInstr::Return { src } = instr {
+                    Some(function.reg_types[*src as usize])
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        };
+        let scalar_leaf_callable =
+            native_scalar_leaf_callable(function, osr_header.is_some(), returns_handle);
+        let native_callees = self.resolve_native_callees(function)?;
+        let native_call_depth = native_callees
+            .iter()
+            .filter_map(|callee| self.funcs.get(callee.handle.index))
+            .map(|callee| callee.native_call_depth.saturating_add(1))
+            .max()
+            .unwrap_or(0);
         let ptr_ty = self.module.target_config().pointer_type();
         self.module.clear_context(&mut self.ctx);
         self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // args ptr
         self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // n_args
         self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // lens ptr (TV2)
+        self.ctx
+            .func
+            .signature
+            .params
+            .push(AbiParam::new(types::I64)); // host helper context
         self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // out ptr
         self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // bail flag ptr
         self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // safepoint id out ptr
@@ -905,10 +1843,11 @@ impl NativeModule {
             &mut self.ctx.func,
             &mut self.fbctx,
             &mut self.module,
-            self.imports,
+            self.imports.clone(),
             function,
             forced,
             osr_header,
+            &native_callees,
         )?;
 
         let name = format!("rss_jit_{}", self.counter);
@@ -920,6 +1859,11 @@ impl NativeModule {
         self.module
             .define_function(id, &mut self.ctx)
             .map_err(|e| err("define", e))?;
+        let code_size_bytes = self
+            .ctx
+            .compiled_code()
+            .map(|code| u64::from(code.code_info().total_size))
+            .unwrap_or(0);
         self.module.clear_context(&mut self.ctx);
         self.module
             .finalize_definitions()
@@ -934,13 +1878,108 @@ impl NativeModule {
         };
         self.funcs.push(CompiledFunc {
             f,
+            id,
+            code_size_bytes,
+            native_call_depth,
             n_params: function.n_params as usize,
             n_regs: function.n_regs as usize,
             deopt_map,
             osr: osr_header.is_some(),
             returns_handle,
+            param_types: function.reg_types[..function.n_params as usize].to_vec(),
+            return_type,
+            scalar_leaf_callable,
         });
         Ok(handle)
+    }
+
+    /// Machine-code bytes emitted for a compiled function, including any constant
+    /// data reported by Cranelift. Used only for host-side telemetry.
+    pub fn code_size_bytes(&self, id: CompiledId) -> Option<u64> {
+        if id.module_id != self.id {
+            return None;
+        }
+        self.funcs.get(id.index).map(|func| func.code_size_bytes)
+    }
+
+    /// Longest native-to-native call chain reachable from a compiled function.
+    /// Used only for host-side telemetry.
+    pub fn native_call_depth(&self, id: CompiledId) -> Option<u32> {
+        if id.module_id != self.id {
+            return None;
+        }
+        self.funcs.get(id.index).map(|func| func.native_call_depth)
+    }
+
+    fn resolve_native_callees(
+        &self,
+        function: &JitFunction,
+    ) -> Result<Vec<NativeCallee>, JitError> {
+        let mut callees = Vec::new();
+        for instr in &function.code {
+            let JitInstr::CallNative { callee, dst, args } = instr else {
+                continue;
+            };
+            if callee.module_id != self.id {
+                return Err(JitError(
+                    "CallNative callee belongs to a different module".into(),
+                ));
+            }
+            let compiled = self
+                .funcs
+                .get(callee.index)
+                .ok_or_else(|| JitError("CallNative callee index is out of range".into()))?;
+            if compiled.osr {
+                return Err(JitError(
+                    "CallNative does not support OSR callees yet".into(),
+                ));
+            }
+            if !compiled.scalar_leaf_callable {
+                return Err(JitError(
+                    "CallNative callee is not a scalar-callable function".into(),
+                ));
+            }
+            if compiled.n_params != args.len() {
+                return Err(JitError(format!(
+                    "CallNative got {} args, callee expects {}",
+                    args.len(),
+                    compiled.n_params
+                )));
+            }
+            let Some(return_type) = compiled.return_type else {
+                return Err(JitError(
+                    "CallNative callee has no scalar Return instruction".into(),
+                ));
+            };
+            if matches!(return_type, JitValueType::FlatInt | JitValueType::FlatFloat) {
+                return Err(JitError(format!(
+                    "CallNative callee return type {return_type:?} is not callable"
+                )));
+            }
+            if function.reg_types[*dst as usize] != return_type {
+                return Err(JitError(format!(
+                    "CallNative result register {dst} is {:?}, callee returns {return_type:?}",
+                    function.reg_types[*dst as usize]
+                )));
+            }
+            for (i, (&arg, &expected)) in args.iter().zip(compiled.param_types.iter()).enumerate() {
+                if function.reg_types[arg as usize] != expected {
+                    return Err(JitError(format!(
+                        "CallNative arg {i}: caller register {arg} is {:?}, callee expects {expected:?}",
+                        function.reg_types[arg as usize]
+                    )));
+                }
+            }
+            callees.push(NativeCallee {
+                handle: *callee,
+                func_id: compiled.id,
+                n_params: compiled.n_params,
+                param_types: compiled.param_types.clone(),
+                deopt_payload_words: compiled.deopt_map.payload_words,
+                return_type,
+            });
+        }
+        Ok(callees)
     }
 
     /// Run a compiled function. Returns [`NativeOutcome::Completed`] with the result
@@ -967,12 +2006,84 @@ impl NativeModule {
     /// this by pinning a shared `Ref` borrow of the backing `RefCell<TypedVec>` for
     /// the call (so no `borrow_mut`/realloc can occur); see `try_native`.
     pub fn call(&self, id: CompiledId, args: &[i64], lens: &[i64]) -> NativeOutcome {
+        self.call_with_host_ctx(id, args, lens, 0)
+    }
+
+    fn decode_deopt_live(site: &DeoptSite, payload_base: usize, payload: &[i64]) -> Vec<DeoptReg> {
+        site.live
+            .iter()
+            .filter_map(|&(reg, ty)| {
+                payload.get(payload_base + reg as usize).map(|&bits| {
+                    let value = match ty {
+                        JitValueType::Float => DeoptValue::Float(f64::from_bits(bits as u64)),
+                        _ => DeoptValue::Int(bits),
+                    };
+                    DeoptReg { reg, value }
+                })
+            })
+            .collect()
+    }
+
+    fn decode_deopt_child(
+        &self,
+        child: DeoptChildSite,
+        payload_base: usize,
+        payload: &[i64],
+    ) -> Option<Box<DeoptFrame>> {
+        let safepoint_bits = *payload.get(payload_base + child.safepoint_slot as usize)?;
+        if safepoint_bits <= 0 {
+            return None;
+        }
+        self.decode_deopt_frame(
+            child.callee,
+            SafepointId(safepoint_bits as u32),
+            payload_base + child.payload_slot as usize,
+            payload,
+        )
+        .map(Box::new)
+    }
+
+    fn decode_deopt_frame(
+        &self,
+        function: CompiledId,
+        safepoint_id: SafepointId,
+        payload_base: usize,
+        payload: &[i64],
+    ) -> Option<DeoptFrame> {
+        if function.module_id != self.id || safepoint_id.0 == 0 {
+            return None;
+        }
+        let func = self.funcs.get(function.index)?;
+        let site = func.deopt_map.sites.get(safepoint_id.0 as usize - 1)?;
+        let live = Self::decode_deopt_live(site, payload_base, payload);
+        let child = site
+            .child
+            .and_then(|child| self.decode_deopt_child(child, payload_base, payload));
+        Some(DeoptFrame {
+            function,
+            safepoint_id,
+            live,
+            child,
+        })
+    }
+
+    /// Run a compiled function while forwarding `host_ctx` to every imported host
+    /// helper. The context is opaque to `vm-jit`; the embedding VM validates and
+    /// interprets it.
+    pub fn call_with_host_ctx(
+        &self,
+        id: CompiledId,
+        args: &[i64],
+        lens: &[i64],
+        host_ctx: HostCtx,
+    ) -> NativeOutcome {
         // Reject an id from a different module and an out-of-range index: either
         // would invoke the wrong (or no) function. Falling back is always safe.
         if id.module_id != self.id {
             return NativeOutcome::Deopt {
                 safepoint_id: SafepointId::ANONYMOUS,
                 live: Vec::new(),
+                child: None,
             };
         }
         let func = match self.funcs.get(id.index) {
@@ -981,7 +2092,8 @@ impl NativeModule {
                 return NativeOutcome::Deopt {
                     safepoint_id: SafepointId::ANONYMOUS,
                     live: Vec::new(),
-                }
+                    child: None,
+                };
             }
         };
         // The generated entry block reads words from `args_ptr` (and `lens_ptr`)
@@ -989,19 +2101,15 @@ impl NativeModule {
         // would read out of bounds. A normal compile reads `n_params` packed args; an
         // OSR-entry reads from the full `n_regs`-wide register window. Reject any
         // length mismatch against the required width.
-        let required = if func.osr {
-            func.n_regs
-        } else {
-            func.n_params
-        };
+        let required = if func.osr { func.n_regs } else { func.n_params };
         if args.len() != required || lens.len() != required {
             return NativeOutcome::Deopt {
                 safepoint_id: SafepointId::ANONYMOUS,
                 live: Vec::new(),
+                child: None,
             };
         }
         let f = func.f;
-        let n_regs = func.n_regs;
         let returns_handle = func.returns_handle;
         let deopt_map = &func.deopt_map;
         let mut out: i64 = 0;
@@ -1020,8 +2128,8 @@ impl NativeModule {
                     // never observed.
                     let payload_ptr = {
                         let mut buf = payload.borrow_mut();
-                        if buf.len() < n_regs {
-                            buf.resize(n_regs, 0);
+                        if buf.len() < deopt_map.payload_words {
+                            buf.resize(deopt_map.payload_words, 0);
                         }
                         buf.as_mut_ptr()
                     };
@@ -1034,18 +2142,20 @@ impl NativeModule {
                     // `bail_ptr`) — this thread's `SAFEPOINT_ID` cell, also valid for the
                     // call, and only on a bail edge (the hot path never touches it).
                     // `payload_ptr` addresses this thread's `DEOPT_PAYLOAD` buffer, sized
-                    // to `n_regs` words above and held borrowed (so it stays valid and
-                    // immovable) for the whole call; the generated code only ever
-                    // *stores* a live register's word into its slot, and only on a bail
-                    // edge (the hot path never touches it). Any flat-array data pointer
-                    // in `args` is read in-bounds (against the matching `lens` entry) per
-                    // the caller's borrow-protocol obligation documented above. The
-                    // generated code never retains any of the pointers.
+                    // to `deopt_map.payload_words` above and held borrowed (so it stays
+                    // valid and immovable) for the whole call; the generated code only
+                    // ever *stores* live register words and copied child-frame payloads
+                    // into it, and only on a bail edge (the hot path never touches it).
+                    // Any flat-array data pointer in `args` is read in-bounds (against
+                    // the matching `lens` entry) per the caller's borrow-protocol
+                    // obligation documented above. The generated code never retains any
+                    // of the pointers.
                     let completed = unsafe {
                         f(
                             args.as_ptr(),
                             args.len(),
                             lens.as_ptr(),
+                            host_ctx,
                             &mut out as *mut i64,
                             bail_ptr,
                             safepoint_ptr,
@@ -1054,7 +2164,7 @@ impl NativeModule {
                     };
                     if completed != 0 && bail.get() == 0 {
                         // Success: leave the payload buffer untouched, build no Vec.
-                        // Heap-result return ABI (S0): a Handle-returning function's
+                        // Heap-result return ABI: a Handle-returning function's
                         // `out` is an output-table handle, signalled distinctly so the
                         // host materializes a heap value from it. The scalar path is
                         // byte-for-byte unchanged. §7.2: this branch runs ONLY on a
@@ -1073,27 +2183,14 @@ impl NativeModule {
                         // anonymous bail (id 0, e.g. fell off the end) has no site, so
                         // `live` is empty.
                         let buf = payload.borrow();
-                        let live = deopt_map
-                            .sites
-                            .get((safepoint.get() as usize).wrapping_sub(1))
-                            .map(|site| {
-                                site.live
-                                    .iter()
-                                    .filter_map(|&(reg, ty)| {
-                                        buf.get(reg as usize).map(|&bits| {
-                                            let value = match ty {
-                                                JitValueType::Float => {
-                                                    DeoptValue::Float(f64::from_bits(bits as u64))
-                                                }
-                                                _ => DeoptValue::Int(bits),
-                                            };
-                                            DeoptReg { reg, value }
-                                        })
-                                    })
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        NativeOutcome::Deopt { safepoint_id, live }
+                        let frame = self.decode_deopt_frame(id, safepoint_id, 0, &buf);
+                        NativeOutcome::Deopt {
+                            safepoint_id,
+                            live: frame
+                                .as_ref()
+                                .map_or_else(Vec::new, |frame| frame.live.clone()),
+                            child: frame.and_then(|frame| frame.child),
+                        }
                     }
                 })
             })
@@ -1135,11 +2232,12 @@ std::thread_local! {
     /// that bailed.
     static SAFEPOINT_ID: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
 
-    /// Per-thread reused scratch buffer for the deopt payload (one `i64` slot per
-    /// VM register). `call` resizes it to the function's `n_regs` and passes its
-    /// pointer into the compiled function, which *stores* each live register's value
-    /// into its slot on a bail edge only. Reused across calls so the success hot
-    /// path performs no steady-state allocation.
+    /// Per-thread reused scratch buffer for the deopt payload. `call` resizes it to
+    /// the function's `deopt_map.payload_words` and passes its pointer into the
+    /// compiled function, which *stores* each live register's value into its slot on
+    /// a bail edge only; native-call bail edges also copy chained child payloads.
+    /// Reused across calls so the success hot path performs no steady-state
+    /// allocation.
     static DEOPT_PAYLOAD: std::cell::RefCell<Vec<i64>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
@@ -1179,6 +2277,13 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
             "n_params {} exceeds n_regs {n_regs}",
             program.n_params
         )));
+    }
+    for &cold_ip in &program.cold_blocks {
+        if (cold_ip as usize) >= n {
+            return Err(JitError(format!(
+                "cold block instruction {cold_ip} is out of range for {n} instructions"
+            )));
+        }
     }
 
     let check_reg = |r: u32| -> Result<(), JitError> {
@@ -1320,9 +2425,8 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                 // through a temporary (Pending #1). A **flat-array** register (pointer
                 // + length, keyed by reg in the `lens` slice) genuinely cannot be
                 // moved, so those stay rejected.
-                let is_flat = |r: u32| {
-                    matches!(class(r), JitValueType::FlatInt | JitValueType::FlatFloat)
-                };
+                let is_flat =
+                    |r: u32| matches!(class(r), JitValueType::FlatInt | JitValueType::FlatFloat);
                 if is_flat(*src) || is_flat(*dst) {
                     return Err(JitError(
                         "Move: flat-array registers cannot be moved".into(),
@@ -1345,6 +2449,150 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                 require_class(*src, JitValueType::Int, "IntToFloat src")?;
                 require_class(*dst, JitValueType::Float, "IntToFloat result")?;
             }
+            JitInstr::HostCall { helper, dst, args } => {
+                let sig = helper.signature();
+                if args.len() != sig.args.len() {
+                    return Err(JitError(format!(
+                        "HostCall {helper:?}: got {} args, expected {}",
+                        args.len(),
+                        sig.args.len()
+                    )));
+                }
+                for (i, (arg, expected)) in args.iter().zip(sig.args.iter()).enumerate() {
+                    match arg {
+                        HostArg::Reg(reg) => {
+                            require_class(*reg, *expected, &format!("HostCall {helper:?} arg {i}"))?
+                        }
+                        HostArg::ImmI64(_) => {
+                            if *expected != JitValueType::Int {
+                                return Err(JitError(format!(
+                                    "HostCall {helper:?} arg {i}: immediate used for {expected:?}"
+                                )));
+                            }
+                        }
+                    }
+                }
+                match sig.result {
+                    HostResult::Exact(result) => {
+                        require_class(*dst, result, &format!("HostCall {helper:?} result"))?;
+                    }
+                    HostResult::IntOrFloatBits => {
+                        check_reg(*dst)?;
+                        if !matches!(class(*dst), JitValueType::Int | JitValueType::Float) {
+                            return Err(JitError(format!(
+                                "HostCall {helper:?} result: register {dst} is {:?}, expected Int or Float",
+                                class(*dst)
+                            )));
+                        }
+                    }
+                }
+            }
+            JitInstr::MemoizedHostCall {
+                helper,
+                dst,
+                args,
+                cache,
+                flag,
+            } => {
+                let sig = helper.signature();
+                if helper.heap_effect().writes_existing_heap() {
+                    return Err(JitError(format!(
+                        "MemoizedHostCall {helper:?}: heap-writing helpers cannot be memoized"
+                    )));
+                }
+                if args.len() != sig.args.len() {
+                    return Err(JitError(format!(
+                        "MemoizedHostCall {helper:?}: got {} args, expected {}",
+                        args.len(),
+                        sig.args.len()
+                    )));
+                }
+                for (i, (arg, expected)) in args.iter().zip(sig.args.iter()).enumerate() {
+                    match arg {
+                        HostArg::Reg(reg) => require_class(
+                            *reg,
+                            *expected,
+                            &format!("MemoizedHostCall {helper:?} arg {i}"),
+                        )?,
+                        HostArg::ImmI64(_) => {
+                            if *expected != JitValueType::Int {
+                                return Err(JitError(format!(
+                                    "MemoizedHostCall {helper:?} arg {i}: immediate used for {expected:?}"
+                                )));
+                            }
+                        }
+                    }
+                }
+                require_class(*flag, JitValueType::Int, "MemoizedHostCall flag")?;
+                match sig.result {
+                    HostResult::Exact(result) => {
+                        require_class(
+                            *dst,
+                            result,
+                            &format!("MemoizedHostCall {helper:?} result"),
+                        )?;
+                        require_class(
+                            *cache,
+                            result,
+                            &format!("MemoizedHostCall {helper:?} cache"),
+                        )?;
+                    }
+                    HostResult::IntOrFloatBits => {
+                        check_reg(*dst)?;
+                        check_reg(*cache)?;
+                        if !matches!(class(*dst), JitValueType::Int | JitValueType::Float) {
+                            return Err(JitError(format!(
+                                "MemoizedHostCall {helper:?} result: register {dst} is {:?}, expected Int or Float",
+                                class(*dst)
+                            )));
+                        }
+                        if class(*cache) != class(*dst) {
+                            return Err(JitError(format!(
+                                "MemoizedHostCall {helper:?} cache: class {:?} does not match result {:?}",
+                                class(*cache),
+                                class(*dst)
+                            )));
+                        }
+                    }
+                }
+            }
+            JitInstr::CallNative { dst, args, .. } => {
+                check_reg(*dst)?;
+                if matches!(class(*dst), JitValueType::FlatInt | JitValueType::FlatFloat) {
+                    return Err(JitError(format!(
+                        "CallNative result register {dst} is a flat-array register"
+                    )));
+                }
+                for arg in args {
+                    check_reg(*arg)?;
+                }
+            }
+            JitInstr::MatchMapGetInt {
+                map,
+                key,
+                value_dst,
+                some_ip,
+                none_ip,
+            } => {
+                require_class(*map, JitValueType::Handle, "MatchMapGetInt map")?;
+                require_class(*key, JitValueType::Int, "MatchMapGetInt key")?;
+                require_class(*value_dst, JitValueType::Int, "MatchMapGetInt value")?;
+                check_target(*some_ip)?;
+                check_target(*none_ip)?;
+            }
+            JitInstr::MatchSortedMapGetInt {
+                map,
+                key,
+                value_dst,
+                some_ip,
+                none_ip,
+            } => {
+                require_class(*map, JitValueType::Handle, "MatchSortedMapGetInt map")?;
+                require_class(*key, JitValueType::Int, "MatchSortedMapGetInt key")?;
+                require_class(*value_dst, JitValueType::Int, "MatchSortedMapGetInt value")?;
+                check_target(*some_ip)?;
+                check_target(*none_ip)?;
+            }
             JitInstr::BitAnd { dst, lhs, rhs } => int_op(*dst, *lhs, *rhs, "BitAnd")?,
             JitInstr::BitOr { dst, lhs, rhs } => int_op(*dst, *lhs, *rhs, "BitOr")?,
             JitInstr::BitXor { dst, lhs, rhs } => int_op(*dst, *lhs, *rhs, "BitXor")?,
@@ -1359,6 +2607,11 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                 check_target(*target)?;
                 check_fallthrough()?;
             }
+            JitInstr::ProfiledJumpIfBool { cond, target, .. } => {
+                require_class(*cond, JitValueType::Int, "ProfiledJumpIfBool")?;
+                check_target(*target)?;
+                check_fallthrough()?;
+            }
             JitInstr::JumpIfIntCompare {
                 lhs, rhs, target, ..
             } => {
@@ -1366,9 +2619,16 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                 check_target(*target)?;
                 check_fallthrough()?;
             }
+            JitInstr::ProfiledJumpIfIntCompare {
+                lhs, rhs, target, ..
+            } => {
+                scalar_pair(*lhs, *rhs, "ProfiledJumpIfIntCompare")?;
+                check_target(*target)?;
+                check_fallthrough()?;
+            }
             JitInstr::Return { src } => {
                 check_reg(*src)?;
-                // Heap-result return ABI (heap-write S0): a scalar (`Int`/`Float`) or a
+                // Heap-result return ABI: a scalar (`Int`/`Float`) or a
                 // `Handle` register may be returned. A `Handle` return's i64 is an
                 // opaque output-table handle (the host materializes a heap value from
                 // it); see [`NativeOutcome::CompletedHandle`]. A FLAT-array register is
@@ -1380,32 +2640,21 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                     ));
                 }
             }
-            JitInstr::FieldInt { dst, base, .. } => {
-                require_class(*base, JitValueType::Handle, "FieldInt base")?;
-                require_class(*dst, JitValueType::Int, "FieldInt result")?;
-            }
-            JitInstr::ListLen { dst, base } => {
-                require_class(*base, JitValueType::Handle, "ListLen base")?;
-                require_class(*dst, JitValueType::Int, "ListLen result")?;
-            }
-            JitInstr::ListGetInt { dst, base, index } => {
-                require_class(*base, JitValueType::Handle, "ListGetInt base")?;
-                require_class(*index, JitValueType::Int, "ListGetInt index")?;
-                require_class(*dst, JitValueType::Int, "ListGetInt result")?;
-            }
-            JitInstr::FieldFloat { dst, base, .. } => {
-                require_class(*base, JitValueType::Handle, "FieldFloat base")?;
-                require_class(*dst, JitValueType::Float, "FieldFloat result")?;
-            }
-            JitInstr::ListGetFloat { dst, base, index } => {
-                require_class(*base, JitValueType::Handle, "ListGetFloat base")?;
-                require_class(*index, JitValueType::Int, "ListGetFloat index")?;
-                require_class(*dst, JitValueType::Float, "ListGetFloat result")?;
-            }
             JitInstr::ListGetIntDirect { dst, base, index } => {
                 require_flat_param(*base, JitValueType::FlatInt, "ListGetIntDirect base")?;
                 require_class(*index, JitValueType::Int, "ListGetIntDirect index")?;
                 require_class(*dst, JitValueType::Int, "ListGetIntDirect result")?;
+            }
+            JitInstr::ListSetIntDirect {
+                dst,
+                base,
+                index,
+                value,
+            } => {
+                require_flat_param(*base, JitValueType::FlatInt, "ListSetIntDirect base")?;
+                require_class(*index, JitValueType::Int, "ListSetIntDirect index")?;
+                require_class(*value, JitValueType::Int, "ListSetIntDirect value")?;
+                require_class(*dst, JitValueType::Int, "ListSetIntDirect result")?;
             }
             JitInstr::ListGetFloatDirect { dst, base, index } => {
                 require_flat_param(*base, JitValueType::FlatFloat, "ListGetFloatDirect base")?;
@@ -1414,7 +2663,10 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
             }
             JitInstr::ListLenDirect { dst, base } => {
                 check_reg(*base)?;
-                if !matches!(class(*base), JitValueType::FlatInt | JitValueType::FlatFloat) {
+                if !matches!(
+                    class(*base),
+                    JitValueType::FlatInt | JitValueType::FlatFloat
+                ) {
                     return Err(JitError(format!(
                         "ListLenDirect base: register {base} is {:?}, expected a flat-array param",
                         class(*base)
@@ -1440,31 +2692,6 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                     )));
                 }
             }
-            JitInstr::ClosureId { dst, base } => {
-                require_class(*base, JitValueType::Handle, "ClosureId base")?;
-                require_class(*dst, JitValueType::Int, "ClosureId result")?;
-            }
-            JitInstr::ClosureCapture { dst, base, .. } => {
-                require_class(*base, JitValueType::Handle, "ClosureCapture base")?;
-                // The capture result `dst` is Int-class (an Int/Bool capture, used
-                // as i64 directly) or Float-class (a Float capture, whose i64 slot
-                // is `f64::to_bits` and is bit-reinterpreted to f64 in codegen).
-                if !matches!(class(*dst), JitValueType::Int | JitValueType::Float) {
-                    return Err(JitError(format!(
-                        "ClosureCapture result: register {dst} is {:?}, expected Int or Float",
-                        class(*dst)
-                    )));
-                }
-            }
-            JitInstr::FieldHandle { dst, base, .. } => {
-                require_class(*base, JitValueType::Handle, "FieldHandle base")?;
-                require_class(*dst, JitValueType::Handle, "FieldHandle result")?;
-            }
-            JitInstr::ListGetHandle { dst, base, index } => {
-                require_class(*base, JitValueType::Handle, "ListGetHandle base")?;
-                require_class(*index, JitValueType::Int, "ListGetHandle index")?;
-                require_class(*dst, JitValueType::Handle, "ListGetHandle result")?;
-            }
             // OSR-exit is a parameterless terminator (an unconditional deopt at its
             // own ip); its live set is computed from definite-assignment, so it
             // carries no operands to validate.
@@ -1488,6 +2715,9 @@ fn instr_def(instr: &JitInstr) -> Option<u32> {
         | JitInstr::Div { dst, .. }
         | JitInstr::Mod { dst, .. }
         | JitInstr::IntToFloat { dst, .. }
+        | JitInstr::HostCall { dst, .. }
+        | JitInstr::MemoizedHostCall { dst, .. }
+        | JitInstr::CallNative { dst, .. }
         | JitInstr::BitAnd { dst, .. }
         | JitInstr::BitOr { dst, .. }
         | JitInstr::BitXor { dst, .. }
@@ -1496,22 +2726,18 @@ fn instr_def(instr: &JitInstr) -> Option<u32> {
         | JitInstr::Compare { dst, .. }
         | JitInstr::Equal { dst, .. }
         | JitInstr::NotEqual { dst, .. }
-        | JitInstr::FieldInt { dst, .. }
-        | JitInstr::ListLen { dst, .. }
-        | JitInstr::ListGetInt { dst, .. }
-        | JitInstr::FieldFloat { dst, .. }
-        | JitInstr::ListGetFloat { dst, .. }
+        | JitInstr::MatchMapGetInt { value_dst: dst, .. }
+        | JitInstr::MatchSortedMapGetInt { value_dst: dst, .. }
         | JitInstr::ListGetIntDirect { dst, .. }
+        | JitInstr::ListSetIntDirect { dst, .. }
         | JitInstr::ListGetFloatDirect { dst, .. }
-        | JitInstr::ListLenDirect { dst, .. }
-        | JitInstr::ClosureId { dst, .. }
-        | JitInstr::ClosureCapture { dst, .. }
-        | JitInstr::FieldHandle { dst, .. }
-        | JitInstr::ListGetHandle { dst, .. } => Some(*dst),
+        | JitInstr::ListLenDirect { dst, .. } => Some(*dst),
         JitInstr::Nop
         | JitInstr::Jump { .. }
         | JitInstr::JumpIfBool { .. }
         | JitInstr::JumpIfIntCompare { .. }
+        | JitInstr::ProfiledJumpIfBool { .. }
+        | JitInstr::ProfiledJumpIfIntCompare { .. }
         | JitInstr::Return { .. }
         | JitInstr::GuardClosureId { .. }
         | JitInstr::OsrExit
@@ -1536,13 +2762,31 @@ fn successors(program: &JitFunction, i: usize) -> Vec<usize> {
                 vec![]
             }
         }
-        JitInstr::JumpIfBool { target, .. } | JitInstr::JumpIfIntCompare { target, .. } => {
+        JitInstr::JumpIfBool { target, .. }
+        | JitInstr::JumpIfIntCompare { target, .. }
+        | JitInstr::ProfiledJumpIfBool { target, .. }
+        | JitInstr::ProfiledJumpIfIntCompare { target, .. } => {
             let mut succ = Vec::new();
             if next < n {
                 succ.push(next);
             }
             if in_range(*target) {
                 succ.push(*target as usize);
+            }
+            succ
+        }
+        JitInstr::MatchMapGetInt {
+            some_ip, none_ip, ..
+        }
+        | JitInstr::MatchSortedMapGetInt {
+            some_ip, none_ip, ..
+        } => {
+            let mut succ = Vec::new();
+            if in_range(*some_ip) {
+                succ.push(*some_ip as usize);
+            }
+            if in_range(*none_ip) {
+                succ.push(*none_ip as usize);
             }
             succ
         }
@@ -1753,18 +2997,44 @@ fn interval_analysis(program: &JitFunction) -> Vec<Vec<Interval>> {
             }
             // A list/array length is a non-negative element count; we soundly bound
             // it to `[0, i64::MAX]` and deliberately assume NO tighter upper bound.
-            JitInstr::ListLen { dst, .. } | JitInstr::ListLenDirect { dst, .. } => {
-                set(&mut out, *dst, Interval { lo: 0, hi: i64::MAX as i128 });
+            JitInstr::ListLenDirect { dst, .. }
+            | JitInstr::HostCall {
+                helper: HostHelper::ListLen,
+                dst,
+                ..
+            } => {
+                set(
+                    &mut out,
+                    *dst,
+                    Interval {
+                        lo: 0,
+                        hi: i64::MAX as i128,
+                    },
+                );
             }
             JitInstr::Add { dst, lhs, rhs } if is_int(*lhs) => {
                 let a = read(in_set, *lhs);
                 let b = read(in_set, *rhs);
-                set(&mut out, *dst, Interval { lo: a.lo + b.lo, hi: a.hi + b.hi });
+                set(
+                    &mut out,
+                    *dst,
+                    Interval {
+                        lo: a.lo + b.lo,
+                        hi: a.hi + b.hi,
+                    },
+                );
             }
             JitInstr::Sub { dst, lhs, rhs } if is_int(*lhs) => {
                 let a = read(in_set, *lhs);
                 let b = read(in_set, *rhs);
-                set(&mut out, *dst, Interval { lo: a.lo - b.hi, hi: a.hi - b.lo });
+                set(
+                    &mut out,
+                    *dst,
+                    Interval {
+                        lo: a.lo - b.hi,
+                        hi: a.hi - b.lo,
+                    },
+                );
             }
             JitInstr::Mul { dst, lhs, rhs } if is_int(*lhs) => {
                 let a = read(in_set, *lhs);
@@ -1805,17 +3075,30 @@ fn interval_analysis(program: &JitFunction) -> Vec<Vec<Interval>> {
     // else flows un-refined. The join still hulls + widens to TOP (termination is
     // unaffected — refinement only narrows along an edge, never grows the lattice).
     let refine_edge = |out: &mut Vec<Interval>, p: usize, succ: usize| {
-        let JitInstr::JumpIfIntCompare { lhs, rhs, op, expected, target } = &program.code[p]
-        else {
-            return;
+        let (lhs, rhs, op, expected, target) = match &program.code[p] {
+            JitInstr::JumpIfIntCompare {
+                lhs,
+                rhs,
+                op,
+                expected,
+                target,
+            }
+            | JitInstr::ProfiledJumpIfIntCompare {
+                lhs,
+                rhs,
+                op,
+                expected,
+                target,
+                ..
+            } => (*lhs, *rhs, *op, *expected, *target),
+            _ => return,
         };
-        let (lhs, rhs) = (*lhs, *rhs);
         if !is_int(lhs) || !is_int(rhs) {
             return;
         }
         // Is this edge the one on which `(lhs op rhs)` holds, or its negation?
         // The target edge is taken when `(lhs op rhs) == expected`.
-        let is_target = succ == *target as usize;
+        let is_target = succ == target as usize;
         // Could this edge also be the fall-through? (e.g. target == next). If the
         // edge is ambiguous (both target and fall-through reach `succ`), we cannot
         // attribute a single fact to it — flow un-refined (sound).
@@ -1829,7 +3112,7 @@ fn interval_analysis(program: &JitFunction) -> Vec<Vec<Interval>> {
         // The relation that holds on THIS edge: on the target edge it is the raw
         // comparison iff `expected` is true; on the fall-through edge it is the
         // negation of "comparison == expected".
-        let cond_holds = if is_target { *expected } else { !*expected };
+        let cond_holds = if is_target { expected } else { !expected };
         // `cond_holds == true`  => `lhs op rhs`
         // `cond_holds == false` => `!(lhs op rhs)`
         let (a, b) = (out[lhs as usize], out[rhs as usize]);
@@ -1887,8 +3170,7 @@ fn interval_analysis(program: &JitFunction) -> Vec<Vec<Interval>> {
     // where a definer/merge proves a bound. `initialized[j]` tracks whether block
     // `j`'s in-set has been computed from predecessors at least once (the first such
     // pass *replaces* the all-TOP seed rather than hulling against it).
-    let mut interval_in: Vec<Vec<Interval>> =
-        (0..n).map(|_| vec![Interval::TOP; n_regs]).collect();
+    let mut interval_in: Vec<Vec<Interval>> = (0..n).map(|_| vec![Interval::TOP; n_regs]).collect();
     let mut initialized = vec![false; n];
     // Sticky-widened marker per (instruction, register): once a register at block
     // `j` widens to TOP (e.g. across a loop back-edge), it is pinned to TOP and
@@ -1916,7 +3198,10 @@ fn interval_analysis(program: &JitFunction) -> Vec<Vec<Interval>> {
                 initialized[j] = true;
                 continue;
             }
-            let bottom = Interval { lo: i128::MAX, hi: i128::MIN };
+            let bottom = Interval {
+                lo: i128::MAX,
+                hi: i128::MIN,
+            };
             let mut new_in = vec![bottom; n_regs];
             // Optimistic worklist join: only hull predecessors whose own in-set has
             // been computed at least once. A not-yet-`initialized` predecessor still
@@ -2035,12 +3320,18 @@ fn arith_cannot_overflow(intervals: &[Interval], instr: &JitInstr) -> bool {
         JitInstr::Add { lhs, rhs, .. } => {
             let a = get(*lhs);
             let b = get(*rhs);
-            Interval { lo: a.lo + b.lo, hi: a.hi + b.hi }
+            Interval {
+                lo: a.lo + b.lo,
+                hi: a.hi + b.hi,
+            }
         }
         JitInstr::Sub { lhs, rhs, .. } => {
             let a = get(*lhs);
             let b = get(*rhs);
-            Interval { lo: a.lo - b.hi, hi: a.hi - b.lo }
+            Interval {
+                lo: a.lo - b.hi,
+                hi: a.hi - b.lo,
+            }
         }
         JitInstr::Mul { lhs, rhs, .. } => {
             let a = get(*lhs);
@@ -2066,8 +3357,9 @@ fn build_function(
     module: &mut JITModule,
     imports: HostFuncs,
     program: &JitFunction,
-    forced: Option<u32>,
+    forced: Option<ForcedDeopt>,
     osr_header: Option<u32>,
+    native_callees: &[NativeCallee],
 ) -> Result<DeoptMap, JitError> {
     // Definite-assignment ("must") sets per instruction, computed once up front so
     // each bail site can record its live (entry-assigned) registers. Purely
@@ -2081,19 +3373,30 @@ fn build_function(
     // Sites accumulate in emission order, aligned 1:1 with the `next_id` counter
     // (`sites[id - 1]` is the site for id `id`).
     let mut sites: Vec<DeoptSite> = Vec::new();
+    let mut payload_words = program.n_regs as usize;
 
     let mut bcx = FunctionBuilder::new(func, fbctx);
+    let ptr_ty = module.target_config().pointer_type();
 
     // Per-function references to the imported host helpers (heap reads call these).
-    let field_int_ref = module.declare_func_in_func(imports.field_int, bcx.func);
-    let list_len_ref = module.declare_func_in_func(imports.list_len, bcx.func);
-    let list_get_int_ref = module.declare_func_in_func(imports.list_get_int, bcx.func);
-    let field_float_ref = module.declare_func_in_func(imports.field_float, bcx.func);
-    let list_get_float_ref = module.declare_func_in_func(imports.list_get_float, bcx.func);
-    let closure_id_ref = module.declare_func_in_func(imports.closure_id, bcx.func);
-    let closure_capture_ref = module.declare_func_in_func(imports.closure_capture, bcx.func);
-    let field_handle_ref = module.declare_func_in_func(imports.field_handle, bcx.func);
-    let list_get_handle_ref = module.declare_func_in_func(imports.list_get_handle, bcx.func);
+    let helper_refs: Vec<_> = HostHelper::all()
+        .iter()
+        .map(|&helper| {
+            (
+                helper,
+                module.declare_func_in_func(imports.get(helper), bcx.func),
+            )
+        })
+        .collect();
+    let native_refs: Vec<_> = native_callees
+        .iter()
+        .map(|callee| {
+            (
+                callee.handle,
+                module.declare_func_in_func(callee.func_id, bcx.func),
+            )
+        })
+        .collect();
 
     let n = program.code.len();
     let n_regs = program.n_regs as usize;
@@ -2118,10 +3421,11 @@ fn build_function(
     let params = bcx.block_params(entry).to_vec();
     let args_ptr = params[0];
     let lens_ptr = params[2];
-    let out_ptr = params[3];
-    let bail_ptr = params[4];
-    let safepoint_ptr = params[5];
-    let payload_ptr = params[6];
+    let host_ctx = params[3];
+    let out_ptr = params[4];
+    let bail_ptr = params[5];
+    let safepoint_ptr = params[6];
+    let payload_ptr = params[7];
     // Running per-site bail-id counter. Starts at 1 (0 is reserved = no bail);
     // `bail_if` post-increments it so every guard/bail site gets a stable id.
     let mut next_id: i64 = 1;
@@ -2188,8 +3492,23 @@ fn build_function(
                     is_leader[i + 1] = true;
                 }
             }
-            JitInstr::JumpIfBool { target, .. } | JitInstr::JumpIfIntCompare { target, .. } => {
+            JitInstr::JumpIfBool { target, .. }
+            | JitInstr::JumpIfIntCompare { target, .. }
+            | JitInstr::ProfiledJumpIfBool { target, .. }
+            | JitInstr::ProfiledJumpIfIntCompare { target, .. } => {
                 is_leader[*target as usize] = true;
+                if i + 1 < n {
+                    is_leader[i + 1] = true;
+                }
+            }
+            JitInstr::MatchMapGetInt {
+                some_ip, none_ip, ..
+            }
+            | JitInstr::MatchSortedMapGetInt {
+                some_ip, none_ip, ..
+            } => {
+                is_leader[*some_ip as usize] = true;
+                is_leader[*none_ip as usize] = true;
                 if i + 1 < n {
                     is_leader[i + 1] = true;
                 }
@@ -2198,6 +3517,13 @@ fn build_function(
                 is_leader[i + 1] = true;
             }
             _ => {}
+        }
+    }
+    for &cold_ip in &program.cold_blocks {
+        if (cold_ip as usize) >= n {
+            return Err(JitError(format!(
+                "cold block instruction {cold_ip} is out of range for {n} instructions"
+            )));
         }
     }
     let block_for: Vec<Option<Block>> = (0..n)
@@ -2209,6 +3535,11 @@ fn build_function(
             }
         })
         .collect();
+    for &cold_ip in &program.cold_blocks {
+        if let Some(block) = block_for[cold_ip as usize] {
+            bcx.set_cold_block(block);
+        }
+    }
 
     let reg = |program_reg: u32| vars[program_reg as usize];
 
@@ -2223,6 +3554,7 @@ fn build_function(
                 assigned_in: &assigned_in,
                 reg_types: &program.reg_types,
                 sites: &mut sites,
+                payload_words: &mut payload_words,
                 forced,
                 unconditional: false,
             }
@@ -2233,11 +3565,31 @@ fn build_function(
                 assigned_in: &assigned_in,
                 reg_types: &program.reg_types,
                 sites: &mut sites,
+                payload_words: &mut payload_words,
                 forced,
                 unconditional: true,
             }
         };
     }
+
+    let helper_ref = |helper: HostHelper| {
+        helper_refs
+            .iter()
+            .find_map(|(candidate, func_ref)| (*candidate == helper).then_some(*func_ref))
+            .expect("host helper func ref declared")
+    };
+    let native_ref = |callee: CompiledId| {
+        native_refs
+            .iter()
+            .find_map(|(candidate, func_ref)| (*candidate == callee).then_some(*func_ref))
+            .expect("native callee func ref declared")
+    };
+    let native_callee = |callee: CompiledId| {
+        native_callees
+            .iter()
+            .find(|candidate| candidate.handle == callee)
+            .expect("native callee metadata resolved")
+    };
 
     match osr_header {
         // OSR-entry: begin native execution *inside* the loop at the header block.
@@ -2301,8 +3653,7 @@ fn build_function(
                     bcx.def_var(reg(*dst), res);
                 } else {
                     let (res, of) = bcx.ins().sadd_overflow(a, b);
-                    let cont =
-                        bail_if(
+                    let cont = bail_if(
                         &mut bcx,
                         of,
                         fallback,
@@ -2327,8 +3678,7 @@ fn build_function(
                     bcx.def_var(reg(*dst), res);
                 } else {
                     let (res, of) = bcx.ins().ssub_overflow(a, b);
-                    let cont =
-                        bail_if(
+                    let cont = bail_if(
                         &mut bcx,
                         of,
                         fallback,
@@ -2353,8 +3703,7 @@ fn build_function(
                     bcx.def_var(reg(*dst), res);
                 } else {
                     let (res, of) = bcx.ins().smul_overflow(a, b);
-                    let cont =
-                        bail_if(
+                    let cont = bail_if(
                         &mut bcx,
                         of,
                         fallback,
@@ -2416,6 +3765,278 @@ fn build_function(
                 let v = bcx.use_var(reg(*src));
                 let res = bcx.ins().fcvt_from_sint(types::F64, v);
                 bcx.def_var(reg(*dst), res);
+            }
+            JitInstr::HostCall { helper, dst, args } => {
+                let call_args: Vec<Value> = std::iter::once(host_ctx)
+                    .chain(args.iter().map(|arg| match arg {
+                        HostArg::Reg(arg) => bcx.use_var(reg(*arg)),
+                        HostArg::ImmI64(value) => bcx.ins().iconst(types::I64, *value),
+                    }))
+                    .collect();
+                let call = bcx.ins().call(helper_ref(*helper), &call_args);
+                let result = bcx.inst_results(call)[0];
+                match helper.signature().failure {
+                    HostFailureMode::CannotFail => {}
+                    HostFailureMode::BailFlag => {
+                        let cont = bail_if_helper_failed(
+                            &mut bcx,
+                            bail_ptr,
+                            fallback,
+                            safepoint_ptr,
+                            payload_ptr,
+                            &vars,
+                            &mut next_id,
+                            deopt!(i),
+                        );
+                        bcx.switch_to_block(cont);
+                    }
+                }
+                let stored = match helper.signature().result {
+                    HostResult::Exact(_) => result,
+                    HostResult::IntOrFloatBits if program.is_float(*dst) => {
+                        bcx.ins().bitcast(types::F64, MemFlags::new(), result)
+                    }
+                    HostResult::IntOrFloatBits => result,
+                };
+                bcx.def_var(reg(*dst), stored);
+            }
+            JitInstr::MemoizedHostCall {
+                helper,
+                dst,
+                args,
+                cache,
+                flag,
+            } => {
+                let cached_block = bcx.create_block();
+                let call_block = bcx.create_block();
+                let done_block = bcx.create_block();
+                let flag_value = bcx.use_var(reg(*flag));
+                let zero = bcx.ins().iconst(types::I64, 0);
+                let cached = bcx.ins().icmp(IntCC::NotEqual, flag_value, zero);
+                bcx.ins().brif(cached, cached_block, &[], call_block, &[]);
+
+                bcx.switch_to_block(cached_block);
+                bcx.seal_block(cached_block);
+                let cached_value = bcx.use_var(reg(*cache));
+                bcx.def_var(reg(*dst), cached_value);
+                bcx.ins().jump(done_block, &[]);
+
+                bcx.switch_to_block(call_block);
+                bcx.seal_block(call_block);
+                let call_args: Vec<Value> = std::iter::once(host_ctx)
+                    .chain(args.iter().map(|arg| match arg {
+                        HostArg::Reg(arg) => bcx.use_var(reg(*arg)),
+                        HostArg::ImmI64(value) => bcx.ins().iconst(types::I64, *value),
+                    }))
+                    .collect();
+                let call = bcx.ins().call(helper_ref(*helper), &call_args);
+                let result = bcx.inst_results(call)[0];
+                match helper.signature().failure {
+                    HostFailureMode::CannotFail => {}
+                    HostFailureMode::BailFlag => {
+                        let cont = bail_if_helper_failed(
+                            &mut bcx,
+                            bail_ptr,
+                            fallback,
+                            safepoint_ptr,
+                            payload_ptr,
+                            &vars,
+                            &mut next_id,
+                            deopt!(i),
+                        );
+                        bcx.switch_to_block(cont);
+                    }
+                }
+                let stored = match helper.signature().result {
+                    HostResult::Exact(_) => result,
+                    HostResult::IntOrFloatBits if program.is_float(*dst) => {
+                        bcx.ins().bitcast(types::F64, MemFlags::new(), result)
+                    }
+                    HostResult::IntOrFloatBits => result,
+                };
+                bcx.def_var(reg(*dst), stored);
+                bcx.def_var(reg(*cache), stored);
+                let one = bcx.ins().iconst(types::I64, 1);
+                bcx.def_var(reg(*flag), one);
+                bcx.ins().jump(done_block, &[]);
+
+                bcx.switch_to_block(done_block);
+                bcx.seal_block(done_block);
+            }
+            JitInstr::CallNative { callee, dst, args } => {
+                let meta = native_callee(*callee);
+                let slot_bytes = |words: usize| (words.max(1) * 8) as u32;
+                let args_slot = bcx.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    slot_bytes(meta.n_params),
+                    3,
+                ));
+                let lens_slot = bcx.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    slot_bytes(meta.n_params),
+                    3,
+                ));
+                let out_slot = bcx.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    8,
+                    3,
+                ));
+                let bail_slot = bcx.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    1,
+                    0,
+                ));
+                let safepoint_slot = bcx.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    8,
+                    3,
+                ));
+                let payload_slot = bcx.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    slot_bytes(meta.deopt_payload_words),
+                    3,
+                ));
+
+                let zero_i64 = bcx.ins().iconst(types::I64, 0);
+                let zero_i8 = bcx.ins().iconst(types::I8, 0);
+                bcx.ins().stack_store(zero_i8, bail_slot, 0);
+                bcx.ins().stack_store(zero_i64, safepoint_slot, 0);
+                for (i_arg, &arg) in args.iter().enumerate() {
+                    let value = bcx.use_var(reg(arg));
+                    bcx.ins().stack_store(value, args_slot, (i_arg as i32) * 8);
+                    let len = if matches!(
+                        meta.param_types[i_arg],
+                        JitValueType::FlatInt | JitValueType::FlatFloat
+                    ) {
+                        bcx.ins()
+                            .load(types::I64, MemFlags::trusted(), lens_ptr, (arg as i32) * 8)
+                    } else {
+                        zero_i64
+                    };
+                    bcx.ins().stack_store(len, lens_slot, (i_arg as i32) * 8);
+                }
+                let args_ptr_v = bcx.ins().stack_addr(ptr_ty, args_slot, 0);
+                let lens_ptr_v = bcx.ins().stack_addr(ptr_ty, lens_slot, 0);
+                let out_ptr_v = bcx.ins().stack_addr(ptr_ty, out_slot, 0);
+                let bail_ptr_v = bcx.ins().stack_addr(ptr_ty, bail_slot, 0);
+                let safepoint_ptr_v = bcx.ins().stack_addr(ptr_ty, safepoint_slot, 0);
+                let payload_ptr_v = bcx.ins().stack_addr(ptr_ty, payload_slot, 0);
+                let nargs_v = bcx.ins().iconst(ptr_ty, meta.n_params as i64);
+                let call = bcx.ins().call(
+                    native_ref(*callee),
+                    &[
+                        args_ptr_v,
+                        nargs_v,
+                        lens_ptr_v,
+                        host_ctx,
+                        out_ptr_v,
+                        bail_ptr_v,
+                        safepoint_ptr_v,
+                        payload_ptr_v,
+                    ],
+                );
+                let completed = bcx.inst_results(call)[0];
+                let child_bail = bcx.ins().stack_load(types::I8, bail_slot, 0);
+                let one_i8 = bcx.ins().iconst(types::I8, 1);
+                let zero_i8_again = bcx.ins().iconst(types::I8, 0);
+                let not_completed = bcx.ins().icmp(IntCC::NotEqual, completed, one_i8);
+                let child_bailed = bcx.ins().icmp(IntCC::NotEqual, child_bail, zero_i8_again);
+                let failed = bcx.ins().bor(not_completed, child_bailed);
+                let cont = bail_if_child_native_failed(
+                    &mut bcx,
+                    failed,
+                    fallback,
+                    safepoint_ptr,
+                    payload_ptr,
+                    safepoint_ptr_v,
+                    payload_ptr_v,
+                    meta,
+                    &vars,
+                    &mut next_id,
+                    deopt!(i),
+                );
+                bcx.switch_to_block(cont);
+                let result = if meta.return_type == JitValueType::Float {
+                    bcx.ins().stack_load(types::F64, out_slot, 0)
+                } else {
+                    bcx.ins().stack_load(types::I64, out_slot, 0)
+                };
+                bcx.def_var(reg(*dst), result);
+            }
+            JitInstr::MatchMapGetInt {
+                map,
+                key,
+                value_dst,
+                some_ip,
+                none_ip,
+            } => {
+                let map_value = bcx.use_var(reg(*map));
+                let key_value = bcx.use_var(reg(*key));
+                let loaded = bcx.ins().call(
+                    helper_ref(HostHelper::MapGetMatchInt),
+                    &[host_ctx, map_value, key_value],
+                );
+                let value = bcx.inst_results(loaded)[0];
+                let cont = bail_if_helper_failed(
+                    &mut bcx,
+                    bail_ptr,
+                    fallback,
+                    safepoint_ptr,
+                    payload_ptr,
+                    &vars,
+                    &mut next_id,
+                    deopt!(i),
+                );
+                bcx.switch_to_block(cont);
+                let found_call = bcx
+                    .ins()
+                    .call(helper_ref(HostHelper::MapGetMatchFound), &[host_ctx]);
+                let found = bcx.inst_results(found_call)[0];
+
+                let some_block = block_for[*some_ip as usize].unwrap();
+                let none_block = block_for[*none_ip as usize].unwrap();
+                let zero = bcx.ins().iconst(types::I64, 0);
+                let is_found = bcx.ins().icmp(IntCC::NotEqual, found, zero);
+                bcx.def_var(reg(*value_dst), value);
+                bcx.ins().brif(is_found, some_block, &[], none_block, &[]);
+                terminated = true;
+            }
+            JitInstr::MatchSortedMapGetInt {
+                map,
+                key,
+                value_dst,
+                some_ip,
+                none_ip,
+            } => {
+                let map_value = bcx.use_var(reg(*map));
+                let key_value = bcx.use_var(reg(*key));
+                let loaded = bcx.ins().call(
+                    helper_ref(HostHelper::SortedMapGetInt),
+                    &[host_ctx, map_value, key_value],
+                );
+                let value = bcx.inst_results(loaded)[0];
+                let cont = bail_if_helper_failed(
+                    &mut bcx,
+                    bail_ptr,
+                    fallback,
+                    safepoint_ptr,
+                    payload_ptr,
+                    &vars,
+                    &mut next_id,
+                    deopt!(i),
+                );
+                bcx.switch_to_block(cont);
+                let found_call = bcx
+                    .ins()
+                    .call(helper_ref(HostHelper::SortedMapGetFound), &[host_ctx]);
+                let found = bcx.inst_results(found_call)[0];
+                let some_block = block_for[*some_ip as usize].unwrap();
+                let none_block = block_for[*none_ip as usize].unwrap();
+                let zero = bcx.ins().iconst(types::I64, 0);
+                let is_found = bcx.ins().icmp(IntCC::NotEqual, found, zero);
+                bcx.def_var(reg(*value_dst), value);
+                bcx.ins().brif(is_found, some_block, &[], none_block, &[]);
+                terminated = true;
             }
             JitInstr::BitAnd { dst, lhs, rhs } => {
                 let a = bcx.use_var(reg(*lhs));
@@ -2517,6 +4138,42 @@ fn build_function(
                 }
                 terminated = true;
             }
+            JitInstr::ProfiledJumpIfBool {
+                cond,
+                expected,
+                target,
+                hot_target,
+            } => {
+                let value = bcx.use_var(reg(*cond));
+                let zero = bcx.ins().iconst(types::I64, 0);
+                let is_true = bcx.ins().icmp(IntCC::NotEqual, value, zero);
+                let taken = if *expected {
+                    is_true
+                } else {
+                    bcx.ins().icmp(IntCC::Equal, value, zero)
+                };
+                let cold = if *hot_target {
+                    let true_value = bcx.ins().icmp(IntCC::Equal, zero, zero);
+                    bcx.ins().bxor(taken, true_value)
+                } else {
+                    taken
+                };
+                let cont = bail_if(
+                    &mut bcx,
+                    cold,
+                    fallback,
+                    safepoint_ptr,
+                    payload_ptr,
+                    &vars,
+                    &mut next_id,
+                    deopt!(i),
+                );
+                bcx.switch_to_block(cont);
+                if *hot_target {
+                    bcx.ins().jump(block_for[*target as usize].unwrap(), &[]);
+                    terminated = true;
+                }
+            }
             JitInstr::JumpIfIntCompare {
                 lhs,
                 rhs,
@@ -2539,6 +4196,51 @@ fn build_function(
                     bcx.ins().brif(c, fb, &[], tb, &[]);
                 }
                 terminated = true;
+            }
+            JitInstr::ProfiledJumpIfIntCompare {
+                lhs,
+                rhs,
+                op,
+                expected,
+                target,
+                hot_target,
+            } => {
+                let a = bcx.use_var(reg(*lhs));
+                let b = bcx.use_var(reg(*rhs));
+                let cmp = if program.is_float(*lhs) {
+                    bcx.ins().fcmp(op.fcc(), a, b)
+                } else {
+                    bcx.ins().icmp(op.cc(), a, b)
+                };
+                let taken = if *expected {
+                    cmp
+                } else {
+                    let zero = bcx.ins().iconst(types::I64, 0);
+                    let true_value = bcx.ins().icmp(IntCC::Equal, zero, zero);
+                    bcx.ins().bxor(cmp, true_value)
+                };
+                let cold = if *hot_target {
+                    let zero = bcx.ins().iconst(types::I64, 0);
+                    let true_value = bcx.ins().icmp(IntCC::Equal, zero, zero);
+                    bcx.ins().bxor(taken, true_value)
+                } else {
+                    taken
+                };
+                let cont = bail_if(
+                    &mut bcx,
+                    cold,
+                    fallback,
+                    safepoint_ptr,
+                    payload_ptr,
+                    &vars,
+                    &mut next_id,
+                    deopt!(i),
+                );
+                bcx.switch_to_block(cont);
+                if *hot_target {
+                    bcx.ins().jump(block_for[*target as usize].unwrap(), &[]);
+                    terminated = true;
+                }
             }
             JitInstr::Return { src } => {
                 let v = bcx.use_var(reg(*src));
@@ -2577,95 +4279,6 @@ fn build_function(
                 bcx.ins().jump(fallback, &[]);
                 terminated = true;
             }
-            JitInstr::FieldInt { dst, base, slot } => {
-                let handle = bcx.use_var(reg(*base));
-                let slot_v = bcx.ins().iconst(types::I64, i64::from(*slot));
-                let call = bcx.ins().call(field_int_ref, &[handle, slot_v]);
-                let result = bcx.inst_results(call)[0];
-                let cont = bail_if_helper_failed(
-                    &mut bcx,
-                    bail_ptr,
-                    fallback,
-                    safepoint_ptr,
-                    payload_ptr,
-                    &vars,
-                    &mut next_id,
-                    deopt!(i),
-                );
-                bcx.switch_to_block(cont);
-                bcx.def_var(reg(*dst), result);
-            }
-            JitInstr::ListLen { dst, base } => {
-                let handle = bcx.use_var(reg(*base));
-                let call = bcx.ins().call(list_len_ref, &[handle]);
-                let result = bcx.inst_results(call)[0];
-                let cont = bail_if_helper_failed(
-                    &mut bcx,
-                    bail_ptr,
-                    fallback,
-                    safepoint_ptr,
-                    payload_ptr,
-                    &vars,
-                    &mut next_id,
-                    deopt!(i),
-                );
-                bcx.switch_to_block(cont);
-                bcx.def_var(reg(*dst), result);
-            }
-            JitInstr::ListGetInt { dst, base, index } => {
-                let handle = bcx.use_var(reg(*base));
-                let index_v = bcx.use_var(reg(*index));
-                let call = bcx.ins().call(list_get_int_ref, &[handle, index_v]);
-                let result = bcx.inst_results(call)[0];
-                let cont = bail_if_helper_failed(
-                    &mut bcx,
-                    bail_ptr,
-                    fallback,
-                    safepoint_ptr,
-                    payload_ptr,
-                    &vars,
-                    &mut next_id,
-                    deopt!(i),
-                );
-                bcx.switch_to_block(cont);
-                bcx.def_var(reg(*dst), result);
-            }
-            JitInstr::FieldFloat { dst, base, slot } => {
-                let handle = bcx.use_var(reg(*base));
-                let slot_v = bcx.ins().iconst(types::I64, i64::from(*slot));
-                let call = bcx.ins().call(field_float_ref, &[handle, slot_v]);
-                let result = bcx.inst_results(call)[0];
-                let cont = bail_if_helper_failed(
-                    &mut bcx,
-                    bail_ptr,
-                    fallback,
-                    safepoint_ptr,
-                    payload_ptr,
-                    &vars,
-                    &mut next_id,
-                    deopt!(i),
-                );
-                bcx.switch_to_block(cont);
-                bcx.def_var(reg(*dst), result);
-            }
-            JitInstr::ListGetFloat { dst, base, index } => {
-                let handle = bcx.use_var(reg(*base));
-                let index_v = bcx.use_var(reg(*index));
-                let call = bcx.ins().call(list_get_float_ref, &[handle, index_v]);
-                let result = bcx.inst_results(call)[0];
-                let cont = bail_if_helper_failed(
-                    &mut bcx,
-                    bail_ptr,
-                    fallback,
-                    safepoint_ptr,
-                    payload_ptr,
-                    &vars,
-                    &mut next_id,
-                    deopt!(i),
-                );
-                bcx.switch_to_block(cont);
-                bcx.def_var(reg(*dst), result);
-            }
             JitInstr::ListGetIntDirect { dst, base, index } => {
                 let result = emit_direct_get(
                     &mut bcx,
@@ -2682,6 +4295,29 @@ fn build_function(
                     types::I64,
                 );
                 bcx.def_var(reg(*dst), result);
+            }
+            JitInstr::ListSetIntDirect {
+                dst,
+                base,
+                index,
+                value,
+            } => {
+                emit_direct_set_int(
+                    &mut bcx,
+                    lens_ptr,
+                    fallback,
+                    safepoint_ptr,
+                    payload_ptr,
+                    &vars,
+                    &mut next_id,
+                    deopt!(i),
+                    reg(*base),
+                    reg(*index),
+                    reg(*value),
+                    *base,
+                );
+                let zero = bcx.ins().iconst(types::I64, 0);
+                bcx.def_var(reg(*dst), zero);
             }
             JitInstr::ListGetFloatDirect { dst, base, index } => {
                 let result = emit_direct_get(
@@ -2718,7 +4354,9 @@ fn build_function(
                 // compare alone decides; the bail reuses the standard re-run-from-top
                 // fallback, sound because the inlined subset is side-effect-free.
                 let handle = bcx.use_var(reg(*base));
-                let call = bcx.ins().call(closure_id_ref, &[handle]);
+                let call = bcx
+                    .ins()
+                    .call(helper_ref(HostHelper::ClosureId), &[host_ctx, handle]);
                 let id = bcx.inst_results(call)[0];
                 let want = bcx.ins().iconst(types::I64, *expected);
                 let mismatch = bcx.ins().icmp(IntCC::NotEqual, id, want);
@@ -2733,92 +4371,6 @@ fn build_function(
                     deopt!(i),
                 );
                 bcx.switch_to_block(cont);
-            }
-            JitInstr::ClosureId { dst, base } => {
-                // Polymorphic inline cache (J2.2): read the closure handle's
-                // underlying function id once into `dst` (a single, total helper
-                // call — `-1` for a non-closure). The dispatcher then selects an
-                // inlined callee with ordinary integer compares/branches; a
-                // no-match arm bails via the standard re-run-from-top fallback.
-                let handle = bcx.use_var(reg(*base));
-                let call = bcx.ins().call(closure_id_ref, &[handle]);
-                let id = bcx.inst_results(call)[0];
-                bcx.def_var(reg(*dst), id);
-            }
-            JitInstr::ClosureCapture { dst, base, index } => {
-                // Materialize a scalar capture of an inlined param-handle closure
-                // (OSR × J2). Mirrors `FieldInt`: read the capture bits via the host
-                // helper, which flags the standard re-run-from-top fallback out-of-band
-                // for a non-scalar/out-of-range capture (defensive — the producer only
-                // emits this for captures it proved scalar).
-                let handle = bcx.use_var(reg(*base));
-                let index_v = bcx.ins().iconst(types::I64, i64::from(*index));
-                let call = bcx.ins().call(closure_capture_ref, &[handle, index_v]);
-                let result = bcx.inst_results(call)[0];
-                let cont = bail_if_helper_failed(
-                    &mut bcx,
-                    bail_ptr,
-                    fallback,
-                    safepoint_ptr,
-                    payload_ptr,
-                    &vars,
-                    &mut next_id,
-                    deopt!(i),
-                );
-                bcx.switch_to_block(cont);
-                // The helper returns the capture's raw scalar bits as i64. For an
-                // Int/Bool-class `dst` that IS the value; for a Float-class `dst`
-                // the i64 is `f64::to_bits`, so bit-reinterpret it to f64 (NOT an
-                // integer-to-float conversion) — the same convention by which a
-                // float register's arg slot is loaded as f64 on entry.
-                let stored = if program.is_float(*dst) {
-                    bcx.ins().bitcast(types::F64, MemFlags::new(), result)
-                } else {
-                    result
-                };
-                bcx.def_var(reg(*dst), stored);
-            }
-            JitInstr::FieldHandle { dst, base, slot } => {
-                // Fetch a heap field (e.g. a stored closure) as a fresh handle.
-                // Mirrors `FieldInt`: the helper clones the nested value into the
-                // per-call heap table and returns its index, flagging the standard
-                // fallback out-of-band for a non-heap/out-of-range field.
-                let handle = bcx.use_var(reg(*base));
-                let slot_v = bcx.ins().iconst(types::I64, i64::from(*slot));
-                let call = bcx.ins().call(field_handle_ref, &[handle, slot_v]);
-                let result = bcx.inst_results(call)[0];
-                let cont = bail_if_helper_failed(
-                    &mut bcx,
-                    bail_ptr,
-                    fallback,
-                    safepoint_ptr,
-                    payload_ptr,
-                    &vars,
-                    &mut next_id,
-                    deopt!(i),
-                );
-                bcx.switch_to_block(cont);
-                bcx.def_var(reg(*dst), result);
-            }
-            JitInstr::ListGetHandle { dst, base, index } => {
-                // Fetch a heap list element (e.g. a struct holding a closure) as a
-                // fresh handle. Mirrors `ListGetInt` with a handle result.
-                let handle = bcx.use_var(reg(*base));
-                let index_v = bcx.use_var(reg(*index));
-                let call = bcx.ins().call(list_get_handle_ref, &[handle, index_v]);
-                let result = bcx.inst_results(call)[0];
-                let cont = bail_if_helper_failed(
-                    &mut bcx,
-                    bail_ptr,
-                    fallback,
-                    safepoint_ptr,
-                    payload_ptr,
-                    &vars,
-                    &mut next_id,
-                    deopt!(i),
-                );
-                bcx.switch_to_block(cont);
-                bcx.def_var(reg(*dst), result);
             }
         }
     }
@@ -2837,7 +4389,10 @@ fn build_function(
     bcx.seal_all_blocks();
     bcx.finalize();
 
-    Ok(DeoptMap { sites })
+    Ok(DeoptMap {
+        sites,
+        payload_words,
+    })
 }
 
 /// TV2 direct list read: `cont: dst = base_ptr[index]`, bounds-checked against the
@@ -2868,20 +4423,75 @@ fn emit_direct_get(
     elem_ty: types::Type,
 ) -> Value {
     let index = bcx.use_var(index_var);
-    let len = bcx
-        .ins()
-        .load(types::I64, MemFlags::trusted(), lens_ptr, (base_param as i32) * 8);
+    let len = bcx.ins().load(
+        types::I64,
+        MemFlags::trusted(),
+        lens_ptr,
+        (base_param as i32) * 8,
+    );
     // Single unsigned compare folds "index < 0" (huge unsigned) and "index >= len"
     // into one OOB test (len is a non-negative element count).
     let oob = bcx
         .ins()
         .icmp(IntCC::UnsignedGreaterThanOrEqual, index, len);
-    let cont = bail_if(bcx, oob, fallback, safepoint_ptr, payload_ptr, vars, next_id, deopt);
+    let cont = bail_if(
+        bcx,
+        oob,
+        fallback,
+        safepoint_ptr,
+        payload_ptr,
+        vars,
+        next_id,
+        deopt,
+    );
     bcx.switch_to_block(cont);
     let base_ptr = bcx.use_var(base_var);
     let offset = bcx.ins().imul_imm(index, 8);
     let addr = bcx.ins().iadd(base_ptr, offset);
     bcx.ins().load(elem_ty, MemFlags::trusted(), addr, 0)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_direct_set_int(
+    bcx: &mut FunctionBuilder,
+    lens_ptr: Value,
+    fallback: Block,
+    safepoint_ptr: Value,
+    payload_ptr: Value,
+    vars: &[Variable],
+    next_id: &mut i64,
+    deopt: &mut DeoptCtx,
+    base_var: Variable,
+    index_var: Variable,
+    value_var: Variable,
+    base_param: u32,
+) {
+    let index = bcx.use_var(index_var);
+    let len = bcx.ins().load(
+        types::I64,
+        MemFlags::trusted(),
+        lens_ptr,
+        (base_param as i32) * 8,
+    );
+    let oob = bcx
+        .ins()
+        .icmp(IntCC::UnsignedGreaterThanOrEqual, index, len);
+    let cont = bail_if(
+        bcx,
+        oob,
+        fallback,
+        safepoint_ptr,
+        payload_ptr,
+        vars,
+        next_id,
+        deopt,
+    );
+    bcx.switch_to_block(cont);
+    let base_ptr = bcx.use_var(base_var);
+    let value = bcx.use_var(value_var);
+    let offset = bcx.ins().imul_imm(index, 8);
+    let addr = bcx.ins().iadd(base_ptr, offset);
+    bcx.ins().store(MemFlags::trusted(), value, addr, 0);
 }
 
 /// Host-side deopt bookkeeping threaded through every guard emission. Each
@@ -2898,10 +4508,14 @@ struct DeoptCtx<'a> {
     reg_types: &'a [JitValueType],
     /// Accumulated sites, in emission (= id) order.
     sites: &'a mut Vec<DeoptSite>,
-    /// Test/diagnostic hook: when `Some(id)`, the site minted with that id bails
-    /// unconditionally (see [`NativeModule::compile_forcing_bail`]). `None` on the
-    /// default [`compile`](NativeModule::compile) path, where every site is guarded.
-    forced: Option<u32>,
+    /// Required payload width for this function. Starts at `n_regs`; native-call
+    /// deopt sites reserve extra words for copied child payloads.
+    payload_words: &'a mut usize,
+    /// Test/diagnostic hook: when set, matching safepoints bail unconditionally
+    /// (see [`NativeModule::compile_forcing_bail`] and
+    /// [`NativeModule::compile_forcing_all_bails`]). `None` on the default
+    /// [`compile`](NativeModule::compile) path, where every site is guarded.
+    forced: Option<ForcedDeopt>,
     /// OSR-exit (J5.2): when set, the site about to be minted bails unconditionally
     /// (the loop-exit edge always deopts). Independent of `forced` (which is keyed
     /// by a specific id); this applies to whatever id this single `bail_if` mints.
@@ -2912,7 +4526,7 @@ impl DeoptCtx<'_> {
     /// Record the site for the safepoint about to be minted: resume at the current
     /// instruction with its entry-assigned (definitely-live) registers. Returns the
     /// same `live` set so the caller can emit the matching payload-capture stores.
-    fn record(&mut self) -> Vec<(u32, JitValueType)> {
+    fn record_site(&mut self, child: Option<DeoptChildSite>) -> Vec<(u32, JitValueType)> {
         let live: Vec<(u32, JitValueType)> = match self.assigned_in.get(self.ip as usize) {
             Some(set) => set
                 .iter()
@@ -2925,8 +4539,30 @@ impl DeoptCtx<'_> {
         self.sites.push(DeoptSite {
             resume_ip: self.ip,
             live: live.clone(),
+            child,
         });
         live
+    }
+
+    fn record(&mut self) -> Vec<(u32, JitValueType)> {
+        self.record_site(None)
+    }
+
+    fn record_child(
+        &mut self,
+        callee: &NativeCallee,
+    ) -> (Vec<(u32, JitValueType)>, DeoptChildSite) {
+        let safepoint_slot = *self.payload_words;
+        let payload_slot = safepoint_slot + 1;
+        *self.payload_words += 1 + callee.deopt_payload_words;
+        let child = DeoptChildSite {
+            callee: callee.handle,
+            safepoint_slot: safepoint_slot as u32,
+            payload_slot: payload_slot as u32,
+            payload_words: callee.deopt_payload_words as u32,
+        };
+        let live = self.record_site(Some(child));
+        (live, child)
     }
 }
 
@@ -2960,7 +4596,7 @@ fn bail_if(
 ) -> Block {
     let site_id = *next_id;
     *next_id += 1;
-    let forced = deopt.forced == Some(site_id as u32) || deopt.unconditional;
+    let forced = deopt.forced.is_some_and(|forced| forced.forces(site_id)) || deopt.unconditional;
     let live = deopt.record();
     let site_block = bcx.create_block();
     let cont = bcx.create_block();
@@ -2991,6 +4627,69 @@ fn bail_if(
     cont
 }
 
+#[allow(clippy::too_many_arguments)]
+fn bail_if_child_native_failed(
+    bcx: &mut FunctionBuilder,
+    cond: Value,
+    fallback: Block,
+    safepoint_ptr: Value,
+    payload_ptr: Value,
+    child_safepoint_ptr: Value,
+    child_payload_ptr: Value,
+    child_meta: &NativeCallee,
+    vars: &[Variable],
+    next_id: &mut i64,
+    deopt: &mut DeoptCtx,
+) -> Block {
+    let site_id = *next_id;
+    *next_id += 1;
+    let forced = deopt.forced.is_some_and(|forced| forced.forces(site_id)) || deopt.unconditional;
+    let (live, child) = deopt.record_child(child_meta);
+    let site_block = bcx.create_block();
+    let cont = bcx.create_block();
+    if forced {
+        bcx.ins().jump(site_block, &[]);
+    } else {
+        bcx.ins().brif(cond, site_block, &[], cont, &[]);
+    }
+
+    bcx.switch_to_block(site_block);
+    let id_v = bcx.ins().iconst(types::I64, site_id);
+    bcx.ins().store(MemFlags::trusted(), id_v, safepoint_ptr, 0);
+    for &(reg, _) in &live {
+        let v = bcx.use_var(vars[reg as usize]);
+        bcx.ins()
+            .store(MemFlags::trusted(), v, payload_ptr, (reg as i32) * 8);
+    }
+
+    let child_safepoint = bcx
+        .ins()
+        .load(types::I64, MemFlags::trusted(), child_safepoint_ptr, 0);
+    bcx.ins().store(
+        MemFlags::trusted(),
+        child_safepoint,
+        payload_ptr,
+        (child.safepoint_slot as i32) * 8,
+    );
+    for slot in 0..child.payload_words {
+        let bits = bcx.ins().load(
+            types::I64,
+            MemFlags::trusted(),
+            child_payload_ptr,
+            (slot as i32) * 8,
+        );
+        bcx.ins().store(
+            MemFlags::trusted(),
+            bits,
+            payload_ptr,
+            ((child.payload_slot + slot) as i32) * 8,
+        );
+    }
+    bcx.ins().jump(fallback, &[]);
+    bcx.switch_to_block(cont);
+    cont
+}
+
 /// Load the host-helper bail flag and branch to `fallback` if a preceding heap
 /// read flagged failure — checked immediately after each helper call so a bad
 /// read never keeps executing. Returns the continuation block.
@@ -3006,7 +4705,16 @@ fn bail_if_helper_failed(
     deopt: &mut DeoptCtx,
 ) -> Block {
     let flag = bcx.ins().load(types::I8, MemFlags::trusted(), bail_ptr, 0);
-    bail_if(bcx, flag, fallback, safepoint_ptr, payload_ptr, vars, next_id, deopt)
+    bail_if(
+        bcx,
+        flag,
+        fallback,
+        safepoint_ptr,
+        payload_ptr,
+        vars,
+        next_id,
+        deopt,
+    )
 }
 
 /// Checked division / remainder matching the interpreter: bail on divide-by-zero
@@ -3028,14 +4736,32 @@ fn emit_checked_divrem(
     let b = bcx.use_var(rhs);
     let zero = bcx.ins().iconst(types::I64, 0);
     let is_zero = bcx.ins().icmp(IntCC::Equal, b, zero);
-    let cont1 = bail_if(bcx, is_zero, fallback, safepoint_ptr, payload_ptr, vars, next_id, deopt);
+    let cont1 = bail_if(
+        bcx,
+        is_zero,
+        fallback,
+        safepoint_ptr,
+        payload_ptr,
+        vars,
+        next_id,
+        deopt,
+    );
     bcx.switch_to_block(cont1);
     let imin = bcx.ins().iconst(types::I64, i64::MIN);
     let neg1 = bcx.ins().iconst(types::I64, -1);
     let a_is_min = bcx.ins().icmp(IntCC::Equal, a, imin);
     let b_is_neg1 = bcx.ins().icmp(IntCC::Equal, b, neg1);
     let overflow = bcx.ins().band(a_is_min, b_is_neg1);
-    let cont2 = bail_if(bcx, overflow, fallback, safepoint_ptr, payload_ptr, vars, next_id, deopt);
+    let cont2 = bail_if(
+        bcx,
+        overflow,
+        fallback,
+        safepoint_ptr,
+        payload_ptr,
+        vars,
+        next_id,
+        deopt,
+    );
     bcx.switch_to_block(cont2);
     if is_rem {
         bcx.ins().srem(a, b)
@@ -3066,7 +4792,16 @@ fn emit_checked_shift(
     let oob = bcx
         .ins()
         .icmp(IntCC::UnsignedGreaterThanOrEqual, amt, limit);
-    let cont = bail_if(bcx, oob, fallback, safepoint_ptr, payload_ptr, vars, next_id, deopt);
+    let cont = bail_if(
+        bcx,
+        oob,
+        fallback,
+        safepoint_ptr,
+        payload_ptr,
+        vars,
+        next_id,
+        deopt,
+    );
     bcx.switch_to_block(cont);
     if is_right {
         bcx.ins().sshr(a, amt)
@@ -3083,6 +4818,84 @@ mod tests {
     /// validation tests). OSR-specific validation is exercised via `compile_osr`.
     fn validate(program: &JitFunction) -> Result<(), JitError> {
         super::validate(program, false)
+    }
+
+    #[test]
+    fn host_helper_descriptor_table_is_complete_and_unique() {
+        let helpers = HostHelper::all();
+        assert_eq!(helpers.len(), HostHelper::DESCRIPTORS.len());
+        let mut symbols = std::collections::HashSet::new();
+        let mut seen_helpers = std::collections::HashSet::new();
+        for (&helper, descriptor) in helpers.iter().zip(HostHelper::DESCRIPTORS.iter()) {
+            assert_eq!(descriptor.helper, helper);
+            assert!(seen_helpers.insert(helper), "duplicate helper: {helper:?}");
+            assert!(
+                symbols.insert(descriptor.symbol),
+                "duplicate host helper symbol: {}",
+                descriptor.symbol
+            );
+            assert_eq!(helper.symbol(), descriptor.symbol);
+            assert_eq!(helper.signature().args, descriptor.sig.args);
+            assert_eq!(helper.arg_types(), descriptor.sig.args);
+            if helper.heap_effect().extends_input_handles() {
+                assert!(
+                    matches!(
+                        helper.signature().result,
+                        HostResult::Exact(JitValueType::Handle)
+                    ),
+                    "{helper:?} extends input handles but does not return a handle"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn host_helper_heap_effect_metadata_covers_transactional_helpers() {
+        let mut mutates_input = std::collections::HashSet::from([
+            HostHelper::ListSetInt,
+            HostHelper::ListPushInt,
+            HostHelper::ListSortInt,
+            HostHelper::MapInsertInt,
+            HostHelper::SetInsertInt,
+            HostHelper::SortedSetInsertInt,
+            HostHelper::SortedMapInsertInt,
+            HostHelper::DequePushBackInt,
+            HostHelper::DequePushFrontInt,
+            HostHelper::DequePopFrontInt,
+            HostHelper::DequePopBackInt,
+        ]);
+        let mut allocates_result = std::collections::HashSet::from([
+            HostHelper::ListNewInt,
+            HostHelper::StringFromInt,
+            HostHelper::StringConcat,
+            HostHelper::StringSlice,
+            HostHelper::StringPadLeft,
+            HostHelper::StringSplit,
+            HostHelper::StringLiteral,
+            HostHelper::JsonParse,
+            HostHelper::JsonField,
+            HostHelper::BytesSlice,
+        ]);
+        let mut extends_input_handles =
+            std::collections::HashSet::from([HostHelper::FieldHandle, HostHelper::ListGetHandle]);
+
+        for &helper in HostHelper::all() {
+            let expected = if mutates_input.remove(&helper) {
+                HostHeapEffect::MutatesInput
+            } else if allocates_result.remove(&helper) {
+                HostHeapEffect::AllocatesResult
+            } else if extends_input_handles.remove(&helper) {
+                HostHeapEffect::ExtendsInputHandles
+            } else if helper == HostHelper::FieldSetInt {
+                HostHeapEffect::ReplacesInput
+            } else {
+                HostHeapEffect::ReadOnly
+            };
+            assert_eq!(helper.heap_effect(), expected, "{helper:?}");
+        }
+        assert!(mutates_input.is_empty());
+        assert!(allocates_result.is_empty());
+        assert!(extends_input_handles.is_empty());
     }
 
     /// Test-only convenience over [`NativeModule::call`]: pass a zeroed `lens`
@@ -3117,54 +4930,244 @@ mod tests {
         let deopt = NativeOutcome::Deopt {
             safepoint_id: SafepointId(0),
             live: Vec::new(),
+            child: None,
         };
         assert_eq!(deopt.clone().completed(), None);
         assert_eq!(deopt.clone().completed_handle(), None);
         assert_eq!(deopt.completed_any_bits(), None);
     }
 
-    extern "C" fn noop_field_int(_handle: i64, _slot: i64) -> i64 {
+    extern "C" fn noop_field_int(_ctx: HostCtx, _handle: i64, _slot: i64) -> i64 {
         0
     }
-    extern "C" fn noop_list_len(_handle: i64) -> i64 {
+    extern "C" fn noop_field_set_int(_ctx: HostCtx, _handle: i64, _slot: i64, _value: i64) -> i64 {
         0
     }
-    extern "C" fn noop_list_get_int(_handle: i64, _index: i64) -> i64 {
+    extern "C" fn noop_list_len(_ctx: HostCtx, _handle: i64) -> i64 {
         0
     }
-    extern "C" fn noop_field_float(_handle: i64, _slot: i64) -> f64 {
+    extern "C" fn noop_collection_len(_ctx: HostCtx, _handle: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_is_empty(_ctx: HostCtx, _handle: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_list_get_int(_ctx: HostCtx, _handle: i64, _index: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_list_set_int(_ctx: HostCtx, _handle: i64, _index: i64, _value: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_list_push_int(_ctx: HostCtx, _handle: i64, _value: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_list_sort_int(_ctx: HostCtx, _handle: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_list_new_int(_ctx: HostCtx) -> i64 {
+        0
+    }
+    extern "C" fn noop_field_float(_ctx: HostCtx, _handle: i64, _slot: i64) -> f64 {
         0.0
     }
-    extern "C" fn noop_list_get_float(_handle: i64, _index: i64) -> f64 {
+    extern "C" fn noop_list_get_float(_ctx: HostCtx, _handle: i64, _index: i64) -> f64 {
         0.0
     }
-    extern "C" fn noop_closure_id(_handle: i64) -> i64 {
+    extern "C" fn noop_closure_id(_ctx: HostCtx, _handle: i64) -> i64 {
         0
     }
-    extern "C" fn noop_closure_capture(_handle: i64, _index: i64) -> i64 {
+    extern "C" fn noop_closure_capture(_ctx: HostCtx, _handle: i64, _index: i64) -> i64 {
         0
     }
-    extern "C" fn noop_field_handle(_handle: i64, _slot: i64) -> i64 {
+    extern "C" fn noop_field_closure_id(_ctx: HostCtx, _handle: i64, _slot: i64) -> i64 {
         0
     }
-    extern "C" fn noop_list_get_handle(_handle: i64, _index: i64) -> i64 {
+    extern "C" fn noop_field_closure_capture(
+        _ctx: HostCtx,
+        _handle: i64,
+        _slot: i64,
+        _index: i64,
+    ) -> i64 {
+        0
+    }
+    extern "C" fn noop_field_handle(_ctx: HostCtx, _handle: i64, _slot: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_list_get_handle(_ctx: HostCtx, _handle: i64, _index: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_string_from_int(_ctx: HostCtx, _value: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_string_len(_ctx: HostCtx, _handle: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_string_concat(_ctx: HostCtx, _left: i64, _right: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_string_slice(_ctx: HostCtx, _value: i64, _start: i64, _len: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_string_pad_left(_ctx: HostCtx, _value: i64, _width: i64, _fill: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_string_pad_left_len(
+        _ctx: HostCtx,
+        _value: i64,
+        _width: i64,
+        _fill: i64,
+    ) -> i64 {
+        0
+    }
+    extern "C" fn noop_string_split(_ctx: HostCtx, _value: i64, _delimiter: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_string_starts_with(_ctx: HostCtx, _value: i64, _prefix: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_string_split_count(_ctx: HostCtx, _value: i64, _delimiter: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_string_literal(_ctx: HostCtx, _literal_id: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_json_parse(_ctx: HostCtx, _text: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_json_field(_ctx: HostCtx, _value: i64, _name: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_json_field_int(_ctx: HostCtx, _value: i64, _name: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_bytes_slice(_ctx: HostCtx, _value: i64, _start: i64, _len: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_map_insert_int(_ctx: HostCtx, _map: i64, _key: i64, _value: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_map_get_int(_ctx: HostCtx, _map: i64, _key: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_map_get_match_int(_ctx: HostCtx, _map: i64, _key: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_map_get_match_found(_ctx: HostCtx) -> i64 {
+        0
+    }
+    extern "C" fn noop_map_contains_int(_ctx: HostCtx, _map: i64, _key: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_set_insert_int(_ctx: HostCtx, _set: i64, _value: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_sorted_set_insert_int(_ctx: HostCtx, _set: i64, _value: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_sorted_set_contains_int(_ctx: HostCtx, _set: i64, _value: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_sorted_map_insert_int(
+        _ctx: HostCtx,
+        _map: i64,
+        _key: i64,
+        _value: i64,
+    ) -> i64 {
+        0
+    }
+    extern "C" fn noop_sorted_map_get_int(_ctx: HostCtx, _map: i64, _key: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_sorted_map_get_found(_ctx: HostCtx) -> i64 {
+        0
+    }
+    extern "C" fn noop_sorted_map_contains_key_int(_ctx: HostCtx, _map: i64, _key: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_sorted_map_len(_ctx: HostCtx, _map: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_deque_len(_ctx: HostCtx, _deque: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_deque_push_back_int(_ctx: HostCtx, _deque: i64, _value: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_deque_push_front_int(_ctx: HostCtx, _deque: i64, _value: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_deque_pop_front_int(_ctx: HostCtx, _deque: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_deque_pop_back_int(_ctx: HostCtx, _deque: i64) -> i64 {
         0
     }
 
-    /// A module with no-op host helpers (these tests exercise only scalar ops).
-    fn module() -> NativeModule {
-        NativeModule::new(HostHelpers {
+    fn host_helpers() -> HostHelpers {
+        HostHelpers {
             field_int: noop_field_int,
+            field_set_int: noop_field_set_int,
             list_len: noop_list_len,
+            list_is_empty: noop_is_empty,
             list_get_int: noop_list_get_int,
+            list_set_int: noop_list_set_int,
+            list_push_int: noop_list_push_int,
+            list_sort_int: noop_list_sort_int,
+            list_new_int: noop_list_new_int,
             field_float: noop_field_float,
             list_get_float: noop_list_get_float,
             closure_id: noop_closure_id,
             closure_capture: noop_closure_capture,
+            field_closure_id: noop_field_closure_id,
+            field_closure_capture: noop_field_closure_capture,
             field_handle: noop_field_handle,
             list_get_handle: noop_list_get_handle,
-        })
-        .unwrap()
+            string_from_int: noop_string_from_int,
+            string_len: noop_string_len,
+            string_concat: noop_string_concat,
+            string_slice: noop_string_slice,
+            string_pad_left: noop_string_pad_left,
+            string_pad_left_len: noop_string_pad_left_len,
+            string_split: noop_string_split,
+            string_starts_with: noop_string_starts_with,
+            string_split_count: noop_string_split_count,
+            string_literal: noop_string_literal,
+            json_parse: noop_json_parse,
+            json_field: noop_json_field,
+            json_field_int: noop_json_field_int,
+            bytes_len: noop_collection_len,
+            bytes_slice: noop_bytes_slice,
+            map_insert_int: noop_map_insert_int,
+            map_get_int: noop_map_get_int,
+            map_get_match_int: noop_map_get_match_int,
+            map_get_match_found: noop_map_get_match_found,
+            map_contains_int: noop_map_contains_int,
+            map_len: noop_collection_len,
+            map_is_empty: noop_is_empty,
+            set_insert_int: noop_set_insert_int,
+            set_len: noop_collection_len,
+            set_is_empty: noop_is_empty,
+            sorted_set_insert_int: noop_sorted_set_insert_int,
+            sorted_set_contains_int: noop_sorted_set_contains_int,
+            sorted_set_is_empty: noop_is_empty,
+            sorted_map_insert_int: noop_sorted_map_insert_int,
+            sorted_map_get_int: noop_sorted_map_get_int,
+            sorted_map_get_found: noop_sorted_map_get_found,
+            sorted_map_contains_key_int: noop_sorted_map_contains_key_int,
+            sorted_map_is_empty: noop_is_empty,
+            sorted_map_len: noop_sorted_map_len,
+            deque_len: noop_deque_len,
+            deque_is_empty: noop_is_empty,
+            deque_push_back_int: noop_deque_push_back_int,
+            deque_push_front_int: noop_deque_push_front_int,
+            deque_pop_front_int: noop_deque_pop_front_int,
+            deque_pop_back_int: noop_deque_pop_back_int,
+        }
+    }
+
+    /// A module with no-op host helpers (these tests exercise only scalar ops).
+    fn module() -> NativeModule {
+        NativeModule::new(host_helpers()).unwrap()
     }
 
     fn f(n_params: u32, n_regs: u32, code: Vec<JitInstr>) -> JitFunction {
@@ -3173,6 +5176,7 @@ mod tests {
             n_regs,
             reg_types: vec![JitValueType::Int; n_regs as usize],
             code,
+            cold_blocks: Vec::new(),
         }
     }
 
@@ -3183,10 +5187,37 @@ mod tests {
             n_regs: reg_types.len() as u32,
             reg_types,
             code,
+            cold_blocks: Vec::new(),
         }
     }
 
-    // Heap-result return ABI (heap-write S0): a function whose `Return` source is a
+    #[test]
+    fn rejects_memoized_heap_writing_host_helper() {
+        use JitValueType::{Handle, Int};
+
+        let err = validate(&ft(
+            1,
+            vec![Handle, Int, Int, Int, Int],
+            vec![
+                JitInstr::MemoizedHostCall {
+                    helper: HostHelper::ListSetInt,
+                    dst: 3,
+                    args: vec![HostArg::Reg(0), HostArg::Reg(1), HostArg::Reg(2)],
+                    cache: 4,
+                    flag: 1,
+                },
+                JitInstr::Return { src: 3 },
+            ],
+        ))
+        .expect_err("memoized heap-writing helper should be rejected");
+
+        assert!(
+            err.0.contains("heap-writing helpers cannot be memoized"),
+            "{err:?}"
+        );
+    }
+
+    // Heap-result return ABI: a function whose `Return` source is a
     // `Handle` register reports `CompletedHandle` carrying the i64 it returned (an
     // opaque output-table handle), while the scalar path stays `Completed`. This
     // pass-through (`fn(h) -> h`) performs no allocation/mutation; the host
@@ -3215,6 +5246,70 @@ mod tests {
         }
     }
 
+    static MEMOIZED_SPLIT_COUNT_CALLS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    extern "C" fn counting_string_split_count(_ctx: HostCtx, _value: i64, _delimiter: i64) -> i64 {
+        MEMOIZED_SPLIT_COUNT_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        5
+    }
+
+    #[test]
+    fn memoized_host_call_reuses_first_scalar_result_in_loop() {
+        use JitValueType::{Handle, Int};
+
+        MEMOIZED_SPLIT_COUNT_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
+        let mut helpers = host_helpers();
+        helpers.string_split_count = counting_string_split_count;
+        let mut m = NativeModule::new(helpers).unwrap();
+        let id = m
+            .compile(&ft(
+                3,
+                vec![Handle, Handle, Int, Int, Int, Int, Int, Int, Int],
+                vec![
+                    JitInstr::LoadInt { dst: 3, value: 0 },
+                    JitInstr::LoadInt { dst: 4, value: 0 },
+                    JitInstr::JumpIfIntCompare {
+                        lhs: 3,
+                        rhs: 2,
+                        op: JitCompare::Lt,
+                        expected: false,
+                        target: 8,
+                    },
+                    JitInstr::MemoizedHostCall {
+                        helper: HostHelper::StringSplitCount,
+                        dst: 5,
+                        args: vec![HostArg::Reg(0), HostArg::Reg(1)],
+                        cache: 7,
+                        flag: 8,
+                    },
+                    JitInstr::Add {
+                        dst: 4,
+                        lhs: 4,
+                        rhs: 5,
+                    },
+                    JitInstr::LoadInt { dst: 6, value: 1 },
+                    JitInstr::Add {
+                        dst: 3,
+                        lhs: 3,
+                        rhs: 6,
+                    },
+                    JitInstr::Jump { target: 2 },
+                    JitInstr::Return { src: 4 },
+                ],
+            ))
+            .unwrap();
+
+        match m.call(id, &[10, 11, 4], &[0, 0, 0]) {
+            NativeOutcome::Completed(v) => assert_eq!(v, 20),
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        assert_eq!(
+            MEMOIZED_SPLIT_COUNT_CALLS.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+        );
+    }
+
     // A forced bail of a handle-returning function reports `Deopt`, NOT
     // `CompletedHandle`: the heap result is materialized only on clean completion, so
     // a bailed attempt never reports a heap value (§7.2 no-effect-before-bail).
@@ -3232,6 +5327,393 @@ mod tests {
         match m.call(id, &[7], &[0]) {
             NativeOutcome::Deopt { .. } => {}
             other => panic!("expected Deopt on bail, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn string_from_int_returns_heap_output_handle() {
+        use JitValueType::{Handle, Int};
+        extern "C" fn string_from_int(_ctx: HostCtx, value: i64) -> i64 {
+            value + 100
+        }
+        let mut m = NativeModule::new(HostHelpers {
+            string_from_int,
+            ..host_helpers()
+        })
+        .unwrap();
+        let id = m
+            .compile(&ft(
+                1,
+                vec![Int, Handle],
+                vec![
+                    JitInstr::HostCall {
+                        helper: HostHelper::StringFromInt,
+                        dst: 1,
+                        args: vec![HostArg::Reg(0)],
+                    },
+                    JitInstr::Return { src: 1 },
+                ],
+            ))
+            .unwrap();
+        match m.call(id, &[23], &[0]) {
+            NativeOutcome::CompletedHandle(handle) => assert_eq!(handle, 123),
+            other => panic!("expected CompletedHandle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn string_from_int_handle_can_feed_string_len() {
+        use JitValueType::{Handle, Int};
+        extern "C" fn string_from_int(_ctx: HostCtx, value: i64) -> i64 {
+            value + 10
+        }
+        extern "C" fn string_len(_ctx: HostCtx, handle: i64) -> i64 {
+            handle * 2
+        }
+        let mut m = NativeModule::new(HostHelpers {
+            string_from_int,
+            string_len,
+            ..host_helpers()
+        })
+        .unwrap();
+        let id = m
+            .compile(&ft(
+                1,
+                vec![Int, Handle, Int],
+                vec![
+                    JitInstr::HostCall {
+                        helper: HostHelper::StringFromInt,
+                        dst: 1,
+                        args: vec![HostArg::Reg(0)],
+                    },
+                    JitInstr::HostCall {
+                        helper: HostHelper::StringLen,
+                        dst: 2,
+                        args: vec![HostArg::Reg(1)],
+                    },
+                    JitInstr::Return { src: 2 },
+                ],
+            ))
+            .unwrap();
+        match m.call(id, &[5], &[0]) {
+            NativeOutcome::Completed(value) => assert_eq!(value, 30),
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn string_concat_returns_heap_output_handle() {
+        use JitValueType::Handle;
+        extern "C" fn string_concat(_ctx: HostCtx, left: i64, right: i64) -> i64 {
+            left * 10 + right
+        }
+        let mut m = NativeModule::new(HostHelpers {
+            string_concat,
+            ..host_helpers()
+        })
+        .unwrap();
+        let id = m
+            .compile(&ft(
+                2,
+                vec![Handle, Handle, Handle],
+                vec![
+                    JitInstr::HostCall {
+                        helper: HostHelper::StringConcat,
+                        dst: 2,
+                        args: vec![HostArg::Reg(0), HostArg::Reg(1)],
+                    },
+                    JitInstr::Return { src: 2 },
+                ],
+            ))
+            .unwrap();
+        match m.call(id, &[4, 7], &[0, 1]) {
+            NativeOutcome::CompletedHandle(handle) => assert_eq!(handle, 47),
+            other => panic!("expected CompletedHandle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn host_call_covers_heap_read_helpers_with_immediates_and_typed_results() {
+        use JitValueType::{Float, Handle, Int};
+        extern "C" fn field_int(_ctx: HostCtx, handle: i64, slot: i64) -> i64 {
+            handle + slot
+        }
+        extern "C" fn list_len(_ctx: HostCtx, handle: i64) -> i64 {
+            handle * 2
+        }
+        extern "C" fn list_get_int(_ctx: HostCtx, handle: i64, index: i64) -> i64 {
+            handle + index * 3
+        }
+        extern "C" fn field_float(_ctx: HostCtx, handle: i64, slot: i64) -> f64 {
+            handle as f64 + slot as f64 + 0.25
+        }
+        extern "C" fn list_get_float(_ctx: HostCtx, handle: i64, index: i64) -> f64 {
+            handle as f64 + index as f64 + 0.5
+        }
+        extern "C" fn closure_capture(_ctx: HostCtx, _handle: i64, _index: i64) -> i64 {
+            1.25_f64.to_bits() as i64
+        }
+        extern "C" fn field_handle(_ctx: HostCtx, handle: i64, slot: i64) -> i64 {
+            handle * 10 + slot
+        }
+        extern "C" fn list_get_handle(_ctx: HostCtx, handle: i64, index: i64) -> i64 {
+            handle * 100 + index
+        }
+        let mut m = NativeModule::new(HostHelpers {
+            field_int,
+            list_len,
+            list_get_int,
+            field_float,
+            list_get_float,
+            closure_capture,
+            field_handle,
+            list_get_handle,
+            ..host_helpers()
+        })
+        .unwrap();
+
+        let id = m
+            .compile(&ft(
+                1,
+                vec![Handle, Int, Int, Int],
+                vec![
+                    JitInstr::HostCall {
+                        helper: HostHelper::FieldInt,
+                        dst: 1,
+                        args: vec![HostArg::Reg(0), HostArg::ImmI64(2)],
+                    },
+                    JitInstr::HostCall {
+                        helper: HostHelper::ListLen,
+                        dst: 2,
+                        args: vec![HostArg::Reg(0)],
+                    },
+                    JitInstr::HostCall {
+                        helper: HostHelper::ListGetInt,
+                        dst: 3,
+                        args: vec![HostArg::Reg(0), HostArg::Reg(1)],
+                    },
+                    JitInstr::Add {
+                        dst: 3,
+                        lhs: 3,
+                        rhs: 2,
+                    },
+                    JitInstr::Return { src: 3 },
+                ],
+            ))
+            .unwrap();
+        match m.call(id, &[5], &[0]) {
+            NativeOutcome::Completed(value) => assert_eq!(value, 5 + (5 + 2) * 3 + 10),
+            other => panic!("expected Completed, got {other:?}"),
+        }
+
+        let float_id = m
+            .compile(&ft(
+                1,
+                vec![Handle, Float],
+                vec![
+                    JitInstr::HostCall {
+                        helper: HostHelper::FieldFloat,
+                        dst: 1,
+                        args: vec![HostArg::Reg(0), HostArg::ImmI64(3)],
+                    },
+                    JitInstr::Return { src: 1 },
+                ],
+            ))
+            .unwrap();
+        match m.call(float_id, &[4], &[0]) {
+            NativeOutcome::Completed(bits) => assert_eq!(f64::from_bits(bits as u64), 7.25),
+            other => panic!("expected Completed float bits, got {other:?}"),
+        }
+
+        let list_float_id = m
+            .compile(&ft(
+                2,
+                vec![Handle, Int, Float],
+                vec![
+                    JitInstr::HostCall {
+                        helper: HostHelper::ListGetFloat,
+                        dst: 2,
+                        args: vec![HostArg::Reg(0), HostArg::Reg(1)],
+                    },
+                    JitInstr::Return { src: 2 },
+                ],
+            ))
+            .unwrap();
+        match m.call(list_float_id, &[4, 3], &[0, 0]) {
+            NativeOutcome::Completed(bits) => assert_eq!(f64::from_bits(bits as u64), 7.5),
+            other => panic!("expected Completed list float bits, got {other:?}"),
+        }
+
+        let capture_id = m
+            .compile(&ft(
+                1,
+                vec![Handle, Float],
+                vec![
+                    JitInstr::HostCall {
+                        helper: HostHelper::ClosureCapture,
+                        dst: 1,
+                        args: vec![HostArg::Reg(0), HostArg::ImmI64(0)],
+                    },
+                    JitInstr::Return { src: 1 },
+                ],
+            ))
+            .unwrap();
+        match m.call(capture_id, &[9], &[0]) {
+            NativeOutcome::Completed(bits) => assert_eq!(f64::from_bits(bits as u64), 1.25),
+            other => panic!("expected Completed capture float bits, got {other:?}"),
+        }
+
+        let handle_id = m
+            .compile(&ft(
+                1,
+                vec![Handle, Handle],
+                vec![
+                    JitInstr::HostCall {
+                        helper: HostHelper::FieldHandle,
+                        dst: 1,
+                        args: vec![HostArg::Reg(0), HostArg::ImmI64(6)],
+                    },
+                    JitInstr::Return { src: 1 },
+                ],
+            ))
+            .unwrap();
+        match m.call(handle_id, &[8], &[0]) {
+            NativeOutcome::CompletedHandle(handle) => assert_eq!(handle, 86),
+            other => panic!("expected CompletedHandle, got {other:?}"),
+        }
+
+        let list_handle_id = m
+            .compile(&ft(
+                2,
+                vec![Handle, Int, Handle],
+                vec![
+                    JitInstr::HostCall {
+                        helper: HostHelper::ListGetHandle,
+                        dst: 2,
+                        args: vec![HostArg::Reg(0), HostArg::Reg(1)],
+                    },
+                    JitInstr::Return { src: 2 },
+                ],
+            ))
+            .unwrap();
+        match m.call(list_handle_id, &[8, 6], &[0, 0]) {
+            NativeOutcome::CompletedHandle(handle) => assert_eq!(handle, 806),
+            other => panic!("expected list CompletedHandle, got {other:?}"),
+        }
+    }
+
+    static MAP_GET_MATCH_CALLS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+    static MAP_CONTAINS_CALLS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+    static MAP_GET_MATCH_FOUND: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+    extern "C" fn counting_map_get_match_int(_ctx: HostCtx, _map: i64, key: i64) -> i64 {
+        MAP_GET_MATCH_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        match key {
+            7 => {
+                MAP_GET_MATCH_FOUND.store(1, std::sync::atomic::Ordering::SeqCst);
+                0
+            }
+            8 => {
+                MAP_GET_MATCH_FOUND.store(1, std::sync::atomic::Ordering::SeqCst);
+                123
+            }
+            _ => {
+                MAP_GET_MATCH_FOUND.store(0, std::sync::atomic::Ordering::SeqCst);
+                0
+            }
+        }
+    }
+
+    extern "C" fn counting_map_get_match_found(_ctx: HostCtx) -> i64 {
+        MAP_GET_MATCH_FOUND.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    extern "C" fn counting_map_contains_int(_ctx: HostCtx, _map: i64, _key: i64) -> i64 {
+        MAP_CONTAINS_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        1
+    }
+
+    #[test]
+    fn match_map_get_uses_single_lookup_and_found_flag() {
+        use JitValueType::{Handle, Int};
+
+        MAP_GET_MATCH_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
+        MAP_CONTAINS_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
+        MAP_GET_MATCH_FOUND.store(0, std::sync::atomic::Ordering::SeqCst);
+
+        let mut helpers = host_helpers();
+        helpers.map_get_match_int = counting_map_get_match_int;
+        helpers.map_get_match_found = counting_map_get_match_found;
+        helpers.map_contains_int = counting_map_contains_int;
+        let mut m = NativeModule::new(helpers).unwrap();
+        let id = m
+            .compile(&ft(
+                2,
+                vec![Handle, Int, Int],
+                vec![
+                    JitInstr::MatchMapGetInt {
+                        map: 0,
+                        key: 1,
+                        value_dst: 2,
+                        some_ip: 1,
+                        none_ip: 3,
+                    },
+                    JitInstr::Return { src: 2 },
+                    JitInstr::Nop,
+                    JitInstr::LoadInt { dst: 2, value: -1 },
+                    JitInstr::Return { src: 2 },
+                ],
+            ))
+            .unwrap();
+
+        assert_eq!(m.call(id, &[42, 7], &[0, 0]).completed(), Some(0));
+        assert_eq!(m.call(id, &[42, 8], &[0, 0]).completed(), Some(123));
+        assert_eq!(m.call(id, &[42, 9], &[0, 0]).completed(), Some(-1));
+        assert_eq!(
+            MAP_GET_MATCH_CALLS.load(std::sync::atomic::Ordering::SeqCst),
+            3
+        );
+        assert_eq!(
+            MAP_CONTAINS_CALLS.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+    }
+
+    #[test]
+    fn host_call_closure_id_uses_non_bailing_failure_mode() {
+        assert_eq!(
+            HostHelper::ClosureId.signature().failure,
+            HostFailureMode::CannotFail,
+            "closure_id is total and must not inspect the shared bail flag",
+        );
+        use JitValueType::{Handle, Int};
+        extern "C" fn closure_id(_ctx: HostCtx, handle: i64) -> i64 {
+            handle + 4
+        }
+        let mut m = NativeModule::new(HostHelpers {
+            closure_id,
+            ..host_helpers()
+        })
+        .unwrap();
+        let id = m
+            .compile(&ft(
+                1,
+                vec![Handle, Int],
+                vec![
+                    JitInstr::HostCall {
+                        helper: HostHelper::ClosureId,
+                        dst: 1,
+                        args: vec![HostArg::Reg(0)],
+                    },
+                    JitInstr::Return { src: 1 },
+                ],
+            ))
+            .unwrap();
+        match m.call(id, &[9], &[0]) {
+            NativeOutcome::Completed(value) => assert_eq!(value, 13),
+            other => panic!("expected Completed, got {other:?}"),
         }
     }
 
@@ -3271,11 +5753,727 @@ mod tests {
     }
 
     #[test]
+    fn native_scalar_call_invokes_compiled_int_leaf() {
+        let mut m = module();
+        // callee add2(a, b) = a + b
+        let callee = m
+            .compile(&f(
+                2,
+                3,
+                vec![
+                    JitInstr::Add {
+                        dst: 2,
+                        lhs: 0,
+                        rhs: 1,
+                    },
+                    JitInstr::Return { src: 2 },
+                ],
+            ))
+            .unwrap();
+        // caller(x) = add2(x, 7) * 2
+        let caller = m
+            .compile(&f(
+                1,
+                5,
+                vec![
+                    JitInstr::LoadInt { dst: 1, value: 7 },
+                    JitInstr::CallNative {
+                        callee,
+                        dst: 2,
+                        args: vec![0, 1],
+                    },
+                    JitInstr::LoadInt { dst: 3, value: 2 },
+                    JitInstr::Mul {
+                        dst: 4,
+                        lhs: 2,
+                        rhs: 3,
+                    },
+                    JitInstr::Return { src: 4 },
+                ],
+            ))
+            .unwrap();
+
+        assert_eq!(m.callt(caller, &[5]), Some(24));
+        assert_eq!(m.callt(caller, &[-10]), Some(-6));
+    }
+
+    #[test]
+    fn compile_records_machine_code_size() {
+        let mut m = module();
+        let id = m
+            .compile(&f(
+                1,
+                2,
+                vec![
+                    JitInstr::LoadInt { dst: 1, value: 1 },
+                    JitInstr::Add {
+                        dst: 1,
+                        lhs: 0,
+                        rhs: 1,
+                    },
+                    JitInstr::Return { src: 1 },
+                ],
+            ))
+            .unwrap();
+        assert!(
+            m.code_size_bytes(id).is_some_and(|bytes| bytes > 0),
+            "compiled functions should expose nonzero emitted machine-code size"
+        );
+
+        assert_eq!(
+            m.code_size_bytes(CompiledId {
+                module_id: id.module_id.wrapping_add(1),
+                index: id.index,
+            }),
+            None,
+            "compiled ids from another module must not expose local code metadata"
+        );
+    }
+
+    #[test]
+    fn native_scalar_call_invokes_compiled_call_chain() {
+        let mut m = module();
+        let inc = m
+            .compile(&f(
+                1,
+                3,
+                vec![
+                    JitInstr::LoadInt { dst: 1, value: 1 },
+                    JitInstr::Add {
+                        dst: 2,
+                        lhs: 0,
+                        rhs: 1,
+                    },
+                    JitInstr::Return { src: 2 },
+                ],
+            ))
+            .unwrap();
+        assert_eq!(m.native_call_depth(inc), Some(0));
+        let twice = m
+            .compile(&f(
+                1,
+                4,
+                vec![
+                    JitInstr::CallNative {
+                        callee: inc,
+                        dst: 1,
+                        args: vec![0],
+                    },
+                    JitInstr::CallNative {
+                        callee: inc,
+                        dst: 2,
+                        args: vec![0],
+                    },
+                    JitInstr::Add {
+                        dst: 3,
+                        lhs: 1,
+                        rhs: 2,
+                    },
+                    JitInstr::Return { src: 3 },
+                ],
+            ))
+            .unwrap();
+        assert_eq!(m.native_call_depth(twice), Some(1));
+        let top = m
+            .compile(&f(
+                1,
+                4,
+                vec![
+                    JitInstr::CallNative {
+                        callee: twice,
+                        dst: 1,
+                        args: vec![0],
+                    },
+                    JitInstr::CallNative {
+                        callee: twice,
+                        dst: 2,
+                        args: vec![0],
+                    },
+                    JitInstr::Add {
+                        dst: 3,
+                        lhs: 1,
+                        rhs: 2,
+                    },
+                    JitInstr::Return { src: 3 },
+                ],
+            ))
+            .unwrap();
+
+        assert_eq!(m.native_call_depth(top), Some(2));
+        assert_eq!(m.callt(top, &[10]), Some(44));
+    }
+
+    #[test]
+    fn native_scalar_call_invokes_compiled_float_leaf() {
+        use JitValueType::{Float, Int};
+        let mut m = module();
+        // callee(a: Float, b: Float) = a * b
+        let callee = m
+            .compile(&ft(
+                2,
+                vec![Float, Float, Float],
+                vec![
+                    JitInstr::Mul {
+                        dst: 2,
+                        lhs: 0,
+                        rhs: 1,
+                    },
+                    JitInstr::Return { src: 2 },
+                ],
+            ))
+            .unwrap();
+        // caller(x: Float) = callee(x, 4.0) - x
+        let caller = m
+            .compile(&ft(
+                1,
+                vec![Float, Float, Float, Float],
+                vec![
+                    JitInstr::LoadFloat { dst: 1, value: 4.0 },
+                    JitInstr::CallNative {
+                        callee,
+                        dst: 2,
+                        args: vec![0, 1],
+                    },
+                    JitInstr::Sub {
+                        dst: 3,
+                        lhs: 2,
+                        rhs: 0,
+                    },
+                    JitInstr::Return { src: 3 },
+                ],
+            ))
+            .unwrap();
+        let got = m
+            .callt(caller, &[2.5f64.to_bits() as i64])
+            .map(|bits| f64::from_bits(bits as u64));
+        assert_eq!(got, Some(7.5));
+        let _ = Int;
+    }
+
+    #[test]
+    fn native_call_can_return_child_heap_handle_to_parent() {
+        use JitValueType::{Handle, Int};
+        extern "C" fn string_from_int(_ctx: HostCtx, value: i64) -> i64 {
+            value + 10
+        }
+        let mut m = NativeModule::new(HostHelpers {
+            string_from_int,
+            ..host_helpers()
+        })
+        .unwrap();
+
+        let child = m
+            .compile(&ft(
+                1,
+                vec![Int, Handle],
+                vec![
+                    JitInstr::HostCall {
+                        helper: HostHelper::StringFromInt,
+                        dst: 1,
+                        args: vec![HostArg::Reg(0)],
+                    },
+                    JitInstr::Return { src: 1 },
+                ],
+            ))
+            .unwrap();
+        let parent = m
+            .compile(&ft(
+                1,
+                vec![Int, Handle],
+                vec![
+                    JitInstr::CallNative {
+                        callee: child,
+                        dst: 1,
+                        args: vec![0],
+                    },
+                    JitInstr::Return { src: 1 },
+                ],
+            ))
+            .unwrap();
+
+        match m.call(parent, &[37], &[0]) {
+            NativeOutcome::CompletedHandle(handle) => assert_eq!(handle, 47),
+            other => panic!("expected CompletedHandle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn native_call_child_heap_handle_can_feed_parent_host_helper() {
+        use JitValueType::{Handle, Int};
+        extern "C" fn string_from_int(_ctx: HostCtx, value: i64) -> i64 {
+            value + 10
+        }
+        extern "C" fn string_len(_ctx: HostCtx, handle: i64) -> i64 {
+            handle * 2
+        }
+        let mut m = NativeModule::new(HostHelpers {
+            string_from_int,
+            string_len,
+            ..host_helpers()
+        })
+        .unwrap();
+
+        let child = m
+            .compile(&ft(
+                1,
+                vec![Int, Handle],
+                vec![
+                    JitInstr::HostCall {
+                        helper: HostHelper::StringFromInt,
+                        dst: 1,
+                        args: vec![HostArg::Reg(0)],
+                    },
+                    JitInstr::Return { src: 1 },
+                ],
+            ))
+            .unwrap();
+        let parent = m
+            .compile(&ft(
+                1,
+                vec![Int, Handle, Int],
+                vec![
+                    JitInstr::CallNative {
+                        callee: child,
+                        dst: 1,
+                        args: vec![0],
+                    },
+                    JitInstr::HostCall {
+                        helper: HostHelper::StringLen,
+                        dst: 2,
+                        args: vec![HostArg::Reg(1)],
+                    },
+                    JitInstr::Return { src: 2 },
+                ],
+            ))
+            .unwrap();
+
+        match m.call(parent, &[5], &[0]) {
+            NativeOutcome::Completed(value) => assert_eq!(value, 30),
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn native_scalar_call_deopts_at_caller_when_callee_deopts() {
+        let mut m = module();
+        // callee(a, b) = a + b; overflows for (MAX, 1).
+        let callee = m
+            .compile(&f(
+                2,
+                3,
+                vec![
+                    JitInstr::Add {
+                        dst: 2,
+                        lhs: 0,
+                        rhs: 1,
+                    },
+                    JitInstr::Return { src: 2 },
+                ],
+            ))
+            .unwrap();
+        let caller = m
+            .compile(&f(
+                2,
+                3,
+                vec![
+                    JitInstr::CallNative {
+                        callee,
+                        dst: 2,
+                        args: vec![0, 1],
+                    },
+                    JitInstr::Return { src: 2 },
+                ],
+            ))
+            .unwrap();
+
+        assert_eq!(m.callt(caller, &[10, 20]), Some(30));
+        assert!(matches!(
+            m.call(caller, &[i64::MAX, 1], &[0, 0]),
+            NativeOutcome::Deopt {
+                safepoint_id: SafepointId(1),
+                child: Some(_),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn native_scalar_call_chains_child_deopt_payload() {
+        let mut m = module();
+        // callee(a, b) = a + b; overflows for (MAX, 1). The child Add guard lives
+        // at callee safepoint 1 with params a/b live.
+        let callee = m
+            .compile(&f(
+                2,
+                3,
+                vec![
+                    JitInstr::Add {
+                        dst: 2,
+                        lhs: 0,
+                        rhs: 1,
+                    },
+                    JitInstr::Return { src: 2 },
+                ],
+            ))
+            .unwrap();
+        // caller(x, y) { c = 9; return callee(x, y) + c }. On child deopt, the
+        // parent deopts at the CallNative site and preserves its own live regs plus
+        // a child frame decoded with the callee's deopt map.
+        let caller = m
+            .compile(&f(
+                2,
+                5,
+                vec![
+                    JitInstr::LoadInt { dst: 2, value: 9 },
+                    JitInstr::CallNative {
+                        callee,
+                        dst: 3,
+                        args: vec![0, 1],
+                    },
+                    JitInstr::Add {
+                        dst: 4,
+                        lhs: 3,
+                        rhs: 2,
+                    },
+                    JitInstr::Return { src: 4 },
+                ],
+            ))
+            .unwrap();
+
+        match m.call(caller, &[i64::MAX, 1], &[0, 0]) {
+            NativeOutcome::Deopt {
+                safepoint_id,
+                live,
+                child: Some(child),
+            } => {
+                assert_eq!(safepoint_id, SafepointId(1));
+                assert_eq!(child.function, callee);
+                assert_eq!(child.safepoint_id, SafepointId(1));
+                assert_eq!(child.child, None);
+                assert_eq!(
+                    live.iter().find(|r| r.reg == 2).map(|r| r.value),
+                    Some(DeoptValue::Int(9)),
+                    "parent payload should still capture live caller regs"
+                );
+                assert_eq!(
+                    child.live.iter().find(|r| r.reg == 0).map(|r| r.value),
+                    Some(DeoptValue::Int(i64::MAX))
+                );
+                assert_eq!(
+                    child.live.iter().find(|r| r.reg == 1).map(|r| r.value),
+                    Some(DeoptValue::Int(1))
+                );
+            }
+            other => panic!("expected parent deopt with child frame, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn native_scalar_call_chains_nested_child_deopt_payloads() {
+        let mut m = module();
+        let leaf = m
+            .compile(&f(
+                2,
+                3,
+                vec![
+                    JitInstr::Add {
+                        dst: 2,
+                        lhs: 0,
+                        rhs: 1,
+                    },
+                    JitInstr::Return { src: 2 },
+                ],
+            ))
+            .unwrap();
+        let middle = m
+            .compile(&f(
+                2,
+                4,
+                vec![
+                    JitInstr::LoadInt { dst: 2, value: 11 },
+                    JitInstr::CallNative {
+                        callee: leaf,
+                        dst: 3,
+                        args: vec![0, 1],
+                    },
+                    JitInstr::Return { src: 3 },
+                ],
+            ))
+            .unwrap();
+        let top = m
+            .compile(&f(
+                2,
+                4,
+                vec![
+                    JitInstr::LoadInt { dst: 2, value: 22 },
+                    JitInstr::CallNative {
+                        callee: middle,
+                        dst: 3,
+                        args: vec![0, 1],
+                    },
+                    JitInstr::Return { src: 3 },
+                ],
+            ))
+            .unwrap();
+
+        match m.call(top, &[i64::MAX, 1], &[0, 0]) {
+            NativeOutcome::Deopt {
+                safepoint_id,
+                child: Some(middle_frame),
+                ..
+            } => {
+                assert_eq!(safepoint_id, SafepointId(1));
+                assert_eq!(middle_frame.function, middle);
+                assert_eq!(middle_frame.safepoint_id, SafepointId(1));
+                assert_eq!(
+                    middle_frame
+                        .live
+                        .iter()
+                        .find(|r| r.reg == 2)
+                        .map(|r| r.value),
+                    Some(DeoptValue::Int(11))
+                );
+                let leaf_frame = middle_frame.child.as_ref().expect("leaf child frame");
+                assert_eq!(leaf_frame.function, leaf);
+                assert_eq!(leaf_frame.safepoint_id, SafepointId(1));
+                assert_eq!(
+                    leaf_frame.live.iter().find(|r| r.reg == 0).map(|r| r.value),
+                    Some(DeoptValue::Int(i64::MAX))
+                );
+                assert_eq!(
+                    leaf_frame.live.iter().find(|r| r.reg == 1).map(|r| r.value),
+                    Some(DeoptValue::Int(1))
+                );
+                assert_eq!(leaf_frame.child, None);
+            }
+            other => panic!("expected nested native deopt chain, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn native_call_can_pass_handle_arg_to_readonly_callee() {
+        use JitValueType::{Handle, Int};
+        extern "C" fn string_len(_ctx: HostCtx, handle: i64) -> i64 {
+            handle * 2
+        }
+        let mut m = NativeModule::new(HostHelpers {
+            string_len,
+            ..host_helpers()
+        })
+        .unwrap();
+        let callee = m
+            .compile(&ft(
+                1,
+                vec![Handle, Int],
+                vec![
+                    JitInstr::HostCall {
+                        helper: HostHelper::StringLen,
+                        dst: 1,
+                        args: vec![HostArg::Reg(0)],
+                    },
+                    JitInstr::Return { src: 1 },
+                ],
+            ))
+            .unwrap();
+        let caller = m
+            .compile(&ft(
+                1,
+                vec![Handle, Int],
+                vec![
+                    JitInstr::CallNative {
+                        callee,
+                        dst: 1,
+                        args: vec![0],
+                    },
+                    JitInstr::Return { src: 1 },
+                ],
+            ))
+            .unwrap();
+
+        assert_eq!(m.callt(caller, &[21]), Some(42));
+    }
+
+    #[test]
+    fn native_call_can_invoke_heap_writing_handle_callee() {
+        use JitValueType::{Handle, Int};
+        extern "C" fn list_set_int(_ctx: HostCtx, handle: i64, index: i64, value: i64) -> i64 {
+            handle + index * 10 + value * 100
+        }
+        let mut m = NativeModule::new(HostHelpers {
+            list_set_int,
+            ..host_helpers()
+        })
+        .unwrap();
+        let callee = m
+            .compile(&ft(
+                3,
+                vec![Handle, Int, Int, Int],
+                vec![
+                    JitInstr::HostCall {
+                        helper: HostHelper::ListSetInt,
+                        dst: 3,
+                        args: vec![HostArg::Reg(0), HostArg::Reg(1), HostArg::Reg(2)],
+                    },
+                    JitInstr::Return { src: 3 },
+                ],
+            ))
+            .unwrap();
+        let caller = m
+            .compile(&ft(
+                3,
+                vec![Handle, Int, Int, Int],
+                vec![
+                    JitInstr::CallNative {
+                        callee,
+                        dst: 3,
+                        args: vec![0, 1, 2],
+                    },
+                    JitInstr::Return { src: 3 },
+                ],
+            ))
+            .unwrap();
+
+        assert_eq!(m.callt(caller, &[5, 2, 7]), Some(725));
+    }
+
+    #[test]
+    fn native_call_can_pass_flat_int_arg_to_readonly_callee() {
+        use JitValueType::{FlatInt, Int};
+        let mut m = module();
+        let flat_callee = m
+            .compile(&ft(
+                1,
+                vec![FlatInt, Int],
+                vec![
+                    JitInstr::ListLenDirect { dst: 1, base: 0 },
+                    JitInstr::Return { src: 1 },
+                ],
+            ))
+            .unwrap();
+        let caller = m
+            .compile(&ft(
+                1,
+                vec![FlatInt, Int],
+                vec![
+                    JitInstr::CallNative {
+                        callee: flat_callee,
+                        dst: 1,
+                        args: vec![0],
+                    },
+                    JitInstr::Return { src: 1 },
+                ],
+            ))
+            .unwrap();
+
+        let data = [10i64, 20, 30];
+        assert_eq!(
+            m.call(caller, &[data.as_ptr() as i64], &[data.len() as i64])
+                .completed(),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn native_call_can_pass_flat_int_arg_to_mutating_callee() {
+        use JitValueType::{FlatInt, Int};
+        let mut m = module();
+        let flat_callee = m
+            .compile(&ft(
+                3,
+                vec![FlatInt, Int, Int, Int],
+                vec![
+                    JitInstr::ListSetIntDirect {
+                        dst: 3,
+                        base: 0,
+                        index: 1,
+                        value: 2,
+                    },
+                    JitInstr::Return { src: 3 },
+                ],
+            ))
+            .unwrap();
+        let caller = m
+            .compile(&ft(
+                3,
+                vec![FlatInt, Int, Int, Int, Int],
+                vec![
+                    JitInstr::CallNative {
+                        callee: flat_callee,
+                        dst: 3,
+                        args: vec![0, 1, 2],
+                    },
+                    JitInstr::ListGetIntDirect {
+                        dst: 4,
+                        base: 0,
+                        index: 1,
+                    },
+                    JitInstr::Return { src: 4 },
+                ],
+            ))
+            .unwrap();
+
+        let mut data = [10i64, 20, 30];
+        assert_eq!(
+            m.call(
+                caller,
+                &[data.as_mut_ptr() as i64, 1, 99],
+                &[data.len() as i64, 0, 0],
+            )
+            .completed(),
+            Some(99)
+        );
+        assert_eq!(data, [10, 99, 30]);
+    }
+
+    #[test]
+    fn native_call_can_pass_flat_float_arg_to_readonly_callee() {
+        use JitValueType::{FlatFloat, Float, Int};
+        let mut m = module();
+        let flat_callee = m
+            .compile(&ft(
+                2,
+                vec![FlatFloat, Int, Float],
+                vec![
+                    JitInstr::ListGetFloatDirect {
+                        dst: 2,
+                        base: 0,
+                        index: 1,
+                    },
+                    JitInstr::Return { src: 2 },
+                ],
+            ))
+            .unwrap();
+        let caller = m
+            .compile(&ft(
+                2,
+                vec![FlatFloat, Int, Float],
+                vec![
+                    JitInstr::CallNative {
+                        callee: flat_callee,
+                        dst: 2,
+                        args: vec![0, 1],
+                    },
+                    JitInstr::Return { src: 2 },
+                ],
+            ))
+            .unwrap();
+
+        let data = [1.25f64, 2.5, 3.75];
+        let outcome = m.call(caller, &[data.as_ptr() as i64, 1], &[data.len() as i64, 0]);
+        match outcome {
+            NativeOutcome::Completed(bits) => {
+                assert_eq!(f64::from_bits(bits as u64), 2.5);
+            }
+            other => panic!("expected flat-float native call to complete, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn float_read_helpers_compile_and_bail() {
         use JitValueType::{Float, Handle, Int};
         // A module whose float helpers return a fixed value or bail by parity of
         // the slot/index, so we can exercise both the success and bail channels.
-        extern "C" fn field_float(_handle: i64, slot: i64) -> f64 {
+        extern "C" fn field_float(_ctx: HostCtx, _handle: i64, slot: i64) -> f64 {
             if slot == 0 {
                 2.5
             } else {
@@ -3283,7 +6481,7 @@ mod tests {
                 0.0
             }
         }
-        extern "C" fn list_get_float(_handle: i64, index: i64) -> f64 {
+        extern "C" fn list_get_float(_ctx: HostCtx, _handle: i64, index: i64) -> f64 {
             if index >= 0 {
                 index as f64 + 0.5
             } else {
@@ -3292,15 +6490,9 @@ mod tests {
             }
         }
         let mut m = NativeModule::new(HostHelpers {
-            field_int: noop_field_int,
-            list_len: noop_list_len,
-            list_get_int: noop_list_get_int,
             field_float,
             list_get_float,
-            closure_id: noop_closure_id,
-            closure_capture: noop_closure_capture,
-            field_handle: noop_field_handle,
-            list_get_handle: noop_list_get_handle,
+            ..host_helpers()
         })
         .unwrap();
         // fn(h: Handle, idx: Int) -> Float { return list[idx] }  regs 0=h,1=idx,2=res
@@ -3309,10 +6501,10 @@ mod tests {
                 2,
                 vec![Handle, Int, Float],
                 vec![
-                    JitInstr::ListGetFloat {
+                    JitInstr::HostCall {
+                        helper: HostHelper::ListGetFloat,
                         dst: 2,
-                        base: 0,
-                        index: 1,
+                        args: vec![HostArg::Reg(0), HostArg::Reg(1)],
                     },
                     JitInstr::Return { src: 2 },
                 ],
@@ -3330,10 +6522,10 @@ mod tests {
                 1,
                 vec![Handle, Float],
                 vec![
-                    JitInstr::FieldFloat {
+                    JitInstr::HostCall {
+                        helper: HostHelper::FieldFloat,
                         dst: 1,
-                        base: 0,
-                        slot: 1,
+                        args: vec![HostArg::Reg(0), HostArg::ImmI64(1)],
                     },
                     JitInstr::Return { src: 1 },
                 ],
@@ -3348,19 +6540,12 @@ mod tests {
         use JitValueType::{Handle, Int};
         // `closure_id` is the identity on the handle arg, so the handle value IS the
         // observed function id — letting the test drive the guard directly.
-        extern "C" fn closure_id(handle: i64) -> i64 {
+        extern "C" fn closure_id(_ctx: HostCtx, handle: i64) -> i64 {
             handle
         }
         let mut m = NativeModule::new(HostHelpers {
-            field_int: noop_field_int,
-            list_len: noop_list_len,
-            list_get_int: noop_list_get_int,
-            field_float: noop_field_float,
-            list_get_float: noop_list_get_float,
             closure_id,
-            closure_capture: noop_closure_capture,
-            field_handle: noop_field_handle,
-            list_get_handle: noop_list_get_handle,
+            ..host_helpers()
         })
         .unwrap();
         // fn(h: Handle, x: Int) -> Int { guard id(h) == 7; return x + 100 }
@@ -3374,10 +6559,7 @@ mod tests {
                         base: 0,
                         expected: 7,
                     },
-                    JitInstr::LoadInt {
-                        dst: 2,
-                        value: 100,
-                    },
+                    JitInstr::LoadInt { dst: 2, value: 100 },
                     JitInstr::Add {
                         dst: 3,
                         lhs: 1,
@@ -3401,19 +6583,12 @@ mod tests {
         // observed function id — the test drives the polymorphic dispatch directly,
         // mirroring the producer's lowering (read id once via ClosureId, then
         // LoadInt + Equal + JumpIfBool per arm, with a no-match Bail).
-        extern "C" fn closure_id(handle: i64) -> i64 {
+        extern "C" fn closure_id(_ctx: HostCtx, handle: i64) -> i64 {
             handle
         }
         let mut m = NativeModule::new(HostHelpers {
-            field_int: noop_field_int,
-            list_len: noop_list_len,
-            list_get_int: noop_list_get_int,
-            field_float: noop_field_float,
-            list_get_float: noop_list_get_float,
             closure_id,
-            closure_capture: noop_closure_capture,
-            field_handle: noop_field_handle,
-            list_get_handle: noop_list_get_handle,
+            ..host_helpers()
         })
         .unwrap();
         // Polymorphic inline cache over two callees {3, 5}:
@@ -3433,8 +6608,12 @@ mod tests {
                 2,
                 vec![Handle, Int, Int, Int, Int, Int, Int, Int, Int],
                 vec![
-                    JitInstr::ClosureId { dst: 2, base: 0 }, // 0
-                    JitInstr::LoadInt { dst: 3, value: 3 },  // 1
+                    JitInstr::HostCall {
+                        helper: HostHelper::ClosureId,
+                        dst: 2,
+                        args: vec![HostArg::Reg(0)],
+                    }, // 0
+                    JitInstr::LoadInt { dst: 3, value: 3 }, // 1
                     JitInstr::Equal {
                         dst: 4,
                         lhs: 2,
@@ -3456,21 +6635,21 @@ mod tests {
                         expected: true,
                         target: 11,
                     }, // 6
-                    JitInstr::Bail,                          // 7 (no match)
+                    JitInstr::Bail,                         // 7 (no match)
                     JitInstr::LoadInt { dst: 5, value: 30 }, // 8 arm3
                     JitInstr::Add {
                         dst: 6,
                         lhs: 1,
                         rhs: 5,
                     }, // 9
-                    JitInstr::Return { src: 6 },             // 10
+                    JitInstr::Return { src: 6 },            // 10
                     JitInstr::LoadInt { dst: 7, value: 50 }, // 11 arm5
                     JitInstr::Add {
                         dst: 8,
                         lhs: 1,
                         rhs: 7,
                     }, // 12
-                    JitInstr::Return { src: 8 }, // 13
+                    JitInstr::Return { src: 8 },            // 13
                 ],
             ))
             .unwrap();
@@ -3485,7 +6664,7 @@ mod tests {
 
     #[test]
     fn direct_flat_reads_index_in_register() {
-        use JitValueType::{Float, FlatFloat, FlatInt, Int};
+        use JitValueType::{FlatFloat, FlatInt, Float, Int};
         let mut m = module();
 
         // fn(a: FlatInt, i: Int) -> Int { return a[i] }  regs 0=a,1=i,2=res
@@ -3507,11 +6686,20 @@ mod tests {
         let ints_ptr = ints.as_ptr() as i64;
         let ilen = ints.len() as i64;
         // In-bounds reads index directly out of the flat buffer.
-        assert_eq!(m.call(id_int, &[ints_ptr, 0], &[ilen, 0]).completed(), Some(10));
-        assert_eq!(m.call(id_int, &[ints_ptr, 2], &[ilen, 0]).completed(), Some(30));
+        assert_eq!(
+            m.call(id_int, &[ints_ptr, 0], &[ilen, 0]).completed(),
+            Some(10)
+        );
+        assert_eq!(
+            m.call(id_int, &[ints_ptr, 2], &[ilen, 0]).completed(),
+            Some(30)
+        );
         // OOB (>= len and < 0) → fallback (None), like the helper's bail.
         assert_eq!(m.call(id_int, &[ints_ptr, 3], &[ilen, 0]).completed(), None);
-        assert_eq!(m.call(id_int, &[ints_ptr, -1], &[ilen, 0]).completed(), None);
+        assert_eq!(
+            m.call(id_int, &[ints_ptr, -1], &[ilen, 0]).completed(),
+            None
+        );
 
         // fn(a: FlatFloat, i: Int) -> Float { return a[i] }
         let id_f = m
@@ -3639,6 +6827,49 @@ mod tests {
             map.sites[0].live,
             vec![(0, JitValueType::Int), (1, JitValueType::Int)]
         );
+    }
+
+    #[test]
+    fn profiled_branch_deopts_on_cold_edge() {
+        let mut m = module();
+        let id = m
+            .compile(&f(
+                2,
+                3,
+                vec![
+                    JitInstr::ProfiledJumpIfIntCompare {
+                        lhs: 0,
+                        rhs: 1,
+                        op: JitCompare::Lt,
+                        expected: true,
+                        target: 3,
+                        hot_target: false,
+                    },
+                    JitInstr::LoadInt { dst: 2, value: 10 },
+                    JitInstr::Return { src: 2 },
+                    JitInstr::LoadInt { dst: 2, value: 99 },
+                    JitInstr::Return { src: 2 },
+                ],
+            ))
+            .unwrap();
+
+        assert_eq!(m.call(id, &[5, 3], &[0, 0]).completed(), Some(10));
+        match m.call(id, &[1, 3], &[0, 0]) {
+            NativeOutcome::Deopt {
+                safepoint_id, live, ..
+            } => {
+                assert_eq!(safepoint_id, SafepointId(1));
+                assert_eq!(
+                    live.iter().find(|reg| reg.reg == 0).map(|reg| reg.value),
+                    Some(DeoptValue::Int(1))
+                );
+                assert_eq!(
+                    live.iter().find(|reg| reg.reg == 1).map(|reg| reg.value),
+                    Some(DeoptValue::Int(3))
+                );
+            }
+            other => panic!("expected profiled cold edge to deopt, got {other:?}"),
+        }
     }
 
     #[test]
@@ -3841,11 +7072,19 @@ mod tests {
                 expected: false,
                 target: 8,
             },
-            JitInstr::Add { dst: 1, lhs: 1, rhs: 2 }, // 4 total+=i
-            JitInstr::Add { dst: 2, lhs: 2, rhs: 3 }, // 5 i+=1
-            JitInstr::Jump { target: 3 },             // 6 loop
-            JitInstr::Nop,                            // 7 (padding leader)
-            JitInstr::OsrExit,                        // 8 OSR-exit (was Return)
+            JitInstr::Add {
+                dst: 1,
+                lhs: 1,
+                rhs: 2,
+            }, // 4 total+=i
+            JitInstr::Add {
+                dst: 2,
+                lhs: 2,
+                rhs: 3,
+            }, // 5 i+=1
+            JitInstr::Jump { target: 3 }, // 6 loop
+            JitInstr::Nop,                // 7 (padding leader)
+            JitInstr::OsrExit,            // 8 OSR-exit (was Return)
         ];
         let prog = f(1, 4, code);
         let id = m.compile_osr(&prog, 3).unwrap();
@@ -3858,7 +7097,9 @@ mod tests {
         };
         for &(n, expected) in &[(10i64, 55i64), (0, 0), (100, 5050)] {
             match run(n) {
-                NativeOutcome::Deopt { safepoint_id, live } => {
+                NativeOutcome::Deopt {
+                    safepoint_id, live, ..
+                } => {
                     let site = m.deopt_map(id).unwrap().sites[safepoint_id.0 as usize - 1].clone();
                     assert_eq!(site.resume_ip, 8, "OSR-exit resumes at the post-loop ip");
                     let total = live
@@ -3909,17 +7150,25 @@ mod tests {
                 expected: false,
                 target: 9,
             },
-            JitInstr::ListGetIntDirect { dst: 5, base: 0, index: 2 }, // 5 elem = xs[i]
-            JitInstr::Add { dst: 3, lhs: 3, rhs: 5 },                 // 6 acc += elem
-            JitInstr::Add { dst: 2, lhs: 2, rhs: 4 },                 // 7 i += 1
-            JitInstr::Jump { target: 4 },                             // 8 loop
-            JitInstr::OsrExit,                                        // 9 exit (live-out: acc)
+            JitInstr::ListGetIntDirect {
+                dst: 5,
+                base: 0,
+                index: 2,
+            }, // 5 elem = xs[i]
+            JitInstr::Add {
+                dst: 3,
+                lhs: 3,
+                rhs: 5,
+            }, // 6 acc += elem
+            JitInstr::Add {
+                dst: 2,
+                lhs: 2,
+                rhs: 4,
+            }, // 7 i += 1
+            JitInstr::Jump { target: 4 }, // 8 loop
+            JitInstr::OsrExit,            // 9 exit (live-out: acc)
         ];
-        let prog = ft(
-            0,
-            vec![FlatInt, Int, Int, Int, Int, Int],
-            code,
-        );
+        let prog = ft(0, vec![FlatInt, Int, Int, Int, Int, Int], code);
         // OSR header at the loop head (ip 4). regs 0,1,2,3,4 are definitely assigned
         // there (read-only live-ins, never written in-loop).
         let id = m.compile_osr(&prog, 4).unwrap();
@@ -3937,7 +7186,9 @@ mod tests {
         let mut lens = [0i64; 6];
         lens[0] = data.len() as i64;
         match m.call(id, &window, &lens) {
-            NativeOutcome::Deopt { safepoint_id, live } => {
+            NativeOutcome::Deopt {
+                safepoint_id, live, ..
+            } => {
                 let site = m.deopt_map(id).unwrap().sites[safepoint_id.0 as usize - 1].clone();
                 assert_eq!(site.resume_ip, 9, "exits at post-loop ip");
                 let acc = live
@@ -3966,7 +7217,9 @@ mod tests {
         let mut empty_lens = [0i64; 6];
         empty_lens[0] = 0;
         match m.call(id, &empty_window, &empty_lens) {
-            NativeOutcome::Deopt { safepoint_id, live } => {
+            NativeOutcome::Deopt {
+                safepoint_id, live, ..
+            } => {
                 let site = m.deopt_map(id).unwrap().sites[safepoint_id.0 as usize - 1].clone();
                 assert_eq!(site.resume_ip, 9);
                 let acc = live.iter().find(|r| r.reg == 3).map(|r| match r.value {
@@ -3999,23 +7252,27 @@ mod tests {
                 target: 10,
             },
             JitInstr::ListLenDirect { dst: 4, base: 0 }, // 5 len = len(xs)  (direct)
-            JitInstr::ListGetIntDirect { dst: 5, base: 0, index: 1 }, // 6 elem = xs[i] (OOB once i>=len)
-            JitInstr::Add { dst: 2, lhs: 2, rhs: 5 },    // 7 acc += elem
-            JitInstr::Add { dst: 1, lhs: 1, rhs: 3 },    // 8 i += 1
+            JitInstr::ListGetIntDirect {
+                dst: 5,
+                base: 0,
+                index: 1,
+            }, // 6 elem = xs[i] (OOB once i>=len)
+            JitInstr::Add {
+                dst: 2,
+                lhs: 2,
+                rhs: 5,
+            }, // 7 acc += elem
+            JitInstr::Add {
+                dst: 1,
+                lhs: 1,
+                rhs: 3,
+            }, // 8 i += 1
             JitInstr::Jump { target: 4 },                // 9 loop
             JitInstr::OsrExit,                           // 10 exit
         ];
         let prog2 = ft(
             0,
-            vec![
-                JitValueType::FlatInt,
-                Int,
-                Int,
-                Int,
-                Int,
-                Int,
-                Int,
-            ],
+            vec![JitValueType::FlatInt, Int, Int, Int, Int, Int, Int],
             code2,
         );
         let id2 = m.compile_osr(&prog2, 4).unwrap();
@@ -4035,7 +7292,10 @@ mod tests {
                 // The OOB read bails at the ListGetIntDirect ip (6), NOT the exit (10):
                 // a precise mid-loop deopt, so the interpreter re-runs and raises the
                 // real out-of-bounds behavior itself.
-                assert_eq!(site.resume_ip, 6, "OOB direct read bails at its own ip (not UB)");
+                assert_eq!(
+                    site.resume_ip, 6,
+                    "OOB direct read bails at its own ip (not UB)"
+                );
             }
             other => panic!("OOB direct read must deopt, got {other:?}"),
         }
@@ -4054,7 +7314,11 @@ mod tests {
             1,
             vec![Int, Int, FlatInt, Int],
             vec![
-                JitInstr::ListGetIntDirect { dst: 1, base: 2, index: 0 },
+                JitInstr::ListGetIntDirect {
+                    dst: 1,
+                    base: 2,
+                    index: 0,
+                },
                 JitInstr::Return { src: 1 },
             ],
         );
@@ -4078,7 +7342,11 @@ mod tests {
             1,
             2,
             vec![
-                JitInstr::Add { dst: 1, lhs: 0, rhs: 0 },
+                JitInstr::Add {
+                    dst: 1,
+                    lhs: 0,
+                    rhs: 0,
+                },
                 JitInstr::Return { src: 1 },
             ],
         );
@@ -4169,7 +7437,7 @@ mod tests {
 
     #[test]
     fn deopt_capture_records_float_register_value() {
-        use JitValueType::{Float, FlatInt, Int};
+        use JitValueType::{FlatInt, Float, Int};
         let mut m = module();
         // fn(xs: FlatInt, i: Int, f: Float) -> Int { g = f + f; return xs[i] }
         // regs 0=xs, 1=i, 2=f, 3=g. The float `g` is definitely assigned before the
@@ -4364,7 +7632,9 @@ mod tests {
 
                 // The forced site must bail with exactly its id.
                 let live = match &out {
-                    NativeOutcome::Deopt { safepoint_id, live } => {
+                    NativeOutcome::Deopt {
+                        safepoint_id, live, ..
+                    } => {
                         assert_eq!(
                             *safepoint_id,
                             SafepointId(k),
@@ -4441,6 +7711,52 @@ mod tests {
         assert!(late_intermediate_checks >= 2, "expected late-site checks");
     }
 
+    #[test]
+    fn compile_forcing_all_bails_deopts_at_first_executed_safepoint() {
+        use JitValueType::{FlatInt, Int};
+
+        let values = vec![10, 20, 30];
+        let ptr = values.as_ptr() as i64;
+        let func = ft(
+            3,
+            vec![FlatInt, Int, Int, Int, Int],
+            vec![
+                JitInstr::Add {
+                    dst: 3,
+                    lhs: 1,
+                    rhs: 1,
+                },
+                JitInstr::ListGetIntDirect {
+                    dst: 4,
+                    base: 0,
+                    index: 2,
+                },
+                JitInstr::Return { src: 4 },
+            ],
+        );
+
+        let mut m = module();
+        let id = m.compile_forcing_all_bails(&func).unwrap();
+        assert_eq!(
+            m.deopt_map(id).expect("map").sites.len(),
+            2,
+            "test function should have both add-overflow and direct-list guards",
+        );
+        let out = m.call(id, &[ptr, 7, 1], &[values.len() as i64, 0, 0]);
+        match out {
+            NativeOutcome::Deopt {
+                safepoint_id, live, ..
+            } => {
+                assert_eq!(safepoint_id, SafepointId(1));
+                assert_eq!(
+                    live.iter().find(|reg| reg.reg == 1).map(|reg| reg.value),
+                    Some(DeoptValue::Int(7))
+                );
+            }
+            other => panic!("expected forced all-sites deopt, got {other:?}"),
+        }
+    }
+
     // --- IR validation: malformed public IR must fail cleanly, not panic ---
 
     #[test]
@@ -4466,6 +7782,35 @@ mod tests {
     }
 
     #[test]
+    fn rejects_out_of_range_cold_block_hint() {
+        let mut prog = f(1, 1, vec![JitInstr::Return { src: 0 }]);
+        prog.cold_blocks.push(3);
+        let err = validate(&prog).unwrap_err();
+        assert!(err.0.contains("cold block instruction 3"), "{}", err.0);
+    }
+
+    #[test]
+    fn compiles_valid_cold_block_hint() {
+        let mut m = module();
+        let mut prog = f(
+            1,
+            1,
+            vec![
+                JitInstr::JumpIfBool {
+                    cond: 0,
+                    expected: true,
+                    target: 2,
+                },
+                JitInstr::Return { src: 0 },
+                JitInstr::Return { src: 0 },
+            ],
+        );
+        prog.cold_blocks.push(2);
+        m.compile(&prog)
+            .expect("cold block metadata must be a layout-only hint");
+    }
+
+    #[test]
     fn rejects_conditional_branch_without_fallthrough() {
         // A trailing conditional branch has no `i + 1` to fall through to.
         let err = validate(&f(
@@ -4488,6 +7833,7 @@ mod tests {
             n_regs: 3,
             reg_types: vec![JitValueType::Int; 2],
             code: vec![],
+            cold_blocks: Vec::new(),
         };
         let err = validate(&bad).unwrap_err();
         assert!(err.0.contains("reg_types length"), "{}", err.0);
@@ -4552,14 +7898,14 @@ mod tests {
 
     #[test]
     fn rejects_non_handle_heap_read_base() {
-        // `FieldInt` base must be a `Handle`, not an `Int`.
+        // `FieldInt` host helper base must be a `Handle`, not an `Int`.
         let err = validate(&f(
             1,
             2,
-            vec![JitInstr::FieldInt {
+            vec![JitInstr::HostCall {
+                helper: HostHelper::FieldInt,
                 dst: 1,
-                base: 0,
-                slot: 0,
+                args: vec![HostArg::Reg(0), HostArg::ImmI64(0)],
             }],
         ))
         .unwrap_err();
@@ -4573,7 +7919,11 @@ mod tests {
             1,
             vec![Handle, Int],
             vec![
-                JitInstr::ListLen { dst: 1, base: 0 },
+                JitInstr::HostCall {
+                    helper: HostHelper::ListLen,
+                    dst: 1,
+                    args: vec![HostArg::Reg(0)],
+                },
                 JitInstr::Return { src: 1 },
             ],
         ))
@@ -4677,16 +8027,19 @@ mod tests {
     fn random_instr(rng: &mut Rng, n_regs: u32, n: u32) -> JitInstr {
         let r = |rng: &mut Rng| rng.reg(n_regs);
         let t = |rng: &mut Rng| rng.below(n.saturating_add(2));
-        match rng.below(27) {
-            22 => JitInstr::FieldFloat {
+        match rng.below(31) {
+            22 => JitInstr::HostCall {
+                helper: HostHelper::FieldFloat,
                 dst: r(rng),
-                base: r(rng),
-                slot: rng.below(8),
+                args: vec![
+                    HostArg::Reg(r(rng)),
+                    HostArg::ImmI64(i64::from(rng.below(8))),
+                ],
             },
-            23 => JitInstr::ListGetFloat {
+            23 => JitInstr::HostCall {
+                helper: HostHelper::ListGetFloat,
                 dst: r(rng),
-                base: r(rng),
-                index: r(rng),
+                args: vec![HostArg::Reg(r(rng)), HostArg::Reg(r(rng))],
             },
             24 => JitInstr::ListGetIntDirect {
                 dst: r(rng),
@@ -4783,19 +8136,49 @@ mod tests {
                 target: t(rng),
             },
             18 => JitInstr::Return { src: r(rng) },
-            19 => JitInstr::FieldInt {
+            19 => JitInstr::HostCall {
+                helper: HostHelper::FieldInt,
                 dst: r(rng),
-                base: r(rng),
-                slot: rng.below(8),
+                args: vec![
+                    HostArg::Reg(r(rng)),
+                    HostArg::ImmI64(i64::from(rng.below(8))),
+                ],
             },
-            20 => JitInstr::ListLen {
+            20 => JitInstr::HostCall {
+                helper: HostHelper::ListLen,
                 dst: r(rng),
-                base: r(rng),
+                args: vec![HostArg::Reg(r(rng))],
             },
-            _ => JitInstr::ListGetInt {
+            21 => JitInstr::HostCall {
+                helper: HostHelper::ListGetInt,
                 dst: r(rng),
-                base: r(rng),
-                index: r(rng),
+                args: vec![HostArg::Reg(r(rng)), HostArg::Reg(r(rng))],
+            },
+            27 => JitInstr::HostCall {
+                helper: HostHelper::ClosureId,
+                dst: r(rng),
+                args: vec![HostArg::Reg(r(rng))],
+            },
+            28 => JitInstr::HostCall {
+                helper: HostHelper::ClosureCapture,
+                dst: r(rng),
+                args: vec![
+                    HostArg::Reg(r(rng)),
+                    HostArg::ImmI64(i64::from(rng.below(8))),
+                ],
+            },
+            29 => JitInstr::HostCall {
+                helper: HostHelper::FieldHandle,
+                dst: r(rng),
+                args: vec![
+                    HostArg::Reg(r(rng)),
+                    HostArg::ImmI64(i64::from(rng.below(8))),
+                ],
+            },
+            _ => JitInstr::HostCall {
+                helper: HostHelper::ListGetHandle,
+                dst: r(rng),
+                args: vec![HostArg::Reg(r(rng)), HostArg::Reg(r(rng))],
             },
         }
     }
@@ -4815,6 +8198,7 @@ mod tests {
             n_regs,
             reg_types,
             code,
+            cold_blocks: Vec::new(),
         }
     }
 
@@ -4920,6 +8304,7 @@ mod tests {
                 n_regs,
                 reg_types,
                 code,
+                cold_blocks: Vec::new(),
             };
             if let Ok(id) = m.compile(&prog) {
                 let args: Vec<i64> = (0..n_params).map(|_| rng.next() as i64).collect();
@@ -4954,7 +8339,11 @@ mod tests {
             vec![
                 JitInstr::LoadInt { dst: 0, value: 5 },
                 JitInstr::LoadInt { dst: 1, value: 3 },
-                JitInstr::Add { dst: 2, lhs: 0, rhs: 1 },
+                JitInstr::Add {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
                 JitInstr::Return { src: 2 },
             ],
         );
@@ -4980,9 +8369,16 @@ mod tests {
                 0,
                 3,
                 vec![
-                    JitInstr::LoadInt { dst: 0, value: i64::MAX - 10 },
+                    JitInstr::LoadInt {
+                        dst: 0,
+                        value: i64::MAX - 10,
+                    },
                     JitInstr::LoadInt { dst: 1, value: 10 },
-                    JitInstr::Add { dst: 2, lhs: 0, rhs: 1 },
+                    JitInstr::Add {
+                        dst: 2,
+                        lhs: 0,
+                        rhs: 1,
+                    },
                     JitInstr::Return { src: 2 },
                 ],
             ))
@@ -4999,14 +8395,27 @@ mod tests {
             0,
             3,
             vec![
-                JitInstr::LoadInt { dst: 0, value: i64::MAX - 1 },
+                JitInstr::LoadInt {
+                    dst: 0,
+                    value: i64::MAX - 1,
+                },
                 JitInstr::LoadInt { dst: 1, value: 1 },
-                JitInstr::Add { dst: 2, lhs: 0, rhs: 1 },
+                JitInstr::Add {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
                 JitInstr::Return { src: 2 },
             ],
         );
         let iv = interval_analysis(&safe);
-        assert_eq!(iv[2][0], Interval { lo: i64::MAX as i128 - 1, hi: i64::MAX as i128 - 1 });
+        assert_eq!(
+            iv[2][0],
+            Interval {
+                lo: i64::MAX as i128 - 1,
+                hi: i64::MAX as i128 - 1
+            }
+        );
         assert!(arith_cannot_overflow(&iv[2], &safe.code[2]));
 
         // Just over: i64::MAX + 1 overflows ⇒ NOT proven, stays checked.
@@ -5014,9 +8423,16 @@ mod tests {
             0,
             3,
             vec![
-                JitInstr::LoadInt { dst: 0, value: i64::MAX },
+                JitInstr::LoadInt {
+                    dst: 0,
+                    value: i64::MAX,
+                },
                 JitInstr::LoadInt { dst: 1, value: 1 },
-                JitInstr::Add { dst: 2, lhs: 0, rhs: 1 },
+                JitInstr::Add {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
                 JitInstr::Return { src: 2 },
             ],
         );
@@ -5035,9 +8451,16 @@ mod tests {
                 0,
                 3,
                 vec![
-                    JitInstr::LoadInt { dst: 0, value: i64::MAX - 1 },
+                    JitInstr::LoadInt {
+                        dst: 0,
+                        value: i64::MAX - 1,
+                    },
                     JitInstr::LoadInt { dst: 1, value: 1 },
-                    JitInstr::Add { dst: 2, lhs: 0, rhs: 1 },
+                    JitInstr::Add {
+                        dst: 2,
+                        lhs: 0,
+                        rhs: 1,
+                    },
                     JitInstr::Return { src: 2 },
                 ],
             ))
@@ -5049,9 +8472,16 @@ mod tests {
                 0,
                 3,
                 vec![
-                    JitInstr::LoadInt { dst: 0, value: i64::MAX },
+                    JitInstr::LoadInt {
+                        dst: 0,
+                        value: i64::MAX,
+                    },
                     JitInstr::LoadInt { dst: 1, value: 1 },
-                    JitInstr::Add { dst: 2, lhs: 0, rhs: 1 },
+                    JitInstr::Add {
+                        dst: 2,
+                        lhs: 0,
+                        rhs: 1,
+                    },
                     JitInstr::Return { src: 2 },
                 ],
             ))
@@ -5072,7 +8502,11 @@ mod tests {
             2,
             3,
             vec![
-                JitInstr::Add { dst: 2, lhs: 0, rhs: 1 },
+                JitInstr::Add {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
                 JitInstr::Return { src: 2 },
             ],
         );
@@ -5096,15 +8530,29 @@ mod tests {
             1,
             vec![Handle, Int, Int],
             vec![
-                JitInstr::ListLen { dst: 1, base: 0 },
+                JitInstr::HostCall {
+                    helper: HostHelper::ListLen,
+                    dst: 1,
+                    args: vec![HostArg::Reg(0)],
+                },
                 // len + len
-                JitInstr::Add { dst: 2, lhs: 1, rhs: 1 },
+                JitInstr::Add {
+                    dst: 2,
+                    lhs: 1,
+                    rhs: 1,
+                },
                 JitInstr::Return { src: 2 },
             ],
         );
         let iv = interval_analysis(&prog);
         // ListLen result is exactly [0, i64::MAX] on entry to the Add (ip 1).
-        assert_eq!(iv[1][1], Interval { lo: 0, hi: i64::MAX as i128 });
+        assert_eq!(
+            iv[1][1],
+            Interval {
+                lo: 0,
+                hi: i64::MAX as i128
+            }
+        );
         // [0,MAX]+[0,MAX] = [0, 2*MAX] does NOT fit i64 ⇒ stays checked.
         assert!(!arith_cannot_overflow(&iv[1], &prog.code[1]));
     }
@@ -5122,7 +8570,13 @@ mod tests {
             ],
         );
         let iv = interval_analysis(&prog);
-        assert_eq!(iv[1][1], Interval { lo: 0, hi: i64::MAX as i128 });
+        assert_eq!(
+            iv[1][1],
+            Interval {
+                lo: 0,
+                hi: i64::MAX as i128
+            }
+        );
     }
 
     /// Sub and Mul interval transfer functions, plus their proven/unproven lines.
@@ -5135,8 +8589,16 @@ mod tests {
             vec![
                 JitInstr::LoadInt { dst: 0, value: 10 },
                 JitInstr::LoadInt { dst: 1, value: 3 },
-                JitInstr::Sub { dst: 2, lhs: 0, rhs: 1 },
-                JitInstr::Mul { dst: 3, lhs: 2, rhs: 1 },
+                JitInstr::Sub {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                JitInstr::Mul {
+                    dst: 3,
+                    lhs: 2,
+                    rhs: 1,
+                },
                 JitInstr::Return { src: 3 },
             ],
         );
@@ -5150,9 +8612,16 @@ mod tests {
             0,
             3,
             vec![
-                JitInstr::LoadInt { dst: 0, value: i64::MAX },
+                JitInstr::LoadInt {
+                    dst: 0,
+                    value: i64::MAX,
+                },
                 JitInstr::LoadInt { dst: 1, value: 2 },
-                JitInstr::Mul { dst: 2, lhs: 0, rhs: 1 },
+                JitInstr::Mul {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
                 JitInstr::Return { src: 2 },
             ],
         );
@@ -5173,7 +8642,11 @@ mod tests {
             vec![
                 JitInstr::LoadInt { dst: 0, value: 0 }, // 0
                 JitInstr::LoadInt { dst: 1, value: 1 }, // 1
-                JitInstr::Add { dst: 0, lhs: 0, rhs: 1 }, // 2: i = i + 1
+                JitInstr::Add {
+                    dst: 0,
+                    lhs: 0,
+                    rhs: 1,
+                }, // 2: i = i + 1
                 JitInstr::Jump { target: 2 },           // 3: back-edge to the Add
             ],
         );
@@ -5195,10 +8668,13 @@ mod tests {
             1,
             5,
             vec![
-                JitInstr::LoadInt { dst: 1, value: 0 },   // 0: i = 0
-                JitInstr::LoadInt { dst: 2, value: 0 },   // 1: total = 0
-                JitInstr::LoadInt { dst: 3, value: incr }, // 2: incr
-                JitInstr::LoadInt { dst: 4, value: 1 },   // 3: step = 1
+                JitInstr::LoadInt { dst: 1, value: 0 }, // 0: i = 0
+                JitInstr::LoadInt { dst: 2, value: 0 }, // 1: total = 0
+                JitInstr::LoadInt {
+                    dst: 3,
+                    value: incr,
+                }, // 2: incr
+                JitInstr::LoadInt { dst: 4, value: 1 }, // 3: step = 1
                 // 4: header guard — if !(i <op> limit) goto exit(8)
                 JitInstr::JumpIfIntCompare {
                     lhs: 1,
@@ -5207,10 +8683,18 @@ mod tests {
                     expected: false,
                     target: 8,
                 },
-                JitInstr::Add { dst: 2, lhs: 2, rhs: 4 }, // 5: total = total + 1 (unbounded)
-                JitInstr::Add { dst: 1, lhs: 1, rhs: 3 }, // 6: i = i + incr (loop counter)
-                JitInstr::Jump { target: 4 },             // 7: back-edge
-                JitInstr::Return { src: 2 },              // 8: exit
+                JitInstr::Add {
+                    dst: 2,
+                    lhs: 2,
+                    rhs: 4,
+                }, // 5: total = total + 1 (unbounded)
+                JitInstr::Add {
+                    dst: 1,
+                    lhs: 1,
+                    rhs: 3,
+                }, // 6: i = i + incr (loop counter)
+                JitInstr::Jump { target: 4 }, // 7: back-edge
+                JitInstr::Return { src: 2 },  // 8: exit
             ],
         )
     }
@@ -5280,7 +8764,11 @@ mod tests {
             2,
             3,
             vec![
-                JitInstr::Add { dst: 2, lhs: 0, rhs: 1 },
+                JitInstr::Add {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
                 JitInstr::Return { src: 2 },
             ],
         );
@@ -5309,9 +8797,13 @@ mod tests {
                     expected: false,
                     target: 3,
                 },
-                JitInstr::Add { dst: 2, lhs: 1, rhs: 1 }, // 1: t = i + i (on i<limit edge)
-                JitInstr::Return { src: 2 },              // 2
-                JitInstr::Return { src: 1 },              // 3: else
+                JitInstr::Add {
+                    dst: 2,
+                    lhs: 1,
+                    rhs: 1,
+                }, // 1: t = i + i (on i<limit edge)
+                JitInstr::Return { src: 2 }, // 2
+                JitInstr::Return { src: 1 }, // 3: else
             ],
         );
         let iv = interval_analysis(&prog);

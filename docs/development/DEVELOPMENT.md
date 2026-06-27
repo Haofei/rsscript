@@ -71,15 +71,14 @@ reviewing and eventually implementing its own core tooling.
 
 ## Testing Loop
 
-Use the Docker-backed public test targets. They intentionally match the only
-Cargo-facing rsscript test target names: `static`, `runtime`, `differential`,
-and `soak`.
+Use Docker Compose directly for development. The public Cargo-facing rsscript
+test target names are `static`, `runtime`, `differential`, and `soak`.
 
 ```sh
-make test-compile  # compile rsscript tests only
-make test-fast     # normal edit loop
-make test-full     # pre-commit local gate
-make test-soak     # slow parity/demo/release checks
+docker compose run --rm dev cargo test -p rsscript --no-run
+docker compose run --rm dev cargo test -p rsscript
+docker compose run --rm dev cargo clippy -p rsscript --tests -- -D warnings
+docker compose run --rm dev cargo test -p rsscript --features native-jit --no-run
 ```
 
 If a broad target fails, run the specific failing test while editing. After the
@@ -112,19 +111,23 @@ docker compose run --rm dev bash -lc 'RSS_DIFF_PROPTEST_CASES=200 RSS_GENERATIVE
 Before committing a semantic change, run the full local gate:
 
 ```sh
-make test-full
+docker compose run --rm dev cargo clippy -p rsscript --tests -- -D warnings
+docker compose run --rm dev cargo test -p rsscript --features native-jit --no-run
+docker compose run --rm dev cargo test -p rsscript
+git diff --check
 ```
 
 For release/demo parity and timing-sensitive checks, use:
 
 ```sh
-make test-soak
+docker compose run --rm dev bash -lc 'RSSCRIPT_FULL_BACKEND_PARITY=1 RSS_DIFF_PROPTEST_CASES=200 RSS_GENERATIVE_CASES=64 RSS_GENERATIVE_MUTATION_CASES=200 cargo test -p rsscript --test differential'
+docker compose run --rm dev cargo test -p rsscript --test soak -- --ignored
 ```
 
 The default development loop must stay static/runtime/differential-first. Do not
 add executable examples, checked-in self-hosted tool runs, ignored static tests,
-or any other e2e test back into `make test-fast` or `make test-full`. Slow
-release-grade checks belong in `make test-soak`.
+or any other e2e test back into the normal `cargo test -p rsscript` loop. Slow
+release-grade checks belong in the explicit soak commands above.
 
 For package-manager dogfood work, use the focused TDD gate first:
 
@@ -142,7 +145,7 @@ touching shared lowering/runtime behavior.
 Release/soak tests live in a separate opt-in manifest:
 
 ```sh
-make test-soak
+docker compose run --rm dev cargo test -p rsscript --test soak -- --ignored
 ```
 
 These tests may build native demo binaries, start local mock servers, generate
@@ -194,8 +197,8 @@ seed target, then clean the copy after the test.
 
 No unignored runtime/soak tests are allowed in this repository. Do not add
 default tests that execute RSScript programs through `rss run`, drive
-`verify-rust` as an end-to-end compiler invocation, sweep examples as behavior
-tests, run checked-in self-hosted scripts as acceptance tests, build native demo
+generated Rust/Cargo as an end-to-end compiler invocation, sweep examples as
+behavior tests, run checked-in self-hosted scripts as acceptance tests, build native demo
 binaries, or start mock servers. Fast semantic demo tests are allowed when they
 only exercise review/package/REIR functions and do not build native binaries,
 start servers, run generated packages, or depend on timing. When behavior needs

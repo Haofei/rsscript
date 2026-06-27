@@ -1,5 +1,127 @@
 use super::*;
 
+#[derive(Clone)]
+pub(super) struct PureClosurePlan {
+    regs: usize,
+    code: Vec<PureClosureInstr>,
+}
+
+#[derive(Clone)]
+enum PureClosureInstr {
+    LoadUnit {
+        dst: Reg,
+    },
+    LoadInt {
+        dst: Reg,
+        value: i64,
+    },
+    LoadFloat {
+        dst: Reg,
+        value: f64,
+    },
+    LoadBool {
+        dst: Reg,
+        value: bool,
+    },
+    Move {
+        dst: Reg,
+        src: Reg,
+    },
+    Numeric {
+        op: BinaryOp,
+        dst: Reg,
+        lhs: Reg,
+        rhs: Reg,
+    },
+    IntCompare {
+        op: RegIntCompare,
+        dst: Reg,
+        lhs: Reg,
+        rhs: Reg,
+    },
+    Equal {
+        dst: Reg,
+        lhs: Reg,
+        rhs: Reg,
+        negated: bool,
+    },
+    GetFieldSlot {
+        dst: Reg,
+        base: Reg,
+        slot: usize,
+    },
+    MakeStruct {
+        dst: Reg,
+        layout: Rc<TypeLayout>,
+        fields: Vec<Reg>,
+    },
+    Return {
+        src: Reg,
+    },
+    RuntimeError {
+        message: String,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum PureIntScalar {
+    Int(i64),
+    Bool(bool),
+}
+
+struct IntStructFoldPlan {
+    layout: Rc<TypeLayout>,
+    fields: Vec<PureIntExpr>,
+}
+
+enum IntPipelineStage {
+    Map(PureIntExpr),
+    Filter(PureBoolExpr),
+}
+
+#[derive(Clone)]
+enum PureIntExpr {
+    StateField(usize),
+    Item,
+    Const(i64),
+    Binary {
+        op: BinaryOp,
+        lhs: Box<PureIntExpr>,
+        rhs: Box<PureIntExpr>,
+    },
+}
+
+#[derive(Clone)]
+enum PureBoolExpr {
+    Const(bool),
+    Compare {
+        op: RegIntCompare,
+        lhs: Box<PureIntExpr>,
+        rhs: Box<PureIntExpr>,
+    },
+    EqualInt {
+        lhs: Box<PureIntExpr>,
+        rhs: Box<PureIntExpr>,
+        negated: bool,
+    },
+}
+
+#[derive(Clone)]
+enum PureExprSymbol {
+    Int(PureIntExpr),
+    Bool(PureBoolExpr),
+}
+
+#[derive(Clone)]
+enum PureFoldSymbol {
+    State,
+    Int(PureIntExpr),
+    IntStruct {
+        layout: Rc<TypeLayout>,
+        fields: Vec<PureIntExpr>,
+    },
+}
+
 impl RegVm {
     pub(super) fn call_native_key(
         &mut self,
@@ -173,7 +295,10 @@ impl RegVm {
 
     /// Resolve a `Tensor` handle to the stored `RssTensor` (cloned — the buffer is
     /// `Rc`-shared, so this is a cheap pointer bump, not a data copy).
-    pub(super) fn expect_tensor_ref(&self, value: &VmValue) -> Result<rsscript_runtime::RssTensor, EvalError> {
+    pub(super) fn expect_tensor_ref(
+        &self,
+        value: &VmValue,
+    ) -> Result<rsscript_runtime::RssTensor, EvalError> {
         let id = match value {
             VmValue::Native(native) if native.type_name.as_ref() == "Tensor" => native.id,
             VmValue::Managed(inner) => return self.expect_tensor_ref(&inner.borrow()),
@@ -190,7 +315,11 @@ impl RegVm {
             .ok_or_else(|| EvalError::Runtime(format!("unknown tensor id `{id}`.")))
     }
 
-    pub(super) fn channel_send(&mut self, sender: VmSender, value: VmValue) -> Result<VmValue, VmValue> {
+    pub(super) fn channel_send(
+        &mut self,
+        sender: VmSender,
+        value: VmValue,
+    ) -> Result<VmValue, VmValue> {
         if sender.closed {
             return Err(channel_error_value("channel sender closed"));
         }
@@ -234,14 +363,28 @@ impl RegVm {
     ) -> Result<VmValue, EvalError> {
         let len = list.borrow().len();
         let mut filtered = Vec::with_capacity(len);
+        let pure_predicate = self.captureless_pure_closure_plan(unit, predicate, 1);
+        if let Some(ref plan) = pure_predicate {
+            if let Some(result) = Self::try_filter_int_list_with_plan(&list, plan) {
+                return result;
+            }
+        }
+        let mut pure_regs = Vec::new();
         for index in 0..len {
             let item = list_item_at(&list, index, "List.filter")?;
-            let keep = self.call_closure_one(unit, predicate, item.clone(), base)?;
+            let keep = match pure_predicate {
+                Some(ref plan) => {
+                    Self::eval_captureless_pure_closure(plan, &[item.clone()], &mut pure_regs)?
+                }
+                None => self.call_closure_one(unit, predicate, item.clone(), base)?,
+            };
             if expect_bool_ref(&keep)? {
                 filtered.push(item);
             }
         }
-        Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(filtered)))))
+        Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
+            filtered,
+        )))))
     }
 
     pub(super) fn fold_list(
@@ -285,9 +428,23 @@ impl RegVm {
             }
         }
         let len = list.borrow().len();
+        let pure_folder = self.captureless_pure_closure_plan(unit, folder, 2);
+        if let Some(ref plan) = pure_folder {
+            if let Some(result) = Self::try_fold_int_list_with_struct_plan(&list, &state, plan) {
+                return result;
+            }
+        }
+        let mut pure_regs = Vec::new();
         for index in 0..len {
             let item = list_item_at(&list, index, "List.fold")?;
-            state = self.call_closure_two(unit, folder, state, item, base)?;
+            state = match pure_folder {
+                Some(ref plan) => Self::eval_captureless_pure_closure(
+                    plan,
+                    &[state.clone(), item.clone()],
+                    &mut pure_regs,
+                )?,
+                None => self.call_closure_two(unit, folder, state, item, base)?,
+            };
         }
         Ok(state)
     }
@@ -301,11 +458,1009 @@ impl RegVm {
     ) -> Result<VmValue, EvalError> {
         let len = list.borrow().len();
         let mut mapped = Vec::with_capacity(len);
+        let pure_mapper = self.captureless_pure_closure_plan(unit, mapper, 1);
+        if let Some(ref plan) = pure_mapper {
+            if let Some(result) = Self::try_map_int_list_with_plan(&list, plan) {
+                return result;
+            }
+        }
+        let mut pure_regs = Vec::new();
         for index in 0..len {
             let item = list_item_at(&list, index, "List.map")?;
-            mapped.push(self.call_closure_one(unit, mapper, item, base)?);
+            let mapped_value = match pure_mapper {
+                Some(ref plan) => {
+                    Self::eval_captureless_pure_closure(plan, &[item.clone()], &mut pure_regs)?
+                }
+                None => self.call_closure_one(unit, mapper, item, base)?,
+            };
+            mapped.push(mapped_value);
         }
-        Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(mapped)))))
+        Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
+            mapped,
+        )))))
+    }
+
+    fn try_filter_int_list_with_plan(
+        list: &Rc<RefCell<TypedVec>>,
+        plan: &PureClosurePlan,
+    ) -> Option<Result<VmValue, EvalError>> {
+        let borrowed = list.borrow();
+        let TypedVec::Ints(values) = &*borrowed else {
+            return None;
+        };
+        let mut filtered = Vec::with_capacity(values.len());
+        let mut regs = Vec::new();
+        for &value in values {
+            match Self::eval_captureless_pure_int_closure(plan, value, &mut regs) {
+                Some(Ok(PureIntScalar::Bool(true))) => filtered.push(value),
+                Some(Ok(PureIntScalar::Bool(false))) => {}
+                Some(Ok(PureIntScalar::Int(_))) => return None,
+                Some(Err(error)) => return Some(Err(error)),
+                None => return None,
+            }
+        }
+        Some(Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::Ints(
+            filtered,
+        ))))))
+    }
+
+    fn try_map_int_list_with_plan(
+        list: &Rc<RefCell<TypedVec>>,
+        plan: &PureClosurePlan,
+    ) -> Option<Result<VmValue, EvalError>> {
+        let borrowed = list.borrow();
+        let TypedVec::Ints(values) = &*borrowed else {
+            return None;
+        };
+        let mut mapped = Vec::with_capacity(values.len());
+        let mut regs = Vec::new();
+        for &value in values {
+            match Self::eval_captureless_pure_int_closure(plan, value, &mut regs) {
+                Some(Ok(PureIntScalar::Int(value))) => mapped.push(value),
+                Some(Ok(PureIntScalar::Bool(_))) => return None,
+                Some(Err(error)) => return Some(Err(error)),
+                None => return None,
+            }
+        }
+        Some(Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::Ints(
+            mapped,
+        ))))))
+    }
+
+    pub(super) fn try_fuse_int_list_pipeline_at(
+        &mut self,
+        unit: &RegUnit,
+        code: &[RegInstr],
+        ip: usize,
+        base: usize,
+    ) -> Result<Option<usize>, EvalError> {
+        let Some(instr) = code.get(ip) else {
+            return Ok(None);
+        };
+
+        let Some((source, stages, current_reg, after_stages, mut temps)) =
+            self.fusable_int_pipeline_prefix(unit, code, instr, ip, base)?
+        else {
+            return Ok(None);
+        };
+        let Some((fold_ip, dst, state, folder, collect_temp)) =
+            Self::fusable_fold_sink(code, after_stages, current_reg)
+        else {
+            return Ok(None);
+        };
+        if let Some(temp) = collect_temp {
+            temps.push(temp);
+        }
+        if !Self::pipeline_temps_dead_after(code, fold_ip + 1, &temps) {
+            return Ok(None);
+        }
+        let list = expect_list_ref(self.reg(base + source))?;
+        let state = self.reg(base + state).clone();
+        let folder = expect_closure_rc(self.reg(base + folder))?;
+        let Some(folder_plan) = self.captureless_pure_closure_plan(unit, &folder, 2) else {
+            return Ok(None);
+        };
+        let Some(result) =
+            Self::try_fold_int_pipeline_with_struct_plan(&list, &stages, &state, &folder_plan)
+        else {
+            return Ok(None);
+        };
+        self.set_reg(base + dst, result?);
+        Ok(Some(fold_ip + 1))
+    }
+
+    fn fusable_int_pipeline_prefix(
+        &mut self,
+        unit: &RegUnit,
+        code: &[RegInstr],
+        instr: &RegInstr,
+        ip: usize,
+        base: usize,
+    ) -> Result<Option<(Reg, Vec<IntPipelineStage>, Reg, usize, Vec<Reg>)>, EvalError> {
+        match instr {
+            RegInstr::ListMap { dst, list, mapper } => {
+                let Some(RegInstr::ListFilter {
+                    dst: filter_dst,
+                    list: filter_list,
+                    predicate,
+                }) = code.get(ip + 1)
+                else {
+                    return Ok(None);
+                };
+                if *filter_list != *dst {
+                    return Ok(None);
+                }
+                let Some(mapper) = self.compile_pure_closure_from_reg(unit, base, *mapper, 1)?
+                else {
+                    return Ok(None);
+                };
+                let Some(predicate) =
+                    self.compile_pure_closure_from_reg(unit, base, *predicate, 1)?
+                else {
+                    return Ok(None);
+                };
+                let Some(mapper) = Self::compile_int_expr_closure(&mapper) else {
+                    return Ok(None);
+                };
+                let Some(predicate) = Self::compile_bool_expr_closure(&predicate) else {
+                    return Ok(None);
+                };
+                Ok(Some((
+                    *list,
+                    vec![
+                        IntPipelineStage::Map(mapper),
+                        IntPipelineStage::Filter(predicate),
+                    ],
+                    *filter_dst,
+                    ip + 2,
+                    vec![*dst, *filter_dst],
+                )))
+            }
+            RegInstr::ListFilter {
+                dst,
+                list,
+                predicate,
+            } => {
+                let Some(RegInstr::ListMap {
+                    dst: map_dst,
+                    list: map_list,
+                    mapper,
+                }) = code.get(ip + 1)
+                else {
+                    return Ok(None);
+                };
+                if *map_list != *dst {
+                    return Ok(None);
+                }
+                let Some(predicate) =
+                    self.compile_pure_closure_from_reg(unit, base, *predicate, 1)?
+                else {
+                    return Ok(None);
+                };
+                let Some(mapper) = self.compile_pure_closure_from_reg(unit, base, *mapper, 1)?
+                else {
+                    return Ok(None);
+                };
+                let Some(predicate) = Self::compile_bool_expr_closure(&predicate) else {
+                    return Ok(None);
+                };
+                let Some(mapper) = Self::compile_int_expr_closure(&mapper) else {
+                    return Ok(None);
+                };
+                Ok(Some((
+                    *list,
+                    vec![
+                        IntPipelineStage::Filter(predicate),
+                        IntPipelineStage::Map(mapper),
+                    ],
+                    *map_dst,
+                    ip + 2,
+                    vec![*dst, *map_dst],
+                )))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn compile_pure_closure_from_reg(
+        &mut self,
+        unit: &RegUnit,
+        base: usize,
+        reg: Reg,
+        args_len: usize,
+    ) -> Result<Option<PureClosurePlan>, EvalError> {
+        let closure = expect_closure_rc(self.reg(base + reg))?;
+        Ok(self.captureless_pure_closure_plan(unit, &closure, args_len))
+    }
+
+    fn fusable_fold_sink(
+        code: &[RegInstr],
+        after_stages: usize,
+        current_reg: Reg,
+    ) -> Option<(usize, Reg, Reg, Reg, Option<Reg>)> {
+        match code.get(after_stages)? {
+            RegInstr::ListFold {
+                dst,
+                list,
+                state,
+                folder,
+            } if *list == current_reg => Some((after_stages, *dst, *state, *folder, None)),
+            RegInstr::CallIntrinsic {
+                dst: collect_dst,
+                intrinsic: RegIntrinsic::PipelineCollect,
+                args,
+            } if args.as_slice() == [current_reg] => match code.get(after_stages + 1)? {
+                RegInstr::ListFold {
+                    dst,
+                    list,
+                    state,
+                    folder,
+                } if *list == *collect_dst => {
+                    Some((after_stages + 1, *dst, *state, *folder, Some(*collect_dst)))
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn pipeline_temps_dead_after(code: &[RegInstr], start: usize, temps: &[Reg]) -> bool {
+        !code
+            .iter()
+            .skip(start)
+            .any(|instr| temps.iter().any(|reg| instr_reads_register(instr, *reg)))
+    }
+
+    fn try_fold_int_pipeline_with_struct_plan(
+        list: &Rc<RefCell<TypedVec>>,
+        stages: &[IntPipelineStage],
+        state: &VmValue,
+        folder: &PureClosurePlan,
+    ) -> Option<Result<VmValue, EvalError>> {
+        let borrowed = list.borrow();
+        let TypedVec::Ints(values) = &*borrowed else {
+            return None;
+        };
+        let fold = Self::compile_int_struct_fold_plan(folder)?;
+        let (_state_layout, mut state_fields) = Self::pure_int_struct_parts_from_value(state)?;
+        let mut next_fields = vec![0; fold.fields.len()];
+
+        'items: for &source_value in values {
+            let mut value = source_value;
+            for stage in stages {
+                match stage {
+                    IntPipelineStage::Map(expr) => {
+                        value = match Self::eval_pure_int_expr(expr, &[], value) {
+                            Some(Ok(value)) => value,
+                            Some(Err(error)) => return Some(Err(error)),
+                            None => return None,
+                        }
+                    }
+                    IntPipelineStage::Filter(expr) => {
+                        let keep = match Self::eval_pure_bool_expr(expr, &[], value) {
+                            Some(Ok(value)) => value,
+                            Some(Err(error)) => return Some(Err(error)),
+                            None => return None,
+                        };
+                        if !keep {
+                            continue 'items;
+                        }
+                    }
+                }
+            }
+
+            for (index, expr) in fold.fields.iter().enumerate() {
+                let evaluated = match Self::eval_pure_int_expr(expr, &state_fields, value) {
+                    Some(Ok(value)) => value,
+                    Some(Err(error)) => return Some(Err(error)),
+                    None => return None,
+                };
+                next_fields[index] = evaluated;
+            }
+            std::mem::swap(&mut state_fields, &mut next_fields);
+        }
+
+        Some(Ok(VmValue::Struct(Rc::new(VmStruct::with_layout(
+            fold.layout,
+            state_fields.into_iter().map(VmValue::Int).collect(),
+        )))))
+    }
+
+    fn try_fold_int_list_with_struct_plan(
+        list: &Rc<RefCell<TypedVec>>,
+        state: &VmValue,
+        plan: &PureClosurePlan,
+    ) -> Option<Result<VmValue, EvalError>> {
+        let borrowed = list.borrow();
+        let TypedVec::Ints(values) = &*borrowed else {
+            return None;
+        };
+        let fold = Self::compile_int_struct_fold_plan(plan)?;
+        let (_state_layout, mut state_fields) = Self::pure_int_struct_parts_from_value(state)?;
+        let mut next_fields = vec![0; fold.fields.len()];
+        for &value in values {
+            for (index, expr) in fold.fields.iter().enumerate() {
+                let evaluated = match Self::eval_pure_int_expr(expr, &state_fields, value) {
+                    Some(Ok(value)) => value,
+                    Some(Err(error)) => return Some(Err(error)),
+                    None => return None,
+                };
+                next_fields[index] = evaluated;
+            }
+            std::mem::swap(&mut state_fields, &mut next_fields);
+        }
+        Some(Ok(VmValue::Struct(Rc::new(VmStruct::with_layout(
+            fold.layout,
+            state_fields.into_iter().map(VmValue::Int).collect(),
+        )))))
+    }
+
+    fn pure_int_struct_parts_from_value(value: &VmValue) -> Option<(Rc<TypeLayout>, Vec<i64>)> {
+        match value {
+            VmValue::Struct(data) => {
+                let mut fields = Vec::with_capacity(data.fields.len());
+                for field in &data.fields {
+                    let VmValue::Int(value) = field else {
+                        return None;
+                    };
+                    fields.push(*value);
+                }
+                Some((Rc::clone(&data.layout), fields))
+            }
+            VmValue::Managed(inner) => Self::pure_int_struct_parts_from_value(&inner.borrow()),
+            _ => None,
+        }
+    }
+
+    fn compile_int_struct_fold_plan(plan: &PureClosurePlan) -> Option<IntStructFoldPlan> {
+        let mut regs = vec![None; plan.regs];
+        regs[0] = Some(PureFoldSymbol::State);
+        regs[1] = Some(PureFoldSymbol::Int(PureIntExpr::Item));
+
+        let read = |regs: &[Option<PureFoldSymbol>], reg: usize| -> Option<PureFoldSymbol> {
+            regs.get(reg).and_then(Option::as_ref).cloned()
+        };
+        let write = |regs: &mut [Option<PureFoldSymbol>],
+                     reg: usize,
+                     value: PureFoldSymbol|
+         -> Option<()> {
+            *regs.get_mut(reg)? = Some(value);
+            Some(())
+        };
+        let read_int = |regs: &[Option<PureFoldSymbol>], reg: usize| -> Option<PureIntExpr> {
+            match read(regs, reg)? {
+                PureFoldSymbol::Int(expr) => Some(expr),
+                PureFoldSymbol::State | PureFoldSymbol::IntStruct { .. } => None,
+            }
+        };
+
+        for instr in &plan.code {
+            match instr {
+                PureClosureInstr::LoadInt { dst, value } => write(
+                    regs.as_mut_slice(),
+                    *dst,
+                    PureFoldSymbol::Int(PureIntExpr::Const(*value)),
+                )?,
+                PureClosureInstr::Move { dst, src } => {
+                    let value = read(regs.as_slice(), *src)?;
+                    write(regs.as_mut_slice(), *dst, value)?;
+                }
+                PureClosureInstr::Numeric { op, dst, lhs, rhs } => {
+                    let lhs = read_int(regs.as_slice(), *lhs)?;
+                    let rhs = read_int(regs.as_slice(), *rhs)?;
+                    write(
+                        regs.as_mut_slice(),
+                        *dst,
+                        PureFoldSymbol::Int(PureIntExpr::Binary {
+                            op: *op,
+                            lhs: Box::new(lhs),
+                            rhs: Box::new(rhs),
+                        }),
+                    )?;
+                }
+                PureClosureInstr::GetFieldSlot { dst, base, slot } => {
+                    let expr = match read(regs.as_slice(), *base)? {
+                        PureFoldSymbol::State => PureIntExpr::StateField(*slot),
+                        PureFoldSymbol::IntStruct { fields, .. } => fields.get(*slot)?.clone(),
+                        PureFoldSymbol::Int(_) => return None,
+                    };
+                    write(regs.as_mut_slice(), *dst, PureFoldSymbol::Int(expr))?;
+                }
+                PureClosureInstr::MakeStruct {
+                    dst,
+                    layout,
+                    fields,
+                } => {
+                    let mut exprs = Vec::with_capacity(fields.len());
+                    for field in fields {
+                        exprs.push(read_int(regs.as_slice(), *field)?);
+                    }
+                    write(
+                        regs.as_mut_slice(),
+                        *dst,
+                        PureFoldSymbol::IntStruct {
+                            layout: Rc::clone(layout),
+                            fields: exprs,
+                        },
+                    )?;
+                }
+                PureClosureInstr::Return { src } => {
+                    let PureFoldSymbol::IntStruct { layout, fields } = read(regs.as_slice(), *src)?
+                    else {
+                        return None;
+                    };
+                    return Some(IntStructFoldPlan { layout, fields });
+                }
+                PureClosureInstr::RuntimeError { .. }
+                | PureClosureInstr::LoadUnit { .. }
+                | PureClosureInstr::LoadFloat { .. }
+                | PureClosureInstr::LoadBool { .. }
+                | PureClosureInstr::IntCompare { .. }
+                | PureClosureInstr::Equal { .. } => return None,
+            }
+        }
+        None
+    }
+
+    fn eval_pure_int_expr(
+        expr: &PureIntExpr,
+        state_fields: &[i64],
+        item: i64,
+    ) -> Option<Result<i64, EvalError>> {
+        Some(match expr {
+            PureIntExpr::StateField(slot) => Ok(*state_fields.get(*slot)?),
+            PureIntExpr::Item => Ok(item),
+            PureIntExpr::Const(value) => Ok(*value),
+            PureIntExpr::Binary { op, lhs, rhs } => {
+                let lhs = match Self::eval_pure_int_expr(lhs, state_fields, item)? {
+                    Ok(value) => value,
+                    Err(error) => return Some(Err(error)),
+                };
+                let rhs = match Self::eval_pure_int_expr(rhs, state_fields, item)? {
+                    Ok(value) => value,
+                    Err(error) => return Some(Err(error)),
+                };
+                Self::eval_pure_int_binary(*op, lhs, rhs)
+            }
+        })
+    }
+
+    fn compile_int_expr_closure(plan: &PureClosurePlan) -> Option<PureIntExpr> {
+        match Self::compile_unary_int_item_expr_closure(plan)? {
+            PureExprSymbol::Int(expr) => Some(expr),
+            PureExprSymbol::Bool(_) => None,
+        }
+    }
+
+    fn compile_bool_expr_closure(plan: &PureClosurePlan) -> Option<PureBoolExpr> {
+        match Self::compile_unary_int_item_expr_closure(plan)? {
+            PureExprSymbol::Bool(expr) => Some(expr),
+            PureExprSymbol::Int(_) => None,
+        }
+    }
+
+    fn compile_unary_int_item_expr_closure(plan: &PureClosurePlan) -> Option<PureExprSymbol> {
+        let mut regs = vec![None; plan.regs];
+        regs[0] = Some(PureExprSymbol::Int(PureIntExpr::Item));
+
+        let read = |regs: &[Option<PureExprSymbol>], reg: usize| -> Option<PureExprSymbol> {
+            regs.get(reg).and_then(Option::as_ref).cloned()
+        };
+        let write = |regs: &mut [Option<PureExprSymbol>],
+                     reg: usize,
+                     value: PureExprSymbol|
+         -> Option<()> {
+            *regs.get_mut(reg)? = Some(value);
+            Some(())
+        };
+        let read_int = |regs: &[Option<PureExprSymbol>], reg: usize| -> Option<PureIntExpr> {
+            match read(regs, reg)? {
+                PureExprSymbol::Int(expr) => Some(expr),
+                PureExprSymbol::Bool(_) => None,
+            }
+        };
+
+        for instr in &plan.code {
+            match instr {
+                PureClosureInstr::LoadInt { dst, value } => write(
+                    regs.as_mut_slice(),
+                    *dst,
+                    PureExprSymbol::Int(PureIntExpr::Const(*value)),
+                )?,
+                PureClosureInstr::LoadBool { dst, value } => write(
+                    regs.as_mut_slice(),
+                    *dst,
+                    PureExprSymbol::Bool(PureBoolExpr::Const(*value)),
+                )?,
+                PureClosureInstr::Move { dst, src } => {
+                    let value = read(regs.as_slice(), *src)?;
+                    write(regs.as_mut_slice(), *dst, value)?;
+                }
+                PureClosureInstr::Numeric { op, dst, lhs, rhs } => {
+                    let lhs = read_int(regs.as_slice(), *lhs)?;
+                    let rhs = read_int(regs.as_slice(), *rhs)?;
+                    write(
+                        regs.as_mut_slice(),
+                        *dst,
+                        PureExprSymbol::Int(PureIntExpr::Binary {
+                            op: *op,
+                            lhs: Box::new(lhs),
+                            rhs: Box::new(rhs),
+                        }),
+                    )?;
+                }
+                PureClosureInstr::IntCompare { op, dst, lhs, rhs } => {
+                    let lhs = read_int(regs.as_slice(), *lhs)?;
+                    let rhs = read_int(regs.as_slice(), *rhs)?;
+                    write(
+                        regs.as_mut_slice(),
+                        *dst,
+                        PureExprSymbol::Bool(PureBoolExpr::Compare {
+                            op: *op,
+                            lhs: Box::new(lhs),
+                            rhs: Box::new(rhs),
+                        }),
+                    )?;
+                }
+                PureClosureInstr::Equal {
+                    dst,
+                    lhs,
+                    rhs,
+                    negated,
+                } => {
+                    let lhs = read_int(regs.as_slice(), *lhs)?;
+                    let rhs = read_int(regs.as_slice(), *rhs)?;
+                    write(
+                        regs.as_mut_slice(),
+                        *dst,
+                        PureExprSymbol::Bool(PureBoolExpr::EqualInt {
+                            lhs: Box::new(lhs),
+                            rhs: Box::new(rhs),
+                            negated: *negated,
+                        }),
+                    )?;
+                }
+                PureClosureInstr::Return { src } => return read(regs.as_slice(), *src),
+                PureClosureInstr::RuntimeError { .. }
+                | PureClosureInstr::LoadUnit { .. }
+                | PureClosureInstr::LoadFloat { .. }
+                | PureClosureInstr::GetFieldSlot { .. }
+                | PureClosureInstr::MakeStruct { .. } => return None,
+            }
+        }
+        None
+    }
+
+    fn eval_pure_bool_expr(
+        expr: &PureBoolExpr,
+        state_fields: &[i64],
+        item: i64,
+    ) -> Option<Result<bool, EvalError>> {
+        Some(match expr {
+            PureBoolExpr::Const(value) => Ok(*value),
+            PureBoolExpr::Compare { op, lhs, rhs } => {
+                let lhs = match Self::eval_pure_int_expr(lhs, state_fields, item)? {
+                    Ok(value) => value,
+                    Err(error) => return Some(Err(error)),
+                };
+                let rhs = match Self::eval_pure_int_expr(rhs, state_fields, item)? {
+                    Ok(value) => value,
+                    Err(error) => return Some(Err(error)),
+                };
+                Ok(eval_int_compare(*op, lhs, rhs))
+            }
+            PureBoolExpr::EqualInt { lhs, rhs, negated } => {
+                let lhs = match Self::eval_pure_int_expr(lhs, state_fields, item)? {
+                    Ok(value) => value,
+                    Err(error) => return Some(Err(error)),
+                };
+                let rhs = match Self::eval_pure_int_expr(rhs, state_fields, item)? {
+                    Ok(value) => value,
+                    Err(error) => return Some(Err(error)),
+                };
+                Ok((lhs == rhs) ^ *negated)
+            }
+        })
+    }
+
+    fn captureless_pure_closure_plan(
+        &mut self,
+        unit: &RegUnit,
+        closure: &VmClosure,
+        args_len: usize,
+    ) -> Option<PureClosurePlan> {
+        if !closure.captures.is_empty() {
+            return None;
+        }
+        let key = (closure.function, args_len);
+        if let Some(cached) = self.pure_closure_plan_cache.get(&key) {
+            return cached.clone();
+        }
+        let plan = Self::compile_captureless_pure_closure(unit, closure, args_len);
+        self.pure_closure_plan_cache.insert(key, plan.clone());
+        plan
+    }
+
+    fn compile_captureless_pure_closure(
+        unit: &RegUnit,
+        closure: &VmClosure,
+        args_len: usize,
+    ) -> Option<PureClosurePlan> {
+        if !closure.captures.is_empty() {
+            return None;
+        }
+        let function = unit.functions.get(closure.function)?;
+        if function.params != args_len || function.captures != 0 || function.params > function.regs
+        {
+            return None;
+        }
+
+        let mut code = Vec::with_capacity(function.code.len());
+        for instr in &function.code {
+            let planned = match instr {
+                RegInstr::LoadUnit { dst } => PureClosureInstr::LoadUnit { dst: *dst },
+                RegInstr::LoadInt { dst, value } => PureClosureInstr::LoadInt {
+                    dst: *dst,
+                    value: *value,
+                },
+                RegInstr::LoadFloat { dst, value } => PureClosureInstr::LoadFloat {
+                    dst: *dst,
+                    value: *value,
+                },
+                RegInstr::LoadBool { dst, value } => PureClosureInstr::LoadBool {
+                    dst: *dst,
+                    value: *value,
+                },
+                RegInstr::Move { dst, src } => PureClosureInstr::Move {
+                    dst: *dst,
+                    src: *src,
+                },
+                RegInstr::AddInt { dst, lhs, rhs }
+                | RegInstr::SubInt { dst, lhs, rhs }
+                | RegInstr::MulInt { dst, lhs, rhs }
+                | RegInstr::DivInt { dst, lhs, rhs }
+                | RegInstr::ModInt { dst, lhs, rhs } => {
+                    let (op, _, _, _) = arithmetic_binop_parts(instr)?;
+                    PureClosureInstr::Numeric {
+                        op,
+                        dst: *dst,
+                        lhs: *lhs,
+                        rhs: *rhs,
+                    }
+                }
+                RegInstr::LessInt { dst, lhs, rhs } => PureClosureInstr::IntCompare {
+                    op: RegIntCompare::Less,
+                    dst: *dst,
+                    lhs: *lhs,
+                    rhs: *rhs,
+                },
+                RegInstr::LessEqualInt { dst, lhs, rhs } => PureClosureInstr::IntCompare {
+                    op: RegIntCompare::LessEqual,
+                    dst: *dst,
+                    lhs: *lhs,
+                    rhs: *rhs,
+                },
+                RegInstr::GreaterInt { dst, lhs, rhs } => PureClosureInstr::IntCompare {
+                    op: RegIntCompare::Greater,
+                    dst: *dst,
+                    lhs: *lhs,
+                    rhs: *rhs,
+                },
+                RegInstr::GreaterEqualInt { dst, lhs, rhs } => PureClosureInstr::IntCompare {
+                    op: RegIntCompare::GreaterEqual,
+                    dst: *dst,
+                    lhs: *lhs,
+                    rhs: *rhs,
+                },
+                RegInstr::Equal { dst, lhs, rhs } => PureClosureInstr::Equal {
+                    dst: *dst,
+                    lhs: *lhs,
+                    rhs: *rhs,
+                    negated: false,
+                },
+                RegInstr::NotEqual { dst, lhs, rhs } => PureClosureInstr::Equal {
+                    dst: *dst,
+                    lhs: *lhs,
+                    rhs: *rhs,
+                    negated: true,
+                },
+                RegInstr::GetFieldSlot { dst, base, slot } => PureClosureInstr::GetFieldSlot {
+                    dst: *dst,
+                    base: *base,
+                    slot: *slot,
+                },
+                RegInstr::MakeStruct {
+                    dst,
+                    layout,
+                    fields,
+                } => PureClosureInstr::MakeStruct {
+                    dst: *dst,
+                    layout: Rc::clone(layout),
+                    fields: fields.iter().map(|(_, reg)| *reg).collect(),
+                },
+                RegInstr::Return { src } => PureClosureInstr::Return { src: *src },
+                RegInstr::RuntimeError { message } => PureClosureInstr::RuntimeError {
+                    message: message.clone(),
+                },
+                _ => return None,
+            };
+            code.push(planned);
+        }
+
+        Some(PureClosurePlan {
+            regs: function.regs,
+            code,
+        })
+    }
+
+    #[cfg(test)]
+    pub(super) fn try_call_captureless_pure_closure(
+        &self,
+        unit: &RegUnit,
+        closure: &VmClosure,
+        args: &[VmValue],
+    ) -> Option<Result<VmValue, EvalError>> {
+        let plan = Self::compile_captureless_pure_closure(unit, closure, args.len())?;
+        let mut regs = Vec::new();
+        Some(Self::eval_captureless_pure_closure(&plan, args, &mut regs))
+    }
+
+    #[cfg(test)]
+    pub(super) fn try_fold_int_list_with_struct_plan_for_test(
+        unit: &RegUnit,
+        list: &Rc<RefCell<TypedVec>>,
+        state: &VmValue,
+        folder: &VmClosure,
+    ) -> Option<Result<VmValue, EvalError>> {
+        let plan = Self::compile_captureless_pure_closure(unit, folder, 2)?;
+        Self::try_fold_int_list_with_struct_plan(list, state, &plan)
+    }
+
+    fn eval_captureless_pure_int_closure(
+        plan: &PureClosurePlan,
+        arg: i64,
+        regs: &mut Vec<Option<PureIntScalar>>,
+    ) -> Option<Result<PureIntScalar, EvalError>> {
+        regs.clear();
+        regs.resize_with(plan.regs, || None);
+        regs[0] = Some(PureIntScalar::Int(arg));
+
+        let read_reg = |regs: &[Option<PureIntScalar>], reg: usize| -> Option<PureIntScalar> {
+            regs.get(reg).and_then(|slot| *slot)
+        };
+        let write_reg =
+            |regs: &mut [Option<PureIntScalar>], reg: usize, value: PureIntScalar| -> bool {
+                let Some(slot) = regs.get_mut(reg) else {
+                    return false;
+                };
+                *slot = Some(value);
+                true
+            };
+        let read_int = |regs: &[Option<PureIntScalar>], reg: usize| -> Option<i64> {
+            match read_reg(regs, reg)? {
+                PureIntScalar::Int(value) => Some(value),
+                PureIntScalar::Bool(_) => None,
+            }
+        };
+
+        for instr in &plan.code {
+            let step = match instr {
+                PureClosureInstr::LoadInt { dst, value } => {
+                    write_reg(regs.as_mut_slice(), *dst, PureIntScalar::Int(*value))
+                        .then_some(Ok(()))?
+                }
+                PureClosureInstr::LoadBool { dst, value } => {
+                    write_reg(regs.as_mut_slice(), *dst, PureIntScalar::Bool(*value))
+                        .then_some(Ok(()))?
+                }
+                PureClosureInstr::Move { dst, src } => {
+                    let value = read_reg(regs.as_slice(), *src)?;
+                    write_reg(regs.as_mut_slice(), *dst, value).then_some(Ok(()))?
+                }
+                PureClosureInstr::Numeric { op, dst, lhs, rhs } => {
+                    let lhs = read_int(regs.as_slice(), *lhs)?;
+                    let rhs = read_int(regs.as_slice(), *rhs)?;
+                    Self::eval_pure_int_binary(*op, lhs, rhs)
+                        .map(|value| {
+                            write_reg(regs.as_mut_slice(), *dst, PureIntScalar::Int(value))
+                                .then_some(())
+                        })
+                        .and_then(|written| match written {
+                            Some(()) => Ok(()),
+                            None => Err(EvalError::Runtime(
+                                "reg VM closure write register out of range.".to_string(),
+                            )),
+                        })
+                }
+                PureClosureInstr::IntCompare { op, dst, lhs, rhs } => {
+                    let lhs = read_int(regs.as_slice(), *lhs)?;
+                    let rhs = read_int(regs.as_slice(), *rhs)?;
+                    write_reg(
+                        regs.as_mut_slice(),
+                        *dst,
+                        PureIntScalar::Bool(eval_int_compare(*op, lhs, rhs)),
+                    )
+                    .then_some(Ok(()))?
+                }
+                PureClosureInstr::Equal {
+                    dst,
+                    lhs,
+                    rhs,
+                    negated,
+                } => {
+                    let lhs = read_reg(regs.as_slice(), *lhs)?;
+                    let rhs = read_reg(regs.as_slice(), *rhs)?;
+                    let equal = match (lhs, rhs) {
+                        (PureIntScalar::Int(lhs), PureIntScalar::Int(rhs)) => lhs == rhs,
+                        (PureIntScalar::Bool(lhs), PureIntScalar::Bool(rhs)) => lhs == rhs,
+                        _ => return None,
+                    };
+                    write_reg(
+                        regs.as_mut_slice(),
+                        *dst,
+                        PureIntScalar::Bool(equal ^ *negated),
+                    )
+                    .then_some(Ok(()))?
+                }
+                PureClosureInstr::Return { src } => {
+                    return Some(Ok(read_reg(regs.as_slice(), *src)?));
+                }
+                PureClosureInstr::RuntimeError { message } => {
+                    return Some(Err(EvalError::Runtime(message.clone())));
+                }
+                PureClosureInstr::LoadUnit { .. }
+                | PureClosureInstr::LoadFloat { .. }
+                | PureClosureInstr::GetFieldSlot { .. }
+                | PureClosureInstr::MakeStruct { .. } => return None,
+            };
+            if let Err(error) = step {
+                return Some(Err(error));
+            }
+        }
+        None
+    }
+
+    fn eval_pure_int_binary(op: BinaryOp, lhs: i64, rhs: i64) -> Result<i64, EvalError> {
+        match op {
+            BinaryOp::Add => lhs
+                .checked_add(rhs)
+                .ok_or_else(|| int_overflow_error("addition", lhs, rhs)),
+            BinaryOp::Subtract => lhs
+                .checked_sub(rhs)
+                .ok_or_else(|| int_overflow_error("subtraction", lhs, rhs)),
+            BinaryOp::Multiply => lhs
+                .checked_mul(rhs)
+                .ok_or_else(|| int_overflow_error("multiplication", lhs, rhs)),
+            BinaryOp::Divide => {
+                if rhs == 0 {
+                    return Err(EvalError::Runtime("integer division by zero".to_string()));
+                }
+                lhs.checked_div(rhs)
+                    .ok_or_else(|| int_overflow_error("division", lhs, rhs))
+            }
+            BinaryOp::Modulo => {
+                if rhs == 0 {
+                    return Err(EvalError::Runtime("integer modulo by zero".to_string()));
+                }
+                lhs.checked_rem(rhs)
+                    .ok_or_else(|| int_overflow_error("modulo", lhs, rhs))
+            }
+            _ => Err(EvalError::Runtime(
+                "reg VM closure scalar integer evaluator called with non-integer op.".to_string(),
+            )),
+        }
+    }
+
+    fn eval_captureless_pure_closure(
+        plan: &PureClosurePlan,
+        args: &[VmValue],
+        regs: &mut Vec<Option<VmValue>>,
+    ) -> Result<VmValue, EvalError> {
+        regs.clear();
+        regs.resize_with(plan.regs, || None);
+        for (index, value) in args.iter().enumerate() {
+            regs[index] = Some(value.clone());
+        }
+
+        let read_reg = |regs: &[Option<VmValue>], reg: usize| -> Result<VmValue, EvalError> {
+            regs.get(reg)
+                .and_then(Option::as_ref)
+                .cloned()
+                .ok_or_else(|| {
+                    EvalError::Runtime(format!("reg VM closure read uninitialized register {reg}."))
+                })
+        };
+        let write_reg =
+            |regs: &mut [Option<VmValue>], reg: usize, value: VmValue| -> Result<(), EvalError> {
+                let Some(slot) = regs.get_mut(reg) else {
+                    return Err(EvalError::Runtime(format!(
+                        "reg VM closure write register {reg} out of range."
+                    )));
+                };
+                *slot = Some(value);
+                Ok(())
+            };
+
+        for instr in &plan.code {
+            let step = match instr {
+                PureClosureInstr::LoadUnit { dst } => {
+                    write_reg(regs.as_mut_slice(), *dst, VmValue::Unit)
+                }
+                PureClosureInstr::LoadInt { dst, value } => {
+                    write_reg(regs.as_mut_slice(), *dst, VmValue::Int(*value))
+                }
+                PureClosureInstr::LoadFloat { dst, value } => {
+                    write_reg(regs.as_mut_slice(), *dst, VmValue::Float(*value))
+                }
+                PureClosureInstr::LoadBool { dst, value } => {
+                    write_reg(regs.as_mut_slice(), *dst, VmValue::Bool(*value))
+                }
+                PureClosureInstr::Move { dst, src } => {
+                    let value = read_reg(regs.as_slice(), *src);
+                    value.and_then(|value| write_reg(regs.as_mut_slice(), *dst, value))
+                }
+                PureClosureInstr::Numeric { op, dst, lhs, rhs } => {
+                    let lhs = read_reg(regs.as_slice(), *lhs);
+                    let rhs = read_reg(regs.as_slice(), *rhs);
+                    lhs.and_then(|lhs| rhs.and_then(|rhs| eval_numeric_binary(*op, &lhs, &rhs)))
+                        .and_then(|value| write_reg(regs.as_mut_slice(), *dst, value))
+                }
+                PureClosureInstr::IntCompare { op, dst, lhs, rhs } => {
+                    let lhs =
+                        read_reg(regs.as_slice(), *lhs).and_then(|value| expect_int_ref(&value));
+                    let rhs =
+                        read_reg(regs.as_slice(), *rhs).and_then(|value| expect_int_ref(&value));
+                    lhs.and_then(|lhs| rhs.map(|rhs| eval_int_compare(*op, lhs, rhs)))
+                        .and_then(|value| {
+                            write_reg(regs.as_mut_slice(), *dst, VmValue::Bool(value))
+                        })
+                }
+                PureClosureInstr::Equal {
+                    dst,
+                    lhs,
+                    rhs,
+                    negated,
+                } => {
+                    let lhs = read_reg(regs.as_slice(), *lhs);
+                    let rhs = read_reg(regs.as_slice(), *rhs);
+                    lhs.and_then(|lhs| rhs.map(|rhs| (lhs == rhs) ^ *negated))
+                        .and_then(|value| {
+                            write_reg(regs.as_mut_slice(), *dst, VmValue::Bool(value))
+                        })
+                }
+                PureClosureInstr::GetFieldSlot { dst, base, slot } => {
+                    let value = read_reg(regs.as_slice(), *base)
+                        .and_then(|value| read_field_slot(&value, *slot));
+                    value.and_then(|value| write_reg(regs.as_mut_slice(), *dst, value))
+                }
+                PureClosureInstr::MakeStruct {
+                    dst,
+                    layout,
+                    fields,
+                } => {
+                    let mut values = Vec::with_capacity(fields.len());
+                    for reg in fields {
+                        match read_reg(regs.as_slice(), *reg) {
+                            Ok(value) => values.push(value),
+                            Err(error) => return Err(error),
+                        }
+                    }
+                    write_reg(
+                        regs.as_mut_slice(),
+                        *dst,
+                        VmValue::Struct(Rc::new(VmStruct::with_layout(Rc::clone(layout), values))),
+                    )
+                }
+                PureClosureInstr::Return { src } => return read_reg(regs.as_slice(), *src),
+                PureClosureInstr::RuntimeError { message } => {
+                    return Err(EvalError::Runtime(message.clone()));
+                }
+            };
+            if let Err(error) = step {
+                return Err(error);
+            }
+        }
+        Ok(VmValue::Unit)
     }
 
     pub(super) fn sort_list_with_closure(

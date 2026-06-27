@@ -1,19 +1,25 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use rsscript::{
-    check_generated_rust_package, parse_runtime_diagnostics, write_generated_rust_package,
+    EvalError, EvalOutput, NativeValue, check_generated_rust_package,
+    eval_package_main_with_args_and_native_bindings, format_diagnostics_human,
+    format_diagnostics_json, load_package_native_bindings, parse_runtime_diagnostics,
+    reg_vm_eval_source_main_with_args, write_generated_rust_package,
 };
 
 use super::{
     cleanup_temp_dir, cli_input_package_name, default_runtime_path, generated_target_dir_from_env,
-    lower_cli_input_to_rust_package, print_diagnostics, print_usage, read_cached_fingerprint,
-    required_flag_value, run_cache_dir, run_input_fingerprint, write_cached_fingerprint,
+    is_package_directory, lower_cli_input_to_rust_package, print_diagnostics, print_usage,
+    read_cached_fingerprint, required_flag_value, run_cache_dir, run_input_fingerprint,
+    write_cached_fingerprint,
 };
 
 #[derive(Debug)]
 struct RunOptions<'a> {
     json: bool,
+    vm: bool,
     release: bool,
     dry_run: bool,
     path: Option<&'a str>,
@@ -23,6 +29,7 @@ struct RunOptions<'a> {
 
 fn parse_run_args(args: &[String]) -> Result<RunOptions<'_>, String> {
     let mut json = false;
+    let mut vm = false;
     let mut release = false;
     let mut dry_run = false;
     let mut path = None;
@@ -36,6 +43,8 @@ fn parse_run_args(args: &[String]) -> Result<RunOptions<'_>, String> {
             break;
         } else if arg == "--json" {
             json = true;
+        } else if arg == "--vm" {
+            vm = true;
         } else if arg == "--release" {
             release = true;
         } else if arg == "--dry-run" {
@@ -53,28 +62,32 @@ fn parse_run_args(args: &[String]) -> Result<RunOptions<'_>, String> {
         index += 1;
     }
 
-    Ok(RunOptions {
+    let options = RunOptions {
         json,
+        vm,
         release,
         dry_run,
         path,
         out_dir,
         program_args,
-    })
+    };
+    validate_run_options(&options)?;
+    Ok(options)
+}
+
+fn validate_run_options(options: &RunOptions<'_>) -> Result<(), String> {
+    if options.vm && options.release {
+        return Err("`rss run --vm` cannot be combined with `--release`.".to_string());
+    }
+    if options.vm && options.dry_run {
+        return Err("`rss run --vm` cannot be combined with `--dry-run`.".to_string());
+    }
+    if options.vm && options.out_dir.is_some() {
+        return Err("`rss run --vm` cannot be combined with `--out-dir`.".to_string());
+    }
+    Ok(())
 }
 pub(crate) fn run_generated_rust(args: &[String]) -> ExitCode {
-    run_generated_rust_inner(args, false)
-}
-
-/// Like [`run_generated_rust`] but inherits the child's stdio so the compiled
-/// program's output streams live instead of being captured and printed at exit.
-/// Used by `rss dev --run --release` so a slow/looping run shows progress. `rss
-/// run` keeps capturing (so its runtime-diagnostic parsing is unchanged).
-pub(crate) fn run_generated_rust_streaming(args: &[String]) -> ExitCode {
-    run_generated_rust_inner(args, true)
-}
-
-fn run_generated_rust_inner(args: &[String], stream_stdio: bool) -> ExitCode {
     let options = match parse_run_args(args) {
         Ok(options) => options,
         Err(error) => {
@@ -86,6 +99,9 @@ fn run_generated_rust_inner(args: &[String], stream_stdio: bool) -> ExitCode {
         print_usage();
         return ExitCode::from(2);
     };
+    if options.vm {
+        return run_via_vm(path, &options.program_args, options.json);
+    }
     let runtime_path = match default_runtime_path() {
         Ok(path) => path,
         Err(error) => {
@@ -115,7 +131,6 @@ fn run_generated_rust_inner(args: &[String], stream_stdio: bool) -> ExitCode {
                 options.release,
                 &options.program_args,
                 options.json,
-                stream_stdio,
             );
         }
     }
@@ -177,8 +192,73 @@ fn run_generated_rust_inner(args: &[String], stream_stdio: bool) -> ExitCode {
         options.release,
         &options.program_args,
         options.json,
-        stream_stdio,
     )
+}
+
+/// Execute through the register VM instead of the Rust-lowering AOT backend.
+/// This is the fast edit-run path folded into `rss run` so VM execution remains
+/// available without growing the top-level command set.
+fn run_via_vm(path: &str, program_args: &[&str], json: bool) -> ExitCode {
+    let result = if is_package_directory(path) {
+        run_package_via_vm(path, program_args)
+    } else {
+        let source = match fs::read_to_string(path) {
+            Ok(source) => source,
+            Err(error) => {
+                eprintln!("failed to read {path}: {error}");
+                return ExitCode::from(2);
+            }
+        };
+        run_source_via_vm(path, &source, program_args)
+    };
+    finish_vm_run(result, json)
+}
+
+fn run_source_via_vm(
+    path: &str,
+    source: &str,
+    program_args: &[&str],
+) -> Result<EvalOutput, EvalError> {
+    reg_vm_eval_source_main_with_args(path, source, program_args.iter().copied())
+}
+
+fn run_package_via_vm(path: &str, program_args: &[&str]) -> Result<EvalOutput, EvalError> {
+    let package_dir = Path::new(path);
+    let bindings = load_package_native_bindings(package_dir).map_err(EvalError::Runtime)?;
+    eval_package_main_with_args_and_native_bindings(
+        package_dir,
+        program_args.iter().copied(),
+        bindings,
+    )
+}
+
+fn finish_vm_run(result: Result<EvalOutput, EvalError>, json: bool) -> ExitCode {
+    match result {
+        Ok(output) => {
+            print!("{}", output.stdout);
+            eprint!("{}", output.stderr);
+            if let Some(NativeValue::Variant { name, .. }) = &output.native_value
+                && name == "Err"
+            {
+                eprintln!("RSScript main returned an error: {}", output.value);
+                return ExitCode::from(1);
+            }
+            println!("{}", output.value);
+            ExitCode::SUCCESS
+        }
+        Err(EvalError::Diagnostics(diagnostics)) => {
+            if json {
+                println!("{}", format_diagnostics_json(&diagnostics));
+            } else {
+                print!("{}", format_diagnostics_human(&diagnostics));
+            }
+            ExitCode::from(1)
+        }
+        Err(EvalError::Runtime(error)) => {
+            eprintln!("{error}");
+            ExitCode::from(1)
+        }
+    }
 }
 
 /// Runs the fast-path cache hit: the generated package in `cache_dir` is already
@@ -189,9 +269,8 @@ fn run_cached_package(
     release: bool,
     program_args: &[&str],
     json: bool,
-    stream_stdio: bool,
 ) -> ExitCode {
-    build_and_run_package(cache_dir, release, program_args, json, stream_stdio)
+    build_and_run_package(cache_dir, release, program_args, json)
 }
 
 /// Invokes `cargo run` for the generated package in `package_dir` and translates
@@ -203,7 +282,6 @@ fn build_and_run_package(
     release: bool,
     program_args: &[&str],
     json: bool,
-    stream_stdio: bool,
 ) -> ExitCode {
     let mut cargo = Command::new("cargo");
     for arg in cargo_run_args(package_dir, release, program_args) {
@@ -214,27 +292,6 @@ fn build_and_run_package(
     }
     if let Ok(current_dir) = std::env::current_dir() {
         cargo.env("RSS_RUN_WORKSPACE_ROOT", current_dir);
-    }
-    if stream_stdio {
-        // Inherit stdio so cargo's build progress and the program's stdout stream
-        // live to the terminal (no buffering until exit). The captured-output
-        // diagnostic post-processing is intentionally skipped here; it only runs
-        // for the captured `rss run` path.
-        let status = match cargo.status() {
-            Ok(status) => status,
-            Err(error) => {
-                eprintln!("failed to run cargo: {error}");
-                return ExitCode::from(2);
-            }
-        };
-        return if status.success() {
-            ExitCode::SUCCESS
-        } else {
-            status
-                .code()
-                .map(|code| ExitCode::from(code as u8))
-                .unwrap_or_else(|| ExitCode::from(1))
-        };
     }
     let output = match cargo.output() {
         Ok(output) => output,
@@ -359,10 +416,34 @@ mod tests {
         let options = super::parse_run_args(&values).expect("arguments should parse");
 
         assert!(options.json);
+        assert!(!options.vm);
         assert!(options.release);
         assert!(options.dry_run);
         assert_eq!(options.path, Some("packages/rayon/tests/sort-speed"));
         assert_eq!(options.program_args, vec!["input"]);
+    }
+
+    #[test]
+    fn parse_run_args_accepts_vm_before_path() {
+        let values = args(&["--json", "--vm", "demo.rss", "--", "input"]);
+        let options = super::parse_run_args(&values).expect("arguments should parse");
+
+        assert!(options.json);
+        assert!(options.vm);
+        assert!(!options.release);
+        assert!(!options.dry_run);
+        assert_eq!(options.path, Some("demo.rss"));
+        assert_eq!(options.program_args, vec!["input"]);
+    }
+
+    #[test]
+    fn parse_run_args_treats_vm_after_separator_as_program_arg() {
+        let values = args(&["demo.rss", "--", "--vm"]);
+        let options = super::parse_run_args(&values).expect("arguments should parse");
+
+        assert!(!options.vm);
+        assert_eq!(options.path, Some("demo.rss"));
+        assert_eq!(options.program_args, vec!["--vm"]);
     }
 
     #[test]
@@ -412,5 +493,29 @@ mod tests {
         let error = super::parse_run_args(&values).expect_err("missing out-dir should fail");
 
         assert_eq!(error, "missing value for `--out-dir`.");
+    }
+
+    #[test]
+    fn parse_run_args_rejects_vm_release_combo() {
+        let values = args(&["--vm", "--release", "demo.rss"]);
+        let error = super::parse_run_args(&values).expect_err("vm release combo should fail");
+
+        assert_eq!(error, "`rss run --vm` cannot be combined with `--release`.");
+    }
+
+    #[test]
+    fn parse_run_args_rejects_vm_dry_run_combo() {
+        let values = args(&["--vm", "--dry-run", "demo.rss"]);
+        let error = super::parse_run_args(&values).expect_err("vm dry-run combo should fail");
+
+        assert_eq!(error, "`rss run --vm` cannot be combined with `--dry-run`.");
+    }
+
+    #[test]
+    fn parse_run_args_rejects_vm_out_dir_combo() {
+        let values = args(&["--vm", "demo.rss", "--out-dir", "generated"]);
+        let error = super::parse_run_args(&values).expect_err("vm out-dir combo should fail");
+
+        assert_eq!(error, "`rss run --vm` cannot be combined with `--out-dir`.");
     }
 }

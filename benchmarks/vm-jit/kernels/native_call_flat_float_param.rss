@@ -1,0 +1,44 @@
+features: local
+
+// JIT hot path: a native parent passes a read-only flat `List<Float>` parameter
+// to a compiled native child. This pins the native-to-native FlatFloat ABI:
+// the caller must forward both the raw f64 pointer and the parallel length word.
+
+fn bench_size(default: Int) -> Int {
+    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
+    match String.parse_int(value: read raw) {
+        Some(value) => {
+            return value
+        }
+        None => {
+            return default
+        }
+    }
+}
+
+fn read_at(values: read List<Float>, index: Int) -> Float {
+    return List.get<Float>(list: read values, index: index) + Int.to_float(value: read List.len<Float>(list: read values))
+}
+
+fn hot(values: read List<Float>, limit: Int) -> Float {
+    let mut i = 0
+    let mut total = 0.0
+    let n = List.len<Float>(list: read values)
+    while i < limit {
+        total = total + read_at(values: read values, index: read i % n)
+        i = i + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    let limit = bench_size(default: 750000)
+    local values = List.new<Float>()
+    List.push<Float>(list: mut values, value: read 1.25)
+    List.push<Float>(list: mut values, value: read 2.5)
+    List.push<Float>(list: mut values, value: read 3.75)
+    List.push<Float>(list: mut values, value: read 5.0)
+    let result = hot(values: read values, limit: limit)
+    Log.write(message: read Float.to_string(value: read result))
+    return Unit
+}

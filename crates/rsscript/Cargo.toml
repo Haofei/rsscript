@@ -45,8 +45,8 @@ vm-jit = { path = "../vm-jit", optional = true }
 
 [features]
 # Native (Cranelift) baseline JIT for the integer/control core. Off by default so
-# normal builds/tests don't pull in the codegen dependency; enable for the
-# native differential backend, `rss bench --mode jit-native`, and force-JIT CI.
+# normal builds/tests don't pull in the codegen dependency; enable for the Rust
+# differential/benchmark harnesses and force-JIT CI.
 native-jit = ["dep:vm-jit"]
 
 [build-dependencies]

@@ -1,5 +1,5 @@
-use super::*;
 use super::expr::*;
+use super::*;
 
 pub(super) fn declaration_line_end(tokens: &[Token], start: usize) -> usize {
     if start >= tokens.len() {
@@ -100,7 +100,11 @@ fn is_statement_postfix_token(token: &Token) -> bool {
     token.symbol("?") || token.symbol(".")
 }
 
-pub(super) fn find_control_body_open(tokens: &[Token], start: usize, limit: usize) -> Option<usize> {
+pub(super) fn find_control_body_open(
+    tokens: &[Token],
+    start: usize,
+    limit: usize,
+) -> Option<usize> {
     let mut depth = 0usize;
     let mut angle_depth = 0usize;
     for (index, token) in tokens.iter().enumerate().take(limit).skip(start + 1) {
@@ -152,7 +156,12 @@ pub(super) fn find_top_level_symbol(
     None
 }
 
-pub(super) fn find_top_level_ident(tokens: &[Token], start: usize, end: usize, ident: &str) -> Option<usize> {
+pub(super) fn find_top_level_ident(
+    tokens: &[Token],
+    start: usize,
+    end: usize,
+    ident: &str,
+) -> Option<usize> {
     let mut depth = 0usize;
     for (index, token) in tokens.iter().enumerate().take(end).skip(start) {
         if token.symbol("(") || token.symbol("{") || token.symbol("[") {
@@ -259,4 +268,3 @@ pub(super) fn tokens_to_source(tokens: &[Token], start: usize, end: usize) -> St
         .collect::<Vec<_>>()
         .join("")
 }
-

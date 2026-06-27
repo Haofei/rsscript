@@ -1621,7 +1621,7 @@ or lower-confidence facts rather than being treated as reviewed. The dependency
 edge records package-shape evidence (`rsspkg.toml` / package review metadata);
 transitive graph risk and effective interface hashes come from graph, lockfile,
 or registry producers when those artifacts are available. The implemented
-RSScript package-check producer (`rss pkg check --reir`) emits CI gate
+RSScript package-check producer (`rss pkg ci --json`) emits CI gate
 `policy_result` facts for overall status, graph, lock, and native checks; stale
 lock package-change facts and changed lock-field facts; provider implementation
 declarations from `[implements]`; native unsafe/build-time facts; and
@@ -1650,8 +1650,7 @@ entry lacks an expected checksum, effective interface hash, review hash, or
 native hash value, the corresponding `supply_chain` fact is `unknown` rather than
 `true`; missing lock hashes must not be represented as verified lockfile
 evidence.
-The implemented RSScript lock-update producer
-(`rss pkg review update --reir`) emits update-risk, per-package risk, and
+Future lock-update REIR producers may emit update-risk, per-package risk, and
 changed-field facts with `lockfile_entry` evidence so dependency update review
 can be merged with package, graph, and publish evidence. The top-level
 update-risk fact uses `/risk` evidence. Added or changed package/field evidence
@@ -1666,9 +1665,9 @@ package-review evidence. For resolved `path+` graph nodes, `dependency_path`
 evidence uses the resolved package directory as its evidence file; unresolved
 registry, git, or missing path nodes leave `evidence.file` empty rather than
 inventing a local artifact path.
-The implemented RSScript publish producer (`rss pkg publish --dry-run --reir`)
-emits registry/archive `supply_chain` facts and publish check results with
-`registry_metadata` evidence. The RSScript publish adapter consumes the current
+The RSScript publish dry-run JSON can be adapted into registry/archive
+`supply_chain` facts and publish check results with `registry_metadata`
+evidence. The RSScript publish adapter consumes the current
 `rss.registry.index.v1` dry-run shape, including review schema, default feature
 selection, default graph footprint, and native/unsafe registry review signals.
 It emits `native_boundary` and `unsafe_boundary` facts for the registry preview
@@ -2160,8 +2159,8 @@ security and runtime drift detection.
 REIR v0.2 does not require a specific CLI. The current prototype CLI supports
 `collect --producer rsscript`, `reconcile`, `diff`, `slice`, `merge`, and `show`
 over existing REIR bundle JSON. The RSScript collector accepts `--review-map`
-JSON from `rss review --map --json`, `--package-review` JSON from
-`rss pkg review --json`, or both; package-review JSON may also carry an embedded
+JSON from a review-map artifact, `--package-review` JSON from `rss pkg review
+--json`, or both; package-review JSON may also carry an embedded
 `review_map`. It also accepts package-manager JSON artifacts from
 `--package-check`, `--package-lock`, `--lock-update`, `--package-tree`,
 `--package-publish`, `--package-metadata`, and `--package-vendor`, then merges
@@ -2175,8 +2174,7 @@ below remain design targets.
 reir collect --producer rsscript --package-review review/rss-package.json --out review/reir/rsscript.json
 reir collect --producer rsscript --review-map review/rss-map.json --package-name my_package --out review/reir/rsscript-map.json
 reir collect --producer rsscript --package-review review/package-review.json --package-check review/package-check.json --package-lock rsspkg.lock.json --out review/reir/rsscript-ci.json
-rss pkg review --reir . > review/reir/rsscript.json
-rss pkg check --reir . > review/reir/rsscript-check.json
+rss pkg ci --json . > review/reir/rsscript-check.json
 rss pkg metadata .   # writes review/package-review.json and review/reir/rsscript.json
 rss pkg metadata --verify .   # verifies committed package review and REIR artifacts
 rss pkg metadata --verify --reir . > review/reir/rsscript-metadata-verify.json
@@ -2187,15 +2185,13 @@ rss pkg vendor --dry-run --reir . > review/reir/rsscript-vendor.json
 reir merge review/reir/*.json --out review/reir/system.json
 reir reconcile --target prod --out review/reir/system-reconciled.json review/reir/system.json
 reir diff --fail-on-change --baseline review/reir-baseline.json --current review/reir/system.json
-rss pkg diff --reir old-package new-package
-rss pkg reir diff --fail-on-change --from review/reir-baseline.json --to review/reir/rsscript.json
 reir slice --bundle review/reir/system-reconciled.json --kind package_risk
 ```
 
-RSScript tooling provides `rss pkg review --reir` as a convenience wrapper, but
-REIR remains the common format rather than an RSScript-only output.
-`rss pkg reir diff` is the package-manager artifact path for comparing an
-already locked REIR baseline with a current package REIR bundle.
+RSScript tooling provides REIR through the package subcommands that explicitly
+support `--reir`, while REIR remains the common format rather than an
+RSScript-only output. `reir diff` is the artifact path for comparing an already
+locked REIR baseline with a current package REIR bundle.
 `reir reconcile` supports the older two-bundle form
 `--required required.json --granted granted.json [--target name]` and the
 merged-bundle form shown above. In merged-bundle mode it reads required and
@@ -2204,9 +2200,9 @@ granted facts by `role`, writes reconciliation results back into the bundle when
 When `--target <name>` is supplied, the implemented CLI records that target name
 on each emitted `reir.reconciliation.v0.2` item and includes it in human output.
 This is provenance for CI/review display; it does not filter facts by target.
-`reir diff` and `rss pkg reir diff` compare facts, edges, subject chains,
-reconciliations, slices, embedded diff artifacts, policy results, profile rules,
-exceptions, producer metadata, bundle schema, and ontology. They default to
+`reir diff` compares facts, edges, subject chains, reconciliations, slices,
+embedded diff artifacts, policy results, profile rules, exceptions, producer
+metadata, bundle schema, and ontology. It defaults to
 reporting semantic differences without failing; `--fail-on-change` makes any
 diff item a non-zero CI result.
 `reir slice` reads a bundle and can filter by any implemented slice kind listed

@@ -132,7 +132,7 @@ runs:
         cp "$REVIEW_OUTPUT_FILE" "$COMMENT_FILE"
 
         # Write outputs
-        COMMENT_DELIMITER="RSSCRIPT_REVIEW_$(uuidgen 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4().hex)')"
+        COMMENT_DELIMITER="RSSCRIPT_REVIEW_$(uuidgen 2>/dev/null || date +%s%N)"
         {
           echo "comment<<$COMMENT_DELIMITER"
           cat "$REVIEW_OUTPUT_FILE"
@@ -168,7 +168,7 @@ runs:
         fi
 
         if [ -s "$CI_JSON_FILE" ]; then
-          REVIEW_STATUS=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status","unknown"))' "$CI_JSON_FILE")
+          REVIEW_STATUS=$(perl -MJSON::PP -e 'local $/; my $d = decode_json(<>); print $d->{status} // "unknown";' < "$CI_JSON_FILE")
         elif [ $EXIT_CODE -ne 0 ]; then
           REVIEW_STATUS="fail"
         else

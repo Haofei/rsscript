@@ -737,7 +737,9 @@ pub(super) fn review_map_line_count(
     next_line.saturating_sub(start_line).max(1)
 }
 
-pub(super) fn review_map_classification_label(classification: ReviewMapClassification) -> &'static str {
+pub(super) fn review_map_classification_label(
+    classification: ReviewMapClassification,
+) -> &'static str {
     match classification {
         ReviewMapClassification::ReviewRequired => "must-review",
         ReviewMapClassification::Foldable => "low-semantic-risk",

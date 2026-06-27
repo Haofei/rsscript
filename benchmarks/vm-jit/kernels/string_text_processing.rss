@@ -16,20 +16,30 @@ fn bench_size(default: Int) -> Int {
 
 fn main() -> Unit {
     let limit = bench_size(default: 100000)
-    let line = "alpha,beta,gamma,delta,epsilon"
+    let total = hot(
+        line: read "alpha,beta,gamma,delta,epsilon",
+        delimiter: read ",",
+        fill: read " ",
+        prefix: read "alpha",
+        limit: limit,
+    )
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+
+fn hot(line: read String, delimiter: read String, fill: read String, prefix: read String, limit: Int) -> Int {
     let mut index = 0
     let mut total = 0
 
     while index < limit {
-        let parts = String.split(value: read line, delimiter: read ",")
-        let padded = String.pad_left(value: read line, width: 40, fill: read " ")
+        let parts = String.split(value: read line, delimiter: read delimiter)
+        let padded = String.pad_left(value: read line, width: 40, fill: read fill)
         total = total + List.len<String>(list: read parts) + String.len(value: read padded)
-        if String.starts_with(value: read line, prefix: read "alpha") {
+        if String.starts_with(value: read line, prefix: read prefix) {
             total = total + 1
         }
         index = index + 1
     }
 
-    Log.write(message: read String.from_int(value: total))
-    return Unit
+    return total
 }

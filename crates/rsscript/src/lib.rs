@@ -107,7 +107,9 @@ pub use reg_vm::{
 };
 #[cfg(feature = "native-jit")]
 pub use reg_vm::{
-    NativeStats, reg_vm_eval_source_main_native, reg_vm_eval_source_main_native_force_deopt,
+    NativeStats, reg_vm_eval_source_main_native,
+    reg_vm_eval_source_main_native_force_all_safepoints,
+    reg_vm_eval_source_main_native_force_deopt, reg_vm_eval_source_main_native_force_safepoint,
     reg_vm_eval_source_main_native_osr, reg_vm_eval_source_main_native_osr_report,
     reg_vm_eval_source_main_native_precise,
 };

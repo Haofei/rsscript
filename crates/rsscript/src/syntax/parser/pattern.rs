@@ -1,9 +1,9 @@
-use super::*;
 use super::expr::*;
 use super::items::*;
 use super::scan::*;
 use super::stmt::*;
 use super::types::*;
+use super::*;
 
 pub(super) fn parse_match_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
     // match <value> { arms... }
@@ -178,7 +178,11 @@ fn parse_dotted_pattern_name(
     Some((name, index))
 }
 
-pub(super) fn parse_match_pattern(tokens: &[Token], start: usize, end: usize) -> Option<MatchPattern> {
+pub(super) fn parse_match_pattern(
+    tokens: &[Token],
+    start: usize,
+    end: usize,
+) -> Option<MatchPattern> {
     // A tuple pattern `(p0, p1, ..)` desugars to the synthetic `__TupleN` struct
     // pattern `__TupleN { item0: p0, item1: p1, .. }`. Checked before `trim_outer`
     // strips the parens as grouping.
@@ -549,4 +553,3 @@ fn parse_single_literal_or_constructor_pattern(
 fn starts_like_constructor(name: &str) -> bool {
     name.chars().next().is_some_and(char::is_uppercase)
 }
-

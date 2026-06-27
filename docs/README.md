@@ -10,7 +10,7 @@ LLMs); everything else lives here, grouped into categorized subfolders.
 |-----|-----------------|
 | [RSScript_v0.7_Spec.md](spec/RSScript_v0.7_Spec.md) | The language. Opens with a binding **Constitution** (Articles I–IX) that overrides every chapter. |
 | [RSScript_Execution_Spec_v0.1.md](spec/RSScript_Execution_Spec_v0.1.md) | The execution engine: reg-VM + JIT tiers — the single home. Normative parity contract (interp ≡ tier-0 ≡ native ≡ AOT), calling convention, sandbox/hardening, host-helper ABI (§0–11), plus the consolidated implementation baseline, JIT phase status, and per-feature parity ledger (Part II appendices). Subordinate to the language spec. |
-| [RSScript_Package_Manager_Design_v0.6.md](spec/RSScript_Package_Manager_Design_v0.6.md) | The package manager (`rss pkg`): `.rssi` contracts, `rsspkg.toml`/`.lock`, semantic dependency review. |
+| [RSScript_Package_Manager_Design_v0.6.md](spec/RSScript_Package_Manager_Design_v0.6.md) | The package manager (`rss pkg`): `.rssi` contracts, `rsspkg.toml`/`.lock`, semantic dependency review. This is still a v0.6 design document; use the root README and `rss --help` for implemented command shape. |
 | [Review_Evidence_IR_Spec_v0.2.md](spec/Review_Evidence_IR_Spec_v0.2.md) | REIR — the review-evidence IR consumed by `--reir` tooling and CI gates. |
 
 ## Architecture
@@ -34,13 +34,10 @@ LLMs); everything else lives here, grouped into categorized subfolders.
 
 ## Planning
 
-| Doc | Idea |
-|-----|------|
-| [spec-todo.md](planning/spec-todo.md) | Prioritized list of unimplemented spec surface (the §3.2 / §20.1 superset). |
-| [ml-perf-todo.md](planning/ml-perf-todo.md) | ML-framework perf plan: native tensor kernels (fix VM big-matrix cliff) + AOT build-time levers. |
-| [cross-isolate-design.md](planning/cross-isolate-design.md) | Feasibility + smallest-sound-slice plan for the cross-isolate message API (§20.2-3): message-channel core landed, multi-heap isolates still future. |
-| [RSScript_AI_Generation_Feedback_v0.1.md](planning/RSScript_AI_Generation_Feedback_v0.1.md) | Agent-facing generation oracle plus fast interpreter feedback loop for AI-generated RSScript. |
-| [declarative-rewrite-roadmap.md](planning/declarative-rewrite-roadmap.md) | Highest-leverage feature for the ML port: escaping/storable closures (keystone) → a PatternMatcher/graph_rewrite library, so the scheduler transliterates tinygrad instead of paraphrasing it. |
+Planning docs are non-normative and can be active roadmaps or historical evidence.
+Start with [planning/README.md](planning/README.md), which separates current
+roadmaps from shipped/rejected performance notes and records the authority order
+for resolving stale claims.
 
 ## Conventions
 

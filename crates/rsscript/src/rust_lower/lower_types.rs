@@ -1,7 +1,4 @@
-
-use crate::syntax::ast::{
-    BinaryOp, Callee, DataEffect, Expr, Stmt, TypeKind, TypeRef,
-};
+use crate::syntax::ast::{BinaryOp, Callee, DataEffect, Expr, Stmt, TypeKind, TypeRef};
 
 use super::helpers::*;
 
@@ -40,7 +37,6 @@ impl RustLowerer<'_> {
                 .is_none_or(|return_ty| self.type_ref_is_concrete_for_annotation(return_ty))
     }
 
-
     pub(super) fn infer_call_arg_type(&self, expr: &Expr) -> Option<TypeRef> {
         match expr {
             Expr::Effect { value, .. }
@@ -50,7 +46,6 @@ impl RustLowerer<'_> {
             _ => self.infer_expr_type(expr),
         }
     }
-
 
     pub(super) fn infer_expr_type(&self, expr: &Expr) -> Option<TypeRef> {
         match expr {
@@ -177,7 +172,6 @@ impl RustLowerer<'_> {
         }
     }
 
-
     /// The Rust type annotation to emit on a `let`, when it is needed for
     /// inference and provably matches the value's owned lowered type.
     ///
@@ -211,7 +205,6 @@ impl RustLowerer<'_> {
         }
         Some(self.lower_type_ref(ty, ManagedPosition::Bare))
     }
-
 
     pub(super) fn lower_type_ref(&self, ty: &TypeRef, position: ManagedPosition) -> String {
         if ty.name == "Fn" {
@@ -462,8 +455,11 @@ impl RustLowerer<'_> {
         }
     }
 
-
-    pub(super) fn should_wrap_in_managed_handle(&self, ty: &TypeRef, position: ManagedPosition) -> bool {
+    pub(super) fn should_wrap_in_managed_handle(
+        &self,
+        ty: &TypeRef,
+        position: ManagedPosition,
+    ) -> bool {
         if !matches!(
             position,
             ManagedPosition::Param | ManagedPosition::Return | ManagedPosition::Nested
@@ -473,9 +469,7 @@ impl RustLowerer<'_> {
         matches!(self.type_kinds.get(&ty.name), Some(TypeKind::Class))
     }
 
-
     pub(super) fn is_class_type(&self, ty: &TypeRef) -> bool {
         matches!(self.type_kinds.get(&ty.name), Some(TypeKind::Class))
     }
-
 }

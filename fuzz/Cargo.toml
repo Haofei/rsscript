@@ -36,6 +36,12 @@ path = "../crates/rsscript"
 [dependencies.rss-testgen]
 path = "../crates/rss-testgen"
 
+[features]
+# Enable the native Cranelift tier in the generative differential. This pulls the
+# native backend, force-deopt backend, forced-safepoint backends, and OSR backend
+# into `rss-testgen::backends::all_inprocess_backends`.
+native-jit = ["rsscript/native-jit", "rss-testgen/native-jit"]
+
 # Prevent this from interfering with `cargo test` over the parent tree.
 [[bin]]
 name = "parse_check"

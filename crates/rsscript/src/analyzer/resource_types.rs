@@ -204,7 +204,11 @@ impl Analyzer<'_> {
         }
     }
 
-    pub(super) fn check_resource_generic_type_ref(&mut self, ty: &TypeRef, context: ResourceGenericContext) {
+    pub(super) fn check_resource_generic_type_ref(
+        &mut self,
+        ty: &TypeRef,
+        context: ResourceGenericContext,
+    ) {
         if ty.name != "ResourcePool" {
             for (index, arg) in ty.args.iter().enumerate() {
                 if self.hir.type_kind(&arg.name) == Some(HirTypeKind::Resource)
@@ -349,7 +353,10 @@ impl Analyzer<'_> {
         }
     }
 
-    pub(super) fn check_resource_generic_calls_in_block(&mut self, block: &crate::syntax::ast::Block) {
+    pub(super) fn check_resource_generic_calls_in_block(
+        &mut self,
+        block: &crate::syntax::ast::Block,
+    ) {
         for statement in &block.statements {
             self.check_resource_generic_calls_in_stmt(statement);
         }
@@ -479,7 +486,11 @@ impl Analyzer<'_> {
         }
     }
 
-    pub(super) fn check_resource_pool_arg(&mut self, type_name: &str, span: &crate::diagnostic::Span) {
+    pub(super) fn check_resource_pool_arg(
+        &mut self,
+        type_name: &str,
+        span: &crate::diagnostic::Span,
+    ) {
         match self.hir.type_kind(type_name) {
             Some(HirTypeKind::Resource) | None => {}
             Some(HirTypeKind::Class) | Some(HirTypeKind::Struct) | Some(HirTypeKind::Sum) => {
@@ -492,5 +503,4 @@ impl Analyzer<'_> {
             }
         }
     }
-
 }

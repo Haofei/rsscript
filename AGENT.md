@@ -68,12 +68,14 @@ it as the lone exception, not the pattern. Spec: Constitution Article VIII, §2A
 rss check  [--core|--no-core] [--interface <f.rssi> ...] <file.rss>   # type/effect check
 rss check  <package-directory>            # check a package
 rss check  --explain <CODE>               # explain a diagnostic code, e.g. RS0026
-rss lint   <file.rss>                     # check + style lints
+rss check  --lint <file.rss>              # check + style lints
+rss fix    [--write] <file.rss>           # apply machine-applicable fixes
 rss fmt    <file.rss>                     # canonical formatter
-rss run    <file-or-package-dir> [-- <args>...]   # lower to Rust + build + run
+rss run    --vm <file-or-package-dir> [-- <args>...]  # fast VM run
+rss run    <file-or-package-dir> [-- <args>...]       # lower to Rust + build + run
 rss test   [--all] [--filter <substr>]
-rss dev    [--run] [--once] <file-or-dir> # watch loop
 rss pkg    [--json] [dir]            # package health check
+rss pkg    add <dep|dep@version|path>
 rss pkg    review [--json] [dir]     # review surface
 rss pkg    diff [--json] <old-dir> <new-dir>
 rss pkg    ci [--json] [dir]         # CI-facing package check
@@ -192,7 +194,7 @@ if count == 1 {
     Log.write(message: read "many")
 }
 
-for query in queries {            // `for` iterates a `List<T>` only (v0.6)
+for query in queries {            // `for` iterates a `List<T>` only
     DbConnection.query(conn: mut conn, sql: read query.sql)?
 }
 
@@ -325,7 +327,7 @@ Constructors are call-like and use the same named-arg + effect rules.
 
 ---
 
-## 7. Async (restricted in v0.6)
+## 7. Async (restricted v0.7 surface)
 
 ```rust
 features: async
@@ -336,9 +338,12 @@ async fn fetch(url: read Url) -> Result<Int, HttpError> {
 }
 ```
 
-Rules: `await` appears **only inside an `async fn`** and must directly consume an
-async call. There is no `Future`/`Poll`/`spawn` surface in v0.6 (single-isolate,
-cooperative). `spawn` and `Stream<T>` are review-visible but not executable yet.
+Rules: `await` appears **only inside an `async fn`**. The executable v0.7 surface
+supports direct `await`, structured `task_group { async let ... }`, `select`,
+bounded channels, streams, and `await for` in the single-isolate cooperative
+model. There is no public `Future`/`Poll`/`spawn` surface; unstructured `spawn`,
+async closures, public task handles, and cross-isolate task execution remain
+future work.
 
 ---
 

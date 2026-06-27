@@ -253,5 +253,4 @@ impl Analyzer<'_> {
             | Expr::Unknown(_) => {}
         }
     }
-
 }

@@ -3,8 +3,9 @@
 //! libFuzzer's bytes are decoded by `rss-testgen` into a well-typed, terminating
 //! RSScript program, which is then run through every in-process backend (VM
 //! interpreter, tier-0 JIT, and — under the `native-jit` feature — the native
-//! tier + its force-deopt twin). Any disagreement panics, which libFuzzer records
-//! as a crash with the offending seed; replay it with `rss-testgen <hex-seed>`.
+//! tier plus deopt/OSR stress twins). Any disagreement panics, which libFuzzer
+//! records as a crash with the offending seed; replay it with
+//! `rss-testgen <hex-seed>`.
 //!
 //! The compiled-Rust backend is deliberately excluded here (a `rustc` invocation
 //! per case is far too slow for coverage-guided fuzzing); it is folded in by the

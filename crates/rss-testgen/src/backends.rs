@@ -2,8 +2,8 @@
 //!
 //! These run RSScript source through the register VM's public entry points —
 //! interpreter, tier-0 JIT, and (under the `native-jit` feature) the native
-//! Cranelift tier plus its force-deopt twin. They are microsecond-fast (no
-//! `rustc` involved), so the whole set can run inside a libFuzzer iteration.
+//! Cranelift tier plus its deopt/OSR stress twins. They are microsecond-fast
+//! (no `rustc` involved), so the whole set can run inside a libFuzzer iteration.
 //!
 //! The compiled-Rust backend is intentionally absent here: it builds a crate per
 //! program and is far too slow for coverage-guided fuzzing. The in-suite proptest
@@ -98,6 +98,77 @@ impl Backend for NativeJitForceDeopt {
     }
 }
 
+/// The native tier with one generated safepoint forced to bail. This is slower
+/// than the pre-entry force-deopt backend but exercises the real safepoint
+/// payload/resume path.
+#[cfg(feature = "native-jit")]
+pub struct NativeJitForceSafepoint(pub u32);
+
+#[cfg(feature = "native-jit")]
+impl Backend for NativeJitForceSafepoint {
+    fn name(&self) -> &'static str {
+        match self.0 {
+            1 => "vm-jit-native-force-safepoint-1",
+            2 => "vm-jit-native-force-safepoint-2",
+            3 => "vm-jit-native-force-safepoint-3",
+            4 => "vm-jit-native-force-safepoint-4",
+            _ => "vm-jit-native-force-safepoint",
+        }
+    }
+
+    fn run_stdout(&self, file: &str, source: &str, args: &[&str]) -> Result<String, String> {
+        rsscript::reg_vm_eval_source_main_native_force_safepoint(
+            file,
+            source,
+            args.iter().copied(),
+            self.0,
+        )
+        .map_err(|error| format!("{error:?}"))
+        .and_then(stdout_or_main_err)
+    }
+}
+
+/// The native tier with every generated safepoint forced to bail. This gives the
+/// coverage-guided differential a deterministic deopt-every backend without
+/// relying on process-global environment variables.
+#[cfg(feature = "native-jit")]
+pub struct NativeJitForceAllSafepoints;
+
+#[cfg(feature = "native-jit")]
+impl Backend for NativeJitForceAllSafepoints {
+    fn name(&self) -> &'static str {
+        "vm-jit-native-force-all-safepoints"
+    }
+
+    fn run_stdout(&self, file: &str, source: &str, args: &[&str]) -> Result<String, String> {
+        rsscript::reg_vm_eval_source_main_native_force_all_safepoints(
+            file,
+            source,
+            args.iter().copied(),
+        )
+        .map_err(|error| format!("{error:?}"))
+        .and_then(stdout_or_main_err)
+    }
+}
+
+/// The native tier with OSR forced on. This exercises mid-function native entry
+/// and the OSR-exit precise-deopt resume path.
+#[cfg(feature = "native-jit")]
+pub struct NativeJitOsr;
+
+#[cfg(feature = "native-jit")]
+impl Backend for NativeJitOsr {
+    fn name(&self) -> &'static str {
+        "vm-jit-native-osr"
+    }
+
+    fn run_stdout(&self, file: &str, source: &str, args: &[&str]) -> Result<String, String> {
+        rsscript::reg_vm_eval_source_main_native_osr(file, source, args.iter().copied())
+            .map_err(|error| format!("{error:?}"))
+            .and_then(stdout_or_main_err)
+    }
+}
+
 /// Every in-process backend (the native tier and its force-deopt twin join under
 /// the `native-jit` feature).
 pub fn all_inprocess_backends() -> Vec<Box<dyn Backend>> {
@@ -112,6 +183,12 @@ pub fn all_inprocess_backends() -> Vec<Box<dyn Backend>> {
             Box::new(Jit),
             Box::new(NativeJit),
             Box::new(NativeJitForceDeopt),
+            Box::new(NativeJitForceSafepoint(1)),
+            Box::new(NativeJitForceSafepoint(2)),
+            Box::new(NativeJitForceSafepoint(3)),
+            Box::new(NativeJitForceSafepoint(4)),
+            Box::new(NativeJitForceAllSafepoints),
+            Box::new(NativeJitOsr),
         ]
     }
 }

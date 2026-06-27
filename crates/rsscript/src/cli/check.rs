@@ -4,7 +4,8 @@ use std::process::ExitCode;
 use rsscript::{
     analyze_source_with_interfaces, analyze_source_with_interfaces_without_core,
     analyze_source_without_core, explain_diagnostic_code, format_diagnostic_explanation,
-    format_diagnostics_human, format_diagnostics_json_with_source, standard_package_interfaces,
+    format_diagnostics_human, format_diagnostics_json_with_source, lint_source,
+    standard_package_interfaces,
 };
 
 use super::package::run_package_check;
@@ -29,6 +30,7 @@ fn parse_explain_args(args: &[String]) -> Option<(&str, bool)> {
 pub(crate) struct CheckOptions<'a> {
     pub(crate) json: bool,
     pub(crate) use_core: bool,
+    pub(crate) lint: bool,
     pub(crate) path: Option<&'a str>,
     pub(crate) interfaces: Vec<&'a str>,
 }
@@ -36,6 +38,7 @@ pub(crate) struct CheckOptions<'a> {
 pub(crate) fn parse_check_args(args: &[String]) -> Result<CheckOptions<'_>, String> {
     let mut json = false;
     let mut use_core = true;
+    let mut lint = false;
     let mut path = None;
     let mut interfaces = Vec::new();
     let mut index = 0;
@@ -43,6 +46,8 @@ pub(crate) fn parse_check_args(args: &[String]) -> Result<CheckOptions<'_>, Stri
     while let Some(arg) = args.get(index) {
         if arg == "--json" {
             json = true;
+        } else if arg == "--lint" {
+            lint = true;
         } else if arg == "--core" {
             use_core = true;
         } else if arg == "--no-core" {
@@ -64,12 +69,19 @@ pub(crate) fn parse_check_args(args: &[String]) -> Result<CheckOptions<'_>, Stri
     Ok(CheckOptions {
         json,
         use_core,
+        lint,
         path,
         interfaces,
     })
 }
 
 fn package_check_option_error(options: &CheckOptions<'_>) -> Option<String> {
+    if options.lint {
+        return Some(
+            "`rss check --lint` is only valid for single-file checks; package checks use `rss pkg`."
+                .to_string(),
+        );
+    }
     if !options.use_core {
         return Some(
             "`rss check --no-core` is only valid for single-file checks; package checks use package interfaces and dependencies.".to_string(),
@@ -140,7 +152,7 @@ pub(crate) fn run_check(args: &[String]) -> ExitCode {
         .iter()
         .map(|interface| (interface.path.as_str(), interface.contents.as_str()))
         .collect::<Vec<_>>();
-    let diagnostics = if options.use_core {
+    let mut diagnostics = if options.use_core {
         let mut combined = standard_package_interfaces().to_vec();
         combined.extend(interface_refs);
         analyze_source_with_interfaces(path, &source, &combined)
@@ -149,13 +161,16 @@ pub(crate) fn run_check(args: &[String]) -> ExitCode {
     } else {
         analyze_source_with_interfaces_without_core(path, &source, &interface_refs)
     };
+    if options.lint {
+        diagnostics.extend(lint_source(path, &source));
+    }
     if options.json {
         println!(
             "{}",
             format_diagnostics_json_with_source(&source, &diagnostics)
         );
     } else if diagnostics.is_empty() {
-        println!("{path}: ok");
+        println!("{}: {}", path, if options.lint { "lint ok" } else { "ok" });
     } else {
         print!("{}", format_diagnostics_human(&diagnostics));
     }
@@ -199,5 +214,12 @@ mod tests {
             .expect("package check should reject explicit interface");
 
         assert!(error.contains("--interface"));
+
+        let values = args(&["--lint", "package"]);
+        let options = super::parse_check_args(&values).expect("arguments should parse");
+        let error =
+            super::package_check_option_error(&options).expect("package check should reject lint");
+
+        assert!(error.contains("--lint"));
     }
 }

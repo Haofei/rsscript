@@ -59,7 +59,7 @@ pub(super) fn recognize_numeric_binary_closure(
 /// If `instr` is one of the numeric arithmetic instructions handled by
 /// [`eval_numeric_binary`], return `(op, dst, lhs, rhs)`. Bitwise/shift ops are
 /// excluded: they are `Int`-only and not routed through `eval_numeric_binary`.
-fn arithmetic_binop_parts(instr: &RegInstr) -> Option<(BinaryOp, Reg, Reg, Reg)> {
+pub(super) fn arithmetic_binop_parts(instr: &RegInstr) -> Option<(BinaryOp, Reg, Reg, Reg)> {
     match instr {
         RegInstr::AddInt { dst, lhs, rhs } => Some((BinaryOp::Add, *dst, *lhs, *rhs)),
         RegInstr::SubInt { dst, lhs, rhs } => Some((BinaryOp::Subtract, *dst, *lhs, *rhs)),
@@ -70,7 +70,11 @@ fn arithmetic_binop_parts(instr: &RegInstr) -> Option<(BinaryOp, Reg, Reg, Reg)>
     }
 }
 
-pub(super) fn eval_numeric_binary(op: BinaryOp, lhs: &VmValue, rhs: &VmValue) -> Result<VmValue, EvalError> {
+pub(super) fn eval_numeric_binary(
+    op: BinaryOp,
+    lhs: &VmValue,
+    rhs: &VmValue,
+) -> Result<VmValue, EvalError> {
     match (lhs, rhs) {
         (VmValue::Int(lhs), VmValue::Int(rhs)) => match op {
             // Integer arithmetic traps (overflow, divide/modulo by zero) are
@@ -288,7 +292,10 @@ pub(super) fn date_days_in_month(year: i64, month: i64) -> i64 {
 /// Insert `value` into an already-sorted `Vec` via binary search, keeping it
 /// sorted (`Ok(false)` if an equal element is present). O(log n) search + O(n)
 /// shift — no clone and no full re-sort, unlike rebuilding the whole backing.
-pub(super) fn sorted_insert_vm(items: &mut Vec<VmValue>, value: VmValue) -> Result<bool, EvalError> {
+pub(super) fn sorted_insert_vm(
+    items: &mut Vec<VmValue>,
+    value: VmValue,
+) -> Result<bool, EvalError> {
     vm_value_cmp(&value, &value)?; // reject non-orderable values (parity with re-sort)
     let mut lo = 0;
     let mut hi = items.len();
@@ -305,7 +312,10 @@ pub(super) fn sorted_insert_vm(items: &mut Vec<VmValue>, value: VmValue) -> Resu
 }
 
 /// Remove `value` from an already-sorted `Vec` via binary search.
-pub(super) fn sorted_remove_vm(items: &mut Vec<VmValue>, value: &VmValue) -> Result<bool, EvalError> {
+pub(super) fn sorted_remove_vm(
+    items: &mut Vec<VmValue>,
+    value: &VmValue,
+) -> Result<bool, EvalError> {
     let mut lo = 0;
     let mut hi = items.len();
     while lo < hi {
@@ -401,7 +411,12 @@ pub(super) fn sorted_map_insert_in_place(
             }
         }
     }
-    backing.insert(lo, VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(vec![key, value])))));
+    backing.insert(
+        lo,
+        VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(vec![
+            key, value,
+        ])))),
+    );
     Ok(())
 }
 
@@ -473,7 +488,11 @@ pub(super) fn sorted_map_value(entries: Vec<(VmValue, VmValue)>) -> VmValue {
 fn sorted_map_entry_values(entries: Vec<(VmValue, VmValue)>) -> Vec<VmValue> {
     entries
         .into_iter()
-        .map(|(key, value)| VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(vec![key, value])))))
+        .map(|(key, value)| {
+            VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(vec![
+                key, value,
+            ]))))
+        })
         .collect()
 }
 
@@ -483,7 +502,11 @@ pub(super) fn sorted_map_get(entries: &[(VmValue, VmValue)], key: &VmValue) -> O
         .find_map(|(entry_key, value)| (entry_key == key).then(|| value.clone()))
 }
 
-pub(super) fn sorted_map_insert(entries: &mut Vec<(VmValue, VmValue)>, key: VmValue, value: VmValue) {
+pub(super) fn sorted_map_insert(
+    entries: &mut Vec<(VmValue, VmValue)>,
+    key: VmValue,
+    value: VmValue,
+) {
     if let Some((_, existing)) = entries.iter_mut().find(|(entry_key, _)| entry_key == &key) {
         *existing = value;
         return;
@@ -491,7 +514,10 @@ pub(super) fn sorted_map_insert(entries: &mut Vec<(VmValue, VmValue)>, key: VmVa
     entries.push((key, value));
 }
 
-pub(super) fn sorted_map_remove(entries: &mut Vec<(VmValue, VmValue)>, key: &VmValue) -> Option<VmValue> {
+pub(super) fn sorted_map_remove(
+    entries: &mut Vec<(VmValue, VmValue)>,
+    key: &VmValue,
+) -> Option<VmValue> {
     let index = entries.iter().position(|(entry_key, _)| entry_key == key)?;
     Some(entries.remove(index).1)
 }
@@ -681,7 +707,10 @@ pub(super) fn json_quote_string(value: &str) -> Result<String, EvalError> {
     serde_json::to_string(value).map_err(|error| EvalError::Runtime(error.to_string()))
 }
 
-pub(super) fn json_array_get_value(value: &serde_json::Value, index: i64) -> Result<VmValue, VmValue> {
+pub(super) fn json_array_get_value(
+    value: &serde_json::Value,
+    index: i64,
+) -> Result<VmValue, VmValue> {
     if index < 0 {
         return Err(json_error_value(format!(
             "JSON array index `{index}` is negative"
@@ -697,7 +726,9 @@ pub(super) fn json_array_get_value(value: &serde_json::Value, index: i64) -> Res
         .ok_or_else(|| json_error_value(format!("JSON array index `{index}` is out of bounds")))
 }
 
-pub(super) fn json_array_items(value: &serde_json::Value) -> Result<&Vec<serde_json::Value>, VmValue> {
+pub(super) fn json_array_items(
+    value: &serde_json::Value,
+) -> Result<&Vec<serde_json::Value>, VmValue> {
     let serde_json::Value::Array(items) = value else {
         return Err(json_error_value("JSON value is not an array"));
     };
@@ -715,7 +746,9 @@ pub(super) fn json_array_bools_value(value: &serde_json::Value) -> Result<VmValu
         };
         flags.push(VmValue::Bool(flag));
     }
-    Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(flags)))))
+    Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
+        flags,
+    )))))
 }
 
 pub(super) fn json_array_ints_value(value: &serde_json::Value) -> Result<VmValue, VmValue> {
@@ -729,7 +762,9 @@ pub(super) fn json_array_ints_value(value: &serde_json::Value) -> Result<VmValue
         };
         numbers.push(VmValue::Int(number));
     }
-    Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(numbers)))))
+    Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
+        numbers,
+    )))))
 }
 
 pub(super) fn json_array_strings_value(value: &serde_json::Value) -> Result<VmValue, VmValue> {
@@ -743,7 +778,9 @@ pub(super) fn json_array_strings_value(value: &serde_json::Value) -> Result<VmVa
         };
         strings.push(VmValue::string(text));
     }
-    Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(strings)))))
+    Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
+        strings,
+    )))))
 }
 
 #[derive(Debug, Clone, Copy)]

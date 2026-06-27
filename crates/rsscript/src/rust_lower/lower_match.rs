@@ -1,7 +1,4 @@
-
-use crate::syntax::ast::{
-    DataEffect, Expr, FieldDecl, Item, MatchPattern, TypeRef,
-};
+use crate::syntax::ast::{DataEffect, Expr, FieldDecl, Item, MatchPattern, TypeRef};
 
 use super::helpers::*;
 
@@ -31,7 +28,6 @@ impl RustLowerer<'_> {
         }
     }
 
-
     pub(super) fn lower_map_literal(&mut self, expr: &Expr, expected: &TypeRef) -> String {
         let Expr::MapLiteral { entries, .. } = expr else {
             return self.lower_expr(expr);
@@ -58,7 +54,6 @@ impl RustLowerer<'_> {
         format!("rsscript_runtime::map_from_entries(vec![{entries}])")
     }
 
-
     pub(super) fn lower_list_literal(&mut self, expr: &Expr, expected: &TypeRef) -> String {
         let Expr::ArrayLiteral { items, .. } = expr else {
             return self.lower_expr(expr);
@@ -77,7 +72,6 @@ impl RustLowerer<'_> {
             .join(", ");
         format!("vec![{items}]")
     }
-
 
     pub(super) fn lower_json_field(&mut self, name: &str, value: &Expr) -> String {
         let key = format!("{:?}.to_string()", decode_string_token(name));
@@ -121,7 +115,6 @@ impl RustLowerer<'_> {
         }
     }
 
-
     pub(super) fn lower_json_array_item(&mut self, value: &Expr) -> String {
         match value {
             Expr::ObjectLiteral { .. } | Expr::ArrayLiteral { .. } => self.lower_json_value(value),
@@ -144,7 +137,6 @@ impl RustLowerer<'_> {
         }
     }
 
-
     pub(super) fn lower_json_string_value(&mut self, value: &Expr) -> String {
         match value {
             Expr::Effect {
@@ -156,7 +148,6 @@ impl RustLowerer<'_> {
             _ => format!("&{}", self.lower_expr(value)),
         }
     }
-
 
     pub(super) fn lower_match_scrutinee_expr(
         &mut self,
@@ -173,7 +164,6 @@ impl RustLowerer<'_> {
         }
     }
 
-
     // A match scrutinee that is a *place* behind a borrow (a field/index of a read-view) has
     // value type `T` (not `&T`), so matching it would move a non-Copy payload out of a shared
     // reference. Borrow it so the match binds by reference instead.
@@ -181,7 +171,6 @@ impl RustLowerer<'_> {
         matches!(value, Expr::Field { .. } | Expr::Index { .. })
             && self.match_scrutinee_by_ref(value)
     }
-
 
     // Whether a match scrutinee lowers to a reference (`&T`): a read-view `let` binding, a `read`
     // param, or a field/index of one. Such matches bind payloads by reference (so non-Copy payloads
@@ -201,7 +190,6 @@ impl RustLowerer<'_> {
             _ => false,
         }
     }
-
 
     // For a match arm that binds a *single* payload field to a name, return
     // `(binding_name, payload_field_type)`. Covers the built-in `Option<T>` /
@@ -235,7 +223,6 @@ impl RustLowerer<'_> {
         };
         Some((bind_name.clone(), field_ty))
     }
-
 
     // When the scrutinee is matched by-ref, a single payload binding is `&T` (match
     // ergonomics), but RSScript's model is that the arm sees an owned `T` — so using
@@ -320,11 +307,14 @@ impl RustLowerer<'_> {
         Vec::new()
     }
 
-
     /// The owned rebinding for a single by-ref match binding: `*x` for a `Copy`
     /// payload, `x.clone()` for any other cloneable value type, and nothing for a
     /// resource (it can't be moved out of a shared `read` view).
-    pub(super) fn owned_rebinding_for(&self, bind_name: &str, field_ty: &TypeRef) -> Option<(String, String)> {
+    pub(super) fn owned_rebinding_for(
+        &self,
+        bind_name: &str,
+        field_ty: &TypeRef,
+    ) -> Option<(String, String)> {
         let ident = rust_ident(bind_name);
         if Self::is_copy_primitive(field_ty) {
             Some((ident.clone(), format!("*{ident}")))
@@ -335,11 +325,14 @@ impl RustLowerer<'_> {
         }
     }
 
-
     /// The generic type parameters declared by the type backing `pattern_name`
     /// when matched against `value_type` (struct or sum variant), in declaration
     /// order — so concrete arguments from `value_type` can be substituted in.
-    pub(super) fn pattern_type_params(&self, value_type: Option<&TypeRef>, pattern_name: &str) -> Vec<String> {
+    pub(super) fn pattern_type_params(
+        &self,
+        value_type: Option<&TypeRef>,
+        pattern_name: &str,
+    ) -> Vec<String> {
         let Some(root) = value_type.map(|ty| ty.name.as_str()) else {
             return Vec::new();
         };
@@ -366,7 +359,6 @@ impl RustLowerer<'_> {
         }
         Vec::new()
     }
-
 
     pub(super) fn lower_match_pattern_typed(
         &self,
@@ -468,7 +460,6 @@ impl RustLowerer<'_> {
         }
     }
 
-
     pub(super) fn lower_struct_match_pattern_typed(
         &self,
         name: &str,
@@ -521,7 +512,6 @@ impl RustLowerer<'_> {
         format!("{path} {{ {} }}", parts.join(", "))
     }
 
-
     pub(super) fn pattern_declared_field_types(
         &self,
         value_type: Option<&TypeRef>,
@@ -540,7 +530,6 @@ impl RustLowerer<'_> {
         None
     }
 
-
     pub(super) fn sum_variant_fields_for_type(
         &self,
         value_type: Option<&TypeRef>,
@@ -556,7 +545,6 @@ impl RustLowerer<'_> {
             _ => None,
         })
     }
-
 
     pub(super) fn find_sum_type_for_variant(&self, variant_name: &str) -> Option<String> {
         // Skip built-in variants

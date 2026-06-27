@@ -116,7 +116,7 @@ Status:         open | decided | done
 - **Tool:** manifest inspector (failure path)
 - **Symptom:** running the inspector on a malformed manifest (so `main() ->
   Result<Unit, String>` returns `Err`):
-  - VM (`rss eval`): prints `Err { value: "missing JSON field \`package\`" }`,
+  - VM harness: prints `Err { value: "missing JSON field \`package\`" }`,
     **exit 0**.
   - AOT (`rss run`): `panicked … RSScript main returned an error: …`, **exit 101**.
 - **Minimal RSS:** `fn main() -> Result<Unit, String> { return Err("boom") }`.
