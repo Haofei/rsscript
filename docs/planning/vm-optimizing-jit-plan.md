@@ -133,23 +133,28 @@ machinery **engage real program shapes and prove it**, not new subsystems. In pr
    deopt state-map format / OSR-exit, NOT a one-liner — and none has a *correctness*
    driver today, so the differential cannot gate a reconstruction bug by output alone;
    they must be driven by dedicated repro tests):**
-   - **(a) Live-out SCALAR aggregate reconstruction (most tractable; do first).**
-     `native_loop_carried_struct_in_region` / the variant+struct SR passes bail when
-     the aggregate is read after the loop (`passes.rs:7430`, the live-after / escape
-     check). To lift that: when every field is scalar, record a *reconstruction recipe*
-     `(orig_reg, layout/tag, [leaf_reg per field])` from the SR pass, thread it through
-     `translate` into the OSR result, and at **OSR-exit** (reg_vm, before resuming the
-     interpreter on the live-out window) rebuild `VmValue::Struct`/`Variant` from the
-     leaf regs and write it into `orig_reg`. No `handle→VmValue` problem (all scalar);
-     the differential validates correctness once a live-out-struct kernel is added.
-   - **(b) Composite HEAP-payload reconstruction.** A variant/struct field that is a
-     heap value (`Handle`) currently bails (`passes.rs:6205/6210`). The blocker: a heap
-     field in a native reg is an opaque handle, and the interpreter frame no longer
-     holds the dissolved value. Approach: extend the recipe so a heap field references
-     its **interpreter-visible SOURCE register** (the reg the `MakeVariant`/`MakeStruct`
-     read it from), provided that reg stays live + unclobbered to the reconstruction
-     point (needs a liveness proof); reconstruction reads `frame.reg(source)`. Fields
-     with no live source reg still bail.
+   - **(a) Live-out / escaping aggregate OSR — ALREADY COVERED (correctness + OSR)
+     via native heap writes; only a perf refinement remains.** A loop-carried struct
+     read after the loop or returned already OSRs through the transactional heap-write
+     path (`native_osr_loop_carried_struct_live_after_loop_uses_heap_writes`,
+     `..._escaping_uses_heap_writes` — both green). The scalar loop-carried-struct SR
+     pass declines (`passes.rs:7430`) but OSR proceeds with the un-dissolved body
+     (host-helper `SetFieldSlot` writes, journaled). So this is **not a capability
+     gap** — the only refinement is scalar-replacing such live-out structs for fewer
+     host calls (record a recipe `(orig_reg, layout, [leaf_reg])`, rebuild at OSR-exit);
+     pure perf, low priority.
+   - **(b) Live-after HEAP-payload variant/Result OSR — the one genuine remaining
+     coverage gap (perf, not correctness).** A `Result`/variant with a heap-payload arm
+     that is **live after the loop** does NOT OSR today (`native_osr_j3_escaping_result_does_not_osr`
+     asserts `osr_entries == 0`); it is correct (runs on the interpreter), just not
+     accelerated. Unlike structs (which OSR via heap writes), a dissolved variant's heap
+     payload has no live heap object to write back. Blocker: a heap field in a native
+     reg is an opaque handle and the interpreter frame no longer holds the dissolved
+     value. Approach: extend the reconstruction recipe so a heap field references its
+     **interpreter-visible SOURCE register** (the reg `MakeVariant`/`MakeStruct` read it
+     from), provided that reg stays live + unclobbered to the reconstruction point
+     (needs a liveness proof); reconstruction reads `frame.reg(source)`. Subtle
+     (which arm, in-loop-built payloads have no live source) — a deliberate slice.
    - **(c) Inlined logical-frame-chain format.** A deopt inside a `native_inline_leaf_calls`
      region resumes at the caller's `CallKnown` and re-runs the (side-effect-free)
      callee — *correct today*. Full J0.1 reconstructs the logical callee frame in place
