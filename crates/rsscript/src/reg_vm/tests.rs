@@ -5637,21 +5637,18 @@ fn main() -> Unit {
         );
     }
 
-    /// B2 (KNOWN GAP — blocked on J0.1 heap-aware deopt state maps; precise resume is
-    /// default-OFF so this is latent, not a production bug): the reg VM binds params as
+    /// B2 (FIXED by J0.1 heap-aware deopt state maps): the reg VM binds params as
     /// locals, so `n = n + 1` rewrites the param register. A native scalar function
-    /// that REASSIGNS a param still live at a safepoint should, on precise deopt,
-    /// restore the param to its native-computed value — but the restore skips every
-    /// `reg < n_params`, resuming with the stale call-time value. The skip is required
-    /// because a heap/flat param (`Handle`/`FlatInt`/…) is marshalled as a raw `i64`
-    /// and is INDISTINGUISHABLE from a scalar `Int` in the deopt payload
-    /// (`JitValueType` loses the `NativeTy` flat/handle distinction); dropping the skip
-    /// corrupts flat-buffer params (proven: it broke `native_heap_reads` /
-    /// `tv2_direct_flat_reads` differential parity). A sound fix must thread the
-    /// scalar-vs-heap param kind into the deopt state map (J0.1). Ignored until then.
+    /// that REASSIGNS a param still live at a safepoint must, on precise deopt, restore
+    /// the param to its native-computed value. The deopt state map distinguishes
+    /// reconstructible scalars (`Int`/`Float`) from heap refs (`Handle`/`FlatInt`/
+    /// `FlatFloat`): `decode_deopt_live` drops the latter (the frame already holds
+    /// their `VmValue`), so `restore_native_deopt_live_regs` can restore ALL scalar
+    /// regs — params included — without the old `< n_params` skip that lost reassigned
+    /// scalar params. (Skipping only `Handle` and not `FlatInt`/`FlatFloat` corrupts
+    /// flat-buffer params — see `native_heap_reads`/`tv2_direct_flat_reads`.)
     #[cfg(feature = "native-jit")]
     #[test]
-    #[ignore = "B2: needs J0.1 NativeTy-aware deopt state maps; precise resume is default-off (latent)"]
     fn precise_deopt_restores_reassigned_scalar_param() {
         let big: i64 = 4_000_000_000;
         // reg 0 = param x (runtime `big`); reg 0 = x + 1 (REASSIGN, live past the

@@ -2013,13 +2013,22 @@ impl NativeModule {
         site.live
             .iter()
             .filter_map(|&(reg, ty)| {
-                payload.get(payload_base + reg as usize).map(|&bits| {
-                    let value = match ty {
-                        JitValueType::Float => DeoptValue::Float(f64::from_bits(bits as u64)),
-                        _ => DeoptValue::Int(bits),
-                    };
-                    DeoptReg { reg, value }
-                })
+                let &bits = payload.get(payload_base + reg as usize)?;
+                // Heap-aware deopt (J0.1): only a TRUE scalar (`Int`/`Float`) reg is
+                // reconstructible as a deopt value. A non-scalar reg — a `Handle` (heap
+                // table index) or a `FlatInt`/`FlatFloat` (raw borrow-pinned buffer
+                // pointer) — carries no scalar payload; the interpreter frame already
+                // holds its heap `VmValue` (precise resume implies no heap writes), so
+                // it MUST NOT be decoded as a raw `Int`/`Float` and written back.
+                // Exhaustive on purpose: a new `JitValueType` must choose a side here.
+                let value = match ty {
+                    JitValueType::Int => DeoptValue::Int(bits),
+                    JitValueType::Float => DeoptValue::Float(f64::from_bits(bits as u64)),
+                    JitValueType::Handle | JitValueType::FlatInt | JitValueType::FlatFloat => {
+                        return None;
+                    }
+                };
+                Some(DeoptReg { reg, value })
             })
             .collect()
     }
@@ -7649,39 +7658,51 @@ mod tests {
                     }
                 };
 
-                // The captured live registers must be exactly the map's live set...
+                // Heap-aware deopt (J0.1): the captured live set is exactly the SCALAR
+                // (`Int`/`Float`) subset of the map's live set — `Handle`/`FlatInt`/
+                // `FlatFloat` regs are reconstructed from the interpreter frame, not the
+                // payload, so they are intentionally absent from the capture.
                 let mut captured: Vec<u32> = live.iter().map(|r| r.reg).collect();
                 captured.sort_unstable();
-                let mut expected_regs: Vec<u32> = site.live.iter().map(|(r, _)| *r).collect();
+                let mut expected_regs: Vec<u32> = site
+                    .live
+                    .iter()
+                    .filter(|(_, ty)| matches!(ty, JitValueType::Int | JitValueType::Float))
+                    .map(|(r, _)| *r)
+                    .collect();
                 expected_regs.sort_unstable();
                 assert_eq!(
                     captured, expected_regs,
-                    "{}: site {} live-reg set mismatch (map vs capture)",
+                    "{}: site {} scalar live-reg set mismatch (map vs capture)",
                     case.name, k
                 );
 
-                // ...and each captured value must match what the function computes,
-                // including FlatInt pointer registers (checked as the raw arg word).
-                for &(reg, _ty) in &site.live {
-                    let got = live_value(&out, reg).expect("captured reg present");
-                    if case.func.reg_types[reg as usize] == FlatInt {
-                        assert_eq!(
-                            got,
-                            DeoptValue::Int(case.args[reg as usize]),
-                            "{}: site {} reg {} (flat ptr) value mismatch",
-                            case.name,
-                            k,
-                            reg
-                        );
-                    } else {
-                        assert_eq!(
-                            got,
-                            (case.expect)(reg),
-                            "{}: site {} reg {} value mismatch",
-                            case.name,
-                            k,
-                            reg
-                        );
+                // ...each captured SCALAR value must match what the function computes;
+                // a non-scalar (Handle/FlatInt/FlatFloat) reg is NOT reconstructed and
+                // must be absent from the capture.
+                for &(reg, ty) in &site.live {
+                    match ty {
+                        JitValueType::Int | JitValueType::Float => {
+                            let got =
+                                live_value(&out, reg).expect("captured scalar reg present");
+                            assert_eq!(
+                                got,
+                                (case.expect)(reg),
+                                "{}: site {} reg {} value mismatch",
+                                case.name,
+                                k,
+                                reg
+                            );
+                        }
+                        JitValueType::Handle | JitValueType::FlatInt | JitValueType::FlatFloat => {
+                            assert!(
+                                live_value(&out, reg).is_none(),
+                                "{}: site {} reg {} (non-scalar) must not be reconstructed",
+                                case.name,
+                                k,
+                                reg
+                            );
+                        }
                     }
                 }
 

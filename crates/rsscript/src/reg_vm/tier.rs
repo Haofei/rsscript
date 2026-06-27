@@ -736,23 +736,14 @@ impl RegVm {
     }
 
     #[cfg(feature = "native-jit")]
-    fn restore_native_deopt_live_regs(
-        &mut self,
-        base: usize,
-        n_params: usize,
-        n_regs: usize,
-        live: &[vm_jit::DeoptReg],
-    ) {
+    fn restore_native_deopt_live_regs(&mut self, base: usize, n_regs: usize, live: &[vm_jit::DeoptReg]) {
         for vm_jit::DeoptReg { reg, value } in live {
-            // Params are skipped: a heap/flat param (`Handle`/`FlatInt`/…) is
-            // marshalled as a raw `i64` handle/pointer and is INDISTINGUISHABLE from a
-            // scalar `Int` at this (`JitValueType`) boundary, so writing it back would
-            // corrupt the interpreter frame's heap value. The cost is that a
-            // reassigned *scalar* param resumes with its stale call-time value (see
-            // `precise_deopt_restores_reassigned_scalar_param`, #[ignore]); fixing that
-            // soundly needs `NativeTy`-aware deopt state maps (J0.1), which carry the
-            // scalar-vs-heap param distinction the payload currently loses.
-            if (*reg as usize) < n_params || (*reg as usize) >= n_regs {
+            // Heap-aware deopt (J0.1): every entry in `live` is a TRUE scalar —
+            // `decode_deopt_live` drops `Handle`/`FlatInt`/`FlatFloat` regs — so a
+            // reassigned SCALAR param is safe to restore (no `< n_params` guard).
+            // Heap / flat-pointer params never reach here, so the interpreter frame
+            // keeps its own heap value.
+            if (*reg as usize) >= n_regs {
                 continue;
             }
             let vm_value = match value {
@@ -802,7 +793,7 @@ impl RegVm {
             let value = self.reg(caller_base + *reg).clone();
             self.set_reg(child_base + index, value);
         }
-        self.restore_native_deopt_live_regs(child_base, callee.params, callee.regs, &child.live);
+        self.restore_native_deopt_live_regs(child_base, callee.regs, &child.live);
 
         let Some(caller_frame) = self.frames.last_mut() else {
             return false;
@@ -839,7 +830,7 @@ impl RegVm {
     ) -> bool {
         let original_len = self.frames.len();
         let original_ip = self.frames.last().map(|frame| frame.ip).unwrap_or_default();
-        self.restore_native_deopt_live_regs(base, func.params, func.regs, live);
+        self.restore_native_deopt_live_regs(base, func.regs, live);
         let resumed = self.push_native_child_deopt_frame(unit, func, base, resume_ip, child);
         if !resumed {
             self.frames.truncate(original_len);
@@ -1412,7 +1403,7 @@ impl RegVm {
                         // SKIPPING parameter registers: their window slots
                         // `base..base+n_params` are already valid and may hold heap
                         // `VmValue`s the scalar deopt payload cannot represent.
-                        self.restore_native_deopt_live_regs(base, func.params, func.regs, &live);
+                        self.restore_native_deopt_live_regs(base, func.regs, &live);
                         // Resume interpretation AT the bailing instruction.
                         self.frames.last_mut().expect("active frame").ip = resume_ip as usize;
                         scratch.restore(self.native.as_mut());
