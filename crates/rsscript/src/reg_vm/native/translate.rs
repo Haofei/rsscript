@@ -519,13 +519,14 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                     native_set_ty(ty, *deque, NativeTy::Handle, c)
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
-                RegInstr::MatchMapGet {
-                    map,
-                    key,
-                    value_dst,
-                    ..
+                RegInstr::MatchMapGet { map, key, .. } => {
+                    // value_dst flows from its uses (Int or Float); lowering picks
+                    // MatchMapGetInt/MatchMapGetFloat, and a wrong-value-type map
+                    // bails at the helper.
+                    native_set_ty(ty, *map, NativeTy::Handle, c)
+                        && native_set_ty(ty, *key, NativeTy::Int, c)
                 }
-                | RegInstr::MatchSortedMapGet {
+                RegInstr::MatchSortedMapGet {
                     map,
                     key,
                     value_dst,
@@ -1573,13 +1574,23 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 some_ip,
                 none_ip,
             } => {
-                require(handle_reg(*map) && int(*key) && int(*value_dst))?;
-                JitInstr::MatchMapGetInt {
-                    map: r(*map),
-                    key: r(*key),
-                    value_dst: r(*value_dst),
-                    some_ip: r(*some_ip),
-                    none_ip: r(*none_ip),
+                require(handle_reg(*map) && int(*key) && (int_or_free(*value_dst) || float(*value_dst)))?;
+                if float(*value_dst) {
+                    JitInstr::MatchMapGetFloat {
+                        map: r(*map),
+                        key: r(*key),
+                        value_dst: r(*value_dst),
+                        some_ip: r(*some_ip),
+                        none_ip: r(*none_ip),
+                    }
+                } else {
+                    JitInstr::MatchMapGetInt {
+                        map: r(*map),
+                        key: r(*key),
+                        value_dst: r(*value_dst),
+                        some_ip: r(*some_ip),
+                        none_ip: r(*none_ip),
+                    }
                 }
             }
             RegInstr::MatchSortedMapGet {
@@ -2438,8 +2449,10 @@ fn native_jit_written_reg(instr: &vm_jit::JitInstr) -> Option<u32> {
         | vm_jit::JitInstr::ListGetIntDirect { dst, .. }
         | vm_jit::JitInstr::ListSetIntDirect { dst, .. }
         | vm_jit::JitInstr::ListGetFloatDirect { dst, .. }
+        | vm_jit::JitInstr::ListSetFloatDirect { dst, .. }
         | vm_jit::JitInstr::ListLenDirect { dst, .. }
         | vm_jit::JitInstr::MatchMapGetInt { value_dst: dst, .. }
+        | vm_jit::JitInstr::MatchMapGetFloat { value_dst: dst, .. }
         | vm_jit::JitInstr::MatchSortedMapGetInt { value_dst: dst, .. }
         | vm_jit::JitInstr::CallNative { dst, .. }
         | vm_jit::JitInstr::CallSelf { dst, .. } => Some(*dst),
@@ -3283,13 +3296,14 @@ fn translate_osr_loop_inner(
                     native_set_ty(ty, *deque, NativeTy::Handle, c)
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
-                RegInstr::MatchMapGet {
-                    map,
-                    key,
-                    value_dst,
-                    ..
+                RegInstr::MatchMapGet { map, key, .. } => {
+                    // value_dst flows from its uses (Int or Float); lowering picks
+                    // MatchMapGetInt/MatchMapGetFloat, and a wrong-value-type map
+                    // bails at the helper.
+                    native_set_ty(ty, *map, NativeTy::Handle, c)
+                        && native_set_ty(ty, *key, NativeTy::Int, c)
                 }
-                | RegInstr::MatchSortedMapGet {
+                RegInstr::MatchSortedMapGet {
                     map,
                     key,
                     value_dst,
@@ -4321,13 +4335,23 @@ fn translate_osr_loop_inner(
                 some_ip,
                 none_ip,
             } => {
-                require(handle_reg(*map) && int(*key) && int(*value_dst))?;
-                JitInstr::MatchMapGetInt {
-                    map: r(*map),
-                    key: r(*key),
-                    value_dst: r(*value_dst),
-                    some_ip: r(*some_ip),
-                    none_ip: r(*none_ip),
+                require(handle_reg(*map) && int(*key) && (int_or_free(*value_dst) || float(*value_dst)))?;
+                if float(*value_dst) {
+                    JitInstr::MatchMapGetFloat {
+                        map: r(*map),
+                        key: r(*key),
+                        value_dst: r(*value_dst),
+                        some_ip: r(*some_ip),
+                        none_ip: r(*none_ip),
+                    }
+                } else {
+                    JitInstr::MatchMapGetInt {
+                        map: r(*map),
+                        key: r(*key),
+                        value_dst: r(*value_dst),
+                        some_ip: r(*some_ip),
+                        none_ip: r(*none_ip),
+                    }
                 }
             }
             RegInstr::MatchSortedMapGet {

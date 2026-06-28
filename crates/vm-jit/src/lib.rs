@@ -188,6 +188,11 @@ pub type MapGetIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
 /// missing key. Call `map_get_match_found` to distinguish missing from a real
 /// zero payload. Wrong shape/non-Int payloads signal a bail.
 pub type MapGetMatchIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
+/// `(map_handle, key) -> f64`: return a Float payload for a map key, or `0.0` for a
+/// missing key (the Float value-side mirror of [`MapGetMatchIntFn`]). Call
+/// `map_get_match_found` to distinguish missing from a real `0.0` payload. Wrong
+/// shape / non-Float payloads signal a bail.
+pub type MapGetMatchFloatFn = extern "C" fn(HostCtx, i64, i64) -> f64;
 /// `() -> i64`: return whether the previous map-get-match helper found its key.
 pub type MapGetMatchFoundFn = extern "C" fn(HostCtx) -> i64;
 /// `(map_handle, key) -> i64`: return `1` when the Int key exists, else `0`.
@@ -288,6 +293,7 @@ pub struct HostHelpers {
     pub map_insert_float: MapInsertFloatFn,
     pub map_get_int: MapGetIntFn,
     pub map_get_match_int: MapGetMatchIntFn,
+    pub map_get_match_float: MapGetMatchFloatFn,
     pub map_get_match_found: MapGetMatchFoundFn,
     pub map_contains_int: MapContainsIntFn,
     pub map_len: CollectionLenFn,
@@ -766,6 +772,13 @@ host_helpers! {
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
     },
+    MapGetMatchFloat => {
+        field: map_get_match_float,
+        symbol: "rss_jit_map_get_match_float",
+        args: [JitValueType::Handle, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Float),
+        failure: HostFailureMode::BailFlag,
+    },
     MapGetMatchFound => {
         field: map_get_match_found,
         symbol: "rss_jit_map_get_match_found",
@@ -1127,6 +1140,16 @@ pub enum JitInstr {
     /// tests membership; on `Some`, it loads the Int payload into `value_dst` and
     /// jumps to `some_ip`, otherwise it jumps to `none_ip`.
     MatchMapGetInt {
+        map: u32,
+        key: u32,
+        value_dst: u32,
+        some_ip: u32,
+        none_ip: u32,
+    },
+    /// `Map.get` fused with an Option match for an Int-keyed `Map<_, Float>` — the
+    /// Float value-side mirror of [`MatchMapGetInt`]. On `Some` it loads the Float
+    /// payload (f64 channel) into the Float `value_dst` and jumps to `some_ip`.
+    MatchMapGetFloat {
         map: u32,
         key: u32,
         value_dst: u32,
@@ -2897,6 +2920,19 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                 check_target(*some_ip)?;
                 check_target(*none_ip)?;
             }
+            JitInstr::MatchMapGetFloat {
+                map,
+                key,
+                value_dst,
+                some_ip,
+                none_ip,
+            } => {
+                require_class(*map, JitValueType::Handle, "MatchMapGetFloat map")?;
+                require_class(*key, JitValueType::Int, "MatchMapGetFloat key")?;
+                require_class(*value_dst, JitValueType::Float, "MatchMapGetFloat value")?;
+                check_target(*some_ip)?;
+                check_target(*none_ip)?;
+            }
             JitInstr::MatchSortedMapGetInt {
                 map,
                 key,
@@ -3058,6 +3094,7 @@ fn instr_def(instr: &JitInstr) -> Option<u32> {
         | JitInstr::Equal { dst, .. }
         | JitInstr::NotEqual { dst, .. }
         | JitInstr::MatchMapGetInt { value_dst: dst, .. }
+        | JitInstr::MatchMapGetFloat { value_dst: dst, .. }
         | JitInstr::MatchSortedMapGetInt { value_dst: dst, .. }
         | JitInstr::ListGetIntDirect { dst, .. }
         | JitInstr::ListSetIntDirect { dst, .. }
@@ -3108,6 +3145,9 @@ fn successors(program: &JitFunction, i: usize) -> Vec<usize> {
             succ
         }
         JitInstr::MatchMapGetInt {
+            some_ip, none_ip, ..
+        }
+        | JitInstr::MatchMapGetFloat {
             some_ip, none_ip, ..
         }
         | JitInstr::MatchSortedMapGetInt {
@@ -3930,6 +3970,9 @@ fn build_function(
             JitInstr::MatchMapGetInt {
                 some_ip, none_ip, ..
             }
+            | JitInstr::MatchMapGetFloat {
+                some_ip, none_ip, ..
+            }
             | JitInstr::MatchSortedMapGetInt {
                 some_ip, none_ip, ..
             } => {
@@ -4637,6 +4680,46 @@ fn build_function(
                     .call(helper_ref(HostHelper::MapGetMatchFound), &[host_ctx]);
                 let found = bcx.inst_results(found_call)[0];
 
+                let some_block = block_for[*some_ip as usize].unwrap();
+                let none_block = block_for[*none_ip as usize].unwrap();
+                let zero = bcx.ins().iconst(types::I64, 0);
+                let is_found = bcx.ins().icmp(IntCC::NotEqual, found, zero);
+                bcx.def_var(reg(*value_dst), value);
+                bcx.ins().brif(is_found, some_block, &[], none_block, &[]);
+                terminated = true;
+            }
+            JitInstr::MatchMapGetFloat {
+                map,
+                key,
+                value_dst,
+                some_ip,
+                none_ip,
+            } => {
+                // Identical control flow to MatchMapGetInt; only the payload helper
+                // (f64 channel) and the Float `value_dst` differ. The lookup itself
+                // is the interpreter's — the helper calls the same `map.get`.
+                let map_value = bcx.use_var(reg(*map));
+                let key_value = bcx.use_var(reg(*key));
+                let loaded = bcx.ins().call(
+                    helper_ref(HostHelper::MapGetMatchFloat),
+                    &[host_ctx, map_value, key_value],
+                );
+                let value = bcx.inst_results(loaded)[0];
+                let cont = bail_if_helper_failed(
+                    &mut bcx,
+                    bail_ptr,
+                    fallback,
+                    safepoint_ptr,
+                    payload_ptr,
+                    &vars,
+                    &mut next_id,
+                    deopt!(i),
+                );
+                bcx.switch_to_block(cont);
+                let found_call = bcx
+                    .ins()
+                    .call(helper_ref(HostHelper::MapGetMatchFound), &[host_ctx]);
+                let found = bcx.inst_results(found_call)[0];
                 let some_block = block_for[*some_ip as usize].unwrap();
                 let none_block = block_for[*none_ip as usize].unwrap();
                 let zero = bcx.ins().iconst(types::I64, 0);
@@ -5738,6 +5821,9 @@ mod tests {
     extern "C" fn noop_map_get_match_int(_ctx: HostCtx, _map: i64, _key: i64) -> i64 {
         0
     }
+    extern "C" fn noop_map_get_match_float(_ctx: HostCtx, _map: i64, _key: i64) -> f64 {
+        0.0
+    }
     extern "C" fn noop_map_get_match_found(_ctx: HostCtx) -> i64 {
         0
     }
@@ -5836,6 +5922,7 @@ mod tests {
             map_insert_float: noop_map_insert_float,
             map_get_int: noop_map_get_int,
             map_get_match_int: noop_map_get_match_int,
+            map_get_match_float: noop_map_get_match_float,
             map_get_match_found: noop_map_get_match_found,
             map_contains_int: noop_map_contains_int,
             map_len: noop_collection_len,

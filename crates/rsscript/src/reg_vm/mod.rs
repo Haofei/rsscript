@@ -3589,6 +3589,7 @@ fn jit_host_helpers() -> vm_jit::HostHelpers {
         map_insert_float: rss_jit_map_insert_float,
         map_get_int: rss_jit_map_get_int,
         map_get_match_int: rss_jit_map_get_match_int,
+        map_get_match_float: rss_jit_map_get_match_float,
         map_get_match_found: rss_jit_map_get_match_found,
         map_contains_int: rss_jit_map_contains_int,
         map_len: rss_jit_map_len,
@@ -4731,6 +4732,33 @@ extern "C" fn rss_jit_map_get_match_int(_ctx: vm_jit::HostCtx, handle: i64, key:
         _ => {
             vm_jit::signal_bail();
             0
+        }
+    }
+}
+
+/// Float value-side mirror of `rss_jit_map_get_match_int`: the lookup is the
+/// interpreter's own `map.get`; this only extracts the `Float` payload (f64 channel)
+/// and sets the shared `found` flag. A non-Float payload bails out-of-band.
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_map_get_match_float(_ctx: vm_jit::HostCtx, handle: i64, key: i64) -> f64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0.0;
+    };
+    _ctx.set_map_get_match_found(false);
+    let Some(map) = _ctx.heap_map_handle(handle) else {
+        vm_jit::signal_bail();
+        return 0.0;
+    };
+    match map.borrow().get(&jit_int_key(key)) {
+        Some(VmValue::Float(value)) => {
+            _ctx.set_map_get_match_found(true);
+            *value
+        }
+        None => 0.0,
+        _ => {
+            vm_jit::signal_bail();
+            0.0
         }
     }
 }
