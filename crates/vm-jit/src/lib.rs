@@ -1237,6 +1237,7 @@ type CompiledAbi = unsafe extern "C" fn(
     *const u8,
     *mut i64,
     *mut i64,
+    usize,
 ) -> u8;
 
 #[derive(Debug)]
@@ -1833,6 +1834,11 @@ impl NativeModule {
         self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // bail flag ptr
         self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // safepoint id out ptr
         self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // deopt payload out ptr
+        // Native call depth (native-call-ABI slice 1): the dynamic depth of the
+        // native->native call chain. Threaded so a recursive native frame can bail to
+        // the interpreter before overflowing the host C stack (the guard lands in a
+        // later slice; for now it is carried only). `usize`-width == pointer-width.
+        self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // native call depth
         self.ctx
             .func
             .signature
@@ -2169,6 +2175,9 @@ impl NativeModule {
                             bail_ptr,
                             safepoint_ptr,
                             payload_ptr,
+                            // Top-level native entry: the native call chain starts at
+                            // depth 0 (native-call-ABI slice 1).
+                            0,
                         )
                     };
                     if completed != 0 && bail.get() == 0 {
@@ -3435,6 +3444,10 @@ fn build_function(
     let bail_ptr = params[5];
     let safepoint_ptr = params[6];
     let payload_ptr = params[7];
+    // Native call depth (native-call-ABI slice 1): the chain depth passed by the
+    // caller. Forwarded as `depth + 1` to native callees so a future entry guard can
+    // bail before host-stack overflow; not yet checked.
+    let native_call_depth = params[8];
     // Running per-site bail-id counter. Starts at 1 (0 is reserved = no bail);
     // `bail_if` post-increments it so every guard/bail site gets a stable id.
     let mut next_id: i64 = 1;
@@ -3931,6 +3944,10 @@ fn build_function(
                 let safepoint_ptr_v = bcx.ins().stack_addr(ptr_ty, safepoint_slot, 0);
                 let payload_ptr_v = bcx.ins().stack_addr(ptr_ty, payload_slot, 0);
                 let nargs_v = bcx.ins().iconst(ptr_ty, meta.n_params as i64);
+                // Forward the chain depth as `caller_depth + 1` (native-call-ABI
+                // slice 1): a native callee's depth is one deeper than its caller's.
+                let one_depth = bcx.ins().iconst(ptr_ty, 1);
+                let child_depth = bcx.ins().iadd(native_call_depth, one_depth);
                 let call = bcx.ins().call(
                     native_ref(*callee),
                     &[
@@ -3942,6 +3959,7 @@ fn build_function(
                         bail_ptr_v,
                         safepoint_ptr_v,
                         payload_ptr_v,
+                        child_depth,
                     ],
                 );
                 let completed = bcx.inst_results(call)[0];

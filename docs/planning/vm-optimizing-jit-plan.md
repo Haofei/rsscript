@@ -214,10 +214,24 @@ machinery **engage real program shapes and prove it**, not new subsystems. In pr
       investigated), `json` (1.01, parse), `string-map` (0.98, Map-key hashing). These need
       `List.len(split(...))` count-law / `starts_with` byte-compare folds, or the general allocation
       path (a) for programs that actually *use* the constructed strings; each is its own slice.
-   2. **Native-call ABI — the large architectural keystone (later).** Unlocks `recursion-tree`/
-      `fib` (~192 ms), bounded recursion generally, and non-inlinable cross-function native calls.
-      Much larger, and it will interact with the full inlined frame-chain deopt / state maps
-      (Pending #3, J0.1) and a host-stack depth guard — scope it deliberately, not opportunistically.
+   2. **Native-call ABI — the large architectural keystone (IN PROGRESS, sliced).** Unlocks
+      `recursion-tree`/`fib` (~192 ms today via the tier-0 scalar executor, not Cranelift),
+      bounded recursion generally, and non-inlinable cross-function native calls. Non-recursive
+      native call chains already ship (`CallNative` + child-frame deopt); the remaining work is
+      **native recursion**, blocked by (i) self-reference (a `CallNative` resolves its callee via
+      `self.funcs`, but a self-call's id isn't minted until compile returns → needs a self-call IR
+      form + declare-before-define), and (ii) a **host-stack depth guard** (native→native calls the
+      callee on the host C stack at lib.rs CallNative codegen, so unbounded recursion overflows it
+      → a crash, not a clean bail; safety-critical). Sliced:
+      - **Slice 1 — depth-carrying ABI: DONE.** `CompiledAbi` gained a trailing `depth: usize`
+        param; the top-level `call()` passes 0, each `CallNative` passes `caller_depth + 1`. Carried
+        only (no entry guard yet); behavior unchanged, validated by vm-jit 81/0 + differential 33/0.
+      - **Slice 2 — self-call lowering + entry depth guard** (next): a `CallSelf` IR form,
+        declare-before-define in `compile_inner`, and an entry check that bails (deopts to the
+        interpreter) when `depth >= cap` so the host stack can't overflow.
+      - **Slice 3 — enable + verify** (`fact`/`fib` go native, byte-identical to interp, deep
+        recursion bails cleanly at the cap), then **slice 4 — mutual recursion** (declare a cycle
+        before defining). Interacts with the frame-chain deopt / state maps (Pending #3, J0.1).
    *Net (FRONTIER REACHED, 2026-06-23): the cleanly-tractable incremental wins are DONE* — folds
    (string/Bytes length, ~13×/~20×), scalar replacement (Option/variant/struct/nested/loop-carried),
    closure-sink (~53×), TCO (~70×), float (~42×), deopt-before-heap (~10×), plus the registry +
