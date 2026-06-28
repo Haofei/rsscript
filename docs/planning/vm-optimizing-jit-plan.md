@@ -38,7 +38,7 @@ numeric-mode language decision). Owner: TBD. Created 2026-06-20; status updated 
 |---|---|---|
 | **J0.0–J0.3** precise-deopt spine | **shipped (leaf/scalar subset)** | `NativeOutcome::Deopt` + per-site safepoint ids + live-reg capture + state-map + precise resume + every-safepoint stress test. **Precise resume is now the production DEFAULT** (`eval_main_with_args_native`); re-run-from-top remains the byte-identical fallback when a heap write disables precise resume (`can_precise_deopt_resume`) and stays under differential coverage via the force-deopt backend. The state-map is `resume_ip + live registers` — **not** yet the full inlined logical-frame-chain format J0.1 describes. So: done for the current leaf/scalar subset; full inlined-frame / side-effecting deopt is still **future**. |
 | **J0.1 (heap-aware reg reconstruction)** | **shipped** | The deopt state map distinguishes reconstructible scalars (`Int`/`Float`) from heap refs (`Handle`/`FlatInt`/`FlatFloat`): `decode_deopt_live` reconstructs only scalar regs (the interpreter frame already holds heap values — precise resume implies no heap writes), and `restore_native_deopt_live_regs` restores ALL scalar regs incl. **reassigned scalar params** (the `< n_params` skip is gone). Fixes the reassigned-scalar-param resume bug (`precise_deopt_restores_reassigned_scalar_param`); flat-buffer params stay uncorrupted. **Precise resume is now default-on (validated corpus-wide).** **Remaining for full J0.1:** inlined logical-frame-chain state-map format, and heap-payload-variant / live-out *value* reconstruction (rebuilding native-built composite heap values — variant/struct with heap payload — across a bail; today such arms bail). |
-| **J0.4** heap writes + deopt-after-write | **future** | blocked on native heap-write codegen; the native subset is read-only today. |
+| **J0.4** heap writes + deopt-after-write | **S0–S3 shipped; S4 future** | **S0** (heap-result return ABI, `95e2b71`) and **S1–S3** (allocate-only: 10 `AllocatesResult` host helpers — `StringFromInt`/`StringConcat`/`StringSlice`/`StringPadLeft`/`StringSplit`/`StringLiteral`/`JsonParse`/`JsonField`/`BytesSlice`/`ListNewInt` — publishing fresh unaliased values into `JIT_HEAP_RESULTS`, gated by `escaping_output_handle` escape analysis; `mem_budget` kept exact by **Model-A refusal when armed** (`tier.rs`), so no in-helper accounting/double-charge; §7.2 via clear-on-bail output table + `JitHeapResultsGuard`, force-deopt-tested) are **shipped & green**. In-place **caller-aliased** writes (**S4**) remain **future** — they need J0.1 frame-chain + J0.5. The native subset is no longer read-only: it allocates fresh heap values. |
 | **J0.5** in-generated-code `VmLimits` accounting | **future** | currently the Model-A fallback (see J6); the `VmLimitsSnapshot` tick/poll machinery is not built. |
 | **J1** profiling | **shipped** | per-call-site type feedback on dynamic sites, warm-gated, no interpreter regression. (Branch profiling **not** shipped — it regressed `bool_logic_loop` ~7%; needs a hot/cold dispatch split.) |
 | **J2.1 / J2.2** mono + poly closure inlining | **shipped; fires on real kernels via OSR (measured)** | guarded inline of closures, **broadened to capturing, stored (struct/list-fetched handle), and polymorphic** closures with scalar-capture materialization. Composed into OSR, this makes the literal `dynamic_closure_call` allocation-free native — **~4.6×**, `osr_entries:1`. (Standalone whole-function J2 outside OSR remains a coverage scaffold; the wins come through OSR.) |
@@ -330,10 +330,18 @@ below. Build a dedicated mid-level IR only when pass interactions actually deman
      §7.2-safe infra):** `NativeOutcome::CompletedHandle` + a VM-owned output table materialized ONLY on
      clean completion (cleared on bail), so native can *return* a heap value it was given with no
      allocation and §7.2 holds verbatim (IR_VERSION→10; scalar path byte-identical; differential 33/0 +
-     force-deopt). **S1–S3 (allocate-only: native allocates ONE fresh, *unaliased* value-type, charges
-     `mem_budget` at the host-helper boundary, commits in a no-bail tail so a bail leaves nothing to
-     double-apply) is SOUND and needs NEITHER J0.1 NOR J0.5** — the next slice on top of S0 (≈ medium-
-     large; §7.2-breaking, so it adds the replacement-equivalence argument + a mem-budget differential).
+     force-deopt). **S1–S3 (allocate-only) — SHIPPED & green (verified 2026-06-28).** 10
+     `AllocatesResult` host helpers (`StringFromInt`/`StringConcat`/`StringSlice`/`StringPadLeft`/
+     `StringSplit`/`StringLiteral`/`JsonParse`/`JsonField`/`BytesSlice`/`ListNewInt`) `publish_heap_result`
+     a fresh *unaliased* value into `JIT_HEAP_RESULTS`, gated by `escaping_output_handle` escape analysis so
+     the result is genuinely returned/consumed. Implementation note vs. the original plan: rather than
+     charging `mem_budget` at the host-helper boundary + no-bail-tail, the shipped design keeps `mem_budget`
+     EXACT by **Model-A refusal — native is declined while `mem_budget`/`step_budget`/`cancel` is armed**
+     (`tier.rs` `native_limits_unarmed`), so there is **no in-helper accounting and no double-charge
+     possible** (simpler and equally exact). §7.2 holds via clear-on-bail output table + `JitHeapResultsGuard`
+     (force-deopt test `native_heap_result_force_deopt_leaves_output_table_empty`). Needs NEITHER J0.1 NOR
+     J0.5 (confirmed). Tests: `native_string_from_int_return_allocates_heap_result`,
+     `native_string_concat_handle_feeds_string_len`, + vm-jit lib 83/0, runtime 401 functional pass.
      **S4 (in-place mutation of caller-aliased heap — the fully general "write anywhere" unlock) is
      monolithic and requires BOTH J0.1 (frame-chain state maps) AND J0.5 (in-code mem accounting)** — the
      "big scary" layer. Biggest/broadest payoff (~138 ms alloc-bound + general). The moment S1 lands,

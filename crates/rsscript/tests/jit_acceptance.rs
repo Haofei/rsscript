@@ -960,6 +960,119 @@ fn main() -> Unit {
     assert_eq!(osr.stdout.trim_end(), "begin\n31\n31");
 }
 
+/// Nested-loop OSR (roadmap #4), all-native variant: an OUTER accumulator loop with
+/// an INNER counting loop, wrapped by non-native I/O so the function is whole-native
+/// ineligible and only OSR can run a loop natively. The OSR pipeline is multi-loop-
+/// aware (`detect_natural_loops` → `select_osr_candidate_loop`): with both loops in
+/// the native subset the OUTER region out-scores the inner on length, so the whole
+/// nested `[outer-header, outer-exit)` region compiles as ONE native loop with the
+/// inner backedge as an in-region jump. Byte parity with the interpreter is the
+/// correctness net (a wrong ip-map over the nested CFG would diverge here).
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_nested_inner_loop_matches_interpreter() {
+    let source = "\
+fn nested_sum(rows: Int, cols: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut total = 0
+    let mut i = 0
+    while i < rows {
+        let mut j = 0
+        while j < cols {
+            let idx = i * cols + j
+            total = total + idx
+            j = j + 1
+        }
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: nested_sum(rows: read 40, cols: read 40)))
+    return Unit
+}
+";
+    let file = "jit-osr-nested.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let osr =
+        rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+            .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "nested-loop OSR must be byte-identical to the interpreter (stdout)"
+    );
+    // i*cols+j over i in 0..40, j in 0..40 is a bijection onto 0..1599, so the total
+    // is sum(0..=1599) = 1599*1600/2 = 1279200.
+    assert_eq!(osr.stdout.trim_end(), "begin\n1279200\n1279200");
+
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (_osr2, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run (stats)");
+    assert!(
+        stats.osr_entries > 0,
+        "the nested hot loop must OSR natively: {stats:?}",
+    );
+}
+
+/// Nested-loop OSR (roadmap #4), DIRTY-outer variant: the outer loop body itself
+/// does non-native I/O (`Log.write`), so the outer region fails the transform-
+/// candidate filter and `select_osr_candidate_loop` picks the INNER loop. This
+/// exercises the re-entrant case — the inner loop is OSR-entered, exits back to the
+/// interpreted outer body each outer iteration, and re-enters native on the next
+/// outer trip. Parity proves the repeated OSR entry/exit boundary stays correct.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_nested_inner_loop_with_dirty_outer_matches_interpreter() {
+    let source = "\
+fn nested_sum(rows: Int, cols: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut total = 0
+    let mut i = 0
+    while i < rows {
+        let mut j = 0
+        while j < cols {
+            let idx = i * cols + j
+            total = total + idx
+            j = j + 1
+        }
+        Log.write(message: read String.from_int(value: i))
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: nested_sum(rows: read 3, cols: read 200)))
+    return Unit
+}
+";
+    let file = "jit-osr-nested-dirty.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let osr =
+        rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+            .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "dirty-outer nested-loop OSR must be byte-identical to the interpreter (stdout)"
+    );
+    // Per outer i: sum_{j<200}(i*200+j) = 200*200*i + sum(0..=199) = 40000*i + 19900.
+    // i=0,1,2 ⇒ 19900 + 59900 + 99900 = 179700. The outer prints i each trip.
+    assert_eq!(osr.stdout.trim_end(), "begin\n0\n1\n2\n179700\n179700");
+
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (_osr2, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run (stats)");
+    assert!(
+        stats.osr_entries > 0,
+        "the inner hot loop must OSR natively even with a dirty (I/O) outer body: {stats:?}",
+    );
+}
+
 /// OSR × J3 (Pending #1) correctness: a hot loop that constructs and matches a
 /// *non-escaping* scalar `Option<Int>` each iteration, wrapped by non-native I/O
 /// (`Log.write` before/after) in the SAME function — so the function is

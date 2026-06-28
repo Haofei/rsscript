@@ -1,0 +1,158 @@
+# JIT 后续优化路线图(按难度从低到高)
+
+> 这是 [`vm-optimizing-jit-plan.md`](./vm-optimizing-jit-plan.md) 的聚焦补充,只记录
+> **还没做、接下来可能做** 的 JIT 性能项,按**实现难度从低到高**排序。每项标注难度 /
+> ROI / 前置依赖 / 解锁什么 / 做法概要 / 风险。基准数据见
+> [`../../benchmarks/vm-jit/README.md`](../../benchmarks/vm-jit/README.md)。
+
+## 背景:现在到了什么程度
+
+JIT 性能有两条轴:
+- **轴 A(覆盖率 / eligibility)**——让更多代码"能 native 跑"。VM→native 的大头在这(15–50×)。
+- **轴 B(代码质量)**——缩小 native 与手写 Rust 的差距。
+
+**轴 A 的容易收益基本吃完**:OSR×J2/J3、native 递归、scalar replacement、checked-int 消除、
+堆读全覆盖(Int/Bool/Float)、可回滚的堆写(field/list/map/deque + flat 就地写)、query-folding
+都已 shipped。剩下的核心判断:
+
+> **native codegen 已接近 Rust;瓶颈在覆盖率,尤其"堆分配"还几乎全 bail。**
+> 最后一块"一把解锁一大片"的通用解是 **J0.4(native 堆分配 + 写后精确 deopt)**。
+
+铁律(所有项都遵守):**native 只搬运,解释器定语义;能用可回滚兜底就别碰精确 deopt。**
+
+---
+
+## 排序总表
+
+| # | 项目 | 难度 | ROI | 前置 | 一句话 |
+|---|---|---|---|---|---|
+| 1 | Handle-value / 非 Int key 集合写 | 低 | **低** | 无 | 机械镜像,但 host helper 干主活,native 只省派发 |
+| 2 | ~~Deque-pop Option native 融合~~ ✅**已支持(OSR 路径)** | 中 | 低–中 | 无 | OSR 用的 in-region scalar-replace(`passes.rs:5662`)已 seed deque-pop 并以"恒 Some tag + bail-on-empty 兜 None"融合;测试 `native_osr_enters_loop_with_transactional_deque_pop_front_int` 绿。(整函数 pass 未 seed,但无关紧要——热循环走 OSR) |
+| 3 | 轴 B:热堆读 host-call 边界内联 | 中 | 中 | 无 | 堆读现比 Rust 慢 ~13×,瓶颈是每次跨调用边界 |
+| 4 | ~~嵌套循环 OSR~~ ✅**已支持** | 中–高 | 中 | 无 | OSR 管线本就多循环感知(`detect_natural_loops`→`select_osr_candidate_loop`);嵌套/兄弟循环已可 OSR(新增回归测试坐实) |
+| 5 | ~~**J0.4 S1–S3:仅分配的 native 堆写**~~ ✅**已完成** | 中–高 | **最高** | 无(不需 J0.1/J0.5) | 解锁 alloc-bound(string/json/集合构造);10 个 `AllocatesResult` helper 已落地并验证 |
+| 6 | J0.5:生成代码内 `VmLimits` 记账 | 高 | 中 | 无(S4 的前置) | 让 native 在 budget/cancel armed 时也能跑(沙箱场景) |
+| 7 | 完整 J0.1:内联帧链 + 堆值重建 | 很高 | 高(地基) | 无(S4 的前置) | 精确 deopt 的硬核;输出测不出,需定向 repro |
+| 8 | **J0.4 S4:任意别名堆就地写** | 很高 | 高/广 | J0.1 + J0.5 | "随便写"的通用解锁;最后的大魔王 |
+| 9 | async / 挂起函数 native | 很高 | 类相关 | — | 架构性;park/resume × native,可能不做 |
+
+**⚠️ 2026-06-28 核实结论:本路线图前段大多已完成。** #3(堆读内联,flat-list 部分)、#4(嵌套循环 OSR)、
+#5(J0.4 S1–S3 仅分配堆写)**都已 shipped 并验证**(docs 之前是 stale 的)。**真正未做的**只剩:
+#3-remainder(flat-struct 字段读内联,比原评级更难)、native `string_byte` 读 helper + `split` 折叠
+(`string_text` 的真 gate)、#2(deque-pop 融合,低 ROI)、#1(Handle-value 写,低 ROI)、以及那条**最硬的
+精确-deopt 主线 #7 J0.1 → #6 J0.5 → #8 S4**(多 session 大投入,需主人定 scope/风险)、#9(async,缓做)。
+**下一步最该做的是主线 #7(完整 J0.1)**——它是 #8 和"边写边精确续跑"的地基,且独立解锁 heap-payload
+variant / live-out 的 OSR。
+
+**(历史)推荐切入顺序:** ~~先 **#5(J0.4 S1–S3)**~~ ✅**#5 已完成**——
+10 个 `AllocatesResult` helper(`StringFromInt`/`StringConcat`/`StringSlice`/`StringPadLeft`/`StringSplit`/
+`StringLiteral`/`JsonParse`/`JsonField`/`BytesSlice`/`ListNewInt`)经 `JIT_HEAP_RESULTS` 输出表 +
+`escaping_output_handle` 逃逸分析 + Model-A(`mem_budget` armed 时拒绝 native)落地并验证
+(`native_string_from_int_return_allocates_heap_result` / `native_string_concat_handle_feeds_string_len` /
+§7.2 双子 `native_heap_result_force_deopt_leaves_output_table_empty`)。**下一步主线:**
+**#3(轴 B 堆读内联)→ #4(嵌套循环 OSR)→ #7(J0.1)→ #6(J0.5)→ #8(S4)**;**#1 / #2** 按需,**#9** 缓做。
+
+---
+
+## 逐项详述
+
+### 1. Handle-value / 非 Int key 集合写 —— 难度低,ROI 低(按需)
+- **现状缺口:** 集合里 Handle 类型的 value 只有读(`ListGetHandle` / `FieldHandle`),**没有写**:
+  没有 `MapInsertHandle` / `ListPushHandle` / `SetInsertHandle` / `FieldSetHandle`;map/set 只支持
+  `jit_int_key`(Int key),`Map<String,_>` / `Set<String>` 虽合法(String 是 Hashable)但 native 不认。
+  (注:**Float 不能做 key**——不是 Hashable,checker 直接拒,这条不存在。)
+- **做法:** 沿用 `MapInsertFloat` 套路,加 Handle 版 helper;key 复用解释器自己的 `VmMapKey` /
+  哈希函数(**绝不在 native 重写哈希语义**),native 只在堆表里搬 handle + COW 回写。
+- **为什么 ROI 低:** 贵的部分(字符串哈希、堆分配、哈希表机制)无论如何都在 host helper 里跑,
+  native 只能削掉外面那薄薄一层派发(占总成本百分之几)。**唯一有意义的场景**是"一个热循环里混着
+  一个这种操作,导致整个循环没法 native"——那时补它是为了**保住周围 native 循环**,不是加速这次写。
+- **触发条件:** profiling 显示真有这种热循环再做;否则不投。
+
+### 2. Deque-pop Option native 融合 —— 难度中,ROI 低–中
+- **现状缺口:** `match Deque.pop_front()` 对 **Int 和 Float 都进不了 native**。`DequePopFront` 的 dst 是
+  `Option`,要靠 J3(`native_scalar_replace_options`)把它和后面的 `MatchOption` 融合掉;但 J3 只从
+  `MakeSome`/`LoadNone` 播种 OPT,**不认 deque-pop 直接产出的 Option**。而且 deque-pop 的 native 形态是
+  "空则 bail",和 J3"产出 is_some 判别位"的模型对不上。
+- **做法:** 扩 J3——把 `DequePopFront/Back` 也当 Option 生产者播种,并协调"bail-on-None"与"is_some 判别"
+  两种模型(或给 deque-pop 一条独立的融合路径)。`DequePop*Float` 的 helper + lowering 已就绪
+  (parity 验证过),融合一通它们立刻 native。
+- **收益:** Int + Float 一起解锁,但 deque-pop 热循环本就不常见,ROI 有限。
+
+### 3. 轴 B:热堆读 host-call 边界内联 —— 难度中,ROI 中
+- **现状:** native 标量已接近 Rust(0.9–2.1×),但**堆读比 Rust 慢 ~13×**(`native_read_heap`),
+  因为每次 `list_len`/`list_get` 都跨 host-helper 调用边界(§7.1)。
+- **做法:** 把最热的只读 helper(`list_len`/`list_get_int/float`/`field_*`)的快路径**内联进生成代码**
+  (直接读 `TypedVec` 的长度 / 缓冲指针,慢路径再 fall back 到 host call),削掉调用 + 寄存器保存开销。
+- **收益:** 对已经 native 的 heap-heavy 代码直接提速;通用、风险中等(要小心 §7.2 的指针 pin 协议与边界检查)。
+- **注意:** 这是**轴 B(代码质量)**,不增加覆盖率;和 J0.4 正交,可独立做。
+
+### 4. 嵌套循环 OSR —— ✅**已支持**(原评:难度中–高,ROI 中)
+- **核实(2026-06-28):** 这条的"缺口"是**误判**。`detect_single_natural_loop` **不在 OSR 管线里**——它只用于
+  诊断报告(`mod.rs:2512`)和单测。OSR 管线全程用**多循环感知**的 `detect_natural_loops` →
+  `detect_natural_loop_at` → `select_osr_candidate_loop` → `mapped_osr_loop`,**嵌套/兄弟循环本就支持**。
+  - 外层全 native 时:外层 region 更长、score 更高,整块嵌套 `[外头, 外出)` 编成**一个** native loop,
+    内层 backedge 只是 region 内的 `Jump`(vm-jit 块构造器支持任意可归约 CFG / 多 backedge)。
+  - 外层体有非 subset op(I/O 等)时:外层落选,`select_osr_candidate_loop` 直接选**内层**循环;
+    内层 OSR-entry/exit 在每个外层迭代**可重入**(`osr_cache` 命中、`osr_state` 不被一次性消费)。
+- **回归测试(新增):** `native_osr_nested_inner_loop_matches_interpreter`(外层全 native)+
+  `native_osr_nested_inner_loop_with_dirty_outer_matches_interpreter`(脏外层,内层可重入)——
+  两者均 byte-parity 解释器且 `osr_entries > 0`。
+- **`string_text` 的真正 gate:** 不是嵌套循环,而是**未落地的 native string-READ helper**
+  (`string_len`/`string_byte`,已设计未 land,因为之前"没有消费者")。嵌套循环既已支持,这个消费者
+  现在存在了——若要推进 `string_text`,下一步是 land 这两个只读 helper(§7.2-safe)。
+
+### 5. J0.4 S1–S3:仅分配的 native 堆写 —— ✅**已完成**(难度中–高,ROI 最高,无 J0.1/J0.5 前置)★旗舰
+- **完成状态(2026-06-28 核实):** 已落地并验证。10 个 `AllocatesResult` host helper
+  (`vm-jit/src/lib.rs` 578–756:`ListNewInt` / `StringFromInt` / `StringConcat` / `StringSlice` /
+  `StringPadLeft` / `StringSplit` / `StringLiteral` / `JsonParse` / `JsonField` / `BytesSlice`)在 S0 的
+  `JIT_HEAP_RESULTS` 输出表之上 `publish_heap_result` 分配一个**全新无别名** `VmValue`,经
+  `escaping_output_handle` 逃逸分析(`translate.rs` 802–896 + gate 1837/1880)确保结果真被返回/下游消费。
+  **`mem_budget` 用 Model-A 精确兜底**(`tier.rs` 868–881:armed 时拒绝 native),所以无需在 helper 内记账、
+  也无双重计费——比计划里"在边界处计 `mem_budget`"更简洁且同样精确。§7.2 由"bail 即清空输出表 + `JitHeapResultsGuard`"
+  保证,force-deopt 测试坐实。测试:`native_string_from_int_return_allocates_heap_result` /
+  `native_string_concat_handle_feeds_string_len` / `native_heap_result_force_deopt_leaves_output_table_empty`
+  (reg_vm/tests.rs)+ vm-jit lib 83/0。
+- **基准注脚:** 如计划所述,alloc-bound 基准多为**已 fold 的字符串**,所以**基准搬针有限**;更广的
+  "集合构造器就地写"收益落在 **#8(S4)**。S1–S3 的价值是把"一分配就退回解释器"这块通用能力补齐。
+- **解锁:** 所有 **alloc-bound** kernel(反复 `String.concat`、`String.from_int`、建新 Map/List、json 构造,
+  共 ~138ms)——现在它们因"一分配就退回解释器"而全 parity。
+- **做法(effect-after-commit,不是回滚):** 在 S0(已 ship 的堆结果返回 ABI)之上,让 native **分配一个
+  全新、无别名的值类型**,在 host-helper 边界处**计 `mem_budget`**,并在**一个不会再 bail 的尾段提交**——
+  这样任何 bail 都发生在分配之前,没有 double-apply,**因此既不需要 J0.1 也不需要 J0.5**。
+- **代价:** 中等偏大(~450–650 行 + parity 测试)。**它打破 §7.2(从"无副作用"变"有受控副作用")**,
+  所以要补:① 替换等价性(replacement-equivalence)论证;② 一条 `mem_budget` 的 differential。
+  **S1 一落地,`mem_budget` 就必须加入 native eligibility 判定。**
+- **建议:** 这是接下来**最该先做**的一项——单点解锁面最大,且不依赖最难的 deopt 重建。
+
+### 6. J0.5:生成代码内 `VmLimits` 记账 —— 难度高,ROI 中(S4 前置)
+- **现状:** 现在 native 在 `step_budget`/`mem_budget`/`cancel` **armed 时直接拒绝**(Model-A 兜底)。
+- **做法:** 在生成代码里 inline 地 tick/poll 这些预算(`VmLimitsSnapshot` 机制),让 native 在受限下也能跑。
+- **为什么重要:** rss 本质是**沙箱**,"受限执行下也要快"是真实场景;同时它是 S4 的前置。
+- **风险:** 记账必须跨 bail 边界精确(不重不漏),且不能拖垮热循环。
+
+### 7. 完整 J0.1:内联帧链 + 堆值/live-out 重建 —— 难度很高,ROI 高(地基),S4 前置
+- **缺口三块:** ① 内联 leaf 区域内 deopt 的**逻辑帧链**状态图格式;② **堆 payload 的 variant/Result**
+  在循环后仍活时的**值重建**(把 native 造的复合堆值跨 bail 重新物化);③ live-out 复合值重建(perf)。
+- **为什么最硬:** 要在**任意 bail 点**把 native 那套被打散的状态(寄存器、解构的复合值、内联帧链)**完整
+  翻译回**解释器状态,还要堆停在一致中间态。**这种 bug 输出测不出来**(differential 抓不到),必须为每条
+  slice 写定向 repro。等价于 HotSpot 的 deopt + scope descriptors + 逃逸对象 rematerialization——业界最硬子系统之一。
+- **定位:** 这是"大魔王"的真正核心,S4 与"边写边精确续跑"都建在它上面。
+
+### 8. J0.4 S4:任意别名堆就地写 —— 难度很高,ROI 高/广,需 J0.1 + J0.5
+- **解锁:** 真正的"**随便写**"——就地改"调用方也持有引用"的堆,且写后能精确续跑。这是通用 native 分配/写的终态。
+- **为什么放最后:** 它是单体式的,**同时**要 J0.1(精确 deopt 重建)和 J0.5(生成代码内记账)。在它们就位前无法安全做。
+
+### 9. async / 挂起函数 native —— 难度很高,类相关,可能不做
+- **现状:** 挂起函数(`await`/`task_group`)天然 native-ineligible,整类异步代码走解释器。
+- **做法:** native 里支持 park/resume 帧状态——架构性大改,§7.2/deopt 交互复杂。
+- **定位:** 收益只覆盖异步密集代码;优先级最低,先评估是否值得。
+
+---
+
+## 一句话收尾
+
+> ~~接下来最该做的是 #5~~ ✅**#5(J0.4 S1–S3,仅分配的 native 堆写)已完成**(2026-06-28 核实:
+> 10 个 `AllocatesResult` helper 落地 + 测试绿;运行期 401 functional pass / vm-jit 83/0,唯一红是
+> 容器内已知坏的 perf-gate 基准)。**接下来该做 #3(轴 B:热堆读 host-call 边界内联)**——独立、广收益、
+> 与已 native 的 heap-heavy 代码复利。再往上走 **#4(嵌套循环 OSR)→ #7 J0.1 → #6 J0.5 → #8 S4** 这条
+> 精确-deopt 主线(JIT 最复杂的一块)。**#1 / #2** 按需,**#9** 缓做。
