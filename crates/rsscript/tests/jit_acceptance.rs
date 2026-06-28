@@ -415,6 +415,54 @@ fn main() -> Unit {
     );
 }
 
+/// Phase 4 (collection element-type breadth): inserting a `Float` value into a
+/// `Map<Int, Float>` and pushing a `Float` onto a `Deque<Float>`, both through `mut`
+/// parameters, lower to the new `MapInsertFloat` / `DequePushBackFloat` helpers
+/// (value-side counterparts enabled by the float-arg helper ABI). Backends must
+/// agree with the interpreter and the loop must run natively.
+#[cfg(feature = "native-jit")]
+#[test]
+fn jit_acceptance_runs_float_map_and_deque_helpers() {
+    let source = "\
+fn fill(m: mut Map<Int, Float>, d: mut Deque<Float>, n: Int) -> Int {
+    let mut i = 0
+    while i < n {
+        Map.insert<Int, Float>(map: mut m, key: read i, value: read 1.5)
+        Deque.push_back<Float>(deque: mut d, value: read 2.5)
+        i = i + 1
+    }
+    return 0
+}
+
+fn main() -> Unit {
+    let mut m = Map<Int, Float>.new()
+    let mut d = Deque<Float>.new()
+    let r = fill(m: mut m, d: mut d, n: read 4)
+    let mut total = 0.0
+    match Map.get<Int, Float>(map: read m, key: read 2) {
+        Some(v) => { total = total + v }
+        None => { total = total }
+    }
+    match Deque.pop_front<Float>(deque: mut d) {
+        Some(v) => { total = total + v }
+        None => { total = total }
+    }
+    Log.write(message: read Float.to_string(value: read total))
+    return Unit
+}
+";
+    let file = "jit-accept-float-map-deque.rss";
+    assert_fast_jit_backends_agree(file, source);
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (_out, stats) = exe
+        .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
+        .expect("native run");
+    assert!(
+        stats.native_calls > 0,
+        "the Float map-insert / deque-push loop should run natively: {stats:?}",
+    );
+}
+
 #[test]
 fn jit_acceptance_runs_float_parameter_loop() {
     let source = "\

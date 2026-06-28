@@ -175,6 +175,8 @@ pub type BytesSliceFn = extern "C" fn(HostCtx, i64, i64, i64) -> i64;
 /// `(map_handle, key) -> i64`: insert/update an Int-keyed, Int-valued map.
 /// A wrong container/key/value shape signals a bail.
 pub type MapInsertIntFn = extern "C" fn(HostCtx, i64, i64, i64) -> i64;
+/// `(map_handle, key, value: f64) -> i64`: insert into an Int-keyed `Map<_, Float>`.
+pub type MapInsertFloatFn = extern "C" fn(HostCtx, i64, i64, f64) -> i64;
 /// `(map_handle, key) -> i64`: return an Int payload for an existing map key.
 /// Missing keys or non-Int payloads signal a bail.
 pub type MapGetIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
@@ -216,6 +218,10 @@ pub type SortedMapLenFn = extern "C" fn(HostCtx, i64) -> i64;
 pub type DequeLenFn = extern "C" fn(HostCtx, i64) -> i64;
 /// `(deque_handle, value) -> i64`: push an Int to the back of a deque.
 pub type DequePushBackIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
+/// `(deque_handle, value: f64) -> i64`: push a `Float` onto the back of a `Deque<Float>`.
+pub type DequePushBackFloatFn = extern "C" fn(HostCtx, i64, f64) -> i64;
+/// `(deque_handle, value: f64) -> i64`: push a `Float` onto the front of a `Deque<Float>`.
+pub type DequePushFrontFloatFn = extern "C" fn(HostCtx, i64, f64) -> i64;
 /// `(deque_handle, value) -> i64`: push an Int to the front of a deque.
 pub type DequePushFrontIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
 /// `(deque_handle) -> i64`: pop an Int from the front of a deque. Empty or non-Int
@@ -274,6 +280,7 @@ pub struct HostHelpers {
     pub bytes_len: BytesLenFn,
     pub bytes_slice: BytesSliceFn,
     pub map_insert_int: MapInsertIntFn,
+    pub map_insert_float: MapInsertFloatFn,
     pub map_get_int: MapGetIntFn,
     pub map_get_match_int: MapGetMatchIntFn,
     pub map_get_match_found: MapGetMatchFoundFn,
@@ -295,7 +302,9 @@ pub struct HostHelpers {
     pub deque_len: DequeLenFn,
     pub deque_is_empty: IsEmptyFn,
     pub deque_push_back_int: DequePushBackIntFn,
+    pub deque_push_back_float: DequePushBackFloatFn,
     pub deque_push_front_int: DequePushFrontIntFn,
+    pub deque_push_front_float: DequePushFrontFloatFn,
     pub deque_pop_front_int: DequePopFrontIntFn,
     pub deque_pop_back_int: DequePopBackIntFn,
 }
@@ -722,6 +731,14 @@ host_helpers! {
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
     },
+    MapInsertFloat => {
+        field: map_insert_float,
+        symbol: "rss_jit_map_insert_float",
+        args: [JitValueType::Handle, JitValueType::Int, JitValueType::Float],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::MutatesInput,
+    },
     MapGetInt => {
         field: map_get_int,
         symbol: "rss_jit_map_get_int",
@@ -873,10 +890,26 @@ host_helpers! {
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
     },
+    DequePushBackFloat => {
+        field: deque_push_back_float,
+        symbol: "rss_jit_deque_push_back_float",
+        args: [JitValueType::Handle, JitValueType::Float],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::MutatesInput,
+    },
     DequePushFrontInt => {
         field: deque_push_front_int,
         symbol: "rss_jit_deque_push_front_int",
         args: [JitValueType::Handle, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::MutatesInput,
+    },
+    DequePushFrontFloat => {
+        field: deque_push_front_float,
+        symbol: "rss_jit_deque_push_front_float",
+        args: [JitValueType::Handle, JitValueType::Float],
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
@@ -5431,11 +5464,14 @@ mod tests {
             HostHelper::ListPushFloat,
             HostHelper::ListSortInt,
             HostHelper::MapInsertInt,
+            HostHelper::MapInsertFloat,
             HostHelper::SetInsertInt,
             HostHelper::SortedSetInsertInt,
             HostHelper::SortedMapInsertInt,
             HostHelper::DequePushBackInt,
+            HostHelper::DequePushBackFloat,
             HostHelper::DequePushFrontInt,
+            HostHelper::DequePushFrontFloat,
             HostHelper::DequePopFrontInt,
             HostHelper::DequePopBackInt,
         ]);
@@ -5627,6 +5663,9 @@ mod tests {
     extern "C" fn noop_map_insert_int(_ctx: HostCtx, _map: i64, _key: i64, _value: i64) -> i64 {
         0
     }
+    extern "C" fn noop_map_insert_float(_ctx: HostCtx, _map: i64, _key: i64, _value: f64) -> i64 {
+        0
+    }
     extern "C" fn noop_map_get_int(_ctx: HostCtx, _map: i64, _key: i64) -> i64 {
         0
     }
@@ -5674,7 +5713,13 @@ mod tests {
     extern "C" fn noop_deque_push_back_int(_ctx: HostCtx, _deque: i64, _value: i64) -> i64 {
         0
     }
+    extern "C" fn noop_deque_push_back_float(_ctx: HostCtx, _deque: i64, _value: f64) -> i64 {
+        0
+    }
     extern "C" fn noop_deque_push_front_int(_ctx: HostCtx, _deque: i64, _value: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_deque_push_front_float(_ctx: HostCtx, _deque: i64, _value: f64) -> i64 {
         0
     }
     extern "C" fn noop_deque_pop_front_int(_ctx: HostCtx, _deque: i64) -> i64 {
@@ -5721,6 +5766,7 @@ mod tests {
             bytes_len: noop_collection_len,
             bytes_slice: noop_bytes_slice,
             map_insert_int: noop_map_insert_int,
+            map_insert_float: noop_map_insert_float,
             map_get_int: noop_map_get_int,
             map_get_match_int: noop_map_get_match_int,
             map_get_match_found: noop_map_get_match_found,
@@ -5742,7 +5788,9 @@ mod tests {
             deque_len: noop_deque_len,
             deque_is_empty: noop_is_empty,
             deque_push_back_int: noop_deque_push_back_int,
+            deque_push_back_float: noop_deque_push_back_float,
             deque_push_front_int: noop_deque_push_front_int,
+            deque_push_front_float: noop_deque_push_front_float,
             deque_pop_front_int: noop_deque_pop_front_int,
             deque_pop_back_int: noop_deque_pop_back_int,
         }

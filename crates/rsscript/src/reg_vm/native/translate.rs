@@ -469,11 +469,13 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                     dst,
                     map,
                     key,
-                    value,
+                    value: _,
                 } => {
+                    // The value type flows from its definition (Int or Float);
+                    // lowering picks MapInsertInt/MapInsertFloat, and a wrong-value-type
+                    // map bails at the helper.
                     native_set_ty(ty, *map, NativeTy::Handle, c)
                         && native_set_ty(ty, *key, NativeTy::Int, c)
-                        && native_set_ty(ty, *value, NativeTy::Int, c)
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
                 RegInstr::SetInsert { dst, set, value } => {
@@ -497,10 +499,10 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                         && native_set_ty(ty, *value, NativeTy::Int, c)
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
-                RegInstr::DequePushBack { dst, deque, value }
-                | RegInstr::DequePushFront { dst, deque, value } => {
+                RegInstr::DequePushBack { dst, deque, value: _ }
+                | RegInstr::DequePushFront { dst, deque, value: _ } => {
+                    // The value type flows (Int or Float); lowering picks the helper.
                     native_set_ty(ty, *deque, NativeTy::Handle, c)
-                        && native_set_ty(ty, *value, NativeTy::Int, c)
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
                 RegInstr::DequePopFront { dst, deque } | RegInstr::DequePopBack { dst, deque } => {
@@ -1431,9 +1433,14 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 key,
                 value,
             } => {
-                require(handle_reg(*map) && int(*key) && int(*value) && int(*dst))?;
+                require(handle_reg(*map) && int(*key) && int(*dst) && (int_or_free(*value) || float(*value)))?;
+                let helper = if float(*value) {
+                    vm_jit::HostHelper::MapInsertFloat
+                } else {
+                    vm_jit::HostHelper::MapInsertInt
+                };
                 JitInstr::HostCall {
-                    helper: vm_jit::HostHelper::MapInsertInt,
+                    helper,
                     dst: r(*dst),
                     args: vec![
                         vm_jit::HostArg::Reg(r(*map)),
@@ -1482,9 +1489,14 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 }
             }
             RegInstr::DequePushBack { dst, deque, value } => {
-                require(handle_reg(*deque) && int(*value) && int(*dst))?;
+                require(handle_reg(*deque) && int(*dst) && (int_or_free(*value) || float(*value)))?;
+                let helper = if float(*value) {
+                    vm_jit::HostHelper::DequePushBackFloat
+                } else {
+                    vm_jit::HostHelper::DequePushBackInt
+                };
                 JitInstr::HostCall {
-                    helper: vm_jit::HostHelper::DequePushBackInt,
+                    helper,
                     dst: r(*dst),
                     args: vec![
                         vm_jit::HostArg::Reg(r(*deque)),
@@ -1493,9 +1505,14 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 }
             }
             RegInstr::DequePushFront { dst, deque, value } => {
-                require(handle_reg(*deque) && int(*value) && int(*dst))?;
+                require(handle_reg(*deque) && int(*dst) && (int_or_free(*value) || float(*value)))?;
+                let helper = if float(*value) {
+                    vm_jit::HostHelper::DequePushFrontFloat
+                } else {
+                    vm_jit::HostHelper::DequePushFrontInt
+                };
                 JitInstr::HostCall {
-                    helper: vm_jit::HostHelper::DequePushFrontInt,
+                    helper,
                     dst: r(*dst),
                     args: vec![
                         vm_jit::HostArg::Reg(r(*deque)),
@@ -3184,11 +3201,13 @@ fn translate_osr_loop_inner(
                     dst,
                     map,
                     key,
-                    value,
+                    value: _,
                 } => {
+                    // The value type flows from its definition (Int or Float);
+                    // lowering picks MapInsertInt/MapInsertFloat, and a wrong-value-type
+                    // map bails at the helper.
                     native_set_ty(ty, *map, NativeTy::Handle, c)
                         && native_set_ty(ty, *key, NativeTy::Int, c)
-                        && native_set_ty(ty, *value, NativeTy::Int, c)
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
                 RegInstr::SetInsert { dst, set, value } => {
@@ -3212,10 +3231,10 @@ fn translate_osr_loop_inner(
                         && native_set_ty(ty, *value, NativeTy::Int, c)
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
-                RegInstr::DequePushBack { dst, deque, value }
-                | RegInstr::DequePushFront { dst, deque, value } => {
+                RegInstr::DequePushBack { dst, deque, value: _ }
+                | RegInstr::DequePushFront { dst, deque, value: _ } => {
+                    // The value type flows (Int or Float); lowering picks the helper.
                     native_set_ty(ty, *deque, NativeTy::Handle, c)
-                        && native_set_ty(ty, *value, NativeTy::Int, c)
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
                 RegInstr::DequePopFront { dst, deque } | RegInstr::DequePopBack { dst, deque } => {
@@ -4121,9 +4140,14 @@ fn translate_osr_loop_inner(
                 key,
                 value,
             } => {
-                require(handle_reg(*map) && int(*key) && int(*value) && int(*dst))?;
+                require(handle_reg(*map) && int(*key) && int(*dst) && (int_or_free(*value) || float(*value)))?;
+                let helper = if float(*value) {
+                    vm_jit::HostHelper::MapInsertFloat
+                } else {
+                    vm_jit::HostHelper::MapInsertInt
+                };
                 JitInstr::HostCall {
-                    helper: vm_jit::HostHelper::MapInsertInt,
+                    helper,
                     dst: r(*dst),
                     args: vec![
                         vm_jit::HostArg::Reg(r(*map)),
@@ -4172,9 +4196,14 @@ fn translate_osr_loop_inner(
                 }
             }
             RegInstr::DequePushBack { dst, deque, value } => {
-                require(handle_reg(*deque) && int(*value) && int(*dst))?;
+                require(handle_reg(*deque) && int(*dst) && (int_or_free(*value) || float(*value)))?;
+                let helper = if float(*value) {
+                    vm_jit::HostHelper::DequePushBackFloat
+                } else {
+                    vm_jit::HostHelper::DequePushBackInt
+                };
                 JitInstr::HostCall {
-                    helper: vm_jit::HostHelper::DequePushBackInt,
+                    helper,
                     dst: r(*dst),
                     args: vec![
                         vm_jit::HostArg::Reg(r(*deque)),
@@ -4183,9 +4212,14 @@ fn translate_osr_loop_inner(
                 }
             }
             RegInstr::DequePushFront { dst, deque, value } => {
-                require(handle_reg(*deque) && int(*value) && int(*dst))?;
+                require(handle_reg(*deque) && int(*dst) && (int_or_free(*value) || float(*value)))?;
+                let helper = if float(*value) {
+                    vm_jit::HostHelper::DequePushFrontFloat
+                } else {
+                    vm_jit::HostHelper::DequePushFrontInt
+                };
                 JitInstr::HostCall {
-                    helper: vm_jit::HostHelper::DequePushFrontInt,
+                    helper,
                     dst: r(*dst),
                     args: vec![
                         vm_jit::HostArg::Reg(r(*deque)),

@@ -3585,6 +3585,7 @@ fn jit_host_helpers() -> vm_jit::HostHelpers {
         bytes_len: rss_jit_bytes_len,
         bytes_slice: rss_jit_bytes_slice,
         map_insert_int: rss_jit_map_insert_int,
+        map_insert_float: rss_jit_map_insert_float,
         map_get_int: rss_jit_map_get_int,
         map_get_match_int: rss_jit_map_get_match_int,
         map_get_match_found: rss_jit_map_get_match_found,
@@ -3606,7 +3607,9 @@ fn jit_host_helpers() -> vm_jit::HostHelpers {
         deque_len: rss_jit_deque_len,
         deque_is_empty: rss_jit_deque_is_empty,
         deque_push_back_int: rss_jit_deque_push_back_int,
+        deque_push_back_float: rss_jit_deque_push_back_float,
         deque_push_front_int: rss_jit_deque_push_front_int,
+        deque_push_front_float: rss_jit_deque_push_front_float,
         deque_pop_front_int: rss_jit_deque_pop_front_int,
         deque_pop_back_int: rss_jit_deque_pop_back_int,
     }
@@ -4622,6 +4625,36 @@ fn rss_jit_map_insert_int_with_ctx(ctx: JitHostCallCtx, handle: i64, key: i64, v
 }
 
 #[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_map_insert_float(
+    _ctx: vm_jit::HostCtx,
+    handle: i64,
+    key: i64,
+    value: f64,
+) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    rss_jit_map_insert_float_with_ctx(_ctx, handle, key, value)
+}
+
+/// Insert a `Float` value into an Int-keyed map — the value-side mirror of
+/// `rss_jit_map_insert_int`. A bad handle bails out-of-band.
+#[cfg(feature = "native-jit")]
+fn rss_jit_map_insert_float_with_ctx(ctx: JitHostCallCtx, handle: i64, key: i64, value: f64) -> i64 {
+    match ctx.with_journaled_map_write(handle, |map| {
+        map.insert(jit_int_key(key), VmValue::Float(value));
+        Some(0)
+    }) {
+        Some(value) => value,
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_map_get_int(_ctx: vm_jit::HostCtx, handle: i64, key: i64) -> i64 {
     let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
         vm_jit::signal_bail();
@@ -5112,6 +5145,29 @@ fn rss_jit_deque_push_back_int_with_ctx(ctx: JitHostCallCtx, handle: i64, value:
 }
 
 #[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_deque_push_back_float(_ctx: vm_jit::HostCtx, handle: i64, value: f64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    rss_jit_deque_push_back_float_with_ctx(_ctx, handle, value)
+}
+
+#[cfg(feature = "native-jit")]
+fn rss_jit_deque_push_back_float_with_ctx(ctx: JitHostCallCtx, handle: i64, value: f64) -> i64 {
+    match ctx.with_journaled_deque_write(handle, |deque| {
+        deque.push_back(VmValue::Float(value));
+        Some(0)
+    }) {
+        Some(value) => value,
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_deque_push_front_int(_ctx: vm_jit::HostCtx, handle: i64, value: i64) -> i64 {
     let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
         vm_jit::signal_bail();
@@ -5124,6 +5180,29 @@ extern "C" fn rss_jit_deque_push_front_int(_ctx: vm_jit::HostCtx, handle: i64, v
 fn rss_jit_deque_push_front_int_with_ctx(ctx: JitHostCallCtx, handle: i64, value: i64) -> i64 {
     match ctx.with_journaled_deque_write(handle, |deque| {
         deque.push_front(VmValue::Int(value));
+        Some(0)
+    }) {
+        Some(value) => value,
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_deque_push_front_float(_ctx: vm_jit::HostCtx, handle: i64, value: f64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    rss_jit_deque_push_front_float_with_ctx(_ctx, handle, value)
+}
+
+#[cfg(feature = "native-jit")]
+fn rss_jit_deque_push_front_float_with_ctx(ctx: JitHostCallCtx, handle: i64, value: f64) -> i64 {
+    match ctx.with_journaled_deque_write(handle, |deque| {
+        deque.push_front(VmValue::Float(value));
         Some(0)
     }) {
         Some(value) => value,
