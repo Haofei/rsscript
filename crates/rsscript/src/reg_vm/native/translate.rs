@@ -240,7 +240,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
     // expects only native-subset instructions plus Option ops. Variant and struct SR
     // then remove user aggregate constructors/accessors exposed by inlining.
     let region_exit = native_whole_function_region_exit(&code);
-    let (code, n_regs, next_ip_map) =
+    let (code, n_regs, next_ip_map, _recipes) =
         native_scalar_replace_results_in_region(&code, n_regs, 0, region_exit)?;
     ip_map = native_compose_ip_maps(&ip_map, &next_ip_map)?;
     let (code, n_regs, scalar_payload_regs, next_ip_map) =
@@ -2776,6 +2776,21 @@ pub(in crate::reg_vm) struct OsrEntry {
     /// opaque handle-table index or an untyped zero.
     pub(in crate::reg_vm) written_regs: Vec<bool>,
     pub(in crate::reg_vm) string_literals: Vec<Rc<String>>,
+    /// J0.1(b) live-after always-`Ok` Result reconstruction recipes. Each entry is
+    /// `(variant_reg, payload_reg)`: a Result register `variant_reg` that the
+    /// RESULT-SR pass dissolved (always-`Ok` with a scalar `Ok` payload) but which is
+    /// READ after the loop. The native loop only writes the scalar `payload_reg`; the
+    /// original `variant_reg` slot is never written, so at OSR-exit the interpreter
+    /// would read a stale value. For each recipe, OSR-exit rebuilds
+    /// `Ok(payload)` — `VmValue::Variant(result_ok_layout(), [payload_scalar])` — from
+    /// the live-out `payload_reg` and writes it into `variant_reg`. The pass only emits
+    /// a recipe when the `Ok` def is reached unconditionally each iteration (so
+    /// `payload_reg` is definitely-assigned after ≥1 iteration; absent after 0
+    /// iterations, where the pre-loop value already in the slot is correct) and the
+    /// payload is a scalar `Int`/`Float` (verified at the build site, where reg types
+    /// are known). The reconstructed value is observed after the loop, so a wrong
+    /// recipe diverges from the interpreter and is caught by the differential.
+    pub(in crate::reg_vm) variant_reconstructs: Vec<(usize, usize)>,
 }
 
 /// Detect one natural loop at a specific header, allowing other disjoint loops

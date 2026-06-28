@@ -4507,7 +4507,7 @@ fn main() -> Unit {
             .into_iter()
             .next()
             .expect("loop should remain after checked payload pass");
-        let (code, n_regs, _) =
+        let (code, n_regs, _, _) =
             native_scalar_replace_results_in_region(&code, n_regs, lp.header, lp.exit)
                 .expect("result SR should accept inlined hot loop");
         let lp = detect_natural_loops(&code)
@@ -4931,7 +4931,7 @@ fn main() -> Unit {
                 .expect("checked payload pass should accept selfhost mailbox hot loop");
         let lp = detect_natural_loop_at(&code, lp.header)
             .expect("loop should remain after checked payload pass");
-        let (code, n_regs, _) =
+        let (code, n_regs, _, _) =
             native_scalar_replace_results_in_region(&code, n_regs, lp.header, lp.exit)
                 .expect("result SR should accept selfhost mailbox hot loop");
         let lp =

@@ -1555,6 +1555,7 @@ impl RegVm {
             reg_types,
             written_regs,
             string_literals,
+            variant_reconstructs,
         ) = {
             // Fast path: cached and NOT at the header ⇒ nothing to do (no clone).
             if let Some(native) = self.native.as_ref() {
@@ -1687,6 +1688,9 @@ impl RegVm {
                                             reg_types,
                                             written_regs,
                                             string_literals,
+                                            // Direct path runs no RESULT-SR ⇒ no live-after
+                                            // Result reconstruction recipes.
+                                            variant_reconstructs: Vec::new(),
                                         })
                                     }
                                     Err(_) => None,
@@ -1833,7 +1837,7 @@ impl RegVm {
                     native_scalar_replace_results_in_region(
                         &inlined_code, n_regs0, lp_r.header, lp_r.exit,
                     )
-                    .and_then(|(code_r, n_regs_r, ip_map_r)| {
+                    .and_then(|(code_r, n_regs_r, ip_map_r, recipes_r)| {
                         // OSR × J3 for OPTIONS: dissolve any non-escaping scalar Option
                         // living entirely inside the region. After Result-SR the region
                         // carries only Option ops + native subset, so the strict
@@ -2033,6 +2037,18 @@ impl RegVm {
                                                 }
                                             }
                                             record_native_compile_stats(native, id, &jit_fn);
+                                            // J0.1(b): every live-after Result recipe
+                                            // must reconstruct from a SCALAR payload —
+                                            // the deopt ABI carries only Int/Float. A
+                                            // non-scalar Ok payload (struct handle, Bool,
+                                            // flat) cannot be rematerialized here, so
+                                            // decline OSR (fall back to interpreter).
+                                            for (_r, payload_reg) in &recipes_r {
+                                                match reg_types.get(*payload_reg) {
+                                                    Some(NativeTy::Int | NativeTy::Float) => {}
+                                                    _ => return None,
+                                                }
+                                            }
                                             Some(OsrEntry {
                                                 id,
                                                 orig_header,
@@ -2046,6 +2062,7 @@ impl RegVm {
                                                 reg_types,
                                                 written_regs,
                                                 string_literals,
+                                                variant_reconstructs: recipes_r,
                                             })
                                         }
                                         Err(_) => None,
@@ -2088,6 +2105,7 @@ impl RegVm {
                     e.reg_types.clone(),
                     e.written_regs.clone(),
                     e.string_literals.clone(),
+                    e.variant_reconstructs.clone(),
                 ),
                 _ => {
                     return false;
@@ -2445,6 +2463,30 @@ impl RegVm {
                 // only an opaque handle/pointer/zero. Also skip J3-added tag/payload
                 // registers (index >= func.regs) and Handle/flat classes, whose
                 // scalar deopt payload cannot represent a VM heap value.
+                // J0.1(b): rebuild any live-after always-`Ok` Result from its scalar
+                // payload register's live-out value into the original variant slot. The
+                // RESULT-SR pass dissolved the Result to a scalar `payload_reg` and the
+                // native loop never wrote the original `variant_reg`, so the interpreter
+                // slot is stale (its pre-loop value). The pass guaranteed the `Ok` def is
+                // reached unconditionally, so after >=1 iteration `payload_reg` is in the
+                // deopt live set and we reconstruct `Ok(payload)`. If `payload_reg` is
+                // ABSENT, the native loop ran 0 iterations and the pre-loop value already
+                // in the slot is exactly correct, so we leave it untouched.
+                for (variant_reg, payload_reg) in &variant_reconstructs {
+                    if let Some(dr) = live.iter().find(|d| d.reg as usize == *payload_reg) {
+                        let payload = match dr.value {
+                            vm_jit::DeoptValue::Int(i) => VmValue::Int(i),
+                            vm_jit::DeoptValue::Float(f) => VmValue::Float(f),
+                        };
+                        let value = VmValue::Variant(std::rc::Rc::new(
+                            crate::vm_value::VmStruct::with_layout(
+                                result_ok_layout(),
+                                vec![payload],
+                            ),
+                        ));
+                        self.set_reg(base + *variant_reg, value);
+                    }
+                }
                 let n_params = func.params;
                 let n_orig_regs = func.regs;
                 for vm_jit::DeoptReg { reg, value } in live {

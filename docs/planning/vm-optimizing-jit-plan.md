@@ -37,7 +37,7 @@ numeric-mode language decision). Owner: TBD. Created 2026-06-20; status updated 
 | Item | State | Notes |
 |---|---|---|
 | **J0.0–J0.3** precise-deopt spine | **shipped (leaf/scalar subset)** | `NativeOutcome::Deopt` + per-site safepoint ids + live-reg capture + state-map + precise resume + every-safepoint stress test. **Precise resume is now the production DEFAULT** (`eval_main_with_args_native`); re-run-from-top remains the byte-identical fallback when a heap write disables precise resume (`can_precise_deopt_resume`) and stays under differential coverage via the force-deopt backend. The state-map is `resume_ip + live registers` — **not** yet the full inlined logical-frame-chain format J0.1 describes. So: done for the current leaf/scalar subset; full inlined-frame / side-effecting deopt is still **future**. |
-| **J0.1 (heap-aware reg reconstruction)** | **shipped** | The deopt state map distinguishes reconstructible scalars (`Int`/`Float`) from heap refs (`Handle`/`FlatInt`/`FlatFloat`): `decode_deopt_live` reconstructs only scalar regs (the interpreter frame already holds heap values — precise resume implies no heap writes), and `restore_native_deopt_live_regs` restores ALL scalar regs incl. **reassigned scalar params** (the `< n_params` skip is gone). Fixes the reassigned-scalar-param resume bug (`precise_deopt_restores_reassigned_scalar_param`); flat-buffer params stay uncorrupted. **Precise resume is now default-on (validated corpus-wide).** **Remaining for full J0.1:** inlined logical-frame-chain state-map format, and heap-payload-variant / live-out *value* reconstruction (rebuilding native-built composite heap values — variant/struct with heap payload — across a bail; today such arms bail). |
+| **J0.1 (heap-aware reg reconstruction)** | **shipped** | The deopt state map distinguishes reconstructible scalars (`Int`/`Float`) from heap refs (`Handle`/`FlatInt`/`FlatFloat`): `decode_deopt_live` reconstructs only scalar regs (the interpreter frame already holds heap values — precise resume implies no heap writes), and `restore_native_deopt_live_regs` restores ALL scalar regs incl. **reassigned scalar params** (the `< n_params` skip is gone). Fixes the reassigned-scalar-param resume bug (`precise_deopt_restores_reassigned_scalar_param`); flat-buffer params stay uncorrupted. **Precise resume is now default-on (validated corpus-wide).** **Remaining for full J0.1:** inlined logical-frame-chain state-map format, and heap-payload-variant / live-out *value* reconstruction (rebuilding native-built composite heap values — variant/struct with heap payload — across a bail; today such arms bail). **J0.1(b) slice 1 shipped (2026-06-28): live-after always-`Ok` *scalar*-payload Results now OSR via OSR-exit reconstruction (`OsrEntry.variant_reconstructs`); the heap-payload-arm-taken sub-case still bails.** |
 | **J0.4** heap writes + deopt-after-write | **S0–S3 shipped; S4 future** | **S0** (heap-result return ABI, `95e2b71`) and **S1–S3** (allocate-only: 10 `AllocatesResult` host helpers — `StringFromInt`/`StringConcat`/`StringSlice`/`StringPadLeft`/`StringSplit`/`StringLiteral`/`JsonParse`/`JsonField`/`BytesSlice`/`ListNewInt` — publishing fresh unaliased values into `JIT_HEAP_RESULTS`, gated by `escaping_output_handle` escape analysis; `mem_budget` kept exact by **Model-A refusal when armed** (`tier.rs`), so no in-helper accounting/double-charge; §7.2 via clear-on-bail output table + `JitHeapResultsGuard`, force-deopt-tested) are **shipped & green**. In-place **caller-aliased** writes (**S4**) remain **future** — they need J0.1 frame-chain + J0.5. The native subset is no longer read-only: it allocates fresh heap values. |
 | **J0.5** in-generated-code `VmLimits` accounting | **future** | currently the Model-A fallback (see J6); the `VmLimitsSnapshot` tick/poll machinery is not built. |
 | **J1** profiling | **shipped** | per-call-site type feedback on dynamic sites, warm-gated, no interpreter regression. (Branch profiling **not** shipped — it regressed `bool_logic_loop` ~7%; needs a hot/cold dispatch split.) |
@@ -143,18 +143,29 @@ machinery **engage real program shapes and prove it**, not new subsystems. In pr
      gap** — the only refinement is scalar-replacing such live-out structs for fewer
      host calls (record a recipe `(orig_reg, layout, [leaf_reg])`, rebuild at OSR-exit);
      pure perf, low priority.
-   - **(b) Live-after HEAP-payload variant/Result OSR — the one genuine remaining
-     coverage gap (perf, not correctness).** A `Result`/variant with a heap-payload arm
-     that is **live after the loop** does NOT OSR today (`native_osr_j3_escaping_result_does_not_osr`
-     asserts `osr_entries == 0`); it is correct (runs on the interpreter), just not
-     accelerated. Unlike structs (which OSR via heap writes), a dissolved variant's heap
-     payload has no live heap object to write back. Blocker: a heap field in a native
-     reg is an opaque handle and the interpreter frame no longer holds the dissolved
-     value. Approach: extend the reconstruction recipe so a heap field references its
-     **interpreter-visible SOURCE register** (the reg `MakeVariant`/`MakeStruct` read it
-     from), provided that reg stays live + unclobbered to the reconstruction point
-     (needs a liveness proof); reconstruction reads `frame.reg(source)`. Subtle
-     (which arm, in-loop-built payloads have no live source) — a deliberate slice.
+   - **(b) Live-after variant/Result OSR — SLICE 1 SHIPPED (2026-06-28); heap-payload
+     sub-case remains.** **Shipped:** a live-after **always-`Ok` Result with a SCALAR
+     `Ok` payload** now OSRs via a reconstruction recipe. The RESULT-SR pass
+     (`native_scalar_replace_results_in_region`) records `(variant_reg, payload_reg)` for
+     each RES register that is read after the region, **iff** (i) no RES register is
+     written after the region (pre-loop init is fine), and (ii) the `Ok` def is reached
+     UNCONDITIONALLY each iteration (single in-region def, no branch between header and
+     def except the loop-exit condition) so `payload_reg` is definitely-assigned. The
+     `OsrEntry.variant_reconstructs` recipe is validated at the build site (payload reg
+     type must be `Int`/`Float` — the deopt ABI is scalar-only) and applied at OSR-exit
+     (`tier.rs`): rebuild `Ok(payload)` = `VmValue::Variant(result_ok_layout(),
+     [payload])` into the variant slot, or, after 0 iterations, leave the correct
+     pre-loop value. The reconstructed value is observed after the loop, so a wrong
+     recipe diverges → **caught by the differential** (not a silent path). Tests:
+     `native_osr_j3_live_after_always_ok_result_reconstructs` (positive) +
+     `native_osr_j3_escaping_result_does_not_osr` (its `r` is built by a branchy inlined
+     `checked`, so the `Ok` def is NOT unconditional ⇒ still declines, `osr_entries==0`).
+     **Remaining (the original hard sub-case):** an `Err`/heap-payload arm that is
+     actually TAKEN and live after the loop — a dissolved heap payload has no live heap
+     object to write back. Approach: extend the recipe so a heap field references its
+     interpreter-visible SOURCE register (loop-invariant live-in), reconstruction reads
+     `frame.reg(source)`. Subtle (in-loop-built heap payloads have no live source) — a
+     further deliberate slice.
    - **(c) Inlined logical-frame-chain format.** A deopt inside a `native_inline_leaf_calls`
      region resumes at the caller's `CallKnown` and re-runs the (side-effect-free)
      callee — *correct today*. Full J0.1 reconstructs the logical callee frame in place

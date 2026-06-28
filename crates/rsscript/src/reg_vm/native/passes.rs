@@ -5833,7 +5833,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_results_in_region(
     n_regs: usize,
     header: usize,
     exit: usize,
-) -> Option<(Vec<RegInstr>, usize, Vec<usize>)> {
+) -> Option<(Vec<RegInstr>, usize, Vec<usize>, Vec<(usize, usize)>)> {
     if header >= exit || exit > code.len() {
         return None;
     }
@@ -5847,7 +5847,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_results_in_region(
     });
     if !has_result_op {
         let ip_map: Vec<usize> = (0..code.len()).collect();
-        return Some((code.to_vec(), n_regs, ip_map));
+        return Some((code.to_vec(), n_regs, ip_map, Vec::new()));
     }
 
     let analysis = NativeRegionAnalysis::compute_prefix(code, n_regs, header, exit)?;
@@ -5941,15 +5941,90 @@ pub(in crate::reg_vm) fn native_scalar_replace_results_in_region(
         }
     }
 
-    // Boundary soundness (identical to the Option pass): every RES register must be
-    // DEAD outside `[header, exit)` — its defs become payload writes inside the region
-    // and the original RES register is never written there, so the interpreter's slot
-    // must carry no value any out-of-region instruction observes.
-    if analysis
-        .external_reads_or_writes_touch(code, &res)
-        .unwrap_or(true)
-    {
-        return None;
+    // Boundary soundness + J0.1(b) live-after reconstruction. Originally every RES
+    // register had to be DEAD outside `[header, exit)`. We now also allow a RES
+    // register that is only READ after the region by reconstructing `Ok(payload)` at
+    // OSR-exit from its scalar payload register, because the pass already proved every
+    // RES register is always-`Ok` with a scalar `Ok` payload (a heap `Err` became a
+    // native `Bail`), so a completed native loop guarantees the value is `Ok(payload)`.
+    // Conditions to keep it sound:
+    //   * No RES register may be WRITTEN at ip >= exit (post-loop reassignment is out
+    //     of scope). A write BEFORE the region (pre-loop `let mut r = Ok(..)`) is fine:
+    //     native never touches the original RES slot and reconstruction overwrites it
+    //     at exit, or — after 0 native iterations — the pre-loop value already in the
+    //     slot is exactly correct.
+    //   * A RES register read BEFORE the region (a live-in Result) is out of scope.
+    //   * Each live-after RES register needs a single in-region definition reached
+    //     UNCONDITIONALLY each iteration (no branch between the header and the def
+    //     except the header's own loop-exit condition), so its payload register is
+    //     definitely-assigned after >=1 iteration (hence present in the OSR-exit deopt
+    //     live set). A conditional/multiply-defined RES register would leave the
+    //     payload only maybe-assigned ⇒ bail (conservative).
+    // The scalar-payload-TYPE check is deferred to the OsrEntry build site (where
+    // native register types are known); a non-scalar `Ok` payload declines OSR there.
+    let mut reconstruct = vec![false; n_regs];
+    for i in 0..code.len() {
+        if in_region(i) {
+            continue;
+        }
+        match instr_written_reg(&code[i]) {
+            RegFootprint::Some(regs) => {
+                if i >= exit && regs.iter().any(|&r| r < n_regs && res[r]) {
+                    return None; // post-loop reassignment of a dissolved Result
+                }
+            }
+            RegFootprint::All => return None,
+        }
+        match instr_read_regs(&code[i]) {
+            RegFootprint::Some(regs) => {
+                for r in regs {
+                    if r < n_regs && res[r] {
+                        if i < header {
+                            return None; // live-in Result (read before the loop)
+                        }
+                        reconstruct[r] = true;
+                    }
+                }
+            }
+            RegFootprint::All => return None,
+        }
+    }
+    // Require a single, unconditionally-reached in-region def for every RES register we
+    // must reconstruct.
+    for (reg, &needs) in reconstruct.iter().enumerate() {
+        if !needs {
+            continue;
+        }
+        let in_region_defs: Vec<usize> = analysis
+            .writer_ips_of(code, reg)?
+            .into_iter()
+            .filter(|&i| in_region(i))
+            .collect();
+        if in_region_defs.len() != 1 {
+            return None;
+        }
+        let def_ip = in_region_defs[0];
+        for i in header..def_ip {
+            match &code[i] {
+                // The header's loop-exit condition (target outside the loop) is fine.
+                RegInstr::JumpIfBool { target, .. }
+                | RegInstr::JumpIfIntCompare { target, .. }
+                    if *target >= exit => {}
+                // Any other branch/match/return between the header and the def could
+                // skip the def on some iteration ⇒ payload not definitely-assigned.
+                RegInstr::Jump { .. }
+                | RegInstr::JumpIfBool { .. }
+                | RegInstr::JumpIfIntCompare { .. }
+                | RegInstr::MatchOption { .. }
+                | RegInstr::MatchResult { .. }
+                | RegInstr::MatchVariant { .. }
+                | RegInstr::MatchMapGet { .. }
+                | RegInstr::MatchSortedMapGet { .. }
+                | RegInstr::Return { .. }
+                | RegInstr::RuntimeError { .. } => return None,
+                _ => {}
+            }
+        }
     }
 
     // Allocate one fresh payload register per RES register (always-Ok ⇒ no tag).
@@ -5961,6 +6036,14 @@ pub(in crate::reg_vm) fn native_scalar_replace_results_in_region(
             next_reg += 1;
         }
     }
+
+    // J0.1(b) recipes: (variant_reg, payload_reg) for each live-after RES register.
+    let recipes: Vec<(usize, usize)> = reconstruct
+        .iter()
+        .enumerate()
+        .filter(|&(_, &needs)| needs)
+        .map(|(reg, _)| (reg, payload_reg[reg]))
+        .collect();
 
     // Rewrite the WHOLE code, dissolving in-region Result ops and copying everything
     // else through verbatim; remap all jump/match targets through the index map.
@@ -6129,7 +6212,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_results_in_region(
             ip_map[t] = i;
         }
     }
-    Some((new_code, next_reg, ip_map))
+    Some((new_code, next_reg, ip_map, recipes))
 }
 
 /// OSR × J3 for VARIANTS: scalar-replace non-escaping user `sum`/variant values that

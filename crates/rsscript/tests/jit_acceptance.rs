@@ -3611,6 +3611,65 @@ fn main() -> Unit {
     );
 }
 
+/// OSR × J3 — J0.1(b) live-after always-`Ok` Result RECONSTRUCTION (POSITIVE). Unlike
+/// `native_osr_j3_escaping_result_does_not_osr` (whose `r` is built via a branchy
+/// inlined `checked`, so the `Ok` def is NOT unconditionally reached and the pass
+/// still declines), here `r = Ok(i)` is a single, unconditionally-reached in-region
+/// definition with a SCALAR (`Int`) payload, and `r` is read AFTER the loop. The
+/// RESULT-SR pass dissolves `r` to a scalar payload register and records a
+/// reconstruction recipe; at OSR-exit the loop rebuilds `Ok(last i)` into `r`'s slot
+/// so the post-loop `match r` is interpreter-identical. This is the J0.1(b) slice:
+/// a previously-declining live-after Result now OSRs. Because `r`'s value is observed
+/// after the loop, a wrong reconstruction diverges here (and on the differential).
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j3_live_after_always_ok_result_reconstructs() {
+    let source = "\
+fn f(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    let mut r: Result<Int, String> = Ok(0)
+    while i < limit {
+        r = Ok(i)
+        match r {
+            Ok(v) => { total = total + v }
+            Err(e) => { total = total + 0 }
+        }
+        i = i + 1
+    }
+    match r {
+        Ok(v) => { Log.write(message: read String.from_int(value: v)) }
+        Err(e) => { Log.write(message: read \"err\") }
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(limit: read 60)))
+    return Unit
+}
+";
+    let file = "jit-osr-j3-live-after-ok-result.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "live-after Result reconstruction must be byte-identical to the interpreter"
+    );
+    // i in 0..60: total = 0+...+59 = 1770; r = Ok(59) after the loop ⇒ "59".
+    assert_eq!(osr.stdout.trim_end(), "begin\n59\n1770\n1770");
+    assert!(
+        stats.osr_entries > 0,
+        "a live-after always-Ok Result with an unconditional scalar def must OSR via \
+         reconstruction (J0.1(b)): {stats:?}",
+    );
+}
+
 /// OSR × J3 combinator expansion (deopt-before-heap, Slice 2) — POSITIVE. The
 /// `option_result_chain` shape: a hot loop chains `Option.map`/`and_then`/
 /// `unwrap_or` (with inline `|v| {...}` mappers) and `Result.map`/`and_then`/

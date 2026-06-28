@@ -2694,7 +2694,7 @@ fn native_decline_reason(unit: &RegUnit, func: &RegFunction) -> String {
         return "contains a non-inlinable call (callee not native-inlinable)".to_string();
     };
     let region_exit = native_whole_function_region_exit(&code);
-    let Some((code, _n_regs, _ip_map)) =
+    let Some((code, _n_regs, _ip_map, _recipes)) =
         native_scalar_replace_results_in_region(&code, _n_regs, 0, region_exit)
     else {
         return "not scalar-replaced: Result escapes the region".to_string();
