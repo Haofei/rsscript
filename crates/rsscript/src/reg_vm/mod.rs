@@ -1445,7 +1445,7 @@ impl RegVmExecutable {
         args: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<(EvalOutput, NativeStats, Vec<String>), EvalError> {
         self.eval_main_with_args_native_inner_reported(
-            args, 0, false, true, true, true, true, None, false,
+            args, 0, false, true, true, true, true, None, false, VmLimits::default(),
         )
     }
 
@@ -1471,6 +1471,23 @@ impl RegVmExecutable {
             false,
             forced_safepoint,
             force_all_safepoints_override,
+            VmLimits::default(),
+        )
+        .map(|(output, stats, _lines)| (output, stats))
+    }
+
+    /// Like [`Self::eval_main_with_args_native_with_stats`] but runs under explicit
+    /// [`VmLimits`]. With native enabled, an armed `step_budget`/`cancel`/`mem_budget`
+    /// must prevent native dispatch (Cranelift polls/accounts none of them) — used to
+    /// regression-test the recursive native fast-path limit gate.
+    #[cfg(feature = "native-jit")]
+    pub fn eval_main_with_args_native_with_limits(
+        &self,
+        args: impl IntoIterator<Item = impl Into<String>>,
+        limits: VmLimits,
+    ) -> Result<(EvalOutput, NativeStats), EvalError> {
+        self.eval_main_with_args_native_inner_reported(
+            args, 0, false, true, true, false, false, None, false, limits,
         )
         .map(|(output, stats, _lines)| (output, stats))
     }
@@ -1488,12 +1505,17 @@ impl RegVmExecutable {
         report_override: bool,
         forced_safepoint: Option<u32>,
         force_all_safepoints_override: bool,
+        limits: VmLimits,
     ) -> Result<(EvalOutput, NativeStats, Vec<String>), EvalError> {
         let mut vm = RegVm::new(
             Rc::clone(&self.unit),
             args.into_iter().map(Into::into).collect(),
             std::iter::empty::<(String, NativeInterpreterFn)>().collect(),
         );
+        // Limits gate native dispatch: when any preemption/accounting limit is armed,
+        // `native_limits_unarmed()` refuses native (incl. the recursive fast paths) so
+        // the interpreter/tier-0 path enforces it via `tick()`.
+        vm.set_limits(limits);
         // Native first, then tier-0, then interpreter.
         // `RSS_JIT_BASELINE=1` selects the Phase-2 path-B baseline tier
         // (`opt_level="none"`); default (unset) keeps the optimizing tier

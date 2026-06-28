@@ -868,10 +868,7 @@ impl RegVm {
         // `mem_budget`, so a function could grow the accounted live-set past the
         // limit without erroring. Refusing native while `mem_budget` is armed keeps
         // the limit exact (Model A; matches the tier-0 self-recursive gate).
-        if self.limits.step_budget.is_some()
-            || self.limits.cancel.is_some()
-            || self.limits.mem_budget.is_some()
-        {
+        if !self.native_limits_unarmed() {
             return NativeAttempt::Fallback;
         }
         // Cheap negative path: a function known not native-eligible never compiles,

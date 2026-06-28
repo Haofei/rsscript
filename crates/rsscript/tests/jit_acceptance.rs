@@ -4693,3 +4693,124 @@ fn main() -> Unit {
         "shallow Bool mutual recursion should run natively: {stats:?}",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Recursive native fast paths must honor the same limit gate as `try_native`:
+// Cranelift code polls neither `step_budget` nor `cancel` and allocates off the
+// `mem_budget` meter, so with any of them armed the recursive paths must NOT
+// dispatch natively (they run on the interpreter / tier-0, which `tick()`s).
+// ---------------------------------------------------------------------------
+
+const FIB_SELF_SRC: &str = "\
+fn fib(n: Int) -> Int {
+    if n < 2 { return n }
+    return fib(n: read n - 1) + fib(n: read n - 2)
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: fib(n: read 28)))
+    return Unit
+}
+";
+
+const IS_EVEN_MUTUAL_SRC: &str = "\
+fn is_even(n: Int) -> Int {
+    if n < 1 { return 1 }
+    return is_odd(n: read n - 1)
+}
+fn is_odd(n: Int) -> Int {
+    if n < 1 { return 0 }
+    return is_even(n: read n - 1)
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: is_even(n: read 20)))
+    return Unit
+}
+";
+
+/// Self-recursive native candidate (`fib`) must NOT dispatch natively while a
+/// `step_budget` is armed (native never `tick()`s, so it would bypass the budget).
+/// The budget here is generous enough to complete on the interpreter; the proof is
+/// `native_calls == 0` (native refused) with the correct result.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_self_recursion_refused_when_step_budget_armed() {
+    let exe = rsscript::reg_vm_compile_source("limit-self.rss", FIB_SELF_SRC).expect("compile");
+    let limits = rsscript::VmLimits {
+        step_budget: Some(50_000_000),
+        ..rsscript::VmLimits::default()
+    };
+    let (out, stats) = exe
+        .eval_main_with_args_native_with_limits(std::iter::empty::<String>(), limits)
+        .expect("completes within budget");
+    assert_eq!(out.stdout.trim_end(), "317811");
+    assert_eq!(
+        stats.native_calls, 0,
+        "armed step_budget must refuse native self-recursion: {stats:?}"
+    );
+}
+
+/// Mutual-recursion native candidate (`is_even`/`is_odd`) must NOT dispatch natively
+/// while a `step_budget` is armed.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_mutual_recursion_refused_when_step_budget_armed() {
+    let exe =
+        rsscript::reg_vm_compile_source("limit-mutual.rss", IS_EVEN_MUTUAL_SRC).expect("compile");
+    let limits = rsscript::VmLimits {
+        step_budget: Some(50_000_000),
+        ..rsscript::VmLimits::default()
+    };
+    let (out, stats) = exe
+        .eval_main_with_args_native_with_limits(std::iter::empty::<String>(), limits)
+        .expect("completes within budget");
+    assert_eq!(out.stdout.trim_end(), "1");
+    assert_eq!(
+        stats.native_calls, 0,
+        "armed step_budget must refuse native mutual recursion: {stats:?}"
+    );
+}
+
+/// A present `cancel` flag (even un-triggered) must refuse recursive native dispatch,
+/// matching `try_native` — native code can never observe the flag, so the cooperative
+/// interpreter path (which polls it in `tick()`) must run instead.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_recursion_refused_when_cancel_armed() {
+    let exe = rsscript::reg_vm_compile_source("limit-cancel.rss", FIB_SELF_SRC).expect("compile");
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let limits = rsscript::VmLimits {
+        cancel: Some(cancel),
+        ..rsscript::VmLimits::default()
+    };
+    let (out, stats) = exe
+        .eval_main_with_args_native_with_limits(std::iter::empty::<String>(), limits)
+        .expect("completes (flag never set)");
+    assert_eq!(out.stdout.trim_end(), "317811");
+    assert_eq!(
+        stats.native_calls, 0,
+        "an armed cancel flag must refuse native recursion: {stats:?}"
+    );
+}
+
+/// Enforcement, not just refusal: a small `step_budget` must actually PREEMPT a
+/// recursive native candidate (with the bug, native ran `fib(28)` to completion and
+/// silently bypassed the budget). Now it runs on the interpreter and trips the budget.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_self_recursion_step_budget_preempts() {
+    let exe = rsscript::reg_vm_compile_source("limit-preempt.rss", FIB_SELF_SRC).expect("compile");
+    let limits = rsscript::VmLimits {
+        step_budget: Some(1_000),
+        ..rsscript::VmLimits::default()
+    };
+    let err = exe
+        .eval_main_with_args_native_with_limits(std::iter::empty::<String>(), limits)
+        .expect_err("small step budget must preempt, not be bypassed by native");
+    match err {
+        rsscript::EvalError::Runtime(msg) => assert!(
+            msg.contains("step budget"),
+            "expected step-budget error, got: {msg}"
+        ),
+        other => panic!("expected Runtime(step budget), got {other:?}"),
+    }
+}

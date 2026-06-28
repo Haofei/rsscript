@@ -113,6 +113,18 @@ impl RegVm {
     /// `CancellationToken` remains the cooperative, per-task mechanism (it only
     /// preempts at await points); this ambient flag is the blunt host-level kill.
     #[inline]
+    /// Whether it is sound to dispatch Cranelift-native code right now: native code
+    /// polls neither the step budget nor the cancel flag and runs allocation off the
+    /// memory meter, so all three preemption/accounting limits must be unarmed (it
+    /// `tick()`s on the interpreter/tier-0 paths instead). The single source of truth
+    /// for both the native-tier gate (`try_native`) and the recursive native fast
+    /// paths (self-recursive + mutual-recursive); see execution spec §6.2 (Model A).
+    pub(super) fn native_limits_unarmed(&self) -> bool {
+        self.limits.step_budget.is_none()
+            && self.limits.cancel.is_none()
+            && self.limits.mem_budget.is_none()
+    }
+
     pub(super) fn tick(&mut self) -> Result<(), EvalError> {
         self.steps += 1;
         if let Some(limit) = self.limits.step_budget
@@ -1310,9 +1322,15 @@ impl RegVm {
                             args,
                             mut_args,
                         } => {
+                            // Recursive native fast paths run Cranelift code that polls
+                            // neither `step_budget` nor `cancel` (and allocates off the
+                            // `mem_budget` meter), so they are gated on all three limits
+                            // being unarmed — matching the native-tier gate in
+                            // `try_native`. With any limit armed, recursion runs on the
+                            // interpreter / tier-0 executor, which `tick()`s every step.
                             if self.jit_enabled
                                 && mut_args.is_empty()
-                                && self.limits.mem_budget.is_none()
+                                && self.native_limits_unarmed()
                                 && let Some(value) =
                                     self.run_jit_self_recursive_int(unit, *callee_id, base, args)?
                             {
@@ -1325,7 +1343,7 @@ impl RegVm {
                             #[cfg(feature = "native-jit")]
                             if self.jit_enabled
                                 && mut_args.is_empty()
-                                && self.limits.mem_budget.is_none()
+                                && self.native_limits_unarmed()
                                 && let Some(value) =
                                     self.try_native_mutual_recursive_int(unit, *callee_id, base, args)
                             {
