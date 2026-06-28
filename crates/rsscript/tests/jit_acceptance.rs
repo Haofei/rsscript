@@ -331,6 +331,47 @@ fn main() -> Unit {
     assert_fast_jit_backends_agree("jit-accept-float-heap-reads.rss", source);
 }
 
+/// Phase 3 (Float write-side): a struct `Float` field mutated through a `mut`
+/// parameter (which escapes, so it is NOT scalar-replaced) lowers to the new
+/// `FieldSetFloat` host helper — the write-side counterpart of the existing
+/// `FieldFloat` read. All fast JIT backends (incl. native + deopt-stress) must
+/// agree with the interpreter, and the loop must actually run natively.
+#[cfg(feature = "native-jit")]
+#[test]
+fn jit_acceptance_runs_float_field_write_helper() {
+    let source = "\
+struct Acc {
+    total: Float
+}
+
+fn bump(a: mut Acc, n: Int) -> Float {
+    let mut i = 0
+    while i < n {
+        a.total = a.total + 1.5
+        i = i + 1
+    }
+    return a.total
+}
+
+fn main() -> Unit {
+    let mut a = Acc(total: 0.0)
+    let r = bump(a: mut a, n: read 100)
+    Log.write(message: read String.from_float(value: read r))
+    return Unit
+}
+";
+    let file = "jit-accept-float-field-write.rss";
+    assert_fast_jit_backends_agree(file, source);
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (_out, stats) = exe
+        .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
+        .expect("native run");
+    assert!(
+        stats.native_calls > 0,
+        "the Float field-write loop should run natively via FieldSetFloat: {stats:?}",
+    );
+}
+
 #[test]
 fn jit_acceptance_runs_float_parameter_loop() {
     let source = "\

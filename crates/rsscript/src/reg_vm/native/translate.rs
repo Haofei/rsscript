@@ -421,11 +421,13 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 RegInstr::GetFieldSlot { dst: _, base, .. } => {
                     native_set_ty(ty, *base, NativeTy::Handle, c)
                 }
-                RegInstr::SetFieldSlot {
-                    dst, base, value, ..
-                } => {
+                RegInstr::SetFieldSlot { dst, base, .. } => {
+                    // The written `value`'s type is left to flow from its definition
+                    // (Int or Float) — lowering then picks `FieldSetInt`/`FieldSetFloat`
+                    // accordingly, and a runtime field-type mismatch bails. `dst` is the
+                    // Unit result sentinel (the native write returns the new handle into
+                    // `base`); an Int placeholder is never read.
                     native_set_ty(ty, *base, NativeTy::Handle, c)
-                        && native_set_ty(ty, *value, NativeTy::Int, c)
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
                 RegInstr::ListLen { dst, list } => {
@@ -1269,9 +1271,18 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 slot,
                 value,
             } => {
-                require(handle_reg(*base) && int(*value))?;
+                // Pick the store helper by the value's type, mirroring the read side:
+                // a provably-Float value uses `FieldSetFloat`; Int OR unconstrained
+                // (`int_or_free`) uses `FieldSetInt` (a non-Int field then bails at the
+                // helper). A Bool value is rejected here.
+                require(handle_reg(*base) && (int_or_free(*value) || float(*value)))?;
+                let helper = if float(*value) {
+                    vm_jit::HostHelper::FieldSetFloat
+                } else {
+                    vm_jit::HostHelper::FieldSetInt
+                };
                 JitInstr::HostCall {
-                    helper: vm_jit::HostHelper::FieldSetInt,
+                    helper,
                     dst: r(*base),
                     args: vec![
                         vm_jit::HostArg::Reg(r(*base)),
@@ -2141,13 +2152,16 @@ fn native_field_load_slot_not_stored_in_loop(
     };
     for instr in &jit_code[header..exit] {
         let vm_jit::JitInstr::HostCall {
-            helper: vm_jit::HostHelper::FieldSetInt,
+            helper,
             args: store_args,
             ..
         } = instr
         else {
             continue;
         };
+        if !is_native_field_set_helper(*helper) {
+            continue;
+        }
         match store_args.get(1).copied() {
             Some(vm_jit::HostArg::ImmI64(store_slot)) if store_slot != read_slot => {}
             _ => return false,
@@ -2263,6 +2277,19 @@ fn native_field_base_root_stable_regs(
     stable
 }
 
+/// Whether a host helper is a copy-on-write struct/variant field store
+/// (`FieldSetInt` or its Float counterpart `FieldSetFloat`). The loop field-read
+/// stability analyses must treat BOTH as stores — otherwise a `FieldSetFloat` write
+/// in a loop would be invisible to a `FieldFloat` read's invalidation check, and the
+/// read would be wrongly hoisted as loop-invariant (reading a stale value).
+#[cfg(feature = "native-jit")]
+fn is_native_field_set_helper(helper: vm_jit::HostHelper) -> bool {
+    matches!(
+        helper,
+        vm_jit::HostHelper::FieldSetInt | vm_jit::HostHelper::FieldSetFloat
+    )
+}
+
 #[cfg(feature = "native-jit")]
 fn native_all_writes_preserve_field_root(
     reg: usize,
@@ -2299,16 +2326,10 @@ fn native_write_preserves_field_root(
 ) -> bool {
     match instr {
         vm_jit::JitInstr::Move { src, .. } => stable.get(*src as usize).copied().unwrap_or(false),
-        vm_jit::JitInstr::MemoizedHostCall {
-            helper: vm_jit::HostHelper::FieldSetInt,
-            args,
-            ..
-        }
-        | vm_jit::JitInstr::HostCall {
-            helper: vm_jit::HostHelper::FieldSetInt,
-            args,
-            ..
-        } => {
+        vm_jit::JitInstr::MemoizedHostCall { helper, args, .. }
+        | vm_jit::JitInstr::HostCall { helper, args, .. }
+            if is_native_field_set_helper(*helper) =>
+        {
             let Some(vm_jit::HostArg::Reg(base)) = args.first().copied() else {
                 return false;
             };
@@ -3207,11 +3228,13 @@ fn translate_osr_loop_inner(
                 RegInstr::GetFieldSlot { base, .. } => {
                     native_set_ty(ty, *base, NativeTy::Handle, c)
                 }
-                RegInstr::SetFieldSlot {
-                    dst, base, value, ..
-                } => {
+                RegInstr::SetFieldSlot { dst, base, .. } => {
+                    // The written `value`'s type is left to flow from its definition
+                    // (Int or Float) — lowering then picks `FieldSetInt`/`FieldSetFloat`
+                    // accordingly, and a runtime field-type mismatch bails. `dst` is the
+                    // Unit result sentinel (the native write returns the new handle into
+                    // `base`); an Int placeholder is never read.
                     native_set_ty(ty, *base, NativeTy::Handle, c)
-                        && native_set_ty(ty, *value, NativeTy::Int, c)
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
                 // Synthetic closure-inline ops (only present when an inlined
@@ -3928,15 +3951,22 @@ fn translate_osr_loop_inner(
                 slot,
                 value,
             } => {
-                require(handle_reg(*base) && int(*value))?;
+                require(handle_reg(*base) && (int_or_free(*value) || float(*value)))?;
                 if let Some(field_reg) = scalar_field_reg(*base, *slot) {
+                    // Scalar-replaced field: a plain register copy carries either an
+                    // Int or a Float (the field register's class follows the value).
                     JitInstr::Move {
                         dst: r(field_reg),
                         src: r(*value),
                     }
                 } else {
+                    let helper = if float(*value) {
+                        vm_jit::HostHelper::FieldSetFloat
+                    } else {
+                        vm_jit::HostHelper::FieldSetInt
+                    };
                     JitInstr::HostCall {
-                        helper: vm_jit::HostHelper::FieldSetInt,
+                        helper,
                         dst: r(*base),
                         args: vec![
                             vm_jit::HostArg::Reg(r(*base)),

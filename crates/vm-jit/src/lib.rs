@@ -56,6 +56,11 @@ pub type FieldIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
 /// `(struct_handle, slot, value) -> i64`: copy-on-write set of an `Int` field,
 /// returning a VM-owned output-table handle for the updated struct/variant.
 pub type FieldSetIntFn = extern "C" fn(HostCtx, i64, i64, i64) -> i64;
+/// `(struct_handle, slot, value: f64) -> i64`: copy-on-write set of a `Float`
+/// field (the write-side counterpart of [`FieldFloatFn`]), returning a VM-owned
+/// output-table handle for the updated struct/variant. A wrong-type/out-of-range
+/// field signals a bail out-of-band.
+pub type FieldSetFloatFn = extern "C" fn(HostCtx, i64, i64, f64) -> i64;
 /// `(list_handle) -> i64`: list length.
 pub type ListLenFn = extern "C" fn(HostCtx, i64) -> i64;
 /// `(handle) -> i64`: return `1` when a collection is empty, else `0`.
@@ -232,6 +237,7 @@ pub type DequePopBackIntFn = extern "C" fn(HostCtx, i64) -> i64;
 pub struct HostHelpers {
     pub field_int: FieldIntFn,
     pub field_set_int: FieldSetIntFn,
+    pub field_set_float: FieldSetFloatFn,
     pub list_len: ListLenFn,
     pub list_is_empty: IsEmptyFn,
     pub list_get_int: ListGetIntFn,
@@ -458,6 +464,14 @@ host_helpers! {
         field: field_set_int,
         symbol: "rss_jit_field_set_int",
         args: [JitValueType::Handle, JitValueType::Int, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Handle),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::ReplacesInput,
+    },
+    FieldSetFloat => {
+        field: field_set_float,
+        symbol: "rss_jit_field_set_float",
+        args: [JitValueType::Handle, JitValueType::Int, JitValueType::Float],
         result: HostResult::Exact(JitValueType::Handle),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::ReplacesInput,
@@ -1361,35 +1375,39 @@ fn native_scalar_leaf_callable(function: &JitFunction, osr: bool, _returns_handl
 
 /// Declare an imported host helper with one opaque `HostCtx` word plus `n_args`
 /// logical `i64` params and an `i64` result.
-fn declare_import(module: &mut JITModule, name: &str, n_args: usize) -> Result<FuncId, JitError> {
-    let mut sig = module.make_signature();
-    sig.params.push(AbiParam::new(types::I64));
-    for _ in 0..n_args {
-        sig.params.push(AbiParam::new(types::I64));
+/// The Cranelift ABI type carrying a logical [`JitValueType`] across the host-helper
+/// boundary: a `Float` rides the native `f64` register, everything else (Int/Bool/
+/// Handle/flat-array handle) rides an `i64`. The bail signal is always out-of-band
+/// (the shared bail flag), so the value channel carries only the value.
+fn host_abi_type(ty: JitValueType) -> cranelift_codegen::ir::Type {
+    match ty {
+        JitValueType::Float => types::F64,
+        _ => types::I64,
     }
-    sig.returns.push(AbiParam::new(types::I64));
-    module
-        .declare_function(name, Linkage::Import, &sig)
-        .map_err(|e| err("declare import", e))
 }
 
-/// Declare an imported host helper with one opaque `HostCtx` word plus `n_args`
-/// logical `i64` params and an `f64` result (the Float read helpers). The bail
-/// signal stays out-of-band (the shared bail flag), so the f64 return channel
-/// carries only the value.
-fn declare_import_f64(
+/// Declare an imported host helper from its signature: one opaque `HostCtx` word
+/// followed by one param per declared arg type (`Float` → `f64`, else `i64`) and a
+/// result typed from the declared result (`Float` → `f64`, else `i64`). Deriving the
+/// ABI from the declared types — rather than assuming all-`i64` — is what lets a
+/// helper take a `Float` argument (e.g. `FieldSetFloat`), not just return one.
+fn declare_import_for(
     module: &mut JITModule,
     name: &str,
-    n_args: usize,
+    sig: &HostHelperSig,
 ) -> Result<FuncId, JitError> {
-    let mut sig = module.make_signature();
-    sig.params.push(AbiParam::new(types::I64));
-    for _ in 0..n_args {
-        sig.params.push(AbiParam::new(types::I64));
+    let mut cl_sig = module.make_signature();
+    cl_sig.params.push(AbiParam::new(types::I64)); // HostCtx
+    for arg in sig.args {
+        cl_sig.params.push(AbiParam::new(host_abi_type(*arg)));
     }
-    sig.returns.push(AbiParam::new(types::F64));
+    let ret = match sig.result {
+        HostResult::Exact(JitValueType::Float) => types::F64,
+        _ => types::I64,
+    };
+    cl_sig.returns.push(AbiParam::new(ret));
     module
-        .declare_function(name, Linkage::Import, &sig)
+        .declare_function(name, Linkage::Import, &cl_sig)
         .map_err(|e| err("declare import", e))
 }
 
@@ -1762,12 +1780,7 @@ impl NativeModule {
             funcs: HostHelper::all()
                 .iter()
                 .map(|&helper| {
-                    let sig = helper.signature();
-                    let id = if matches!(sig.result, HostResult::Exact(JitValueType::Float)) {
-                        declare_import_f64(&mut module, helper.symbol(), sig.args.len())
-                    } else {
-                        declare_import(&mut module, helper.symbol(), sig.args.len())
-                    }?;
+                    let id = declare_import_for(&mut module, helper.symbol(), &helper.signature())?;
                     Ok((helper, id))
                 })
                 .collect::<Result<Vec<_>, JitError>>()?,
@@ -5434,7 +5447,7 @@ mod tests {
                 HostHeapEffect::AllocatesResult
             } else if extends_input_handles.remove(&helper) {
                 HostHeapEffect::ExtendsInputHandles
-            } else if helper == HostHelper::FieldSetInt {
+            } else if helper == HostHelper::FieldSetInt || helper == HostHelper::FieldSetFloat {
                 HostHeapEffect::ReplacesInput
             } else {
                 HostHeapEffect::ReadOnly
@@ -5489,6 +5502,9 @@ mod tests {
         0
     }
     extern "C" fn noop_field_set_int(_ctx: HostCtx, _handle: i64, _slot: i64, _value: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_field_set_float(_ctx: HostCtx, _handle: i64, _slot: i64, _value: f64) -> i64 {
         0
     }
     extern "C" fn noop_list_len(_ctx: HostCtx, _handle: i64) -> i64 {
@@ -5655,6 +5671,7 @@ mod tests {
         HostHelpers {
             field_int: noop_field_int,
             field_set_int: noop_field_set_int,
+            field_set_float: noop_field_set_float,
             list_len: noop_list_len,
             list_is_empty: noop_is_empty,
             list_get_int: noop_list_get_int,

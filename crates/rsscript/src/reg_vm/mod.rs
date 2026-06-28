@@ -3550,6 +3550,7 @@ fn jit_host_helpers() -> vm_jit::HostHelpers {
     vm_jit::HostHelpers {
         field_int: rss_jit_field_int,
         field_set_int: rss_jit_field_set_int,
+        field_set_float: rss_jit_field_set_float,
         list_len: rss_jit_list_len,
         list_is_empty: rss_jit_list_is_empty,
         list_get_int: rss_jit_list_get_int,
@@ -4300,6 +4301,78 @@ fn rss_jit_field_set_int_with_ctx(ctx: JitHostCallCtx, handle: i64, slot: i64, v
                 return None;
             }
             *field = VmValue::Int(value);
+            Some(VmValue::Variant(Rc::new(VmStruct::with_layout(
+                Rc::clone(&data.layout),
+                fields,
+            ))))
+        }
+        _ => None,
+    });
+    match updated {
+        Some(value) => {
+            let handle = jit_push_heap_result_with_root_with_ctx(ctx, value, root);
+            if let Some(root) = root {
+                ctx.push_heap_writeback(root, handle);
+            }
+            handle
+        }
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_field_set_float(
+    _ctx: vm_jit::HostCtx,
+    handle: i64,
+    slot: i64,
+    value: f64,
+) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    rss_jit_field_set_float_with_ctx(_ctx, handle, slot, value)
+}
+
+/// Copy-on-write set of a `Float` struct/variant field — the write-side mirror of
+/// `rss_jit_field_float`. A non-Float field (or out-of-range slot / wrong handle)
+/// bails out-of-band, so a mis-typed lowering falls back to the interpreter rather
+/// than corrupting the value.
+#[cfg(feature = "native-jit")]
+fn rss_jit_field_set_float_with_ctx(
+    ctx: JitHostCallCtx,
+    handle: i64,
+    slot: i64,
+    value: f64,
+) -> i64 {
+    let Some(slot) = usize::try_from(slot).ok() else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let root = jit_heap_result_root_with_ctx(ctx, handle);
+    let updated = ctx.heap_read_handle(handle, |heap| match heap {
+        VmValue::Struct(data) => {
+            let mut fields = data.fields.clone();
+            let field = fields.get_mut(slot)?;
+            if !matches!(field, VmValue::Float(_)) {
+                return None;
+            }
+            *field = VmValue::Float(value);
+            Some(VmValue::Struct(Rc::new(VmStruct::with_layout(
+                Rc::clone(&data.layout),
+                fields,
+            ))))
+        }
+        VmValue::Variant(data) => {
+            let mut fields = data.fields.clone();
+            let field = fields.get_mut(slot)?;
+            if !matches!(field, VmValue::Float(_)) {
+                return None;
+            }
+            *field = VmValue::Float(value);
             Some(VmValue::Variant(Rc::new(VmStruct::with_layout(
                 Rc::clone(&data.layout),
                 fields,
