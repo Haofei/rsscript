@@ -421,6 +421,18 @@ fn scalar_param_type_needs_no_deep_copy(type_name: &str) -> bool {
     )
 }
 
+/// Cached classification of a function as a scalar self-recursion JIT candidate
+/// (computed lazily by the tier dispatcher). `Int` and `Bool` are the
+/// i64-representable return kinds that the native `CallSelf` fast path and the
+/// tier-0 i64 scalar executor can both run and wrap. Non-i64 kinds (e.g. Float)
+/// are not classified here — they route through the general native path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SelfRecursionKind {
+    Ineligible,
+    Int,
+    Bool,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct RegFunction {
     // `params`/`captures` are metadata read only by the native JIT (translation);
@@ -437,10 +449,11 @@ pub(crate) struct RegFunction {
     /// Cached tier-0 JIT analysis `(all_instructions_supported, has_loop)`,
     /// computed once after `code` is emitted.
     pub(crate) jit_analysis: std::cell::Cell<Option<(bool, bool)>>,
-    /// Cached tier-0 verdict for the flat scalar self-recursive executor. `None`
-    /// means not inspected yet; `Some(false)` is the hot-path negative cache for
-    /// ordinary call-heavy functions.
-    pub(crate) jit_self_recursive_int: std::cell::Cell<Option<bool>>,
+    /// Cached verdict for the scalar self-recursive fast paths (native `CallSelf`
+    /// + tier-0 i64 executor). `None` means not inspected yet; `Some(Ineligible)`
+    /// is the hot-path negative cache for ordinary call-heavy functions; `Int`/`Bool`
+    /// record the i64-representable return kind so the dispatcher wraps the result.
+    pub(crate) jit_self_recursion_kind: std::cell::Cell<Option<SelfRecursionKind>>,
     /// Cached native-tier verdict, an invariant property of the function:
     /// `0` unknown, `1` known not native-eligible. Lets `try_native` skip all
     /// per-call tiering/cache/name-hash work once a function is known to never
@@ -524,7 +537,7 @@ impl RegFunction {
             local_regs: HashMap::new(),
             code: Vec::new(),
             jit_analysis: std::cell::Cell::new(None),
-            jit_self_recursive_int: std::cell::Cell::new(None),
+            jit_self_recursion_kind: std::cell::Cell::new(None),
             native_status: std::cell::Cell::new(0),
             call_count: std::cell::Cell::new(0),
             branch_count: std::cell::Cell::new(0),
@@ -1859,7 +1872,7 @@ impl RegUnit {
                     local_regs: HashMap::new(),
                     code: Vec::new(),
                     jit_analysis: std::cell::Cell::new(None),
-                    jit_self_recursive_int: std::cell::Cell::new(None),
+                    jit_self_recursion_kind: std::cell::Cell::new(None),
                     native_status: std::cell::Cell::new(0),
                     call_count: std::cell::Cell::new(0),
                     branch_count: std::cell::Cell::new(0),
@@ -1903,7 +1916,7 @@ impl RegUnit {
                     local_regs: HashMap::new(),
                     code: Vec::new(),
                     jit_analysis: std::cell::Cell::new(None),
-                    jit_self_recursive_int: std::cell::Cell::new(None),
+                    jit_self_recursion_kind: std::cell::Cell::new(None),
                     native_status: std::cell::Cell::new(0),
                     call_count: std::cell::Cell::new(0),
                     branch_count: std::cell::Cell::new(0),

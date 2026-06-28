@@ -1689,7 +1689,7 @@ impl RegVm {
                             local_regs: HashMap::new(),
                             code: ecode,
                             jit_analysis: std::cell::Cell::new(None),
-                            jit_self_recursive_int: std::cell::Cell::new(None),
+                            jit_self_recursion_kind: std::cell::Cell::new(None),
                             native_status: std::cell::Cell::new(0),
                             call_count: std::cell::Cell::new(0),
                             branch_count: std::cell::Cell::new(0),
@@ -2608,9 +2608,10 @@ impl RegVm {
                             &std::collections::HashMap::new(),
                         )
                         .and_then(|(jit_fn, ret, _params, _literals, _precise)| {
-                            // This scalar fast path returns an `Int`; other return
-                            // shapes fall back to the scalar executor.
-                            (ret == NativeTy::Int)
+                            // This scalar fast path returns an i64-representable value
+                            // (Int or Bool — the caller wraps per the return kind);
+                            // other return shapes fall back to the scalar executor.
+                            matches!(ret, NativeTy::Int | NativeTy::Bool)
                                 .then(|| native.module.compile(&jit_fn).ok())
                                 .flatten()
                         })
@@ -2798,21 +2799,35 @@ impl RegVm {
         caller_base: usize,
         args: &[usize],
     ) -> Result<Option<VmValue>, EvalError> {
-        if !self_recursive_int_jit_candidate(unit, function_id) {
-            return Ok(None);
-        }
+        let returns_bool = match self_recursive_scalar_jit_candidate(unit, function_id) {
+            SelfRecursionKind::Ineligible => return Ok(None),
+            SelfRecursionKind::Int => false,
+            SelfRecursionKind::Bool => true,
+        };
         let func = Rc::clone(&unit.functions[function_id]);
         if args.len() != func.params {
             return Ok(None);
         }
 
+        // Marshal the scalar value args to i64 (Bool as 0/1, like the native ABI and
+        // the i64 tier-0 machine). Both Int and Bool params are i64-representable.
         let mut stack = vec![0i64; func.regs];
         for (param, arg) in args.iter().enumerate() {
-            let VmValue::Int(value) = self.reg(caller_base + *arg) else {
-                return Ok(None);
+            let bits = match self.reg(caller_base + *arg) {
+                VmValue::Int(value) => *value,
+                VmValue::Bool(value) => i64::from(*value),
+                _ => return Ok(None),
             };
-            stack[param] = *value;
+            stack[param] = bits;
         }
+        // Wrap an i64 result per the function's return kind.
+        let wrap = |bits: i64| {
+            if returns_bool {
+                VmValue::Bool(bits != 0)
+            } else {
+                VmValue::Int(bits)
+            }
+        };
 
         // Native fast path (native-call-ABI slice 3): compile + run this function
         // natively with self-recursive `CallSelf`. On a clean completion return the
@@ -2826,7 +2841,7 @@ impl RegVm {
             func.as_ref(),
             &stack[..func.params],
         ) {
-            return Ok(Some(VmValue::Int(bits)));
+            return Ok(Some(wrap(bits)));
         }
 
         #[derive(Debug, Clone, Copy)]
@@ -3011,7 +3026,7 @@ impl RegVm {
                     if let Some(ret_dst) = frame.ret_dst {
                         stack[ret_dst] = value;
                     } else {
-                        return Ok(Some(VmValue::Int(value)));
+                        return Ok(Some(wrap(value)));
                     }
                 }
                 _ => return Ok(None),
@@ -3028,16 +3043,16 @@ enum ScalarSlotKind {
     Unit,
 }
 
-fn self_recursive_int_jit_candidate(unit: &RegUnit, function_id: usize) -> bool {
+fn self_recursive_scalar_jit_candidate(unit: &RegUnit, function_id: usize) -> SelfRecursionKind {
     let Some(func) = unit.functions.get(function_id) else {
-        return false;
+        return SelfRecursionKind::Ineligible;
     };
-    if let Some(cached) = func.jit_self_recursive_int.get() {
+    if let Some(cached) = func.jit_self_recursion_kind.get() {
         return cached;
     }
-    let ok = compute_self_recursive_int_jit_candidate(unit, function_id);
-    func.jit_self_recursive_int.set(Some(ok));
-    ok
+    let kind = compute_self_recursive_scalar_jit_candidate(unit, function_id);
+    func.jit_self_recursion_kind.set(Some(kind));
+    kind
 }
 
 fn require_scalar_kind(
@@ -3086,11 +3101,21 @@ fn propagate_same_kind(kinds: &mut [ScalarSlotKind], dst: usize, src: usize) -> 
     }
 }
 
-fn compute_self_recursive_int_jit_candidate(unit: &RegUnit, function_id: usize) -> bool {
+fn compute_self_recursive_scalar_jit_candidate(
+    unit: &RegUnit,
+    function_id: usize,
+) -> SelfRecursionKind {
     let group: std::collections::HashSet<usize> = std::iter::once(function_id).collect();
-    // Self-recursion is Int-only: on a depth-cap/compile bail it falls back to the
-    // tier-0 i64 scalar executor, which cannot represent a Bool/Float return.
-    compute_recursive_int_member_inner(unit, function_id, &group) == Some(ScalarSlotKind::Int)
+    // Self-recursion admits the i64-representable scalar kinds (Int, Bool): on a
+    // depth-cap/compile bail it falls back to the tier-0 i64 scalar executor, which
+    // runs the body as an i64 machine and wraps the result per the return kind. Float
+    // (and any non-i64 kind) is not classified here — it routes through the general
+    // native path (which falls back to the full interpreter, not the i64 executor).
+    match compute_recursive_int_member_inner(unit, function_id, &group) {
+        Some(ScalarSlotKind::Int) => SelfRecursionKind::Int,
+        Some(ScalarSlotKind::Bool) => SelfRecursionKind::Bool,
+        _ => SelfRecursionKind::Ineligible,
+    }
 }
 
 /// Scalar-`Int` recursion analysis for one member of a recursive `group`: the body

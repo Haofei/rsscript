@@ -909,7 +909,7 @@ impl RegLowerer<'_> {
                             local_regs: HashMap::new(),
                             code: Vec::new(),
                             jit_analysis: std::cell::Cell::new(None),
-                            jit_self_recursive_int: std::cell::Cell::new(None),
+                            jit_self_recursion_kind: std::cell::Cell::new(None),
                             native_status: std::cell::Cell::new(0),
                             call_count: std::cell::Cell::new(0),
                             branch_count: std::cell::Cell::new(0),

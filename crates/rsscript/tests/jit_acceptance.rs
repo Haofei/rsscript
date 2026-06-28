@@ -4743,6 +4743,42 @@ fn main() -> Unit {
     );
 }
 
+/// Phase 1 (self-recursion widened to i64 scalar kinds): a Bool-returning *self*-
+/// recursive function now runs on the native `CallSelf` fast path (and the tier-0
+/// i64 executor on a depth-cap bail), with the i64 result wrapped back to `Bool` —
+/// where before only Int self-recursion was admitted (Bool declined to the
+/// interpreter). Byte-identical to the interpreter, and `native_calls > 0`.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_self_recursion_bool_runs_native() {
+    let source = "\
+fn even_down(n: Int) -> Bool {
+    if n == 0 { return true }
+    if n == 1 { return false }
+    return even_down(n: n - 2)
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_bool(value: even_down(n: 20)))
+    Log.write(message: read String.from_bool(value: even_down(n: 7)))
+    return Unit
+}
+";
+    let interp = common::run_vm_source("native-self-bool.rss", source, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source("native-self-bool.rss", source).expect("compile");
+    let (out, stats) = exe
+        .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
+        .expect("native run");
+    assert_eq!(out.stdout.trim_end(), "true\nfalse");
+    assert_eq!(
+        interp.stdout, out.stdout,
+        "Bool self-recursion native must match interpreter"
+    );
+    assert!(
+        stats.native_calls > 0,
+        "Bool self-recursion should run via the native CallSelf fast path: {stats:?}",
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Recursive native fast paths must honor the same limit gate as `try_native`:
 // Cranelift code polls neither `step_budget` nor `cancel` and allocates off the
