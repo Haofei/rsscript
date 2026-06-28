@@ -89,6 +89,21 @@ pub(in crate::reg_vm) fn native_host_intrinsic(
     native_host_typed_intrinsic(intrinsic, None)
 }
 
+/// Intrinsics lowered to an *inline* Cranelift numeric conversion rather than a
+/// host-helper call: `Int.to_float` (signed-int→f64) and the Float→Int rounding
+/// casts `Math.floor`/`Math.ceil` (round, then saturating f64→i64). Returns the
+/// expected argument count. `Math.round` is intentionally absent — its
+/// round-half-away-from-zero semantics have no exact single Cranelift form, so it
+/// stays interpreter-only. Centralising the list here keeps the native subset gate,
+/// type inference, and lowering in agreement from one source of truth.
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) fn native_inline_convert_intrinsic(intrinsic: RegIntrinsic) -> Option<usize> {
+    match intrinsic {
+        RegIntrinsic::IntToFloat | RegIntrinsic::MathFloor | RegIntrinsic::MathCeil => Some(1),
+        _ => None,
+    }
+}
+
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn native_host_typed_intrinsic(
     intrinsic: RegIntrinsic,
@@ -1912,7 +1927,8 @@ fn native_instr_semantics(instr: &RegInstr) -> NativeInstrSemantics {
         } => {
             native_host_typed_intrinsic(*intrinsic, None)
                 .is_some_and(|spec| args.len() == spec.arg_tys().len())
-                || (matches!(*intrinsic, RegIntrinsic::IntToFloat) && args.len() == 1)
+                || native_inline_convert_intrinsic(*intrinsic)
+                    .is_some_and(|arity| args.len() == arity)
         }
         RegInstr::CallTypedIntrinsic {
             intrinsic,

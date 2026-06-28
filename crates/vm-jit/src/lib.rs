@@ -913,6 +913,18 @@ impl JitCompare {
     }
 }
 
+/// Rounding mode applied to an f64 before a [`JitInstr::FloatToInt`] cast. Each
+/// variant maps to exactly one interpreter Float→Int operation, so the native
+/// result is bit-identical: `Floor` ↔ `Math.floor` (`f.floor() as i64`), `Ceil` ↔
+/// `Math.ceil` (`f.ceil() as i64`). `Math.round` is *not* representable here —
+/// Rust's `f64::round` rounds half away from zero, which Cranelift's `nearest`
+/// (round half to even) does not match — so it stays an interpreter-only op.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FloatRounding {
+    Floor,
+    Ceil,
+}
+
 /// One instruction of the JIT IR. Registers are `u32` indices; jump `target`s are
 /// indices into the function's instruction vector (matching the VM's bytecode, so
 /// translation is 1:1 and target indices need no remapping).
@@ -968,6 +980,16 @@ pub enum JitInstr {
     IntToFloat {
         dst: u32,
         src: u32,
+    },
+    /// `dst (Int) = round(src (Float)) as i64` — the inverse of [`IntToFloat`].
+    /// Applies `rounding` to the f64 `src`, then a *saturating* signed cast to
+    /// i64 (`fcvt_to_sint_sat`), matching the interpreter's `f.floor()/.ceil() as
+    /// i64`: Rust's `as` saturates (NaN→0, +∞→i64::MAX, -∞→i64::MIN), and the
+    /// rounded value is already integral so the cast is exact in range.
+    FloatToInt {
+        dst: u32,
+        src: u32,
+        rounding: FloatRounding,
     },
     /// Generic i64-returning host helper call. Helpers use the shared out-of-band
     /// bail flag protocol: if the helper cannot satisfy the operation, native
@@ -1304,6 +1326,7 @@ fn native_scalar_leaf_callable(function: &JitFunction, osr: bool, _returns_handl
                 | JitInstr::Div { .. }
                 | JitInstr::Mod { .. }
                 | JitInstr::IntToFloat { .. }
+                | JitInstr::FloatToInt { .. }
                 | JitInstr::BitAnd { .. }
                 | JitInstr::BitOr { .. }
                 | JitInstr::BitXor { .. }
@@ -2613,6 +2636,10 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                 require_class(*src, JitValueType::Int, "IntToFloat src")?;
                 require_class(*dst, JitValueType::Float, "IntToFloat result")?;
             }
+            JitInstr::FloatToInt { dst, src, .. } => {
+                require_class(*src, JitValueType::Float, "FloatToInt src")?;
+                require_class(*dst, JitValueType::Int, "FloatToInt result")?;
+            }
             JitInstr::HostCall { helper, dst, args } => {
                 let sig = helper.signature();
                 if args.len() != sig.args.len() {
@@ -2921,6 +2948,7 @@ fn instr_def(instr: &JitInstr) -> Option<u32> {
         | JitInstr::Div { dst, .. }
         | JitInstr::Mod { dst, .. }
         | JitInstr::IntToFloat { dst, .. }
+        | JitInstr::FloatToInt { dst, .. }
         | JitInstr::HostCall { dst, .. }
         | JitInstr::MemoizedHostCall { dst, .. }
         | JitInstr::CallNative { dst, .. }
@@ -3579,15 +3607,54 @@ fn push_compiled_abi_signature(
     func.signature.returns.push(AbiParam::new(types::I8));
 }
 
-/// Maximum native call-chain depth for self-recursive functions before the entry
-/// guard bails to the interpreter (native-call-ABI slice 2). Native `CallSelf`
-/// recurses on the host C stack, so this cap must stay well under
-/// `host_stack_size / native_frame_size`: a scalar recursive frame is at most a few
-/// hundred bytes of stack slots, and the host stack is megabytes, so a few hundred
-/// frames is safely below overflow. Recursion deeper than this bails to the
-/// interpreter (which enforces its own `max_depth`), so deep recursion is correct
-/// and crash-free, just not native past the cap.
-const NATIVE_RECURSION_DEPTH_CAP: i64 = 250;
+/// Conservative host stack budget a native recursive call-chain may consume before
+/// the entry guard bails to the interpreter. Native `CallSelf`/`CallGroup` recurse
+/// on the host C stack, so the safe call depth is `stack_budget / native_frame_size`
+/// — frame-size-dependent, NOT a fixed count. This budget stays well under the
+/// smallest thread stack we expect to run on (worker/spawned threads can be ~2 MiB),
+/// leaving ample headroom for the interpreter fallback and the host frames sitting
+/// above the native chain. (A fully general guard would compare the live stack
+/// pointer against a captured limit; this static budget achieves the same safety
+/// property — never overflow before bailing — without per-call SP plumbing.)
+const NATIVE_RECURSION_STACK_BUDGET_BYTES: i64 = 1 << 20; // 1 MiB
+
+/// Floor on the derived cap: never bail before a useful amount of native recursion,
+/// even for a wide-frame function (it still can't overflow — the floor times the
+/// largest plausible frame stays under the budget by construction of the ceiling).
+const NATIVE_RECURSION_DEPTH_CAP_MIN: i64 = 16;
+
+/// Ceiling on the derived cap. Small scalar recursive frames (a few hundred bytes)
+/// derive a cap far above any reasonable host-stack-safe depth, so we clamp to this
+/// historically-validated value — which also keeps small-frame behaviour identical
+/// to the previous fixed cap. Recursion deeper than the derived cap bails to the
+/// interpreter (which enforces its own `max_depth`), so deep recursion is always
+/// correct and crash-free, just not native past the cap.
+const NATIVE_RECURSION_DEPTH_CAP_MAX: i64 = 250;
+
+/// Over-estimate the per-call native frame size in bytes. Conservative on purpose:
+/// every virtual register may spill to an 8-byte stack slot, the deopt payload
+/// reserves a parallel slot per register, and a fixed overhead covers the prologue,
+/// callee-saved registers, alignment padding, and call scratch. Over-estimating the
+/// frame yields a *smaller* (safer) cap, which is the correct direction for a guard
+/// whose whole job is to bail before the stack overflows.
+fn native_recursion_frame_bytes_estimate(program: &JitFunction) -> i64 {
+    const SLOT_BYTES: i64 = 8;
+    const FIXED_OVERHEAD_BYTES: i64 = 512;
+    let regs = program.n_regs as i64;
+    FIXED_OVERHEAD_BYTES + SLOT_BYTES * regs * 2
+}
+
+/// Derive the native recursion depth cap from a per-call frame estimate and the
+/// fixed stack budget, clamped to `[MIN, MAX]`. Frame-size-aware so a wide-frame
+/// recursive function bails sooner than a scalar one instead of sharing one
+/// frame-blind constant.
+fn native_recursion_depth_cap(program: &JitFunction) -> i64 {
+    let frame = native_recursion_frame_bytes_estimate(program).max(1);
+    (NATIVE_RECURSION_STACK_BUDGET_BYTES / frame).clamp(
+        NATIVE_RECURSION_DEPTH_CAP_MIN,
+        NATIVE_RECURSION_DEPTH_CAP_MAX,
+    )
+}
 
 #[allow(clippy::too_many_arguments)]
 fn build_function(
@@ -3877,7 +3944,7 @@ fn build_function(
             // BEFORE the host C stack can overflow. Non-recursive functions emit
             // nothing here.
             if has_call_self || has_call_group {
-                let cap = bcx.ins().iconst(ptr_ty, NATIVE_RECURSION_DEPTH_CAP);
+                let cap = bcx.ins().iconst(ptr_ty, native_recursion_depth_cap(program));
                 let too_deep =
                     bcx.ins()
                         .icmp(IntCC::UnsignedGreaterThanOrEqual, native_call_depth, cap);
@@ -4049,6 +4116,20 @@ fn build_function(
                 // var is I64, the dst var F64 (per their register classes).
                 let v = bcx.use_var(reg(*src));
                 let res = bcx.ins().fcvt_from_sint(types::F64, v);
+                bcx.def_var(reg(*dst), res);
+            }
+            JitInstr::FloatToInt { dst, src, rounding } => {
+                // Round the f64 to an integral f64 with the requested mode, then a
+                // saturating signed cast to i64. `fcvt_to_sint_sat` mirrors Rust's
+                // `as i64` saturation (NaN→0, ±∞→i64::MIN/MAX), matching the
+                // interpreter's `f.floor()/.ceil() as i64`. The src var is F64, the
+                // dst var I64 (per their register classes).
+                let v = bcx.use_var(reg(*src));
+                let rounded = match rounding {
+                    FloatRounding::Floor => bcx.ins().floor(v),
+                    FloatRounding::Ceil => bcx.ins().ceil(v),
+                };
+                let res = bcx.ins().fcvt_to_sint_sat(types::I64, rounded);
                 bcx.def_var(reg(*dst), res);
             }
             JitInstr::HostCall { helper, dst, args } => {
@@ -6615,7 +6696,7 @@ mod tests {
 
         // Recursion deeper than the cap bails cleanly (NO host-stack overflow / crash):
         // the entry depth guard deopts, which the host re-runs on the interpreter.
-        let deep = NATIVE_RECURSION_DEPTH_CAP + 50;
+        let deep = NATIVE_RECURSION_DEPTH_CAP_MAX + 50;
         match m.call(sum, &[deep], &[0]) {
             NativeOutcome::Deopt { .. } => {}
             other => panic!("sum(deep) must bail at the depth cap, got {other:?}"),
@@ -6698,7 +6779,7 @@ mod tests {
         }
 
         // Recursion past the depth cap bails cleanly (no host-stack overflow).
-        let deep = NATIVE_RECURSION_DEPTH_CAP + 50;
+        let deep = NATIVE_RECURSION_DEPTH_CAP_MAX + 50;
         match m.call(even, &[deep], &[0]) {
             NativeOutcome::Deopt { .. } => {}
             other => panic!("deep mutual recursion must bail at the cap, got {other:?}"),

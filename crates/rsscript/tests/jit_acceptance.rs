@@ -3607,15 +3607,64 @@ fn main() -> Unit {
     );
 }
 
-/// IntToFloat OSR negative test — proving we admitted ONLY `IntToFloat`, not
-/// `CallIntrinsic` broadly. This loop calls a DIFFERENT, still-unsupported intrinsic
-/// each iteration — `String.to_uppercase`, a heap-String producer that is NOT in the
-/// native subset AND is NOT a length-foldable producer (so the string length-fold
-/// pass cannot dissolve it either, leaving a real non-subset `StringLen`). Because
-/// that `CallIntrinsic` is in-region and unsupported, the loop MUST NOT OSR
+/// `Math.floor`/`Math.ceil` OSR positive test (Float→Int native lowering): a hot
+/// loop converts the counter to a float, biases it to a fractional value, then sums
+/// `Math.floor` + `Math.ceil` of it — both Float→Int rounding casts. The loop is
+/// wrapped by non-native I/O so only OSR can run it natively. Each `Math.floor`/
+/// `Math.ceil` lowers to a `CallIntrinsic` that now becomes a native `FloatToInt`
+/// (round, then saturating f64→i64). Output (the Int sum, formatted) must be
+/// byte-identical to the interpreter — the bit-parity net for the rounding+cast —
+/// and under `native-jit` the loop must genuinely OSR.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_float_to_int_loop_matches_interpreter() {
+    let source = "\
+fn compute(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        let f = Int.to_float(value: read index) * 0.5 - 3.0
+        total = total + Math.floor(value: read f) + Math.ceil(value: read f)
+        index = index + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: compute(limit: read 1000)))
+    return Unit
+}
+";
+    let file = "jit-osr-float-to-int.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "OSR Math.floor/Math.ceil (Float→Int) loop must be byte-identical to the \
+         interpreter (stdout, including the rounding+saturating cast)"
+    );
+    assert!(
+        stats.osr_entries > 0,
+        "a Math.floor/Math.ceil loop must OSR natively now that Float→Int has a \
+         native FloatToInt lowering: {stats:?}",
+    );
+}
+
+/// IntToFloat OSR negative test — proving we admit only the *inline-convert*
+/// intrinsics (`IntToFloat`/`Math.floor`/`Math.ceil`), not `CallIntrinsic` broadly.
+/// This loop calls a DIFFERENT, still-unsupported intrinsic each iteration —
+/// `String.to_uppercase`, a heap-String producer that is NOT in the native subset
+/// AND is NOT a length-foldable producer (so the string length-fold pass cannot
+/// dissolve it either, leaving a real non-subset `StringLen`). Because that
+/// `CallIntrinsic` is in-region and unsupported, the loop MUST NOT OSR
 /// (`osr_entries == 0`), or the interpreter would diverge. The output must still be
 /// interpreter-identical. This guards against a future edit accidentally broadening
-/// the `CallIntrinsic` admission beyond the single `IntToFloat` shape.
+/// the `CallIntrinsic` admission beyond the inline-convert shapes.
 #[cfg(feature = "native-jit")]
 #[test]
 fn native_osr_other_intrinsic_in_loop_does_not_osr() {

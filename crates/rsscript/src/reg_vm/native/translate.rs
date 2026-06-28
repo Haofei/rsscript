@@ -335,14 +335,26 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                     mut_args,
                     ..
                 } if self_call_sites.contains(&ip_map[i]) => {
-                    // Self-recursive call (native-call-ABI slice 3): the self-recursive
-                    // int candidate guarantees Int params + Int return, so the call's
-                    // args and result are all Int.
+                    // Self-recursive call (native-call-ABI slice 3): the callee *is*
+                    // this function, so its args and result take this function's own
+                    // declared parameter/return types — the same signature-driven
+                    // typing the group-call arm uses for mutual recursion. A
+                    // Bool/Float-typed self-recursive function thus types its self-call
+                    // correctly instead of being forced to `Int`. Params/return left
+                    // undeclared flow from their other uses via unification.
                     let mut ok = mut_args.is_empty() && args.len() == func.params;
-                    for arg in args {
-                        ok = ok && native_set_ty(ty, *arg, NativeTy::Int, c);
+                    for (pi, arg) in args.iter().enumerate() {
+                        if let Some(pty) = declared_signature
+                            .and_then(|s| s.params.get(pi))
+                            .and_then(|d| native_declared_type_name_to_ty(d))
+                        {
+                            ok = ok && native_set_ty(ty, *arg, pty, c);
+                        }
                     }
-                    ok && native_set_ty(ty, *dst, NativeTy::Int, c)
+                    if let Some(ret) = declared_return_ty {
+                        ok = ok && native_set_ty(ty, *dst, ret, c);
+                    }
+                    ok
                 }
                 RegInstr::CallKnown {
                     dst,
@@ -550,6 +562,16 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 } => {
                     native_set_ty(ty, args[0], NativeTy::Int, c)
                         && native_set_ty(ty, *dst, NativeTy::Float, c)
+                }
+                // `Math.floor`/`Math.ceil`: single Float arg → Int dst (round, then
+                // saturating f64→i64 cast via `FloatToInt` at lowering).
+                RegInstr::CallIntrinsic {
+                    intrinsic: RegIntrinsic::MathFloor | RegIntrinsic::MathCeil,
+                    args,
+                    dst,
+                } => {
+                    native_set_ty(ty, args[0], NativeTy::Float, c)
+                        && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
                 RegInstr::CallIntrinsic {
                     intrinsic,
@@ -1596,6 +1618,25 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                     src: r(args[0]),
                 }
             }
+            // `Math.floor`/`Math.ceil`: round the f64 arg then a saturating f64→i64
+            // cast, identical to the interpreter's `f.floor()/.ceil() as i64`. src is
+            // a Float (f64), dst an Int (i64).
+            RegInstr::CallIntrinsic {
+                intrinsic: rounding_intrinsic @ (RegIntrinsic::MathFloor | RegIntrinsic::MathCeil),
+                args,
+                dst,
+            } => {
+                require(float(args[0]) && int(*dst))?;
+                let rounding = match rounding_intrinsic {
+                    RegIntrinsic::MathFloor => vm_jit::FloatRounding::Floor,
+                    _ => vm_jit::FloatRounding::Ceil,
+                };
+                JitInstr::FloatToInt {
+                    dst: r(*dst),
+                    src: r(args[0]),
+                    rounding,
+                }
+            }
             RegInstr::CallIntrinsic {
                 intrinsic: RegIntrinsic::StringSplit,
                 dst,
@@ -2301,6 +2342,7 @@ fn native_jit_written_reg(instr: &vm_jit::JitInstr) -> Option<u32> {
         | vm_jit::JitInstr::Equal { dst, .. }
         | vm_jit::JitInstr::NotEqual { dst, .. }
         | vm_jit::JitInstr::IntToFloat { dst, .. }
+        | vm_jit::JitInstr::FloatToInt { dst, .. }
         | vm_jit::JitInstr::HostCall { dst, .. }
         | vm_jit::JitInstr::MemoizedHostCall { dst, .. }
         | vm_jit::JitInstr::ListGetIntDirect { dst, .. }
@@ -3205,6 +3247,16 @@ fn translate_osr_loop_inner(
                 } => {
                     native_set_ty(ty, args[0], NativeTy::Int, c)
                         && native_set_ty(ty, *dst, NativeTy::Float, c)
+                }
+                // `Math.floor`/`Math.ceil`: single Float arg → Int dst (round, then
+                // saturating f64→i64 cast via `FloatToInt` at lowering).
+                RegInstr::CallIntrinsic {
+                    intrinsic: RegIntrinsic::MathFloor | RegIntrinsic::MathCeil,
+                    args,
+                    dst,
+                } => {
+                    native_set_ty(ty, args[0], NativeTy::Float, c)
+                        && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
                 RegInstr::CallIntrinsic {
                     intrinsic,
@@ -4218,6 +4270,25 @@ fn translate_osr_loop_inner(
                 JitInstr::IntToFloat {
                     dst: r(*dst),
                     src: r(args[0]),
+                }
+            }
+            // `Math.floor`/`Math.ceil`: round the f64 arg then a saturating f64→i64
+            // cast, identical to the interpreter's `f.floor()/.ceil() as i64`. src is
+            // a Float (f64), dst an Int (i64).
+            RegInstr::CallIntrinsic {
+                intrinsic: rounding_intrinsic @ (RegIntrinsic::MathFloor | RegIntrinsic::MathCeil),
+                args,
+                dst,
+            } => {
+                require(float(args[0]) && int(*dst))?;
+                let rounding = match rounding_intrinsic {
+                    RegIntrinsic::MathFloor => vm_jit::FloatRounding::Floor,
+                    _ => vm_jit::FloatRounding::Ceil,
+                };
+                JitInstr::FloatToInt {
+                    dst: r(*dst),
+                    src: r(args[0]),
+                    rounding,
                 }
             }
             RegInstr::CallIntrinsic {
