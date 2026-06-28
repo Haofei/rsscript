@@ -2557,21 +2557,25 @@ impl RegVm {
         Ok(VmValue::Unit)
     }
 
-    /// Native self-recursion (native-call-ABI slice 3): compile `func` with
-    /// `CallSelf` and run it natively for scalar `Int` args. Returns the result bits
-    /// on a clean completion, or `None` to fall back to the tier-0 scalar executor
-    /// (compile failure, non-`Int` return, deopt — including the entry depth-cap bail
-    /// that keeps deep recursion off the host stack). Compiled once and cached.
+    /// Native self-recursion (native-call-ABI slice 3; generalized in Phase 2):
+    /// compile `func` with `CallSelf` via the *general* native subset and run it
+    /// natively for SCALAR args (Int/Bool/Float). Marshalling/wrapping is driven by
+    /// the compiled parameter/return `NativeTy`s, so a Float (or match/heap-read-bodied)
+    /// self-recursive function runs natively — not just the Int-arith whitelist.
+    /// Returns the wrapped result on a clean completion, or `None` to fall back
+    /// (compile failure, non-scalar param/return, deopt incl. the entry depth-cap
+    /// bail that keeps deep recursion off the host stack). Compiled once and cached.
     #[cfg(feature = "native-jit")]
-    fn try_native_self_recursive_int(
+    fn try_native_self_recursive(
         &mut self,
         unit: &RegUnit,
         function_id: usize,
         func: &RegFunction,
-        int_args: &[i64],
-    ) -> Option<i64> {
+        caller_base: usize,
+        args: &[usize],
+    ) -> Option<VmValue> {
         let key = func as *const RegFunction as usize;
-        let id = {
+        let (id, param_tys, ret) = {
             let native = self.native.as_mut()?;
             // Deopt-stress / forced-bail modes run the scalar/interpreter path so the
             // differential stress backends exercise the always-correct fallback.
@@ -2582,7 +2586,7 @@ impl RegVm {
                 return None;
             }
             match native.self_recursive_native.get(&key) {
-                Some(cached) => (*cached)?,
+                Some(cached) => cached.clone()?,
                 None => {
                     let self_call_sites: std::collections::HashSet<usize> = func
                         .code
@@ -2597,6 +2601,8 @@ impl RegVm {
                             .then_some(ip)
                         })
                         .collect();
+                    // Not self-recursive ⇒ this path doesn't apply (cheap negative
+                    // cache; avoids attempting the heavy translate on ordinary calls).
                     let compiled = if self_call_sites.is_empty() {
                         None
                     } else {
@@ -2607,27 +2613,50 @@ impl RegVm {
                             &self_call_sites,
                             &std::collections::HashMap::new(),
                         )
-                        .and_then(|(jit_fn, ret, _params, _literals, _precise)| {
-                            // This scalar fast path returns an i64-representable value
-                            // (Int or Bool — the caller wraps per the return kind);
-                            // other return shapes fall back to the scalar executor.
-                            matches!(ret, NativeTy::Int | NativeTy::Bool)
+                        .and_then(|(jit_fn, ret, param_tys, _literals, _precise)| {
+                            // Scalar-only ABI: params and return must be i64/f64
+                            // scalars (Int/Bool/Float). Heap (Handle) params/returns
+                            // route through the fallback — their cross-call
+                            // marshalling/reconstruction is out of scope here.
+                            let is_scalar = |t: &NativeTy| {
+                                matches!(t, NativeTy::Int | NativeTy::Bool | NativeTy::Float)
+                            };
+                            (is_scalar(&ret) && param_tys.iter().all(is_scalar))
                                 .then(|| native.module.compile(&jit_fn).ok())
                                 .flatten()
+                                .map(|id| (id, param_tys, ret))
                         })
                     };
-                    native.self_recursive_native.insert(key, compiled);
+                    native.self_recursive_native.insert(key, compiled.clone());
                     compiled?
                 }
             }
         };
+        if param_tys.len() != args.len() {
+            return None;
+        }
+        // Marshal scalar args to i64 slots, driven by the compiled parameter type
+        // (Float reinterpreted via `to_bits`; an Int value for a Float param is
+        // converted first) — identical to the general native call marshalling.
+        let mut int_args = Vec::with_capacity(args.len());
+        for (&arg, pty) in args.iter().zip(param_tys.iter()) {
+            let bits = match (pty, self.reg(caller_base + arg)) {
+                (NativeTy::Float, VmValue::Float(f)) => f.to_bits() as i64,
+                (NativeTy::Float, VmValue::Int(i)) => (*i as f64).to_bits() as i64,
+                (_, VmValue::Int(i)) => *i,
+                (_, VmValue::Bool(b)) => i64::from(*b),
+                (_, VmValue::Float(f)) => f.to_bits() as i64,
+                _ => return None,
+            };
+            int_args.push(bits);
+        }
         let lens = vec![0i64; int_args.len()];
         let mut heap_tx = JitNativeCallFrame::begin();
         let outcome = {
             let native = self.native.as_ref()?;
             native
                 .module
-                .call_with_host_ctx(id, int_args, &lens, heap_tx.host_ctx())
+                .call_with_host_ctx(id, &int_args, &lens, heap_tx.host_ctx())
         };
         match outcome {
             vm_jit::NativeOutcome::Completed(bits) => {
@@ -2637,7 +2666,11 @@ impl RegVm {
                 {
                     native.stats.native_calls += 1;
                 }
-                Some(bits)
+                Some(match ret {
+                    NativeTy::Float => VmValue::Float(f64::from_bits(bits as u64)),
+                    NativeTy::Bool => VmValue::Bool(bits != 0),
+                    _ => VmValue::Int(bits),
+                })
             }
             _ => {
                 heap_tx.abort();
@@ -2799,18 +2832,38 @@ impl RegVm {
         caller_base: usize,
         args: &[usize],
     ) -> Result<Option<VmValue>, EvalError> {
-        let returns_bool = match self_recursive_scalar_jit_candidate(unit, function_id) {
-            SelfRecursionKind::Ineligible => return Ok(None),
-            SelfRecursionKind::Int => false,
-            SelfRecursionKind::Bool => true,
-        };
         let func = Rc::clone(&unit.functions[function_id]);
         if args.len() != func.params {
             return Ok(None);
         }
 
-        // Marshal the scalar value args to i64 (Bool as 0/1, like the native ABI and
-        // the i64 tier-0 machine). Both Int and Bool params are i64-representable.
+        // General native fast path (native-call-ABI slice 3, generalized in Phase 2):
+        // compile + run this function natively with self-recursive `CallSelf` via the
+        // general native subset, which admits scalar Int/Bool/Float bodies (incl.
+        // `match` and heap reads), not just the Int-arith whitelist. Marshalling and
+        // result wrapping follow the compiled scalar parameter/return types. On a
+        // clean completion return the result; otherwise fall through to the fallback
+        // below (compile failure, non-scalar shape, or a depth-cap/deopt bail).
+        #[cfg(feature = "native-jit")]
+        if let Some(value) =
+            self.try_native_self_recursive(unit, function_id, func.as_ref(), caller_base, args)
+        {
+            return Ok(Some(value));
+        }
+
+        // Fallback selection. The i64 tier-0 scalar executor can run only an
+        // i64-representable (Int/Bool) Int-arith body — exactly what the scalar
+        // candidate recognises; it handles arbitrary depth without touching the host
+        // C stack. A non-i64 body (Float, or one using `match`/heap that the i64
+        // machine cannot run) routes to the full interpreter (`Ok(None)`).
+        let returns_bool = match self_recursive_scalar_jit_candidate(unit, function_id) {
+            SelfRecursionKind::Ineligible => return Ok(None),
+            SelfRecursionKind::Int => false,
+            SelfRecursionKind::Bool => true,
+        };
+
+        // Marshal the scalar value args to i64 (Bool as 0/1). Both Int and Bool
+        // params are i64-representable by the tier-0 machine.
         let mut stack = vec![0i64; func.regs];
         for (param, arg) in args.iter().enumerate() {
             let bits = match self.reg(caller_base + *arg) {
@@ -2828,21 +2881,6 @@ impl RegVm {
                 VmValue::Int(bits)
             }
         };
-
-        // Native fast path (native-call-ABI slice 3): compile + run this function
-        // natively with self-recursive `CallSelf`. On a clean completion return the
-        // result; on a deopt (recursion exceeded the native depth cap) or a compile
-        // failure, fall through to the tier-0 scalar executor below, which handles
-        // arbitrary depth without touching the host C stack.
-        #[cfg(feature = "native-jit")]
-        if let Some(bits) = self.try_native_self_recursive_int(
-            unit,
-            function_id,
-            func.as_ref(),
-            &stack[..func.params],
-        ) {
-            return Ok(Some(wrap(bits)));
-        }
 
         #[derive(Debug, Clone, Copy)]
         struct ScalarFrame {

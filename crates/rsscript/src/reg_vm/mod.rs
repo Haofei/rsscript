@@ -2201,10 +2201,13 @@ struct NativeState {
     /// re-analyze). Populated lazily the first time the interpreter reaches a header.
     #[allow(clippy::type_complexity)]
     osr_cache: HashMap<usize, Option<OsrEntry>>,
-    /// Native self-recursion cache (native-call-ABI slice 3): per-function
-    /// (`*const RegFunction` key) compiled `CallSelf` entry. `None` = known not
-    /// natively self-recursion-compilable (fall back to the tier-0 scalar executor).
-    self_recursive_native: HashMap<usize, Option<vm_jit::CompiledId>>,
+    /// Native self-recursion cache (native-call-ABI slice 3; generalized in Phase 2):
+    /// per-function (`*const RegFunction` key) compiled `CallSelf` entry, with the
+    /// compiled parameter `NativeTy`s and return `NativeTy` so the dispatcher
+    /// marshals scalar args (Int/Bool/Float) and wraps the result. `None` = known
+    /// not natively self-recursion-compilable (fall back to the tier-0 i64 executor
+    /// for i64-only bodies, or the full interpreter for non-i64 bodies).
+    self_recursive_native: HashMap<usize, Option<(vm_jit::CompiledId, Vec<NativeTy>, NativeTy)>>,
     /// Native mutual-recursion cache (native-call-ABI slice 4): per-function
     /// (`*const RegFunction` key) compiled group-member `(CompiledId, returns_bool)`,
     /// where `returns_bool` wraps the native `i64` result as `Bool` vs `Int`.

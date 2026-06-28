@@ -4779,6 +4779,44 @@ fn main() -> Unit {
     );
 }
 
+/// Phase 2 (recursion eligibility unified with the general native subset): a
+/// FLOAT-returning self-recursive function now runs on the native `CallSelf` fast
+/// path — its Float params/return marshal via `to_bits`/`from_bits` and its body
+/// uses native float arithmetic. Before Phase 2 the bespoke Int-arith-only
+/// recursion analysis rejected any Float body, so this ran on the interpreter.
+/// Output (float-formatted) must be byte-identical to the interpreter, and
+/// `native_calls > 0`.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_self_recursion_float_runs_native() {
+    let source = "\
+fn fpow(base: Float, n: Int) -> Float {
+    if n <= 0 { return 1.0 }
+    return base * fpow(base: base, n: n - 1)
+}
+fn main() -> Unit {
+    Log.write(message: read Float.to_string(value: read fpow(base: 2.0, n: 10)))
+    Log.write(message: read Float.to_string(value: read fpow(base: 1.5, n: 4)))
+    return Unit
+}
+";
+    let interp = common::run_vm_source("native-self-float.rss", source, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source("native-self-float.rss", source).expect("compile");
+    let (out, stats) = exe
+        .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
+        .expect("native run");
+    assert_eq!(
+        interp.stdout, out.stdout,
+        "Float self-recursion native must be byte-identical to the interpreter \
+         (including float formatting)"
+    );
+    assert!(
+        stats.native_calls > 0,
+        "Float self-recursion should run via the native CallSelf fast path now that \
+         recursion uses the general native subset: {stats:?}",
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Recursive native fast paths must honor the same limit gate as `try_native`:
 // Cranelift code polls neither `step_budget` nor `cancel` and allocates off the
