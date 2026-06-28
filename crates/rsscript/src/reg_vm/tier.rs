@@ -103,7 +103,9 @@ fn record_native_compile_stats(
     let mut profile_branch_side_exits = 0;
     for (ip, instr) in jit_fn.code.iter().enumerate() {
         match instr {
-            vm_jit::JitInstr::CallNative { .. } => native_call_edges += 1,
+            vm_jit::JitInstr::CallNative { .. } | vm_jit::JitInstr::CallSelf { .. } => {
+                native_call_edges += 1
+            }
             vm_jit::JitInstr::GuardClosureId { .. } => profile_closure_guard_sites += 1,
             vm_jit::JitInstr::ProfiledJumpIfBool { .. }
             | vm_jit::JitInstr::ProfiledJumpIfIntCompare { .. } => {
@@ -199,6 +201,7 @@ fn jit_function_scalar_leaf_callable(jit_fn: &vm_jit::JitFunction) -> bool {
                 | vm_jit::JitInstr::ProfiledJumpIfBool { .. }
                 | vm_jit::JitInstr::ProfiledJumpIfIntCompare { .. }
                 | vm_jit::JitInstr::CallNative { .. }
+                | vm_jit::JitInstr::CallSelf { .. }
                 | vm_jit::JitInstr::HostCall { .. }
                 | vm_jit::JitInstr::MemoizedHostCall { .. }
                 | vm_jit::JitInstr::Return { .. }
@@ -2557,6 +2560,93 @@ impl RegVm {
         Ok(VmValue::Unit)
     }
 
+    /// Native self-recursion (native-call-ABI slice 3): compile `func` with
+    /// `CallSelf` and run it natively for scalar `Int` args. Returns the result bits
+    /// on a clean completion, or `None` to fall back to the tier-0 scalar executor
+    /// (compile failure, non-`Int` return, deopt — including the entry depth-cap bail
+    /// that keeps deep recursion off the host stack). Compiled once and cached.
+    #[cfg(feature = "native-jit")]
+    fn try_native_self_recursive_int(
+        &mut self,
+        unit: &RegUnit,
+        function_id: usize,
+        func: &RegFunction,
+        int_args: &[i64],
+    ) -> Option<i64> {
+        let key = func as *const RegFunction as usize;
+        let id = {
+            let native = self.native.as_mut()?;
+            // Deopt-stress / forced-bail modes run the scalar/interpreter path so the
+            // differential stress backends exercise the always-correct fallback.
+            if native.force_bail
+                || native.forced_safepoint.is_some()
+                || native.force_all_safepoints
+            {
+                return None;
+            }
+            match native.self_recursive_native.get(&key) {
+                Some(cached) => (*cached)?,
+                None => {
+                    let self_call_sites: std::collections::HashSet<usize> = func
+                        .code
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(ip, instr)| {
+                            matches!(
+                                instr,
+                                RegInstr::CallKnown { function, mut_args, .. }
+                                    if *function == function_id && mut_args.is_empty()
+                            )
+                            .then_some(ip)
+                        })
+                        .collect();
+                    let compiled = if self_call_sites.is_empty() {
+                        None
+                    } else {
+                        translate_to_native_jit_with_calls(
+                            unit,
+                            func,
+                            &std::collections::HashMap::new(),
+                            &self_call_sites,
+                        )
+                        .and_then(|(jit_fn, ret, _params, _literals, _precise)| {
+                            // This scalar fast path returns an `Int`; other return
+                            // shapes fall back to the scalar executor.
+                            (ret == NativeTy::Int)
+                                .then(|| native.module.compile(&jit_fn).ok())
+                                .flatten()
+                        })
+                    };
+                    native.self_recursive_native.insert(key, compiled);
+                    compiled?
+                }
+            }
+        };
+        let lens = vec![0i64; int_args.len()];
+        let mut heap_tx = JitNativeCallFrame::begin();
+        let outcome = {
+            let native = self.native.as_ref()?;
+            native
+                .module
+                .call_with_host_ctx(id, int_args, &lens, heap_tx.host_ctx())
+        };
+        match outcome {
+            vm_jit::NativeOutcome::Completed(bits) => {
+                heap_tx.commit_scalar_with_writebacks(&[]);
+                if let Some(native) = self.native.as_mut()
+                    && native.collect_stats
+                {
+                    native.stats.native_calls += 1;
+                }
+                Some(bits)
+            }
+            _ => {
+                heap_tx.abort();
+                None
+            }
+        }
+    }
+
     pub(super) fn run_jit_self_recursive_int(
         &mut self,
         unit: &RegUnit,
@@ -2578,6 +2668,21 @@ impl RegVm {
                 return Ok(None);
             };
             stack[param] = *value;
+        }
+
+        // Native fast path (native-call-ABI slice 3): compile + run this function
+        // natively with self-recursive `CallSelf`. On a clean completion return the
+        // result; on a deopt (recursion exceeded the native depth cap) or a compile
+        // failure, fall through to the tier-0 scalar executor below, which handles
+        // arbitrary depth without touching the host C stack.
+        #[cfg(feature = "native-jit")]
+        if let Some(bits) = self.try_native_self_recursive_int(
+            unit,
+            function_id,
+            func.as_ref(),
+            &stack[..func.params],
+        ) {
+            return Ok(Some(VmValue::Int(bits)));
         }
 
         #[derive(Debug, Clone, Copy)]

@@ -168,6 +168,27 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_compiled_callees(
     Vec<Rc<String>>,
     bool,
 )> {
+    translate_to_native_jit_with_calls(unit, func, compiled_callees, &HashSet::new())
+}
+
+/// Like [`translate_to_native_jit_with_compiled_callees`], but `self_call_sites`
+/// names the original ips of `CallKnown` instructions that call `func` itself —
+/// emitted as `JitInstr::CallSelf` for native self-recursion (native-call-ABI
+/// slice 3). Such functions use re-run-from-top deopt (`precise_resume_safe` forced
+/// off), so a bail anywhere in the recursion unwinds to the interpreter.
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
+    unit: &RegUnit,
+    func: &RegFunction,
+    compiled_callees: &HashMap<usize, NativeCompiledCallee>,
+    self_call_sites: &HashSet<usize>,
+) -> Option<(
+    vm_jit::JitFunction,
+    NativeTy,
+    Vec<NativeTy>,
+    Vec<Rc<String>>,
+    bool,
+)> {
     use vm_jit::{JitCompare, JitInstr};
 
     if func.captures != 0 {
@@ -177,7 +198,11 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_compiled_callees(
     // native subset via small helper calls still qualifies (the calls vanish).
     // Whole-function native translation: the ENTIRE body runs natively, so every
     // call must be inlinable (`None` region ⇒ whole function in-scope).
-    let preserve_call_known: HashSet<usize> = compiled_callees.keys().copied().collect();
+    let preserve_call_known: HashSet<usize> = compiled_callees
+        .keys()
+        .copied()
+        .chain(self_call_sites.iter().copied())
+        .collect();
     let (code, n_regs, mut ip_map) = native_inline_leaf_calls_preserving_known_calls(
         unit,
         func,
@@ -229,7 +254,8 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_compiled_callees(
     // Every *reachable* instruction must be in the native subset.
     for (i, instr) in code.iter().enumerate() {
         let compiled_call = matches!(instr, RegInstr::CallKnown { .. })
-            && compiled_callees.contains_key(&ip_map[i]);
+            && (compiled_callees.contains_key(&ip_map[i])
+                || self_call_sites.contains(&ip_map[i]));
         if reachable[i] && !compiled_call && !native_subset_instruction(instr) {
             return None;
         }
@@ -296,6 +322,21 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_compiled_callees(
                 RegInstr::Move { dst, src } => native_unify(ty, *dst, *src, c),
                 RegInstr::Return { src } if declared_return_ty.is_some() => {
                     native_set_ty(ty, *src, declared_return_ty.unwrap(), c)
+                }
+                RegInstr::CallKnown {
+                    dst,
+                    args,
+                    mut_args,
+                    ..
+                } if self_call_sites.contains(&ip_map[i]) => {
+                    // Self-recursive call (native-call-ABI slice 3): the self-recursive
+                    // int candidate guarantees Int params + Int return, so the call's
+                    // args and result are all Int.
+                    let mut ok = mut_args.is_empty() && args.len() == func.params;
+                    for arg in args {
+                        ok = ok && native_set_ty(ty, *arg, NativeTy::Int, c);
+                    }
+                    ok && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
                 RegInstr::CallKnown {
                     dst,
@@ -859,6 +900,26 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_compiled_callees(
                         dst: r(*dst),
                         src: r(*src),
                     }
+                }
+            }
+            RegInstr::CallKnown {
+                dst,
+                args,
+                mut_args,
+                ..
+            } if self_call_sites.contains(&ip_map[i]) => {
+                // Self-recursive native call (native-call-ABI slice 3): lower to
+                // `CallSelf`, which the codegen resolves to THIS function's own
+                // FuncId. Scalar params only (no `mut`); arity/types are re-checked by
+                // vm-jit's `validate` against this function's own signature.
+                require(mut_args.is_empty() && args.len() == func.params)?;
+                require(ty[*dst].is_some())?;
+                for arg in args {
+                    require(ty[*arg].is_some())?;
+                }
+                JitInstr::CallSelf {
+                    dst: r(*dst),
+                    args: args.iter().map(|arg| r(*arg)).collect(),
                 }
             }
             RegInstr::CallKnown {
@@ -1631,8 +1692,12 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_compiled_callees(
         code: jit_code,
         cold_blocks: profile_guidance.cold_blocks,
     };
-    let precise_resume_safe =
-        n_regs == func.regs && ip_map.iter().enumerate().all(|(ip, &orig)| ip == orig);
+    // A self-recursive function uses re-run-from-top deopt (its `CallSelf` is
+    // non-chaining and its native frame chain has no bounded deopt payload), so it is
+    // never precise-resumable regardless of ip-map identity.
+    let precise_resume_safe = self_call_sites.is_empty()
+        && n_regs == func.regs
+        && ip_map.iter().enumerate().all(|(ip, &orig)| ip == orig);
     Some((
         jit_fn,
         ret_type,
@@ -2186,7 +2251,8 @@ fn native_jit_written_reg(instr: &vm_jit::JitInstr) -> Option<u32> {
         | vm_jit::JitInstr::ListLenDirect { dst, .. }
         | vm_jit::JitInstr::MatchMapGetInt { value_dst: dst, .. }
         | vm_jit::JitInstr::MatchSortedMapGetInt { value_dst: dst, .. }
-        | vm_jit::JitInstr::CallNative { dst, .. } => Some(*dst),
+        | vm_jit::JitInstr::CallNative { dst, .. }
+        | vm_jit::JitInstr::CallSelf { dst, .. } => Some(*dst),
         _ => None,
     }
 }

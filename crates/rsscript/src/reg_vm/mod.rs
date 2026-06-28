@@ -2179,6 +2179,10 @@ struct NativeState {
     /// re-analyze). Populated lazily the first time the interpreter reaches a header.
     #[allow(clippy::type_complexity)]
     osr_cache: HashMap<usize, Option<OsrEntry>>,
+    /// Native self-recursion cache (native-call-ABI slice 3): per-function
+    /// (`*const RegFunction` key) compiled `CallSelf` entry. `None` = known not
+    /// natively self-recursion-compilable (fall back to the tier-0 scalar executor).
+    self_recursive_native: HashMap<usize, Option<vm_jit::CompiledId>>,
     /// Reusable per-call marshalling scratch buffers (TV2 arg/len words and the
     /// flat-list `Rc` keep-alive set). Held here and `mem::take`n into the call
     /// frame so a hot per-iteration native dispatch (e.g. a tiny leaf/closure
@@ -5725,6 +5729,7 @@ impl NativeState {
             precise_deopt,
             osr_enabled,
             osr_cache: HashMap::new(),
+            self_recursive_native: HashMap::new(),
             scratch_args: Vec::new(),
             scratch_lens: Vec::new(),
             scratch_flat_owned: Vec::new(),

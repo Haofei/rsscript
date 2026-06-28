@@ -1002,6 +1002,19 @@ pub enum JitInstr {
         dst: u32,
         args: Vec<u32>,
     },
+    /// A self-recursive native call: invoke THIS same function (the one being
+    /// compiled). Used because a `CallNative` callee id is not minted until `compile`
+    /// returns, so a self-call cannot name its own id; `CallSelf` resolves to the
+    /// function's own (declared-before-defined) `FuncId`. Semantically a
+    /// `CallNative` to self, but its deopt is **non-chaining**: a self-recursive
+    /// function is compiled with re-run-from-top deopt (its own `precise` is off), so a
+    /// bail anywhere in the recursion unwinds to the interpreter and re-runs from the
+    /// top — avoiding an unbounded deopt payload chain. An **entry depth guard** bails
+    /// before the host C stack can overflow.
+    CallSelf {
+        dst: u32,
+        args: Vec<u32>,
+    },
     /// `Map.get` fused with an Option match for Int-keyed maps. The helper first
     /// tests membership; on `Some`, it loads the Int payload into `value_dst` and
     /// jumps to `some_ip`, otherwise it jumps to `none_ip`.
@@ -1292,6 +1305,7 @@ fn native_scalar_leaf_callable(function: &JitFunction, osr: bool, _returns_handl
                 | JitInstr::ProfiledJumpIfBool { .. }
                 | JitInstr::ProfiledJumpIfIntCompare { .. }
                 | JitInstr::CallNative { .. }
+                | JitInstr::CallSelf { .. }
                 | JitInstr::HostCall { .. }
                 | JitInstr::MemoizedHostCall { .. }
                 | JitInstr::Return { .. }
@@ -1845,6 +1859,18 @@ impl NativeModule {
             .returns
             .push(AbiParam::new(types::I8));
 
+        // Declare BEFORE defining (native-call-ABI slice 2): a `CallSelf` must
+        // reference this function's own `FuncId`, which only exists once the function
+        // is declared. So mint the id now, hand it to `build_function` for self-call
+        // lowering, then define the body against it. (Harmless for non-recursive
+        // functions, which simply never use the id.)
+        let name = format!("rss_jit_{}", self.counter);
+        self.counter += 1;
+        let id = self
+            .module
+            .declare_function(&name, Linkage::Local, &self.ctx.func.signature)
+            .map_err(|e| err("declare", e))?;
+
         let deopt_map = build_function(
             &mut self.ctx.func,
             &mut self.fbctx,
@@ -1854,14 +1880,9 @@ impl NativeModule {
             forced,
             osr_header,
             &native_callees,
+            id,
         )?;
 
-        let name = format!("rss_jit_{}", self.counter);
-        self.counter += 1;
-        let id = self
-            .module
-            .declare_function(&name, Linkage::Local, &self.ctx.func.signature)
-            .map_err(|e| err("declare", e))?;
         self.module
             .define_function(id, &mut self.ctx)
             .map_err(|e| err("define", e))?;
@@ -2585,6 +2606,33 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                     check_reg(*arg)?;
                 }
             }
+            JitInstr::CallSelf { dst, args } => {
+                check_reg(*dst)?;
+                if matches!(class(*dst), JitValueType::FlatInt | JitValueType::FlatFloat) {
+                    return Err(JitError(format!(
+                        "CallSelf result register {dst} is a flat-array register"
+                    )));
+                }
+                // A self-call invokes THIS function: arity and arg/result classes must
+                // match its own signature (params are regs `0..n_params`).
+                if args.len() != program.n_params as usize {
+                    return Err(JitError(format!(
+                        "CallSelf got {} args, function expects {}",
+                        args.len(),
+                        program.n_params
+                    )));
+                }
+                for (i, arg) in args.iter().enumerate() {
+                    check_reg(*arg)?;
+                    let expected = program.reg_types[i];
+                    if class(*arg) != expected {
+                        return Err(JitError(format!(
+                            "CallSelf arg {i}: register {arg} is {:?}, function param is {expected:?}",
+                            class(*arg)
+                        )));
+                    }
+                }
+            }
             JitInstr::MatchMapGetInt {
                 map,
                 key,
@@ -2736,6 +2784,7 @@ fn instr_def(instr: &JitInstr) -> Option<u32> {
         | JitInstr::HostCall { dst, .. }
         | JitInstr::MemoizedHostCall { dst, .. }
         | JitInstr::CallNative { dst, .. }
+        | JitInstr::CallSelf { dst, .. }
         | JitInstr::BitAnd { dst, .. }
         | JitInstr::BitOr { dst, .. }
         | JitInstr::BitXor { dst, .. }
@@ -3369,6 +3418,17 @@ fn arith_cannot_overflow(intervals: &[Interval], instr: &JitInstr) -> bool {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Maximum native call-chain depth for self-recursive functions before the entry
+/// guard bails to the interpreter (native-call-ABI slice 2). Native `CallSelf`
+/// recurses on the host C stack, so this cap must stay well under
+/// `host_stack_size / native_frame_size`: a scalar recursive frame is at most a few
+/// hundred bytes of stack slots, and the host stack is megabytes, so a few hundred
+/// frames is safely below overflow. Recursion deeper than this bails to the
+/// interpreter (which enforces its own `max_depth`), so deep recursion is correct
+/// and crash-free, just not native past the cap.
+const NATIVE_RECURSION_DEPTH_CAP: i64 = 250;
+
+#[allow(clippy::too_many_arguments)]
 fn build_function(
     func: &mut cranelift_codegen::ir::Function,
     fbctx: &mut FunctionBuilderContext,
@@ -3378,6 +3438,7 @@ fn build_function(
     forced: Option<ForcedDeopt>,
     osr_header: Option<u32>,
     native_callees: &[NativeCallee],
+    self_func_id: FuncId,
 ) -> Result<DeoptMap, JitError> {
     // Definite-assignment ("must") sets per instruction, computed once up front so
     // each bail site can record its live (entry-assigned) registers. Purely
@@ -3415,6 +3476,14 @@ fn build_function(
             )
         })
         .collect();
+    // Self-recursive native calls (native-call-ABI slice 2): a `CallSelf` invokes
+    // THIS function via its own (declared-before-defined) `FuncId`. Only declared when
+    // a self-call is present, so non-recursive functions get no extra func ref.
+    let has_call_self = program
+        .code
+        .iter()
+        .any(|instr| matches!(instr, JitInstr::CallSelf { .. }));
+    let self_ref = has_call_self.then(|| module.declare_func_in_func(self_func_id, bcx.func));
 
     let n = program.code.len();
     let n_regs = program.n_regs as usize;
@@ -3630,6 +3699,27 @@ fn build_function(
             bcx.ins().jump(fallback, &[]);
         }
         None => {
+            // Entry depth guard (native-call-ABI slice 2): a self-recursive function
+            // bails to the interpreter (re-run from the top — its precise resume is
+            // off) once the native call depth reaches the cap, BEFORE the host C stack
+            // can overflow. Non-recursive functions emit nothing here.
+            if has_call_self {
+                let cap = bcx.ins().iconst(ptr_ty, NATIVE_RECURSION_DEPTH_CAP);
+                let too_deep =
+                    bcx.ins()
+                        .icmp(IntCC::UnsignedGreaterThanOrEqual, native_call_depth, cap);
+                let cont = bail_if(
+                    &mut bcx,
+                    too_deep,
+                    fallback,
+                    safepoint_ptr,
+                    payload_ptr,
+                    &vars,
+                    &mut next_id,
+                    deopt!(0),
+                );
+                bcx.switch_to_block(cont);
+            }
             bcx.ins().jump(block_for[0].unwrap(), &[]);
         }
     }
@@ -3984,6 +4074,84 @@ fn build_function(
                 );
                 bcx.switch_to_block(cont);
                 let result = if meta.return_type == JitValueType::Float {
+                    bcx.ins().stack_load(types::F64, out_slot, 0)
+                } else {
+                    bcx.ins().stack_load(types::I64, out_slot, 0)
+                };
+                bcx.def_var(reg(*dst), result);
+            }
+            JitInstr::CallSelf { dst, args } => {
+                // Self-recursive native call (native-call-ABI slice 2): invoke THIS
+                // function via its own func ref, sharing the caller's bail/safepoint/
+                // payload pointers (host-helper style). The self-call is NON-chaining:
+                // a self-recursive function uses re-run-from-top deopt, so on any child
+                // bail we propagate to the interpreter rather than reconstructing an
+                // unbounded native frame chain. Forward `depth + 1` so the callee's
+                // entry guard sees a deeper frame; that guard bounds the host stack.
+                let self_ref =
+                    self_ref.expect("self func ref declared when a CallSelf is present");
+                let n_params = program.n_params as usize;
+                let slot_bytes = |words: usize| (words.max(1) * 8) as u32;
+                let args_slot = bcx.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    slot_bytes(n_params),
+                    3,
+                ));
+                let lens_slot = bcx.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    slot_bytes(n_params),
+                    3,
+                ));
+                let out_slot = bcx.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    8,
+                    3,
+                ));
+                let zero_i64 = bcx.ins().iconst(types::I64, 0);
+                for (i_arg, &arg) in args.iter().enumerate() {
+                    let value = bcx.use_var(reg(arg));
+                    bcx.ins().stack_store(value, args_slot, (i_arg as i32) * 8);
+                    // Self params are scalar (validated): no flat-array length needed.
+                    bcx.ins().stack_store(zero_i64, lens_slot, (i_arg as i32) * 8);
+                }
+                let args_ptr_v = bcx.ins().stack_addr(ptr_ty, args_slot, 0);
+                let lens_ptr_v = bcx.ins().stack_addr(ptr_ty, lens_slot, 0);
+                let out_ptr_v = bcx.ins().stack_addr(ptr_ty, out_slot, 0);
+                let nargs_v = bcx.ins().iconst(ptr_ty, n_params as i64);
+                let one_depth = bcx.ins().iconst(ptr_ty, 1);
+                let child_depth = bcx.ins().iadd(native_call_depth, one_depth);
+                let call = bcx.ins().call(
+                    self_ref,
+                    &[
+                        args_ptr_v,
+                        nargs_v,
+                        lens_ptr_v,
+                        host_ctx,
+                        out_ptr_v,
+                        bail_ptr,
+                        safepoint_ptr,
+                        payload_ptr,
+                        child_depth,
+                    ],
+                );
+                // A child guard-bail returns completed=0 WITHOUT setting the shared
+                // bail flag, so detect failure via the return value (covers guard and
+                // helper bails alike). On failure, propagate (re-run-from-top).
+                let completed = bcx.inst_results(call)[0];
+                let one_i8 = bcx.ins().iconst(types::I8, 1);
+                let not_completed = bcx.ins().icmp(IntCC::NotEqual, completed, one_i8);
+                let cont = bail_if(
+                    &mut bcx,
+                    not_completed,
+                    fallback,
+                    safepoint_ptr,
+                    payload_ptr,
+                    &vars,
+                    &mut next_id,
+                    deopt!(i),
+                );
+                bcx.switch_to_block(cont);
+                let result = if program.reg_types[*dst as usize] == JitValueType::Float {
                     bcx.ins().stack_load(types::F64, out_slot, 0)
                 } else {
                     bcx.ins().stack_load(types::I64, out_slot, 0)
@@ -6122,6 +6290,64 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn native_self_recursion_computes_and_caps_depth() {
+        // sum(n) = if n <= 0 { 0 } else { n + sum(n - 1) }, compiled with CallSelf.
+        // reg 0 = n (param); regs 1..3 scratch.
+        let mut m = module();
+        let sum = m
+            .compile(&f(
+                1,
+                4,
+                vec![
+                    JitInstr::LoadInt { dst: 1, value: 0 },
+                    JitInstr::JumpIfIntCompare {
+                        lhs: 0,
+                        rhs: 1,
+                        op: JitCompare::Le,
+                        expected: true,
+                        target: 7,
+                    },
+                    JitInstr::LoadInt { dst: 1, value: 1 },
+                    JitInstr::Sub {
+                        dst: 2,
+                        lhs: 0,
+                        rhs: 1,
+                    },
+                    JitInstr::CallSelf {
+                        dst: 3,
+                        args: vec![2],
+                    },
+                    JitInstr::Add {
+                        dst: 3,
+                        lhs: 0,
+                        rhs: 3,
+                    },
+                    JitInstr::Return { src: 3 },
+                    JitInstr::Return { src: 1 },
+                ],
+            ))
+            .expect("self-recursive function compiles");
+
+        // Shallow recursion (depth < cap) runs fully native and is correct.
+        match m.call(sum, &[5], &[0]) {
+            NativeOutcome::Completed(v) => assert_eq!(v, 15),
+            other => panic!("sum(5) expected Completed(15), got {other:?}"),
+        }
+        match m.call(sum, &[100], &[0]) {
+            NativeOutcome::Completed(v) => assert_eq!(v, 5050),
+            other => panic!("sum(100) expected Completed(5050), got {other:?}"),
+        }
+
+        // Recursion deeper than the cap bails cleanly (NO host-stack overflow / crash):
+        // the entry depth guard deopts, which the host re-runs on the interpreter.
+        let deep = NATIVE_RECURSION_DEPTH_CAP + 50;
+        match m.call(sum, &[deep], &[0]) {
+            NativeOutcome::Deopt { .. } => {}
+            other => panic!("sum(deep) must bail at the depth cap, got {other:?}"),
+        }
     }
 
     #[test]

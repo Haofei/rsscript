@@ -3437,8 +3437,8 @@ fn main() -> Unit {
 /// Negative (non-tail recursion): `fib(n) = fib(n-1) + fib(n-2)` is tree
 /// recursion — the self-call result is consumed by `+`, so it is NOT in tail
 /// position. TCO must NOT fire (the result is observed by an `AddInt`), so `fib`
-/// stays recursive and therefore interpreter-only (`native_calls == 0`). Output
-/// must still match the interpreter.
+/// stays genuinely recursive. It now runs NATIVELY via the native-call ABI's
+/// self-recursion (`CallSelf`), not via TCO. Output must match the interpreter.
 #[cfg(feature = "native-jit")]
 #[test]
 fn tco_leaves_non_tail_tree_recursion_untouched() {
@@ -3466,13 +3466,12 @@ fn main() -> Unit {
         "result must match interpreter"
     );
     assert_eq!(native.stdout.trim(), "6765");
-    assert_eq!(
-        stats.native_calls, 0,
-        "non-tail tree recursion must NOT be made native-eligible by TCO: {stats:?}"
-    );
-    assert_eq!(
-        stats.translated, 0,
-        "non-tail tree recursion must not be translated: {stats:?}"
+    // TCO does not fire (the self-call is not in tail position), so `fib` stays
+    // genuinely recursive — but it now runs NATIVELY via the native-call ABI's
+    // self-recursion (`CallSelf`), not via TCO and not on the interpreter.
+    assert!(
+        stats.native_calls > 0,
+        "non-tail tree recursion should run via native self-recursion: {stats:?}"
     );
 }
 
@@ -4512,4 +4511,113 @@ fn main() -> Unit {
         (Err(_), Err(_)) => { /* both error the same way: OOB raised */ }
         (i, o) => panic!("interpreter/OSR disagree on OOB outcome: interp={i:?} osr={o:?}"),
     }
+}
+
+/// Native-call ABI (slice 3): a non-tail self-recursive `fib` runs NATIVELY (via
+/// `CallSelf`) and is byte-identical to the interpreter. `native_calls > 0` proves
+/// the native self-recursive path actually executed (not the tier-0 scalar executor).
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_self_recursive_fib_runs_native_and_matches_interpreter() {
+    let source = "\
+fn fib(n: Int) -> Int {
+    if n < 2 { return n }
+    return fib(n: read n - 1) + fib(n: read n - 2)
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: fib(n: read 28)))
+    return Unit
+}
+";
+    let interp = common::run_vm_source("native-fib.rss", source, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source("native-fib.rss", source).expect("compile");
+    let (out, stats) = exe
+        .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
+        .expect("native run");
+    assert_eq!(out.stdout.trim_end(), "317811");
+    assert_eq!(interp.stdout, out.stdout, "fib native must match the interpreter");
+    assert!(
+        stats.native_calls > 0,
+        "fib must run via the native self-recursive path: {stats:?}",
+    );
+}
+
+/// Native-call ABI (slice 3): self-recursion DEEPER than the native depth cap must
+/// stay correct — the entry depth guard bails to the interpreter/tier-0 (no host
+/// stack overflow / crash) and the result still matches the interpreter.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_self_recursive_deep_recursion_stays_correct_past_cap() {
+    // Linear sum to depth 1000 (well past the native cap): n + sum(n-1), sum(0)=0.
+    let source = "\
+fn sum(n: Int) -> Int {
+    if n <= 0 { return 0 }
+    return n + sum(n: read n - 1)
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: sum(n: read 1000)))
+    return Unit
+}
+";
+    let interp = common::run_vm_source("native-deep-sum.rss", source, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source("native-deep-sum.rss", source).expect("compile");
+    let (out, _stats) = exe
+        .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
+        .expect("native run (deep recursion bails to fallback, no crash)");
+    assert_eq!(out.stdout.trim_end(), "500500");
+    assert_eq!(
+        interp.stdout, out.stdout,
+        "deep self-recursion past the native cap must stay interpreter-identical"
+    );
+}
+
+/// Native-call ABI (slice 3) — PERFORMANCE PROOF: native self-recursive `fib`
+/// (Cranelift, via `CallSelf`) is materially faster than the non-native baseline.
+/// Times the best of several runs of `fib(32)` on each path and asserts the native
+/// path wins (and actually ran natively). Prints the measured speedup.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_self_recursion_perf_beats_baseline() {
+    let source = "\
+fn fib(n: Int) -> Int {
+    if n < 2 { return n }
+    return fib(n: read n - 1) + fib(n: read n - 2)
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: fib(n: read 32)))
+    return Unit
+}
+";
+    // Confirm it genuinely runs natively (not the tier-0 scalar executor).
+    let exe = rsscript::reg_vm_compile_source("perf-fib.rss", source).expect("compile");
+    let (_o, stats) = exe
+        .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
+        .expect("native run");
+    assert!(stats.native_calls > 0, "fib must run natively: {stats:?}");
+
+    let best = |native: bool| -> std::time::Duration {
+        let mut best = std::time::Duration::MAX;
+        for _ in 0..3 {
+            let exe = rsscript::reg_vm_compile_source("perf-fib.rss", source).expect("compile");
+            let t = std::time::Instant::now();
+            let out = if native {
+                exe.eval_main_with_args_native(std::iter::empty::<String>())
+            } else {
+                exe.eval_main_with_args(std::iter::empty::<String>())
+            }
+            .expect("run");
+            let dt = t.elapsed();
+            assert_eq!(out.stdout.trim_end(), "2178309");
+            best = best.min(dt);
+        }
+        best
+    };
+    let baseline = best(false);
+    let native = best(true);
+    let speedup = baseline.as_secs_f64() / native.as_secs_f64();
+    eprintln!("fib(32): baseline={baseline:?} native={native:?} speedup={speedup:.2}x");
+    assert!(
+        native < baseline,
+        "native self-recursion ({native:?}) must beat the baseline ({baseline:?})"
+    );
 }
