@@ -31,6 +31,10 @@ pub(in crate::reg_vm) enum NativeTy {
     /// TV2: a flat `List<Float>` param read directly in-register. Marshalled as a raw
     /// `*const f64` + element count; falls back if the runtime list isn't `Floats`.
     FlatFloat,
+    /// TV2: a mutable flat `List<Float>` param passed as raw `*mut f64` + element
+    /// count (write-side counterpart of [`FlatFloat`]). Native direct writes are
+    /// protected by the VM-side heap transaction snapshot/rollback path.
+    FlatFloatMut,
 }
 
 #[cfg(feature = "native-jit")]
@@ -42,7 +46,7 @@ impl NativeTy {
             NativeTy::Float => vm_jit::JitValueType::Float,
             NativeTy::Handle => vm_jit::JitValueType::Handle,
             NativeTy::FlatInt | NativeTy::FlatIntMut => vm_jit::JitValueType::FlatInt,
-            NativeTy::FlatFloat => vm_jit::JitValueType::FlatFloat,
+            NativeTy::FlatFloat | NativeTy::FlatFloatMut => vm_jit::JitValueType::FlatFloat,
         }
     }
 }

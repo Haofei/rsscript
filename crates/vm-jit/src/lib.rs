@@ -70,6 +70,10 @@ pub type ListGetIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
 /// `(list_handle, index, value) -> i64`: set an `Int` list element. Returns `0`
 /// on success; a wrong-type/out-of-bounds write signals a bail out-of-band.
 pub type ListSetIntFn = extern "C" fn(HostCtx, i64, i64, i64) -> i64;
+/// `(list_handle, index, value: f64) -> i64`: set a `Float` list element (write-side
+/// counterpart of [`ListGetFloatFn`]). Returns `0` on success; a wrong-type/out-of-
+/// bounds write signals a bail out-of-band.
+pub type ListSetFloatFn = extern "C" fn(HostCtx, i64, i64, f64) -> i64;
 /// `(list_handle, value) -> i64`: push an `Int` list element. Returns `0` on
 /// success; a wrong-type/invalid handle signals a bail out-of-band.
 pub type ListPushIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
@@ -252,6 +256,7 @@ pub struct HostHelpers {
     pub list_is_empty: IsEmptyFn,
     pub list_get_int: ListGetIntFn,
     pub list_set_int: ListSetIntFn,
+    pub list_set_float: ListSetFloatFn,
     pub list_push_int: ListPushIntFn,
     pub list_push_float: ListPushFloatFn,
     pub list_sort_int: ListSortIntFn,
@@ -515,6 +520,14 @@ host_helpers! {
         field: list_set_int,
         symbol: "rss_jit_list_set_int",
         args: [JitValueType::Handle, JitValueType::Int, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::MutatesInput,
+    },
+    ListSetFloat => {
+        field: list_set_float,
+        symbol: "rss_jit_list_set_float",
+        args: [JitValueType::Handle, JitValueType::Int, JitValueType::Float],
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
@@ -1242,6 +1255,17 @@ pub enum JitInstr {
         base: u32,
         index: u32,
     },
+    /// TV2 direct write: `base_ptr[index] = value` where `base` is a mutable flat
+    /// `List<Float>` param (write-side counterpart of [`ListGetFloatDirect`]).
+    /// Bounds-checked against `lens[base]`; OOB bails and the VM-side heap
+    /// transaction restores the list snapshot. `value` is a `Float` register; the
+    /// 8-byte store is identical to the Int form (the f64 value var selects f64).
+    ListSetFloatDirect {
+        dst: u32,
+        base: u32,
+        index: u32,
+        value: u32,
+    },
     /// TV2 direct read: `dst = len` of the flat-array param `base` (a `FlatInt` or
     /// `FlatFloat` register). Reads the length from the param's `lens` slot — no
     /// host call. `dst` is an `Int` register.
@@ -1410,6 +1434,7 @@ fn native_scalar_leaf_callable(function: &JitFunction, osr: bool, _returns_handl
                 | JitInstr::ListGetIntDirect { .. }
                 | JitInstr::ListSetIntDirect { .. }
                 | JitInstr::ListGetFloatDirect { .. }
+                | JitInstr::ListSetFloatDirect { .. }
                 | JitInstr::ListLenDirect { .. }
         ) && !matches!(
             instr,
@@ -2953,6 +2978,17 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                 require_class(*index, JitValueType::Int, "ListGetFloatDirect index")?;
                 require_class(*dst, JitValueType::Float, "ListGetFloatDirect result")?;
             }
+            JitInstr::ListSetFloatDirect {
+                dst,
+                base,
+                index,
+                value,
+            } => {
+                require_flat_param(*base, JitValueType::FlatFloat, "ListSetFloatDirect base")?;
+                require_class(*index, JitValueType::Int, "ListSetFloatDirect index")?;
+                require_class(*value, JitValueType::Float, "ListSetFloatDirect value")?;
+                require_class(*dst, JitValueType::Int, "ListSetFloatDirect result")?;
+            }
             JitInstr::ListLenDirect { dst, base } => {
                 check_reg(*base)?;
                 if !matches!(
@@ -3026,6 +3062,7 @@ fn instr_def(instr: &JitInstr) -> Option<u32> {
         | JitInstr::ListGetIntDirect { dst, .. }
         | JitInstr::ListSetIntDirect { dst, .. }
         | JitInstr::ListGetFloatDirect { dst, .. }
+        | JitInstr::ListSetFloatDirect { dst, .. }
         | JitInstr::ListLenDirect { dst, .. } => Some(*dst),
         JitInstr::Nop
         | JitInstr::Jump { .. }
@@ -4943,6 +4980,31 @@ fn build_function(
                 );
                 bcx.def_var(reg(*dst), result);
             }
+            JitInstr::ListSetFloatDirect {
+                dst,
+                base,
+                index,
+                value,
+            } => {
+                // Same emitter as the Int form: the store is 8 bytes at base+index*8,
+                // and `value`'s register is F64, so it stores an f64.
+                emit_direct_set_int(
+                    &mut bcx,
+                    lens_ptr,
+                    fallback,
+                    safepoint_ptr,
+                    payload_ptr,
+                    &vars,
+                    &mut next_id,
+                    deopt!(i),
+                    reg(*base),
+                    reg(*index),
+                    reg(*value),
+                    *base,
+                );
+                let zero = bcx.ins().iconst(types::I64, 0);
+                bcx.def_var(reg(*dst), zero);
+            }
             JitInstr::ListLenDirect { dst, base } => {
                 // Length lives in the `lens` slot for the base param (param index ==
                 // register index for flat params). No host call, no bail.
@@ -5460,6 +5522,7 @@ mod tests {
     fn host_helper_heap_effect_metadata_covers_transactional_helpers() {
         let mut mutates_input = std::collections::HashSet::from([
             HostHelper::ListSetInt,
+            HostHelper::ListSetFloat,
             HostHelper::ListPushInt,
             HostHelper::ListPushFloat,
             HostHelper::ListSortInt,
@@ -5570,6 +5633,9 @@ mod tests {
         0
     }
     extern "C" fn noop_list_set_int(_ctx: HostCtx, _handle: i64, _index: i64, _value: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_list_set_float(_ctx: HostCtx, _handle: i64, _index: i64, _value: f64) -> i64 {
         0
     }
     extern "C" fn noop_list_push_int(_ctx: HostCtx, _handle: i64, _value: i64) -> i64 {
@@ -5738,6 +5804,7 @@ mod tests {
             list_is_empty: noop_is_empty,
             list_get_int: noop_list_get_int,
             list_set_int: noop_list_set_int,
+            list_set_float: noop_list_set_float,
             list_push_int: noop_list_push_int,
             list_push_float: noop_list_push_float,
             list_sort_int: noop_list_sort_int,

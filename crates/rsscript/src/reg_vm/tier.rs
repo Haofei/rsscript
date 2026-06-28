@@ -230,6 +230,7 @@ fn native_ty_is_callable_param_abi(ty: NativeTy) -> bool {
             | NativeTy::FlatInt
             | NativeTy::FlatIntMut
             | NativeTy::FlatFloat
+            | NativeTy::FlatFloatMut
     )
 }
 
@@ -246,7 +247,12 @@ fn native_call_mut_args_supported(mut_args: &[usize], param_tys: &[NativeTy]) ->
     mut_args.iter().all(|&pos| {
         param_tys
             .get(pos)
-            .is_some_and(|ty| matches!(ty, NativeTy::Handle | NativeTy::FlatIntMut))
+            .is_some_and(|ty| {
+                matches!(
+                    ty,
+                    NativeTy::Handle | NativeTy::FlatIntMut | NativeTy::FlatFloatMut
+                )
+            })
     })
 }
 
@@ -1141,6 +1147,22 @@ impl RegVm {
                     }
                     _ => None,
                 },
+                NativeTy::FlatFloatMut => match value {
+                    VmValue::List(list) => {
+                        let ok = list.borrow().as_floats_slice().is_some();
+                        if ok {
+                            if !jit_snapshot_list_before_write(index as i64, list) {
+                                None
+                            } else {
+                                scratch.flat_mut_owned.push(Rc::clone(list));
+                                Some(0)
+                            }
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                },
             };
             match bits {
                 Some(bits) => scratch.args[index] = bits,
@@ -1213,6 +1235,14 @@ impl RegVm {
                         next += 1;
                         scratch.args[index] = ptr as i64;
                         scratch.lens[index] = len as i64;
+                    }
+                    NativeTy::FlatFloatMut => {
+                        let slice = flat_mut_guards[next_mut]
+                            .as_floats_mut_slice()
+                            .expect("Floats mut pinned");
+                        next_mut += 1;
+                        scratch.args[index] = slice.as_mut_ptr() as i64;
+                        scratch.lens[index] = slice.len() as i64;
                     }
                     _ => {}
                 }
@@ -2104,7 +2134,10 @@ impl RegVm {
             let ty = reg_types.get(reg).copied().unwrap_or(NativeTy::Int);
             if matches!(
                 ty,
-                NativeTy::FlatInt | NativeTy::FlatFloat | NativeTy::FlatIntMut
+                NativeTy::FlatInt
+                    | NativeTy::FlatFloat
+                    | NativeTy::FlatIntMut
+                    | NativeTy::FlatFloatMut
             ) {
                 let want_int = ty == NativeTy::FlatInt;
                 match value {
@@ -2121,7 +2154,7 @@ impl RegVm {
                             // Not the canonical flat kind ⇒ bail this OSR attempt.
                             bail_osr!();
                         }
-                        if ty == NativeTy::FlatIntMut {
+                        if ty == NativeTy::FlatIntMut || ty == NativeTy::FlatFloatMut {
                             if !jit_snapshot_list_before_write(reg as i64, list) {
                                 bail_osr!();
                             }
@@ -2182,14 +2215,16 @@ impl RegVm {
                 let borrowed = list.borrow();
                 match livein.ty {
                     NativeTy::FlatInt | NativeTy::FlatIntMut => borrowed.as_ints_slice().is_some(),
-                    NativeTy::FlatFloat => borrowed.as_floats_slice().is_some(),
+                    NativeTy::FlatFloat | NativeTy::FlatFloatMut => {
+                        borrowed.as_floats_slice().is_some()
+                    }
                     _ => false,
                 }
             };
             if !ok {
                 bail_osr!();
             }
-            if livein.ty == NativeTy::FlatIntMut {
+            if livein.ty == NativeTy::FlatIntMut || livein.ty == NativeTy::FlatFloatMut {
                 if !jit_snapshot_input_list_before_write(&list) {
                     bail_osr!();
                 }
@@ -2291,9 +2326,16 @@ impl RegVm {
         }
         for &(i, reg) in &scratch.flat_mut_slots {
             let guard = flat_mut_guards.get_mut(i).expect("flat mut slot index");
-            let slice = guard.as_ints_mut_slice().expect("Ints mut pinned");
-            let ptr = slice.as_mut_ptr() as i64;
-            let len = slice.len() as i64;
+            // `flat_mut_slots` carries no element kind; pick the buffer by what the
+            // pinned list actually is (an Int-mut or Float-mut flat list).
+            let (ptr, len) = if let Some(slice) = guard.as_ints_mut_slice() {
+                (slice.as_mut_ptr() as i64, slice.len() as i64)
+            } else {
+                let slice = guard
+                    .as_floats_mut_slice()
+                    .expect("flat mut list is Ints or Floats");
+                (slice.as_mut_ptr() as i64, slice.len() as i64)
+            };
             scratch.window[reg] = ptr;
             scratch.lens[reg] = len;
         }
@@ -2421,7 +2463,8 @@ impl RegVm {
                             &NativeTy::Handle
                                 | &NativeTy::FlatInt
                                 | &NativeTy::FlatIntMut
-                                | &NativeTy::FlatFloat,
+                                | &NativeTy::FlatFloat
+                                | &NativeTy::FlatFloatMut,
                         )
                     ) {
                         continue;

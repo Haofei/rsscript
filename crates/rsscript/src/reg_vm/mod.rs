@@ -3557,6 +3557,7 @@ fn jit_host_helpers() -> vm_jit::HostHelpers {
         list_is_empty: rss_jit_list_is_empty,
         list_get_int: rss_jit_list_get_int,
         list_set_int: rss_jit_list_set_int,
+        list_set_float: rss_jit_list_set_float,
         list_push_int: rss_jit_list_push_int,
         list_push_float: rss_jit_list_push_float,
         list_sort_int: rss_jit_list_sort_int,
@@ -4495,6 +4496,43 @@ fn rss_jit_list_set_int_with_ctx(ctx: JitHostCallCtx, handle: i64, index: i64, v
             return None;
         }
         list.checked_set(index, VmValue::Int(value)).ok()?;
+        Some(0)
+    }) {
+        Some(value) => value,
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_list_set_float(
+    _ctx: vm_jit::HostCtx,
+    handle: i64,
+    index: i64,
+    value: f64,
+) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    rss_jit_list_set_float_with_ctx(_ctx, handle, index, value)
+}
+
+/// Set a `Float` list element — the write-side mirror of `rss_jit_list_get_float`.
+/// A non-Float list / out-of-bounds index bails out-of-band.
+#[cfg(feature = "native-jit")]
+fn rss_jit_list_set_float_with_ctx(ctx: JitHostCallCtx, handle: i64, index: i64, value: f64) -> i64 {
+    let Some(index) = usize::try_from(index).ok() else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    match ctx.with_journaled_list_write(handle, |list| {
+        if index >= list.len() {
+            return None;
+        }
+        list.checked_set(index, VmValue::Float(value)).ok()?;
         Some(0)
     }) {
         Some(value) => value,

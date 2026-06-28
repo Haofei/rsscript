@@ -415,6 +415,61 @@ fn main() -> Unit {
     );
 }
 
+/// TV2 mutable-flat-float: an in-place `List.set<Float>` loop over a `mut
+/// List<Float>` param classifies the param as `FlatFloatMut` and lowers the write
+/// to `ListSetFloatDirect` (direct f64 buffer store, bounds-checked) — the write
+/// side of the existing `ListGetFloatDirect`. Backends must agree with the
+/// interpreter and the loop must run natively.
+#[cfg(feature = "native-jit")]
+#[test]
+fn jit_acceptance_runs_flat_float_in_place_set() {
+    let source = "\
+fn scale(xs: mut List<Float>, n: Int) -> Int {
+    let mut i = 0
+    while i < n {
+        let v = List.get<Float>(list: read xs, index: i)
+        let doubled = v * 2.0
+        List.set<Float>(list: mut xs, index: i, value: read doubled)
+        i = i + 1
+    }
+    return 0
+}
+
+fn main() -> Unit {
+    Log.write(message: read \"begin\")
+    let mut xs = List<Float>.new()
+    let mut k = 0
+    while k < 200 {
+        List.push<Float>(list: mut xs, value: read 1.5)
+        k = k + 1
+    }
+    let r = scale(xs: mut xs, n: read 200)
+    let mut total = 0.0
+    let mut j = 0
+    while j < List.len<Float>(list: read xs) {
+        total = total + List.get<Float>(list: read xs, index: j)
+        j = j + 1
+    }
+    Log.write(message: read Float.to_string(value: read total))
+    return Unit
+}
+";
+    let file = "jit-accept-flat-float-set.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "in-place Float list-set must be byte-identical to the interpreter"
+    );
+    assert!(
+        stats.osr_entries > 0,
+        "the hot flat Float list-set loop should OSR natively via ListSetFloatDirect: {stats:?}",
+    );
+}
+
 /// Phase 4 (collection element-type breadth): inserting a `Float` value into a
 /// `Map<Int, Float>` and pushing a `Float` onto a `Deque<Float>`, both through `mut`
 /// parameters, lower to the new `MapInsertFloat` / `DequePushBackFloat` helpers

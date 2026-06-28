@@ -279,6 +279,18 @@ impl TypedVec {
         }
     }
 
+    /// TV2 write path: mutable `f64` buffer of a `Floats` list — the write-side
+    /// mirror of [`as_ints_mut_slice`](Self::as_ints_mut_slice). Native marshalling
+    /// converts this slice to a raw pointer while holding the mutable borrow and
+    /// protecting the write with the heap transaction rollback guard.
+    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    pub(crate) fn as_floats_mut_slice(&mut self) -> Option<&mut [f64]> {
+        match self {
+            TypedVec::Floats(v) => Some(v.as_mut_slice()),
+            _ => None,
+        }
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
     }

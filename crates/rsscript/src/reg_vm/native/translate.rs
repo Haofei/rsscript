@@ -22,7 +22,12 @@ fn native_call_mut_args_supported(mut_args: &[usize], param_tys: &[NativeTy]) ->
     mut_args.iter().all(|&pos| {
         param_tys
             .get(pos)
-            .is_some_and(|ty| matches!(ty, NativeTy::Handle | NativeTy::FlatIntMut))
+            .is_some_and(|ty| {
+                matches!(
+                    ty,
+                    NativeTy::Handle | NativeTy::FlatIntMut | NativeTy::FlatFloatMut
+                )
+            })
     })
 }
 
@@ -112,7 +117,10 @@ fn native_set_compiled_call_arg_ty(
     match (ty[reg], expected) {
         (
             Some(NativeTy::Handle),
-            NativeTy::FlatInt | NativeTy::FlatIntMut | NativeTy::FlatFloat,
+            NativeTy::FlatInt
+            | NativeTy::FlatIntMut
+            | NativeTy::FlatFloat
+            | NativeTy::FlatFloatMut,
         ) if reg < n_params => {
             ty[reg] = Some(expected);
             *changed = true;
@@ -129,7 +137,9 @@ fn native_set_list_read_base_ty(
     changed: &mut bool,
 ) -> bool {
     match ty[reg] {
-        Some(NativeTy::FlatInt | NativeTy::FlatIntMut | NativeTy::FlatFloat) => true,
+        Some(
+            NativeTy::FlatInt | NativeTy::FlatIntMut | NativeTy::FlatFloat | NativeTy::FlatFloatMut,
+        ) => true,
         _ => native_set_ty(ty, reg, NativeTy::Handle, changed),
     }
 }
@@ -653,6 +663,9 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                         S::Flat(NativeTy::FlatIntMut) if kind == NativeTy::FlatInt => {
                             S::Flat(NativeTy::FlatIntMut)
                         }
+                        S::Flat(NativeTy::FlatFloatMut) if kind == NativeTy::FlatFloat => {
+                            S::Flat(NativeTy::FlatFloatMut)
+                        }
                         _ => S::Disq,
                     };
                 }
@@ -660,6 +673,9 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                     st[*list] = match st[*list] {
                         S::Unseen | S::Flat(NativeTy::FlatInt) | S::Flat(NativeTy::FlatIntMut) => {
                             S::Flat(NativeTy::FlatIntMut)
+                        }
+                        S::Flat(NativeTy::FlatFloat) | S::Flat(NativeTy::FlatFloatMut) => {
+                            S::Flat(NativeTy::FlatFloatMut)
                         }
                         _ => S::Disq,
                     };
@@ -695,7 +711,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
     for &payload in &scalar_payload_regs {
         if matches!(
             ty[payload],
-            Some(NativeTy::Handle | NativeTy::FlatInt | NativeTy::FlatIntMut | NativeTy::FlatFloat)
+            Some(NativeTy::Handle | NativeTy::FlatInt | NativeTy::FlatIntMut | NativeTy::FlatFloat | NativeTy::FlatFloatMut)
         ) {
             return None;
         }
@@ -894,7 +910,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
     let flat_param = |reg: usize| {
         matches!(
             ty[reg],
-            Some(NativeTy::FlatInt | NativeTy::FlatIntMut | NativeTy::FlatFloat)
+            Some(NativeTy::FlatInt | NativeTy::FlatIntMut | NativeTy::FlatFloat | NativeTy::FlatFloatMut)
         ) && reg < func.params
     };
     let r = |reg: usize| reg as u32;
@@ -1380,9 +1396,18 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 index,
                 value,
             } => {
-                require(int(*index) && int(*value) && int(*dst))?;
+                require(int(*index) && int(*dst) && (int_or_free(*value) || float(*value)))?;
                 if ty[*list] == Some(NativeTy::FlatIntMut) {
+                    require(int_or_free(*value))?;
                     JitInstr::ListSetIntDirect {
+                        dst: r(*dst),
+                        base: r(*list),
+                        index: r(*index),
+                        value: r(*value),
+                    }
+                } else if ty[*list] == Some(NativeTy::FlatFloatMut) {
+                    require(float(*value))?;
+                    JitInstr::ListSetFloatDirect {
                         dst: r(*dst),
                         base: r(*list),
                         index: r(*index),
@@ -1390,8 +1415,13 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                     }
                 } else {
                     require(handle_reg(*list))?;
+                    let helper = if float(*value) {
+                        vm_jit::HostHelper::ListSetFloat
+                    } else {
+                        vm_jit::HostHelper::ListSetInt
+                    };
                     JitInstr::HostCall {
-                        helper: vm_jit::HostHelper::ListSetInt,
+                        helper,
                         dst: r(*dst),
                         args: vec![
                             vm_jit::HostArg::Reg(r(*list)),
@@ -1727,7 +1757,10 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                         NativeTy::Bool => bool_ty(*arg),
                         NativeTy::Float => float(*arg),
                         NativeTy::Handle => handle_reg(*arg),
-                        NativeTy::FlatInt | NativeTy::FlatIntMut | NativeTy::FlatFloat => false,
+                        NativeTy::FlatInt
+                        | NativeTy::FlatIntMut
+                        | NativeTy::FlatFloat
+                        | NativeTy::FlatFloatMut => false,
                     })?;
                 }
                 require(match spec.result_ty {
@@ -1735,7 +1768,10 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                     NativeTy::Bool => bool_ty(*dst),
                     NativeTy::Float => float(*dst),
                     NativeTy::Handle => handle_reg(*dst),
-                    NativeTy::FlatInt | NativeTy::FlatIntMut | NativeTy::FlatFloat => false,
+                    NativeTy::FlatInt
+                        | NativeTy::FlatIntMut
+                        | NativeTy::FlatFloat
+                        | NativeTy::FlatFloatMut => false,
                 })?;
                 if spec.produces_output_handle() {
                     require(escaping_output_handle[*dst])?;
@@ -1763,7 +1799,10 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                         NativeTy::Bool => bool_ty(*arg),
                         NativeTy::Float => float(*arg),
                         NativeTy::Handle => handle_reg(*arg),
-                        NativeTy::FlatInt | NativeTy::FlatIntMut | NativeTy::FlatFloat => false,
+                        NativeTy::FlatInt
+                        | NativeTy::FlatIntMut
+                        | NativeTy::FlatFloat
+                        | NativeTy::FlatFloatMut => false,
                     })?;
                 }
                 require(match spec.result_ty {
@@ -1771,7 +1810,10 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                     NativeTy::Bool => bool_ty(*dst),
                     NativeTy::Float => float(*dst),
                     NativeTy::Handle => handle_reg(*dst),
-                    NativeTy::FlatInt | NativeTy::FlatIntMut | NativeTy::FlatFloat => false,
+                    NativeTy::FlatInt
+                        | NativeTy::FlatIntMut
+                        | NativeTy::FlatFloat
+                        | NativeTy::FlatFloatMut => false,
                 })?;
                 if spec.produces_output_handle() {
                     require(escaping_output_handle[*dst])?;
@@ -3449,6 +3491,9 @@ fn translate_osr_loop_inner(
                             S::Flat(NativeTy::FlatIntMut) if kind == NativeTy::FlatInt => {
                                 S::Flat(NativeTy::FlatIntMut)
                             }
+                            S::Flat(NativeTy::FlatFloatMut) if kind == NativeTy::FlatFloat => {
+                                S::Flat(NativeTy::FlatFloatMut)
+                            }
                             _ => S::Disq,
                         };
                     }
@@ -3459,6 +3504,13 @@ fn translate_osr_loop_inner(
                             S::Unseen
                             | S::Flat(NativeTy::FlatInt)
                             | S::Flat(NativeTy::FlatIntMut) => S::Flat(NativeTy::FlatIntMut),
+                            _ => S::Disq,
+                        };
+                    } else if ty[*value] == Some(NativeTy::Float) {
+                        st[*list] = match st[*list] {
+                            S::Unseen
+                            | S::Flat(NativeTy::FlatFloat)
+                            | S::Flat(NativeTy::FlatFloatMut) => S::Flat(NativeTy::FlatFloatMut),
                             _ => S::Disq,
                         };
                     } else {
@@ -3506,11 +3558,16 @@ fn translate_osr_loop_inner(
             {
                 if *existing == kind
                     || (*existing == NativeTy::FlatIntMut && kind == NativeTy::FlatInt)
+                    || (*existing == NativeTy::FlatFloatMut && kind == NativeTy::FlatFloat)
                 {
                     continue;
                 }
                 if *existing == NativeTy::FlatInt && kind == NativeTy::FlatIntMut {
                     *existing = NativeTy::FlatIntMut;
+                    continue;
+                }
+                if *existing == NativeTy::FlatFloat && kind == NativeTy::FlatFloatMut {
+                    *existing = NativeTy::FlatFloatMut;
                     continue;
                 }
                 continue;
@@ -3685,7 +3742,7 @@ fn translate_osr_loop_inner(
     let flat_reg = |reg: usize| {
         matches!(
             ty[reg],
-            Some(NativeTy::FlatInt | NativeTy::FlatIntMut | NativeTy::FlatFloat)
+            Some(NativeTy::FlatInt | NativeTy::FlatIntMut | NativeTy::FlatFloat | NativeTy::FlatFloatMut)
         )
     };
     let derived_livein = |reg: usize, _base: usize, slot: usize| {
@@ -4084,9 +4141,18 @@ fn translate_osr_loop_inner(
                 index,
                 value,
             } => {
-                require(int(*index) && int(*value) && int(*dst))?;
+                require(int(*index) && int(*dst) && (int_or_free(*value) || float(*value)))?;
                 if ty[*list] == Some(NativeTy::FlatIntMut) {
+                    require(int_or_free(*value))?;
                     JitInstr::ListSetIntDirect {
+                        dst: r(*dst),
+                        base: r(*list),
+                        index: r(*index),
+                        value: r(*value),
+                    }
+                } else if ty[*list] == Some(NativeTy::FlatFloatMut) {
+                    require(float(*value))?;
+                    JitInstr::ListSetFloatDirect {
                         dst: r(*dst),
                         base: r(*list),
                         index: r(*index),
@@ -4094,8 +4160,13 @@ fn translate_osr_loop_inner(
                     }
                 } else {
                     require(handle_reg(*list))?;
+                    let helper = if float(*value) {
+                        vm_jit::HostHelper::ListSetFloat
+                    } else {
+                        vm_jit::HostHelper::ListSetInt
+                    };
                     JitInstr::HostCall {
-                        helper: vm_jit::HostHelper::ListSetInt,
+                        helper,
                         dst: r(*dst),
                         args: vec![
                             vm_jit::HostArg::Reg(r(*list)),
@@ -4386,7 +4457,10 @@ fn translate_osr_loop_inner(
                         NativeTy::Bool => bool_ty(*arg),
                         NativeTy::Float => float(*arg),
                         NativeTy::Handle => handle_reg(*arg),
-                        NativeTy::FlatInt | NativeTy::FlatIntMut | NativeTy::FlatFloat => false,
+                        NativeTy::FlatInt
+                        | NativeTy::FlatIntMut
+                        | NativeTy::FlatFloat
+                        | NativeTy::FlatFloatMut => false,
                     })?;
                 }
                 require(match spec.result_ty {
@@ -4394,7 +4468,10 @@ fn translate_osr_loop_inner(
                     NativeTy::Bool => bool_ty(*dst),
                     NativeTy::Float => float(*dst),
                     NativeTy::Handle => handle_reg(*dst),
-                    NativeTy::FlatInt | NativeTy::FlatIntMut | NativeTy::FlatFloat => false,
+                    NativeTy::FlatInt
+                        | NativeTy::FlatIntMut
+                        | NativeTy::FlatFloat
+                        | NativeTy::FlatFloatMut => false,
                 })?;
                 JitInstr::HostCall {
                     helper: spec.helper,
@@ -4419,7 +4496,10 @@ fn translate_osr_loop_inner(
                         NativeTy::Bool => bool_ty(*arg),
                         NativeTy::Float => float(*arg),
                         NativeTy::Handle => handle_reg(*arg),
-                        NativeTy::FlatInt | NativeTy::FlatIntMut | NativeTy::FlatFloat => false,
+                        NativeTy::FlatInt
+                        | NativeTy::FlatIntMut
+                        | NativeTy::FlatFloat
+                        | NativeTy::FlatFloatMut => false,
                     })?;
                 }
                 require(match spec.result_ty {
@@ -4427,7 +4507,10 @@ fn translate_osr_loop_inner(
                     NativeTy::Bool => bool_ty(*dst),
                     NativeTy::Float => float(*dst),
                     NativeTy::Handle => handle_reg(*dst),
-                    NativeTy::FlatInt | NativeTy::FlatIntMut | NativeTy::FlatFloat => false,
+                    NativeTy::FlatInt
+                        | NativeTy::FlatIntMut
+                        | NativeTy::FlatFloat
+                        | NativeTy::FlatFloatMut => false,
                 })?;
                 JitInstr::HostCall {
                     helper: spec.helper,
