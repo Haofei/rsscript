@@ -4759,6 +4759,44 @@ fn main() -> Unit {
     );
 }
 
+/// Mutual recursion generalized to scalar Float (the Phase-2 treatment applied to
+/// the group path): a FLOAT-returning mutually-recursive cycle now runs natively via
+/// the co-compiled group, with Float params/return marshalled via to_bits/from_bits.
+/// Before, the group analysis admitted only Int/Bool members. Byte-identical to the
+/// interpreter (incl. float formatting) and `native_calls > 0`.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_mutual_recursion_float_runs_native() {
+    let source = "\
+fn fa(n: Int) -> Float {
+    if n <= 0 { return 1.0 }
+    return 1.5 + fb(n: n - 1)
+}
+fn fb(n: Int) -> Float {
+    if n <= 0 { return 2.0 }
+    return 0.5 + fa(n: n - 1)
+}
+fn main() -> Unit {
+    Log.write(message: read Float.to_string(value: read fa(n: 11)))
+    Log.write(message: read Float.to_string(value: read fb(n: 10)))
+    return Unit
+}
+";
+    let interp = common::run_vm_source("native-mutual-float.rss", source, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source("native-mutual-float.rss", source).expect("compile");
+    let (out, stats) = exe
+        .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
+        .expect("native run");
+    assert_eq!(
+        interp.stdout, out.stdout,
+        "Float mutual recursion native must be byte-identical to the interpreter"
+    );
+    assert!(
+        stats.native_calls > 0,
+        "Float mutual recursion should run via the native group path: {stats:?}",
+    );
+}
+
 /// Native-call ABI (slice 4): MUTUAL recursion `is_even`/`is_odd` runs NATIVELY via
 /// the co-compiled group (CallGroup), byte-identical to the interpreter.
 /// `native_calls > 0` proves the native group path executed.

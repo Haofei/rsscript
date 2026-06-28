@@ -2679,12 +2679,15 @@ impl RegVm {
         }
     }
 
-    /// Native mutual recursion (native-call-ABI slice 4): if `function_id` is part of
-    /// a mutually-recursive scalar-`Int` cycle, compile the whole group together
-    /// (declare the cycle, then define each) and dispatch the called member natively.
-    /// Returns the result on a clean completion, or `None` to fall back to the
-    /// interpreter (not eligible, or a deopt incl. the entry depth-cap bail). The
-    /// group is compiled once and every member cached.
+    /// Native mutual recursion (native-call-ABI slice 4; generalized to scalar Float):
+    /// if `function_id` is part of a mutually-recursive cycle of scalar functions,
+    /// compile the whole group together (declare the cycle, then define each) and
+    /// dispatch the called member natively. Arg/return marshalling follows each
+    /// member's compiled scalar parameter/return `NativeTy`s (Int/Bool/Float — Float
+    /// via `to_bits`/`from_bits`), exactly like `try_native_self_recursive`. Returns
+    /// the result on a clean completion, or `None` to fall back to the interpreter
+    /// (not eligible, non-scalar param/return, or a deopt incl. the depth-cap bail).
+    /// The group is compiled once and every member cached.
     #[cfg(feature = "native-jit")]
     pub(super) fn try_native_mutual_recursive_int(
         &mut self,
@@ -2698,10 +2701,10 @@ impl RegVm {
             return None;
         }
         let key = Rc::as_ptr(func) as usize;
-        // Resolve the called member's native id and its return kind (Int → wrap the
-        // result `i64` as `VmValue::Int`, Bool → as `VmValue::Bool`). Cached per
-        // member; compiling any member compiles the whole group.
-        let (id, returns_bool) = {
+        // Resolve the called member's native id, its parameter types (to marshal each
+        // scalar arg) and its return type (to wrap the i64 result). Cached per member;
+        // compiling any member compiles the whole group.
+        let (id, param_tys, ret) = {
             let native = self.native.as_mut()?;
             if native.force_bail
                 || native.forced_safepoint.is_some()
@@ -2710,9 +2713,11 @@ impl RegVm {
                 return None;
             }
             if let Some(cached) = native.mutual_recursive_native.get(&key) {
-                (*cached)?
+                cached.clone()?
             } else {
-                let group = native_recursive_int_group(unit, function_id);
+                let group = native_recursive_group(unit, function_id);
+                let is_scalar =
+                    |t: &NativeTy| matches!(t, NativeTy::Int | NativeTy::Bool | NativeTy::Float);
                 let compiled = group.as_ref().and_then(|scc| {
                     let index_of: std::collections::HashMap<usize, u32> = scc
                         .iter()
@@ -2720,7 +2725,7 @@ impl RegVm {
                         .map(|(i, &fid)| (fid, i as u32))
                         .collect();
                     let mut jit_funcs = Vec::with_capacity(scc.len());
-                    let mut member_returns_bool = Vec::with_capacity(scc.len());
+                    let mut member_sigs = Vec::with_capacity(scc.len());
                     for &member in scc {
                         let mfunc = unit.functions.get(member)?;
                         let group_call_sites: std::collections::HashMap<usize, u32> = mfunc
@@ -2736,32 +2741,34 @@ impl RegVm {
                                 _ => None,
                             })
                             .collect();
-                        let (jit_fn, ret, _p, _l, _pr) = translate_to_native_jit_with_calls(
+                        let (jit_fn, ret, param_tys, _l, _pr) = translate_to_native_jit_with_calls(
                             unit,
                             mfunc,
                             &std::collections::HashMap::new(),
                             &std::collections::HashSet::new(),
                             &group_call_sites,
                         )?;
-                        // i64-scalar returns only: Int or Bool (both wrap from i64).
-                        let returns_bool = match ret {
-                            NativeTy::Int => false,
-                            NativeTy::Bool => true,
-                            _ => return None,
-                        };
-                        member_returns_bool.push(returns_bool);
+                        // Scalar-only ABI: params and return must be Int/Bool/Float
+                        // (each wraps to/from an i64 slot). Heap params/returns decline.
+                        if !is_scalar(&ret) || !param_tys.iter().all(is_scalar) {
+                            return None;
+                        }
+                        member_sigs.push((param_tys, ret));
                         jit_funcs.push(jit_fn);
                     }
                     let ids = native.module.compile_recursive_group(&jit_funcs).ok()?;
-                    Some((ids, member_returns_bool))
+                    Some((ids, member_sigs))
                 });
                 match (group, compiled) {
-                    (Some(scc), Some((ids, member_returns_bool))) if ids.len() == scc.len() => {
+                    (Some(scc), Some((ids, member_sigs))) if ids.len() == scc.len() => {
                         let mut mine = None;
                         for (i, &member) in scc.iter().enumerate() {
                             let mkey = Rc::as_ptr(&unit.functions[member]) as usize;
-                            let entry = (ids[i], member_returns_bool[i]);
-                            native.mutual_recursive_native.insert(mkey, Some(entry));
+                            let (param_tys, ret) = member_sigs[i].clone();
+                            let entry = (ids[i], param_tys, ret);
+                            native
+                                .mutual_recursive_native
+                                .insert(mkey, Some(entry.clone()));
                             if member == function_id {
                                 mine = Some(entry);
                             }
@@ -2786,12 +2793,20 @@ impl RegVm {
                 }
             }
         };
+        if param_tys.len() != args.len() {
+            return None;
+        }
         let mut int_args = Vec::with_capacity(args.len());
-        for &arg in args {
-            // Scalar value args marshal to `i64` (Bool as 0/1, like the native ABI).
-            let bits = match self.reg(caller_base + arg) {
-                VmValue::Int(value) => *value,
-                VmValue::Bool(value) => *value as i64,
+        for (&arg, pty) in args.iter().zip(param_tys.iter()) {
+            // Scalar value args marshal to an i64 slot, driven by the compiled
+            // parameter type (Float reinterpreted via `to_bits`; an Int value for a
+            // Float param converted first) — identical to the self-recursion path.
+            let bits = match (pty, self.reg(caller_base + arg)) {
+                (NativeTy::Float, VmValue::Float(f)) => f.to_bits() as i64,
+                (NativeTy::Float, VmValue::Int(i)) => (*i as f64).to_bits() as i64,
+                (_, VmValue::Int(i)) => *i,
+                (_, VmValue::Bool(b)) => i64::from(*b),
+                (_, VmValue::Float(f)) => f.to_bits() as i64,
                 _ => return None,
             };
             int_args.push(bits);
@@ -2812,10 +2827,10 @@ impl RegVm {
                 {
                     native.stats.native_calls += 1;
                 }
-                Some(if returns_bool {
-                    VmValue::Bool(bits != 0)
-                } else {
-                    VmValue::Int(bits)
+                Some(match ret {
+                    NativeTy::Float => VmValue::Float(f64::from_bits(bits as u64)),
+                    NativeTy::Bool => VmValue::Bool(bits != 0),
+                    _ => VmValue::Int(bits),
                 })
             }
             _ => {
@@ -3304,11 +3319,14 @@ fn compute_recursive_int_member_inner(
 }
 
 /// The mutually-recursive group (call-graph SCC) containing `function_id`, if it is
-/// a cycle of >= 2 all-scalar-`Int` functions whose every `CallKnown` targets a
-/// group member (native-call-ABI slice 4). Returned sorted; `None` for non-cyclic
-/// functions and pure self-recursion (handled by the self-recursive path).
+/// a cycle of >= 2 functions (native-call-ABI slice 4). Returned sorted; `None` for
+/// non-cyclic functions and pure self-recursion (handled by the self-recursive
+/// path). Per-member native eligibility (scalar params/return, native-subset body)
+/// is NOT decided here — the caller's `translate_to_native_jit_with_calls` per member
+/// is the single eligibility gate, so the group admits any cycle the general native
+/// path can compile (Int/Bool/Float bodies, members that also call inlinable leaves).
 #[cfg(feature = "native-jit")]
-fn native_recursive_int_group(unit: &RegUnit, function_id: usize) -> Option<Vec<usize>> {
+fn native_recursive_group(unit: &RegUnit, function_id: usize) -> Option<Vec<usize>> {
     use std::collections::HashSet;
     let callees = |fid: usize| -> Vec<usize> {
         unit.functions.get(fid).map_or_else(Vec::new, |f| {
@@ -3346,15 +3364,6 @@ fn native_recursive_int_group(unit: &RegUnit, function_id: usize) -> Option<Vec<
     scc.sort_unstable();
     if scc.len() < 2 {
         return None;
-    }
-    let group: HashSet<usize> = scc.iter().copied().collect();
-    for &member in &scc {
-        // Mutual recursion falls back to the full interpreter (not the i64 tier-0
-        // executor), so any scalar value return kind (Int or Bool) is admissible.
-        match compute_recursive_int_member_inner(unit, member, &group) {
-            Some(ScalarSlotKind::Int | ScalarSlotKind::Bool) => {}
-            _ => return None,
-        }
     }
     Some(scc)
 }
