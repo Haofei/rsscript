@@ -1319,6 +1319,19 @@ impl RegVm {
                                 self.set_reg(base + *dst, value);
                                 continue;
                             }
+                            // Native mutual recursion (native-call-ABI slice 4): a
+                            // member of a mutually-recursive scalar-Int cycle runs via
+                            // the co-compiled native group; deep recursion falls back.
+                            #[cfg(feature = "native-jit")]
+                            if self.jit_enabled
+                                && mut_args.is_empty()
+                                && self.limits.mem_budget.is_none()
+                                && let Some(value) =
+                                    self.try_native_mutual_recursive_int(unit, *callee_id, base, args)
+                            {
+                                self.set_reg(base + *dst, value);
+                                continue;
+                            }
                             let callee = Rc::clone(&unit.functions[*callee_id]);
                             self.prepare_frame(next_base, callee.regs)?;
                             for (index, reg) in args.iter().enumerate() {

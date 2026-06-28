@@ -4621,3 +4621,37 @@ fn main() -> Unit {
         "native self-recursion ({native:?}) must beat the baseline ({baseline:?})"
     );
 }
+
+/// Native-call ABI (slice 4): MUTUAL recursion `is_even`/`is_odd` runs NATIVELY via
+/// the co-compiled group (CallGroup), byte-identical to the interpreter.
+/// `native_calls > 0` proves the native group path executed.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_mutual_recursion_runs_native_and_matches_interpreter() {
+    let source = "\
+fn is_even(n: Int) -> Int {
+    if n < 1 { return 1 }
+    return is_odd(n: read n - 1)
+}
+fn is_odd(n: Int) -> Int {
+    if n < 1 { return 0 }
+    return is_even(n: read n - 1)
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: is_even(n: read 20)))
+    Log.write(message: read String.from_int(value: is_odd(n: read 21)))
+    return Unit
+}
+";
+    let interp = common::run_vm_source("native-mutual.rss", source, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source("native-mutual.rss", source).expect("compile");
+    let (out, stats) = exe
+        .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
+        .expect("native run");
+    assert_eq!(out.stdout.trim_end(), "1\n1");
+    assert_eq!(interp.stdout, out.stdout, "mutual recursion native must match interpreter");
+    assert!(
+        stats.native_calls > 0,
+        "is_even/is_odd must run via the native mutual-recursion group: {stats:?}",
+    );
+}

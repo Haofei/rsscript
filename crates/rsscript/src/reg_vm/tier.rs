@@ -2608,6 +2608,7 @@ impl RegVm {
                             func,
                             &std::collections::HashMap::new(),
                             &self_call_sites,
+                            &std::collections::HashMap::new(),
                         )
                         .and_then(|(jit_fn, ret, _params, _literals, _precise)| {
                             // This scalar fast path returns an `Int`; other return
@@ -2639,6 +2640,135 @@ impl RegVm {
                     native.stats.native_calls += 1;
                 }
                 Some(bits)
+            }
+            _ => {
+                heap_tx.abort();
+                None
+            }
+        }
+    }
+
+    /// Native mutual recursion (native-call-ABI slice 4): if `function_id` is part of
+    /// a mutually-recursive scalar-`Int` cycle, compile the whole group together
+    /// (declare the cycle, then define each) and dispatch the called member natively.
+    /// Returns the result on a clean completion, or `None` to fall back to the
+    /// interpreter (not eligible, or a deopt incl. the entry depth-cap bail). The
+    /// group is compiled once and every member cached.
+    #[cfg(feature = "native-jit")]
+    pub(super) fn try_native_mutual_recursive_int(
+        &mut self,
+        unit: &RegUnit,
+        function_id: usize,
+        caller_base: usize,
+        args: &[usize],
+    ) -> Option<VmValue> {
+        let func = unit.functions.get(function_id)?;
+        if args.len() != func.params {
+            return None;
+        }
+        let key = Rc::as_ptr(func) as usize;
+        let id = {
+            let native = self.native.as_mut()?;
+            if native.force_bail
+                || native.forced_safepoint.is_some()
+                || native.force_all_safepoints
+            {
+                return None;
+            }
+            if let Some(cached) = native.mutual_recursive_native.get(&key) {
+                (*cached)?
+            } else {
+                let group = native_recursive_int_group(unit, function_id);
+                let compiled = group.as_ref().and_then(|scc| {
+                    let index_of: std::collections::HashMap<usize, u32> = scc
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &fid)| (fid, i as u32))
+                        .collect();
+                    let mut jit_funcs = Vec::with_capacity(scc.len());
+                    for &member in scc {
+                        let mfunc = unit.functions.get(member)?;
+                        let group_call_sites: std::collections::HashMap<usize, u32> = mfunc
+                            .code
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(ip, instr)| match instr {
+                                RegInstr::CallKnown {
+                                    function, mut_args, ..
+                                } if mut_args.is_empty() && index_of.contains_key(function) => {
+                                    Some((ip, index_of[function]))
+                                }
+                                _ => None,
+                            })
+                            .collect();
+                        let (jit_fn, ret, _p, _l, _pr) = translate_to_native_jit_with_calls(
+                            unit,
+                            mfunc,
+                            &std::collections::HashMap::new(),
+                            &std::collections::HashSet::new(),
+                            &group_call_sites,
+                        )?;
+                        if ret != NativeTy::Int {
+                            return None;
+                        }
+                        jit_funcs.push(jit_fn);
+                    }
+                    native.module.compile_recursive_group(&jit_funcs).ok()
+                });
+                match (group, compiled) {
+                    (Some(scc), Some(ids)) if ids.len() == scc.len() => {
+                        let mut my_id = None;
+                        for (i, &member) in scc.iter().enumerate() {
+                            let mkey = Rc::as_ptr(&unit.functions[member]) as usize;
+                            native.mutual_recursive_native.insert(mkey, Some(ids[i]));
+                            if member == function_id {
+                                my_id = Some(ids[i]);
+                            }
+                        }
+                        my_id?
+                    }
+                    (group, _) => {
+                        // Cache ineligibility (for the whole detected group, or this key).
+                        match group {
+                            Some(scc) => {
+                                for member in scc {
+                                    let mkey = Rc::as_ptr(&unit.functions[member]) as usize;
+                                    native.mutual_recursive_native.insert(mkey, None);
+                                }
+                            }
+                            None => {
+                                native.mutual_recursive_native.insert(key, None);
+                            }
+                        }
+                        return None;
+                    }
+                }
+            }
+        };
+        let mut int_args = Vec::with_capacity(args.len());
+        for &arg in args {
+            let VmValue::Int(value) = self.reg(caller_base + arg) else {
+                return None;
+            };
+            int_args.push(*value);
+        }
+        let lens = vec![0i64; int_args.len()];
+        let mut heap_tx = JitNativeCallFrame::begin();
+        let outcome = {
+            let native = self.native.as_ref()?;
+            native
+                .module
+                .call_with_host_ctx(id, &int_args, &lens, heap_tx.host_ctx())
+        };
+        match outcome {
+            vm_jit::NativeOutcome::Completed(bits) => {
+                heap_tx.commit_scalar_with_writebacks(&[]);
+                if let Some(native) = self.native.as_mut()
+                    && native.collect_stats
+                {
+                    native.stats.native_calls += 1;
+                }
+                Some(VmValue::Int(bits))
             }
             _ => {
                 heap_tx.abort();
@@ -2931,12 +3061,18 @@ fn propagate_same_kind(kinds: &mut [ScalarSlotKind], dst: usize, src: usize) -> 
 }
 
 fn compute_self_recursive_int_jit_candidate(unit: &RegUnit, function_id: usize) -> bool {
-    compute_self_recursive_int_jit_candidate_inner(unit, function_id).unwrap_or(false)
+    let group: std::collections::HashSet<usize> = std::iter::once(function_id).collect();
+    compute_recursive_int_member_inner(unit, function_id, &group).unwrap_or(false)
 }
 
-fn compute_self_recursive_int_jit_candidate_inner(
+/// Scalar-`Int` recursion analysis for one member of a recursive `group`: the body
+/// must be all-scalar-`Int`, return `Int`, and every `CallKnown` must target a group
+/// member (self for self-recursion, or any sibling for mutual recursion) with scalar
+/// args and matching arity. `group = {function_id}` is the self-recursive case.
+fn compute_recursive_int_member_inner(
     unit: &RegUnit,
     function_id: usize,
+    group: &std::collections::HashSet<usize>,
 ) -> Option<bool> {
     let Some(func) = unit.functions.get(function_id) else {
         return Some(false);
@@ -3011,9 +3147,9 @@ fn compute_self_recursive_int_jit_candidate_inner(
                     function,
                     args,
                     mut_args,
-                } if *function == function_id
+                } if group.contains(function)
                     && mut_args.is_empty()
-                    && args.len() == func.params =>
+                    && unit.functions.get(*function).is_some_and(|f| f.params == args.len()) =>
                 {
                     saw_self_call = true;
                     let mut local_changed =
@@ -3047,6 +3183,59 @@ fn compute_self_recursive_int_jit_candidate_inner(
                 .take(func.params)
                 .all(|kind| *kind == ScalarSlotKind::Int),
     )
+}
+
+/// The mutually-recursive group (call-graph SCC) containing `function_id`, if it is
+/// a cycle of >= 2 all-scalar-`Int` functions whose every `CallKnown` targets a
+/// group member (native-call-ABI slice 4). Returned sorted; `None` for non-cyclic
+/// functions and pure self-recursion (handled by the self-recursive path).
+#[cfg(feature = "native-jit")]
+fn native_recursive_int_group(unit: &RegUnit, function_id: usize) -> Option<Vec<usize>> {
+    use std::collections::HashSet;
+    let callees = |fid: usize| -> Vec<usize> {
+        unit.functions.get(fid).map_or_else(Vec::new, |f| {
+            f.code
+                .iter()
+                .filter_map(|instr| match instr {
+                    RegInstr::CallKnown { function, .. } => Some(*function),
+                    _ => None,
+                })
+                .collect()
+        })
+    };
+    // Forward-reachable from `function_id` via CallKnown edges.
+    let mut fwd = HashSet::new();
+    let mut stack = vec![function_id];
+    while let Some(f) = stack.pop() {
+        if fwd.insert(f) {
+            stack.extend(callees(f));
+        }
+    }
+    // Backward-reachable: functions that can transitively reach `function_id`.
+    let mut bwd = HashSet::new();
+    let mut stack = vec![function_id];
+    while let Some(target) = stack.pop() {
+        if bwd.insert(target) {
+            for caller in 0..unit.functions.len() {
+                if callees(caller).contains(&target) {
+                    stack.push(caller);
+                }
+            }
+        }
+    }
+    // The SCC is the intersection (mutually reachable with `function_id`).
+    let mut scc: Vec<usize> = fwd.intersection(&bwd).copied().collect();
+    scc.sort_unstable();
+    if scc.len() < 2 {
+        return None;
+    }
+    let group: HashSet<usize> = scc.iter().copied().collect();
+    for &member in &scc {
+        if !compute_recursive_int_member_inner(unit, member, &group).unwrap_or(false) {
+            return None;
+        }
+    }
+    Some(scc)
 }
 
 fn scalar_reachable_instructions(code: &[RegInstr]) -> Vec<bool> {

@@ -2183,6 +2183,11 @@ struct NativeState {
     /// (`*const RegFunction` key) compiled `CallSelf` entry. `None` = known not
     /// natively self-recursion-compilable (fall back to the tier-0 scalar executor).
     self_recursive_native: HashMap<usize, Option<vm_jit::CompiledId>>,
+    /// Native mutual-recursion cache (native-call-ABI slice 4): per-function
+    /// (`*const RegFunction` key) compiled group-member `CompiledId`. Compiling any
+    /// member of a recursive cycle compiles+caches the whole group. `None` = known
+    /// not a natively-compilable mutual-recursion member (fall back to interpreter).
+    mutual_recursive_native: HashMap<usize, Option<vm_jit::CompiledId>>,
     /// Reusable per-call marshalling scratch buffers (TV2 arg/len words and the
     /// flat-list `Rc` keep-alive set). Held here and `mem::take`n into the call
     /// frame so a hot per-iteration native dispatch (e.g. a tiny leaf/closure
@@ -5730,6 +5735,7 @@ impl NativeState {
             osr_enabled,
             osr_cache: HashMap::new(),
             self_recursive_native: HashMap::new(),
+            mutual_recursive_native: HashMap::new(),
             scratch_args: Vec::new(),
             scratch_lens: Vec::new(),
             scratch_flat_owned: Vec::new(),

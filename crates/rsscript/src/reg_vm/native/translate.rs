@@ -168,20 +168,24 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_compiled_callees(
     Vec<Rc<String>>,
     bool,
 )> {
-    translate_to_native_jit_with_calls(unit, func, compiled_callees, &HashSet::new())
+    translate_to_native_jit_with_calls(unit, func, compiled_callees, &HashSet::new(), &HashMap::new())
 }
 
 /// Like [`translate_to_native_jit_with_compiled_callees`], but `self_call_sites`
 /// names the original ips of `CallKnown` instructions that call `func` itself —
 /// emitted as `JitInstr::CallSelf` for native self-recursion (native-call-ABI
-/// slice 3). Such functions use re-run-from-top deopt (`precise_resume_safe` forced
-/// off), so a bail anywhere in the recursion unwinds to the interpreter.
+/// slice 3) — and `group_call_sites` maps the original ip of a `CallKnown` to a
+/// *mutually-recursive group member* to that member's group index, emitted as
+/// `JitInstr::CallGroup` (slice 4). Such functions use re-run-from-top deopt
+/// (`precise_resume_safe` forced off), so a bail anywhere in the recursion unwinds
+/// to the interpreter.
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
     unit: &RegUnit,
     func: &RegFunction,
     compiled_callees: &HashMap<usize, NativeCompiledCallee>,
     self_call_sites: &HashSet<usize>,
+    group_call_sites: &HashMap<usize, u32>,
 ) -> Option<(
     vm_jit::JitFunction,
     NativeTy,
@@ -202,6 +206,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
         .keys()
         .copied()
         .chain(self_call_sites.iter().copied())
+        .chain(group_call_sites.keys().copied())
         .collect();
     let (code, n_regs, mut ip_map) = native_inline_leaf_calls_preserving_known_calls(
         unit,
@@ -255,7 +260,8 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
     for (i, instr) in code.iter().enumerate() {
         let compiled_call = matches!(instr, RegInstr::CallKnown { .. })
             && (compiled_callees.contains_key(&ip_map[i])
-                || self_call_sites.contains(&ip_map[i]));
+                || self_call_sites.contains(&ip_map[i])
+                || group_call_sites.contains_key(&ip_map[i]));
         if reachable[i] && !compiled_call && !native_subset_instruction(instr) {
             return None;
         }
@@ -333,6 +339,17 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                     // int candidate guarantees Int params + Int return, so the call's
                     // args and result are all Int.
                     let mut ok = mut_args.is_empty() && args.len() == func.params;
+                    for arg in args {
+                        ok = ok && native_set_ty(ty, *arg, NativeTy::Int, c);
+                    }
+                    ok && native_set_ty(ty, *dst, NativeTy::Int, c)
+                }
+                RegInstr::CallKnown {
+                    dst, args, mut_args, ..
+                } if group_call_sites.contains_key(&ip_map[i]) => {
+                    // Mutually-recursive group call (native-call-ABI slice 4): the
+                    // mutual-recursive int group is all-scalar-Int, so args/result Int.
+                    let mut ok = mut_args.is_empty();
                     for arg in args {
                         ok = ok && native_set_ty(ty, *arg, NativeTy::Int, c);
                     }
@@ -918,6 +935,26 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                     require(ty[*arg].is_some())?;
                 }
                 JitInstr::CallSelf {
+                    dst: r(*dst),
+                    args: args.iter().map(|arg| r(*arg)).collect(),
+                }
+            }
+            RegInstr::CallKnown {
+                dst,
+                args,
+                mut_args,
+                ..
+            } if group_call_sites.contains_key(&ip_map[i]) => {
+                // Mutually-recursive native call (native-call-ABI slice 4): lower to
+                // `CallGroup` targeting the member's group index. Scalar params only.
+                let group_index = group_call_sites[&ip_map[i]];
+                require(mut_args.is_empty())?;
+                require(ty[*dst].is_some())?;
+                for arg in args {
+                    require(ty[*arg].is_some())?;
+                }
+                JitInstr::CallGroup {
+                    group_index,
                     dst: r(*dst),
                     args: args.iter().map(|arg| r(*arg)).collect(),
                 }
@@ -1696,6 +1733,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
     // non-chaining and its native frame chain has no bounded deopt payload), so it is
     // never precise-resumable regardless of ip-map identity.
     let precise_resume_safe = self_call_sites.is_empty()
+        && group_call_sites.is_empty()
         && n_regs == func.regs
         && ip_map.iter().enumerate().all(|(ip, &orig)| ip == orig);
     Some((
