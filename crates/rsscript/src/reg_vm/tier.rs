@@ -1482,16 +1482,12 @@ impl RegVm {
     pub(super) fn resolve_osr_candidate(&self, func: &RegFunction) -> Option<usize> {
         match func.osr_state.get() {
             OsrTrigger::Unknown => {
-                // Preemption + memory parity with `try_osr`: native loops poll
-                // neither the step budget nor the cancel flag, and an allocating OSR
-                // loop runs off the `mem_budget` meter (§7.1 rule 9), so a function
-                // can never OSR while any of them is armed. Resolve to `NotCandidate`
-                // WITHOUT caching it permanently — a later run without the budget must
-                // re-resolve, so leave the state `Unknown` (return `None` this frame).
-                if self.limits.step_budget.is_some()
-                    || self.limits.cancel.is_some()
-                    || self.limits.mem_budget.is_some()
-                {
+                // Memory parity with `try_osr` (J0.5): `step_budget`/`cancel` are now
+                // enforced inside the armed OSR variant, so they no longer block OSR.
+                // `mem_budget` still does — native allocations are not yet charged — and
+                // we resolve to `None` WITHOUT caching it permanently, so a later run
+                // without `mem_budget` re-resolves (state stays `Unknown` this frame).
+                if self.limits.mem_budget.is_some() {
                     return None;
                 }
                 // Cheap candidacy pre-check. Use the unified scorer even when the
@@ -1521,15 +1517,21 @@ impl RegVm {
 
     #[cfg(feature = "native-jit")]
     pub(super) fn try_osr(&mut self, func: &RegFunction, base: usize, header_ip: usize) -> bool {
-        // Preemption + memory parity (as in `try_native`): native loops poll neither
-        // the step budget nor the cancel flag, and an allocating OSR loop runs off the
-        // `mem_budget` meter (§7.1 rule 9), so refuse OSR while any is armed.
-        if self.limits.step_budget.is_some()
-            || self.limits.cancel.is_some()
-            || self.limits.mem_budget.is_some()
-        {
+        // Memory parity: an allocating OSR loop runs off the `mem_budget` meter (§7.1
+        // rule 9), and native allocations are not yet charged (J0.5 mem accounting is
+        // future / tied to S4), so refuse OSR while `mem_budget` is armed. `step_budget`
+        // and `cancel` are NOT refused anymore: J0.5 emits the per-instruction step
+        // accumulator + per-header `step_budget` test + `cancel` poll directly in the
+        // armed OSR variant (Exec-Spec §6.2, "enforce or be ineligible" — the *enforce*
+        // branch), bailing to the interpreter which remains the sole limit authority.
+        if self.limits.mem_budget.is_some() {
             return false;
         }
+        // Which limit checks the armed OSR variant must emit (and the host must wire a
+        // limits cell for). Constant for the whole eval (`VmLimits` is fixed), so the
+        // per-function `osr_cache` never mixes armed/unarmed variants.
+        let emit_step = self.limits.step_budget.is_some();
+        let emit_cancel = self.limits.cancel.is_some();
         if let Some(native) = self.native.as_mut() {
             native.osr_dynamic_bail = false;
         }
@@ -1655,7 +1657,7 @@ impl RegVm {
                             )| {
                                 let n_jit_regs = jit_fn.n_regs as usize;
                                 let heap_input_regs = osr_heap_input_regs(&jit_fn);
-                                match native.module.compile_osr(&jit_fn, lp.header as u32) {
+                                match native.module.compile_osr(&jit_fn, lp.header as u32, emit_step, emit_cancel) {
                                     Ok(id) => {
                                         let verify_native =
                                             cfg!(debug_assertions) || jit_native_verify_is_strict();
@@ -2022,7 +2024,7 @@ impl RegVm {
                                 .and_then(|(jit_fn, params, derived_liveins, scalar_fields, reg_types, written_regs, string_literals)| {
                                     let n_jit_regs = jit_fn.n_regs as usize;
                                     let heap_input_regs = osr_heap_input_regs(&jit_fn);
-                                    match native.module.compile_osr(&jit_fn, lp.header as u32) {
+                                    match native.module.compile_osr(&jit_fn, lp.header as u32, emit_step, emit_cancel) {
                                         Ok(id) => {
                                             let verify_native =
                                                 cfg!(debug_assertions) || jit_native_verify_is_strict();
@@ -2368,6 +2370,20 @@ impl RegVm {
         }
 
         // Phase 3: run the OSR loop body natively.
+        // J0.5: seed the limits cell for an armed variant. `emit_step`/`emit_cancel`
+        // were fixed at the top of this call from `self.limits`; the compiled variant
+        // matches (same eval-constant limits), so a non-null cell is required exactly
+        // when armed. `steps` flows in here and back out below into `self.steps`.
+        let armed = emit_step || emit_cancel;
+        if armed {
+            let step_budget = self.limits.step_budget.map_or(-1, |b| b as i64);
+            let cancel_addr = self
+                .limits
+                .cancel
+                .as_ref()
+                .map_or(0, |flag| std::sync::Arc::as_ptr(flag) as i64);
+            jit_set_limits_cell(self.steps as i64, step_budget, cancel_addr);
+        }
         let Some(native_ref) = self.native.as_ref() else {
             heap_tx.abort();
             drop(flat_guards);
@@ -2378,16 +2394,32 @@ impl RegVm {
         let collect_stats = native_ref.collect_stats;
         let started = collect_stats.then(std::time::Instant::now);
         let _literal_guard = jit_install_string_literals(&string_literals);
-        let result = native_ref.module.call_with_host_ctx(
-            id,
-            &scratch.window,
-            &scratch.lens,
-            heap_tx.host_ctx(),
-        );
+        let result = if armed {
+            native_ref.module.call_with_limits(
+                id,
+                &scratch.window,
+                &scratch.lens,
+                heap_tx.host_ctx(),
+                jit_limits_cell_ptr(),
+            )
+        } else {
+            native_ref.module.call_with_host_ctx(
+                id,
+                &scratch.window,
+                &scratch.lens,
+                heap_tx.host_ctx(),
+            )
+        };
         let elapsed = started.map(|started| started.elapsed().as_nanos());
         // The pinned borrows are no longer needed once the native call returns.
         drop(flat_guards);
         drop(flat_mut_guards);
+        // J0.5: fold the steps native paid (clean completion OR deopt both wrote it
+        // back) into the interpreter's counter, so resuming the interpreter continues
+        // the single tick stream with no double-/under-count.
+        if emit_step {
+            self.steps = jit_limits_cell_steps() as u64;
+        }
         if let Some(native) = self.native.as_mut() {
             if let Some(elapsed) = elapsed {
                 native.stats.run_nanos += elapsed;

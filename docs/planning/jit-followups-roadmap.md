@@ -31,7 +31,7 @@ JIT 性能有两条轴:
 | 3 | 轴 B:热堆读 host-call 边界内联 | 中 | 中 | 无 | 堆读现比 Rust 慢 ~13×,瓶颈是每次跨调用边界 |
 | 4 | ~~嵌套循环 OSR~~ ✅**已支持** | 中–高 | 中 | 无 | OSR 管线本就多循环感知(`detect_natural_loops`→`select_osr_candidate_loop`);嵌套/兄弟循环已可 OSR(新增回归测试坐实) |
 | 5 | ~~**J0.4 S1–S3:仅分配的 native 堆写**~~ ✅**已完成** | 中–高 | **最高** | 无(不需 J0.1/J0.5) | 解锁 alloc-bound(string/json/集合构造);10 个 `AllocatesResult` helper 已落地并验证 |
-| 6 | J0.5:生成代码内 `VmLimits` 记账 | 高 | 中 | 无(S4 的前置) | 让 native 在 budget/cancel armed 时也能跑(沙箱场景) |
+| 6 | 🔶J0.5:生成代码内 `VmLimits` 记账(**step+cancel 已落地 OSR 层**;mem future) | 高 | 中 | 无(S4 的前置) | OSR 在 step/cancel armed 时也能跑(沙箱场景);mem 记账仍缺 |
 | 7 | 完整 J0.1:内联帧链 + 堆值重建 | 很高 | 高(地基) | 无(S4 的前置) | 精确 deopt 的硬核;输出测不出,需定向 repro |
 | 8 | **J0.4 S4:任意别名堆就地写** | 很高 | 高/广 | J0.1 + J0.5 | "随便写"的通用解锁;最后的大魔王 |
 | 9 | async / 挂起函数 native | 很高 | 类相关 | — | 架构性;park/resume × native,可能不做 |
@@ -124,11 +124,19 @@ variant / live-out 的 OSR。
   **S1 一落地,`mem_budget` 就必须加入 native eligibility 判定。**
 - **建议:** 这是接下来**最该先做**的一项——单点解锁面最大,且不依赖最难的 deopt 重建。
 
-### 6. J0.5:生成代码内 `VmLimits` 记账 —— 难度高,ROI 中(S4 前置)
-- **现状:** 现在 native 在 `step_budget`/`mem_budget`/`cancel` **armed 时直接拒绝**(Model-A 兜底)。
-- **做法:** 在生成代码里 inline 地 tick/poll 这些预算(`VmLimitsSnapshot` 机制),让 native 在受限下也能跑。
-- **为什么重要:** rss 本质是**沙箱**,"受限执行下也要快"是真实场景;同时它是 S4 的前置。
-- **风险:** 记账必须跨 bail 边界精确(不重不漏),且不能拖垮热循环。
+### 6. J0.5:生成代码内 `VmLimits` 记账 —— 🔶 **step + cancel 已落地(OSR 层);mem 仍 future**
+- **现状(2026-06-28):** **OSR 层的 armed 变体现在在生成代码里强制 `step_budget` 和 `cancel`**
+  (Exec-Spec §6.2 的*enforce*分支)。每条指令 +1 tick(与解释器 `tick()` 1:1,因为 `resume_ip`
+  就是共享的指令索引);在**每个循环 header**(= 每条 backedge,含嵌套循环)测 `steps > step_budget`
+  并 poll `cancel`;在**每个 native 出口**(干净 `Return` + 共享 `fallback` deopt 边)把 `steps`
+  写回宿主 cell;trip 时 bail(resume_ip = header)回解释器由它报错——一条跨 native/解释器的
+  tick 流,不重不漏,`cancel` 只观测不回滚。ABI:新增 `limits_ptr` 参数指向宿主
+  `[steps, step_budget, cancel_addr]` cell(`call_with_limits`);未 armed 变体忽略它(与改前字节一致,
+  热路径零开销)。`try_osr`/`resolve_osr_candidate` 现在**仅在 `mem_budget` armed 时**拒绝 OSR。
+- **仍缺:** ① native 分配对 `mem_budget` 的记账(绑 S4;故 `mem_budget` armed 时 OSR 仍拒绝);
+  ② 把强制扩展到整函数/递归层(目前仍 Model-A 拒绝)。
+- **测试:** `native_osr_completes_under_generous_step_budget`(正,`osr_entries>0`)、
+  `native_osr_trips_tight_step_budget`、`native_osr_cancel_flag_preempts`;hostile limits 套件全绿。
 
 ### 7. 完整 J0.1:内联帧链 + 堆值/live-out 重建 —— 难度很高,ROI 高(地基),S4 前置
 - **缺口三块:** ① 内联 leaf 区域内 deopt 的**逻辑帧链**状态图格式;② **堆 payload 的 variant/Result**

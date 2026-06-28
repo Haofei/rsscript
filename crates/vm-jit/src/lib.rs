@@ -1438,6 +1438,7 @@ type CompiledAbi = unsafe extern "C" fn(
     *mut i64,
     *mut i64,
     usize,
+    *const i64,
 ) -> u8;
 
 #[derive(Debug)]
@@ -1938,7 +1939,7 @@ impl NativeModule {
 
     /// Compile `function` to native code and return a handle to call it.
     pub fn compile(&mut self, function: &JitFunction) -> Result<CompiledId, JitError> {
-        self.compile_inner(function, None, None)
+        self.compile_inner(function, None, None, LimitChecks::default())
     }
 
     /// Compile `function` while forcing the safepoint with id `force_site` (sites are
@@ -1956,7 +1957,12 @@ impl NativeModule {
         function: &JitFunction,
         force_site: u32,
     ) -> Result<CompiledId, JitError> {
-        self.compile_inner(function, Some(ForcedDeopt::Site(force_site)), None)
+        self.compile_inner(
+            function,
+            Some(ForcedDeopt::Site(force_site)),
+            None,
+            LimitChecks::default(),
+        )
     }
 
     /// Compile `function` while forcing every generated safepoint to bail
@@ -1968,7 +1974,7 @@ impl NativeModule {
         &mut self,
         function: &JitFunction,
     ) -> Result<CompiledId, JitError> {
-        self.compile_inner(function, Some(ForcedDeopt::All), None)
+        self.compile_inner(function, Some(ForcedDeopt::All), None, LimitChecks::default())
     }
 
     /// Compile `function` as an **OSR (on-stack replacement) entry** at `header_ip`
@@ -1989,12 +1995,28 @@ impl NativeModule {
     /// register's bit pattern in its slot), and the caller passes `n_args = n_regs`
     /// with an `n_regs`-long `lens` slice. An out-of-range `header_ip` (no leader
     /// block) is rejected as a [`JitError`].
+    ///
+    /// `step_limit`/`cancel_armed` request in-generated-code `VmLimits` enforcement
+    /// (J0.5, Exec-Spec §6.2): when set, the loop ticks `step_budget` per instruction
+    /// and tests it (plus polls `cancel`) at every header, bailing to the interpreter
+    /// — which then enforces the limit. The caller must pass a non-null `limits` cell
+    /// pointer at call time (see [`call_with_host_ctx`](Self::call_with_host_ctx)).
     pub fn compile_osr(
         &mut self,
         function: &JitFunction,
         header_ip: u32,
+        step_limit: bool,
+        cancel_armed: bool,
     ) -> Result<CompiledId, JitError> {
-        self.compile_inner(function, None, Some(header_ip))
+        self.compile_inner(
+            function,
+            None,
+            Some(header_ip),
+            LimitChecks {
+                step: step_limit,
+                cancel: cancel_armed,
+            },
+        )
     }
 
     fn compile_inner(
@@ -2002,6 +2024,7 @@ impl NativeModule {
         function: &JitFunction,
         forced: Option<ForcedDeopt>,
         osr_header: Option<u32>,
+        limit_checks: LimitChecks,
     ) -> Result<CompiledId, JitError> {
         // `JitFunction` is a public, versioned surface: a malformed producer must
         // fail cleanly here, not panic inside `build_function` (out-of-range index)
@@ -2063,6 +2086,7 @@ impl NativeModule {
             &native_callees,
             id,
             &[],
+            limit_checks,
         )?;
 
         self.module
@@ -2174,6 +2198,7 @@ impl NativeModule {
                 &native_callees,
                 func_ids[i],
                 &group,
+                LimitChecks::default(),
             )?;
             self.module
                 .define_function(func_ids[i], &mut self.ctx)
@@ -2336,6 +2361,22 @@ impl NativeModule {
         self.call_with_host_ctx(id, args, lens, 0)
     }
 
+    /// Run with a host context (see [`call_with_host_ctx`](Self::call_with_host_ctx))
+    /// and a non-null J0.5 limits cell. `limits_ptr` must point at a live, immovable
+    /// `[i64; 3]` = `[steps, step_budget, cancel_addr]` for the call's duration: an
+    /// armed OSR variant reads `step_budget`/`cancel_addr`, accumulates into and writes
+    /// back `steps`. Unarmed variants ignore it (so [`call`](Self::call) passes null).
+    pub fn call_with_limits(
+        &self,
+        id: CompiledId,
+        args: &[i64],
+        lens: &[i64],
+        host_ctx: HostCtx,
+        limits_ptr: *const i64,
+    ) -> NativeOutcome {
+        self.call_inner(id, args, lens, host_ctx, limits_ptr)
+    }
+
     fn decode_deopt_live(site: &DeoptSite, payload_base: usize, payload: &[i64]) -> Vec<DeoptReg> {
         site.live
             .iter()
@@ -2412,6 +2453,17 @@ impl NativeModule {
         args: &[i64],
         lens: &[i64],
         host_ctx: HostCtx,
+    ) -> NativeOutcome {
+        self.call_inner(id, args, lens, host_ctx, std::ptr::null())
+    }
+
+    fn call_inner(
+        &self,
+        id: CompiledId,
+        args: &[i64],
+        lens: &[i64],
+        host_ctx: HostCtx,
+        limits_ptr: *const i64,
     ) -> NativeOutcome {
         // Reject an id from a different module and an out-of-range index: either
         // would invoke the wrong (or no) function. Falling back is always safe.
@@ -2499,6 +2551,9 @@ impl NativeModule {
                             // Top-level native entry: the native call chain starts at
                             // depth 0 (native-call-ABI slice 1).
                             0,
+                            // J0.5 limits cell (null for unarmed variants, which ignore
+                            // it). The generated armed OSR variant reads/writes it.
+                            limits_ptr,
                         )
                     };
                     if completed != 0 && bail.get() == 0 {
@@ -3791,8 +3846,13 @@ fn arith_cannot_overflow(intervals: &[Interval], instr: &JitInstr) -> bool {
 #[allow(clippy::too_many_arguments)]
 /// Push the `CompiledAbi` parameter/return signature onto `func` (args ptr, n_args,
 /// lens ptr, host ctx, out ptr, bail ptr, safepoint ptr, deopt payload ptr, native
-/// call depth → i8 completed). Shared by `compile_inner` and `compile_recursive_group`
-/// so the ABI is defined in exactly one place.
+/// call depth, limits ptr → i8 completed). Shared by `compile_inner` and
+/// `compile_recursive_group` so the ABI is defined in exactly one place.
+///
+/// `limits ptr` (J0.5) points at a host-owned 3-word `[i64; 3]` cell
+/// `[steps, step_budget, cancel_addr]` used only by an armed OSR variant to enforce
+/// `step_budget`/`cancel` in generated code; unarmed compiles ignore it, and callers
+/// of unarmed functions may pass a null pointer.
 fn push_compiled_abi_signature(
     func: &mut cranelift_codegen::ir::Function,
     ptr_ty: cranelift_codegen::ir::Type,
@@ -3806,6 +3866,7 @@ fn push_compiled_abi_signature(
     func.signature.params.push(AbiParam::new(ptr_ty)); // safepoint id out ptr
     func.signature.params.push(AbiParam::new(ptr_ty)); // deopt payload out ptr
     func.signature.params.push(AbiParam::new(ptr_ty)); // native call depth (slice 1)
+    func.signature.params.push(AbiParam::new(ptr_ty)); // limits ptr (J0.5)
     func.signature.returns.push(AbiParam::new(types::I8));
 }
 
@@ -3858,6 +3919,27 @@ fn native_recursion_depth_cap(program: &JitFunction) -> i64 {
     )
 }
 
+/// In-generated-code `VmLimits` enforcement requested for this compile (J0.5,
+/// Exec-Spec §6.2). Each flag is set only when the corresponding limit is armed AND
+/// the slice can enforce it; an all-`false` value reproduces the byte-identical
+/// pre-J0.5 codegen. Only the OSR loop tier sets either flag today.
+#[derive(Clone, Copy, Default)]
+struct LimitChecks {
+    /// Emit a per-instruction step accumulator, a `steps > step_budget` test on every
+    /// loop backedge, and a steps write-back on every native exit (clean + deopt), so
+    /// a native loop trips `step_budget` exactly like the interpreter would.
+    step: bool,
+    /// Emit a `cancel` poll (load the host `AtomicBool`) on every loop backedge and
+    /// bail to the interpreter when set — the interpreter then re-polls and errors.
+    cancel: bool,
+}
+
+impl LimitChecks {
+    fn any(self) -> bool {
+        self.step || self.cancel
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_function(
     func: &mut cranelift_codegen::ir::Function,
@@ -3870,6 +3952,7 @@ fn build_function(
     native_callees: &[NativeCallee],
     self_func_id: FuncId,
     group: &[NativeGroupMember],
+    limit_checks: LimitChecks,
 ) -> Result<DeoptMap, JitError> {
     // Definite-assignment ("must") sets per instruction, computed once up front so
     // each bail site can record its live (entry-assigned) registers. Purely
@@ -3958,6 +4041,27 @@ fn build_function(
     // caller. Forwarded as `depth + 1` to native callees so a future entry guard can
     // bail before host-stack overflow; not yet checked.
     let native_call_depth = params[8];
+    // Limits cell pointer (J0.5): `[steps, step_budget, cancel_addr]`. Read only by an
+    // armed OSR variant; forwarded verbatim to native callees so the whole native
+    // chain shares one accounting/cancel cell.
+    let limits_ptr = params[9];
+    // J0.5 limit-tracking variables, materialized only for an armed compile so an
+    // unarmed function emits byte-identical code. `steps_var` accumulates the
+    // interpreter-equivalent instruction count (one tick per instruction); `limit_var`
+    // holds the `step_budget`; `cancel_addr_var` holds the host `AtomicBool` address.
+    let steps_var = limit_checks.step.then(|| bcx.declare_var(types::I64));
+    let limit_var = limit_checks.step.then(|| bcx.declare_var(types::I64));
+    let cancel_addr_var = limit_checks.cancel.then(|| bcx.declare_var(ptr_ty));
+    if let (Some(steps_var), Some(limit_var)) = (steps_var, limit_var) {
+        let steps0 = bcx.ins().load(types::I64, MemFlags::trusted(), limits_ptr, 0);
+        bcx.def_var(steps_var, steps0);
+        let limit0 = bcx.ins().load(types::I64, MemFlags::trusted(), limits_ptr, 8);
+        bcx.def_var(limit_var, limit0);
+    }
+    if let Some(cancel_addr_var) = cancel_addr_var {
+        let caddr = bcx.ins().load(ptr_ty, MemFlags::trusted(), limits_ptr, 16);
+        bcx.def_var(cancel_addr_var, caddr);
+    }
     // Running per-site bail-id counter. Starts at 1 (0 is reserved = no bail);
     // `bail_if` post-increments it so every guard/bail site gets a stable id.
     let mut next_id: i64 = 1;
@@ -4174,6 +4278,28 @@ fn build_function(
         }
     }
 
+    // J0.5: loop headers = any instruction that is the target of a backward control
+    // transfer (`target <= source`). Each loop's header dominates its body and runs
+    // once per iteration, so emitting the budget/cancel check at every header entry is
+    // exactly "check on every backedge" — and it naturally covers nested/inner loops
+    // (each inner header is itself a backward target). Only computed for an armed
+    // compile; otherwise no checks are emitted.
+    let backedge_target = if limit_checks.any() {
+        let mut bt = vec![false; n];
+        for src in 0..n {
+            for target in successors(program, src) {
+                // The fall-through successor (`src + 1`) is always forward, so a
+                // `target <= src` is exactly a backward edge — its target is a header.
+                if target <= src {
+                    bt[target] = true;
+                }
+            }
+        }
+        bt
+    } else {
+        Vec::new()
+    };
+
     let mut terminated = true;
     for i in 0..n {
         if let Some(b) = block_for[i] {
@@ -4182,6 +4308,51 @@ fn build_function(
             }
             bcx.switch_to_block(b);
             terminated = false;
+        }
+        // J0.5 step accounting: tick once per instruction, before its body — exactly
+        // where the interpreter calls `tick()` (one tick per dispatched instruction),
+        // so the native count matches the interpreter's stream tick-for-tick.
+        if let Some(steps_var) = steps_var {
+            let s = bcx.use_var(steps_var);
+            let s1 = bcx.ins().iadd_imm(s, 1);
+            bcx.def_var(steps_var, s1);
+        }
+        // J0.5 limit check at every loop header (= once per iteration of every loop,
+        // incl. nested). On `steps > step_budget` or a set `cancel` flag, deopt with
+        // `resume_ip = i` (re-enter the loop on the interpreter, which then enforces
+        // the limit as the single source of truth). Steps are written back on the
+        // shared fallback edge below, so the interpreter resumes with the exact count.
+        if !backedge_target.is_empty() && backedge_target[i] {
+            let mut trip: Option<Value> = None;
+            if let (Some(steps_var), Some(limit_var)) = (steps_var, limit_var) {
+                let s = bcx.use_var(steps_var);
+                let lim = bcx.use_var(limit_var);
+                let over = bcx.ins().icmp(IntCC::SignedGreaterThan, s, lim);
+                trip = Some(over);
+            }
+            if let Some(cancel_addr_var) = cancel_addr_var {
+                let caddr = bcx.use_var(cancel_addr_var);
+                let flag = bcx.ins().load(types::I8, MemFlags::trusted(), caddr, 0);
+                let zero = bcx.ins().iconst(types::I8, 0);
+                let cancelled = bcx.ins().icmp(IntCC::NotEqual, flag, zero);
+                trip = Some(match trip {
+                    Some(t) => bcx.ins().bor(t, cancelled),
+                    None => cancelled,
+                });
+            }
+            if let Some(trip) = trip {
+                let cont = bail_if(
+                    &mut bcx,
+                    trip,
+                    fallback,
+                    safepoint_ptr,
+                    payload_ptr,
+                    &vars,
+                    &mut next_id,
+                    deopt!(i),
+                );
+                bcx.switch_to_block(cont);
+            }
         }
         match &program.code[i] {
             JitInstr::Nop => {}
@@ -4514,6 +4685,7 @@ fn build_function(
                         safepoint_ptr_v,
                         payload_ptr_v,
                         child_depth,
+                        limits_ptr,
                     ],
                 );
                 let completed = bcx.inst_results(call)[0];
@@ -4596,6 +4768,7 @@ fn build_function(
                         safepoint_ptr,
                         payload_ptr,
                         child_depth,
+                        limits_ptr,
                     ],
                 );
                 // A child guard-bail returns completed=0 WITHOUT setting the shared
@@ -4706,6 +4879,7 @@ fn build_function(
                         safepoint_ptr_v,
                         payload_ptr_v,
                         child_depth,
+                        limits_ptr,
                     ],
                 );
                 // Non-chaining: a child bail (its own slots, discarded) shows up as
@@ -5091,6 +5265,13 @@ fn build_function(
             JitInstr::Return { src } => {
                 let v = bcx.use_var(reg(*src));
                 bcx.ins().store(MemFlags::trusted(), v, out_ptr, 0);
+                // J0.5: a clean native completion writes the accumulated step count
+                // back to the host cell, so the interpreter continues from the exact
+                // tick total native paid (no skipped/double count).
+                if let Some(steps_var) = steps_var {
+                    let s = bcx.use_var(steps_var);
+                    bcx.ins().store(MemFlags::trusted(), s, limits_ptr, 0);
+                }
                 let one = bcx.ins().iconst(types::I8, 1);
                 bcx.ins().return_(&[one]);
                 terminated = true;
@@ -5254,6 +5435,14 @@ fn build_function(
 
     // Fallback block body: not completed.
     bcx.switch_to_block(fallback);
+    // J0.5: every deopt edge funnels through `fallback`, so a single steps write-back
+    // here covers all bails (budget/cancel/guard/OSR-exit). `steps_var` is an SSA
+    // Variable, so `use_var` resolves to the accumulated count on whichever edge
+    // bailed — the interpreter then resumes with the exact paid tick total.
+    if let Some(steps_var) = steps_var {
+        let s = bcx.use_var(steps_var);
+        bcx.ins().store(MemFlags::trusted(), s, limits_ptr, 0);
+    }
     let zero8 = bcx.ins().iconst(types::I8, 0);
     bcx.ins().return_(&[zero8]);
 
@@ -8156,7 +8345,7 @@ mod tests {
             JitInstr::OsrExit,            // 8 OSR-exit (was Return)
         ];
         let prog = f(1, 4, code);
-        let id = m.compile_osr(&prog, 3).unwrap();
+        let id = m.compile_osr(&prog, 3, false, false).unwrap();
         // The window is `n_regs`-wide, indexed by register. Seed the loop live-in:
         // total=0 (reg1), i=1 (reg2), one=1 (reg3), n (reg0). lens parallel & unused.
         let run = |n: i64| -> NativeOutcome {
@@ -8240,7 +8429,7 @@ mod tests {
         let prog = ft(0, vec![FlatInt, Int, Int, Int, Int, Int], code);
         // OSR header at the loop head (ip 4). regs 0,1,2,3,4 are definitely assigned
         // there (read-only live-ins, never written in-loop).
-        let id = m.compile_osr(&prog, 4).unwrap();
+        let id = m.compile_osr(&prog, 4, false, false).unwrap();
 
         let data: Vec<i64> = vec![10, 20, 30, 40];
         // The window is n_regs-wide; reg0's args slot holds the raw data pointer and
@@ -8344,7 +8533,7 @@ mod tests {
             vec![JitValueType::FlatInt, Int, Int, Int, Int, Int, Int],
             code2,
         );
-        let id2 = m.compile_osr(&prog2, 4).unwrap();
+        let id2 = m.compile_osr(&prog2, 4, false, false).unwrap();
         // Drive bound=8 but the buffer only has 4 elements ⇒ at i==4 the direct read is
         // OOB and must deopt (a bounds bail), never reading past the buffer.
         let mut w2 = [0i64; 7];
@@ -8421,7 +8610,7 @@ mod tests {
         );
         // ip 1 (the Return) is a leader only if a jump targets it; here none does,
         // and it is not ip 0, so it has no block.
-        assert!(m.compile_osr(&prog, 1).is_err());
+        assert!(m.compile_osr(&prog, 1, false, false).is_err());
     }
 
     #[test]
@@ -8795,7 +8984,7 @@ mod tests {
     fn compile_forcing_all_bails_deopts_at_first_executed_safepoint() {
         use JitValueType::{FlatInt, Int};
 
-        let values = vec![10, 20, 30];
+        let values = [10, 20, 30];
         let ptr = values.as_ptr() as i64;
         let func = ft(
             3,

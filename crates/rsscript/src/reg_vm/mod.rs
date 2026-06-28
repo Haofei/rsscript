@@ -1501,6 +1501,24 @@ impl RegVmExecutable {
         .map(|(output, stats, _lines)| (output, stats))
     }
 
+    /// Like [`Self::eval_main_with_args_native_osr_with_stats`] but under explicit
+    /// [`VmLimits`] (J0.5). With `step_budget`/`cancel` armed (and `mem_budget` off),
+    /// a qualifying hot loop now OSRs into an armed native variant that ticks the step
+    /// budget per instruction and polls `cancel` at every loop header, bailing to the
+    /// interpreter — which enforces the limit. Test/validation entry point: lets a test
+    /// assert the loop genuinely OSR'd (`osr_entries > 0`) AND observed the limit.
+    #[cfg(feature = "native-jit")]
+    pub fn eval_main_with_args_native_osr_with_limits(
+        &self,
+        args: impl IntoIterator<Item = impl Into<String>>,
+        limits: VmLimits,
+    ) -> Result<(EvalOutput, NativeStats), EvalError> {
+        self.eval_main_with_args_native_inner_reported(
+            args, 0, false, true, true, true, false, None, false, limits,
+        )
+        .map(|(output, stats, _lines)| (output, stats))
+    }
+
     #[cfg(feature = "native-jit")]
     #[allow(clippy::too_many_arguments)]
     fn eval_main_with_args_native_inner_reported(
@@ -2886,6 +2904,34 @@ thread_local! {
         const { RefCell::new(None) };
     static JIT_DEQUE_HANDLE_CACHE: RefCell<Option<JitDequeHandleCache>> =
         const { RefCell::new(None) };
+    /// J0.5 limits cell: `[steps, step_budget, cancel_addr]`, read/written in place by
+    /// an armed OSR native variant through a raw pointer (Exec-Spec §6.2). `step_budget`
+    /// is `-1` when unarmed; `cancel_addr` is `0` when unarmed or the address of the
+    /// host `AtomicBool` otherwise. The host seeds it before the call and reads `steps`
+    /// back after, so one tick stream spans native and interpreter.
+    static JIT_LIMITS_CELL: std::cell::Cell<[i64; 3]> = const { std::cell::Cell::new([0, -1, 0]) };
+}
+
+/// Seed the J0.5 limits cell before an armed OSR native call. `steps` is the current
+/// interpreter step count, `step_budget` is the budget (or `-1`), `cancel_addr` is the
+/// `AtomicBool` address (or `0`).
+#[cfg(feature = "native-jit")]
+fn jit_set_limits_cell(steps: i64, step_budget: i64, cancel_addr: i64) {
+    JIT_LIMITS_CELL.with(|cell| cell.set([steps, step_budget, cancel_addr]));
+}
+
+/// Raw pointer to the J0.5 limits cell, passed as the native ABI `limits_ptr`. Valid
+/// for the duration of the call (thread-local storage does not move).
+#[cfg(feature = "native-jit")]
+fn jit_limits_cell_ptr() -> *const i64 {
+    JIT_LIMITS_CELL.with(|cell| cell.as_ptr() as *const i64)
+}
+
+/// Read the accumulated step count back out of the J0.5 limits cell after an armed OSR
+/// native call (clean completion or deopt both write it back).
+#[cfg(feature = "native-jit")]
+fn jit_limits_cell_steps() -> i64 {
+    JIT_LIMITS_CELL.with(|cell| cell.get()[0])
 }
 
 #[cfg(feature = "native-jit")]

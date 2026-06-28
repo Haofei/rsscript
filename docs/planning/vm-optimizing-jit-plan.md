@@ -39,7 +39,7 @@ numeric-mode language decision). Owner: TBD. Created 2026-06-20; status updated 
 | **J0.0–J0.3** precise-deopt spine | **shipped (leaf/scalar subset)** | `NativeOutcome::Deopt` + per-site safepoint ids + live-reg capture + state-map + precise resume + every-safepoint stress test. **Precise resume is now the production DEFAULT** (`eval_main_with_args_native`); re-run-from-top remains the byte-identical fallback when a heap write disables precise resume (`can_precise_deopt_resume`) and stays under differential coverage via the force-deopt backend. The state-map is `resume_ip + live registers` — **not** yet the full inlined logical-frame-chain format J0.1 describes. So: done for the current leaf/scalar subset; full inlined-frame / side-effecting deopt is still **future**. |
 | **J0.1 (heap-aware reg reconstruction)** | **shipped** | The deopt state map distinguishes reconstructible scalars (`Int`/`Float`) from heap refs (`Handle`/`FlatInt`/`FlatFloat`): `decode_deopt_live` reconstructs only scalar regs (the interpreter frame already holds heap values — precise resume implies no heap writes), and `restore_native_deopt_live_regs` restores ALL scalar regs incl. **reassigned scalar params** (the `< n_params` skip is gone). Fixes the reassigned-scalar-param resume bug (`precise_deopt_restores_reassigned_scalar_param`); flat-buffer params stay uncorrupted. **Precise resume is now default-on (validated corpus-wide).** **Remaining for full J0.1:** inlined logical-frame-chain state-map format, and heap-payload-variant / live-out *value* reconstruction (rebuilding native-built composite heap values — variant/struct with heap payload — across a bail; today such arms bail). **J0.1(b) slice 1 shipped (2026-06-28): live-after always-`Ok` *scalar*-payload Results now OSR via OSR-exit reconstruction (`OsrEntry.variant_reconstructs`); the heap-payload-arm-taken sub-case still bails.** |
 | **J0.4** heap writes + deopt-after-write | **S0–S3 shipped; S4 future** | **S0** (heap-result return ABI, `95e2b71`) and **S1–S3** (allocate-only: 10 `AllocatesResult` host helpers — `StringFromInt`/`StringConcat`/`StringSlice`/`StringPadLeft`/`StringSplit`/`StringLiteral`/`JsonParse`/`JsonField`/`BytesSlice`/`ListNewInt` — publishing fresh unaliased values into `JIT_HEAP_RESULTS`, gated by `escaping_output_handle` escape analysis; `mem_budget` kept exact by **Model-A refusal when armed** (`tier.rs`), so no in-helper accounting/double-charge; §7.2 via clear-on-bail output table + `JitHeapResultsGuard`, force-deopt-tested) are **shipped & green**. In-place **caller-aliased** writes (**S4**) remain **future** — they need J0.1 frame-chain + J0.5. The native subset is no longer read-only: it allocates fresh heap values. |
-| **J0.5** in-generated-code `VmLimits` accounting | **future** | currently the Model-A fallback (see J6); the `VmLimitsSnapshot` tick/poll machinery is not built. |
+| **J0.5** in-generated-code `VmLimits` accounting | **step + cancel shipped (OSR tier); mem future** | The armed OSR variant now **enforces `step_budget` and `cancel` in generated code** (Exec-Spec §6.2, the *enforce* branch): a per-instruction step accumulator (one tick per instruction, matching the interpreter's `tick()` stream 1:1 since `resume_ip` is a shared instruction index), a `steps > step_budget` test + `cancel` poll at **every loop header** (= once per iteration of every loop, incl. nested — headers = backward-edge targets), a steps write-back on **every** native exit (clean `Return` + the shared `fallback` deopt edge), and a bail-to-interpreter that resumes at the header so the interpreter (the sole limit authority) raises the error. ABI: a host-owned `[steps, step_budget, cancel_addr]` cell threaded as the new `limits_ptr` param (`call_with_limits`); unarmed variants ignore it (byte-identical pre-J0.5 codegen, zero hot-path cost). Gate: `try_osr`/`resolve_osr_candidate` now refuse OSR **only** while `mem_budget` is armed. Tests: `native_osr_completes_under_generous_step_budget` (pos, `osr_entries>0`), `native_osr_trips_tight_step_budget`, `native_osr_cancel_flag_preempts`; hostile limits suite green. **Remaining:** `mem_budget` charging of native allocations (tied to S4) and the whole-function/recursive tiers (still Model-A refusal when armed). |
 | **J1** profiling | **shipped** | per-call-site type feedback on dynamic sites, warm-gated, no interpreter regression. (Branch profiling **not** shipped — it regressed `bool_logic_loop` ~7%; needs a hot/cold dispatch split.) |
 | **J2.1 / J2.2** mono + poly closure inlining | **shipped; fires on real kernels via OSR (measured)** | guarded inline of closures, **broadened to capturing, stored (struct/list-fetched handle), and polymorphic** closures with scalar-capture materialization. Composed into OSR, this makes the literal `dynamic_closure_call` allocation-free native — **~4.6×**, `osr_entries:1`. (Standalone whole-function J2 outside OSR remains a coverage scaffold; the wins come through OSR.) |
 | **J2.3** no deopt loops | **satisfied** | existing give-up counter → permanent fallback. |
@@ -52,7 +52,7 @@ numeric-mode language decision). Owner: TBD. Created 2026-06-20; status updated 
 | **J4.6** loop unrolling | **future** | modest; must prove a win to ship. |
 | **J5.1** OSR spec contract | **shipped** (Exec-Spec §7, dual-of-deopt + parity argument). |
 | **J5.2** OSR implementation | **SHIPPED — production, auto-fires by default** | OSR-entry/exit (`compile_osr` / `try_osr`) over a **reducible single-exit loop**, byte-identical to the interpreter on the full differential. **Auto-trigger** (hot-backedge counter, no interpreter regression) fires it **without any flag** (`RSS_JIT_OSR` is now the eager/force path). **OSR × J2/J3 composition** dissolves Options/variants/structs and inlines (leaf + capturing/stored/poly closures) inside the loop. ~39× (`osr_scalar_loop`) up to ~75× (`osr_struct_loop`); literal kernels `variant_match_loop` ~40×, `dynamic_closure_call` ~4.6×. **Remaining:** heap-payload variant arms, live-out struct/value reconstruction, megamorphic sites (production perf-matrix: committed `baseline-20260623-jit.json` on `4219800`, current source of truth). |
-| **J6** adaptive tiering | **Model-A fallback satisfied** | interpret → warm-profile (J1) → tier-up → give-up demotion, **plus refuse-native-while-`step_budget`/`cancel`-armed** (Exec-Spec §6.2 "enforce *or be ineligible*", the ineligible branch). Full generated-code `VmLimits` accounting (J0.5) is **future**. |
+| **J6** adaptive tiering | **Model-A + enforce (OSR step/cancel) satisfied** | interpret → warm-profile (J1) → tier-up → give-up demotion. Exec-Spec §6.2 "enforce *or be ineligible*": the **OSR tier now ENFORCES** `step_budget`/`cancel` in generated code (J0.5); the whole-function/recursive tiers remain on the **ineligible** branch (refuse-native-while-armed). `mem_budget` accounting in generated code is still **future** (so OSR is refused while `mem_budget` armed). |
 
 > **Headline caveat (the honest bottom line).** All shipped slices are
 > correctness-complete and differential-green, and **the #1 lever (OSR × J2/J3
@@ -630,15 +630,24 @@ and resume." This is the prerequisite for *all* speculation and for §3.2w write
       because deopt resumes *after* the write, not from the top). Pick the
       replacement-equivalence discipline (preflight / checkpoint / no-bail-after-commit
       from perf-plan §3.2w) and prove it against the deopt machinery.
-- [ ] **J0.5 Exact `VmLimits` enforcement in generated code (spec §6.2, normative).**
-      Emit the budget/cancel checks the interpreter would tick: a `step_budget` tick on
-      **every loop backedge** + a bounded straight-line interval, and a `cancel` poll —
-      or mark the function ineligible while those limits are armed (today's preemption
-      gate). Once J0.4/J3 allocate, **charge native allocations to `mem_budget`** (the
-      current "subset allocates nothing" exemption ends). Deopt must implement the §2
-      `VmLimitsSnapshot` invariant: one logical tick/accounting stream across native
-      and interpreter, no double-count, no skipped count, and no stale cancel state.
-      Verify with the limits-enabled differential from J0.3.
+- [~] **J0.5 Exact `VmLimits` enforcement in generated code (spec §6.2, normative).**
+      **STEP + CANCEL shipped for the OSR tier (2026-06-28).** The armed OSR variant
+      emits a per-instruction `step_budget` tick (one per instruction — matches the
+      interpreter's `tick()` 1:1, since a `resume_ip` is a shared instruction index), a
+      `steps > step_budget` test + `cancel` poll at **every loop header** (= every
+      backedge, incl. nested loops), and writes the accumulated `steps` back on every
+      native exit (clean `Return` + the shared `fallback` deopt edge). On a trip it
+      bails (resume_ip = header) to the interpreter, which raises the error — so there
+      is one logical tick stream across native and interpreter with no double-/skipped
+      count, and `cancel` is observed (never restored). ABI: a host `[steps,
+      step_budget, cancel_addr]` cell via the new `limits_ptr` param (`call_with_limits`);
+      unarmed variants ignore it (byte-identical, zero hot-path cost). The whole-function
+      and recursive tiers stay on the ineligible (refuse-while-armed) branch.
+      **Remaining:** charge native allocations to `mem_budget` (the "subset allocates
+      nothing" exemption — tied to J0.4 S4; OSR is still refused while `mem_budget`
+      armed) and extend enforcement to the whole-function/recursive tiers. A
+      limits-enabled differential (J0.3) is still the desired broader net beyond the
+      targeted `native_osr_*_step_budget` / `_cancel_*` acceptance tests + hostile suite.
 - **Exit:** deopt-at-every-safepoint backend green on the full soak — **including runs
   with `step_budget`/`mem_budget`/`cancel` enabled** — this is the spine. **Scoped
   rule:** the *leaf/scalar* deopt subset (shipped) is what unblocked the J2/J3/J4.3/J5.2

@@ -5533,3 +5533,119 @@ fn native_self_recursion_step_budget_preempts() {
         other => panic!("expected Runtime(step budget), got {other:?}"),
     }
 }
+
+/// Shared OSR-shaped kernel for the J0.5 limit tests: the loop is wrapped by
+/// non-native `Log.write` I/O, so the function is native-INELIGIBLE as a whole and the
+/// hot loop is taken via OSR (not whole-function native) — which is exactly the tier
+/// J0.5 must enforce limits in. `read N` blocks const-folding.
+#[cfg(feature = "native-jit")]
+const J05_OSR_KERNEL: &str = "\
+fn loopsum(n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut total = 0
+    let mut i = 0
+    while i < n {
+        total = total + i
+        i = i + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: loopsum(n: read 5000)))
+    return Unit
+}
+";
+
+/// J0.5 (in-generated-code `VmLimits`), POSITIVE: with `step_budget` armed but
+/// generous, the hot loop OSRs into the armed native variant (`step_budget` ticked per
+/// instruction, tested at the loop header) and still completes byte-identically to the
+/// interpreter — proving the native step accounting does not falsely trip.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_completes_under_generous_step_budget() {
+    let exe = rsscript::reg_vm_compile_source("j05-step-ok.rss", J05_OSR_KERNEL).expect("compile");
+    let limits = rsscript::VmLimits {
+        step_budget: Some(10_000_000),
+        ..rsscript::VmLimits::default()
+    };
+    let (output, stats) = exe
+        .eval_main_with_args_native_osr_with_limits(std::iter::empty::<String>(), limits)
+        .expect("generous step budget must not trip");
+    // sum(0..5000) = 5000 * 4999 / 2 = 12497500.
+    assert_eq!(output.stdout.trim_end(), "begin\n12497500");
+    assert!(
+        stats.osr_entries > 0,
+        "the hot loop must OSR natively under an armed step budget: {stats:?}",
+    );
+}
+
+/// J0.5, ENFORCEMENT: the SAME OSR loop under a tight `step_budget` must trip cleanly —
+/// the armed native variant accumulates the per-instruction tick count, the loop-header
+/// test crosses the budget, native bails, and the interpreter (the sole limit
+/// authority) raises the step-budget error. A native loop must not bypass the budget.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_trips_tight_step_budget() {
+    let exe =
+        rsscript::reg_vm_compile_source("j05-step-trip.rss", J05_OSR_KERNEL).expect("compile");
+    let limits = rsscript::VmLimits {
+        step_budget: Some(5_000),
+        ..rsscript::VmLimits::default()
+    };
+    let err = exe
+        .eval_main_with_args_native_osr_with_limits(std::iter::empty::<String>(), limits)
+        .expect_err("a tight step budget must preempt the native loop, not be bypassed");
+    match err {
+        rsscript::EvalError::Runtime(msg) => assert!(
+            msg.contains("step budget"),
+            "expected step-budget error, got: {msg}"
+        ),
+        other => panic!("expected Runtime(step budget), got {other:?}"),
+    }
+}
+
+/// J0.5, CANCEL: with an ambient `cancel` flag set and OSR forced, the armed native
+/// variant polls the flag at the loop header and bails to the interpreter, which raises
+/// the cancellation error — a native loop must remain interruptible.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_cancel_flag_preempts() {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    // A long loop so the interpreter, after native bails on the set flag, still reaches
+    // its own (every-1024-step) cancel poll before finishing.
+    let source = "\
+fn loopsum(n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut total = 0
+    let mut i = 0
+    while i < n {
+        total = total + i
+        i = i + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: loopsum(n: read 1000000)))
+    return Unit
+}
+";
+    let exe = rsscript::reg_vm_compile_source("j05-cancel.rss", source).expect("compile");
+    let flag = Arc::new(AtomicBool::new(true));
+    let limits = rsscript::VmLimits {
+        cancel: Some(Arc::clone(&flag)),
+        ..rsscript::VmLimits::default()
+    };
+    let err = exe
+        .eval_main_with_args_native_osr_with_limits(std::iter::empty::<String>(), limits)
+        .expect_err("a set cancel flag must preempt the native loop");
+    match err {
+        rsscript::EvalError::Runtime(msg) => assert!(
+            msg.contains("cancelled"),
+            "expected cancellation error, got: {msg}"
+        ),
+        other => panic!("expected Runtime(cancelled), got {other:?}"),
+    }
+}
