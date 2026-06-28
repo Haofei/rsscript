@@ -1015,6 +1015,19 @@ pub enum JitInstr {
         dst: u32,
         args: Vec<u32>,
     },
+    /// A mutually-recursive native call to another member of the same
+    /// co-compiled group (native-call-ABI slice 4): invoke group member
+    /// `group_index` (an index into the `funcs` slice passed to
+    /// [`NativeModule::compile_recursive_group`]). Like `CallSelf`, the callee's
+    /// id is not minted until the whole cycle is declared, so the call names a
+    /// group index rather than a `CompiledId`. Non-chaining (re-run-from-top deopt),
+    /// and every group member carries the entry depth guard so a mutual-recursion
+    /// cycle cannot overflow the host C stack.
+    CallGroup {
+        group_index: u32,
+        dst: u32,
+        args: Vec<u32>,
+    },
     /// `Map.get` fused with an Option match for Int-keyed maps. The helper first
     /// tests membership; on `Some`, it loads the Int payload into `value_dst` and
     /// jumps to `some_ip`, otherwise it jumps to `none_ip`.
@@ -1306,6 +1319,7 @@ fn native_scalar_leaf_callable(function: &JitFunction, osr: bool, _returns_handl
                 | JitInstr::ProfiledJumpIfIntCompare { .. }
                 | JitInstr::CallNative { .. }
                 | JitInstr::CallSelf { .. }
+                | JitInstr::CallGroup { .. }
                 | JitInstr::HostCall { .. }
                 | JitInstr::MemoizedHostCall { .. }
                 | JitInstr::Return { .. }
@@ -1401,6 +1415,19 @@ struct NativeCallee {
     func_id: FuncId,
     n_params: usize,
     param_types: Vec<JitValueType>,
+    deopt_payload_words: usize,
+    return_type: JitValueType,
+}
+
+/// Metadata for one member of a co-compiled mutually-recursive group
+/// (native-call-ABI slice 4). A `CallGroup { group_index }` lowers to a call of
+/// `group[group_index]` by its declared-but-not-yet-defined `FuncId`. Non-chaining
+/// (re-run-from-top deopt), so only the callee's shape is needed to marshal the
+/// call and size a (discarded-on-bail) payload slot.
+#[derive(Clone, Copy)]
+struct NativeGroupMember {
+    func_id: FuncId,
+    n_params: usize,
     deopt_payload_words: usize,
     return_type: JitValueType,
 }
@@ -1836,28 +1863,7 @@ impl NativeModule {
             .unwrap_or(0);
         let ptr_ty = self.module.target_config().pointer_type();
         self.module.clear_context(&mut self.ctx);
-        self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // args ptr
-        self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // n_args
-        self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // lens ptr (TV2)
-        self.ctx
-            .func
-            .signature
-            .params
-            .push(AbiParam::new(types::I64)); // host helper context
-        self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // out ptr
-        self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // bail flag ptr
-        self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // safepoint id out ptr
-        self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // deopt payload out ptr
-        // Native call depth (native-call-ABI slice 1): the dynamic depth of the
-        // native->native call chain. Threaded so a recursive native frame can bail to
-        // the interpreter before overflowing the host C stack (the guard lands in a
-        // later slice; for now it is carried only). `usize`-width == pointer-width.
-        self.ctx.func.signature.params.push(AbiParam::new(ptr_ty)); // native call depth
-        self.ctx
-            .func
-            .signature
-            .returns
-            .push(AbiParam::new(types::I8));
+        push_compiled_abi_signature(&mut self.ctx.func, ptr_ty);
 
         // Declare BEFORE defining (native-call-ABI slice 2): a `CallSelf` must
         // reference this function's own `FuncId`, which only exists once the function
@@ -1881,6 +1887,7 @@ impl NativeModule {
             osr_header,
             &native_callees,
             id,
+            &[],
         )?;
 
         self.module
@@ -1918,6 +1925,124 @@ impl NativeModule {
             scalar_leaf_callable,
         });
         Ok(handle)
+    }
+
+    /// Compile a mutually-recursive group together (native-call-ABI slice 4):
+    /// **declare every member's `FuncId` first, then build+define each** so a member's
+    /// `CallGroup { group_index }` can call a sibling whose body isn't defined yet,
+    /// then finalize once. Returns one [`CompiledId`] per member (same order as
+    /// `funcs`). Members are scalar, non-OSR, re-run-from-top on deopt, and each
+    /// carries the entry depth guard so the cycle cannot overflow the host C stack.
+    pub fn compile_recursive_group(
+        &mut self,
+        funcs: &[JitFunction],
+    ) -> Result<Vec<CompiledId>, JitError> {
+        if funcs.is_empty() {
+            return Ok(Vec::new());
+        }
+        for function in funcs {
+            validate(function, false)?;
+        }
+        let ptr_ty = self.module.target_config().pointer_type();
+        // Phase 1: declare every member + assemble the group metadata.
+        let mut func_ids: Vec<FuncId> = Vec::with_capacity(funcs.len());
+        let mut group: Vec<NativeGroupMember> = Vec::with_capacity(funcs.len());
+        let mut return_types: Vec<JitValueType> = Vec::with_capacity(funcs.len());
+        for function in funcs {
+            let return_type = function
+                .code
+                .iter()
+                .find_map(|instr| match instr {
+                    JitInstr::Return { src } => Some(function.reg_types[*src as usize]),
+                    _ => None,
+                })
+                .ok_or_else(|| JitError("recursive group member has no Return".into()))?;
+            if return_type == JitValueType::Handle {
+                return Err(JitError(
+                    "recursive group member returning a heap handle is unsupported".into(),
+                ));
+            }
+            self.module.clear_context(&mut self.ctx);
+            push_compiled_abi_signature(&mut self.ctx.func, ptr_ty);
+            let name = format!("rss_jit_{}", self.counter);
+            self.counter += 1;
+            let id = self
+                .module
+                .declare_function(&name, Linkage::Local, &self.ctx.func.signature)
+                .map_err(|e| err("declare", e))?;
+            func_ids.push(id);
+            return_types.push(return_type);
+            group.push(NativeGroupMember {
+                func_id: id,
+                n_params: function.n_params as usize,
+                // Members are scalar (CallGroup/CallSelf are non-chaining), so a
+                // member's deopt payload is just its own register window.
+                deopt_payload_words: function.n_regs as usize,
+                return_type,
+            });
+        }
+        // Phase 2: build + define each member against the declared group ids.
+        let mut deopt_maps: Vec<DeoptMap> = Vec::with_capacity(funcs.len());
+        let mut code_sizes: Vec<u64> = Vec::with_capacity(funcs.len());
+        for (i, function) in funcs.iter().enumerate() {
+            let native_callees = self.resolve_native_callees(function)?;
+            self.module.clear_context(&mut self.ctx);
+            push_compiled_abi_signature(&mut self.ctx.func, ptr_ty);
+            let deopt_map = build_function(
+                &mut self.ctx.func,
+                &mut self.fbctx,
+                &mut self.module,
+                self.imports.clone(),
+                function,
+                None,
+                None,
+                &native_callees,
+                func_ids[i],
+                &group,
+            )?;
+            self.module
+                .define_function(func_ids[i], &mut self.ctx)
+                .map_err(|e| err("define", e))?;
+            let code_size = self
+                .ctx
+                .compiled_code()
+                .map(|code| u64::from(code.code_info().total_size))
+                .unwrap_or(0);
+            deopt_maps.push(deopt_map);
+            code_sizes.push(code_size);
+        }
+        self.module.clear_context(&mut self.ctx);
+        self.module
+            .finalize_definitions()
+            .map_err(|e| err("finalize", e))?;
+        // Phase 3: publish each member and return its handle.
+        let mut handles = Vec::with_capacity(funcs.len());
+        for (i, function) in funcs.iter().enumerate() {
+            let code = self.module.get_finalized_function(func_ids[i]);
+            // SAFETY: emitted with the `CompiledAbi` signature declared above.
+            let f: CompiledAbi = unsafe { std::mem::transmute::<*const u8, CompiledAbi>(code) };
+            let scalar_leaf_callable = native_scalar_leaf_callable(function, false, false);
+            let handle = CompiledId {
+                module_id: self.id,
+                index: self.funcs.len(),
+            };
+            self.funcs.push(CompiledFunc {
+                f,
+                id: func_ids[i],
+                code_size_bytes: code_sizes[i],
+                native_call_depth: 0,
+                n_params: function.n_params as usize,
+                n_regs: function.n_regs as usize,
+                deopt_map: std::mem::take(&mut deopt_maps[i]),
+                osr: false,
+                returns_handle: false,
+                param_types: function.reg_types[..function.n_params as usize].to_vec(),
+                return_type: Some(return_types[i]),
+                scalar_leaf_callable,
+            });
+            handles.push(handle);
+        }
+        Ok(handles)
     }
 
     /// Machine-code bytes emitted for a compiled function, including any constant
@@ -2633,6 +2758,21 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                     }
                 }
             }
+            JitInstr::CallGroup { dst, args, .. } => {
+                // Group index, arity, and arg/result classes are checked against the
+                // co-compiled group in `compile_recursive_group`/`build_function`,
+                // where the group's signatures are known. Here only the local
+                // register references are validated.
+                check_reg(*dst)?;
+                if matches!(class(*dst), JitValueType::FlatInt | JitValueType::FlatFloat) {
+                    return Err(JitError(format!(
+                        "CallGroup result register {dst} is a flat-array register"
+                    )));
+                }
+                for arg in args {
+                    check_reg(*arg)?;
+                }
+            }
             JitInstr::MatchMapGetInt {
                 map,
                 key,
@@ -2785,6 +2925,7 @@ fn instr_def(instr: &JitInstr) -> Option<u32> {
         | JitInstr::MemoizedHostCall { dst, .. }
         | JitInstr::CallNative { dst, .. }
         | JitInstr::CallSelf { dst, .. }
+        | JitInstr::CallGroup { dst, .. }
         | JitInstr::BitAnd { dst, .. }
         | JitInstr::BitOr { dst, .. }
         | JitInstr::BitXor { dst, .. }
@@ -3418,6 +3559,26 @@ fn arith_cannot_overflow(intervals: &[Interval], instr: &JitInstr) -> bool {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Push the `CompiledAbi` parameter/return signature onto `func` (args ptr, n_args,
+/// lens ptr, host ctx, out ptr, bail ptr, safepoint ptr, deopt payload ptr, native
+/// call depth → i8 completed). Shared by `compile_inner` and `compile_recursive_group`
+/// so the ABI is defined in exactly one place.
+fn push_compiled_abi_signature(
+    func: &mut cranelift_codegen::ir::Function,
+    ptr_ty: cranelift_codegen::ir::Type,
+) {
+    func.signature.params.push(AbiParam::new(ptr_ty)); // args ptr
+    func.signature.params.push(AbiParam::new(ptr_ty)); // n_args
+    func.signature.params.push(AbiParam::new(ptr_ty)); // lens ptr (TV2)
+    func.signature.params.push(AbiParam::new(types::I64)); // host helper context
+    func.signature.params.push(AbiParam::new(ptr_ty)); // out ptr
+    func.signature.params.push(AbiParam::new(ptr_ty)); // bail flag ptr
+    func.signature.params.push(AbiParam::new(ptr_ty)); // safepoint id out ptr
+    func.signature.params.push(AbiParam::new(ptr_ty)); // deopt payload out ptr
+    func.signature.params.push(AbiParam::new(ptr_ty)); // native call depth (slice 1)
+    func.signature.returns.push(AbiParam::new(types::I8));
+}
+
 /// Maximum native call-chain depth for self-recursive functions before the entry
 /// guard bails to the interpreter (native-call-ABI slice 2). Native `CallSelf`
 /// recurses on the host C stack, so this cap must stay well under
@@ -3439,6 +3600,7 @@ fn build_function(
     osr_header: Option<u32>,
     native_callees: &[NativeCallee],
     self_func_id: FuncId,
+    group: &[NativeGroupMember],
 ) -> Result<DeoptMap, JitError> {
     // Definite-assignment ("must") sets per instruction, computed once up front so
     // each bail site can record its live (entry-assigned) registers. Purely
@@ -3484,6 +3646,16 @@ fn build_function(
         .iter()
         .any(|instr| matches!(instr, JitInstr::CallSelf { .. }));
     let self_ref = has_call_self.then(|| module.declare_func_in_func(self_func_id, bcx.func));
+    // Mutual-recursion group calls (native-call-ABI slice 4): a func ref per group
+    // member, resolving `CallGroup { group_index }` to the member's declared FuncId.
+    let has_call_group = program
+        .code
+        .iter()
+        .any(|instr| matches!(instr, JitInstr::CallGroup { .. }));
+    let group_refs: Vec<_> = group
+        .iter()
+        .map(|member| module.declare_func_in_func(member.func_id, bcx.func))
+        .collect();
 
     let n = program.code.len();
     let n_regs = program.n_regs as usize;
@@ -3699,11 +3871,12 @@ fn build_function(
             bcx.ins().jump(fallback, &[]);
         }
         None => {
-            // Entry depth guard (native-call-ABI slice 2): a self-recursive function
-            // bails to the interpreter (re-run from the top — its precise resume is
-            // off) once the native call depth reaches the cap, BEFORE the host C stack
-            // can overflow. Non-recursive functions emit nothing here.
-            if has_call_self {
+            // Entry depth guard (native-call-ABI slices 2+4): a self- OR mutually-
+            // recursive function bails to the interpreter (re-run from the top — its
+            // precise resume is off) once the native call depth reaches the cap,
+            // BEFORE the host C stack can overflow. Non-recursive functions emit
+            // nothing here.
+            if has_call_self || has_call_group {
                 let cap = bcx.ins().iconst(ptr_ty, NATIVE_RECURSION_DEPTH_CAP);
                 let too_deep =
                     bcx.ins()
@@ -4152,6 +4325,105 @@ fn build_function(
                 );
                 bcx.switch_to_block(cont);
                 let result = if program.reg_types[*dst as usize] == JitValueType::Float {
+                    bcx.ins().stack_load(types::F64, out_slot, 0)
+                } else {
+                    bcx.ins().stack_load(types::I64, out_slot, 0)
+                };
+                bcx.def_var(reg(*dst), result);
+            }
+            JitInstr::CallGroup {
+                group_index,
+                dst,
+                args,
+            } => {
+                // Mutually-recursive native call to a co-compiled group member
+                // (native-call-ABI slice 4). NON-chaining (re-run-from-top deopt) like
+                // CallSelf, but the callee is a DIFFERENT member with its own register
+                // window, so it gets its own scratch slots (sized to the callee and
+                // discarded on bail). Forward depth+1; the entry guard bounds the stack.
+                let k = *group_index as usize;
+                let member = *group
+                    .get(k)
+                    .ok_or_else(|| JitError(format!("CallGroup group_index {k} out of range")))?;
+                if args.len() != member.n_params {
+                    return Err(JitError(format!(
+                        "CallGroup got {} args, group member {k} expects {}",
+                        args.len(),
+                        member.n_params
+                    )));
+                }
+                let member_ref = group_refs[k];
+                let slot_bytes = |words: usize| (words.max(1) * 8) as u32;
+                let args_slot = bcx.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    slot_bytes(member.n_params),
+                    3,
+                ));
+                let lens_slot = bcx.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    slot_bytes(member.n_params),
+                    3,
+                ));
+                let out_slot =
+                    bcx.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 8, 3));
+                let bail_slot =
+                    bcx.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 1, 0));
+                let safepoint_slot =
+                    bcx.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 8, 3));
+                let payload_slot = bcx.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    slot_bytes(member.deopt_payload_words),
+                    3,
+                ));
+                let zero_i64 = bcx.ins().iconst(types::I64, 0);
+                let zero_i8 = bcx.ins().iconst(types::I8, 0);
+                bcx.ins().stack_store(zero_i8, bail_slot, 0);
+                bcx.ins().stack_store(zero_i64, safepoint_slot, 0);
+                for (i_arg, &arg) in args.iter().enumerate() {
+                    let value = bcx.use_var(reg(arg));
+                    bcx.ins().stack_store(value, args_slot, (i_arg as i32) * 8);
+                    bcx.ins().stack_store(zero_i64, lens_slot, (i_arg as i32) * 8);
+                }
+                let args_ptr_v = bcx.ins().stack_addr(ptr_ty, args_slot, 0);
+                let lens_ptr_v = bcx.ins().stack_addr(ptr_ty, lens_slot, 0);
+                let out_ptr_v = bcx.ins().stack_addr(ptr_ty, out_slot, 0);
+                let bail_ptr_v = bcx.ins().stack_addr(ptr_ty, bail_slot, 0);
+                let safepoint_ptr_v = bcx.ins().stack_addr(ptr_ty, safepoint_slot, 0);
+                let payload_ptr_v = bcx.ins().stack_addr(ptr_ty, payload_slot, 0);
+                let nargs_v = bcx.ins().iconst(ptr_ty, member.n_params as i64);
+                let one_depth = bcx.ins().iconst(ptr_ty, 1);
+                let child_depth = bcx.ins().iadd(native_call_depth, one_depth);
+                let call = bcx.ins().call(
+                    member_ref,
+                    &[
+                        args_ptr_v,
+                        nargs_v,
+                        lens_ptr_v,
+                        host_ctx,
+                        out_ptr_v,
+                        bail_ptr_v,
+                        safepoint_ptr_v,
+                        payload_ptr_v,
+                        child_depth,
+                    ],
+                );
+                // Non-chaining: a child bail (its own slots, discarded) shows up as
+                // completed != 1; propagate at this site (re-run-from-top).
+                let completed = bcx.inst_results(call)[0];
+                let one_i8 = bcx.ins().iconst(types::I8, 1);
+                let not_completed = bcx.ins().icmp(IntCC::NotEqual, completed, one_i8);
+                let cont = bail_if(
+                    &mut bcx,
+                    not_completed,
+                    fallback,
+                    safepoint_ptr,
+                    payload_ptr,
+                    &vars,
+                    &mut next_id,
+                    deopt!(i),
+                );
+                bcx.switch_to_block(cont);
+                let result = if member.return_type == JitValueType::Float {
                     bcx.ins().stack_load(types::F64, out_slot, 0)
                 } else {
                     bcx.ins().stack_load(types::I64, out_slot, 0)
@@ -6347,6 +6619,89 @@ mod tests {
         match m.call(sum, &[deep], &[0]) {
             NativeOutcome::Deopt { .. } => {}
             other => panic!("sum(deep) must bail at the depth cap, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn native_mutual_recursion_group_computes_and_caps_depth() {
+        // is_even(n) = if n<1 {1} else is_odd(n-1); is_odd(n) = if n<1 {0} else is_even(n-1).
+        // Compiled as a co-declared group via CallGroup (group_index 0=even, 1=odd).
+        let is_even = f(
+            1,
+            4,
+            vec![
+                JitInstr::LoadInt { dst: 1, value: 1 },
+                JitInstr::JumpIfIntCompare {
+                    lhs: 0,
+                    rhs: 1,
+                    op: JitCompare::Lt,
+                    expected: true,
+                    target: 5,
+                },
+                JitInstr::Sub {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                JitInstr::CallGroup {
+                    group_index: 1,
+                    dst: 3,
+                    args: vec![2],
+                },
+                JitInstr::Return { src: 3 },
+                JitInstr::Return { src: 1 },
+            ],
+        );
+        let is_odd = f(
+            1,
+            4,
+            vec![
+                JitInstr::LoadInt { dst: 1, value: 1 },
+                JitInstr::JumpIfIntCompare {
+                    lhs: 0,
+                    rhs: 1,
+                    op: JitCompare::Lt,
+                    expected: true,
+                    target: 5,
+                },
+                JitInstr::Sub {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                JitInstr::CallGroup {
+                    group_index: 0,
+                    dst: 3,
+                    args: vec![2],
+                },
+                JitInstr::Return { src: 3 },
+                JitInstr::LoadInt { dst: 1, value: 0 },
+                JitInstr::Return { src: 1 },
+            ],
+        );
+        let mut m = module();
+        let ids = m
+            .compile_recursive_group(&[is_even, is_odd])
+            .expect("mutually-recursive group compiles");
+        let (even, odd) = (ids[0], ids[1]);
+
+        // Shallow mutual recursion runs fully native and is correct.
+        for (n, want_even) in [(10, 1), (7, 0), (0, 1), (1, 0)] {
+            match m.call(even, &[n], &[0]) {
+                NativeOutcome::Completed(v) => assert_eq!(v, want_even, "is_even({n})"),
+                other => panic!("is_even({n}) expected Completed, got {other:?}"),
+            }
+        }
+        match m.call(odd, &[7], &[0]) {
+            NativeOutcome::Completed(v) => assert_eq!(v, 1, "is_odd(7)"),
+            other => panic!("is_odd(7) expected Completed(1), got {other:?}"),
+        }
+
+        // Recursion past the depth cap bails cleanly (no host-stack overflow).
+        let deep = NATIVE_RECURSION_DEPTH_CAP + 50;
+        match m.call(even, &[deep], &[0]) {
+            NativeOutcome::Deopt { .. } => {}
+            other => panic!("deep mutual recursion must bail at the cap, got {other:?}"),
         }
     }
 
