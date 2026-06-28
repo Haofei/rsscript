@@ -1556,6 +1556,7 @@ impl RegVm {
             written_regs,
             string_literals,
             variant_reconstructs,
+            some_option_reconstructs,
         ) = {
             // Fast path: cached and NOT at the header ⇒ nothing to do (no clone).
             if let Some(native) = self.native.as_ref() {
@@ -1688,9 +1689,10 @@ impl RegVm {
                                             reg_types,
                                             written_regs,
                                             string_literals,
-                                            // Direct path runs no RESULT-SR ⇒ no live-after
-                                            // Result reconstruction recipes.
+                                            // Direct path runs no RESULT-SR/OPTION-SR ⇒ no
+                                            // live-after reconstruction recipes.
                                             variant_reconstructs: Vec::new(),
+                                            some_option_reconstructs: Vec::new(),
                                         })
                                     }
                                     Err(_) => None,
@@ -1844,9 +1846,10 @@ impl RegVm {
                         // subset-or-option gate is satisfied. Identity (no Option) ⇒
                         // unchanged.
                         let lp1 = mapped_osr_loop(&code_r, &ip_map_r, lp_r.header)?;
-                        let (code1, n_regs1, ip_map1) = native_scalar_replace_options_in_region(
-                            &code_r, n_regs_r, lp1.header, lp1.exit,
-                        )?;
+                        let (code1, n_regs1, ip_map1, option_recipes1) =
+                            native_scalar_replace_options_in_region(
+                                &code_r, n_regs_r, lp1.header, lp1.exit,
+                            )?;
                         // OSR × J3 for VARIANTS: after dissolving Options/Results, re-detect
                         // the loop on the transformed stream and scalar-replace any
                         // non-escaping user variant whose arms carry only scalar fields
@@ -2043,7 +2046,9 @@ impl RegVm {
                                             // non-scalar Ok payload (struct handle, Bool,
                                             // flat) cannot be rematerialized here, so
                                             // decline OSR (fall back to interpreter).
-                                            for (_r, payload_reg) in &recipes_r {
+                                            for (_r, payload_reg) in
+                                                recipes_r.iter().chain(option_recipes1.iter())
+                                            {
                                                 match reg_types.get(*payload_reg) {
                                                     Some(NativeTy::Int | NativeTy::Float) => {}
                                                     _ => return None,
@@ -2063,6 +2068,7 @@ impl RegVm {
                                                 written_regs,
                                                 string_literals,
                                                 variant_reconstructs: recipes_r,
+                                                some_option_reconstructs: option_recipes1,
                                             })
                                         }
                                         Err(_) => None,
@@ -2106,6 +2112,7 @@ impl RegVm {
                     e.written_regs.clone(),
                     e.string_literals.clone(),
                     e.variant_reconstructs.clone(),
+                    e.some_option_reconstructs.clone(),
                 ),
                 _ => {
                     return false;
@@ -2485,6 +2492,18 @@ impl RegVm {
                             ),
                         ));
                         self.set_reg(base + *variant_reg, value);
+                    }
+                }
+                // J0.1(b): the Option analog — rebuild `Some(payload)` for a live-after
+                // always-`Some` Option from its scalar payload register. Absent payload
+                // ⇒ 0 native iterations ⇒ pre-loop value already correct, leave it.
+                for (opt_reg, payload_reg) in &some_option_reconstructs {
+                    if let Some(dr) = live.iter().find(|d| d.reg as usize == *payload_reg) {
+                        let payload = match dr.value {
+                            vm_jit::DeoptValue::Int(i) => VmValue::Int(i),
+                            vm_jit::DeoptValue::Float(f) => VmValue::Float(f),
+                        };
+                        self.set_reg(base + *opt_reg, VmValue::some(payload));
                     }
                 }
                 let n_params = func.params;

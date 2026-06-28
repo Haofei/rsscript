@@ -4196,7 +4196,7 @@ fn main() -> Unit {
             Some(candidate.header),
             "resolver should arm the selected deque loop",
         );
-        let (code, n_regs, ip_map) = native_scalar_replace_options_in_region(
+        let (code, n_regs, ip_map, _) = native_scalar_replace_options_in_region(
             &func.code,
             func.regs,
             candidate.header,
@@ -4514,7 +4514,7 @@ fn main() -> Unit {
             .into_iter()
             .next()
             .expect("loop should remain after result SR");
-        let (code, n_regs, _) =
+        let (code, n_regs, _, _) =
             native_scalar_replace_options_in_region(&code, n_regs, lp.header, lp.exit)
                 .unwrap_or_else(|| {
                     panic!(
@@ -4936,7 +4936,7 @@ fn main() -> Unit {
                 .expect("result SR should accept selfhost mailbox hot loop");
         let lp =
             detect_natural_loop_at(&code, lp.header).expect("loop should remain after result SR");
-        let (code, n_regs, _) =
+        let (code, n_regs, _, _) =
             native_scalar_replace_options_in_region(&code, n_regs, lp.header, lp.exit)
                 .expect("option SR should accept selfhost mailbox hot loop");
         let lp =

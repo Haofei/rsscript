@@ -1139,15 +1139,17 @@ fn main() -> Unit {
 }
 
 /// OSR × J3 negative test — the safety invariant guard. The core soundness rule of
-/// `native_scalar_replace_options_in_region` is that every scalar-replaced `Option`
-/// must be DEAD outside `[header, exit)`. Here `o` is declared before the loop AND
-/// read in a `match` AFTER it, so it is live across the loop boundary: the region
-/// gate MUST refuse to scalar-replace it and therefore MUST NOT OSR (`osr_entries
-/// == 0`), or the interpreter would read a stale `o` slot the native loop never
-/// wrote back. We assert both that the program is still correct (the interpreter
-/// runs the whole loop, no OSR) and that OSR genuinely bailed. This protects against
-/// a future edit to `instr_read_regs`/`instr_written_reg` accidentally making a
-/// boundary-escaping Option look dead.
+/// `native_scalar_replace_options_in_region` is that a scalar-replaced `Option` that
+/// is live after the loop may only OSR when it can be RECONSTRUCTED at OSR-exit
+/// (J0.1(b): always-`Some` with an unconditional scalar def — see
+/// `native_osr_j3_live_after_always_some_option_reconstructs`). Here `o` is
+/// CONDITIONALLY `None` (a `None` outcome inside the loop), so it is NOT always-`Some`
+/// and has no scalar payload to reconstruct on the `None` path: the pass MUST refuse
+/// to scalar-replace it and therefore MUST NOT OSR (`osr_entries == 0`), or the
+/// interpreter would read a stale `o` slot. We assert both that the program is still
+/// correct (the interpreter runs the whole loop, no OSR) and that OSR genuinely
+/// bailed. This protects the dead/None-arm-not-reconstructible boundary case against a
+/// future edit that accidentally makes a non-reconstructible escaping Option OSR.
 #[cfg(feature = "native-jit")]
 #[test]
 fn native_osr_j3_escaping_option_does_not_osr() {
@@ -1158,7 +1160,11 @@ fn f(limit: Int) -> Int {
     let mut total = 0
     let mut o: Option<Int> = None
     while i < limit {
-        o = Some(i)
+        if i < 5 {
+            o = None
+        } else {
+            o = Some(i)
+        }
         match o {
             Some(x) => {
                 total = total + x
@@ -1196,12 +1202,13 @@ fn main() -> Unit {
         interp.stdout, osr.stdout,
         "an Option read after the loop must still produce interpreter-identical output"
     );
-    // i in 0..60: total = 0+1+...+59 = 1770; o = Some(59) after the loop ⇒ "59".
-    assert_eq!(osr.stdout.trim_end(), "begin\n59\n1770\n1770");
+    // i<5 ⇒ o=None (total += 0); i in 5..60 ⇒ total += i = sum(5..=59) = 1760.
+    // o after the loop = Some(59) (last iteration, i=59 >= 5) ⇒ "59".
+    assert_eq!(osr.stdout.trim_end(), "begin\n59\n1760\n1760");
     assert_eq!(
         stats.osr_entries, 0,
-        "a loop whose Option is live after the loop must NOT OSR (the dead-at-boundary \
-         gate must bail): {stats:?}",
+        "a loop whose Option is conditionally None (not reconstructible) and live after \
+         the loop must NOT OSR: {stats:?}",
     );
 }
 
@@ -3666,6 +3673,63 @@ fn main() -> Unit {
     assert!(
         stats.osr_entries > 0,
         "a live-after always-Ok Result with an unconditional scalar def must OSR via \
+         reconstruction (J0.1(b)): {stats:?}",
+    );
+}
+
+/// OSR × J3 — J0.1(b) live-after always-`Some` Option RECONSTRUCTION (POSITIVE), the
+/// Option analog of the Result reconstruction above. `o = Some(i)` is a single,
+/// unconditionally-reached in-region `MakeSome` (always-`Some`, scalar payload) and
+/// `o` is read AFTER the loop. The OPTION-SR pass records a recipe; at OSR-exit the
+/// loop rebuilds `Some(last i)` into `o`'s slot so the post-loop `match o` is
+/// interpreter-identical. Contrast `native_osr_j3_escaping_option_does_not_osr`,
+/// whose `o` is conditionally `Some`/`None` (it has a `None` outcome) and so still
+/// declines.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j3_live_after_always_some_option_reconstructs() {
+    let source = "\
+fn f(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    let mut o: Option<Int> = Some(0)
+    while i < limit {
+        o = Some(i)
+        match o {
+            Some(v) => { total = total + v }
+            None => { total = total + 0 }
+        }
+        i = i + 1
+    }
+    match o {
+        Some(v) => { Log.write(message: read String.from_int(value: v)) }
+        None => { Log.write(message: read \"none\") }
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(limit: read 60)))
+    return Unit
+}
+";
+    let file = "jit-osr-j3-live-after-some-option.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "live-after Option reconstruction must be byte-identical to the interpreter"
+    );
+    // i in 0..60: total = 1770; o = Some(59) after the loop ⇒ "59".
+    assert_eq!(osr.stdout.trim_end(), "begin\n59\n1770\n1770");
+    assert!(
+        stats.osr_entries > 0,
+        "a live-after always-Some Option with an unconditional scalar def must OSR via \
          reconstruction (J0.1(b)): {stats:?}",
     );
 }

@@ -5494,7 +5494,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_options_in_region(
     n_regs: usize,
     header: usize,
     exit: usize,
-) -> Option<(Vec<RegInstr>, usize, Vec<usize>)> {
+) -> Option<(Vec<RegInstr>, usize, Vec<usize>, Vec<(usize, usize)>)> {
     if header >= exit || exit > code.len() {
         return None;
     }
@@ -5503,7 +5503,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_options_in_region(
     // Fast path: no Option op inside the region ⇒ identity transform (plain OSR).
     if !(header..exit).any(|i| is_option_op(&code[i])) {
         let ip_map: Vec<usize> = (0..code.len()).collect();
-        return Some((code.to_vec(), n_regs, ip_map));
+        return Some((code.to_vec(), n_regs, ip_map, Vec::new()));
     }
 
     // Every in-region instruction must be native-subset or one of the four Option
@@ -5600,21 +5600,84 @@ pub(in crate::reg_vm) fn native_scalar_replace_options_in_region(
         return None;
     }
 
-    // No out-of-region read of an OPT register (would observe a stale `o`). We prove
-    // this with a complete, conservative register footprint
-    // (`instr_read_regs`): a variant we cannot fully analyze reports
-    // `RegFootprint::All` (reads EVERY register), which only ever makes more
-    // registers appear live ⇒ more bails, never a missed escape. The common call
-    // family (`CallNative`/`CallKnown`/…, e.g. the wrapping `Log.write`) is
-    // enumerated exactly, so a genuinely loop-local Option still qualifies.
-    if analysis.external_reads_touch(code, &opt).unwrap_or(true) {
-        return None;
+    // J0.1(b) live-after always-`Some` Option reconstruction (the Option analog of the
+    // Result pass). Originally ANY out-of-region read of an OPT register bailed. We now
+    // allow a read AFTER the region by reconstructing `Some(payload)` at OSR-exit from
+    // its scalar payload register, with the same soundness obligations as the Result
+    // pass plus the always-`Some` requirement:
+    //   * no OPT register written at ip >= exit (pre-loop init, ip < header, is fine);
+    //   * a read BEFORE the region (live-in Option) is out of scope;
+    //   * the OPT register is always-`Some` (no in-region `LoadNone` def) — a `None`
+    //     outcome has no scalar payload to reconstruct and would make the payload only
+    //     maybe-assigned; and
+    //   * a single in-region `MakeSome` def reached UNCONDITIONALLY each iteration (so
+    //     the payload is definitely-assigned after >=1 iteration).
+    // (Conservative register footprints still hold: an unanalyzable instruction reports
+    // `RegFootprint::All`, which bails. The scalar-payload-TYPE check is deferred to the
+    // OsrEntry build site.)
+    let mut reconstruct = vec![false; n_regs];
+    for i in 0..code.len() {
+        if i >= header && i < exit {
+            continue;
+        }
+        match instr_written_reg(&code[i]) {
+            RegFootprint::Some(regs) => {
+                if i >= exit && regs.iter().any(|&r| r < n_regs && opt[r]) {
+                    return None;
+                }
+            }
+            RegFootprint::All => return None,
+        }
+        match instr_read_regs(&code[i]) {
+            RegFootprint::Some(regs) => {
+                for r in regs {
+                    if r < n_regs && opt[r] {
+                        if i < header {
+                            return None; // live-in Option (read before the loop)
+                        }
+                        reconstruct[r] = true;
+                    }
+                }
+            }
+            RegFootprint::All => return None,
+        }
     }
-    // Note on in-region leakage: a `tag`/`payload` value can never leak past `exit`
-    // because those are fresh registers (>= n_regs) emitted only inside the region,
-    // and `UnwrapSome` writes a plain scalar `dst` (an Int, fully captured by the
-    // deopt live-out payload) — the OPT register itself is never copied to a boundary
-    // register. So the boundary disjointness above is the complete proof.
+    for (reg, &needs) in reconstruct.iter().enumerate() {
+        if !needs {
+            continue;
+        }
+        // Always-`Some`: no in-region `LoadNone` def for this register.
+        if (header..exit).any(|i| matches!(&code[i], RegInstr::LoadNone { dst } if *dst == reg)) {
+            return None;
+        }
+        let in_region_defs: Vec<usize> = analysis
+            .writer_ips_of(code, reg)?
+            .into_iter()
+            .filter(|&i| i >= header && i < exit)
+            .collect();
+        if in_region_defs.len() != 1 {
+            return None;
+        }
+        let def_ip = in_region_defs[0];
+        for i in header..def_ip {
+            match &code[i] {
+                RegInstr::JumpIfBool { target, .. }
+                | RegInstr::JumpIfIntCompare { target, .. }
+                    if *target >= exit => {}
+                RegInstr::Jump { .. }
+                | RegInstr::JumpIfBool { .. }
+                | RegInstr::JumpIfIntCompare { .. }
+                | RegInstr::MatchOption { .. }
+                | RegInstr::MatchResult { .. }
+                | RegInstr::MatchVariant { .. }
+                | RegInstr::MatchMapGet { .. }
+                | RegInstr::MatchSortedMapGet { .. }
+                | RegInstr::Return { .. }
+                | RegInstr::RuntimeError { .. } => return None,
+                _ => {}
+            }
+        }
+    }
 
     // Allocate fresh tag/payload regs per OPT register.
     let mut tag_reg = vec![0usize; n_regs];
@@ -5627,6 +5690,14 @@ pub(in crate::reg_vm) fn native_scalar_replace_options_in_region(
             next_reg += 2;
         }
     }
+
+    // J0.1(b) Some-Option reconstruction recipes: (opt_reg, payload_reg).
+    let option_recipes: Vec<(usize, usize)> = reconstruct
+        .iter()
+        .enumerate()
+        .filter(|&(_, &needs)| needs)
+        .map(|(reg, _)| (reg, payload_reg[reg]))
+        .collect();
 
     // Rewrite the WHOLE code, scalar-replacing in-region Option ops and copying
     // everything else through verbatim; remap all jump/match targets through the
@@ -5786,7 +5857,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_options_in_region(
             ip_map[t] = i;
         }
     }
-    Some((new_code, next_reg, ip_map))
+    Some((new_code, next_reg, ip_map, option_recipes))
 }
 
 /// Whether a `MakeVariant` layout name is a `Result` constructor (`Ok`/`Err`). These

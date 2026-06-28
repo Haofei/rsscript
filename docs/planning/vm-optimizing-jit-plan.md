@@ -156,10 +156,14 @@ machinery **engage real program shapes and prove it**, not new subsystems. In pr
      (`tier.rs`): rebuild `Ok(payload)` = `VmValue::Variant(result_ok_layout(),
      [payload])` into the variant slot, or, after 0 iterations, leave the correct
      pre-loop value. The reconstructed value is observed after the loop, so a wrong
-     recipe diverges → **caught by the differential** (not a silent path). Tests:
-     `native_osr_j3_live_after_always_ok_result_reconstructs` (positive) +
-     `native_osr_j3_escaping_result_does_not_osr` (its `r` is built by a branchy inlined
-     `checked`, so the `Ok` def is NOT unconditional ⇒ still declines, `osr_entries==0`).
+     recipe diverges → **caught by the differential** (not a silent path). **The Option
+     analog also shipped** — a live-after always-`Some` Option reconstructs `Some(payload)`
+     via the same machinery (`OsrEntry.some_option_reconstructs`). Tests:
+     `native_osr_j3_live_after_always_ok_result_reconstructs` +
+     `native_osr_j3_live_after_always_some_option_reconstructs` (positive);
+     `native_osr_j3_escaping_result_does_not_osr` (branchy inlined `checked` ⇒ `Ok` def not
+     unconditional) and `native_osr_j3_escaping_option_does_not_osr` (conditionally `None`
+     ⇒ not always-`Some`) still decline (`osr_entries==0`).
      **Remaining (the original hard sub-case):** an `Err`/heap-payload arm that is
      actually TAKEN and live after the loop — a dissolved heap payload has no live heap
      object to write back. Approach: extend the recipe so a heap field references its

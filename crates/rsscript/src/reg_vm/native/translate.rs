@@ -2791,6 +2791,14 @@ pub(in crate::reg_vm) struct OsrEntry {
     /// are known). The reconstructed value is observed after the loop, so a wrong
     /// recipe diverges from the interpreter and is caught by the differential.
     pub(in crate::reg_vm) variant_reconstructs: Vec<(usize, usize)>,
+    /// J0.1(b) live-after always-`Some` Option reconstruction recipes — the `Option`
+    /// analog of [`variant_reconstructs`]. Each `(opt_reg, payload_reg)` is an Option
+    /// register the OPTION-SR pass dissolved that is always-`Some` (no in-region
+    /// `LoadNone` def), reached unconditionally, scalar payload, and READ after the
+    /// loop. OSR-exit rebuilds `Some(payload)` = `VmValue::some(payload)` into
+    /// `opt_reg`, or leaves the correct pre-loop value after 0 iterations. Same
+    /// soundness obligations and differential coverage as [`variant_reconstructs`].
+    pub(in crate::reg_vm) some_option_reconstructs: Vec<(usize, usize)>,
 }
 
 /// Detect one natural loop at a specific header, allowing other disjoint loops
