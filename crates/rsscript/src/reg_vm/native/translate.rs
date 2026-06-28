@@ -345,15 +345,35 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                     ok && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
                 RegInstr::CallKnown {
-                    dst, args, mut_args, ..
+                    dst,
+                    function,
+                    args,
+                    mut_args,
                 } if group_call_sites.contains_key(&ip_map[i]) => {
-                    // Mutually-recursive group call (native-call-ABI slice 4): the
-                    // mutual-recursive int group is all-scalar-Int, so args/result Int.
+                    // Mutually-recursive group call (native-call-ABI slice 4): args and
+                    // result take the *callee* member's declared parameter/return types,
+                    // so a Bool-returning member (e.g. `is_even`/`is_odd`) types its
+                    // result `Bool` rather than being forced to `Int`.
+                    let callee_sig = unit
+                        .functions
+                        .get(*function)
+                        .and_then(|cf| unit.native_signatures.get(&cf.name));
                     let mut ok = mut_args.is_empty();
-                    for arg in args {
-                        ok = ok && native_set_ty(ty, *arg, NativeTy::Int, c);
+                    for (pi, arg) in args.iter().enumerate() {
+                        if let Some(pty) = callee_sig
+                            .and_then(|s| s.params.get(pi))
+                            .and_then(|d| native_declared_type_name_to_ty(d))
+                        {
+                            ok = ok && native_set_ty(ty, *arg, pty, c);
+                        }
                     }
-                    ok && native_set_ty(ty, *dst, NativeTy::Int, c)
+                    if let Some(ret) = callee_sig
+                        .and_then(|s| s.return_type.as_deref())
+                        .and_then(native_declared_type_name_to_ty)
+                    {
+                        ok = ok && native_set_ty(ty, *dst, ret, c);
+                    }
+                    ok
                 }
                 RegInstr::CallKnown {
                     dst,

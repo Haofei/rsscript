@@ -3475,10 +3475,12 @@ fn main() -> Unit {
     );
 }
 
-/// Negative (mutual recursion): `is_even`/`is_odd` call *each other* in tail
-/// position, not themselves. TCO only rewrites *self*-tail-calls, so neither is
-/// transformed; the mutual call cycle remains, keeping both functions
-/// interpreter-only (`native_calls == 0`). Output must match the interpreter.
+/// Mutual recursion (deep): `is_even`/`is_odd` (Bool) call *each other*. The Bool
+/// group is native-eligible (slice 4 + Bool support). `is_even(1000)` recurses past
+/// the native depth cap, so the deep entry bails cleanly at the cap and finishes on
+/// the interpreter — but the interpreter's *shallow* sub-calls (depth < cap) still
+/// complete natively. The result must match the interpreter regardless of where the
+/// cap falls. The pure-native shallow case is `native_mutual_recursion_bool_runs_native`.
 #[cfg(feature = "native-jit")]
 #[test]
 fn tco_leaves_mutual_recursion_untouched() {
@@ -3513,9 +3515,11 @@ fn main() -> Unit {
         "result must match interpreter"
     );
     assert_eq!(native.stdout.trim(), "true");
-    assert_eq!(
-        stats.native_calls, 0,
-        "mutual recursion is not a self-tail-call; TCO must leave it interpreted: {stats:?}"
+    // The deep entry bails at the cap; shallow sub-calls (depth < cap) still complete
+    // natively, so the native path participates without changing the result.
+    assert!(
+        stats.native_calls > 0,
+        "deep mutual recursion should still native-accelerate its shallow sub-calls: {stats:?}"
     );
 }
 
@@ -4653,5 +4657,39 @@ fn main() -> Unit {
     assert!(
         stats.native_calls > 0,
         "is_even/is_odd must run via the native mutual-recursion group: {stats:?}",
+    );
+}
+
+/// Native-call ABI (slice 4 + Bool support): a Bool-returning mutual-recursion
+/// group (`is_even`/`is_odd` -> Bool) runs NATIVELY when the depth stays under the
+/// cap, byte-identical to the interpreter, and the i64 result wraps back to `Bool`.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_mutual_recursion_bool_runs_native() {
+    let source = "\
+fn is_even(n: Int) -> Bool {
+    if n == 0 { return true }
+    return is_odd(n: n - 1)
+}
+fn is_odd(n: Int) -> Bool {
+    if n == 0 { return false }
+    return is_even(n: n - 1)
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_bool(value: is_even(n: 20)))
+    Log.write(message: read String.from_bool(value: is_odd(n: 20)))
+    return Unit
+}
+";
+    let interp = common::run_vm_source("native-mutual-bool.rss", source, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source("native-mutual-bool.rss", source).expect("compile");
+    let (out, stats) = exe
+        .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
+        .expect("native run");
+    assert_eq!(out.stdout.trim_end(), "true\nfalse");
+    assert_eq!(interp.stdout, out.stdout, "Bool mutual recursion native must match interpreter");
+    assert!(
+        stats.native_calls > 0,
+        "shallow Bool mutual recursion should run natively: {stats:?}",
     );
 }

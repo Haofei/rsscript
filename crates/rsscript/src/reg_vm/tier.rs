@@ -2667,7 +2667,10 @@ impl RegVm {
             return None;
         }
         let key = Rc::as_ptr(func) as usize;
-        let id = {
+        // Resolve the called member's native id and its return kind (Int → wrap the
+        // result `i64` as `VmValue::Int`, Bool → as `VmValue::Bool`). Cached per
+        // member; compiling any member compiles the whole group.
+        let (id, returns_bool) = {
             let native = self.native.as_mut()?;
             if native.force_bail
                 || native.forced_safepoint.is_some()
@@ -2686,6 +2689,7 @@ impl RegVm {
                         .map(|(i, &fid)| (fid, i as u32))
                         .collect();
                     let mut jit_funcs = Vec::with_capacity(scc.len());
+                    let mut member_returns_bool = Vec::with_capacity(scc.len());
                     for &member in scc {
                         let mfunc = unit.functions.get(member)?;
                         let group_call_sites: std::collections::HashMap<usize, u32> = mfunc
@@ -2708,24 +2712,30 @@ impl RegVm {
                             &std::collections::HashSet::new(),
                             &group_call_sites,
                         )?;
-                        if ret != NativeTy::Int {
-                            return None;
-                        }
+                        // i64-scalar returns only: Int or Bool (both wrap from i64).
+                        let returns_bool = match ret {
+                            NativeTy::Int => false,
+                            NativeTy::Bool => true,
+                            _ => return None,
+                        };
+                        member_returns_bool.push(returns_bool);
                         jit_funcs.push(jit_fn);
                     }
-                    native.module.compile_recursive_group(&jit_funcs).ok()
+                    let ids = native.module.compile_recursive_group(&jit_funcs).ok()?;
+                    Some((ids, member_returns_bool))
                 });
                 match (group, compiled) {
-                    (Some(scc), Some(ids)) if ids.len() == scc.len() => {
-                        let mut my_id = None;
+                    (Some(scc), Some((ids, member_returns_bool))) if ids.len() == scc.len() => {
+                        let mut mine = None;
                         for (i, &member) in scc.iter().enumerate() {
                             let mkey = Rc::as_ptr(&unit.functions[member]) as usize;
-                            native.mutual_recursive_native.insert(mkey, Some(ids[i]));
+                            let entry = (ids[i], member_returns_bool[i]);
+                            native.mutual_recursive_native.insert(mkey, Some(entry));
                             if member == function_id {
-                                my_id = Some(ids[i]);
+                                mine = Some(entry);
                             }
                         }
-                        my_id?
+                        mine?
                     }
                     (group, _) => {
                         // Cache ineligibility (for the whole detected group, or this key).
@@ -2747,10 +2757,13 @@ impl RegVm {
         };
         let mut int_args = Vec::with_capacity(args.len());
         for &arg in args {
-            let VmValue::Int(value) = self.reg(caller_base + arg) else {
-                return None;
+            // Scalar value args marshal to `i64` (Bool as 0/1, like the native ABI).
+            let bits = match self.reg(caller_base + arg) {
+                VmValue::Int(value) => *value,
+                VmValue::Bool(value) => *value as i64,
+                _ => return None,
             };
-            int_args.push(*value);
+            int_args.push(bits);
         }
         let lens = vec![0i64; int_args.len()];
         let mut heap_tx = JitNativeCallFrame::begin();
@@ -2768,7 +2781,11 @@ impl RegVm {
                 {
                     native.stats.native_calls += 1;
                 }
-                Some(VmValue::Int(bits))
+                Some(if returns_bool {
+                    VmValue::Bool(bits != 0)
+                } else {
+                    VmValue::Int(bits)
+                })
             }
             _ => {
                 heap_tx.abort();
@@ -3042,6 +3059,18 @@ fn require_scalar_kind(
     }
 }
 
+/// A call argument, call result, or return value must be a scalar VALUE kind —
+/// `Int` or `Bool` (both i64-represented). `Unknown` is permitted here (it is
+/// constrained by the reg's other uses, or defaults to `Int` in native lowering);
+/// `Unit` is rejected. Used to widen recursion eligibility from Int-only to any
+/// i64 scalar without forcing a specific kind at calls/returns.
+fn require_scalar_value(kinds: &[ScalarSlotKind], reg: usize) -> Option<bool> {
+    match kinds.get(reg)? {
+        ScalarSlotKind::Int | ScalarSlotKind::Bool | ScalarSlotKind::Unknown => Some(false),
+        ScalarSlotKind::Unit => None,
+    }
+}
+
 fn propagate_same_kind(kinds: &mut [ScalarSlotKind], dst: usize, src: usize) -> Option<bool> {
     let dst_kind = *kinds.get(dst)?;
     let src_kind = *kinds.get(src)?;
@@ -3062,28 +3091,34 @@ fn propagate_same_kind(kinds: &mut [ScalarSlotKind], dst: usize, src: usize) -> 
 
 fn compute_self_recursive_int_jit_candidate(unit: &RegUnit, function_id: usize) -> bool {
     let group: std::collections::HashSet<usize> = std::iter::once(function_id).collect();
-    compute_recursive_int_member_inner(unit, function_id, &group).unwrap_or(false)
+    // Self-recursion is Int-only: on a depth-cap/compile bail it falls back to the
+    // tier-0 i64 scalar executor, which cannot represent a Bool/Float return.
+    compute_recursive_int_member_inner(unit, function_id, &group) == Some(ScalarSlotKind::Int)
 }
 
 /// Scalar-`Int` recursion analysis for one member of a recursive `group`: the body
 /// must be all-scalar-`Int`, return `Int`, and every `CallKnown` must target a group
 /// member (self for self-recursion, or any sibling for mutual recursion) with scalar
 /// args and matching arity. `group = {function_id}` is the self-recursive case.
+/// Scalar recursion analysis for one member of a recursive `group`. Returns the
+/// member's RETURN value kind (`Int` or `Bool`) when it is a valid all-scalar-i64
+/// recursive machine whose every `CallKnown` targets a group member with scalar
+/// value args; `None` when ineligible. The caller decides which return kinds it
+/// accepts (self-recursion: `Int` only, since its tier-0 fallback is an i64 machine;
+/// mutual recursion: `Int` or `Bool`, since its fallback is the full interpreter).
 fn compute_recursive_int_member_inner(
     unit: &RegUnit,
     function_id: usize,
     group: &std::collections::HashSet<usize>,
-) -> Option<bool> {
-    let Some(func) = unit.functions.get(function_id) else {
-        return Some(false);
-    };
+) -> Option<ScalarSlotKind> {
+    let func = unit.functions.get(function_id)?;
     if func.captures != 0 || func.params > func.regs {
-        return Some(false);
+        return None;
     }
     let mut kinds = vec![ScalarSlotKind::Unknown; func.regs];
     let reachable = scalar_reachable_instructions(&func.code);
     let mut saw_self_call = false;
-    let mut saw_int_return = false;
+    let mut return_srcs: Vec<usize> = Vec::new();
 
     loop {
         let mut changed = false;
@@ -3152,21 +3187,24 @@ fn compute_recursive_int_member_inner(
                     && unit.functions.get(*function).is_some_and(|f| f.params == args.len()) =>
                 {
                     saw_self_call = true;
-                    let mut local_changed =
-                        require_scalar_kind(&mut kinds, *dst, ScalarSlotKind::Int)?;
+                    // Call args/result are scalar VALUE kinds (Int or Bool); the exact
+                    // per-call kinds are pinned later by translate via declared sigs.
+                    let mut local_changed = require_scalar_value(&kinds, *dst)?;
                     for &arg in args {
-                        local_changed |= require_scalar_kind(&mut kinds, arg, ScalarSlotKind::Int)?;
+                        local_changed |= require_scalar_value(&kinds, arg)?;
                     }
                     Some(local_changed)
                 }
                 RegInstr::Return { src } => {
-                    saw_int_return = true;
-                    require_scalar_kind(&mut kinds, *src, ScalarSlotKind::Int)
+                    if !return_srcs.contains(src) {
+                        return_srcs.push(*src);
+                    }
+                    require_scalar_value(&kinds, *src)
                 }
-                _ => return Some(false),
+                _ => return None,
             };
             let Some(step_changed) = step else {
-                return Some(false);
+                return None;
             };
             changed |= step_changed;
         }
@@ -3175,14 +3213,34 @@ fn compute_recursive_int_member_inner(
         }
     }
 
-    Some(
-        saw_self_call
-            && saw_int_return
-            && kinds
-                .iter()
-                .take(func.params)
-                .all(|kind| *kind == ScalarSlotKind::Int),
-    )
+    if !saw_self_call {
+        return None;
+    }
+    if !kinds
+        .iter()
+        .take(func.params)
+        .all(|kind| matches!(kind, ScalarSlotKind::Int | ScalarSlotKind::Bool))
+    {
+        return None;
+    }
+    // The member's return kind is fixed by its returns. A return of a recursive
+    // call's result is `Unknown` here (its kind is the callee's, pinned later by
+    // translate via declared sigs) — skip those; the concrete returns (literals,
+    // comparisons) must all agree on one scalar value kind, and there must be at
+    // least one. `Unit` (or any non-value) makes the member ineligible.
+    let mut return_kind = None;
+    for &src in &return_srcs {
+        match *kinds.get(src)? {
+            ScalarSlotKind::Unknown => continue,
+            kind @ (ScalarSlotKind::Int | ScalarSlotKind::Bool) => match return_kind {
+                None => return_kind = Some(kind),
+                Some(prev) if prev == kind => {}
+                Some(_) => return None,
+            },
+            ScalarSlotKind::Unit => return None,
+        }
+    }
+    return_kind
 }
 
 /// The mutually-recursive group (call-graph SCC) containing `function_id`, if it is
@@ -3231,8 +3289,11 @@ fn native_recursive_int_group(unit: &RegUnit, function_id: usize) -> Option<Vec<
     }
     let group: HashSet<usize> = scc.iter().copied().collect();
     for &member in &scc {
-        if !compute_recursive_int_member_inner(unit, member, &group).unwrap_or(false) {
-            return None;
+        // Mutual recursion falls back to the full interpreter (not the i64 tier-0
+        // executor), so any scalar value return kind (Int or Bool) is admissible.
+        match compute_recursive_int_member_inner(unit, member, &group) {
+            Some(ScalarSlotKind::Int | ScalarSlotKind::Bool) => {}
+            _ => return None,
         }
     }
     Some(scc)

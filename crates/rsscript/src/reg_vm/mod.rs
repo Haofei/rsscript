@@ -2184,10 +2184,11 @@ struct NativeState {
     /// natively self-recursion-compilable (fall back to the tier-0 scalar executor).
     self_recursive_native: HashMap<usize, Option<vm_jit::CompiledId>>,
     /// Native mutual-recursion cache (native-call-ABI slice 4): per-function
-    /// (`*const RegFunction` key) compiled group-member `CompiledId`. Compiling any
-    /// member of a recursive cycle compiles+caches the whole group. `None` = known
-    /// not a natively-compilable mutual-recursion member (fall back to interpreter).
-    mutual_recursive_native: HashMap<usize, Option<vm_jit::CompiledId>>,
+    /// (`*const RegFunction` key) compiled group-member `(CompiledId, returns_bool)`,
+    /// where `returns_bool` wraps the native `i64` result as `Bool` vs `Int`.
+    /// Compiling any member of a recursive cycle compiles+caches the whole group.
+    /// `None` = known not a natively-compilable mutual-recursion member (interpreter).
+    mutual_recursive_native: HashMap<usize, Option<(vm_jit::CompiledId, bool)>>,
     /// Reusable per-call marshalling scratch buffers (TV2 arg/len words and the
     /// flat-list `Rc` keep-alive set). Held here and `mem::take`n into the call
     /// frame so a hot per-iteration native dispatch (e.g. a tiny leaf/closure
