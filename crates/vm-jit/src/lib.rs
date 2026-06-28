@@ -216,6 +216,10 @@ pub type SortedMapInsertIntFn = extern "C" fn(HostCtx, i64, i64, i64) -> i64;
 /// key, or 0 for a missing key. Call `sorted_map_get_found` to distinguish
 /// missing from a real zero payload. Wrong shape/non-Int payloads signal a bail.
 pub type SortedMapGetIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
+/// `(map_handle, key) -> f64`: Float value-side mirror of [`SortedMapGetIntFn`] for a
+/// sorted `Map<_, Float>`. Call `sorted_map_get_found` to distinguish missing from a
+/// real `0.0` payload. Wrong shape / non-Float payloads signal a bail.
+pub type SortedMapGetFloatFn = extern "C" fn(HostCtx, i64, i64) -> f64;
 /// `() -> i64`: return whether the previous sorted-map get helper found its key.
 pub type SortedMapGetFoundFn = extern "C" fn(HostCtx) -> i64;
 /// `(map_handle, key) -> i64`: return `1` when the Int key exists, else `0`.
@@ -239,6 +243,12 @@ pub type DequePopFrontIntFn = extern "C" fn(HostCtx, i64) -> i64;
 /// `(deque_handle) -> i64`: pop an Int from the back of a deque. Empty or non-Int
 /// payloads signal a bail; RSScript's interpreter then executes the `None` path.
 pub type DequePopBackIntFn = extern "C" fn(HostCtx, i64) -> i64;
+/// `(deque_handle) -> f64`: pop a `Float` from the front of a `Deque<Float>` (Float
+/// value-side mirror of [`DequePopFrontIntFn`]). Empty or non-Float payloads signal a
+/// bail; the interpreter then executes the `None` path.
+pub type DequePopFrontFloatFn = extern "C" fn(HostCtx, i64) -> f64;
+/// `(deque_handle) -> f64`: pop a `Float` from the back of a `Deque<Float>`.
+pub type DequePopBackFloatFn = extern "C" fn(HostCtx, i64) -> f64;
 
 /// Host helper functions the compiled code calls to read heap values (struct
 /// fields, list elements) that don't fit in a scalar register. The `rsscript`
@@ -306,6 +316,7 @@ pub struct HostHelpers {
     pub sorted_set_is_empty: IsEmptyFn,
     pub sorted_map_insert_int: SortedMapInsertIntFn,
     pub sorted_map_get_int: SortedMapGetIntFn,
+    pub sorted_map_get_float: SortedMapGetFloatFn,
     pub sorted_map_get_found: SortedMapGetFoundFn,
     pub sorted_map_contains_key_int: SortedMapContainsKeyIntFn,
     pub sorted_map_is_empty: IsEmptyFn,
@@ -318,6 +329,8 @@ pub struct HostHelpers {
     pub deque_push_front_float: DequePushFrontFloatFn,
     pub deque_pop_front_int: DequePopFrontIntFn,
     pub deque_pop_back_int: DequePopBackIntFn,
+    pub deque_pop_front_float: DequePopFrontFloatFn,
+    pub deque_pop_back_float: DequePopBackFloatFn,
 }
 
 /// Version of the [`JitInstr`]/[`JitFunction`] IR this crate consumes. The
@@ -866,6 +879,13 @@ host_helpers! {
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
     },
+    SortedMapGetFloat => {
+        field: sorted_map_get_float,
+        symbol: "rss_jit_sorted_map_get_float",
+        args: [JitValueType::Handle, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Float),
+        failure: HostFailureMode::BailFlag,
+    },
     SortedMapGetFound => {
         field: sorted_map_get_found,
         symbol: "rss_jit_sorted_map_get_found",
@@ -945,6 +965,22 @@ host_helpers! {
         symbol: "rss_jit_deque_pop_front_int",
         args: [JitValueType::Handle],
         result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::MutatesInput,
+    },
+    DequePopFrontFloat => {
+        field: deque_pop_front_float,
+        symbol: "rss_jit_deque_pop_front_float",
+        args: [JitValueType::Handle],
+        result: HostResult::Exact(JitValueType::Float),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::MutatesInput,
+    },
+    DequePopBackFloat => {
+        field: deque_pop_back_float,
+        symbol: "rss_jit_deque_pop_back_float",
+        args: [JitValueType::Handle],
+        result: HostResult::Exact(JitValueType::Float),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
     },
@@ -1158,6 +1194,15 @@ pub enum JitInstr {
     },
     /// `SortedMap.get` fused with an Option match for Int-keyed sorted maps.
     MatchSortedMapGetInt {
+        map: u32,
+        key: u32,
+        value_dst: u32,
+        some_ip: u32,
+        none_ip: u32,
+    },
+    /// `SortedMap.get` fused with an Option match for an Int-keyed sorted
+    /// `Map<_, Float>` — the Float value-side mirror of [`MatchSortedMapGetInt`].
+    MatchSortedMapGetFloat {
         map: u32,
         key: u32,
         value_dst: u32,
@@ -2946,6 +2991,23 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                 check_target(*some_ip)?;
                 check_target(*none_ip)?;
             }
+            JitInstr::MatchSortedMapGetFloat {
+                map,
+                key,
+                value_dst,
+                some_ip,
+                none_ip,
+            } => {
+                require_class(*map, JitValueType::Handle, "MatchSortedMapGetFloat map")?;
+                require_class(*key, JitValueType::Int, "MatchSortedMapGetFloat key")?;
+                require_class(
+                    *value_dst,
+                    JitValueType::Float,
+                    "MatchSortedMapGetFloat value",
+                )?;
+                check_target(*some_ip)?;
+                check_target(*none_ip)?;
+            }
             JitInstr::BitAnd { dst, lhs, rhs } => int_op(*dst, *lhs, *rhs, "BitAnd")?,
             JitInstr::BitOr { dst, lhs, rhs } => int_op(*dst, *lhs, *rhs, "BitOr")?,
             JitInstr::BitXor { dst, lhs, rhs } => int_op(*dst, *lhs, *rhs, "BitXor")?,
@@ -3096,6 +3158,7 @@ fn instr_def(instr: &JitInstr) -> Option<u32> {
         | JitInstr::MatchMapGetInt { value_dst: dst, .. }
         | JitInstr::MatchMapGetFloat { value_dst: dst, .. }
         | JitInstr::MatchSortedMapGetInt { value_dst: dst, .. }
+        | JitInstr::MatchSortedMapGetFloat { value_dst: dst, .. }
         | JitInstr::ListGetIntDirect { dst, .. }
         | JitInstr::ListSetIntDirect { dst, .. }
         | JitInstr::ListGetFloatDirect { dst, .. }
@@ -3151,6 +3214,9 @@ fn successors(program: &JitFunction, i: usize) -> Vec<usize> {
             some_ip, none_ip, ..
         }
         | JitInstr::MatchSortedMapGetInt {
+            some_ip, none_ip, ..
+        }
+        | JitInstr::MatchSortedMapGetFloat {
             some_ip, none_ip, ..
         } => {
             let mut succ = Vec::new();
@@ -3975,6 +4041,9 @@ fn build_function(
             }
             | JitInstr::MatchSortedMapGetInt {
                 some_ip, none_ip, ..
+            }
+            | JitInstr::MatchSortedMapGetFloat {
+                some_ip, none_ip, ..
             } => {
                 is_leader[*some_ip as usize] = true;
                 is_leader[*none_ip as usize] = true;
@@ -4083,7 +4152,9 @@ fn build_function(
             // BEFORE the host C stack can overflow. Non-recursive functions emit
             // nothing here.
             if has_call_self || has_call_group {
-                let cap = bcx.ins().iconst(ptr_ty, native_recursion_depth_cap(program));
+                let cap = bcx
+                    .ins()
+                    .iconst(ptr_ty, native_recursion_depth_cap(program));
                 let too_deep =
                     bcx.ins()
                         .icmp(IntCC::UnsignedGreaterThanOrEqual, native_call_depth, cap);
@@ -4481,8 +4552,7 @@ fn build_function(
                 // bail we propagate to the interpreter rather than reconstructing an
                 // unbounded native frame chain. Forward `depth + 1` so the callee's
                 // entry guard sees a deeper frame; that guard bounds the host stack.
-                let self_ref =
-                    self_ref.expect("self func ref declared when a CallSelf is present");
+                let self_ref = self_ref.expect("self func ref declared when a CallSelf is present");
                 let n_params = program.n_params as usize;
                 let slot_bytes = |words: usize| (words.max(1) * 8) as u32;
                 let args_slot = bcx.create_sized_stack_slot(StackSlotData::new(
@@ -4505,7 +4575,8 @@ fn build_function(
                     let value = bcx.use_var(reg(arg));
                     bcx.ins().stack_store(value, args_slot, (i_arg as i32) * 8);
                     // Self params are scalar (validated): no flat-array length needed.
-                    bcx.ins().stack_store(zero_i64, lens_slot, (i_arg as i32) * 8);
+                    bcx.ins()
+                        .stack_store(zero_i64, lens_slot, (i_arg as i32) * 8);
                 }
                 let args_ptr_v = bcx.ins().stack_addr(ptr_ty, args_slot, 0);
                 let lens_ptr_v = bcx.ins().stack_addr(ptr_ty, lens_slot, 0);
@@ -4584,12 +4655,21 @@ fn build_function(
                     slot_bytes(member.n_params),
                     3,
                 ));
-                let out_slot =
-                    bcx.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 8, 3));
-                let bail_slot =
-                    bcx.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 1, 0));
-                let safepoint_slot =
-                    bcx.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 8, 3));
+                let out_slot = bcx.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    8,
+                    3,
+                ));
+                let bail_slot = bcx.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    1,
+                    0,
+                ));
+                let safepoint_slot = bcx.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    8,
+                    3,
+                ));
                 let payload_slot = bcx.create_sized_stack_slot(StackSlotData::new(
                     StackSlotKind::ExplicitSlot,
                     slot_bytes(member.deopt_payload_words),
@@ -4602,7 +4682,8 @@ fn build_function(
                 for (i_arg, &arg) in args.iter().enumerate() {
                     let value = bcx.use_var(reg(arg));
                     bcx.ins().stack_store(value, args_slot, (i_arg as i32) * 8);
-                    bcx.ins().stack_store(zero_i64, lens_slot, (i_arg as i32) * 8);
+                    bcx.ins()
+                        .stack_store(zero_i64, lens_slot, (i_arg as i32) * 8);
                 }
                 let args_ptr_v = bcx.ins().stack_addr(ptr_ty, args_slot, 0);
                 let lens_ptr_v = bcx.ins().stack_addr(ptr_ty, lens_slot, 0);
@@ -4739,6 +4820,44 @@ fn build_function(
                 let key_value = bcx.use_var(reg(*key));
                 let loaded = bcx.ins().call(
                     helper_ref(HostHelper::SortedMapGetInt),
+                    &[host_ctx, map_value, key_value],
+                );
+                let value = bcx.inst_results(loaded)[0];
+                let cont = bail_if_helper_failed(
+                    &mut bcx,
+                    bail_ptr,
+                    fallback,
+                    safepoint_ptr,
+                    payload_ptr,
+                    &vars,
+                    &mut next_id,
+                    deopt!(i),
+                );
+                bcx.switch_to_block(cont);
+                let found_call = bcx
+                    .ins()
+                    .call(helper_ref(HostHelper::SortedMapGetFound), &[host_ctx]);
+                let found = bcx.inst_results(found_call)[0];
+                let some_block = block_for[*some_ip as usize].unwrap();
+                let none_block = block_for[*none_ip as usize].unwrap();
+                let zero = bcx.ins().iconst(types::I64, 0);
+                let is_found = bcx.ins().icmp(IntCC::NotEqual, found, zero);
+                bcx.def_var(reg(*value_dst), value);
+                bcx.ins().brif(is_found, some_block, &[], none_block, &[]);
+                terminated = true;
+            }
+            JitInstr::MatchSortedMapGetFloat {
+                map,
+                key,
+                value_dst,
+                some_ip,
+                none_ip,
+            } => {
+                // Mirror of MatchSortedMapGetInt; f64 payload helper + Float value_dst.
+                let map_value = bcx.use_var(reg(*map));
+                let key_value = bcx.use_var(reg(*key));
+                let loaded = bcx.ins().call(
+                    helper_ref(HostHelper::SortedMapGetFloat),
                     &[host_ctx, map_value, key_value],
                 );
                 let value = bcx.inst_results(loaded)[0];
@@ -5620,6 +5739,8 @@ mod tests {
             HostHelper::DequePushFrontFloat,
             HostHelper::DequePopFrontInt,
             HostHelper::DequePopBackInt,
+            HostHelper::DequePopFrontFloat,
+            HostHelper::DequePopBackFloat,
         ]);
         let mut allocates_result = std::collections::HashSet::from([
             HostHelper::ListNewInt,
@@ -5700,7 +5821,12 @@ mod tests {
     extern "C" fn noop_field_set_int(_ctx: HostCtx, _handle: i64, _slot: i64, _value: i64) -> i64 {
         0
     }
-    extern "C" fn noop_field_set_float(_ctx: HostCtx, _handle: i64, _slot: i64, _value: f64) -> i64 {
+    extern "C" fn noop_field_set_float(
+        _ctx: HostCtx,
+        _handle: i64,
+        _slot: i64,
+        _value: f64,
+    ) -> i64 {
         0
     }
     extern "C" fn noop_list_len(_ctx: HostCtx, _handle: i64) -> i64 {
@@ -5718,7 +5844,12 @@ mod tests {
     extern "C" fn noop_list_set_int(_ctx: HostCtx, _handle: i64, _index: i64, _value: i64) -> i64 {
         0
     }
-    extern "C" fn noop_list_set_float(_ctx: HostCtx, _handle: i64, _index: i64, _value: f64) -> i64 {
+    extern "C" fn noop_list_set_float(
+        _ctx: HostCtx,
+        _handle: i64,
+        _index: i64,
+        _value: f64,
+    ) -> i64 {
         0
     }
     extern "C" fn noop_list_push_int(_ctx: HostCtx, _handle: i64, _value: i64) -> i64 {
@@ -5850,6 +5981,9 @@ mod tests {
     extern "C" fn noop_sorted_map_get_int(_ctx: HostCtx, _map: i64, _key: i64) -> i64 {
         0
     }
+    extern "C" fn noop_sorted_map_get_float(_ctx: HostCtx, _map: i64, _key: i64) -> f64 {
+        0.0
+    }
     extern "C" fn noop_sorted_map_get_found(_ctx: HostCtx) -> i64 {
         0
     }
@@ -5876,6 +6010,12 @@ mod tests {
     }
     extern "C" fn noop_deque_pop_front_int(_ctx: HostCtx, _deque: i64) -> i64 {
         0
+    }
+    extern "C" fn noop_deque_pop_front_float(_ctx: HostCtx, _deque: i64) -> f64 {
+        0.0
+    }
+    extern "C" fn noop_deque_pop_back_float(_ctx: HostCtx, _deque: i64) -> f64 {
+        0.0
     }
     extern "C" fn noop_deque_pop_back_int(_ctx: HostCtx, _deque: i64) -> i64 {
         0
@@ -5935,6 +6075,7 @@ mod tests {
             sorted_set_is_empty: noop_is_empty,
             sorted_map_insert_int: noop_sorted_map_insert_int,
             sorted_map_get_int: noop_sorted_map_get_int,
+            sorted_map_get_float: noop_sorted_map_get_float,
             sorted_map_get_found: noop_sorted_map_get_found,
             sorted_map_contains_key_int: noop_sorted_map_contains_key_int,
             sorted_map_is_empty: noop_is_empty,
@@ -5947,6 +6088,8 @@ mod tests {
             deque_push_front_float: noop_deque_push_front_float,
             deque_pop_front_int: noop_deque_pop_front_int,
             deque_pop_back_int: noop_deque_pop_back_int,
+            deque_pop_front_float: noop_deque_pop_front_float,
+            deque_pop_back_float: noop_deque_pop_back_float,
         }
     }
 
@@ -8600,8 +8743,7 @@ mod tests {
                 for &(reg, ty) in &site.live {
                     match ty {
                         JitValueType::Int | JitValueType::Float => {
-                            let got =
-                                live_value(&out, reg).expect("captured scalar reg present");
+                            let got = live_value(&out, reg).expect("captured scalar reg present");
                             assert_eq!(
                                 got,
                                 (case.expect)(reg),

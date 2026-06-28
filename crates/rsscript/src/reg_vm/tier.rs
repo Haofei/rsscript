@@ -245,14 +245,12 @@ fn native_ty_is_callable_return_abi(ty: NativeTy) -> bool {
 #[cfg(feature = "native-jit")]
 fn native_call_mut_args_supported(mut_args: &[usize], param_tys: &[NativeTy]) -> bool {
     mut_args.iter().all(|&pos| {
-        param_tys
-            .get(pos)
-            .is_some_and(|ty| {
-                matches!(
-                    ty,
-                    NativeTy::Handle | NativeTy::FlatIntMut | NativeTy::FlatFloatMut
-                )
-            })
+        param_tys.get(pos).is_some_and(|ty| {
+            matches!(
+                ty,
+                NativeTy::Handle | NativeTy::FlatIntMut | NativeTy::FlatFloatMut
+            )
+        })
     })
 }
 
@@ -609,8 +607,7 @@ fn osr_loop_region_is_transform_candidate(unit: &RegUnit, func: &RegFunction, lp
             // A `ListPush` that grows a LIVE-IN list breaks the OSR flat-buffer model
             // (no payoff); one that grows a region-local list is fine. A rejected
             // push falls through to the match below (`_ => false`) and vetoes the loop.
-            if native_subset_instruction(instr)
-                && native_osr_growth_admissible(instr, &region_defs)
+            if native_subset_instruction(instr) && native_osr_growth_admissible(instr, &region_defs)
             {
                 return true;
             }
@@ -745,7 +742,12 @@ impl RegVm {
     }
 
     #[cfg(feature = "native-jit")]
-    fn restore_native_deopt_live_regs(&mut self, base: usize, n_regs: usize, live: &[vm_jit::DeoptReg]) {
+    fn restore_native_deopt_live_regs(
+        &mut self,
+        base: usize,
+        n_regs: usize,
+        live: &[vm_jit::DeoptReg],
+    ) {
         for vm_jit::DeoptReg { reg, value } in live {
             // Heap-aware deopt (J0.1): every entry in `live` is a TRUE scalar —
             // `decode_deopt_live` drops `Handle`/`FlatInt`/`FlatFloat` regs — so a
@@ -2622,9 +2624,7 @@ impl RegVm {
             let native = self.native.as_mut()?;
             // Deopt-stress / forced-bail modes run the scalar/interpreter path so the
             // differential stress backends exercise the always-correct fallback.
-            if native.force_bail
-                || native.forced_safepoint.is_some()
-                || native.force_all_safepoints
+            if native.force_bail || native.forced_safepoint.is_some() || native.force_all_safepoints
             {
                 return None;
             }
@@ -2656,19 +2656,21 @@ impl RegVm {
                             &self_call_sites,
                             &std::collections::HashMap::new(),
                         )
-                        .and_then(|(jit_fn, ret, param_tys, _literals, _precise)| {
-                            // Scalar-only ABI: params and return must be i64/f64
-                            // scalars (Int/Bool/Float). Heap (Handle) params/returns
-                            // route through the fallback — their cross-call
-                            // marshalling/reconstruction is out of scope here.
-                            let is_scalar = |t: &NativeTy| {
-                                matches!(t, NativeTy::Int | NativeTy::Bool | NativeTy::Float)
-                            };
-                            (is_scalar(&ret) && param_tys.iter().all(is_scalar))
-                                .then(|| native.module.compile(&jit_fn).ok())
-                                .flatten()
-                                .map(|id| (id, param_tys, ret))
-                        })
+                        .and_then(
+                            |(jit_fn, ret, param_tys, _literals, _precise)| {
+                                // Scalar-only ABI: params and return must be i64/f64
+                                // scalars (Int/Bool/Float). Heap (Handle) params/returns
+                                // route through the fallback — their cross-call
+                                // marshalling/reconstruction is out of scope here.
+                                let is_scalar = |t: &NativeTy| {
+                                    matches!(t, NativeTy::Int | NativeTy::Bool | NativeTy::Float)
+                                };
+                                (is_scalar(&ret) && param_tys.iter().all(is_scalar))
+                                    .then(|| native.module.compile(&jit_fn).ok())
+                                    .flatten()
+                                    .map(|id| (id, param_tys, ret))
+                            },
+                        )
                     };
                     native.self_recursive_native.insert(key, compiled.clone());
                     compiled?
@@ -2749,9 +2751,7 @@ impl RegVm {
         // compiling any member compiles the whole group.
         let (id, param_tys, ret) = {
             let native = self.native.as_mut()?;
-            if native.force_bail
-                || native.forced_safepoint.is_some()
-                || native.force_all_safepoints
+            if native.force_bail || native.forced_safepoint.is_some() || native.force_all_safepoints
             {
                 return None;
             }
@@ -3302,7 +3302,10 @@ fn compute_recursive_int_member_inner(
                     mut_args,
                 } if group.contains(function)
                     && mut_args.is_empty()
-                    && unit.functions.get(*function).is_some_and(|f| f.params == args.len()) =>
+                    && unit
+                        .functions
+                        .get(*function)
+                        .is_some_and(|f| f.params == args.len()) =>
                 {
                     saw_self_call = true;
                     // Call args/result are scalar VALUE kinds (Int or Bool); the exact

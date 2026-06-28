@@ -561,6 +561,89 @@ fn main() -> Unit {
     );
 }
 
+/// Float-value sorted-map read: `SortedMap.get` on a `SortedMap<Int, Float>` fused
+/// with its Option match lowers to `MatchSortedMapGetFloat` (f64 value channel +
+/// shared sorted-map found flag; binary search is the interpreter's). Backends must
+/// agree with the interpreter and the loop must run natively.
+#[cfg(feature = "native-jit")]
+#[test]
+fn jit_acceptance_runs_float_sorted_map_get_match() {
+    let source = "\
+fn sum_lookups(m: read SortedMap<Int, Float>, n: Int) -> Float {
+    let mut total = 0.0
+    let mut i = 0
+    while i < n {
+        match SortedMap.get<Int, Float>(map: read m, key: read i) {
+            Some(v) => { total = total + v }
+            None => { total = total }
+        }
+        i = i + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    let mut m = SortedMap<Int, Float>.new()
+    SortedMap.insert<Int, Float>(map: mut m, key: read 0, value: read 1.5)
+    SortedMap.insert<Int, Float>(map: mut m, key: read 1, value: read 2.5)
+    SortedMap.insert<Int, Float>(map: mut m, key: read 2, value: read 3.5)
+    Log.write(message: read Float.to_string(value: read sum_lookups(m: read m, n: read 3)))
+    return Unit
+}
+";
+    let file = "jit-accept-float-sorted-map-get.rss";
+    assert_fast_jit_backends_agree(file, source);
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (_out, stats) = exe
+        .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
+        .expect("native run");
+    assert!(
+        stats.native_calls > 0,
+        "the Float sorted-map-get loop should run natively via MatchSortedMapGetFloat: {stats:?}",
+    );
+}
+
+/// Float deque pop: `Deque.pop_front<Float>` lowers to the `DequePopFrontFloat`
+/// helper (f64 value channel; empty deque bails to the interpreter's None path) — the
+/// value-side mirror of `DequePopFrontInt`. This is a PARITY test: native
+/// reachability of `match Deque.pop` is currently blocked for BOTH Int and Float by
+/// a pre-existing, type-agnostic limitation — J3 Option scalar-replacement seeds only
+/// from `MakeSome`/`LoadNone`, not from the deque pop's directly-produced `Option`.
+/// The helper is verified correct here against the interpreter and is ready the
+/// moment that shared fusion lands. (See also the Int form, equally not-yet-native.)
+#[cfg(feature = "native-jit")]
+#[test]
+fn jit_acceptance_runs_float_deque_pop() {
+    let source = "\
+fn drain(d: mut Deque<Float>, n: Int) -> Float {
+    let mut total = 0.0
+    let mut i = 0
+    while i < n {
+        match Deque.pop_front<Float>(deque: mut d) {
+            Some(v) => { total = total + v }
+            None => { total = total }
+        }
+        i = i + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    let mut d = Deque<Float>.new()
+    Deque.push_back<Float>(deque: mut d, value: read 1.5)
+    Deque.push_back<Float>(deque: mut d, value: read 2.5)
+    Deque.push_back<Float>(deque: mut d, value: read 3.5)
+    Log.write(message: read Float.to_string(value: read drain(d: mut d, n: read 3)))
+    return Unit
+}
+";
+    let file = "jit-accept-float-deque-pop.rss";
+    // Parity across all fast JIT backends (incl. native + deopt-stress). The
+    // DequePopFrontFloat helper is exercised wherever the deque pop reaches native;
+    // correctness (incl. the empty→None bail) is the guarantee asserted here.
+    assert_fast_jit_backends_agree(file, source);
+}
+
 #[test]
 fn jit_acceptance_runs_float_parameter_loop() {
     let source = "\
@@ -4818,7 +4901,10 @@ fn main() -> Unit {
         .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
         .expect("native run");
     assert_eq!(out.stdout.trim_end(), "317811");
-    assert_eq!(interp.stdout, out.stdout, "fib native must match the interpreter");
+    assert_eq!(
+        interp.stdout, out.stdout,
+        "fib native must match the interpreter"
+    );
     assert!(
         stats.native_calls > 0,
         "fib must run via the native self-recursive path: {stats:?}",
@@ -4970,7 +5056,10 @@ fn main() -> Unit {
         .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
         .expect("native run");
     assert_eq!(out.stdout.trim_end(), "1\n1");
-    assert_eq!(interp.stdout, out.stdout, "mutual recursion native must match interpreter");
+    assert_eq!(
+        interp.stdout, out.stdout,
+        "mutual recursion native must match interpreter"
+    );
     assert!(
         stats.native_calls > 0,
         "is_even/is_odd must run via the native mutual-recursion group: {stats:?}",
@@ -5004,7 +5093,10 @@ fn main() -> Unit {
         .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
         .expect("native run");
     assert_eq!(out.stdout.trim_end(), "true\nfalse");
-    assert_eq!(interp.stdout, out.stdout, "Bool mutual recursion native must match interpreter");
+    assert_eq!(
+        interp.stdout, out.stdout,
+        "Bool mutual recursion native must match interpreter"
+    );
     assert!(
         stats.native_calls > 0,
         "shallow Bool mutual recursion should run natively: {stats:?}",

@@ -1344,8 +1344,8 @@ impl RegVm {
                             if self.jit_enabled
                                 && mut_args.is_empty()
                                 && self.native_limits_unarmed()
-                                && let Some(value) =
-                                    self.try_native_mutual_recursive_int(unit, *callee_id, base, args)
+                                && let Some(value) = self
+                                    .try_native_mutual_recursive_int(unit, *callee_id, base, args)
                             {
                                 self.set_reg(base + *dst, value);
                                 continue;

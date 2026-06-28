@@ -20,14 +20,12 @@ pub(in crate::reg_vm) struct NativeCompiledCallee {
 #[cfg(feature = "native-jit")]
 fn native_call_mut_args_supported(mut_args: &[usize], param_tys: &[NativeTy]) -> bool {
     mut_args.iter().all(|&pos| {
-        param_tys
-            .get(pos)
-            .is_some_and(|ty| {
-                matches!(
-                    ty,
-                    NativeTy::Handle | NativeTy::FlatIntMut | NativeTy::FlatFloatMut
-                )
-            })
+        param_tys.get(pos).is_some_and(|ty| {
+            matches!(
+                ty,
+                NativeTy::Handle | NativeTy::FlatIntMut | NativeTy::FlatFloatMut
+            )
+        })
     })
 }
 
@@ -117,10 +115,7 @@ fn native_set_compiled_call_arg_ty(
     match (ty[reg], expected) {
         (
             Some(NativeTy::Handle),
-            NativeTy::FlatInt
-            | NativeTy::FlatIntMut
-            | NativeTy::FlatFloat
-            | NativeTy::FlatFloatMut,
+            NativeTy::FlatInt | NativeTy::FlatIntMut | NativeTy::FlatFloat | NativeTy::FlatFloatMut,
         ) if reg < n_params => {
             ty[reg] = Some(expected);
             *changed = true;
@@ -178,7 +173,13 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_compiled_callees(
     Vec<Rc<String>>,
     bool,
 )> {
-    translate_to_native_jit_with_calls(unit, func, compiled_callees, &HashSet::new(), &HashMap::new())
+    translate_to_native_jit_with_calls(
+        unit,
+        func,
+        compiled_callees,
+        &HashSet::new(),
+        &HashMap::new(),
+    )
 }
 
 /// Like [`translate_to_native_jit_with_compiled_callees`], but `self_call_sites`
@@ -463,7 +464,11 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                         && native_set_ty(ty, *value, NativeTy::Int, c)
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
-                RegInstr::ListPush { dst, list, value: _ } => {
+                RegInstr::ListPush {
+                    dst,
+                    list,
+                    value: _,
+                } => {
                     // The pushed `value`'s type flows from its definition (Int or
                     // Float); lowering picks `ListPushInt`/`ListPushFloat` and a
                     // wrong-element-type list bails at the helper. `dst` is the Int
@@ -509,15 +514,24 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                         && native_set_ty(ty, *value, NativeTy::Int, c)
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
-                RegInstr::DequePushBack { dst, deque, value: _ }
-                | RegInstr::DequePushFront { dst, deque, value: _ } => {
+                RegInstr::DequePushBack {
+                    dst,
+                    deque,
+                    value: _,
+                }
+                | RegInstr::DequePushFront {
+                    dst,
+                    deque,
+                    value: _,
+                } => {
                     // The value type flows (Int or Float); lowering picks the helper.
                     native_set_ty(ty, *deque, NativeTy::Handle, c)
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
-                RegInstr::DequePopFront { dst, deque } | RegInstr::DequePopBack { dst, deque } => {
+                RegInstr::DequePopFront { dst: _, deque }
+                | RegInstr::DequePopBack { dst: _, deque } => {
+                    // dst (popped value) flows (Int or Float); lowering picks the helper.
                     native_set_ty(ty, *deque, NativeTy::Handle, c)
-                        && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
                 RegInstr::MatchMapGet { map, key, .. } => {
                     // value_dst flows from its uses (Int or Float); lowering picks
@@ -526,15 +540,11 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                     native_set_ty(ty, *map, NativeTy::Handle, c)
                         && native_set_ty(ty, *key, NativeTy::Int, c)
                 }
-                RegInstr::MatchSortedMapGet {
-                    map,
-                    key,
-                    value_dst,
-                    ..
-                } => {
+                RegInstr::MatchSortedMapGet { map, key, .. } => {
+                    // value_dst flows (Int or Float); lowering picks
+                    // MatchSortedMapGetInt/MatchSortedMapGetFloat.
                     native_set_ty(ty, *map, NativeTy::Handle, c)
                         && native_set_ty(ty, *key, NativeTy::Int, c)
-                        && native_set_ty(ty, *value_dst, NativeTy::Int, c)
                 }
                 RegInstr::StringConcat { dst, left, right } => {
                     native_set_ty(ty, *left, NativeTy::Handle, c)
@@ -712,7 +722,13 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
     for &payload in &scalar_payload_regs {
         if matches!(
             ty[payload],
-            Some(NativeTy::Handle | NativeTy::FlatInt | NativeTy::FlatIntMut | NativeTy::FlatFloat | NativeTy::FlatFloatMut)
+            Some(
+                NativeTy::Handle
+                    | NativeTy::FlatInt
+                    | NativeTy::FlatIntMut
+                    | NativeTy::FlatFloat
+                    | NativeTy::FlatFloatMut
+            )
         ) {
             return None;
         }
@@ -911,7 +927,12 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
     let flat_param = |reg: usize| {
         matches!(
             ty[reg],
-            Some(NativeTy::FlatInt | NativeTy::FlatIntMut | NativeTy::FlatFloat | NativeTy::FlatFloatMut)
+            Some(
+                NativeTy::FlatInt
+                    | NativeTy::FlatIntMut
+                    | NativeTy::FlatFloat
+                    | NativeTy::FlatFloatMut
+            )
         ) && reg < func.params
     };
     let r = |reg: usize| reg as u32;
@@ -1464,7 +1485,12 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 key,
                 value,
             } => {
-                require(handle_reg(*map) && int(*key) && int(*dst) && (int_or_free(*value) || float(*value)))?;
+                require(
+                    handle_reg(*map)
+                        && int(*key)
+                        && int(*dst)
+                        && (int_or_free(*value) || float(*value)),
+                )?;
                 let helper = if float(*value) {
                     vm_jit::HostHelper::MapInsertFloat
                 } else {
@@ -1552,17 +1578,27 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 }
             }
             RegInstr::DequePopFront { dst, deque } => {
-                require(handle_reg(*deque) && int(*dst))?;
+                require(handle_reg(*deque) && (int_or_free(*dst) || float(*dst)))?;
+                let helper = if float(*dst) {
+                    vm_jit::HostHelper::DequePopFrontFloat
+                } else {
+                    vm_jit::HostHelper::DequePopFrontInt
+                };
                 JitInstr::HostCall {
-                    helper: vm_jit::HostHelper::DequePopFrontInt,
+                    helper,
                     dst: r(*dst),
                     args: vec![vm_jit::HostArg::Reg(r(*deque))],
                 }
             }
             RegInstr::DequePopBack { dst, deque } => {
-                require(handle_reg(*deque) && int(*dst))?;
+                require(handle_reg(*deque) && (int_or_free(*dst) || float(*dst)))?;
+                let helper = if float(*dst) {
+                    vm_jit::HostHelper::DequePopBackFloat
+                } else {
+                    vm_jit::HostHelper::DequePopBackInt
+                };
                 JitInstr::HostCall {
-                    helper: vm_jit::HostHelper::DequePopBackInt,
+                    helper,
                     dst: r(*dst),
                     args: vec![vm_jit::HostArg::Reg(r(*deque))],
                 }
@@ -1574,7 +1610,9 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 some_ip,
                 none_ip,
             } => {
-                require(handle_reg(*map) && int(*key) && (int_or_free(*value_dst) || float(*value_dst)))?;
+                require(
+                    handle_reg(*map) && int(*key) && (int_or_free(*value_dst) || float(*value_dst)),
+                )?;
                 if float(*value_dst) {
                     JitInstr::MatchMapGetFloat {
                         map: r(*map),
@@ -1600,13 +1638,25 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 some_ip,
                 none_ip,
             } => {
-                require(handle_reg(*map) && int(*key) && int(*value_dst))?;
-                JitInstr::MatchSortedMapGetInt {
-                    map: r(*map),
-                    key: r(*key),
-                    value_dst: r(*value_dst),
-                    some_ip: r(*some_ip),
-                    none_ip: r(*none_ip),
+                require(
+                    handle_reg(*map) && int(*key) && (int_or_free(*value_dst) || float(*value_dst)),
+                )?;
+                if float(*value_dst) {
+                    JitInstr::MatchSortedMapGetFloat {
+                        map: r(*map),
+                        key: r(*key),
+                        value_dst: r(*value_dst),
+                        some_ip: r(*some_ip),
+                        none_ip: r(*none_ip),
+                    }
+                } else {
+                    JitInstr::MatchSortedMapGetInt {
+                        map: r(*map),
+                        key: r(*key),
+                        value_dst: r(*value_dst),
+                        some_ip: r(*some_ip),
+                        none_ip: r(*none_ip),
+                    }
                 }
             }
             RegInstr::NativeGuardClosureId { closure, expected } => {
@@ -1780,9 +1830,9 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                     NativeTy::Float => float(*dst),
                     NativeTy::Handle => handle_reg(*dst),
                     NativeTy::FlatInt
-                        | NativeTy::FlatIntMut
-                        | NativeTy::FlatFloat
-                        | NativeTy::FlatFloatMut => false,
+                    | NativeTy::FlatIntMut
+                    | NativeTy::FlatFloat
+                    | NativeTy::FlatFloatMut => false,
                 })?;
                 if spec.produces_output_handle() {
                     require(escaping_output_handle[*dst])?;
@@ -1822,9 +1872,9 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                     NativeTy::Float => float(*dst),
                     NativeTy::Handle => handle_reg(*dst),
                     NativeTy::FlatInt
-                        | NativeTy::FlatIntMut
-                        | NativeTy::FlatFloat
-                        | NativeTy::FlatFloatMut => false,
+                    | NativeTy::FlatIntMut
+                    | NativeTy::FlatFloat
+                    | NativeTy::FlatFloatMut => false,
                 })?;
                 if spec.produces_output_handle() {
                     require(escaping_output_handle[*dst])?;
@@ -2454,6 +2504,7 @@ fn native_jit_written_reg(instr: &vm_jit::JitInstr) -> Option<u32> {
         | vm_jit::JitInstr::MatchMapGetInt { value_dst: dst, .. }
         | vm_jit::JitInstr::MatchMapGetFloat { value_dst: dst, .. }
         | vm_jit::JitInstr::MatchSortedMapGetInt { value_dst: dst, .. }
+        | vm_jit::JitInstr::MatchSortedMapGetFloat { value_dst: dst, .. }
         | vm_jit::JitInstr::CallNative { dst, .. }
         | vm_jit::JitInstr::CallSelf { dst, .. } => Some(*dst),
         _ => None,
@@ -3240,7 +3291,11 @@ fn translate_osr_loop_inner(
                         && native_set_ty(ty, *value, NativeTy::Int, c)
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
-                RegInstr::ListPush { dst, list, value: _ } => {
+                RegInstr::ListPush {
+                    dst,
+                    list,
+                    value: _,
+                } => {
                     // The pushed `value`'s type flows from its definition (Int or
                     // Float); lowering picks `ListPushInt`/`ListPushFloat` and a
                     // wrong-element-type list bails at the helper. `dst` is the Int
@@ -3286,15 +3341,24 @@ fn translate_osr_loop_inner(
                         && native_set_ty(ty, *value, NativeTy::Int, c)
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
-                RegInstr::DequePushBack { dst, deque, value: _ }
-                | RegInstr::DequePushFront { dst, deque, value: _ } => {
+                RegInstr::DequePushBack {
+                    dst,
+                    deque,
+                    value: _,
+                }
+                | RegInstr::DequePushFront {
+                    dst,
+                    deque,
+                    value: _,
+                } => {
                     // The value type flows (Int or Float); lowering picks the helper.
                     native_set_ty(ty, *deque, NativeTy::Handle, c)
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
-                RegInstr::DequePopFront { dst, deque } | RegInstr::DequePopBack { dst, deque } => {
+                RegInstr::DequePopFront { dst: _, deque }
+                | RegInstr::DequePopBack { dst: _, deque } => {
+                    // dst (popped value) flows (Int or Float); lowering picks the helper.
                     native_set_ty(ty, *deque, NativeTy::Handle, c)
-                        && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
                 RegInstr::MatchMapGet { map, key, .. } => {
                     // value_dst flows from its uses (Int or Float); lowering picks
@@ -3303,15 +3367,11 @@ fn translate_osr_loop_inner(
                     native_set_ty(ty, *map, NativeTy::Handle, c)
                         && native_set_ty(ty, *key, NativeTy::Int, c)
                 }
-                RegInstr::MatchSortedMapGet {
-                    map,
-                    key,
-                    value_dst,
-                    ..
-                } => {
+                RegInstr::MatchSortedMapGet { map, key, .. } => {
+                    // value_dst flows (Int or Float); lowering picks
+                    // MatchSortedMapGetInt/MatchSortedMapGetFloat.
                     native_set_ty(ty, *map, NativeTy::Handle, c)
                         && native_set_ty(ty, *key, NativeTy::Int, c)
-                        && native_set_ty(ty, *value_dst, NativeTy::Int, c)
                 }
                 RegInstr::GetFieldSlot { base, .. } => {
                     native_set_ty(ty, *base, NativeTy::Handle, c)
@@ -3756,7 +3816,12 @@ fn translate_osr_loop_inner(
     let flat_reg = |reg: usize| {
         matches!(
             ty[reg],
-            Some(NativeTy::FlatInt | NativeTy::FlatIntMut | NativeTy::FlatFloat | NativeTy::FlatFloatMut)
+            Some(
+                NativeTy::FlatInt
+                    | NativeTy::FlatIntMut
+                    | NativeTy::FlatFloat
+                    | NativeTy::FlatFloatMut
+            )
         )
     };
     let derived_livein = |reg: usize, _base: usize, slot: usize| {
@@ -4225,7 +4290,12 @@ fn translate_osr_loop_inner(
                 key,
                 value,
             } => {
-                require(handle_reg(*map) && int(*key) && int(*dst) && (int_or_free(*value) || float(*value)))?;
+                require(
+                    handle_reg(*map)
+                        && int(*key)
+                        && int(*dst)
+                        && (int_or_free(*value) || float(*value)),
+                )?;
                 let helper = if float(*value) {
                     vm_jit::HostHelper::MapInsertFloat
                 } else {
@@ -4313,17 +4383,27 @@ fn translate_osr_loop_inner(
                 }
             }
             RegInstr::DequePopFront { dst, deque } => {
-                require(handle_reg(*deque) && int(*dst))?;
+                require(handle_reg(*deque) && (int_or_free(*dst) || float(*dst)))?;
+                let helper = if float(*dst) {
+                    vm_jit::HostHelper::DequePopFrontFloat
+                } else {
+                    vm_jit::HostHelper::DequePopFrontInt
+                };
                 JitInstr::HostCall {
-                    helper: vm_jit::HostHelper::DequePopFrontInt,
+                    helper,
                     dst: r(*dst),
                     args: vec![vm_jit::HostArg::Reg(r(*deque))],
                 }
             }
             RegInstr::DequePopBack { dst, deque } => {
-                require(handle_reg(*deque) && int(*dst))?;
+                require(handle_reg(*deque) && (int_or_free(*dst) || float(*dst)))?;
+                let helper = if float(*dst) {
+                    vm_jit::HostHelper::DequePopBackFloat
+                } else {
+                    vm_jit::HostHelper::DequePopBackInt
+                };
                 JitInstr::HostCall {
-                    helper: vm_jit::HostHelper::DequePopBackInt,
+                    helper,
                     dst: r(*dst),
                     args: vec![vm_jit::HostArg::Reg(r(*deque))],
                 }
@@ -4335,7 +4415,9 @@ fn translate_osr_loop_inner(
                 some_ip,
                 none_ip,
             } => {
-                require(handle_reg(*map) && int(*key) && (int_or_free(*value_dst) || float(*value_dst)))?;
+                require(
+                    handle_reg(*map) && int(*key) && (int_or_free(*value_dst) || float(*value_dst)),
+                )?;
                 if float(*value_dst) {
                     JitInstr::MatchMapGetFloat {
                         map: r(*map),
@@ -4361,13 +4443,25 @@ fn translate_osr_loop_inner(
                 some_ip,
                 none_ip,
             } => {
-                require(handle_reg(*map) && int(*key) && int(*value_dst))?;
-                JitInstr::MatchSortedMapGetInt {
-                    map: r(*map),
-                    key: r(*key),
-                    value_dst: r(*value_dst),
-                    some_ip: r(*some_ip),
-                    none_ip: r(*none_ip),
+                require(
+                    handle_reg(*map) && int(*key) && (int_or_free(*value_dst) || float(*value_dst)),
+                )?;
+                if float(*value_dst) {
+                    JitInstr::MatchSortedMapGetFloat {
+                        map: r(*map),
+                        key: r(*key),
+                        value_dst: r(*value_dst),
+                        some_ip: r(*some_ip),
+                        none_ip: r(*none_ip),
+                    }
+                } else {
+                    JitInstr::MatchSortedMapGetInt {
+                        map: r(*map),
+                        key: r(*key),
+                        value_dst: r(*value_dst),
+                        some_ip: r(*some_ip),
+                        none_ip: r(*none_ip),
+                    }
                 }
             }
             RegInstr::NativeGuardClosureId { closure, expected } => {
@@ -4493,9 +4587,9 @@ fn translate_osr_loop_inner(
                     NativeTy::Float => float(*dst),
                     NativeTy::Handle => handle_reg(*dst),
                     NativeTy::FlatInt
-                        | NativeTy::FlatIntMut
-                        | NativeTy::FlatFloat
-                        | NativeTy::FlatFloatMut => false,
+                    | NativeTy::FlatIntMut
+                    | NativeTy::FlatFloat
+                    | NativeTy::FlatFloatMut => false,
                 })?;
                 JitInstr::HostCall {
                     helper: spec.helper,
@@ -4532,9 +4626,9 @@ fn translate_osr_loop_inner(
                     NativeTy::Float => float(*dst),
                     NativeTy::Handle => handle_reg(*dst),
                     NativeTy::FlatInt
-                        | NativeTy::FlatIntMut
-                        | NativeTy::FlatFloat
-                        | NativeTy::FlatFloatMut => false,
+                    | NativeTy::FlatIntMut
+                    | NativeTy::FlatFloat
+                    | NativeTy::FlatFloatMut => false,
                 })?;
                 JitInstr::HostCall {
                     helper: spec.helper,

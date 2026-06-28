@@ -1445,7 +1445,16 @@ impl RegVmExecutable {
         args: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<(EvalOutput, NativeStats, Vec<String>), EvalError> {
         self.eval_main_with_args_native_inner_reported(
-            args, 0, false, true, true, true, true, None, false, VmLimits::default(),
+            args,
+            0,
+            false,
+            true,
+            true,
+            true,
+            true,
+            None,
+            false,
+            VmLimits::default(),
         )
     }
 
@@ -3602,6 +3611,7 @@ fn jit_host_helpers() -> vm_jit::HostHelpers {
         sorted_set_is_empty: rss_jit_sorted_set_is_empty,
         sorted_map_insert_int: rss_jit_sorted_map_insert_int,
         sorted_map_get_int: rss_jit_sorted_map_get_int,
+        sorted_map_get_float: rss_jit_sorted_map_get_float,
         sorted_map_get_found: rss_jit_sorted_map_get_found,
         sorted_map_contains_key_int: rss_jit_sorted_map_contains_key_int,
         sorted_map_is_empty: rss_jit_sorted_map_is_empty,
@@ -3614,6 +3624,8 @@ fn jit_host_helpers() -> vm_jit::HostHelpers {
         deque_push_front_float: rss_jit_deque_push_front_float,
         deque_pop_front_int: rss_jit_deque_pop_front_int,
         deque_pop_back_int: rss_jit_deque_pop_back_int,
+        deque_pop_front_float: rss_jit_deque_pop_front_float,
+        deque_pop_back_float: rss_jit_deque_pop_back_float,
     }
 }
 
@@ -4524,7 +4536,12 @@ extern "C" fn rss_jit_list_set_float(
 /// Set a `Float` list element — the write-side mirror of `rss_jit_list_get_float`.
 /// A non-Float list / out-of-bounds index bails out-of-band.
 #[cfg(feature = "native-jit")]
-fn rss_jit_list_set_float_with_ctx(ctx: JitHostCallCtx, handle: i64, index: i64, value: f64) -> i64 {
+fn rss_jit_list_set_float_with_ctx(
+    ctx: JitHostCallCtx,
+    handle: i64,
+    index: i64,
+    value: f64,
+) -> i64 {
     let Some(index) = usize::try_from(index).ok() else {
         vm_jit::signal_bail();
         return 0;
@@ -4680,7 +4697,12 @@ extern "C" fn rss_jit_map_insert_float(
 /// Insert a `Float` value into an Int-keyed map — the value-side mirror of
 /// `rss_jit_map_insert_int`. A bad handle bails out-of-band.
 #[cfg(feature = "native-jit")]
-fn rss_jit_map_insert_float_with_ctx(ctx: JitHostCallCtx, handle: i64, key: i64, value: f64) -> i64 {
+fn rss_jit_map_insert_float_with_ctx(
+    ctx: JitHostCallCtx,
+    handle: i64,
+    key: i64,
+    value: f64,
+) -> i64 {
     match ctx.with_journaled_map_write(handle, |map| {
         map.insert(jit_int_key(key), VmValue::Float(value));
         Some(0)
@@ -4989,6 +5011,59 @@ fn jit_sorted_map_find_int(
     Ok(None)
 }
 
+/// Int-key / Float-value sorted-map entry at `index` — the value-side mirror of
+/// `jit_sorted_map_entry_int` (key still Int, value Float).
+#[cfg(feature = "native-jit")]
+fn jit_sorted_map_entry_int_key_float(
+    backing: &TypedVec,
+    index: usize,
+) -> Result<Option<(i64, f64)>, EvalError> {
+    let Some(entry) = backing.get(index) else {
+        return Ok(None);
+    };
+    let pair = expect_list_ref(&entry)?;
+    let pair = pair.borrow();
+    let entry_key = pair
+        .first()
+        .ok_or_else(|| EvalError::Runtime("reg VM SortedMap entry missing key.".to_string()))?;
+    let entry_value = pair
+        .get(1)
+        .ok_or_else(|| EvalError::Runtime("reg VM SortedMap entry missing value.".to_string()))?;
+    match (entry_key, entry_value) {
+        (VmValue::Int(entry_key), VmValue::Float(entry_value)) => {
+            Ok(Some((entry_key, entry_value)))
+        }
+        _ => Err(EvalError::Runtime(
+            "reg VM SortedMap<Int, Float> native helper saw non-(Int,Float) entry.".to_string(),
+        )),
+    }
+}
+
+/// Binary search an Int-keyed sorted map for `key`, returning the Float value.
+#[cfg(feature = "native-jit")]
+fn jit_sorted_map_find_int_key_float(
+    backing: &TypedVec,
+    key: i64,
+) -> Result<Option<f64>, EvalError> {
+    let mut lo = 0;
+    let mut hi = backing.len();
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        let Some((entry_key, entry_value)) = jit_sorted_map_entry_int_key_float(backing, mid)?
+        else {
+            return Err(EvalError::Runtime(
+                "reg VM SortedMap entry missing during native lookup.".to_string(),
+            ));
+        };
+        match entry_key.cmp(&key) {
+            Ordering::Less => lo = mid + 1,
+            Ordering::Greater => hi = mid,
+            Ordering::Equal => return Ok(Some(entry_value)),
+        }
+    }
+    Ok(None)
+}
+
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_sorted_map_insert_int(
     _ctx: vm_jit::HostCtx,
@@ -5098,6 +5173,34 @@ extern "C" fn rss_jit_sorted_map_get_found(_ctx: vm_jit::HostCtx) -> i64 {
         return 0;
     };
     i64::from(_ctx.sorted_map_get_found())
+}
+
+/// Int-key / Float-value sorted-map get (mirror of `rss_jit_sorted_map_get_int`),
+/// sharing the same `sorted_map_get_found` flag. Plain binary search — it omits the
+/// sequential scan cache (a perf-only fast path), so the result is identical. A
+/// non-Float value or wrong shape bails to the interpreter.
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_sorted_map_get_float(_ctx: vm_jit::HostCtx, handle: i64, key: i64) -> f64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0.0;
+    };
+    _ctx.set_sorted_map_get_found(false);
+    let Some(list) = _ctx.heap_list_handle(handle) else {
+        vm_jit::signal_bail();
+        return 0.0;
+    };
+    match jit_sorted_map_find_int_key_float(&list.borrow(), key) {
+        Ok(Some(value)) => {
+            _ctx.set_sorted_map_get_found(true);
+            value
+        }
+        Ok(None) => 0.0,
+        Err(_) => {
+            vm_jit::signal_bail();
+            0.0
+        }
+    }
 }
 
 #[cfg(feature = "native-jit")]
@@ -5257,7 +5360,11 @@ fn rss_jit_deque_push_front_int_with_ctx(ctx: JitHostCallCtx, handle: i64, value
 }
 
 #[cfg(feature = "native-jit")]
-extern "C" fn rss_jit_deque_push_front_float(_ctx: vm_jit::HostCtx, handle: i64, value: f64) -> i64 {
+extern "C" fn rss_jit_deque_push_front_float(
+    _ctx: vm_jit::HostCtx,
+    handle: i64,
+    value: f64,
+) -> i64 {
     let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
         vm_jit::signal_bail();
         return 0;
@@ -5310,6 +5417,41 @@ extern "C" fn rss_jit_deque_pop_back_int(_ctx: vm_jit::HostCtx, handle: i64) -> 
         return 0;
     };
     jit_deque_pop_int(_ctx, handle, VecDeque::pop_back)
+}
+
+/// Float value-side mirror of `jit_deque_pop_int`: pop a `Float`; an empty deque or
+/// non-Float element bails (the interpreter then runs the `None` path).
+#[cfg(feature = "native-jit")]
+fn jit_deque_pop_float(
+    ctx: JitHostCallCtx,
+    handle: i64,
+    pop: impl FnOnce(&mut VecDeque<VmValue>) -> Option<VmValue>,
+) -> f64 {
+    match ctx.with_journaled_deque_write(handle, pop) {
+        Some(VmValue::Float(value)) => value,
+        _ => {
+            vm_jit::signal_bail();
+            0.0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_deque_pop_front_float(_ctx: vm_jit::HostCtx, handle: i64) -> f64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0.0;
+    };
+    jit_deque_pop_float(_ctx, handle, VecDeque::pop_front)
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_deque_pop_back_float(_ctx: vm_jit::HostCtx, handle: i64) -> f64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0.0;
+    };
+    jit_deque_pop_float(_ctx, handle, VecDeque::pop_back)
 }
 
 #[cfg(feature = "native-jit")]
