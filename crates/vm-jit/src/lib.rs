@@ -73,6 +73,10 @@ pub type ListSetIntFn = extern "C" fn(HostCtx, i64, i64, i64) -> i64;
 /// `(list_handle, value) -> i64`: push an `Int` list element. Returns `0` on
 /// success; a wrong-type/invalid handle signals a bail out-of-band.
 pub type ListPushIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
+/// `(list_handle, value: f64) -> i64`: push a `Float` list element (the write-side
+/// counterpart of [`ListGetFloatFn`]). Returns `0` on success; a wrong-type/invalid
+/// handle signals a bail out-of-band.
+pub type ListPushFloatFn = extern "C" fn(HostCtx, i64, f64) -> i64;
 /// `(list_handle) -> i64`: sort a flat `List<Int>` in place. Returns `0` on
 /// success; a wrong-type/invalid handle signals a bail out-of-band.
 pub type ListSortIntFn = extern "C" fn(HostCtx, i64) -> i64;
@@ -243,6 +247,7 @@ pub struct HostHelpers {
     pub list_get_int: ListGetIntFn,
     pub list_set_int: ListSetIntFn,
     pub list_push_int: ListPushIntFn,
+    pub list_push_float: ListPushFloatFn,
     pub list_sort_int: ListSortIntFn,
     pub list_new_int: ListNewIntFn,
     pub field_float: FieldFloatFn,
@@ -509,6 +514,14 @@ host_helpers! {
         field: list_push_int,
         symbol: "rss_jit_list_push_int",
         args: [JitValueType::Handle, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::MutatesInput,
+    },
+    ListPushFloat => {
+        field: list_push_float,
+        symbol: "rss_jit_list_push_float",
+        args: [JitValueType::Handle, JitValueType::Float],
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
@@ -5415,6 +5428,7 @@ mod tests {
         let mut mutates_input = std::collections::HashSet::from([
             HostHelper::ListSetInt,
             HostHelper::ListPushInt,
+            HostHelper::ListPushFloat,
             HostHelper::ListSortInt,
             HostHelper::MapInsertInt,
             HostHelper::SetInsertInt,
@@ -5523,6 +5537,9 @@ mod tests {
         0
     }
     extern "C" fn noop_list_push_int(_ctx: HostCtx, _handle: i64, _value: i64) -> i64 {
+        0
+    }
+    extern "C" fn noop_list_push_float(_ctx: HostCtx, _handle: i64, _value: f64) -> i64 {
         0
     }
     extern "C" fn noop_list_sort_int(_ctx: HostCtx, _handle: i64) -> i64 {
@@ -5677,6 +5694,7 @@ mod tests {
             list_get_int: noop_list_get_int,
             list_set_int: noop_list_set_int,
             list_push_int: noop_list_push_int,
+            list_push_float: noop_list_push_float,
             list_sort_int: noop_list_sort_int,
             list_new_int: noop_list_new_int,
             field_float: noop_field_float,

@@ -453,9 +453,12 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                         && native_set_ty(ty, *value, NativeTy::Int, c)
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
-                RegInstr::ListPush { dst, list, value } => {
+                RegInstr::ListPush { dst, list, value: _ } => {
+                    // The pushed `value`'s type flows from its definition (Int or
+                    // Float); lowering picks `ListPushInt`/`ListPushFloat` and a
+                    // wrong-element-type list bails at the helper. `dst` is the Int
+                    // result (0 on success).
                     native_set_ty(ty, *list, NativeTy::Handle, c)
-                        && native_set_ty(ty, *value, NativeTy::Int, c)
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
                 RegInstr::ListSort { dst, list } => {
@@ -1397,9 +1400,16 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 }
             }
             RegInstr::ListPush { dst, list, value } => {
-                require(handle_reg(*list) && int(*value) && int(*dst))?;
+                // Float value → ListPushFloat; Int or unconstrained → ListPushInt
+                // (a wrong-element-type list bails at the helper).
+                require(handle_reg(*list) && int(*dst) && (int_or_free(*value) || float(*value)))?;
+                let helper = if float(*value) {
+                    vm_jit::HostHelper::ListPushFloat
+                } else {
+                    vm_jit::HostHelper::ListPushInt
+                };
                 JitInstr::HostCall {
-                    helper: vm_jit::HostHelper::ListPushInt,
+                    helper,
                     dst: r(*dst),
                     args: vec![
                         vm_jit::HostArg::Reg(r(*list)),
@@ -3158,9 +3168,12 @@ fn translate_osr_loop_inner(
                         && native_set_ty(ty, *value, NativeTy::Int, c)
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
-                RegInstr::ListPush { dst, list, value } => {
+                RegInstr::ListPush { dst, list, value: _ } => {
+                    // The pushed `value`'s type flows from its definition (Int or
+                    // Float); lowering picks `ListPushInt`/`ListPushFloat` and a
+                    // wrong-element-type list bails at the helper. `dst` is the Int
+                    // result (0 on success).
                     native_set_ty(ty, *list, NativeTy::Handle, c)
-                        && native_set_ty(ty, *value, NativeTy::Int, c)
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
                 RegInstr::ListSort { dst, list } => {
@@ -4074,13 +4087,18 @@ fn translate_osr_loop_inner(
                 }
             }
             RegInstr::ListPush { dst, list, value } => {
-                require(int(*value) && int(*dst))?;
+                require(int(*dst) && (int_or_free(*value) || float(*value)))?;
                 if flat_reg(*list) {
                     JitInstr::Bail
                 } else {
                     require(handle_reg(*list))?;
+                    let helper = if float(*value) {
+                        vm_jit::HostHelper::ListPushFloat
+                    } else {
+                        vm_jit::HostHelper::ListPushInt
+                    };
                     JitInstr::HostCall {
-                        helper: vm_jit::HostHelper::ListPushInt,
+                        helper,
                         dst: r(*dst),
                         args: vec![
                             vm_jit::HostArg::Reg(r(*list)),

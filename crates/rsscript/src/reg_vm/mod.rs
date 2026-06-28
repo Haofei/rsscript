@@ -3556,6 +3556,7 @@ fn jit_host_helpers() -> vm_jit::HostHelpers {
         list_get_int: rss_jit_list_get_int,
         list_set_int: rss_jit_list_set_int,
         list_push_int: rss_jit_list_push_int,
+        list_push_float: rss_jit_list_push_float,
         list_sort_int: rss_jit_list_sort_int,
         list_new_int: rss_jit_list_new_int,
         field_float: rss_jit_field_float,
@@ -4512,6 +4513,32 @@ extern "C" fn rss_jit_list_push_int(_ctx: vm_jit::HostCtx, handle: i64, value: i
 fn rss_jit_list_push_int_with_ctx(ctx: JitHostCallCtx, handle: i64, value: i64) -> i64 {
     match ctx.with_journaled_list_write(handle, |list| {
         list.checked_push(VmValue::Int(value)).ok()?;
+        Some(0)
+    }) {
+        Some(value) => value,
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_list_push_float(_ctx: vm_jit::HostCtx, handle: i64, value: f64) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    rss_jit_list_push_float_with_ctx(_ctx, handle, value)
+}
+
+/// Push a `Float` onto a flat `List<Float>` — the write-side mirror of
+/// `rss_jit_list_get_float`. A non-Float list / invalid handle bails out-of-band,
+/// so a mis-typed lowering falls back to the interpreter.
+#[cfg(feature = "native-jit")]
+fn rss_jit_list_push_float_with_ctx(ctx: JitHostCallCtx, handle: i64, value: f64) -> i64 {
+    match ctx.with_journaled_list_write(handle, |list| {
+        list.checked_push(VmValue::Float(value)).ok()?;
         Some(0)
     }) {
         Some(value) => value,

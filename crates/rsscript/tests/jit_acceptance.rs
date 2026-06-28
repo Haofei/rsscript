@@ -372,6 +372,49 @@ fn main() -> Unit {
     );
 }
 
+/// Phase 4 (collection element-type breadth): pushing a `Float` onto a
+/// `List<Float>` through a `mut` parameter lowers to the new `ListPushFloat` host
+/// helper (write-side counterpart of the existing `ListGetFloat`), enabled by the
+/// generalized float-arg helper ABI. All fast JIT backends must agree with the
+/// interpreter and the loop must run natively.
+#[cfg(feature = "native-jit")]
+#[test]
+fn jit_acceptance_runs_float_list_push_helper() {
+    let source = "\
+fn fill(xs: mut List<Float>, n: Int) -> Int {
+    let mut i = 0
+    while i < n {
+        List.push<Float>(list: mut xs, value: read 1.5)
+        i = i + 1
+    }
+    return 0
+}
+
+fn main() -> Unit {
+    let mut xs = List<Float>.new()
+    let r = fill(xs: mut xs, n: read 10)
+    let mut total = 0.0
+    let mut j = 0
+    while j < List.len<Float>(list: read xs) {
+        total = total + List.get<Float>(list: read xs, index: j)
+        j = j + 1
+    }
+    Log.write(message: read String.from_float(value: read total))
+    return Unit
+}
+";
+    let file = "jit-accept-float-list-push.rss";
+    assert_fast_jit_backends_agree(file, source);
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (_out, stats) = exe
+        .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
+        .expect("native run");
+    assert!(
+        stats.native_calls > 0,
+        "the Float list-push loop should run natively via ListPushFloat: {stats:?}",
+    );
+}
+
 #[test]
 fn jit_acceptance_runs_float_parameter_loop() {
     let source = "\
