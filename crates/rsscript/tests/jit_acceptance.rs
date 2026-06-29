@@ -6696,15 +6696,17 @@ fn main() -> Unit {
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("osr");
-    // CHARACTERIZATION: this loop currently DECLINES native OSR (osr_entries=0) and runs
-    // on the interpreter — correct, but not native. The blocker: `classify`'s cold arm
-    // builds a heap String, so it is not leaf-inlinable, and the deopt-before-heap splice
-    // (which converts an in-region heap cold arm to a native Bail) only reaches cold arms
-    // INSIDE the loop region — never a cold arm sitting in a non-inlined callee. This is a
-    // narrow #7-adjacent gap (admit a leaf whose heap is confined to a deoptable arm into
-    // the inline pass, then the existing splice + string-fold handle it), distinct from the
-    // inline frame-chain. The guard locks correctness while the loop declines.
-    assert_eq!(interp.stdout, nat.stdout, "inlined leaf call with cold heap arm must match interpreter");
+    // #7 foldable cold-arm sub-case (now SUPPORTED): `classify`'s cold arm is
+    // `String.len(String.from_int(x))`, which the whole-body string-fold dissolves to
+    // digit-count arithmetic BEFORE the inlinability check — so the leaf becomes
+    // pure-scalar native, inlines, and the loop OSRs (no heap arm left to bail on). The
+    // fold is semantics-preserving, so output still matches the interpreter exactly.
+    assert_eq!(interp.stdout, nat.stdout, "inlined leaf call with foldable cold arm must match interpreter");
+    assert!(
+        stats.osr_entries >= 1,
+        "foldable cold-arm inlined leaf call must OSR after callee-fold (entries={})",
+        stats.osr_entries
+    );
 }
 
 #[cfg(feature = "native-jit")]

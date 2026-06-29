@@ -2617,6 +2617,38 @@ pub(in crate::reg_vm) fn native_callee_inlinable_j3_with_spawns(
     go(unit, callee, n_args, 0)
 }
 
+/// Return a copy of `callee` with the string-length-law fold applied to its WHOLE body,
+/// or `None` if the fold is a no-op (the common case — use the original callee then).
+///
+/// Motivation (#7 foldable cold-arm sub-case): a leaf whose only heap is a measured
+/// throwaway string (e.g. an `if`-arm `return String.len(String.from_int(x))`) is NOT
+/// leaf-inlinable as written — the heap builder makes `deopt_replaceable_cold_arms`
+/// reject the arm (its `Return` value is live), so the loop calling it declines OSR.
+/// The string-fold (already used in-region, semantics-preserving) dissolves
+/// `String.len`-of-foldable into digit-count/byte-length arithmetic and DELETES the dead
+/// allocation, turning such a body into pure native-subset scalar code. Folding the
+/// callee BEFORE the inlinability check + splice lets it inline and the loop OSR, with NO
+/// deopt involved (there is no longer a heap arm to bail on). The fold is
+/// semantics-preserving, so splicing the folded body is always correct; at worst an
+/// un-foldable body returns `None` and nothing changes.
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) fn native_string_folded_callee(callee: &RegFunction) -> Option<RegFunction> {
+    if callee.code.is_empty() {
+        return None;
+    }
+    let (folded_code, folded_regs, _ip_map) =
+        native_string_length_fold_in_region(&callee.code, callee.regs, 0, callee.code.len())?;
+    // No-op fold ⇒ original (the fold DELETES dissolved allocations, so a real fold always
+    // shrinks the stream and/or grows the reg file; equal length AND regs ⇒ nothing folded).
+    if folded_code.len() == callee.code.len() && folded_regs == callee.regs {
+        return None;
+    }
+    let mut folded = callee.clone();
+    folded.code = folded_code;
+    folded.regs = folded_regs;
+    Some(folded)
+}
+
 /// Whether `callee` can be inlined into a native function: captureless, arity
 /// matches, and every reachable instruction is a pure native-subset op, native
 /// control flow (jump/branch), or a `Return`. Unlike the original straight-line
@@ -9240,7 +9272,20 @@ fn native_inline_leaf_calls_inner(
                 args,
                 mut_args,
             } if in_region(i) && !preserve_call_known(i) => {
-                let callee = unit.functions.get(*function)?;
+                let callee0 = unit.functions.get(*function)?;
+                // #7 foldable cold-arm sub-case: fold the callee's whole body first (a
+                // measured-throwaway-string arm dissolves to scalar arithmetic), so a leaf
+                // that was non-inlinable only because of that heap arm becomes inlinable.
+                // The fold is semantics-preserving and a no-op for ordinary bodies. Use the
+                // folded body CONSISTENTLY for both the inlinability verdict and the splice
+                // below (candidacy applies the same fold) — an inconsistency only ever
+                // declines OSR, never miscompiles.
+                let folded_callee = if j3 {
+                    native_string_folded_callee(callee0)
+                } else {
+                    None
+                };
+                let callee = folded_callee.as_ref().unwrap_or(callee0);
                 // `mut` args need write-back at the callee join point, just like the
                 // interpreter frame completion path. Heap copy-updated params are
                 // now ordinary handle registers by that point, so a `Move` back to

@@ -647,7 +647,13 @@ fn osr_loop_region_is_transform_candidate(unit: &RegUnit, func: &RegFunction, lp
                     mut_args: _,
                     ..
                 } => unit.functions.get(*function).is_some_and(|callee| {
-                    native_callee_inlinable_j3_with_spawns(unit, callee, args.len())
+                    // #7 foldable cold-arm sub-case: check inlinability of the
+                    // string-folded body (the inline pass folds it identically before
+                    // splicing). The fold is semantics-preserving and a no-op for ordinary
+                    // bodies, so this only ADMITS more leaves, never changes existing ones.
+                    let folded = native_string_folded_callee(callee);
+                    let effective = folded.as_ref().unwrap_or(callee);
+                    native_callee_inlinable_j3_with_spawns(unit, effective, args.len())
                 }),
                 RegInstr::SpawnTask { function, args, .. } => {
                     unit.functions.get(*function).is_some_and(|callee| {
