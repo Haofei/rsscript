@@ -5720,14 +5720,16 @@ fn native_osr_nonallocating_loop_runs_under_mem_budget() {
     );
 }
 
-/// J0.5 mem (NEGATIVE): an ALLOCATING/mutating hot loop (here a `Map<String,Int>`
-/// insert, `MutatesInput`) must NOT OSR while `mem_budget` is armed — native allocations
-/// are not yet charged to the meter (in-code byte accounting is future), so the loop
-/// declines and runs on the interpreter, which accounts correctly. Output must still be
-/// interpreter-identical.
+/// J0.5 mem (PARITY): a `Map<String,Int>`-insert hot loop now RUNS natively under an
+/// armed `mem_budget` — the interpreter charges map inserts ZERO bytes (its only
+/// per-iteration `account_bytes` sites are `List.push`/`List.append` growth and
+/// list/map LITERAL construction), so a native map-insert loop charges exactly the same
+/// (zero): exact parity, no in-code accounting required. Must OSR and match the
+/// interpreter byte-for-byte. (A `ListPush`-charging loop, by contrast, still declines —
+/// but that case is already vetoed by OSR growth-admissibility for live-in lists.)
 #[cfg(feature = "native-jit")]
 #[test]
-fn native_osr_allocating_loop_declines_under_mem_budget() {
+fn native_osr_map_insert_loop_runs_under_mem_budget() {
     let source = "\
 fn build_map(k: read String, n: Int) -> Int {
     Log.write(message: read \"begin\")
@@ -5745,7 +5747,7 @@ fn main() -> Unit {
     return Unit
 }
 ";
-    let file = "j05-mem-alloc.rss";
+    let file = "j05-mem-mapinsert.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
     let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
     let limits = rsscript::VmLimits {
@@ -5754,13 +5756,14 @@ fn main() -> Unit {
     };
     let (output, stats) = exe
         .eval_main_with_args_native_osr_with_limits(std::iter::empty::<String>(), limits)
-        .expect("allocating loop still completes (on the interpreter) under mem_budget");
+        .expect("map-insert loop must run under mem_budget (map inserts charge zero)");
     assert_eq!(
         interp.stdout, output.stdout,
-        "the declined allocating loop must stay interpreter-identical"
+        "the map-insert loop must stay interpreter-identical under mem_budget"
     );
-    assert_eq!(
-        stats.osr_entries, 0,
-        "an allocating loop must NOT OSR while mem_budget is armed (mem accounting is future): {stats:?}",
+    assert_eq!(output.stdout.trim_end(), "begin\n1");
+    assert!(
+        stats.osr_entries > 0,
+        "a map-insert loop must OSR under mem_budget (zero-charge parity): {stats:?}",
     );
 }

@@ -134,12 +134,15 @@ JIT 性能有两条轴:
   tick 流,不重不漏,`cancel` 只观测不回滚。ABI:新增 `limits_ptr` 参数指向宿主
   `[steps, step_budget, cancel_addr]` cell(`call_with_limits`);未 armed 变体忽略它(与改前字节一致,
   热路径零开销)。`try_osr`/`resolve_osr_candidate` 现在**仅在 `mem_budget` armed 时**拒绝 OSR。
-- **mem 维已部分落地:** 不分配/不变更堆的 OSR 循环(纯标量、只读、就地覆写)现在 **`mem_budget` armed 时也跑 native**
-  —— 它对 `mem_budget` 计入恰为 0,与解释器一致(解释器只在分配/增长点 `account_bytes`),故无需生成代码内记账即安全;
-  **分配型**循环(译后 body 含 `AllocatesResult`/`MutatesInput`/`ReplacesInput` helper)仍在译后 decline
-  (`jit_fn_allocates_or_mutates_heap`)。测试:`native_osr_nonallocating_loop_runs_under_mem_budget`(正)、
-  `native_osr_allocating_loop_declines_under_mem_budget`(负)。
-- **仍缺:** ① **分配型** native 循环的生成代码内 `mem_budget` 字节记账(绑 S4);② 把强制扩展到整函数/递归层(仍 Model-A 拒绝)。
+- **mem 维基本落地(OSR 层,按 parity):** native 必须**与解释器逐字节对齐**地计入 `mem_budget`。解释器每次迭代
+  唯一的 `account_bytes` 点是 flat-list 容量增长(`List.push`/`List.append`)和 list/map **字面量**构造
+  (`MakeList`/`MakeMap`);string/json/map/set/deque/sortedmap 插入都计 **0**。其中只有 `List.push` 可被 native lower
+  (`MakeList`/`MakeMap`/`ListAppend` 不可,故含它们的循环根本不进 native)。所以 native OSR 循环计入恰等于解释器,
+  **除非**它含 `ListPush*` —— 其余分配(字符串构建、map/set 插入…)两边都计 0,故 `mem_budget` armed 时照跑 native(精确 parity,
+  无需生成代码内记账)。`jit_fn_has_unaccounted_mem_charge` 只对 `ListPush*` 循环 decline(而 live-in list 增长本就被
+  OSR growth-admissibility veto,故这是双保险)。测试:`native_osr_nonallocating_loop_runs_under_mem_budget`、
+  `native_osr_map_insert_loop_runs_under_mem_budget`(均正,`osr_entries>0`);hostile mem 套件全绿(list-alloc runaway 仍在解释器 trip)。
+- **仍缺:** ① native `ListPush` 增长的生成代码内字节记账(绑 S4;OSR 里罕见);② 把强制扩展到整函数/递归层(仍 Model-A 拒绝)。
 - **测试:** `native_osr_completes_under_generous_step_budget`(正,`osr_entries>0`)、
   `native_osr_trips_tight_step_budget`、`native_osr_cancel_flag_preempts`;hostile limits 套件全绿。
 

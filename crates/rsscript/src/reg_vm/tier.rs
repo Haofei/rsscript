@@ -163,27 +163,33 @@ fn profile_closure_pic_arm_count(code: &[vm_jit::JitInstr], closure_id_ip: usize
 }
 
 #[cfg(feature = "native-jit")]
-/// Whether `jit_fn` performs any heap allocation or mutation via a host helper
-/// (`AllocatesResult` / `MutatesInput` / `ReplacesInput`). Read-only and
-/// handle-extending helpers, and in-place direct writes (`ListSetIntDirect`, which
-/// overwrite without growing), allocate nothing. Used by J0.5 to decide whether a
-/// `mem_budget`-armed OSR loop is sound to run natively WITHOUT in-code byte accounting:
-/// a loop that allocates/mutates nothing charges `mem_budget` exactly zero — identical
-/// to the interpreter, which only `account_bytes` at allocation/growth sites — so it is
-/// trivially safe; an allocating loop still declines (in-code mem accounting is future).
+/// Whether `jit_fn` contains a heap op that the **interpreter charges to `mem_budget`**
+/// per loop iteration but native does not yet account for in generated code.
+///
+/// J0.5 mem parity (the native tier must charge EXACTLY what the interpreter charges,
+/// no more, no less). The interpreter's only per-iteration `account_bytes` sites are
+/// flat list capacity growth (`List.push`/`List.append`) and list/map LITERAL
+/// construction (`MakeList`/`MakeMap`); strings, JSON, and map/set/deque/sorted-map
+/// inserts are charged ZERO. Of those charged ops, only `List.push` is reachable in the
+/// native subset (`MakeList`/`MakeMap`/`ListAppend` are not native-lowerable, so a loop
+/// using them is not native-eligible at all). So a native OSR loop charges `mem_budget`
+/// exactly the interpreter's amount UNLESS it calls a `ListPush*` helper — every other
+/// allocation (string build, map/set insert, …) is uncharged by BOTH, hence parity-safe
+/// to run under an armed `mem_budget`. A `ListPush*` loop still declines (native list-
+/// growth byte accounting is future). NOTE: live-in `ListPush` is already vetoed by the
+/// OSR growth-admissibility rule, so this is belt-and-suspenders for the region-local
+/// case.
 #[cfg(feature = "native-jit")]
-fn jit_fn_allocates_or_mutates_heap(jit_fn: &vm_jit::JitFunction) -> bool {
+fn jit_fn_has_unaccounted_mem_charge(jit_fn: &vm_jit::JitFunction) -> bool {
     jit_fn.code.iter().any(|instr| {
-        let helper = match instr {
-            vm_jit::JitInstr::HostCall { helper, .. }
-            | vm_jit::JitInstr::MemoizedHostCall { helper, .. } => *helper,
-            _ => return false,
-        };
         matches!(
-            helper.heap_effect(),
-            vm_jit::HostHeapEffect::AllocatesResult
-                | vm_jit::HostHeapEffect::MutatesInput
-                | vm_jit::HostHeapEffect::ReplacesInput
+            instr,
+            vm_jit::JitInstr::HostCall { helper, .. }
+            | vm_jit::JitInstr::MemoizedHostCall { helper, .. }
+                if matches!(
+                    helper,
+                    vm_jit::HostHelper::ListPushInt | vm_jit::HostHelper::ListPushFloat
+                )
         )
     })
 }
@@ -1677,10 +1683,11 @@ impl RegVm {
                                 string_literals,
                             )| {
                                 let n_jit_regs = jit_fn.n_regs as usize;
-                                // J0.5 mem: an allocating loop declines while `mem_budget`
-                                // is armed (in-code byte accounting is future); a loop
-                                // that allocates/mutates nothing is mem-neutral and runs.
-                                if mem_armed && jit_fn_allocates_or_mutates_heap(&jit_fn) {
+                                // J0.5 mem: decline only a loop that charges `mem_budget`
+                                // in a way native does not yet account (a `ListPush*`
+                                // growth); every other allocation is uncharged by the
+                                // interpreter too, so running it natively is exact parity.
+                                if mem_armed && jit_fn_has_unaccounted_mem_charge(&jit_fn) {
                                     return None;
                                 }
                                 let heap_input_regs = osr_heap_input_regs(&jit_fn);
@@ -2050,10 +2057,11 @@ impl RegVm {
                             )
                                 .and_then(|(jit_fn, params, derived_liveins, scalar_fields, reg_types, written_regs, string_literals)| {
                                     let n_jit_regs = jit_fn.n_regs as usize;
-                                    // J0.5 mem: decline an allocating loop while `mem_budget`
-                                    // is armed (checked on the post-dissolution body, which
-                                    // reflects what actually runs); a mem-neutral loop runs.
-                                    if mem_armed && jit_fn_allocates_or_mutates_heap(&jit_fn) {
+                                    // J0.5 mem: decline only a `ListPush*`-charging loop
+                                    // (checked on the post-dissolution body, which reflects
+                                    // what actually runs); every other allocation is
+                                    // uncharged by the interpreter too — exact parity.
+                                    if mem_armed && jit_fn_has_unaccounted_mem_charge(&jit_fn) {
                                         return None;
                                     }
                                     let heap_input_regs = osr_heap_input_regs(&jit_fn);
