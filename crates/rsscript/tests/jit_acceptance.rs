@@ -5927,3 +5927,47 @@ fn main() -> Unit {
         "the two-armed live-after Result loop must OSR (tag-driven Ok/Err reconstruction): {stats:?}",
     );
 }
+
+/// J0.4 #1 (heap-value collection write, Set): a hot loop inserting a heap value (a
+/// `String`) into a `Set<String>` lowers to the native `SetInsertHandle` helper — the
+/// value is resolved and hashed by the host's own `VmMapKey`, the write is journaled.
+/// Must OSR and match the interpreter byte-for-byte.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_set_insert_string_matches_interpreter() {
+    let source = "\
+fn build_set(s: read String, n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut seen = Set<String>.new()
+    let mut i = 0
+    while i < n {
+        Set.insert(set: mut seen, value: read s)
+        i = i + 1
+    }
+    return Set.len(set: read seen)
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: build_set(s: read \"x\", n: read 200)))
+    return Unit
+}
+";
+    let file = "j1-set-insert-string.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let osr = rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "string set insert OSR must match the interpreter"
+    );
+    assert_eq!(osr.stdout.trim_end(), "begin\n1");
+
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("compiles");
+    let (_osr2, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run (stats)");
+    assert!(
+        stats.osr_entries > 0,
+        "the hot string-set insert loop must OSR: {stats:?}",
+    );
+}

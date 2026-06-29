@@ -213,6 +213,11 @@ pub type CollectionLenFn = extern "C" fn(HostCtx, i64) -> i64;
 /// `(set_handle, value) -> i64`: insert an Int into a set, returning whether it
 /// was newly inserted. A wrong container/value shape signals a bail.
 pub type SetInsertIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
+/// `(set_handle, value_handle) -> i64`: insert a **heap** value (e.g. a `String`) into a
+/// `Set<HeapType>`, returning whether it was newly inserted. The value handle is
+/// resolved and hashed by the host's own canonical key (never re-hashed in native). A
+/// wrong container/value shape signals a bail.
+pub type SetInsertHandleFn = extern "C" fn(HostCtx, i64, i64) -> i64;
 /// `(set_handle, value) -> i64`: insert an Int into a sorted set, returning whether
 /// it was newly inserted. A wrong container/value shape signals a bail.
 pub type SortedSetInsertIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
@@ -321,6 +326,7 @@ pub struct HostHelpers {
     pub map_len: CollectionLenFn,
     pub map_is_empty: IsEmptyFn,
     pub set_insert_int: SetInsertIntFn,
+    pub set_insert_handle: SetInsertHandleFn,
     pub set_len: CollectionLenFn,
     pub set_is_empty: IsEmptyFn,
     pub sorted_set_insert_int: SortedSetInsertIntFn,
@@ -852,6 +858,14 @@ host_helpers! {
         field: set_insert_int,
         symbol: "rss_jit_set_insert_int",
         args: [JitValueType::Handle, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::MutatesInput,
+    },
+    SetInsertHandle => {
+        field: set_insert_handle,
+        symbol: "rss_jit_set_insert_handle",
+        args: [JitValueType::Handle, JitValueType::Handle],
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
@@ -5950,6 +5964,7 @@ mod tests {
             HostHelper::MapInsertHandleKeyInt,
             HostHelper::MapInsertFloat,
             HostHelper::SetInsertInt,
+            HostHelper::SetInsertHandle,
             HostHelper::SortedSetInsertInt,
             HostHelper::SortedMapInsertInt,
             HostHelper::DequePushBackInt,
@@ -6289,6 +6304,7 @@ mod tests {
             map_len: noop_collection_len,
             map_is_empty: noop_is_empty,
             set_insert_int: noop_set_insert_int,
+            set_insert_handle: noop_set_insert_int,
             set_len: noop_collection_len,
             set_is_empty: noop_is_empty,
             sorted_set_insert_int: noop_sorted_set_insert_int,

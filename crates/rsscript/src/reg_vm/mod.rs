@@ -3652,6 +3652,7 @@ fn jit_host_helpers() -> vm_jit::HostHelpers {
         map_len: rss_jit_map_len,
         map_is_empty: rss_jit_map_is_empty,
         set_insert_int: rss_jit_set_insert_int,
+        set_insert_handle: rss_jit_set_insert_handle,
         set_len: rss_jit_set_len,
         set_is_empty: rss_jit_set_is_empty,
         sorted_set_insert_int: rss_jit_sorted_set_insert_int,
@@ -4984,6 +4985,42 @@ fn rss_jit_set_insert_int_with_ctx(ctx: JitHostCallCtx, handle: i64, value: i64)
         Some(i64::from(
             map.insert(jit_int_key(value), VmValue::Unit).is_none(),
         ))
+    }) {
+        Some(value) => value,
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+/// J0.4 #1 (heap-value collection write): insert a **heap** value (e.g. a `String`) into
+/// a `Set<HeapType>`. The value handle is resolved to its heap value and wrapped in
+/// `VmMapKey` — hashing/equality is the host's own canonical key, never re-implemented in
+/// native (a set is a map with `Unit` values, like [`rss_jit_set_insert_int`]). The write
+/// is journaled (§7.2 rollback). A wrong shape/invalid handle bails.
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_set_insert_handle(
+    _ctx: vm_jit::HostCtx,
+    handle: i64,
+    value_handle: i64,
+) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    rss_jit_set_insert_handle_with_ctx(_ctx, handle, value_handle)
+}
+
+#[cfg(feature = "native-jit")]
+fn rss_jit_set_insert_handle_with_ctx(ctx: JitHostCallCtx, handle: i64, value_handle: i64) -> i64 {
+    let Some(key) = ctx.heap_read_handle(value_handle, |value| Some(VmMapKey::new(value.clone())))
+    else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    match ctx.with_journaled_map_write(handle, move |map| {
+        Some(i64::from(map.insert(key, VmValue::Unit).is_none()))
     }) {
         Some(value) => value,
         None => {

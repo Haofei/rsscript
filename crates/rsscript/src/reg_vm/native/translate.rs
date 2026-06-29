@@ -1516,9 +1516,19 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 }
             }
             RegInstr::SetInsert { dst, set, value } => {
-                require(handle_reg(*set) && int(*value) && bool_ty(*dst))?;
+                require(handle_reg(*set) && bool_ty(*dst))?;
+                // Int value → SetInsertInt; (J0.4 #1) heap value (e.g. `String`) →
+                // SetInsertHandle, which resolves + hashes the value via the host's key.
+                let helper = if int(*value) {
+                    vm_jit::HostHelper::SetInsertInt
+                } else if handle_reg(*value) {
+                    vm_jit::HostHelper::SetInsertHandle
+                } else {
+                    require(false)?;
+                    unreachable!()
+                };
                 JitInstr::HostCall {
-                    helper: vm_jit::HostHelper::SetInsertInt,
+                    helper,
                     dst: r(*dst),
                     args: vec![
                         vm_jit::HostArg::Reg(r(*set)),
@@ -4345,9 +4355,19 @@ fn translate_osr_loop_inner(
                 }
             }
             RegInstr::SetInsert { dst, set, value } => {
-                require(handle_reg(*set) && int(*value) && bool_ty(*dst))?;
+                require(handle_reg(*set) && bool_ty(*dst))?;
+                // Int value → SetInsertInt; (J0.4 #1) heap value (e.g. `String`) →
+                // SetInsertHandle, which resolves + hashes the value via the host's key.
+                let helper = if int(*value) {
+                    vm_jit::HostHelper::SetInsertInt
+                } else if handle_reg(*value) {
+                    vm_jit::HostHelper::SetInsertHandle
+                } else {
+                    require(false)?;
+                    unreachable!()
+                };
                 JitInstr::HostCall {
-                    helper: vm_jit::HostHelper::SetInsertInt,
+                    helper,
                     dst: r(*dst),
                     args: vec![
                         vm_jit::HostArg::Reg(r(*set)),
