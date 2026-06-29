@@ -178,7 +178,9 @@ mod intrinsic_registry_tests {
         );
     }
 
-    /// The deopt cold-arm pure-builder whitelist is exactly the four String builders.
+    /// The deopt cold-arm pure-builder whitelist: the four String builders plus the
+    /// pure slice/pad/bytes Allocate producers. Each reads only its operands and is
+    /// faithfully re-runnable on the interpreter after a native cold-arm `Bail`.
     #[test]
     fn cold_arm_pure_builders_whitelist() {
         for i in [
@@ -186,13 +188,16 @@ mod intrinsic_registry_tests {
             RegIntrinsic::StringFromBool,
             RegIntrinsic::StringFromFloat,
             RegIntrinsic::StringFromInt,
+            RegIntrinsic::StringSlice,
+            RegIntrinsic::StringPadLeft,
+            RegIntrinsic::BytesFromString,
+            RegIntrinsic::BytesSlice,
         ] {
             assert!(intrinsic_descriptor(i).cold_arm_pure_builder, "{:?}", i);
         }
-        // Not on the whitelist: queries, combinators, slices, opaque allocators.
+        // Not on the whitelist: queries, combinators, opaque allocators / mutators.
         for i in [
             RegIntrinsic::StringLen,
-            RegIntrinsic::StringSlice,
             RegIntrinsic::OptionMap,
             RegIntrinsic::ListContains,
         ] {

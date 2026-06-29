@@ -940,13 +940,15 @@ fn intrinsic_descriptor(intrinsic: RegIntrinsic) -> IntrinsicDescriptor {
             can_fold: true,
             native_lowerable: true,
             string_fold_role: Some(StringFoldRole::ProducerSlice),
-            notes: "allocates substring; native-lowerable and byte length foldable only when source is ASCII",
+            cold_arm_pure_builder: true,
+            notes: "allocates substring; native-lowerable and byte length foldable only when source is ASCII; pure builder (re-runnable after a cold-arm bail)",
             ..d()
         },
         RegIntrinsic::StringPadLeft => IntrinsicDescriptor {
             effect: Allocate,
             native_lowerable: true,
-            notes: "allocates padded string; native-lowerable as a typed host helper",
+            cold_arm_pure_builder: true,
+            notes: "allocates padded string; native-lowerable as a typed host helper; pure builder (re-runnable after a cold-arm bail)",
             ..d()
         },
         RegIntrinsic::StringSplit => IntrinsicDescriptor {
@@ -980,7 +982,8 @@ fn intrinsic_descriptor(intrinsic: RegIntrinsic) -> IntrinsicDescriptor {
             effect: Allocate,
             can_fold: true,
             bytes_fold_role: Some(BytesFoldRole::ProducerFromString),
-            notes: "allocates raw bytes from String; byte length = source String byte length",
+            cold_arm_pure_builder: true,
+            notes: "allocates raw bytes from String; byte length = source String byte length; pure builder (re-runnable after a cold-arm bail)",
             ..d()
         },
         // `Bytes.slice` allocates a byte-index substring; its length is the exact clamp
@@ -990,7 +993,8 @@ fn intrinsic_descriptor(intrinsic: RegIntrinsic) -> IntrinsicDescriptor {
             can_fold: true,
             native_lowerable: true,
             bytes_fold_role: Some(BytesFoldRole::ProducerSlice),
-            notes: "allocates byte-index substring; native-lowerable and byte length foldable",
+            cold_arm_pure_builder: true,
+            notes: "allocates byte-index substring; native-lowerable and byte length foldable; pure builder (re-runnable after a cold-arm bail)",
             ..d()
         },
 
@@ -998,6 +1002,11 @@ fn intrinsic_descriptor(intrinsic: RegIntrinsic) -> IntrinsicDescriptor {
         // These allocate a fresh String from read-only operands and observe/mutate
         // nothing else, so a native Bail can discard the arm and the interpreter
         // re-runs it faithfully. (`StringFromInt` above already carries can_fold.)
+        // The slice/pad/bytes producers above (`StringSlice`/`StringPadLeft`/
+        // `BytesFromString`/`BytesSlice`) are the same shape — pure Allocate from
+        // read-only operands — and also carry `cold_arm_pure_builder`; any
+        // operand-domain error (e.g. a bad `String.slice` boundary) is raised
+        // identically by the interpreter on re-run, so parity holds.
         RegIntrinsic::StringCopy | RegIntrinsic::StringFromBool | RegIntrinsic::StringFromFloat => {
             IntrinsicDescriptor {
                 effect: Allocate,

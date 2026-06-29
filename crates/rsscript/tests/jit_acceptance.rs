@@ -6835,3 +6835,107 @@ fn main() -> Unit {
     let _ = stats;
     assert_eq!(interp.stdout, nat.stdout, "non-foldable live-out cold arm must match interpreter");
 }
+
+/// #7 cold-arm coverage slice (2026-06-29): a leaf whose COLD arm RETURNS a heap value
+/// built by `String.slice` — a pure, read-only Allocate producer now on the
+/// `cold_arm_pure_builder` whitelist. The payload is the live `Err` value (NOT measured
+/// by `String.len`, so no length-fold applies); before the whitelist expansion the arm
+/// was undetectable and the leaf declined inlining (loop did not OSR). Now the arm is a
+/// deopt-replaceable cold arm spliced to a native `Bail`: the loop OSRs, and the rare
+/// cold path (i==1500) rolls back and re-runs on the interpreter, which rebuilds the
+/// sliced `Err` faithfully. Must match the interpreter byte-for-byte AND OSR.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_inlined_leaf_call_string_slice_cold_arm_matches_interpreter() {
+    let source = "\
+fn classify(x: Int) -> Result<Int, String> {
+    if x == 1500 {
+        return Err(String.slice(value: read \"boundary value reached here\", start: read 0, len: read 8))
+    }
+    return Ok(read x)
+}
+fn run(n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut acc = 0
+    let mut i = 0
+    while i < n {
+        match classify(x: read i) {
+            Ok(v) => { acc = acc + v }
+            Err(e) => { acc = acc + String.len(value: read e) }
+        }
+        i = i + 1
+    }
+    return acc
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    return Unit
+}
+";
+    let file = "p7e.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (nat, stats) = exe
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr");
+    assert_eq!(interp.stdout, nat.stdout, "String.slice cold-arm inlined leaf must match interpreter");
+    assert!(
+        stats.osr_entries >= 1,
+        "String.slice cold-arm inlined leaf must OSR after whitelist expansion (entries={})",
+        stats.osr_entries
+    );
+}
+
+/// #7 cold-arm coverage slice (2026-06-29, second builder): a leaf whose COLD arm RETURNS
+/// a heap value built by `String.pad_left` — another pure, read-only Allocate producer
+/// now on the `cold_arm_pure_builder` whitelist. Same shape as the `String.slice` case:
+/// the heap `Err` payload is live (consumed via `String.len`), not folded; the arm
+/// becomes a deopt-replaceable cold arm and the loop OSRs, with the rare cold path
+/// re-running on the interpreter. Must match the interpreter byte-for-byte AND OSR.
+///
+/// (The `Bytes` builders `BytesFromString`/`BytesSlice` are equally whitelisted and
+/// unit-covered by `cold_arm_pure_builders_whitelist`, but a cold arm returning a `Bytes`
+/// `Err` payload does not OSR here — `Result<_, Bytes>` payload dissolution is a separate,
+/// not-yet-implemented native path, orthogonal to this whitelist. Demonstrated with the
+/// String-payload builders, which the two-armed heap-Result path already supports.)
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_inlined_leaf_call_pad_left_cold_arm_matches_interpreter() {
+    let source = "\
+fn classify(x: Int) -> Result<Int, String> {
+    if x == 1500 {
+        return Err(String.pad_left(value: read \"x\", width: 8, fill: read \"*\"))
+    }
+    return Ok(read x)
+}
+fn run(n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut acc = 0
+    let mut i = 0
+    while i < n {
+        match classify(x: read i) {
+            Ok(v) => { acc = acc + v }
+            Err(e) => { acc = acc + String.len(value: read e) }
+        }
+        i = i + 1
+    }
+    return acc
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    return Unit
+}
+";
+    let file = "p7f.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (nat, stats) = exe
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr");
+    assert_eq!(interp.stdout, nat.stdout, "String.pad_left cold-arm inlined leaf must match interpreter");
+    assert!(
+        stats.osr_entries >= 1,
+        "String.pad_left cold-arm inlined leaf must OSR after whitelist expansion (entries={})",
+        stats.osr_entries
+    );
+}
