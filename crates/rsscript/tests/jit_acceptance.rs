@@ -5971,3 +5971,60 @@ fn main() -> Unit {
         "the hot string-set insert loop must OSR: {stats:?}",
     );
 }
+
+/// J0.4 #1: native `SortedSet<String>.insert` (heap value) + `SortedMap<String,Int>.insert`
+/// (heap key). Both lower to their `*Handle*` helpers, resolving + ordering via the host's
+/// own logic; must OSR and match the interpreter.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_sorted_set_and_map_string_insert_matches_interpreter() {
+    let set_src = "\
+fn build(s: read String, n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut seen = SortedSet<String>.new()
+    let mut i = 0
+    while i < n {
+        SortedSet.insert(set: mut seen, value: read s)
+        i = i + 1
+    }
+    return SortedSet.len(set: read seen)
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: build(s: read \"x\", n: read 200)))
+    return Unit
+}
+";
+    let interp = common::run_vm_source("j1-sortedset.rss", set_src, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source("j1-sortedset.rss", set_src).expect("compile");
+    let (osr, stats) = exe
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr");
+    assert_eq!(interp.stdout, osr.stdout, "sorted-set string insert must match interpreter");
+    assert_eq!(osr.stdout.trim_end(), "begin\n1");
+    assert!(stats.osr_entries > 0, "sorted-set string insert loop must OSR: {stats:?}");
+
+    let map_src = "\
+fn build(k: read String, n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut m = SortedMap<String, Int>.new()
+    let mut i = 0
+    while i < n {
+        SortedMap.insert<String, Int>(map: mut m, key: read k, value: read i)
+        i = i + 1
+    }
+    return SortedMap.len<String, Int>(map: read m)
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: build(k: read \"k\", n: read 200)))
+    return Unit
+}
+";
+    let interp2 = common::run_vm_source("j1-sortedmap.rss", map_src, &[]).expect("interp");
+    let exe2 = rsscript::reg_vm_compile_source("j1-sortedmap.rss", map_src).expect("compile");
+    let (osr2, stats2) = exe2
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr");
+    assert_eq!(interp2.stdout, osr2.stdout, "sorted-map string-key insert must match interpreter");
+    assert_eq!(osr2.stdout.trim_end(), "begin\n1");
+    assert!(stats2.osr_entries > 0, "sorted-map string-key insert loop must OSR: {stats2:?}");
+}

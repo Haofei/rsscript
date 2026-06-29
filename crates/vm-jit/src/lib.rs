@@ -221,12 +221,18 @@ pub type SetInsertHandleFn = extern "C" fn(HostCtx, i64, i64) -> i64;
 /// `(set_handle, value) -> i64`: insert an Int into a sorted set, returning whether
 /// it was newly inserted. A wrong container/value shape signals a bail.
 pub type SortedSetInsertIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
+/// `(set_handle, value_handle) -> i64`: insert a **heap** value (e.g. `String`) into a
+/// sorted set, returning whether newly inserted. Ordering/equality is the host's own.
+pub type SortedSetInsertHandleFn = extern "C" fn(HostCtx, i64, i64) -> i64;
 /// `(set_handle, value) -> i64`: return whether an Int exists in a sorted set.
 /// A wrong container/value shape signals a bail.
 pub type SortedSetContainsIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
 /// `(map_handle, key, value) -> i64`: insert/update an Int-keyed, Int-valued
 /// sorted map. A wrong container/key/value shape signals a bail.
 pub type SortedMapInsertIntFn = extern "C" fn(HostCtx, i64, i64, i64) -> i64;
+/// `(map_handle, key_handle, value: i64) -> i64`: insert an `Int` value under a **heap**
+/// key (e.g. `String`) into a sorted map. Ordering/equality is the host's own.
+pub type SortedMapInsertHandleKeyIntFn = extern "C" fn(HostCtx, i64, i64, i64) -> i64;
 /// `(map_handle, key) -> i64`: return an Int payload for an existing sorted-map
 /// key, or 0 for a missing key. Call `sorted_map_get_found` to distinguish
 /// missing from a real zero payload. Wrong shape/non-Int payloads signal a bail.
@@ -330,9 +336,11 @@ pub struct HostHelpers {
     pub set_len: CollectionLenFn,
     pub set_is_empty: IsEmptyFn,
     pub sorted_set_insert_int: SortedSetInsertIntFn,
+    pub sorted_set_insert_handle: SortedSetInsertHandleFn,
     pub sorted_set_contains_int: SortedSetContainsIntFn,
     pub sorted_set_is_empty: IsEmptyFn,
     pub sorted_map_insert_int: SortedMapInsertIntFn,
+    pub sorted_map_insert_handle_key_int: SortedMapInsertHandleKeyIntFn,
     pub sorted_map_get_int: SortedMapGetIntFn,
     pub sorted_map_get_float: SortedMapGetFloatFn,
     pub sorted_map_get_found: SortedMapGetFoundFn,
@@ -892,6 +900,14 @@ host_helpers! {
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
     },
+    SortedSetInsertHandle => {
+        field: sorted_set_insert_handle,
+        symbol: "rss_jit_sorted_set_insert_handle",
+        args: [JitValueType::Handle, JitValueType::Handle],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::MutatesInput,
+    },
     SortedSetContainsInt => {
         field: sorted_set_contains_int,
         symbol: "rss_jit_sorted_set_contains_int",
@@ -910,6 +926,14 @@ host_helpers! {
         field: sorted_map_insert_int,
         symbol: "rss_jit_sorted_map_insert_int",
         args: [JitValueType::Handle, JitValueType::Int, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::MutatesInput,
+    },
+    SortedMapInsertHandleKeyInt => {
+        field: sorted_map_insert_handle_key_int,
+        symbol: "rss_jit_sorted_map_insert_handle_key_int",
+        args: [JitValueType::Handle, JitValueType::Handle, JitValueType::Int],
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
@@ -5966,7 +5990,9 @@ mod tests {
             HostHelper::SetInsertInt,
             HostHelper::SetInsertHandle,
             HostHelper::SortedSetInsertInt,
+            HostHelper::SortedSetInsertHandle,
             HostHelper::SortedMapInsertInt,
+            HostHelper::SortedMapInsertHandleKeyInt,
             HostHelper::DequePushBackInt,
             HostHelper::DequePushBackFloat,
             HostHelper::DequePushFrontInt,
@@ -6308,9 +6334,11 @@ mod tests {
             set_len: noop_collection_len,
             set_is_empty: noop_is_empty,
             sorted_set_insert_int: noop_sorted_set_insert_int,
+            sorted_set_insert_handle: noop_sorted_set_insert_int,
             sorted_set_contains_int: noop_sorted_set_contains_int,
             sorted_set_is_empty: noop_is_empty,
             sorted_map_insert_int: noop_sorted_map_insert_int,
+            sorted_map_insert_handle_key_int: noop_sorted_map_insert_int,
             sorted_map_get_int: noop_sorted_map_get_int,
             sorted_map_get_float: noop_sorted_map_get_float,
             sorted_map_get_found: noop_sorted_map_get_found,

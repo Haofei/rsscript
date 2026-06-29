@@ -1537,9 +1537,18 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 }
             }
             RegInstr::SortedSetInsert { dst, set, value } => {
-                require(handle_reg(*set) && int(*value) && bool_ty(*dst))?;
+                require(handle_reg(*set) && bool_ty(*dst))?;
+                // Int value → SortedSetInsertInt; (J0.4 #1) heap value → SortedSetInsertHandle.
+                let helper = if int(*value) {
+                    vm_jit::HostHelper::SortedSetInsertInt
+                } else if handle_reg(*value) {
+                    vm_jit::HostHelper::SortedSetInsertHandle
+                } else {
+                    require(false)?;
+                    unreachable!()
+                };
                 JitInstr::HostCall {
-                    helper: vm_jit::HostHelper::SortedSetInsertInt,
+                    helper,
                     dst: r(*dst),
                     args: vec![
                         vm_jit::HostArg::Reg(r(*set)),
@@ -1553,9 +1562,18 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 key,
                 value,
             } => {
-                require(handle_reg(*map) && int(*key) && int(*value) && int(*dst))?;
+                require(handle_reg(*map) && int(*value) && int(*dst))?;
+                // Int key → SortedMapInsertInt; (J0.4 #1) heap key → SortedMapInsertHandleKeyInt.
+                let helper = if int(*key) {
+                    vm_jit::HostHelper::SortedMapInsertInt
+                } else if handle_reg(*key) {
+                    vm_jit::HostHelper::SortedMapInsertHandleKeyInt
+                } else {
+                    require(false)?;
+                    unreachable!()
+                };
                 JitInstr::HostCall {
-                    helper: vm_jit::HostHelper::SortedMapInsertInt,
+                    helper,
                     dst: r(*dst),
                     args: vec![
                         vm_jit::HostArg::Reg(r(*map)),
@@ -4376,9 +4394,18 @@ fn translate_osr_loop_inner(
                 }
             }
             RegInstr::SortedSetInsert { dst, set, value } => {
-                require(handle_reg(*set) && int(*value) && bool_ty(*dst))?;
+                require(handle_reg(*set) && bool_ty(*dst))?;
+                // Int value → SortedSetInsertInt; (J0.4 #1) heap value → SortedSetInsertHandle.
+                let helper = if int(*value) {
+                    vm_jit::HostHelper::SortedSetInsertInt
+                } else if handle_reg(*value) {
+                    vm_jit::HostHelper::SortedSetInsertHandle
+                } else {
+                    require(false)?;
+                    unreachable!()
+                };
                 JitInstr::HostCall {
-                    helper: vm_jit::HostHelper::SortedSetInsertInt,
+                    helper,
                     dst: r(*dst),
                     args: vec![
                         vm_jit::HostArg::Reg(r(*set)),
@@ -4392,9 +4419,18 @@ fn translate_osr_loop_inner(
                 key,
                 value,
             } => {
-                require(handle_reg(*map) && int(*key) && int(*value) && int(*dst))?;
+                require(handle_reg(*map) && int(*value) && int(*dst))?;
+                // Int key → SortedMapInsertInt; (J0.4 #1) heap key → SortedMapInsertHandleKeyInt.
+                let helper = if int(*key) {
+                    vm_jit::HostHelper::SortedMapInsertInt
+                } else if handle_reg(*key) {
+                    vm_jit::HostHelper::SortedMapInsertHandleKeyInt
+                } else {
+                    require(false)?;
+                    unreachable!()
+                };
                 JitInstr::HostCall {
-                    helper: vm_jit::HostHelper::SortedMapInsertInt,
+                    helper,
                     dst: r(*dst),
                     args: vec![
                         vm_jit::HostArg::Reg(r(*map)),

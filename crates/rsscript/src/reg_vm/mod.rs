@@ -3656,9 +3656,11 @@ fn jit_host_helpers() -> vm_jit::HostHelpers {
         set_len: rss_jit_set_len,
         set_is_empty: rss_jit_set_is_empty,
         sorted_set_insert_int: rss_jit_sorted_set_insert_int,
+        sorted_set_insert_handle: rss_jit_sorted_set_insert_handle,
         sorted_set_contains_int: rss_jit_sorted_set_contains_int,
         sorted_set_is_empty: rss_jit_sorted_set_is_empty,
         sorted_map_insert_int: rss_jit_sorted_map_insert_int,
+        sorted_map_insert_handle_key_int: rss_jit_sorted_map_insert_handle_key_int,
         sorted_map_get_int: rss_jit_sorted_map_get_int,
         sorted_map_get_float: rss_jit_sorted_map_get_float,
         sorted_map_get_found: rss_jit_sorted_map_get_found,
@@ -5086,6 +5088,35 @@ fn rss_jit_sorted_set_insert_int_with_ctx(ctx: JitHostCallCtx, handle: i64, valu
     }
 }
 
+/// J0.4 #1 (heap-value collection write): insert a **heap** value (e.g. `String`) into a
+/// sorted set — the heap analog of [`rss_jit_sorted_set_insert_int`]. The value handle is
+/// resolved and the host's own `sorted_insert_vm` (ordering + dedup) does the work; the
+/// write is journaled (§7.2). A wrong shape/invalid handle bails.
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_sorted_set_insert_handle(
+    _ctx: vm_jit::HostCtx,
+    handle: i64,
+    value_handle: i64,
+) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let Some(value) = _ctx.heap_read_handle(value_handle, |value| Some(value.clone())) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    match _ctx.with_journaled_list_write(handle, move |list| {
+        sorted_insert_vm(list.as_boxed_mut(), value).ok().map(i64::from)
+    }) {
+        Some(value) => value,
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_sorted_set_contains_int(
     _ctx: vm_jit::HostCtx,
@@ -5255,6 +5286,37 @@ fn rss_jit_sorted_map_insert_int_with_ctx(
     match ctx.with_journaled_list_write(handle, |list| {
         sorted_map_insert_in_place(list.as_boxed_mut(), VmValue::Int(key), VmValue::Int(value))
             .ok()?;
+        Some(0)
+    }) {
+        Some(value) => value,
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+/// J0.4 #1 (heap-key collection write): insert an `Int` value under a **heap** key (e.g.
+/// `String`) into a sorted map — the heap-key analog of [`rss_jit_sorted_map_insert_int`].
+/// The key handle is resolved and the host's own `sorted_map_insert_in_place` (ordering)
+/// does the work; the write is journaled (§7.2). A wrong shape/invalid handle bails.
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_sorted_map_insert_handle_key_int(
+    _ctx: vm_jit::HostCtx,
+    handle: i64,
+    key_handle: i64,
+    value: i64,
+) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let Some(key) = _ctx.heap_read_handle(key_handle, |key| Some(key.clone())) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    match _ctx.with_journaled_list_write(handle, move |list| {
+        sorted_map_insert_in_place(list.as_boxed_mut(), key, VmValue::Int(value)).ok()?;
         Some(0)
     }) {
         Some(value) => value,
