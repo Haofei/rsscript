@@ -6523,3 +6523,34 @@ fn main() -> Unit {
         "mem-over-budget error must match the interpreter exactly",
     );
 }
+
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_aliased_struct_field_write_declines_safely() {
+    // A caller-aliased `mut Acc` struct, scalar field written in a hot loop. Does the
+    // native OSR propagate the in-place writes back to the caller's struct?
+    let source = "\
+struct Acc { total: Int }
+fn bump(a: mut Acc, n: Int) -> Int {
+    let mut i = 0
+    while i < n {
+        a.total = a.total + 2
+        i = i + 1
+    }
+    return a.total
+}
+fn main() -> Unit {
+    let mut a = Acc(total: 0)
+    let r = bump(a: mut a, n: read 3000)
+    Log.write(message: read String.from_int(value: r))
+    Log.write(message: read String.from_int(value: a.total))
+    return Unit
+}
+";
+    let file = "s4.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (nat, stats) = exe.eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>()).expect("osr");
+    eprintln!("S4 interp={:?} native={:?} osr_entries={}", interp.stdout.trim_end(), nat.stdout.trim_end(), stats.osr_entries);
+    assert_eq!(interp.stdout, nat.stdout, "aliased struct field write must match interpreter");
+}
