@@ -33,7 +33,7 @@ JIT 性能有两条轴:
 | 5 | ~~**J0.4 S1–S3:仅分配的 native 堆写**~~ ✅**已完成** | 中–高 | **最高** | 无(不需 J0.1/J0.5) | 解锁 alloc-bound(string/json/集合构造);10 个 `AllocatesResult` helper 已落地并验证 |
 | 6 | ✅**J0.5:生成代码内 `VmLimits` 记账(step+cancel+mem 全落地 OSR 层)** | 高 | 中 | 无(S4 的前置) | OSR 在 step/cancel armed 时跑(沙箱);**2026-06-29:mem 也落地(6057f48)**——`ListPush*`(唯一被解释器计入 `mem_budget` 的 native-subset op)在 helper 内按 `checked_push_accounted` 的 `grew` 记账;超预算 bail→现有 rollback+rerun 让解释器在精确那次 push 报错(免费 exact parity);clean exit 提交 `live_bytes`。判别式测试 `native_osr_list_push_int_charges_mem_budget`(宽松→OSR+完成;紧→native 与解释器逐字节同错)。#6 完成。 |
 | 7 | 🔶完整 J0.1:内联帧链 + 堆值重建(**scalar Result/Option live-after 全覆盖,含两臂**) | 很高 | 高(地基) | 无(S4 的前置) | 已落地:always-Ok Result / always-Some Option live-after 重建;**两臂 scalar Result** 经 tag+payload 溶解,**dead-at-boundary 与 live-after 都支持**(live-after 在 OSR-exit 按 tag 重建 Ok/Err——`native_scalar_replace_two_armed_results_in_region` + `ResultRecipe(variant,payload,Option<tag>)` + `result_err_layout`;测试 `native_osr_j3_two_armed_scalar_result_matches_interpreter`、`native_osr_j3_two_armed_result_live_after_reconstructs`,均字节对齐+osr_entries>0,差分 33/0)。**2026-06-29 新增:heap-payload + 不同类型臂 dead-at-boundary 全覆盖**——`Result<String,String>`(同类型堆,980e7d3:修了 string-fold 误 bail + 翻译器 handle-alias 死循环→改 union-find)与 `Result<Int,String>`(异类型臂,498f041:**per-arm payload 寄存器**,`ResultRecipe(variant,ok_pay,err_pay,tag)`)现都 OSR(测试 `native_osr_two_armed_heap_string_result_*`、`native_osr_two_armed_mixed_result_*`,osr_entries>0,差分 33/0)。**2026-06-29:live-after + heap payload 也已落地(04a24de)**——`DeoptValue::Handle` 携带堆句柄,OSR-exit 经 `heap_read_handle` 解析重建;配合 try_osr 运行期参数类型 seeding(taint-gate:仅 seed 在区内只被 dissolved-payload `Move` 读的参数,堆集合 key/value 参数被 helper spec 定型故排除)。测试 `native_osr_two_armed_heap_result_live_after_reconstructs`,差分 33/0,5 个 #1 集合写循环无回归。**#7 两臂 Result 全维度完成:scalar+heap × 同/异类型 × dead-at-boundary/live-after 均 OSR。** 剩:内联帧链(输出测不出的硬核,需定向 repro/forced-deopt,#8 的地基) |
-| 8 | 🔶**J0.4 S4:别名堆就地写**(**flat-list 直写已落地**) | 很高 | 高/广 | J0.1 + J0.5 | 调用方别名的 flat `List<Int/Float>` 就地写已 lower 成 `ListSetIntDirect`(测试 `native_translation_lowers_flat_int_list_set_to_direct_write`),靠幂等 re-run 保 §7.2。剩通用情形:任意堆复合值写 + 写后精确续跑(需完整 J0.1 帧链 + J0.5 mem) |
+| 8 | ✅**J0.4 S4:别名堆就地写**(**能力已落地并验证**) | 很高 | 高/广 | J0.1 + J0.5 | 调用方别名的堆就地写已在 native OSR 层落地并验证**跨堆类型**:flat `List<Int/Float>` 直写(`ListSetIntDirect`);**struct 标量字段 RMW**(OSR scalar-field replacement 溶解为 loop-carried 标量 + OSR-exit 写回 + mut-param 传播给调用方);**Map insert / Deque push**(`Rc<RefCell>` 就地 helper)。靠幂等 rollback+rerun 保 §7.2。**2026-06-29 验证**:`native_osr_aliased_struct_field_write_matches_interpreter`、`native_osr_aliased_map_insert_matches_interpreter`、`native_osr_aliased_deque_push_matches_interpreter`——均判别式读回(经调用方,非仅 callee 返回)+ osr_entries≥1 + 解释器逐字节对齐。**关键**:这些循环仅当外层函数被 I/O 包裹(整函数 tier-0-INELIGIBLE)才进 OSR 路径;无 I/O 的函数体在调用点被 tier-0 直派、根本不进 OSR(故"osr_entries=0"是没进 OSR,**不是** decline)。剩:**写后精确续跑**(不 rollback、写后从循环中段精确续跑)——是 rollback+rerun 之上的**优化**,建在 #7 内联帧链上,非正确性缺口 |
 | 9 | 🔶async / 挂起函数 native(**task_group spawn/join OSR 融合已落地**) | 很高 | 类相关 | — | 循环内 `task_group { async let x = f(..); await x }` 的纯 spawn/join 已内联进 native OSR(`native_callee_inlinable_j3_with_spawns`;测试 `native_osr_enters_task_group_spawn_loop`)。剩:跨 await 点的真正 park/resume 帧状态(架构性,可能不做) |
 
 **⚠️ 2026-06-28 核实结论:9 项全部已 Done 或 In-progress(无纯 Pending)。** #2/#3/#4/#5 **Done**;
@@ -41,9 +41,11 @@ JIT 性能有两条轴:
 进展):#1 = String-key map insert;#6 = step+cancel(OSR 层)在生成代码内强制;#7 = Result/Option live-after
 重建;#8 = flat-list 别名直写(`ListSetIntDirect`);#9 = task_group spawn/join 的 OSR 融合。**各项剩余**(均为
 更大/更硬的尾巴,非"未开始"):#1 handle-**值**写 + 其他 key 类型(按需);#6 mem_budget 记账 + 整函数/递归层;
-#7 内联帧链 + heap-payload variant 重建(silent-bug-prone,需定向 repro,勿盲冲);#8 通用别名复合写 + 写后精确
-续跑(需完整 #7 + #6-mem);#9 跨 await 的 park/resume(架构性)。**下一步最该做的仍是主线 #7(完整 J0.1)**
-——它是 #8 与"边写边精确续跑"的地基,且独立解锁 heap-payload variant / live-out 的 OSR。
+#7 内联帧链 + heap-payload variant 重建(silent-bug-prone,需定向 repro,勿盲冲);#9 跨 await 的 park/resume(架构性)。
+**2026-06-29 更新:#8 别名复合写能力已落地并验证**(struct 标量字段 RMW / Map insert / Deque push 均 OSR + 调用方判别式
+对齐——见上表)。#8 仅剩**写后精确续跑**(rollback+rerun 之上的优化,建在 #7 帧链上,非正确性缺口)。**真正剩余的硬核
+是 #7 内联帧链**(输出测不出,需 forced-deopt repro)**与 #9 async park/resume**(架构性)——#7 是 #8 精确续跑与
+heap-payload variant / live-out OSR 的地基。
 
 **(历史)推荐切入顺序:** ~~先 **#5(J0.4 S1–S3)**~~ ✅**#5 已完成**——
 10 个 `AllocatesResult` helper(`StringFromInt`/`StringConcat`/`StringSlice`/`StringPadLeft`/`StringSplit`/
