@@ -2636,10 +2636,18 @@ pub(in crate::reg_vm) fn native_string_folded_callee(callee: &RegFunction) -> Op
     if callee.code.is_empty() {
         return None;
     }
-    let (folded_code, folded_regs, _ip_map) =
+    // Chain the semantics-preserving length-law folds over the WHOLE callee body: first
+    // the string-length fold (`String.len`-of-foldable → digit/concat/slice arithmetic),
+    // then the Bytes-length fold (`Bytes.len`-of-foldable → byte-length arithmetic) on its
+    // result. Both DELETE the dissolved allocation, so a measured-throwaway string OR bytes
+    // cold arm becomes pure native-subset scalar code. Each is a no-op for a body lacking
+    // its pattern, returning the input unchanged.
+    let (s_code, s_regs, _s_map) =
         native_string_length_fold_in_region(&callee.code, callee.regs, 0, callee.code.len())?;
-    // No-op fold ⇒ original (the fold DELETES dissolved allocations, so a real fold always
-    // shrinks the stream and/or grows the reg file; equal length AND regs ⇒ nothing folded).
+    let (folded_code, folded_regs, _b_map) =
+        native_bytes_length_fold_in_region(&s_code, s_regs, 0, s_code.len())?;
+    // No-op chain ⇒ original (a real fold shrinks the stream and/or grows the reg file;
+    // equal length AND regs vs the ORIGINAL ⇒ nothing folded by either pass).
     if folded_code.len() == callee.code.len() && folded_regs == callee.regs {
         return None;
     }

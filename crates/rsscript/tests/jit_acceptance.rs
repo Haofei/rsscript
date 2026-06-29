@@ -6743,3 +6743,48 @@ fn main() -> Unit {
         stats.osr_entries
     );
 }
+
+/// #7 foldable cold-arm sub-case (Bytes sibling): an inlined leaf whose cold arm builds a
+/// measured-throwaway Bytes value (`Bytes.len(Bytes.from_string(..))`). The chained
+/// callee-fold (string then Bytes length-law fold) dissolves it to byte-length arithmetic
+/// before the inlinability check, so the leaf becomes pure-scalar native, inlines, and the
+/// loop OSRs — with byte-exact interpreter parity (the fold is semantics-preserving).
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_inlined_leaf_call_bytes_cold_arm_matches_interpreter() {
+    let source = "\
+fn classify(x: Int) -> Int {
+    if x == 1500 {
+        let b = Bytes.from_string(value: read \"hello\")
+        return Bytes.len(value: read b)
+    }
+    return x + 1
+}
+fn run(n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut acc = 0
+    let mut i = 0
+    while i < n {
+        acc = acc + classify(x: read i)
+        i = i + 1
+    }
+    return acc
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    return Unit
+}
+";
+    let file = "p7c.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (nat, stats) = exe
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr");
+    assert_eq!(interp.stdout, nat.stdout, "bytes cold-arm inlined leaf must match interpreter");
+    assert!(
+        stats.osr_entries >= 1,
+        "foldable bytes cold-arm inlined leaf must OSR (entries={})",
+        stats.osr_entries
+    );
+}
