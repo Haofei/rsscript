@@ -5772,12 +5772,15 @@ fn main() -> Unit {
     );
 }
 
-/// J0.4 #1 (heap-VALUE collection write): a hot loop pushing a heap value (a `String`)
-/// onto a function-local `List<String>` accumulator now OSRs via `ListPushHandle` — the
-/// value side of item #1. The accumulator is a NON-parameter register, so it is
-/// handle-accessed (flat-buffer pinning is params-only), making the growth safe; the
-/// growth-admissibility veto now allows non-parameter list growth. Must OSR and match
-/// the interpreter byte-for-byte.
+/// J0.4 #1 correctness guard (heap-VALUE list growth): a hot loop pushing a heap value
+/// (a `String`) onto a `List<String>` accumulator. A `List<String>` is a BOXED list
+/// (16-byte `VmValue` element slots), whose capacity growth the native tier does not yet
+/// account for, so once the pushed value is correctly classified `Handle` the loop
+/// CORRECTLY DECLINES OSR and runs on the interpreter — producing byte-for-byte output.
+/// (It previously appeared to OSR, but only because the heap value was mis-typed `Int`,
+/// which mis-pushed each element's heap-table INDEX as a flat-int — a silent corruption a
+/// single-`len` check could not see. The fix that types heap params `Handle` exposed and
+/// corrected this.) Must match the interpreter and must NOT mis-OSR a Boxed-list growth.
 #[cfg(feature = "native-jit")]
 #[test]
 fn native_osr_list_push_handle_matches_interpreter() {
@@ -5790,7 +5793,9 @@ fn build_list(s: read String, n: Int) -> Int {
         List.push<String>(list: mut xs, value: read s)
         i = i + 1
     }
-    return List.len(list: read xs)
+    // Discriminating: read an element back as a String. A mis-typed (flat-int) push would
+    // store handle indices, so this read would diverge from the interpreter.
+    return String.len(value: read List.get<String>(list: read xs, index: read 0))
 }
 
 fn main() -> Unit {
@@ -5804,18 +5809,10 @@ fn main() -> Unit {
         .expect("osr native run");
     assert_eq!(
         interp.stdout, osr.stdout,
-        "heap-value list push OSR must match the interpreter"
+        "heap-value list push must match the interpreter (Boxed-list growth runs on the interpreter)"
     );
-    assert_eq!(osr.stdout.trim_end(), "begin\n200");
-
-    let executable = rsscript::reg_vm_compile_source(file, source).expect("compiles");
-    let (_osr2, stats) = executable
-        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
-        .expect("osr native run (stats)");
-    assert!(
-        stats.osr_entries > 0,
-        "the hot heap-value push loop must OSR: {stats:?}",
-    );
+    // Element 0 is "hi" (len 2).
+    assert_eq!(osr.stdout.trim_end(), "begin\n2");
 }
 
 /// J0.1 #7 (two-armed scalar Result): a Result built as EITHER `Ok(scalar)` or
@@ -6311,4 +6308,44 @@ fn main() -> Unit {
         stats.osr_entries > 0,
         "the hot live-after heap-payload Result loop must OSR: {stats:?}",
     );
+}
+
+/// J0.4 #1 correctness (heap-key map insert + lookup): DISCRIMINATING regression guard.
+/// Inserts `k -> i` for a `String` key param in a hot loop (OSR via `MapInsertHandleKeyInt`),
+/// then looks the key back up. A heap key mis-typed as the Int handle-index (the bug the
+/// runtime param-type seeding fixes) would store the wrong key and make this lookup miss,
+/// diverging from the interpreter — which a `Map.len`-only check could not detect.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_map_insert_string_key_lookup_matches_interpreter() {
+    let source = "\
+fn build(k: read String, n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut m = Map<String, Int>.new()
+    let mut i = 0
+    while i < n {
+        Map.insert<String, Int>(map: mut m, key: read k, value: read i)
+        i = i + 1
+    }
+    match Map.get<String, Int>(map: read m, key: read k) {
+        Some(found) => { return found }
+        None => { return 0 - 1 }
+    }
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: build(k: read \"key\", n: read 200)))
+    return Unit
+}
+";
+    let file = "j1-map-strkey-lookup.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let osr = rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+        .expect("osr native run");
+    // Last inserted value for "key" is 199.
+    assert_eq!(interp.stdout, osr.stdout, "heap-key map insert+lookup must match interpreter");
+    assert_eq!(osr.stdout.trim_end(), "begin\n199");
+
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compiles");
+    let (_o, stats) = exe.eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>()).expect("osr");
+    assert!(stats.osr_entries > 0, "hot heap-key insert loop must OSR: {stats:?}");
 }

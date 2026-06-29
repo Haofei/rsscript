@@ -294,6 +294,11 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
     let declared_return_ty = declared_signature
         .and_then(|signature| signature.return_type.as_deref())
         .and_then(native_declared_type_name_to_ty);
+    // The whole-function tier has no per-call runtime param classification (unlike OSR's
+    // `try_osr`), so it cannot identify a heap-typed param register here; `heap_param` is
+    // always false (heap collection key/value PARAMS are not specially typed on this path).
+    // A heap key/value LOCAL still flows its `Handle` type from its in-region definition.
+    let heap_param = |_reg: usize| false;
     let mut changed = true;
     while changed {
         changed = false;
@@ -3325,70 +3330,33 @@ fn translate_osr_loop_inner(
             }
         }
     }
-    // J0.1 #7 (live-after heap payload): seed a param the preheader inference left untyped
-    // from its runtime native type — but ONLY a param whose in-region uses never reach a
-    // typed-intrinsic argument (transitively through `Move`s). A param used in-region only
-    // as a dissolved Result/Option payload `Move` (the unwrap/consumer is OUTSIDE the loop
-    // for the live-after case) has no in-region typed use, so the payload `Move` lowering
-    // would otherwise decline (`ty[src]?`); seeding it BEFORE the region fixpoint lets the
-    // seed propagate through the payload `Move` so the dissolved payload reg is `Handle`
-    // (hence captured + resolved at deopt). A heap collection key/value param DOES reach an
-    // in-region intrinsic arg (e.g. `Map.insert` after a `read`-`Move`), where the helper
-    // spec types it Int (the handle-index) — seeding Handle would conflict and decline, so
-    // the taint excludes it. `try_osr` also withholds flat-capable kinds.
-    {
-        // A reg is "typed-elsewhere" if its value reaches any in-region instruction
-        // OTHER than a dissolved-payload `Move`: such an instruction (a typed op or a
-        // collection helper like `MapInsert`/`ListPush`) types the reg authoritatively,
-        // and pre-seeding it would conflict (`native_set_ty` mismatch) and decline. `Move`s
-        // are transparent (a copy), so we taint a reg read by any NON-`Move` in-region
-        // instruction, then back-propagate through `Move`s. A param used in-region ONLY as
-        // a payload `Move` source (the unwrap/consumer is OUTSIDE the loop in the
-        // live-after case) stays untainted and is seeded.
-        let mut typed_elsewhere = vec![false; n_regs];
-        for i in lp.header..lp.exit {
-            if matches!(&code[i], RegInstr::Move { .. }) {
-                continue;
-            }
-            match instr_read_regs(&code[i]) {
-                RegFootprint::Some(reads) => {
-                    for r in reads {
-                        if r < n_regs {
-                            typed_elsewhere[r] = true;
-                        }
-                    }
-                }
-                RegFootprint::All => {
-                    for t in typed_elsewhere.iter_mut() {
-                        *t = true;
-                    }
-                }
-            }
-        }
-        let mut taint_changed = true;
-        while taint_changed {
-            taint_changed = false;
-            for i in lp.header..lp.exit {
-                if let RegInstr::Move { dst, src } = &code[i] {
-                    if *dst < n_regs
-                        && *src < n_regs
-                        && typed_elsewhere[*dst]
-                        && !typed_elsewhere[*src]
-                    {
-                        typed_elsewhere[*src] = true;
-                        taint_changed = true;
-                    }
-                }
-            }
-        }
-        for (reg, seed) in param_native_types.iter().enumerate().take(n_params) {
-            if let Some(t) = seed {
-                if reg < n_regs && ty[reg].is_none() && !typed_elsewhere[reg] {
-                    ty[reg] = Some(*t);
-                }
+    // J0.1 #7 / J0.4 #1: seed each param the preheader inference left untyped from its
+    // runtime native type (`try_osr` classifies the live value: Int/Float scalars, heap
+    // values → Handle; flat-capable List/Deque withheld as `None`). This types a param
+    // used in-region with no typed-use to unify against — a dissolved Result/Option
+    // payload `Move` source (live-after reconstruction), OR a heap collection value pushed
+    // by an unconstrained-value op (`ListPush`/`MapInsert`-value/`DequePush`/`SetFieldSlot`,
+    // which leave the value to flow). It does NOT conflict with the collection-op inference:
+    // that inference now types a heap key/value operand `Handle` (via `heap_param`) too, so
+    // the seed and the inference agree. Fill-`None` only, so a flat-list param the region
+    // pass classifies wins.
+    for (reg, seed) in param_native_types.iter().enumerate().take(n_params) {
+        if let Some(t) = seed {
+            if reg < n_regs && ty[reg].is_none() {
+                ty[reg] = Some(*t);
             }
         }
     }
+    // J0.4 #1 correctness: a heap collection key/value that is a PARAM is classified
+    // `Handle` by `try_osr` from its live value. The collection-op inference below must
+    // type such an operand `Handle` (not the default `Int`), or the lowering's
+    // `handle_reg` test never fires and a heap key/value is mis-lowered to the Int helper
+    // (storing the operand's heap-table INDEX as an Int — a silent mis-key/mis-value the
+    // original single-element tests didn't catch). A non-heap-param operand keeps its
+    // prior typing.
+    let heap_param = |reg: usize| {
+        reg < n_params && matches!(param_native_types.get(reg), Some(Some(NativeTy::Handle)))
+    };
     let mut changed = true;
     while changed {
         changed = false;
@@ -3444,7 +3412,7 @@ fn translate_osr_loop_inner(
                 } => {
                     native_set_ty(ty, *list, NativeTy::Handle, c)
                         && native_set_ty(ty, *index, NativeTy::Int, c)
-                        && native_set_ty(ty, *value, NativeTy::Int, c)
+                        && native_set_ty(ty, *value, if heap_param(*value) { NativeTy::Handle } else { NativeTy::Int }, c)
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
                 RegInstr::ListPush {
@@ -3473,17 +3441,17 @@ fn translate_osr_loop_inner(
                     // lowering picks MapInsertInt/MapInsertFloat, and a wrong-value-type
                     // map bails at the helper.
                     native_set_ty(ty, *map, NativeTy::Handle, c)
-                        && native_set_ty(ty, *key, NativeTy::Int, c)
+                        && native_set_ty(ty, *key, if heap_param(*key) { NativeTy::Handle } else { NativeTy::Int }, c)
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
                 RegInstr::SetInsert { dst, set, value } => {
                     native_set_ty(ty, *set, NativeTy::Handle, c)
-                        && native_set_ty(ty, *value, NativeTy::Int, c)
+                        && native_set_ty(ty, *value, if heap_param(*value) { NativeTy::Handle } else { NativeTy::Int }, c)
                         && native_set_ty(ty, *dst, NativeTy::Bool, c)
                 }
                 RegInstr::SortedSetInsert { dst, set, value } => {
                     native_set_ty(ty, *set, NativeTy::Handle, c)
-                        && native_set_ty(ty, *value, NativeTy::Int, c)
+                        && native_set_ty(ty, *value, if heap_param(*value) { NativeTy::Handle } else { NativeTy::Int }, c)
                         && native_set_ty(ty, *dst, NativeTy::Bool, c)
                 }
                 RegInstr::SortedMapInsert {
@@ -3493,8 +3461,8 @@ fn translate_osr_loop_inner(
                     value,
                 } => {
                     native_set_ty(ty, *map, NativeTy::Handle, c)
-                        && native_set_ty(ty, *key, NativeTy::Int, c)
-                        && native_set_ty(ty, *value, NativeTy::Int, c)
+                        && native_set_ty(ty, *key, if heap_param(*key) { NativeTy::Handle } else { NativeTy::Int }, c)
+                        && native_set_ty(ty, *value, if heap_param(*value) { NativeTy::Handle } else { NativeTy::Int }, c)
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
                 RegInstr::DequePushBack {
@@ -3521,13 +3489,13 @@ fn translate_osr_loop_inner(
                     // MatchMapGetInt/MatchMapGetFloat, and a wrong-value-type map
                     // bails at the helper.
                     native_set_ty(ty, *map, NativeTy::Handle, c)
-                        && native_set_ty(ty, *key, NativeTy::Int, c)
+                        && native_set_ty(ty, *key, if heap_param(*key) { NativeTy::Handle } else { NativeTy::Int }, c)
                 }
                 RegInstr::MatchSortedMapGet { map, key, .. } => {
                     // value_dst flows (Int or Float); lowering picks
                     // MatchSortedMapGetInt/MatchSortedMapGetFloat.
                     native_set_ty(ty, *map, NativeTy::Handle, c)
-                        && native_set_ty(ty, *key, NativeTy::Int, c)
+                        && native_set_ty(ty, *key, if heap_param(*key) { NativeTy::Handle } else { NativeTy::Int }, c)
                 }
                 RegInstr::GetFieldSlot { base, .. } => {
                     native_set_ty(ty, *base, NativeTy::Handle, c)
