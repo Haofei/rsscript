@@ -5023,10 +5023,13 @@ fn main() -> Unit {
     );
 }
 
-/// Negative: a list MUTATED inside the loop (`List.push` in-loop) must NOT take the
-/// direct flat path (a `List.push` is not in the native subset, so the loop is not
-/// OSR-eligible at all) and must stay interpreter-identical. Guards against a future
-/// edit wrongly classifying a mutated list as a fixed flat buffer.
+/// A list MUTATED inside the loop (`List.push` in-loop). The list `xs` is a function
+/// LOCAL (non-parameter), so it is handle-accessed — NOT a pinned flat buffer (flat
+/// pinning is params-only) — which makes in-loop growth safe. So the loop now OSRs (the
+/// growth-admissibility veto allows non-parameter list growth, J0.4 #1) and the
+/// `List.get`/`List.push` go through the journaled heap helpers. The result must stay
+/// byte-identical to the interpreter — this guards that a mutated list is NOT wrongly
+/// treated as a fixed flat buffer (which would corrupt reads after a realloc).
 #[cfg(feature = "native-jit")]
 #[test]
 fn native_osr_mutated_list_in_loop_stays_correct() {
@@ -5059,14 +5062,15 @@ fn main() -> Unit {
         interp.stdout, osr.stdout,
         "a list mutated in-loop must stay interpreter-identical"
     );
-    // xs[0] is always 1 ⇒ total = 3000; final len = 1 + 3000 = 3001. The loop runs well
-    // past the OSR backedge threshold, so a non-zero osr_entries here could only come
-    // from wrongly treating the mutated list as a fixed flat buffer — it must stay 0.
+    // xs[0] is always 1 ⇒ total = 3000; final len = 1 + 3000 = 3001. Byte-identity (and
+    // the cross-backend differential) is the correctness net that proves the mutated
+    // local list is handle-accessed correctly across the in-loop realloc, not pinned.
     assert_eq!(osr.stdout.trim_end(), "begin\n3000\n3001");
-    // The in-loop List.push leaves the native subset ⇒ the loop never OSRs.
-    assert_eq!(
-        stats.osr_entries, 0,
-        "a loop with an in-loop list mutation must NOT OSR (not native-subset): {stats:?}",
+    // The local (non-parameter) list is handle-accessed, so its in-loop growth is safe
+    // and the loop OSRs (J0.4 #1: non-parameter list growth is admissible).
+    assert!(
+        stats.osr_entries > 0,
+        "a mutated non-parameter (handle-accessed) list loop should OSR safely: {stats:?}",
     );
 }
 
@@ -5765,5 +5769,51 @@ fn main() -> Unit {
     assert!(
         stats.osr_entries > 0,
         "a map-insert loop must OSR under mem_budget (zero-charge parity): {stats:?}",
+    );
+}
+
+/// J0.4 #1 (heap-VALUE collection write): a hot loop pushing a heap value (a `String`)
+/// onto a function-local `List<String>` accumulator now OSRs via `ListPushHandle` — the
+/// value side of item #1. The accumulator is a NON-parameter register, so it is
+/// handle-accessed (flat-buffer pinning is params-only), making the growth safe; the
+/// growth-admissibility veto now allows non-parameter list growth. Must OSR and match
+/// the interpreter byte-for-byte.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_list_push_handle_matches_interpreter() {
+    let source = "\
+fn build_list(s: read String, n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut xs = List<String>.new()
+    let mut i = 0
+    while i < n {
+        List.push<String>(list: mut xs, value: read s)
+        i = i + 1
+    }
+    return List.len(list: read xs)
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: build_list(s: read \"hi\", n: read 200)))
+    return Unit
+}
+";
+    let file = "j1-list-push-handle.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let osr = rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "heap-value list push OSR must match the interpreter"
+    );
+    assert_eq!(osr.stdout.trim_end(), "begin\n200");
+
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("compiles");
+    let (_osr2, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run (stats)");
+    assert!(
+        stats.osr_entries > 0,
+        "the hot heap-value push loop must OSR: {stats:?}",
     );
 }

@@ -3614,6 +3614,7 @@ fn jit_host_helpers() -> vm_jit::HostHelpers {
         list_set_int: rss_jit_list_set_int,
         list_set_float: rss_jit_list_set_float,
         list_push_int: rss_jit_list_push_int,
+        list_push_handle: rss_jit_list_push_handle,
         list_push_float: rss_jit_list_push_float,
         list_sort_int: rss_jit_list_sort_int,
         list_new_int: rss_jit_list_new_int,
@@ -4621,6 +4622,43 @@ extern "C" fn rss_jit_list_push_int(_ctx: vm_jit::HostCtx, handle: i64, value: i
 fn rss_jit_list_push_int_with_ctx(ctx: JitHostCallCtx, handle: i64, value: i64) -> i64 {
     match ctx.with_journaled_list_write(handle, |list| {
         list.checked_push(VmValue::Int(value)).ok()?;
+        Some(0)
+    }) {
+        Some(value) => value,
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+/// J0.4 #1 (heap-value collection write): push a **heap** element onto a
+/// `List<HeapType>` — the value side of item #1 (the key side is
+/// [`rss_jit_map_insert_handle_key_int`]). The value handle is resolved to its heap
+/// value (host-owned, input or output table) and appended via the journaled list write
+/// (rolled back on a later bail, §7.2). A wrong-type/invalid handle bails.
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_list_push_handle(
+    _ctx: vm_jit::HostCtx,
+    handle: i64,
+    value_handle: i64,
+) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    rss_jit_list_push_handle_with_ctx(_ctx, handle, value_handle)
+}
+
+#[cfg(feature = "native-jit")]
+fn rss_jit_list_push_handle_with_ctx(ctx: JitHostCallCtx, handle: i64, value_handle: i64) -> i64 {
+    // Resolve the heap value (clone it out of its table) before the journaled write.
+    let Some(value) = ctx.heap_read_handle(value_handle, |value| Some(value.clone())) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    match ctx.with_journaled_list_write(handle, move |list| {
+        list.checked_push(value).ok()?;
         Some(0)
     }) {
         Some(value) => value,

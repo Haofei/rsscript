@@ -1,11 +1,12 @@
 use super::*;
 
 #[cfg(feature = "native-jit")]
-fn osr_loop_region_is_native_subset(code: &[RegInstr], lp: OsrLoop) -> bool {
+fn osr_loop_region_is_native_subset(code: &[RegInstr], lp: OsrLoop, n_params: usize) -> bool {
     code.get(lp.header..lp.exit).is_some_and(|region| {
         let region_defs = native_osr_region_defined_regs(region);
         region.iter().all(|instr| {
-            native_subset_instruction(instr) && native_osr_growth_admissible(instr, &region_defs)
+            native_subset_instruction(instr)
+                && native_osr_growth_admissible(instr, &region_defs, n_params)
         })
     })
 }
@@ -27,20 +28,26 @@ fn native_osr_region_defined_regs(region: &[RegInstr]) -> std::collections::Hash
     defs
 }
 
-/// A growing list mutation (`ListPush`) breaks the OSR flat-buffer model only for a
-/// LIVE-IN list (created outside the region / loop-carried): growing it reallocates
-/// the pinned buffer, and the loop has no flat-buffer payoff. A list CREATED in the
-/// region is region-local — built natively, never pinned — and may be grown freely.
-/// So a `ListPush` is admissible iff its target list register is defined in-region.
-/// (This also drives OSR loop selection to the outer loop when a fresh list is built
-/// by an inner builder loop and consumed — e.g. sorted — by the outer one.)
+/// Whether a growing list mutation (`ListPush`) is safe to run in an OSR loop.
+///
+/// Growth reallocates a list's backing buffer. The ONLY lists pinned as a raw flat
+/// buffer (whose pointer a realloc would dangle) are flat `List<Int>`/`List<Float>`
+/// **parameters** (`reg < n_params`; the TV2 flat classification is params-only — see
+/// `flat_param_kind` in `native/translate.rs`). So a `ListPush` is admissible when its
+/// target list is EITHER region-local (built natively, never pinned) OR a non-parameter
+/// register (`reg >= n_params`, a function-local accumulator that is handle-accessed,
+/// not flat-pinned — e.g. a `List<String>` builder). A PARAMETER list stays vetoed
+/// (conservative: it may be the pinned flat buffer; growing it is UB). This unblocks
+/// native heap-value list building (J0.4 #1) while preserving flat-param safety and the
+/// outer-loop selection for flat-param builder/consumer shapes.
 #[cfg(feature = "native-jit")]
 fn native_osr_growth_admissible(
     instr: &RegInstr,
     region_defs: &std::collections::HashSet<usize>,
+    n_params: usize,
 ) -> bool {
     match instr {
-        RegInstr::ListPush { list, .. } => region_defs.contains(list),
+        RegInstr::ListPush { list, .. } => region_defs.contains(list) || *list >= n_params,
         _ => true,
     }
 }
@@ -188,7 +195,9 @@ fn jit_fn_has_unaccounted_mem_charge(jit_fn: &vm_jit::JitFunction) -> bool {
             | vm_jit::JitInstr::MemoizedHostCall { helper, .. }
                 if matches!(
                     helper,
-                    vm_jit::HostHelper::ListPushInt | vm_jit::HostHelper::ListPushFloat
+                    vm_jit::HostHelper::ListPushInt
+                        | vm_jit::HostHelper::ListPushFloat
+                        | vm_jit::HostHelper::ListPushHandle
                 )
         )
     })
@@ -635,10 +644,11 @@ fn osr_loop_region_is_transform_candidate(unit: &RegUnit, func: &RegFunction, lp
         let region_defs = native_osr_region_defined_regs(region);
         region.iter().enumerate().all(|(offset, instr)| {
             let ip = lp.header + offset;
-            // A `ListPush` that grows a LIVE-IN list breaks the OSR flat-buffer model
-            // (no payoff); one that grows a region-local list is fine. A rejected
-            // push falls through to the match below (`_ => false`) and vetoes the loop.
-            if native_subset_instruction(instr) && native_osr_growth_admissible(instr, &region_defs)
+            // A `ListPush` that grows a flat-param pinned buffer is vetoed; a region-local
+            // or non-parameter (handle-accessed) list grows freely. A rejected push falls
+            // through to the match below (`_ => false`) and vetoes the loop.
+            if native_subset_instruction(instr)
+                && native_osr_growth_admissible(instr, &region_defs, func.params)
             {
                 return true;
             }
@@ -1657,7 +1667,7 @@ impl RegVm {
                 // final OSR boundary is composed back through `expand_map` to land in
                 // the REAL `func.code` (where the interpreter resumes).
                 let direct_entry = detect_natural_loop_at(&func.code, header_ip)
-                    .filter(|lp| osr_loop_region_is_native_subset(&func.code, *lp))
+                    .filter(|lp| osr_loop_region_is_native_subset(&func.code, *lp, func.params))
                     .filter(|lp| {
                         !osr_loop_region_needs_optimized_native_subset_path(&func.code, *lp)
                     })

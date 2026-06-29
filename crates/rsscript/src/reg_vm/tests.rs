@@ -2750,7 +2750,11 @@ fn main() -> Unit {
 
     #[cfg(feature = "native-jit")]
     #[test]
-    fn native_osr_rejects_growth_only_list_push_setup_loop() {
+    fn native_osr_accepts_nonparam_list_push_growth_loop() {
+        // J0.4 #1: a growth loop on a function-LOCAL (non-parameter) list is now a valid
+        // OSR candidate. The local list is handle-accessed (flat-buffer pinning is
+        // params-only), so growing it via the journaled `ListPushInt` helper is safe —
+        // unlike a flat PARAM buffer, which would dangle on realloc and stays vetoed.
         let source = r#"
 features: local
 
@@ -2772,8 +2776,8 @@ fn main() -> Unit {
             reg_vm_compile_source("test.rss", source).expect("lowering should succeed");
         let func = executable.unit.functions[executable.unit.function_ids["main"]].as_ref();
         assert!(
-            super::super::tier::select_osr_candidate_loop(&executable.unit, func).is_none(),
-            "growth-only List.push loop should not be selected for OSR; code={:#?}",
+            super::super::tier::select_osr_candidate_loop(&executable.unit, func).is_some(),
+            "a non-parameter (handle-accessed) list growth loop should be OSR-eligible; code={:#?}",
             func.code,
         );
     }

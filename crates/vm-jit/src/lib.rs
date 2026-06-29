@@ -77,6 +77,11 @@ pub type ListSetFloatFn = extern "C" fn(HostCtx, i64, i64, f64) -> i64;
 /// `(list_handle, value) -> i64`: push an `Int` list element. Returns `0` on
 /// success; a wrong-type/invalid handle signals a bail out-of-band.
 pub type ListPushIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
+/// `(list_handle, value_handle: i64) -> i64`: push a **heap** element (e.g. a `String`
+/// or nested collection) onto a `List<HeapType>`. The value handle is resolved to its
+/// heap value (host-owned) and appended; the write is journaled (§7.2 rollback). A
+/// wrong-type/invalid handle signals a bail out-of-band.
+pub type ListPushHandleFn = extern "C" fn(HostCtx, i64, i64) -> i64;
 /// `(list_handle, value: f64) -> i64`: push a `Float` list element (the write-side
 /// counterpart of [`ListGetFloatFn`]). Returns `0` on success; a wrong-type/invalid
 /// handle signals a bail out-of-band.
@@ -278,6 +283,7 @@ pub struct HostHelpers {
     pub list_set_int: ListSetIntFn,
     pub list_set_float: ListSetFloatFn,
     pub list_push_int: ListPushIntFn,
+    pub list_push_handle: ListPushHandleFn,
     pub list_push_float: ListPushFloatFn,
     pub list_sort_int: ListSortIntFn,
     pub list_new_int: ListNewIntFn,
@@ -561,6 +567,14 @@ host_helpers! {
         field: list_push_int,
         symbol: "rss_jit_list_push_int",
         args: [JitValueType::Handle, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::MutatesInput,
+    },
+    ListPushHandle => {
+        field: list_push_handle,
+        symbol: "rss_jit_list_push_handle",
+        args: [JitValueType::Handle, JitValueType::Handle],
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
@@ -5929,6 +5943,7 @@ mod tests {
             HostHelper::ListSetInt,
             HostHelper::ListSetFloat,
             HostHelper::ListPushInt,
+            HostHelper::ListPushHandle,
             HostHelper::ListPushFloat,
             HostHelper::ListSortInt,
             HostHelper::MapInsertInt,
@@ -6236,6 +6251,7 @@ mod tests {
             list_set_int: noop_list_set_int,
             list_set_float: noop_list_set_float,
             list_push_int: noop_list_push_int,
+            list_push_handle: noop_list_push_int,
             list_push_float: noop_list_push_float,
             list_sort_int: noop_list_sort_int,
             list_new_int: noop_list_new_int,

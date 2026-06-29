@@ -1454,13 +1454,19 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 }
             }
             RegInstr::ListPush { dst, list, value } => {
-                // Float value → ListPushFloat; Int or unconstrained → ListPushInt
-                // (a wrong-element-type list bails at the helper).
-                require(handle_reg(*list) && int(*dst) && (int_or_free(*value) || float(*value)))?;
+                // Float → ListPushFloat; Int/unconstrained → ListPushInt; (J0.4 #1) heap
+                // value (e.g. `String`/nested collection) → ListPushHandle, resolving the
+                // value handle and appending it. A wrong-element-type list bails.
+                require(handle_reg(*list) && int(*dst))?;
                 let helper = if float(*value) {
                     vm_jit::HostHelper::ListPushFloat
-                } else {
+                } else if int_or_free(*value) {
                     vm_jit::HostHelper::ListPushInt
+                } else if handle_reg(*value) {
+                    vm_jit::HostHelper::ListPushHandle
+                } else {
+                    require(false)?;
+                    unreachable!()
                 };
                 JitInstr::HostCall {
                     helper,
