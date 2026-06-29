@@ -6657,3 +6657,87 @@ fn main() -> Unit {
         stats.osr_entries
     );
 }
+
+/// J0.1 #7 probe: an inlined leaf call inside a hot OSR loop, where the callee has a
+/// COLD arm that builds a heap value (lowers to a native `Bail`). The cold arm IS taken
+/// partway through (at i==1500), forcing a mid-inlined-call deopt. The existing
+/// rollback+rerun must reproduce the interpreter's output exactly (the "inline
+/// frame-chain" would make resume PRECISE, but correctness holds via rerun either way).
+/// I/O-wrapped so the function is whole-tier-ineligible and the loop reaches OSR.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_inlined_leaf_call_cold_bail_matches_interpreter() {
+    let source = "\
+fn classify(x: Int) -> Int {
+    if x == 1500 {
+        let s = String.from_int(value: read x)
+        return String.len(value: read s)
+    }
+    return x + 1
+}
+fn run(n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut acc = 0
+    let mut i = 0
+    while i < n {
+        acc = acc + classify(x: read i)
+        i = i + 1
+    }
+    return acc
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    return Unit
+}
+";
+    let file = "p7.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (nat, stats) = exe
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr");
+    // CHARACTERIZATION: this loop currently DECLINES native OSR (osr_entries=0) and runs
+    // on the interpreter — correct, but not native. The blocker: `classify`'s cold arm
+    // builds a heap String, so it is not leaf-inlinable, and the deopt-before-heap splice
+    // (which converts an in-region heap cold arm to a native Bail) only reaches cold arms
+    // INSIDE the loop region — never a cold arm sitting in a non-inlined callee. This is a
+    // narrow #7-adjacent gap (admit a leaf whose heap is confined to a deoptable arm into
+    // the inline pass, then the existing splice + string-fold handle it), distinct from the
+    // inline frame-chain. The guard locks correctness while the loop declines.
+    assert_eq!(interp.stdout, nat.stdout, "inlined leaf call with cold heap arm must match interpreter");
+}
+
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_inlined_leaf_call_scalar_matches_interpreter() {
+    let source = "\
+fn classify(x: Int) -> Int {
+    if x == 1500 { return 7 }
+    return x + 1
+}
+fn run(n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut acc = 0
+    let mut i = 0
+    while i < n {
+        acc = acc + classify(x: read i)
+        i = i + 1
+    }
+    return acc
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    return Unit
+}
+";
+    let file = "p7b.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (nat, stats) = exe.eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>()).expect("osr");
+    assert_eq!(interp.stdout, nat.stdout);
+    assert!(
+        stats.osr_entries >= 1,
+        "pure-scalar inlined leaf call must OSR (entries={})",
+        stats.osr_entries
+    );
+}
