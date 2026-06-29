@@ -5872,3 +5872,58 @@ fn main() -> Unit {
         "the two-armed scalar Result loop must OSR (tag + payload dissolution): {stats:?}",
     );
 }
+
+/// J0.1 #7 (two-armed scalar Result, LIVE-AFTER): a Result assigned `Ok(i)`/`Err(i)`
+/// in-loop and matched AFTER the loop (live-after) now OSRs — the OSR-exit
+/// reconstruction rebuilds `Ok(payload)` or `Err(payload)` from the live-out tag. The
+/// post-loop match observes the reconstructed value (Err arm adds +1000), so byte
+/// identity to the interpreter proves the tag-driven Ok/Err reconstruction is correct.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j3_two_armed_result_live_after_reconstructs() {
+    let source = "\
+fn f(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    let mut last: Result<Int, Int> = Ok(0)
+    while i < limit {
+        if i < 50 {
+            last = Ok(i)
+        } else {
+            last = Err(i)
+        }
+        total = total + 1
+        i = i + 1
+    }
+    match last {
+        Ok(v) => { total = total + v }
+        Err(e) => { total = total + e + 1000 }
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(limit: read 100)))
+    return Unit
+}
+";
+    let file = "jit-osr-j3-two-armed-result-live-after.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "two-armed live-after Result loop must be byte-identical to the interpreter"
+    );
+    // Loop: total += 1 each of 100 iters ⇒ 100. last = (i=99 ⇒ Err(99)). Post-loop match:
+    // Err arm ⇒ +99+1000 = 1099. total = 100 + 1099 = 1199.
+    assert_eq!(osr.stdout.trim_end(), "begin\n1199\n1199");
+    assert!(
+        stats.osr_entries > 0,
+        "the two-armed live-after Result loop must OSR (tag-driven Ok/Err reconstruction): {stats:?}",
+    );
+}

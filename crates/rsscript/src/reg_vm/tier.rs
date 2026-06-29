@@ -2093,18 +2093,37 @@ impl RegVm {
                                                 }
                                             }
                                             record_native_compile_stats(native, id, &jit_fn);
-                                            // J0.1(b): every live-after Result recipe
-                                            // must reconstruct from a SCALAR payload —
-                                            // the deopt ABI carries only Int/Float. A
-                                            // non-scalar Ok payload (struct handle, Bool,
-                                            // flat) cannot be rematerialized here, so
-                                            // decline OSR (fall back to interpreter).
-                                            for (_r, payload_reg) in
-                                                recipes_r.iter().chain(option_recipes1.iter())
-                                            {
-                                                match reg_types.get(*payload_reg) {
-                                                    Some(NativeTy::Int | NativeTy::Float) => {}
-                                                    _ => return None,
+                                            // J0.1(b): every live-after recipe must
+                                            // reconstruct from SCALAR registers — the
+                                            // deopt ABI carries only Int/Float. A
+                                            // non-scalar payload (struct handle, flat) or
+                                            // tag cannot be rematerialized, so decline OSR.
+                                            let scalar = |reg: usize| {
+                                                matches!(
+                                                    reg_types.get(reg),
+                                                    Some(NativeTy::Int | NativeTy::Float)
+                                                )
+                                            };
+                                            // The tag is a boolean — deopt-representable as
+                                            // an Int (vm-jit has no Bool class), so allow
+                                            // `Bool` for it in addition to Int/Float.
+                                            let scalar_or_bool = |reg: usize| {
+                                                scalar(reg)
+                                                    || matches!(reg_types.get(reg), Some(NativeTy::Bool))
+                                            };
+                                            for (_r, payload_reg, tag_reg) in &recipes_r {
+                                                if !scalar(*payload_reg) {
+                                                    return None;
+                                                }
+                                                if let Some(tag_reg) = tag_reg {
+                                                    if !scalar_or_bool(*tag_reg) {
+                                                        return None;
+                                                    }
+                                                }
+                                            }
+                                            for (_r, payload_reg) in &option_recipes1 {
+                                                if !scalar(*payload_reg) {
+                                                    return None;
                                                 }
                                             }
                                             Some(OsrEntry {
@@ -2562,17 +2581,30 @@ impl RegVm {
                 // deopt live set and we reconstruct `Ok(payload)`. If `payload_reg` is
                 // ABSENT, the native loop ran 0 iterations and the pre-loop value already
                 // in the slot is exactly correct, so we leave it untouched.
-                for (variant_reg, payload_reg) in &variant_reconstructs {
+                // For a two-armed Result (`tag_reg` is `Some`), the live-out tag selects
+                // the arm: non-zero ⇒ `Ok(payload)`, zero ⇒ `Err(payload)`. An always-`Ok`
+                // Result (`tag_reg` is `None`) always reconstructs `Ok(payload)`.
+                for (variant_reg, payload_reg, tag_reg) in &variant_reconstructs {
                     if let Some(dr) = live.iter().find(|d| d.reg as usize == *payload_reg) {
                         let payload = match dr.value {
                             vm_jit::DeoptValue::Int(i) => VmValue::Int(i),
                             vm_jit::DeoptValue::Float(f) => VmValue::Float(f),
                         };
+                        let is_ok = match tag_reg {
+                            None => true,
+                            Some(tag_reg) => live
+                                .iter()
+                                .find(|d| d.reg as usize == *tag_reg)
+                                .map(|d| matches!(d.value, vm_jit::DeoptValue::Int(i) if i != 0))
+                                .unwrap_or(true),
+                        };
+                        let layout = if is_ok {
+                            result_ok_layout()
+                        } else {
+                            result_err_layout()
+                        };
                         let value = VmValue::Variant(std::rc::Rc::new(
-                            crate::vm_value::VmStruct::with_layout(
-                                result_ok_layout(),
-                                vec![payload],
-                            ),
+                            crate::vm_value::VmStruct::with_layout(layout, vec![payload]),
                         ));
                         self.set_reg(base + *variant_reg, value);
                     }

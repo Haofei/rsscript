@@ -2785,21 +2785,19 @@ pub(in crate::reg_vm) struct OsrEntry {
     /// opaque handle-table index or an untyped zero.
     pub(in crate::reg_vm) written_regs: Vec<bool>,
     pub(in crate::reg_vm) string_literals: Vec<Rc<String>>,
-    /// J0.1(b) live-after always-`Ok` Result reconstruction recipes. Each entry is
-    /// `(variant_reg, payload_reg)`: a Result register `variant_reg` that the
-    /// RESULT-SR pass dissolved (always-`Ok` with a scalar `Ok` payload) but which is
-    /// READ after the loop. The native loop only writes the scalar `payload_reg`; the
-    /// original `variant_reg` slot is never written, so at OSR-exit the interpreter
-    /// would read a stale value. For each recipe, OSR-exit rebuilds
-    /// `Ok(payload)` — `VmValue::Variant(result_ok_layout(), [payload_scalar])` — from
-    /// the live-out `payload_reg` and writes it into `variant_reg`. The pass only emits
-    /// a recipe when the `Ok` def is reached unconditionally each iteration (so
-    /// `payload_reg` is definitely-assigned after ≥1 iteration; absent after 0
-    /// iterations, where the pre-loop value already in the slot is correct) and the
-    /// payload is a scalar `Int`/`Float` (verified at the build site, where reg types
-    /// are known). The reconstructed value is observed after the loop, so a wrong
-    /// recipe diverges from the interpreter and is caught by the differential.
-    pub(in crate::reg_vm) variant_reconstructs: Vec<(usize, usize)>,
+    /// J0.1(b) live-after Result reconstruction recipes (see
+    /// [`super::passes::ResultRecipe`]). Each entry is `(variant_reg, payload_reg,
+    /// tag_reg)`: a Result register `variant_reg` the RESULT-SR pass dissolved but which
+    /// is READ after the loop. The native loop only writes the scalar `payload_reg` (and,
+    /// for a two-armed Result, the boolean `tag_reg`); the original `variant_reg` slot is
+    /// never written, so at OSR-exit the interpreter would read a stale value. For each
+    /// recipe, OSR-exit rebuilds the value from the live-out registers and writes it into
+    /// `variant_reg`: `tag_reg == None` (always-`Ok`) ⇒ `Ok(payload)`; `Some(tag)` ⇒
+    /// `Ok(payload)` if the tag's live value is non-zero, else `Err(payload)`. The
+    /// payload is a scalar `Int`/`Float` (verified at the build site). The reconstructed
+    /// value is observed after the loop, so a wrong recipe diverges from the interpreter
+    /// and is caught by the differential.
+    pub(in crate::reg_vm) variant_reconstructs: Vec<super::passes::ResultRecipe>,
     /// J0.1(b) live-after always-`Some` Option reconstruction recipes — the `Option`
     /// analog of [`variant_reconstructs`]. Each `(opt_reg, payload_reg)` is an Option
     /// register the OPTION-SR pass dissolved that is always-`Some` (no in-region

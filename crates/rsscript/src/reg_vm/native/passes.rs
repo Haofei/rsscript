@@ -3506,6 +3506,14 @@ pub(in crate::reg_vm) fn result_ok_layout() -> Rc<crate::vm_value::TypeLayout> {
     crate::vm_value::intern_layout(Rc::from("Ok"), vec![Rc::from("value")])
 }
 
+/// The interned `Err(value)` layout — the `Err` analog of [`result_ok_layout`] (the
+/// lowerer builds both `Ok` and `Err` with a single field named `value`). Used to
+/// reconstruct a live-after two-armed Result's `Err` arm at OSR-exit.
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) fn result_err_layout() -> Rc<crate::vm_value::TypeLayout> {
+    crate::vm_value::intern_layout(Rc::from("Err"), vec![Rc::from("value")])
+}
+
 /// Whether `intrinsic` is one of the six Option/Result combinator intrinsics that
 /// the combinator-expansion pass (deopt-before-heap Slice 2) lowers into primitive
 /// match/construct form with the mapper closure inlined. Recognition now reads the
@@ -5898,13 +5906,21 @@ pub(in crate::reg_vm) fn is_result_ctor_name(name: &str) -> bool {
 ///
 /// Returns `(transformed_code, new_n_regs, ip_map)` with the same transformed→original
 /// `ip_map` discipline as the other region passes.
+///
+/// A live-after Result reconstruction recipe: `(variant_reg, payload_reg, tag_reg)`.
+/// `tag_reg` is `None` for an always-`Ok` Result (reconstruct `Ok(payload)`) and
+/// `Some(tag)` for a two-armed Result (reconstruct `Ok(payload)` if the tag's live
+/// value is non-zero, else `Err(payload)`).
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) type ResultRecipe = (usize, usize, Option<usize>);
+
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn native_scalar_replace_results_in_region(
     code: &[RegInstr],
     n_regs: usize,
     header: usize,
     exit: usize,
-) -> Option<(Vec<RegInstr>, usize, Vec<usize>, Vec<(usize, usize)>)> {
+) -> Option<(Vec<RegInstr>, usize, Vec<usize>, Vec<ResultRecipe>)> {
     if header >= exit || exit > code.len() {
         return None;
     }
@@ -6124,11 +6140,12 @@ pub(in crate::reg_vm) fn native_scalar_replace_results_in_region(
     }
 
     // J0.1(b) recipes: (variant_reg, payload_reg) for each live-after RES register.
-    let recipes: Vec<(usize, usize)> = reconstruct
+    // Always-`Ok` recipes carry no tag (`None`) ⇒ reconstruct `Ok(payload)`.
+    let recipes: Vec<ResultRecipe> = reconstruct
         .iter()
         .enumerate()
         .filter(|&(_, &needs)| needs)
-        .map(|(reg, _)| (reg, payload_reg[reg]))
+        .map(|(reg, _)| (reg, payload_reg[reg], None))
         .collect();
 
     // Rewrite the WHOLE code, dissolving in-region Result ops and copying everything
@@ -6304,11 +6321,17 @@ pub(in crate::reg_vm) fn native_scalar_replace_results_in_region(
 /// Two-armed scalar `Result` dissolution (J0.1 #7 follow-up). Companion to
 /// [`native_scalar_replace_results_in_region`]'s always-`Ok` path: handles a Result
 /// constructed as EITHER `Ok(scalar)` or `Err(scalar)` in-region and consumed (matched)
-/// in-region, DEAD at the loop boundary. Each RES register becomes a boolean `tag`
-/// (true = `Ok`) plus one shared scalar `payload`; `MatchResult` routes on the tag and
-/// each arm's `UnwrapVariantValue` reads the payload (which holds the constructed arm's
-/// value). Live-after Ok/Err reconstruction and `?`-short-circuit (`TryResult`) are out
-/// of scope ⇒ bail. `res` is the already-move-closed RES register set.
+/// in-region. Each RES register becomes a boolean `tag` (true = `Ok`) plus one shared
+/// scalar `payload`; `MatchResult` routes on the tag and each arm's `UnwrapVariantValue`
+/// reads the payload (which holds the constructed arm's value).
+///
+/// Live-after is supported: a RES register read after the region reconstructs `Ok` or
+/// `Err` from the tag + payload at OSR-exit. This is sound WITHOUT a definite-assignment
+/// analysis because the rewrite sets `tag` and `payload` at EVERY point the original
+/// Result is assigned, so they are definitely-assigned wherever the Result is — hence in
+/// the OSR-exit deopt live set whenever the Result is live there. `?`-short-circuit
+/// (`TryResult`) and a RES register written AFTER the region (post-loop reassignment) or
+/// read BEFORE it (live-in) are out of scope ⇒ bail. `res` is the move-closed RES set.
 #[cfg(feature = "native-jit")]
 fn native_scalar_replace_two_armed_results_in_region(
     code: &[RegInstr],
@@ -6316,7 +6339,7 @@ fn native_scalar_replace_two_armed_results_in_region(
     header: usize,
     exit: usize,
     res: &[bool],
-) -> Option<(Vec<RegInstr>, usize, Vec<usize>, Vec<(usize, usize)>)> {
+) -> Option<(Vec<RegInstr>, usize, Vec<usize>, Vec<ResultRecipe>)> {
     let in_region = |i: usize| i >= header && i < exit;
 
     // Validate every in-region def/use of a RES register: defs are `Ok`/`Err`
@@ -6365,22 +6388,38 @@ fn native_scalar_replace_two_armed_results_in_region(
         }
     }
 
-    // Dead-at-boundary only: a RES register touched (read or written) OUTSIDE the region
-    // bails (no live-after reconstruction for two-armed yet; live-in is out of scope).
-    let touches_res = |fp: RegFootprint| match fp {
-        RegFootprint::Some(regs) => regs.into_iter().any(|r| r < n_regs && res[r]),
-        RegFootprint::All => true,
-    };
+    // Boundary: a RES register WRITTEN after the region (post-loop reassignment) or READ
+    // before it (live-in) is out of scope ⇒ bail. A RES register READ after the region is
+    // live-after ⇒ mark it for OSR-exit reconstruction.
+    let mut reconstruct = vec![false; n_regs];
     for i in 0..code.len() {
         if in_region(i) {
             continue;
         }
-        if touches_res(instr_read_regs(&code[i])) || touches_res(instr_written_reg(&code[i])) {
-            return None;
+        match instr_written_reg(&code[i]) {
+            RegFootprint::Some(regs) => {
+                if i >= exit && regs.iter().any(|&r| r < n_regs && res[r]) {
+                    return None;
+                }
+            }
+            RegFootprint::All => return None,
+        }
+        match instr_read_regs(&code[i]) {
+            RegFootprint::Some(regs) => {
+                for r in regs {
+                    if r < n_regs && res[r] {
+                        if i < header {
+                            return None; // live-in Result
+                        }
+                        reconstruct[r] = true;
+                    }
+                }
+            }
+            RegFootprint::All => return None,
         }
     }
 
-    // Allocate a `tag` + `payload` register per RES register.
+    // Allocate a `tag` + `payload` register per RES register (consecutively).
     let mut tag_reg = vec![0usize; n_regs];
     let mut payload_reg = vec![0usize; n_regs];
     let mut next_reg = n_regs;
@@ -6391,6 +6430,17 @@ fn native_scalar_replace_two_armed_results_in_region(
             next_reg += 2;
         }
     }
+
+    // Live-after reconstruction recipes: `(variant_reg, payload_reg, Some(tag_reg))` ⇒
+    // rebuild `Ok(payload)` / `Err(payload)` from the tag at OSR-exit. Sound without a
+    // definite-assignment pass: `tag`/`payload` are written at every RES def, so they are
+    // in the deopt live set wherever the Result is live (see the doc comment).
+    let recipes: Vec<ResultRecipe> = reconstruct
+        .iter()
+        .enumerate()
+        .filter(|&(_, &needs)| needs)
+        .map(|(reg, _)| (reg, payload_reg[reg], Some(tag_reg[reg])))
+        .collect();
 
     // Rewrite, dissolving in-region Result ops; remap jump/match targets through the map.
     enum Fix {
@@ -6547,7 +6597,7 @@ fn native_scalar_replace_two_armed_results_in_region(
             ip_map[t] = i;
         }
     }
-    Some((new_code, next_reg, ip_map, Vec::new()))
+    Some((new_code, next_reg, ip_map, recipes))
 }
 
 /// OSR × J3 for VARIANTS: scalar-replace non-escaping user `sum`/variant values that
