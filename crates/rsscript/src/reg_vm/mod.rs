@@ -3671,8 +3671,10 @@ fn jit_host_helpers() -> vm_jit::HostHelpers {
         deque_len: rss_jit_deque_len,
         deque_is_empty: rss_jit_deque_is_empty,
         deque_push_back_int: rss_jit_deque_push_back_int,
+        deque_push_back_handle: rss_jit_deque_push_back_handle,
         deque_push_back_float: rss_jit_deque_push_back_float,
         deque_push_front_int: rss_jit_deque_push_front_int,
+        deque_push_front_handle: rss_jit_deque_push_front_handle,
         deque_push_front_float: rss_jit_deque_push_front_float,
         deque_pop_front_int: rss_jit_deque_pop_front_int,
         deque_pop_back_int: rss_jit_deque_pop_back_int,
@@ -5612,6 +5614,35 @@ fn rss_jit_deque_push_back_int_with_ctx(ctx: JitHostCallCtx, handle: i64, value:
     }
 }
 
+/// J0.4 #1 (heap-value collection write): push a **heap** value onto the back of a
+/// `Deque<HeapType>` — the heap analog of [`rss_jit_deque_push_back_int`]. Resolves the
+/// value handle; the write is journaled (§7.2). A wrong shape/invalid handle bails.
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_deque_push_back_handle(
+    _ctx: vm_jit::HostCtx,
+    handle: i64,
+    value_handle: i64,
+) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let Some(value) = _ctx.heap_read_handle(value_handle, |value| Some(value.clone())) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    match _ctx.with_journaled_deque_write(handle, move |deque| {
+        deque.push_back(value);
+        Some(0)
+    }) {
+        Some(value) => value,
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_deque_push_back_float(_ctx: vm_jit::HostCtx, handle: i64, value: f64) -> i64 {
     let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
@@ -5648,6 +5679,35 @@ extern "C" fn rss_jit_deque_push_front_int(_ctx: vm_jit::HostCtx, handle: i64, v
 fn rss_jit_deque_push_front_int_with_ctx(ctx: JitHostCallCtx, handle: i64, value: i64) -> i64 {
     match ctx.with_journaled_deque_write(handle, |deque| {
         deque.push_front(VmValue::Int(value));
+        Some(0)
+    }) {
+        Some(value) => value,
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+/// J0.4 #1 (heap-value collection write): push a **heap** value onto the front of a
+/// `Deque<HeapType>` — the heap analog of [`rss_jit_deque_push_front_int`]. Resolves the
+/// value handle; the write is journaled (§7.2). A wrong shape/invalid handle bails.
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_deque_push_front_handle(
+    _ctx: vm_jit::HostCtx,
+    handle: i64,
+    value_handle: i64,
+) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let Some(value) = _ctx.heap_read_handle(value_handle, |value| Some(value.clone())) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    match _ctx.with_journaled_deque_write(handle, move |deque| {
+        deque.push_front(value);
         Some(0)
     }) {
         Some(value) => value,

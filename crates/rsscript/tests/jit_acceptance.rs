@@ -6076,3 +6076,42 @@ fn main() -> Unit {
         "the hot heap-value field-set loop must OSR: {stats:?}",
     );
 }
+
+/// J0.4 #1 (heap-value collection write, Deque): a hot loop pushing a heap value (a
+/// `String`) onto a `Deque<String>` (front + back) lowers to the native
+/// `DequePushBackHandle`/`DequePushFrontHandle` helpers. Must OSR and match interpreter.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_deque_push_handle_matches_interpreter() {
+    let source = "\
+fn build(s: read String, n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut d = Deque<String>.new()
+    let mut i = 0
+    while i < n {
+        Deque.push_back<String>(deque: mut d, value: read s)
+        Deque.push_front<String>(deque: mut d, value: read s)
+        i = i + 1
+    }
+    return Deque.len(deque: read d)
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: build(s: read \"z\", n: read 100)))
+    return Unit
+}
+";
+    let file = "j1-deque-push-handle.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let osr = rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(interp.stdout, osr.stdout, "deque heap push OSR must match the interpreter");
+    // 100 iters * 2 pushes = 200.
+    assert_eq!(osr.stdout.trim_end(), "begin\n200");
+
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("compiles");
+    let (_osr2, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run (stats)");
+    assert!(stats.osr_entries > 0, "the hot deque heap-push loop must OSR: {stats:?}");
+}

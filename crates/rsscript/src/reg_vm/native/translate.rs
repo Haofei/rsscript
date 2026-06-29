@@ -1588,11 +1588,16 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 }
             }
             RegInstr::DequePushBack { dst, deque, value } => {
-                require(handle_reg(*deque) && int(*dst) && (int_or_free(*value) || float(*value)))?;
+                require(handle_reg(*deque) && int(*dst))?;
                 let helper = if float(*value) {
                     vm_jit::HostHelper::DequePushBackFloat
-                } else {
+                } else if int_or_free(*value) {
                     vm_jit::HostHelper::DequePushBackInt
+                } else if handle_reg(*value) {
+                    vm_jit::HostHelper::DequePushBackHandle
+                } else {
+                    require(false)?;
+                    unreachable!()
                 };
                 JitInstr::HostCall {
                     helper,
@@ -1604,11 +1609,16 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 }
             }
             RegInstr::DequePushFront { dst, deque, value } => {
-                require(handle_reg(*deque) && int(*dst) && (int_or_free(*value) || float(*value)))?;
+                require(handle_reg(*deque) && int(*dst))?;
                 let helper = if float(*value) {
                     vm_jit::HostHelper::DequePushFrontFloat
-                } else {
+                } else if int_or_free(*value) {
                     vm_jit::HostHelper::DequePushFrontInt
+                } else if handle_reg(*value) {
+                    vm_jit::HostHelper::DequePushFrontHandle
+                } else {
+                    require(false)?;
+                    unreachable!()
                 };
                 JitInstr::HostCall {
                     helper,
@@ -4454,11 +4464,16 @@ fn translate_osr_loop_inner(
                 }
             }
             RegInstr::DequePushBack { dst, deque, value } => {
-                require(handle_reg(*deque) && int(*dst) && (int_or_free(*value) || float(*value)))?;
+                require(handle_reg(*deque) && int(*dst))?;
                 let helper = if float(*value) {
                     vm_jit::HostHelper::DequePushBackFloat
-                } else {
+                } else if int_or_free(*value) {
                     vm_jit::HostHelper::DequePushBackInt
+                } else if handle_reg(*value) {
+                    vm_jit::HostHelper::DequePushBackHandle
+                } else {
+                    require(false)?;
+                    unreachable!()
                 };
                 JitInstr::HostCall {
                     helper,
@@ -4470,11 +4485,16 @@ fn translate_osr_loop_inner(
                 }
             }
             RegInstr::DequePushFront { dst, deque, value } => {
-                require(handle_reg(*deque) && int(*dst) && (int_or_free(*value) || float(*value)))?;
+                require(handle_reg(*deque) && int(*dst))?;
                 let helper = if float(*value) {
                     vm_jit::HostHelper::DequePushFrontFloat
-                } else {
+                } else if int_or_free(*value) {
                     vm_jit::HostHelper::DequePushFrontInt
+                } else if handle_reg(*value) {
+                    vm_jit::HostHelper::DequePushFrontHandle
+                } else {
+                    require(false)?;
+                    unreachable!()
                 };
                 JitInstr::HostCall {
                     helper,

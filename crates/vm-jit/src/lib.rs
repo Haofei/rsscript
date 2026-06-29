@@ -257,12 +257,18 @@ pub type SortedMapLenFn = extern "C" fn(HostCtx, i64) -> i64;
 pub type DequeLenFn = extern "C" fn(HostCtx, i64) -> i64;
 /// `(deque_handle, value) -> i64`: push an Int to the back of a deque.
 pub type DequePushBackIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
+/// `(deque_handle, value_handle) -> i64`: push a **heap** value onto the back of a
+/// `Deque<HeapType>`. The value handle is resolved to its heap value. Bails on bad shape.
+pub type DequePushBackHandleFn = extern "C" fn(HostCtx, i64, i64) -> i64;
 /// `(deque_handle, value: f64) -> i64`: push a `Float` onto the back of a `Deque<Float>`.
 pub type DequePushBackFloatFn = extern "C" fn(HostCtx, i64, f64) -> i64;
 /// `(deque_handle, value: f64) -> i64`: push a `Float` onto the front of a `Deque<Float>`.
 pub type DequePushFrontFloatFn = extern "C" fn(HostCtx, i64, f64) -> i64;
 /// `(deque_handle, value) -> i64`: push an Int to the front of a deque.
 pub type DequePushFrontIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
+/// `(deque_handle, value_handle) -> i64`: push a **heap** value onto the front of a
+/// `Deque<HeapType>`. The value handle is resolved to its heap value. Bails on bad shape.
+pub type DequePushFrontHandleFn = extern "C" fn(HostCtx, i64, i64) -> i64;
 /// `(deque_handle) -> i64`: pop an Int from the front of a deque. Empty or non-Int
 /// payloads signal a bail; RSScript's interpreter then executes the `None` path.
 pub type DequePopFrontIntFn = extern "C" fn(HostCtx, i64) -> i64;
@@ -356,8 +362,10 @@ pub struct HostHelpers {
     pub deque_len: DequeLenFn,
     pub deque_is_empty: IsEmptyFn,
     pub deque_push_back_int: DequePushBackIntFn,
+    pub deque_push_back_handle: DequePushBackHandleFn,
     pub deque_push_back_float: DequePushBackFloatFn,
     pub deque_push_front_int: DequePushFrontIntFn,
+    pub deque_push_front_handle: DequePushFrontHandleFn,
     pub deque_push_front_float: DequePushFrontFloatFn,
     pub deque_pop_front_int: DequePopFrontIntFn,
     pub deque_pop_back_int: DequePopBackIntFn,
@@ -1016,6 +1024,14 @@ host_helpers! {
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
     },
+    DequePushBackHandle => {
+        field: deque_push_back_handle,
+        symbol: "rss_jit_deque_push_back_handle",
+        args: [JitValueType::Handle, JitValueType::Handle],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::MutatesInput,
+    },
     DequePushBackFloat => {
         field: deque_push_back_float,
         symbol: "rss_jit_deque_push_back_float",
@@ -1028,6 +1044,14 @@ host_helpers! {
         field: deque_push_front_int,
         symbol: "rss_jit_deque_push_front_int",
         args: [JitValueType::Handle, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::MutatesInput,
+    },
+    DequePushFrontHandle => {
+        field: deque_push_front_handle,
+        symbol: "rss_jit_deque_push_front_handle",
+        args: [JitValueType::Handle, JitValueType::Handle],
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
@@ -6008,8 +6032,10 @@ mod tests {
             HostHelper::SortedMapInsertInt,
             HostHelper::SortedMapInsertHandleKeyInt,
             HostHelper::DequePushBackInt,
+            HostHelper::DequePushBackHandle,
             HostHelper::DequePushBackFloat,
             HostHelper::DequePushFrontInt,
+            HostHelper::DequePushFrontHandle,
             HostHelper::DequePushFrontFloat,
             HostHelper::DequePopFrontInt,
             HostHelper::DequePopBackInt,
@@ -6366,8 +6392,10 @@ mod tests {
             deque_len: noop_deque_len,
             deque_is_empty: noop_is_empty,
             deque_push_back_int: noop_deque_push_back_int,
+            deque_push_back_handle: noop_deque_push_back_int,
             deque_push_back_float: noop_deque_push_back_float,
             deque_push_front_int: noop_deque_push_front_int,
+            deque_push_front_handle: noop_deque_push_front_int,
             deque_push_front_float: noop_deque_push_front_float,
             deque_pop_front_int: noop_deque_pop_front_int,
             deque_pop_back_int: noop_deque_pop_back_int,
