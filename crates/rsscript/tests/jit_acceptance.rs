@@ -5649,3 +5649,50 @@ fn main() -> Unit {
         other => panic!("expected Runtime(cancelled), got {other:?}"),
     }
 }
+
+/// J0.4 #1 (heap-key collection write): a hot loop inserting into a `Map<String, Int>`
+/// with String keys lowers to the native `MapInsertHandleKeyInt` helper — the key is
+/// resolved and hashed by the host's own `VmMapKey` (never re-hashed in native) and the
+/// write is journaled (§7.2). Must OSR and match the interpreter byte-for-byte.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_map_insert_string_key_matches_interpreter() {
+    // The key is a live-in `String` param (an input handle), not freshly allocated in
+    // the loop, so the loop is native-subset (no escaping allocation) and OSRs; each
+    // iteration inserts `k -> i` (overwriting), exercising `MapInsertHandleKeyInt`.
+    let source = "\
+fn build_map(k: read String, n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut m = Map<String, Int>.new()
+    let mut i = 0
+    while i < n {
+        Map.insert<String, Int>(map: mut m, key: read k, value: read i)
+        i = i + 1
+    }
+    return Map.len<String, Int>(map: read m)
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: build_map(k: read \"hello\", n: read 200)))
+    return Unit
+}
+";
+    let file = "j1-map-strkey.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let osr = rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "string-key map insert OSR must match the interpreter"
+    );
+    assert_eq!(osr.stdout.trim_end(), "begin\n1");
+
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("compiles");
+    let (_osr2, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run (stats)");
+    assert!(
+        stats.osr_entries > 0,
+        "the hot string-key insert loop must OSR: {stats:?}",
+    );
+}

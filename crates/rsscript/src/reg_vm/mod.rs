@@ -3641,6 +3641,7 @@ fn jit_host_helpers() -> vm_jit::HostHelpers {
         bytes_len: rss_jit_bytes_len,
         bytes_slice: rss_jit_bytes_slice,
         map_insert_int: rss_jit_map_insert_int,
+        map_insert_handle_key_int: rss_jit_map_insert_handle_key_int,
         map_insert_float: rss_jit_map_insert_float,
         map_get_int: rss_jit_map_get_int,
         map_get_match_int: rss_jit_map_get_match_int,
@@ -4716,6 +4717,51 @@ extern "C" fn rss_jit_map_insert_int(
 fn rss_jit_map_insert_int_with_ctx(ctx: JitHostCallCtx, handle: i64, key: i64, value: i64) -> i64 {
     match ctx.with_journaled_map_write(handle, |map| {
         map.insert(jit_int_key(key), VmValue::Int(value));
+        Some(0)
+    }) {
+        Some(value) => value,
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+/// J0.4 #1 (heap-key collection write): insert an `Int` value under a **heap key**
+/// (e.g. a `String`) — the non-`Int`-key analog of [`rss_jit_map_insert_int`]. The key
+/// handle is resolved to its heap value and wrapped in `VmMapKey`, so hashing/equality
+/// is the host's own canonical map-key semantics (never re-implemented in native). The
+/// map write is journaled, so a later bail rolls it back (§7.2). A wrong container/key
+/// shape signals a bail.
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_map_insert_handle_key_int(
+    _ctx: vm_jit::HostCtx,
+    handle: i64,
+    key_handle: i64,
+    value: i64,
+) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    rss_jit_map_insert_handle_key_int_with_ctx(_ctx, handle, key_handle, value)
+}
+
+#[cfg(feature = "native-jit")]
+fn rss_jit_map_insert_handle_key_int_with_ctx(
+    ctx: JitHostCallCtx,
+    handle: i64,
+    key_handle: i64,
+    value: i64,
+) -> i64 {
+    // Resolve the heap key to the host's canonical map key BEFORE the journaled write.
+    let Some(key) = ctx.heap_read_handle(key_handle, |value| Some(VmMapKey::new(value.clone())))
+    else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    match ctx.with_journaled_map_write(handle, |map| {
+        map.insert(key, VmValue::Int(value));
         Some(0)
     }) {
         Some(value) => value,

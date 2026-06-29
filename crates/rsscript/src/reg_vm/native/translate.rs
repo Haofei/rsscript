@@ -1485,16 +1485,19 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 key,
                 value,
             } => {
-                require(
-                    handle_reg(*map)
-                        && int(*key)
-                        && int(*dst)
-                        && (int_or_free(*value) || float(*value)),
-                )?;
-                let helper = if float(*value) {
+                require(handle_reg(*map) && int(*dst))?;
+                // Three shapes: Int-key/Float-value, Int-key/Int-value, and (J0.4 #1)
+                // heap-key (e.g. `String`)/Int-value. A heap key is resolved + hashed by
+                // the host's own `VmMapKey` in the helper, never re-hashed in native.
+                let helper = if int(*key) && float(*value) {
                     vm_jit::HostHelper::MapInsertFloat
-                } else {
+                } else if int(*key) && int_or_free(*value) {
                     vm_jit::HostHelper::MapInsertInt
+                } else if handle_reg(*key) && int(*value) {
+                    vm_jit::HostHelper::MapInsertHandleKeyInt
+                } else {
+                    require(false)?;
+                    unreachable!()
                 };
                 JitInstr::HostCall {
                     helper,
@@ -4313,16 +4316,19 @@ fn translate_osr_loop_inner(
                 key,
                 value,
             } => {
-                require(
-                    handle_reg(*map)
-                        && int(*key)
-                        && int(*dst)
-                        && (int_or_free(*value) || float(*value)),
-                )?;
-                let helper = if float(*value) {
+                require(handle_reg(*map) && int(*dst))?;
+                // Three shapes: Int-key/Float-value, Int-key/Int-value, and (J0.4 #1)
+                // heap-key (e.g. `String`)/Int-value. A heap key is resolved + hashed by
+                // the host's own `VmMapKey` in the helper, never re-hashed in native.
+                let helper = if int(*key) && float(*value) {
                     vm_jit::HostHelper::MapInsertFloat
-                } else {
+                } else if int(*key) && int_or_free(*value) {
                     vm_jit::HostHelper::MapInsertInt
+                } else if handle_reg(*key) && int(*value) {
+                    vm_jit::HostHelper::MapInsertHandleKeyInt
+                } else {
+                    require(false)?;
+                    unreachable!()
                 };
                 JitInstr::HostCall {
                     helper,

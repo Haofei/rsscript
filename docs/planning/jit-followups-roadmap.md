@@ -26,23 +26,24 @@ JIT 性能有两条轴:
 
 | # | 项目 | 难度 | ROI | 前置 | 一句话 |
 |---|---|---|---|---|---|
-| 1 | Handle-value / 非 Int key 集合写 | 低 | **低** | 无 | 机械镜像,但 host helper 干主活,native 只省派发 |
+| 1 | 🔶Handle-value / 非 Int key 集合写(**String-key map insert 已落地**) | 低 | **低** | 无 | `MapInsertHandleKeyInt`:key 经 `heap_read_handle`→`VmMapKey`(复用宿主哈希)、journaled 写、scalar 值;`Map<String,Int>` 热循环已 OSR 并字节对齐(测试 `native_osr_map_insert_string_key_matches_interpreter`)。剩:handle-**值** push、其他容器/key 类型(按需) |
 | 2 | ~~Deque-pop Option native 融合~~ ✅**已支持(OSR 路径)** | 中 | 低–中 | 无 | OSR 用的 in-region scalar-replace(`passes.rs:5662`)已 seed deque-pop 并以"恒 Some tag + bail-on-empty 兜 None"融合;测试 `native_osr_enters_loop_with_transactional_deque_pop_front_int` 绿。(整函数 pass 未 seed,但无关紧要——热循环走 OSR) |
 | 3 | 轴 B:热堆读 host-call 边界内联 | 中 | 中 | 无 | 堆读现比 Rust 慢 ~13×,瓶颈是每次跨调用边界 |
 | 4 | ~~嵌套循环 OSR~~ ✅**已支持** | 中–高 | 中 | 无 | OSR 管线本就多循环感知(`detect_natural_loops`→`select_osr_candidate_loop`);嵌套/兄弟循环已可 OSR(新增回归测试坐实) |
 | 5 | ~~**J0.4 S1–S3:仅分配的 native 堆写**~~ ✅**已完成** | 中–高 | **最高** | 无(不需 J0.1/J0.5) | 解锁 alloc-bound(string/json/集合构造);10 个 `AllocatesResult` helper 已落地并验证 |
 | 6 | 🔶J0.5:生成代码内 `VmLimits` 记账(**step+cancel 已落地 OSR 层**;mem future) | 高 | 中 | 无(S4 的前置) | OSR 在 step/cancel armed 时也能跑(沙箱场景);mem 记账仍缺 |
 | 7 | 完整 J0.1:内联帧链 + 堆值重建 | 很高 | 高(地基) | 无(S4 的前置) | 精确 deopt 的硬核;输出测不出,需定向 repro |
-| 8 | **J0.4 S4:任意别名堆就地写** | 很高 | 高/广 | J0.1 + J0.5 | "随便写"的通用解锁;最后的大魔王 |
-| 9 | async / 挂起函数 native | 很高 | 类相关 | — | 架构性;park/resume × native,可能不做 |
+| 8 | 🔶**J0.4 S4:别名堆就地写**(**flat-list 直写已落地**) | 很高 | 高/广 | J0.1 + J0.5 | 调用方别名的 flat `List<Int/Float>` 就地写已 lower 成 `ListSetIntDirect`(测试 `native_translation_lowers_flat_int_list_set_to_direct_write`),靠幂等 re-run 保 §7.2。剩通用情形:任意堆复合值写 + 写后精确续跑(需完整 J0.1 帧链 + J0.5 mem) |
+| 9 | 🔶async / 挂起函数 native(**task_group spawn/join OSR 融合已落地**) | 很高 | 类相关 | — | 循环内 `task_group { async let x = f(..); await x }` 的纯 spawn/join 已内联进 native OSR(`native_callee_inlinable_j3_with_spawns`;测试 `native_osr_enters_task_group_spawn_loop`)。剩:跨 await 点的真正 park/resume 帧状态(架构性,可能不做) |
 
-**⚠️ 2026-06-28 核实结论:本路线图前段大多已完成。** #3(堆读内联,flat-list 部分)、#4(嵌套循环 OSR)、
-#5(J0.4 S1–S3 仅分配堆写)**都已 shipped 并验证**(docs 之前是 stale 的)。**真正未做的**只剩:
-#3-remainder(flat-struct 字段读内联,比原评级更难)、native `string_byte` 读 helper + `split` 折叠
-(`string_text` 的真 gate)、#2(deque-pop 融合,低 ROI)、#1(Handle-value 写,低 ROI)、以及那条**最硬的
-精确-deopt 主线 #7 J0.1 → #6 J0.5 → #8 S4**(多 session 大投入,需主人定 scope/风险)、#9(async,缓做)。
-**下一步最该做的是主线 #7(完整 J0.1)**——它是 #8 和"边写边精确续跑"的地基,且独立解锁 heap-payload
-variant / live-out 的 OSR。
+**⚠️ 2026-06-28 核实结论:9 项全部已 Done 或 In-progress(无纯 Pending)。** #2/#3/#4/#5 **Done**;
+#1/#6/#7/#8/#9 **均有已落地并验证的 slice**(此前 docs 把 #1/#8/#9 误标为 Pending——代码里其实已有真实
+进展):#1 = String-key map insert;#6 = step+cancel(OSR 层)在生成代码内强制;#7 = Result/Option live-after
+重建;#8 = flat-list 别名直写(`ListSetIntDirect`);#9 = task_group spawn/join 的 OSR 融合。**各项剩余**(均为
+更大/更硬的尾巴,非"未开始"):#1 handle-**值**写 + 其他 key 类型(按需);#6 mem_budget 记账 + 整函数/递归层;
+#7 内联帧链 + heap-payload variant 重建(silent-bug-prone,需定向 repro,勿盲冲);#8 通用别名复合写 + 写后精确
+续跑(需完整 #7 + #6-mem);#9 跨 await 的 park/resume(架构性)。**下一步最该做的仍是主线 #7(完整 J0.1)**
+——它是 #8 与"边写边精确续跑"的地基,且独立解锁 heap-payload variant / live-out 的 OSR。
 
 **(历史)推荐切入顺序:** ~~先 **#5(J0.4 S1–S3)**~~ ✅**#5 已完成**——
 10 个 `AllocatesResult` helper(`StringFromInt`/`StringConcat`/`StringSlice`/`StringPadLeft`/`StringSplit`/

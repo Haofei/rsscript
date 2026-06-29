@@ -179,6 +179,11 @@ pub type BytesSliceFn = extern "C" fn(HostCtx, i64, i64, i64) -> i64;
 /// `(map_handle, key) -> i64`: insert/update an Int-keyed, Int-valued map.
 /// A wrong container/key/value shape signals a bail.
 pub type MapInsertIntFn = extern "C" fn(HostCtx, i64, i64, i64) -> i64;
+/// `(map_handle, key_handle, value: i64) -> i64`: insert an `Int` value under a
+/// **heap key** (e.g. a `String`) into a `Map<HeapKey, Int>`. The key handle is
+/// resolved to its heap value and hashed by the host's own canonical map-key (never
+/// re-implemented in native). A wrong container/key shape signals a bail.
+pub type MapInsertHandleKeyIntFn = extern "C" fn(HostCtx, i64, i64, i64) -> i64;
 /// `(map_handle, key, value: f64) -> i64`: insert into an Int-keyed `Map<_, Float>`.
 pub type MapInsertFloatFn = extern "C" fn(HostCtx, i64, i64, f64) -> i64;
 /// `(map_handle, key) -> i64`: return an Int payload for an existing map key.
@@ -300,6 +305,7 @@ pub struct HostHelpers {
     pub bytes_len: BytesLenFn,
     pub bytes_slice: BytesSliceFn,
     pub map_insert_int: MapInsertIntFn,
+    pub map_insert_handle_key_int: MapInsertHandleKeyIntFn,
     pub map_insert_float: MapInsertFloatFn,
     pub map_get_int: MapGetIntFn,
     pub map_get_match_int: MapGetMatchIntFn,
@@ -759,6 +765,14 @@ host_helpers! {
         field: map_insert_int,
         symbol: "rss_jit_map_insert_int",
         args: [JitValueType::Handle, JitValueType::Int, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Int),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::MutatesInput,
+    },
+    MapInsertHandleKeyInt => {
+        field: map_insert_handle_key_int,
+        symbol: "rss_jit_map_insert_handle_key_int",
+        args: [JitValueType::Handle, JitValueType::Handle, JitValueType::Int],
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
@@ -5918,6 +5932,7 @@ mod tests {
             HostHelper::ListPushFloat,
             HostHelper::ListSortInt,
             HostHelper::MapInsertInt,
+            HostHelper::MapInsertHandleKeyInt,
             HostHelper::MapInsertFloat,
             HostHelper::SetInsertInt,
             HostHelper::SortedSetInsertInt,
@@ -6248,6 +6263,7 @@ mod tests {
             bytes_len: noop_collection_len,
             bytes_slice: noop_bytes_slice,
             map_insert_int: noop_map_insert_int,
+            map_insert_handle_key_int: noop_map_insert_int,
             map_insert_float: noop_map_insert_float,
             map_get_int: noop_map_get_int,
             map_get_match_int: noop_map_get_match_int,
