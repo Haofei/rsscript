@@ -134,8 +134,12 @@ JIT 性能有两条轴:
   tick 流,不重不漏,`cancel` 只观测不回滚。ABI:新增 `limits_ptr` 参数指向宿主
   `[steps, step_budget, cancel_addr]` cell(`call_with_limits`);未 armed 变体忽略它(与改前字节一致,
   热路径零开销)。`try_osr`/`resolve_osr_candidate` 现在**仅在 `mem_budget` armed 时**拒绝 OSR。
-- **仍缺:** ① native 分配对 `mem_budget` 的记账(绑 S4;故 `mem_budget` armed 时 OSR 仍拒绝);
-  ② 把强制扩展到整函数/递归层(目前仍 Model-A 拒绝)。
+- **mem 维已部分落地:** 不分配/不变更堆的 OSR 循环(纯标量、只读、就地覆写)现在 **`mem_budget` armed 时也跑 native**
+  —— 它对 `mem_budget` 计入恰为 0,与解释器一致(解释器只在分配/增长点 `account_bytes`),故无需生成代码内记账即安全;
+  **分配型**循环(译后 body 含 `AllocatesResult`/`MutatesInput`/`ReplacesInput` helper)仍在译后 decline
+  (`jit_fn_allocates_or_mutates_heap`)。测试:`native_osr_nonallocating_loop_runs_under_mem_budget`(正)、
+  `native_osr_allocating_loop_declines_under_mem_budget`(负)。
+- **仍缺:** ① **分配型** native 循环的生成代码内 `mem_budget` 字节记账(绑 S4);② 把强制扩展到整函数/递归层(仍 Model-A 拒绝)。
 - **测试:** `native_osr_completes_under_generous_step_budget`(正,`osr_entries>0`)、
   `native_osr_trips_tight_step_budget`、`native_osr_cancel_flag_preempts`;hostile limits 套件全绿。
 

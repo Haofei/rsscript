@@ -163,6 +163,31 @@ fn profile_closure_pic_arm_count(code: &[vm_jit::JitInstr], closure_id_ip: usize
 }
 
 #[cfg(feature = "native-jit")]
+/// Whether `jit_fn` performs any heap allocation or mutation via a host helper
+/// (`AllocatesResult` / `MutatesInput` / `ReplacesInput`). Read-only and
+/// handle-extending helpers, and in-place direct writes (`ListSetIntDirect`, which
+/// overwrite without growing), allocate nothing. Used by J0.5 to decide whether a
+/// `mem_budget`-armed OSR loop is sound to run natively WITHOUT in-code byte accounting:
+/// a loop that allocates/mutates nothing charges `mem_budget` exactly zero — identical
+/// to the interpreter, which only `account_bytes` at allocation/growth sites — so it is
+/// trivially safe; an allocating loop still declines (in-code mem accounting is future).
+#[cfg(feature = "native-jit")]
+fn jit_fn_allocates_or_mutates_heap(jit_fn: &vm_jit::JitFunction) -> bool {
+    jit_fn.code.iter().any(|instr| {
+        let helper = match instr {
+            vm_jit::JitInstr::HostCall { helper, .. }
+            | vm_jit::JitInstr::MemoizedHostCall { helper, .. } => *helper,
+            _ => return false,
+        };
+        matches!(
+            helper.heap_effect(),
+            vm_jit::HostHeapEffect::AllocatesResult
+                | vm_jit::HostHeapEffect::MutatesInput
+                | vm_jit::HostHeapEffect::ReplacesInput
+        )
+    })
+}
+
 fn jit_function_scalar_leaf_callable(jit_fn: &vm_jit::JitFunction) -> bool {
     jit_fn.reg_types.iter().all(|ty| {
         matches!(
@@ -1482,14 +1507,10 @@ impl RegVm {
     pub(super) fn resolve_osr_candidate(&self, func: &RegFunction) -> Option<usize> {
         match func.osr_state.get() {
             OsrTrigger::Unknown => {
-                // Memory parity with `try_osr` (J0.5): `step_budget`/`cancel` are now
-                // enforced inside the armed OSR variant, so they no longer block OSR.
-                // `mem_budget` still does — native allocations are not yet charged — and
-                // we resolve to `None` WITHOUT caching it permanently, so a later run
-                // without `mem_budget` re-resolves (state stays `Unknown` this frame).
-                if self.limits.mem_budget.is_some() {
-                    return None;
-                }
+                // J0.5: no limit blocks candidacy here anymore. `step_budget`/`cancel`
+                // are enforced inside the armed OSR variant; `mem_budget` is decided in
+                // `try_osr` AFTER translation (a non-allocating loop runs, an allocating
+                // one declines), since candidacy alone cannot see the heap effects.
                 // Cheap candidacy pre-check. Use the unified scorer even when the
                 // function has an apparently "single" loop: helper-backed mutation
                 // loops, read loops, and profile-guided closure-inline loops have
@@ -1524,14 +1545,14 @@ impl RegVm {
         // accumulator + per-header `step_budget` test + `cancel` poll directly in the
         // armed OSR variant (Exec-Spec §6.2, "enforce or be ineligible" — the *enforce*
         // branch), bailing to the interpreter which remains the sole limit authority.
-        if self.limits.mem_budget.is_some() {
-            return false;
-        }
-        // Which limit checks the armed OSR variant must emit (and the host must wire a
-        // limits cell for). Constant for the whole eval (`VmLimits` is fixed), so the
-        // per-function `osr_cache` never mixes armed/unarmed variants.
+        //
+        // `mem_budget` is no longer a blanket refusal either: a loop that allocates /
+        // mutates nothing charges `mem_budget` exactly zero (identical to the
+        // interpreter), so it runs natively; an ALLOCATING loop still declines after
+        // translation (in-code byte accounting is future) — see `mem_armed` below.
         let emit_step = self.limits.step_budget.is_some();
         let emit_cancel = self.limits.cancel.is_some();
+        let mem_armed = self.limits.mem_budget.is_some();
         if let Some(native) = self.native.as_mut() {
             native.osr_dynamic_bail = false;
         }
@@ -1656,6 +1677,12 @@ impl RegVm {
                                 string_literals,
                             )| {
                                 let n_jit_regs = jit_fn.n_regs as usize;
+                                // J0.5 mem: an allocating loop declines while `mem_budget`
+                                // is armed (in-code byte accounting is future); a loop
+                                // that allocates/mutates nothing is mem-neutral and runs.
+                                if mem_armed && jit_fn_allocates_or_mutates_heap(&jit_fn) {
+                                    return None;
+                                }
                                 let heap_input_regs = osr_heap_input_regs(&jit_fn);
                                 match native.module.compile_osr(&jit_fn, lp.header as u32, emit_step, emit_cancel) {
                                     Ok(id) => {
@@ -2023,6 +2050,12 @@ impl RegVm {
                             )
                                 .and_then(|(jit_fn, params, derived_liveins, scalar_fields, reg_types, written_regs, string_literals)| {
                                     let n_jit_regs = jit_fn.n_regs as usize;
+                                    // J0.5 mem: decline an allocating loop while `mem_budget`
+                                    // is armed (checked on the post-dissolution body, which
+                                    // reflects what actually runs); a mem-neutral loop runs.
+                                    if mem_armed && jit_fn_allocates_or_mutates_heap(&jit_fn) {
+                                        return None;
+                                    }
                                     let heap_input_regs = osr_heap_input_regs(&jit_fn);
                                     match native.module.compile_osr(&jit_fn, lp.header as u32, emit_step, emit_cancel) {
                                         Ok(id) => {

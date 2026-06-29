@@ -5696,3 +5696,71 @@ fn main() -> Unit {
         "the hot string-key insert loop must OSR: {stats:?}",
     );
 }
+
+/// J0.5 mem (POSITIVE): a non-allocating hot loop (pure scalar arithmetic) now OSRs
+/// even with `mem_budget` armed — it charges `mem_budget` exactly zero, identical to the
+/// interpreter (which only accounts at allocation/growth sites), so running it natively
+/// without in-code byte accounting is sound. Must match the interpreter byte-for-byte.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_nonallocating_loop_runs_under_mem_budget() {
+    let exe = rsscript::reg_vm_compile_source("j05-mem-ok.rss", J05_OSR_KERNEL).expect("compile");
+    let limits = rsscript::VmLimits {
+        mem_budget: Some(1 << 20),
+        ..rsscript::VmLimits::default()
+    };
+    let (output, stats) = exe
+        .eval_main_with_args_native_osr_with_limits(std::iter::empty::<String>(), limits)
+        .expect("a non-allocating loop must run under mem_budget");
+    // sum(0..5000) = 12497500 (same kernel as the step-budget tests).
+    assert_eq!(output.stdout.trim_end(), "begin\n12497500");
+    assert!(
+        stats.osr_entries > 0,
+        "a non-allocating loop must OSR under an armed mem_budget: {stats:?}",
+    );
+}
+
+/// J0.5 mem (NEGATIVE): an ALLOCATING/mutating hot loop (here a `Map<String,Int>`
+/// insert, `MutatesInput`) must NOT OSR while `mem_budget` is armed — native allocations
+/// are not yet charged to the meter (in-code byte accounting is future), so the loop
+/// declines and runs on the interpreter, which accounts correctly. Output must still be
+/// interpreter-identical.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_allocating_loop_declines_under_mem_budget() {
+    let source = "\
+fn build_map(k: read String, n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut m = Map<String, Int>.new()
+    let mut i = 0
+    while i < n {
+        Map.insert<String, Int>(map: mut m, key: read k, value: read i)
+        i = i + 1
+    }
+    return Map.len<String, Int>(map: read m)
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: build_map(k: read \"hello\", n: read 200)))
+    return Unit
+}
+";
+    let file = "j05-mem-alloc.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let limits = rsscript::VmLimits {
+        mem_budget: Some(1 << 20),
+        ..rsscript::VmLimits::default()
+    };
+    let (output, stats) = exe
+        .eval_main_with_args_native_osr_with_limits(std::iter::empty::<String>(), limits)
+        .expect("allocating loop still completes (on the interpreter) under mem_budget");
+    assert_eq!(
+        interp.stdout, output.stdout,
+        "the declined allocating loop must stay interpreter-identical"
+    );
+    assert_eq!(
+        stats.osr_entries, 0,
+        "an allocating loop must NOT OSR while mem_budget is armed (mem accounting is future): {stats:?}",
+    );
+}
