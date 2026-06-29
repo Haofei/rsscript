@@ -5817,3 +5817,58 @@ fn main() -> Unit {
         "the hot heap-value push loop must OSR: {stats:?}",
     );
 }
+
+/// J0.1 #7 (two-armed scalar Result): a Result built as EITHER `Ok(scalar)` or
+/// `Err(scalar)` in-loop (both arms genuinely taken) and matched in-loop, dead at the
+/// boundary, now OSRs — the new two-armed Result scalar-replacement dissolves it to a
+/// boolean tag + shared scalar payload (`MatchResult` routes on the tag). The two-armed
+/// case is observable (the match feeds the running total), so byte-identity to the
+/// interpreter proves the tag routing + payload selection are correct.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j3_two_armed_scalar_result_matches_interpreter() {
+    let source = "\
+fn f(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        let mut r: Result<Int, Int> = Ok(0)
+        if i < 50 {
+            r = Ok(i)
+        } else {
+            r = Err(i)
+        }
+        match r {
+            Ok(v) => { total = total + v }
+            Err(e) => { total = total + e + 1000 }
+        }
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(limit: read 100)))
+    return Unit
+}
+";
+    let file = "jit-osr-j3-two-armed-result.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "two-armed scalar Result loop must be byte-identical to the interpreter (stdout)"
+    );
+    // i in 0..100: i<50 ⇒ Ok(i) ⇒ +i (sum 0..49 = 1225); i>=50 ⇒ Err(i) ⇒ +(i+1000)
+    // (sum 50..99 = 3725, plus 1000*50 = 50000 ⇒ 53725). total = 1225 + 53725 = 54950.
+    assert_eq!(osr.stdout.trim_end(), "begin\n54950\n54950");
+    assert!(
+        stats.osr_entries > 0,
+        "the two-armed scalar Result loop must OSR (tag + payload dissolution): {stats:?}",
+    );
+}

@@ -5947,6 +5947,21 @@ pub(in crate::reg_vm) fn native_scalar_replace_results_in_region(
         }
     }
 
+    // Two-armed (J0.1 #7 follow-up): a reachable `MakeVariant{Err}` on a RES register
+    // means the Result is NOT statically always-`Ok`. Instead of bailing, dissolve it
+    // with an explicit `Ok`/`Err` tag + a shared scalar payload register (the tag routes
+    // the `MatchResult` and selects which arm's `UnwrapVariantValue` reads the payload).
+    // Scoped to dead-at-boundary: a two-armed RES that is live-after, or short-circuited
+    // by `?` (`TryResult`), bails (live-after Ok/Err reconstruction stays future).
+    let two_armed = (header..exit).any(|i| {
+        matches!(&code[i],
+            RegInstr::MakeVariant { dst, layout, .. }
+                if res[*dst] && layout.name.as_ref() == "Err")
+    });
+    if two_armed {
+        return native_scalar_replace_two_armed_results_in_region(code, n_regs, header, exit, &res);
+    }
+
     // Validate every in-region def/use of a RES register. The Result must be
     // statically always-`Ok`: a reachable `MakeVariant{Err}` def is a LIVE heap Err
     // ⇒ bail. `Ok` payload must be scalar (not itself a RES register). Recognized uses:
@@ -6284,6 +6299,255 @@ pub(in crate::reg_vm) fn native_scalar_replace_results_in_region(
         }
     }
     Some((new_code, next_reg, ip_map, recipes))
+}
+
+/// Two-armed scalar `Result` dissolution (J0.1 #7 follow-up). Companion to
+/// [`native_scalar_replace_results_in_region`]'s always-`Ok` path: handles a Result
+/// constructed as EITHER `Ok(scalar)` or `Err(scalar)` in-region and consumed (matched)
+/// in-region, DEAD at the loop boundary. Each RES register becomes a boolean `tag`
+/// (true = `Ok`) plus one shared scalar `payload`; `MatchResult` routes on the tag and
+/// each arm's `UnwrapVariantValue` reads the payload (which holds the constructed arm's
+/// value). Live-after Ok/Err reconstruction and `?`-short-circuit (`TryResult`) are out
+/// of scope ⇒ bail. `res` is the already-move-closed RES register set.
+#[cfg(feature = "native-jit")]
+fn native_scalar_replace_two_armed_results_in_region(
+    code: &[RegInstr],
+    n_regs: usize,
+    header: usize,
+    exit: usize,
+    res: &[bool],
+) -> Option<(Vec<RegInstr>, usize, Vec<usize>, Vec<(usize, usize)>)> {
+    let in_region = |i: usize| i >= header && i < exit;
+
+    // Validate every in-region def/use of a RES register: defs are `Ok`/`Err`
+    // constructors with one scalar (non-RES) field, or a `Move` from another RES; uses
+    // are `MatchResult`/`UnwrapVariantValue`. `?` (`TryResult`) and any other touch bail.
+    for i in header..exit {
+        match &code[i] {
+            RegInstr::MakeVariant { dst, layout, fields } if res[*dst] => {
+                let name = layout.name.as_ref();
+                if name != "Ok" && name != "Err" {
+                    return None;
+                }
+                if fields.len() != 1 || fields.iter().any(|(_, r)| res[*r]) {
+                    return None;
+                }
+            }
+            RegInstr::Move { dst, src } if res[*dst] => {
+                if !res[*src] {
+                    return None;
+                }
+            }
+            RegInstr::MatchResult { src, .. } if res[*src] => {}
+            RegInstr::UnwrapVariantValue { dst, src, .. } if res[*src] => {
+                if res[*dst] {
+                    return None;
+                }
+            }
+            RegInstr::TryResult { src, .. } if res[*src] => return None,
+            other => {
+                match instr_read_regs(other) {
+                    RegFootprint::Some(reads) => {
+                        if reads.into_iter().any(|r| r < n_regs && res[r]) {
+                            return None;
+                        }
+                    }
+                    RegFootprint::All => return None,
+                }
+                if let RegInstr::UnwrapVariantValue { dst, .. }
+                | RegInstr::MakeVariant { dst, .. } = other
+                {
+                    if res[*dst] {
+                        return None;
+                    }
+                }
+            }
+        }
+    }
+
+    // Dead-at-boundary only: a RES register touched (read or written) OUTSIDE the region
+    // bails (no live-after reconstruction for two-armed yet; live-in is out of scope).
+    let touches_res = |fp: RegFootprint| match fp {
+        RegFootprint::Some(regs) => regs.into_iter().any(|r| r < n_regs && res[r]),
+        RegFootprint::All => true,
+    };
+    for i in 0..code.len() {
+        if in_region(i) {
+            continue;
+        }
+        if touches_res(instr_read_regs(&code[i])) || touches_res(instr_written_reg(&code[i])) {
+            return None;
+        }
+    }
+
+    // Allocate a `tag` + `payload` register per RES register.
+    let mut tag_reg = vec![0usize; n_regs];
+    let mut payload_reg = vec![0usize; n_regs];
+    let mut next_reg = n_regs;
+    for (reg, &is_res) in res.iter().enumerate() {
+        if is_res {
+            tag_reg[reg] = next_reg;
+            payload_reg[reg] = next_reg + 1;
+            next_reg += 2;
+        }
+    }
+
+    // Rewrite, dissolving in-region Result ops; remap jump/match targets through the map.
+    enum Fix {
+        Target(usize),
+        Match { a: usize, b: usize },
+    }
+    let mut new_code: Vec<RegInstr> = Vec::with_capacity(code.len() + 8);
+    let mut index_map = vec![0usize; code.len()];
+    let mut fixups: Vec<(usize, Fix)> = Vec::new();
+    for (i, instr) in code.iter().enumerate() {
+        index_map[i] = new_code.len();
+        let region = in_region(i);
+        match instr {
+            RegInstr::MakeVariant {
+                dst, layout, fields, ..
+            } if region && res[*dst] => {
+                let is_ok = layout.name.as_ref() == "Ok";
+                new_code.push(RegInstr::LoadBool {
+                    dst: tag_reg[*dst],
+                    value: is_ok,
+                });
+                let (_, field_reg) = &fields[0];
+                new_code.push(RegInstr::Move {
+                    dst: payload_reg[*dst],
+                    src: *field_reg,
+                });
+            }
+            RegInstr::Move { dst, src } if region && res[*dst] => {
+                new_code.push(RegInstr::Move {
+                    dst: tag_reg[*dst],
+                    src: tag_reg[*src],
+                });
+                new_code.push(RegInstr::Move {
+                    dst: payload_reg[*dst],
+                    src: payload_reg[*src],
+                });
+            }
+            RegInstr::MatchResult { src, ok_ip, err_ip } if region && res[*src] => {
+                // tag true (Ok) ⇒ ok_ip; else fall through to an unconditional jump to err_ip.
+                fixups.push((new_code.len(), Fix::Target(*ok_ip)));
+                new_code.push(RegInstr::JumpIfBool {
+                    cond: tag_reg[*src],
+                    expected: true,
+                    target: 0,
+                });
+                fixups.push((new_code.len(), Fix::Target(*err_ip)));
+                new_code.push(RegInstr::Jump { target: 0 });
+            }
+            RegInstr::UnwrapVariantValue { dst, src, .. } if region && res[*src] => {
+                new_code.push(RegInstr::Move {
+                    dst: *dst,
+                    src: payload_reg[*src],
+                });
+            }
+            RegInstr::Jump { target }
+            | RegInstr::JumpIfBool { target, .. }
+            | RegInstr::JumpIfIntCompare { target, .. } => {
+                fixups.push((new_code.len(), Fix::Target(*target)));
+                new_code.push(instr.clone());
+            }
+            RegInstr::MatchResult { ok_ip, err_ip, .. } => {
+                fixups.push((
+                    new_code.len(),
+                    Fix::Match {
+                        a: *ok_ip,
+                        b: *err_ip,
+                    },
+                ));
+                new_code.push(instr.clone());
+            }
+            RegInstr::MatchOption {
+                some_ip, none_ip, ..
+            }
+            | RegInstr::MatchMapGet {
+                some_ip, none_ip, ..
+            }
+            | RegInstr::MatchSortedMapGet {
+                some_ip, none_ip, ..
+            } => {
+                fixups.push((
+                    new_code.len(),
+                    Fix::Match {
+                        a: *some_ip,
+                        b: *none_ip,
+                    },
+                ));
+                new_code.push(instr.clone());
+            }
+            RegInstr::MatchVariant {
+                match_ip, else_ip, ..
+            } => {
+                fixups.push((
+                    new_code.len(),
+                    Fix::Match {
+                        a: *match_ip,
+                        b: *else_ip,
+                    },
+                ));
+                new_code.push(instr.clone());
+            }
+            other => new_code.push(other.clone()),
+        }
+    }
+    for (pos, fix) in fixups {
+        match fix {
+            Fix::Target(t) => {
+                let target = index_map[t];
+                match &mut new_code[pos] {
+                    RegInstr::Jump { target: dst }
+                    | RegInstr::JumpIfBool { target: dst, .. }
+                    | RegInstr::JumpIfIntCompare { target: dst, .. } => *dst = target,
+                    _ => {}
+                }
+            }
+            Fix::Match { a, b } => {
+                let (na, nb) = (index_map[a], index_map[b]);
+                match &mut new_code[pos] {
+                    RegInstr::MatchResult { ok_ip, err_ip, .. } => {
+                        *ok_ip = na;
+                        *err_ip = nb;
+                    }
+                    RegInstr::MatchOption {
+                        some_ip, none_ip, ..
+                    }
+                    | RegInstr::MatchMapGet {
+                        some_ip, none_ip, ..
+                    }
+                    | RegInstr::MatchSortedMapGet {
+                        some_ip, none_ip, ..
+                    } => {
+                        *some_ip = na;
+                        *none_ip = nb;
+                    }
+                    RegInstr::MatchVariant {
+                        match_ip, else_ip, ..
+                    } => {
+                        *match_ip = na;
+                        *else_ip = nb;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    let mut ip_map = vec![0usize; new_code.len()];
+    for i in 0..code.len() {
+        let start = index_map[i];
+        let end = if i + 1 < code.len() {
+            index_map[i + 1]
+        } else {
+            new_code.len()
+        };
+        for t in start..end {
+            ip_map[t] = i;
+        }
+    }
+    Some((new_code, next_reg, ip_map, Vec::new()))
 }
 
 /// OSR × J3 for VARIANTS: scalar-replace non-escaping user `sum`/variant values that
