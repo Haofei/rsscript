@@ -1845,6 +1845,10 @@ pub enum DeoptValue {
     Int(i64),
     /// A float register's value (decoded from its captured 8-byte bit pattern).
     Float(f64),
+    /// A `Handle` register's captured heap-table index. Carries no VM value by itself;
+    /// the consumer resolves the index against the still-live JIT heap (J0.1 live-after
+    /// heap-payload reconstruction). NOT written back as a raw scalar.
+    Handle(i64),
 }
 
 /// One live register's captured value at a deopt: its register index plus the
@@ -2496,7 +2500,11 @@ impl NativeModule {
                 let value = match ty {
                     JitValueType::Int => DeoptValue::Int(bits),
                     JitValueType::Float => DeoptValue::Float(f64::from_bits(bits as u64)),
-                    JitValueType::Handle | JitValueType::FlatInt | JitValueType::FlatFloat => {
+                    // A `Handle` carries its heap-table index: the consumer resolves it
+                    // against the live JIT heap (J0.1 live-after heap-payload). A flat reg
+                    // is a raw borrow-pinned buffer pointer with no such mapping.
+                    JitValueType::Handle => DeoptValue::Handle(bits),
+                    JitValueType::FlatInt | JitValueType::FlatFloat => {
                         return None;
                     }
                 };
@@ -8488,6 +8496,7 @@ mod tests {
                         .map(|r| match r.value {
                             DeoptValue::Int(v) => v,
                             DeoptValue::Float(_) => panic!("total is Int"),
+                            DeoptValue::Handle(_) => panic!("total is Int"),
                         })
                         .expect("total is live-out");
                     assert_eq!(total, expected, "live-out total for n={n}");
@@ -8577,6 +8586,7 @@ mod tests {
                     .map(|r| match r.value {
                         DeoptValue::Int(v) => v,
                         DeoptValue::Float(_) => panic!("acc is Int"),
+                        DeoptValue::Handle(_) => panic!("acc is Int"),
                     })
                     .expect("acc is live-out");
                 assert_eq!(acc, 100, "sum of [10,20,30,40] via direct reads");
@@ -8605,6 +8615,7 @@ mod tests {
                 let acc = live.iter().find(|r| r.reg == 3).map(|r| match r.value {
                     DeoptValue::Int(v) => v,
                     DeoptValue::Float(_) => panic!(),
+                    DeoptValue::Handle(_) => panic!(),
                 });
                 assert_eq!(acc, Some(0), "empty list sums to 0");
             }

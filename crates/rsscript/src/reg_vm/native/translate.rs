@@ -3201,6 +3201,7 @@ pub(in crate::reg_vm) fn translate_osr_loop(
         lp,
         Vec::new(),
         HashMap::new(),
+        &[],
     )
 }
 
@@ -3213,6 +3214,7 @@ pub(in crate::reg_vm) fn translate_osr_loop_profiled(
     captures: usize,
     lp: OsrLoop,
     ip_map: &[usize],
+    param_native_types: &[Option<NativeTy>],
 ) -> Option<(
     vm_jit::JitFunction,
     Vec<NativeTy>,
@@ -3231,6 +3233,7 @@ pub(in crate::reg_vm) fn translate_osr_loop_profiled(
         lp,
         profile_guidance.cold_blocks,
         profile_guidance.hot_branch_edges,
+        param_native_types,
     )
 }
 
@@ -3257,6 +3260,7 @@ fn translate_osr_loop_inner(
     lp: OsrLoop,
     cold_blocks: Vec<u32>,
     profile_hot_branch_edges: HashMap<usize, bool>,
+    param_native_types: &[Option<NativeTy>],
 ) -> Option<(
     vm_jit::JitFunction,
     Vec<NativeTy>,
@@ -3318,6 +3322,70 @@ fn translate_osr_loop_inner(
             };
             if !ok {
                 return None;
+            }
+        }
+    }
+    // J0.1 #7 (live-after heap payload): seed a param the preheader inference left untyped
+    // from its runtime native type — but ONLY a param whose in-region uses never reach a
+    // typed-intrinsic argument (transitively through `Move`s). A param used in-region only
+    // as a dissolved Result/Option payload `Move` (the unwrap/consumer is OUTSIDE the loop
+    // for the live-after case) has no in-region typed use, so the payload `Move` lowering
+    // would otherwise decline (`ty[src]?`); seeding it BEFORE the region fixpoint lets the
+    // seed propagate through the payload `Move` so the dissolved payload reg is `Handle`
+    // (hence captured + resolved at deopt). A heap collection key/value param DOES reach an
+    // in-region intrinsic arg (e.g. `Map.insert` after a `read`-`Move`), where the helper
+    // spec types it Int (the handle-index) — seeding Handle would conflict and decline, so
+    // the taint excludes it. `try_osr` also withholds flat-capable kinds.
+    {
+        // A reg is "typed-elsewhere" if its value reaches any in-region instruction
+        // OTHER than a dissolved-payload `Move`: such an instruction (a typed op or a
+        // collection helper like `MapInsert`/`ListPush`) types the reg authoritatively,
+        // and pre-seeding it would conflict (`native_set_ty` mismatch) and decline. `Move`s
+        // are transparent (a copy), so we taint a reg read by any NON-`Move` in-region
+        // instruction, then back-propagate through `Move`s. A param used in-region ONLY as
+        // a payload `Move` source (the unwrap/consumer is OUTSIDE the loop in the
+        // live-after case) stays untainted and is seeded.
+        let mut typed_elsewhere = vec![false; n_regs];
+        for i in lp.header..lp.exit {
+            if matches!(&code[i], RegInstr::Move { .. }) {
+                continue;
+            }
+            match instr_read_regs(&code[i]) {
+                RegFootprint::Some(reads) => {
+                    for r in reads {
+                        if r < n_regs {
+                            typed_elsewhere[r] = true;
+                        }
+                    }
+                }
+                RegFootprint::All => {
+                    for t in typed_elsewhere.iter_mut() {
+                        *t = true;
+                    }
+                }
+            }
+        }
+        let mut taint_changed = true;
+        while taint_changed {
+            taint_changed = false;
+            for i in lp.header..lp.exit {
+                if let RegInstr::Move { dst, src } = &code[i] {
+                    if *dst < n_regs
+                        && *src < n_regs
+                        && typed_elsewhere[*dst]
+                        && !typed_elsewhere[*src]
+                    {
+                        typed_elsewhere[*src] = true;
+                        taint_changed = true;
+                    }
+                }
+            }
+        }
+        for (reg, seed) in param_native_types.iter().enumerate().take(n_params) {
+            if let Some(t) = seed {
+                if reg < n_regs && ty[reg].is_none() && !typed_elsewhere[reg] {
+                    ty[reg] = Some(*t);
+                }
             }
         }
     }

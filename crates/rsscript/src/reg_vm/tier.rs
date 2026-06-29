@@ -801,6 +801,10 @@ impl RegVm {
             let vm_value = match value {
                 vm_jit::DeoptValue::Int(i) => VmValue::Int(*i),
                 vm_jit::DeoptValue::Float(f) => VmValue::Float(*f),
+                // A `Handle` deopt value is a heap-table index, not a VM value; the
+                // interpreter frame already holds the heap `VmValue`, so leave the slot
+                // untouched (the old behavior from when Handle regs were dropped here).
+                vm_jit::DeoptValue::Handle(_) => continue,
             };
             self.set_reg(base + *reg as usize, vm_value);
         }
@@ -1574,6 +1578,25 @@ impl RegVm {
         }
         let native_key = func as *const RegFunction as usize;
 
+        // J0.1 #7 (live-after heap payload): classify each param by its LIVE value, for the
+        // OSR translator to seed a param used in-region ONLY as a dissolved Result/Option
+        // payload `Move` (instruction inference can't type it — no typed use). `None` =
+        // don't seed: a `List`/`Deque` may be flat-classified (Handle≠Flat conflicts), and
+        // other kinds are left conservative. The translator additionally taint-gates the
+        // seed by in-region usage so a heap collection key/value param (typed Int as the
+        // handle-index by the helper spec) is never seeded Handle.
+        let param_native_types: Vec<Option<NativeTy>> = (0..func.params)
+            .map(|i| match self.reg(base + i) {
+                VmValue::Int(_) | VmValue::Bool(_) => Some(NativeTy::Int),
+                VmValue::Float(_) => Some(NativeTy::Float),
+                VmValue::String(_)
+                | VmValue::Struct(_)
+                | VmValue::Variant(_)
+                | VmValue::Map(_) => Some(NativeTy::Handle),
+                _ => None,
+            })
+            .collect();
+
         // Phase 1: resolve (and lazily compile) the OSR loop body for this function,
         // then gate on being at the loop header. This runs at every instruction when
         // OSR is armed, so it must be cheap on the common (not-at-header) path: the
@@ -1681,6 +1704,7 @@ impl RegVm {
                             func.captures,
                             lp,
                             &identity_ip_map,
+                            &param_native_types,
                         )
                         .and_then(
                             |(
@@ -2064,6 +2088,7 @@ impl RegVm {
                                 eff_func.captures,
                                 lp,
                                 &real_ip_map,
+                                &param_native_types,
                             )
                                 .and_then(|(jit_fn, params, derived_liveins, scalar_fields, reg_types, written_regs, string_literals)| {
                                     let n_jit_regs = jit_fn.n_regs as usize;
@@ -2111,15 +2136,19 @@ impl RegVm {
                                                 scalar(reg)
                                                     || matches!(reg_types.get(reg), Some(NativeTy::Bool))
                                             };
+                                            // A payload reconstructs at OSR-exit if it is
+                                            // scalar (deopt Int/Float) OR a `Handle` (its
+                                            // heap-table index is captured and resolved
+                                            // against the live JIT heap — J0.1 heap-payload
+                                            // live-after). A flat reg has no mapping ⇒ declines.
+                                            let scalar_or_handle = |reg: usize| {
+                                                scalar(reg)
+                                                    || matches!(reg_types.get(reg), Some(NativeTy::Handle))
+                                            };
                                             for (_r, ok_payload, err_payload, tag_reg) in &recipes_r {
-                                                // Both per-arm payloads must be scalar to
-                                                // reconstruct at OSR-exit (the deopt live
-                                                // set carries only Int/Float). A heap
-                                                // (Handle) payload on either arm — e.g. a
-                                                // live-after `Result<Int,String>` — has no
-                                                // deopt representation yet ⇒ decline (the
-                                                // Handle-carrying deopt ABI is future work).
-                                                if !scalar(*ok_payload) || !scalar(*err_payload) {
+                                                if !scalar_or_handle(*ok_payload)
+                                                    || !scalar_or_handle(*err_payload)
+                                                {
                                                     return None;
                                                 }
                                                 if let Some(tag_reg) = tag_reg {
@@ -2546,6 +2575,7 @@ impl RegVm {
                             match live_reg.value {
                                 vm_jit::DeoptValue::Int(value) => Some(value),
                                 vm_jit::DeoptValue::Float(_) => None,
+                                vm_jit::DeoptValue::Handle(_) => None,
                             }
                         })?
                     }) else {
@@ -2613,6 +2643,17 @@ impl RegVm {
                         let payload = match dr.value {
                             vm_jit::DeoptValue::Int(i) => VmValue::Int(i),
                             vm_jit::DeoptValue::Float(f) => VmValue::Float(f),
+                            // J0.1 heap payload: resolve the captured heap-table index
+                            // against the still-live JIT heap (heap_tx is live here, same
+                            // path host helpers use). Unresolvable ⇒ leave pre-loop slot.
+                            vm_jit::DeoptValue::Handle(h) => {
+                                match JitHostCallCtx::from_token(heap_tx.host_ctx())
+                                    .and_then(|ctx| ctx.heap_read_handle(h, |v| Some(v.clone())))
+                                {
+                                    Some(v) => v,
+                                    None => continue,
+                                }
+                            }
                         };
                         let layout = if is_ok {
                             result_ok_layout()
@@ -2633,6 +2674,9 @@ impl RegVm {
                         let payload = match dr.value {
                             vm_jit::DeoptValue::Int(i) => VmValue::Int(i),
                             vm_jit::DeoptValue::Float(f) => VmValue::Float(f),
+                            // Always-`Some` Option payloads are validated scalar; a Handle
+                            // never reaches here — skip defensively for exhaustiveness.
+                            vm_jit::DeoptValue::Handle(_) => continue,
                         };
                         self.set_reg(base + *opt_reg, VmValue::some(payload));
                     }
@@ -2666,6 +2710,9 @@ impl RegVm {
                     let vm_value = match value {
                         vm_jit::DeoptValue::Int(i) => VmValue::Int(i),
                         vm_jit::DeoptValue::Float(f) => VmValue::Float(f),
+                        // Handle regs are already skipped above via `reg_types`; this arm
+                        // keeps the match exhaustive and never writes a raw index back.
+                        vm_jit::DeoptValue::Handle(_) => continue,
                     };
                     self.set_reg(base + reg as usize, vm_value);
                 }

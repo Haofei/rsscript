@@ -6220,14 +6220,13 @@ fn main() -> Unit {
     );
 }
 
-/// J0.1 #7 boundary guard: a LIVE-AFTER two-armed `Result<String, String>` (the Result
-/// is built in the loop and read AFTER it) with a HEAP payload. Reconstructing it at
-/// OSR-exit would require carrying the heap handle through the deopt record
-/// (`DeoptValue::Handle`) and resolving it across heap-table teardown — not yet
-/// supported, so the validation (both payloads must be scalar) safely declines this to
-/// the interpreter. It MUST still produce byte-for-byte interpreter output (no hang, no
-/// miscompile). Locks the safe boundary; flip to osr_entries>0 when the Handle-carrying
-/// deopt ABI lands.
+/// J0.1 #7 correctness guard: a LIVE-AFTER two-armed `Result<String, String>` whose
+/// match arms `return` directly (no in-region loop work besides the construction). The
+/// heap-payload live-after RECONSTRUCTION itself now works (see
+/// `native_osr_two_armed_heap_result_live_after_reconstructs`); this construction-only
+/// shape may still decline OSR on the profitability/candidacy gate, so it asserts only
+/// byte-for-byte interpreter parity (no hang, no miscompile) regardless of whether it
+/// OSRs — guarding the boundary either way.
 #[cfg(feature = "native-jit")]
 #[test]
 fn native_osr_two_armed_heap_result_live_after_declines_safely() {
@@ -6257,4 +6256,59 @@ fn main() -> Unit {
     // Last iter (i=99) takes Err ⇒ String.len("hello") + 1000 = 1005.
     assert_eq!(interp.stdout, osr.stdout, "live-after heap Result must match interpreter");
     assert_eq!(osr.stdout.trim_end(), "begin\n1005");
+}
+
+/// J0.1 #7 (heap-payload LIVE-AFTER reconstruction): a two-armed `Result<String,String>`
+/// built in the loop and read AFTER it (live-after) with a heap payload. At OSR-exit the
+/// per-arm payload register holds a heap-table index; the deopt record carries it
+/// (`DeoptValue::Handle`) and the reconstruction resolves it against the still-live JIT
+/// heap to rebuild `Ok`/`Err`. Requires: runtime param-type seeding (so the payload
+/// `Move` from the live-in `String` lowers and classifies Handle) + the Handle-carrying
+/// deopt ABI. Must OSR and match the interpreter byte-for-byte.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_two_armed_heap_result_live_after_reconstructs() {
+    let source = "\
+fn f(s: read String, limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    let mut last: Result<String, String> = Ok(read \"init\")
+    while i < limit {
+        if i < 50 { last = Ok(s) } else { last = Err(s) }
+        total = total + 1
+        i = i + 1
+    }
+    match last {
+        Ok(a) => { total = total + String.len(value: read a) }
+        Err(b) => { total = total + String.len(value: read b) + 1000 }
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(s: read \"hello\", limit: read 100)))
+    return Unit
+}
+";
+    let file = "j7-two-armed-heap-live-after.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let osr = rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+        .expect("osr native run");
+    // Loop: total += 1 each of 100 iters ⇒ 100. last = (i=99 ⇒ Err("hello")). Post-loop
+    // Err arm ⇒ +5+1000 = 1005. total = 100 + 1005 = 1105.
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "live-after heap-payload Result OSR must match the interpreter"
+    );
+    assert_eq!(osr.stdout.trim_end(), "begin\n1105\n1105");
+
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (_osr2, stats) = exe
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run (stats)");
+    assert!(
+        stats.osr_entries > 0,
+        "the hot live-after heap-payload Result loop must OSR: {stats:?}",
+    );
 }
