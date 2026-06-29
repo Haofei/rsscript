@@ -6788,3 +6788,50 @@ fn main() -> Unit {
         stats.osr_entries
     );
 }
+
+/// #7 general frame-chain probe: a NON-foldable live-out cold arm. `classify`'s cold arm
+/// builds a heap String and returns an Int via a NON-length intrinsic (`String.count`),
+/// which no length-law fold can dissolve. CHARACTERIZATION: this DECLINES native OSR
+/// (osr_entries=0) and runs on the interpreter — correct, not native. Proven (2026-06-29)
+/// to be the irreducible boundary of the cold-arm path: relaxing the register-isolation
+/// check does NOT enable it, because `String.count` is not a `cold_arm_pure_value_op`, so
+/// the arm is never even detected as deopt-replaceable. Every DETECTABLE live-out cold arm
+/// is built from pure-value string ops and returns `String.len` of them — hence foldable
+/// and already handled by the callee-fold. Resuming into a non-pure-value callee body on
+/// mid-call bail needs the full inline frame-chain (the remaining #7 deep work). The guard
+/// locks correctness while the loop declines.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_inlined_leaf_call_nonfoldable_live_out_declines_safely() {
+    let source = "\
+fn classify(x: Int) -> Int {
+    if x == 1500 {
+        let s = String.from_int(value: read x)
+        return String.count(value: read s, needle: read \"5\")
+    }
+    return x + 1
+}
+fn run(n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut acc = 0
+    let mut i = 0
+    while i < n {
+        acc = acc + classify(x: read i)
+        i = i + 1
+    }
+    return acc
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    return Unit
+}
+";
+    let file = "p7d.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (nat, stats) = exe
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr");
+    let _ = stats;
+    assert_eq!(interp.stdout, nat.stdout, "non-foldable live-out cold arm must match interpreter");
+}
