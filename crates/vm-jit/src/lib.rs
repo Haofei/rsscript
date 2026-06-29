@@ -56,6 +56,11 @@ pub type FieldIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
 /// `(struct_handle, slot, value) -> i64`: copy-on-write set of an `Int` field,
 /// returning a VM-owned output-table handle for the updated struct/variant.
 pub type FieldSetIntFn = extern "C" fn(HostCtx, i64, i64, i64) -> i64;
+/// `(struct_handle, slot, value_handle) -> i64`: set a struct/variant field to a **heap**
+/// value (e.g. a `String`/nested collection), returning the new (COW) struct's
+/// output-table handle. The value handle is resolved to its heap value; a wrong-type/
+/// out-of-range field signals a bail out-of-band.
+pub type FieldSetHandleFn = extern "C" fn(HostCtx, i64, i64, i64) -> i64;
 /// `(struct_handle, slot, value: f64) -> i64`: copy-on-write set of a `Float`
 /// field (the write-side counterpart of [`FieldFloatFn`]), returning a VM-owned
 /// output-table handle for the updated struct/variant. A wrong-type/out-of-range
@@ -287,6 +292,7 @@ pub type DequePopBackFloatFn = extern "C" fn(HostCtx, i64) -> f64;
 pub struct HostHelpers {
     pub field_int: FieldIntFn,
     pub field_set_int: FieldSetIntFn,
+    pub field_set_handle: FieldSetHandleFn,
     pub field_set_float: FieldSetFloatFn,
     pub list_len: ListLenFn,
     pub list_is_empty: IsEmptyFn,
@@ -528,6 +534,14 @@ host_helpers! {
         field: field_set_int,
         symbol: "rss_jit_field_set_int",
         args: [JitValueType::Handle, JitValueType::Int, JitValueType::Int],
+        result: HostResult::Exact(JitValueType::Handle),
+        failure: HostFailureMode::BailFlag,
+        heap_effect: HostHeapEffect::ReplacesInput,
+    },
+    FieldSetHandle => {
+        field: field_set_handle,
+        symbol: "rss_jit_field_set_handle",
+        args: [JitValueType::Handle, JitValueType::Int, JitValueType::Handle],
         result: HostResult::Exact(JitValueType::Handle),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::ReplacesInput,
@@ -6024,7 +6038,10 @@ mod tests {
                 HostHeapEffect::AllocatesResult
             } else if extends_input_handles.remove(&helper) {
                 HostHeapEffect::ExtendsInputHandles
-            } else if helper == HostHelper::FieldSetInt || helper == HostHelper::FieldSetFloat {
+            } else if helper == HostHelper::FieldSetInt
+                || helper == HostHelper::FieldSetFloat
+                || helper == HostHelper::FieldSetHandle
+            {
                 HostHeapEffect::ReplacesInput
             } else {
                 HostHeapEffect::ReadOnly
@@ -6285,6 +6302,7 @@ mod tests {
         HostHelpers {
             field_int: noop_field_int,
             field_set_int: noop_field_set_int,
+            field_set_handle: noop_field_set_int,
             field_set_float: noop_field_set_float,
             list_len: noop_list_len,
             list_is_empty: noop_is_empty,

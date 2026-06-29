@@ -3607,6 +3607,7 @@ fn jit_host_helpers() -> vm_jit::HostHelpers {
     vm_jit::HostHelpers {
         field_int: rss_jit_field_int,
         field_set_int: rss_jit_field_set_int,
+        field_set_handle: rss_jit_field_set_handle,
         field_set_float: rss_jit_field_set_float,
         list_len: rss_jit_list_len,
         list_is_empty: rss_jit_list_is_empty,
@@ -4378,6 +4379,75 @@ fn rss_jit_field_set_int_with_ctx(ctx: JitHostCallCtx, handle: i64, slot: i64, v
             ))))
         }
         _ => None,
+    });
+    match updated {
+        Some(value) => {
+            let handle = jit_push_heap_result_with_root_with_ctx(ctx, value, root);
+            if let Some(root) = root {
+                ctx.push_heap_writeback(root, handle);
+            }
+            handle
+        }
+        None => {
+            vm_jit::signal_bail();
+            0
+        }
+    }
+}
+
+/// J0.4 #1 (heap-value struct write): set a struct/variant field to a **heap** value —
+/// the heap analog of [`rss_jit_field_set_int`]. Resolves the value handle, then COW-
+/// rebuilds the struct with the field replaced and publishes the new value (ReplacesInput
+/// + writeback to the root). A scalar field at the slot is a shape mismatch ⇒ bail.
+#[cfg(feature = "native-jit")]
+extern "C" fn rss_jit_field_set_handle(
+    _ctx: vm_jit::HostCtx,
+    handle: i64,
+    slot: i64,
+    value_handle: i64,
+) -> i64 {
+    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    rss_jit_field_set_handle_with_ctx(_ctx, handle, slot, value_handle)
+}
+
+#[cfg(feature = "native-jit")]
+fn rss_jit_field_set_handle_with_ctx(
+    ctx: JitHostCallCtx,
+    handle: i64,
+    slot: i64,
+    value_handle: i64,
+) -> i64 {
+    let Some(slot) = usize::try_from(slot).ok() else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    // Resolve the new heap field value before the COW write.
+    let Some(new_value) = ctx.heap_read_handle(value_handle, |value| Some(value.clone())) else {
+        vm_jit::signal_bail();
+        return 0;
+    };
+    let root = jit_heap_result_root_with_ctx(ctx, handle);
+    let updated = ctx.heap_read_handle(handle, |heap| {
+        let (mut fields, layout, is_variant) = match heap {
+            VmValue::Struct(data) => (data.fields.clone(), Rc::clone(&data.layout), false),
+            VmValue::Variant(data) => (data.fields.clone(), Rc::clone(&data.layout), true),
+            _ => return None,
+        };
+        let field = fields.get_mut(slot)?;
+        // A scalar field can never hold a heap value ⇒ shape mismatch ⇒ bail.
+        if matches!(field, VmValue::Int(_) | VmValue::Float(_) | VmValue::Bool(_)) {
+            return None;
+        }
+        *field = new_value;
+        let s = Rc::new(VmStruct::with_layout(layout, fields));
+        Some(if is_variant {
+            VmValue::Variant(s)
+        } else {
+            VmValue::Struct(s)
+        })
     });
     match updated {
         Some(value) => {

@@ -6028,3 +6028,51 @@ fn main() -> Unit {
     assert_eq!(osr2.stdout.trim_end(), "begin\n1");
     assert!(stats2.osr_entries > 0, "sorted-map string-key insert loop must OSR: {stats2:?}");
 }
+
+/// J0.4 #1 (heap-value struct field write): a hot loop setting a struct's `String` field
+/// to a heap value lowers to the native `FieldSetHandle` helper (COW struct rebuild +
+/// writeback). Must OSR and match the interpreter byte-for-byte.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_field_set_handle_matches_interpreter() {
+    let source = "\
+struct Holder {
+    name: String
+}
+
+fn build(s: read String, n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut h = Holder(name: read \"init\")
+    let mut i = 0
+    while i < n {
+        h.name = s
+        i = i + 1
+    }
+    return String.len(value: read h.name)
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: build(s: read \"hello\", n: read 200)))
+    return Unit
+}
+";
+    let file = "j1-field-set-handle.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let osr = rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "heap-value field set OSR must match the interpreter"
+    );
+    // After the loop h.name = "hello" (len 5).
+    assert_eq!(osr.stdout.trim_end(), "begin\n5");
+
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("compiles");
+    let (_osr2, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run (stats)");
+    assert!(
+        stats.osr_entries > 0,
+        "the hot heap-value field-set loop must OSR: {stats:?}",
+    );
+}

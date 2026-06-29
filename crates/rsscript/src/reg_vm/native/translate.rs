@@ -1315,14 +1315,19 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 value,
             } => {
                 // Pick the store helper by the value's type, mirroring the read side:
-                // a provably-Float value uses `FieldSetFloat`; Int OR unconstrained
-                // (`int_or_free`) uses `FieldSetInt` (a non-Int field then bails at the
-                // helper). A Bool value is rejected here.
-                require(handle_reg(*base) && (int_or_free(*value) || float(*value)))?;
+                // Float → `FieldSetFloat`; Int/unconstrained → `FieldSetInt`; (J0.4 #1) a
+                // heap value → `FieldSetHandle` (sets the field to a resolved heap value).
+                // A non-matching field then bails at the helper.
+                require(handle_reg(*base))?;
                 let helper = if float(*value) {
                     vm_jit::HostHelper::FieldSetFloat
-                } else {
+                } else if int_or_free(*value) {
                     vm_jit::HostHelper::FieldSetInt
+                } else if handle_reg(*value) {
+                    vm_jit::HostHelper::FieldSetHandle
+                } else {
+                    require(false)?;
+                    unreachable!()
                 };
                 JitInstr::HostCall {
                     helper,
@@ -4177,19 +4182,28 @@ fn translate_osr_loop_inner(
                 slot,
                 value,
             } => {
-                require(handle_reg(*base) && (int_or_free(*value) || float(*value)))?;
-                if let Some(field_reg) = scalar_field_reg(*base, *slot) {
+                require(handle_reg(*base))?;
+                let value_is_scalar = int_or_free(*value) || float(*value);
+                if value_is_scalar && scalar_field_reg(*base, *slot).is_some() {
                     // Scalar-replaced field: a plain register copy carries either an
                     // Int or a Float (the field register's class follows the value).
+                    let field_reg = scalar_field_reg(*base, *slot).expect("just checked");
                     JitInstr::Move {
                         dst: r(field_reg),
                         src: r(*value),
                     }
                 } else {
+                    // Float → FieldSetFloat; Int/unconstrained → FieldSetInt; (J0.4 #1)
+                    // heap value → FieldSetHandle.
                     let helper = if float(*value) {
                         vm_jit::HostHelper::FieldSetFloat
-                    } else {
+                    } else if int_or_free(*value) {
                         vm_jit::HostHelper::FieldSetInt
+                    } else if handle_reg(*value) {
+                        vm_jit::HostHelper::FieldSetHandle
+                    } else {
+                        require(false)?;
+                        unreachable!()
                     };
                     JitInstr::HostCall {
                         helper,
