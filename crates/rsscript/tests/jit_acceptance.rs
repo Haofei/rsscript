@@ -6115,3 +6115,58 @@ fn main() -> Unit {
         .expect("osr native run (stats)");
     assert!(stats.osr_entries > 0, "the hot deque heap-push loop must OSR: {stats:?}");
 }
+
+#[cfg(feature = "native-jit")]
+/// J0.1 #7 (heap-payload, same-typed dead-at-boundary): a hot loop with a two-armed
+/// `Result<String, String>` whose BOTH arms call `String.len` on a live heap payload
+/// must OSR and match the interpreter byte-for-byte. This exercises the expanded-path
+/// compile chain for a heap-payload Result — which requires (a) the string-length-fold
+/// pass to LEAVE a non-foldable `String.len` in place (native `StringLen` helper) rather
+/// than bail the whole OSR, and (b) the translator's Handle-`Move` alias-class
+/// computations to use union-find (the dissolution's cyclic Move graph would otherwise
+/// oscillate and hang the translator). Regression guard for both fixes.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_two_armed_heap_string_result_matches_interpreter() {
+    let source = "\
+fn f(s: read String, limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        let mut r: Result<String, String> = Ok(read \"x\")
+        if i < 50 { r = Ok(s) } else { r = Err(s) }
+        match r {
+            Ok(a) => { total = total + String.len(value: read a) }
+            Err(b) => { total = total + String.len(value: read b) }
+        }
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(s: read \"hello\", limit: read 100)))
+    return Unit
+}
+";
+    let file = "j7-two-armed-heap-string.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let osr = rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "two-armed heap-payload Result OSR must match the interpreter"
+    );
+    // 100 iters * 5 ("hello") = 500.
+    assert_eq!(osr.stdout.trim_end(), "begin\n500\n500");
+
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (_osr2, stats) = exe
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run (stats)");
+    assert!(
+        stats.osr_entries > 0,
+        "the hot two-armed heap-payload Result loop must OSR: {stats:?}",
+    );
+}

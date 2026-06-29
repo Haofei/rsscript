@@ -4304,24 +4304,16 @@ pub(in crate::reg_vm) fn native_string_length_fold_in_region(
         }
     }
 
-    // Every in-region `String.len` MUST now resolve to a foldable source; otherwise a
-    // real `StringLen` (not native-subset) survives and would block OSR ⇒ bail.
-    for i in header..exit {
-        if is_string_len(&code[i]) {
-            let src = match &code[i] {
-                RegInstr::CallIntrinsic { args, .. }
-                | RegInstr::CallTypedIntrinsic { args, .. } => args[0],
-                _ => unreachable!(),
-            };
-            if src >= n_regs || !foldable[src] {
-                return None;
-            }
-        }
-    }
+    // A `String.len` whose source is NOT foldable is left UNCHANGED: the real
+    // `StringLen` intrinsic IS in the native subset (it lowers to the host `string_len`
+    // helper), so a surviving `StringLen` does NOT block OSR — only foldable-source
+    // lengths are dissolved below (the rewrite arm guards on `foldable[args[0]]`). This
+    // is what lets an EXPANDED-path loop (e.g. a two-armed `Result<String,_>` whose arms
+    // call `String.len` on a live heap payload) OSR instead of declining the whole loop.
 
-    // Nothing dissolvable after escape analysis ⇒ identity (no fold). (Reachable
-    // when the only `String.len` had a non-foldable source that we bailed above; if
-    // we get here there IS at least one foldable `String.len`.)
+    // Nothing dissolvable after escape analysis ⇒ identity (no fold): every in-region
+    // `String.len` had a non-foldable source (all left in place), or there was no
+    // foldable producer at all.
     if !foldable.iter().any(|&f| f) {
         let ip_map: Vec<usize> = (0..code.len()).collect();
         return Some((code.to_vec(), n_regs, ip_map));
@@ -4664,7 +4656,12 @@ pub(in crate::reg_vm) fn native_string_length_fold_in_region(
                     }
                     true
                 }
-                _ if is_string_len(instr) => {
+                _ if is_string_len(instr)
+                    && matches!(instr,
+                        RegInstr::CallIntrinsic { args, .. }
+                        | RegInstr::CallTypedIntrinsic { args, .. }
+                        if args[0] < n_regs && foldable[args[0]]) =>
+                {
                     let (dst, src) = match instr {
                         RegInstr::CallIntrinsic { dst, args, .. }
                         | RegInstr::CallTypedIntrinsic { dst, args, .. } => (*dst, args[0]),

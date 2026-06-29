@@ -3233,6 +3233,20 @@ pub(in crate::reg_vm) fn translate_osr_loop_profiled(
     )
 }
 
+/// Union-find `find` with path-halving, used by the OSR translator's Handle-`Move`
+/// alias-class computations. A proper union-find is REQUIRED there: the older
+/// `alias[dst] = alias[src]` propagation-to-fixpoint oscillates forever on a cyclic
+/// Handle-`Move` graph (which a two-armed `Result<Handle,_>` dissolution produces),
+/// hanging the translator.
+#[cfg(feature = "native-jit")]
+fn osr_uf_find(a: &mut [usize], mut x: usize) -> usize {
+    while a[x] != x {
+        a[x] = a[a[x]]; // path-halving
+        x = a[x];
+    }
+    x
+}
+
 #[cfg(feature = "native-jit")]
 fn translate_osr_loop_inner(
     code: &[RegInstr],
@@ -3562,25 +3576,34 @@ fn translate_osr_loop_inner(
             base: usize,
             slot: usize,
         }
+        // Group Handle registers connected by in-loop `Move`s into alias classes via
+        // union-find. This MUST be a union-find (not a `handle_alias[dst] =
+        // handle_alias[src]` propagation-to-fixpoint): a cyclic Handle-`Move` graph —
+        // which the two-armed `Result<Handle,_>` dissolution produces (per-arm payload
+        // Moves plus the loop-carried back-edge) — makes the naive propagation OSCILLATE
+        // forever between equivalent labelings, hanging the translator. Union-find by
+        // minimum representative is monotone, so it converges in one pass + a flatten,
+        // and the downstream only compares class representatives for EQUALITY, so the
+        // grouping (hence behavior) is identical to the old converging cases.
         let mut handle_alias: Vec<usize> = (0..n_regs).collect();
-        let mut alias_changed = true;
-        while alias_changed {
-            alias_changed = false;
-            for i in lp.header..lp.exit {
-                if let RegInstr::Move { dst, src } = &code[i] {
-                    if *dst < n_regs
-                        && *src < n_regs
-                        && ty[*dst] == Some(NativeTy::Handle)
-                        && ty[*src] == Some(NativeTy::Handle)
-                    {
-                        let canonical = handle_alias[*src];
-                        if handle_alias[*dst] != canonical {
-                            handle_alias[*dst] = canonical;
-                            alias_changed = true;
-                        }
+        for i in lp.header..lp.exit {
+            if let RegInstr::Move { dst, src } = &code[i] {
+                if *dst < n_regs
+                    && *src < n_regs
+                    && ty[*dst] == Some(NativeTy::Handle)
+                    && ty[*src] == Some(NativeTy::Handle)
+                {
+                    let rd = osr_uf_find(&mut handle_alias, *dst);
+                    let rs = osr_uf_find(&mut handle_alias, *src);
+                    if rd != rs {
+                        let (lo, hi) = if rd < rs { (rd, rs) } else { (rs, rd) };
+                        handle_alias[hi] = lo;
                     }
                 }
             }
+        }
+        for r in 0..n_regs {
+            handle_alias[r] = osr_uf_find(&mut handle_alias, r);
         }
         // A register written by ANY in-loop instruction is not loop-invariant.
         let mut written_in_loop = vec![false; n_regs];
@@ -3784,25 +3807,28 @@ fn translate_osr_loop_inner(
         slot: usize,
     }
     let handle_alias_for_scalar: Vec<usize> = {
+        // Union-find (NOT propagation-to-fixpoint): a cyclic Handle-`Move` graph would
+        // oscillate forever otherwise — see the matching note on the `handle_alias`
+        // computation above. Same class grouping, but guaranteed to converge.
         let mut alias: Vec<usize> = (0..n_regs).collect();
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for i in lp.header..lp.exit {
-                if let RegInstr::Move { dst, src } = &code[i] {
-                    if *dst < n_regs
-                        && *src < n_regs
-                        && ty[*dst] == Some(NativeTy::Handle)
-                        && ty[*src] == Some(NativeTy::Handle)
-                    {
-                        let canonical = alias[*src];
-                        if alias[*dst] != canonical {
-                            alias[*dst] = canonical;
-                            changed = true;
-                        }
+        for i in lp.header..lp.exit {
+            if let RegInstr::Move { dst, src } = &code[i] {
+                if *dst < n_regs
+                    && *src < n_regs
+                    && ty[*dst] == Some(NativeTy::Handle)
+                    && ty[*src] == Some(NativeTy::Handle)
+                {
+                    let rd = osr_uf_find(&mut alias, *dst);
+                    let rs = osr_uf_find(&mut alias, *src);
+                    if rd != rs {
+                        let (lo, hi) = if rd < rs { (rd, rs) } else { (rs, rd) };
+                        alias[hi] = lo;
                     }
                 }
             }
+        }
+        for r in 0..n_regs {
+            alias[r] = osr_uf_find(&mut alias, r);
         }
         alias
     };
