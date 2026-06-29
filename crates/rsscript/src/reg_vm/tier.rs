@@ -2111,8 +2111,15 @@ impl RegVm {
                                                 scalar(reg)
                                                     || matches!(reg_types.get(reg), Some(NativeTy::Bool))
                                             };
-                                            for (_r, payload_reg, tag_reg) in &recipes_r {
-                                                if !scalar(*payload_reg) {
+                                            for (_r, ok_payload, err_payload, tag_reg) in &recipes_r {
+                                                // Both per-arm payloads must be scalar to
+                                                // reconstruct at OSR-exit (the deopt live
+                                                // set carries only Int/Float). A heap
+                                                // (Handle) payload on either arm — e.g. a
+                                                // live-after `Result<Int,String>` — has no
+                                                // deopt representation yet ⇒ decline (the
+                                                // Handle-carrying deopt ABI is future work).
+                                                if !scalar(*ok_payload) || !scalar(*err_payload) {
                                                     return None;
                                                 }
                                                 if let Some(tag_reg) = tag_reg {
@@ -2584,19 +2591,28 @@ impl RegVm {
                 // For a two-armed Result (`tag_reg` is `Some`), the live-out tag selects
                 // the arm: non-zero ⇒ `Ok(payload)`, zero ⇒ `Err(payload)`. An always-`Ok`
                 // Result (`tag_reg` is `None`) always reconstructs `Ok(payload)`.
-                for (variant_reg, payload_reg, tag_reg) in &variant_reconstructs {
-                    if let Some(dr) = live.iter().find(|d| d.reg as usize == *payload_reg) {
+                for (variant_reg, ok_payload_reg, err_payload_reg, tag_reg) in
+                    &variant_reconstructs
+                {
+                    // The live tag selects the arm; read ONLY that arm's payload register
+                    // (per-arm payloads — the other may be stale/undefined).
+                    let is_ok = match tag_reg {
+                        None => true,
+                        Some(tag_reg) => live
+                            .iter()
+                            .find(|d| d.reg as usize == *tag_reg)
+                            .map(|d| matches!(d.value, vm_jit::DeoptValue::Int(i) if i != 0))
+                            .unwrap_or(true),
+                    };
+                    let payload_reg = if is_ok {
+                        *ok_payload_reg
+                    } else {
+                        *err_payload_reg
+                    };
+                    if let Some(dr) = live.iter().find(|d| d.reg as usize == payload_reg) {
                         let payload = match dr.value {
                             vm_jit::DeoptValue::Int(i) => VmValue::Int(i),
                             vm_jit::DeoptValue::Float(f) => VmValue::Float(f),
-                        };
-                        let is_ok = match tag_reg {
-                            None => true,
-                            Some(tag_reg) => live
-                                .iter()
-                                .find(|d| d.reg as usize == *tag_reg)
-                                .map(|d| matches!(d.value, vm_jit::DeoptValue::Int(i) if i != 0))
-                                .unwrap_or(true),
                         };
                         let layout = if is_ok {
                             result_ok_layout()

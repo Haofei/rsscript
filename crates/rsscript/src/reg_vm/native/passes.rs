@@ -5905,12 +5905,17 @@ pub(in crate::reg_vm) fn is_result_ctor_name(name: &str) -> bool {
 /// Returns `(transformed_code, new_n_regs, ip_map)` with the same transformed→original
 /// `ip_map` discipline as the other region passes.
 ///
-/// A live-after Result reconstruction recipe: `(variant_reg, payload_reg, tag_reg)`.
-/// `tag_reg` is `None` for an always-`Ok` Result (reconstruct `Ok(payload)`) and
-/// `Some(tag)` for a two-armed Result (reconstruct `Ok(payload)` if the tag's live
-/// value is non-zero, else `Err(payload)`).
+/// A live-after Result reconstruction recipe:
+/// `(variant_reg, ok_payload_reg, err_payload_reg, tag_reg)`. `tag_reg` is `None` for an
+/// always-`Ok` Result (reconstruct `Ok(ok_payload)`; `err_payload` is unused, set equal
+/// to `ok_payload`) and `Some(tag)` for a two-armed Result (reconstruct
+/// `Ok(ok_payload)` if the tag's live value is non-zero, else `Err(err_payload)`).
+/// PER-ARM payloads: the `Ok` and `Err` arms keep SEPARATE payload registers so arms
+/// of different native types (e.g. `Result<Int, String>`) don't force a single payload
+/// register into conflicting types. Only the arm matching the live `tag` is read at
+/// reconstruction, so the other (possibly stale) payload is never observed.
 #[cfg(feature = "native-jit")]
-pub(in crate::reg_vm) type ResultRecipe = (usize, usize, Option<usize>);
+pub(in crate::reg_vm) type ResultRecipe = (usize, usize, usize, Option<usize>);
 
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn native_scalar_replace_results_in_region(
@@ -6137,13 +6142,14 @@ pub(in crate::reg_vm) fn native_scalar_replace_results_in_region(
         }
     }
 
-    // J0.1(b) recipes: (variant_reg, payload_reg) for each live-after RES register.
-    // Always-`Ok` recipes carry no tag (`None`) ⇒ reconstruct `Ok(payload)`.
+    // J0.1(b) recipes for each live-after RES register. Always-`Ok` recipes carry no
+    // tag (`None`) ⇒ reconstruct `Ok(payload)`; this path has a single payload register,
+    // so the (unused) err-payload slot mirrors it.
     let recipes: Vec<ResultRecipe> = reconstruct
         .iter()
         .enumerate()
         .filter(|&(_, &needs)| needs)
-        .map(|(reg, _)| (reg, payload_reg[reg], None))
+        .map(|(reg, _)| (reg, payload_reg[reg], payload_reg[reg], None))
         .collect();
 
     // Rewrite the WHOLE code, dissolving in-region Result ops and copying everything
@@ -6426,27 +6432,34 @@ fn native_scalar_replace_two_armed_results_in_region(
         }
     }
 
-    // Allocate a `tag` + `payload` register per RES register (consecutively).
+    // Allocate a `tag` + PER-ARM `ok_payload` + `err_payload` register per RES register
+    // (consecutively). Separate per-arm payloads let arms of different native types
+    // (e.g. `Result<Int, String>`: Int `Ok`, Handle `Err`) each carry their own typed
+    // value instead of forcing one shared payload register into conflicting types.
     let mut tag_reg = vec![0usize; n_regs];
-    let mut payload_reg = vec![0usize; n_regs];
+    let mut ok_payload_reg = vec![0usize; n_regs];
+    let mut err_payload_reg = vec![0usize; n_regs];
     let mut next_reg = n_regs;
     for (reg, &is_res) in res.iter().enumerate() {
         if is_res {
             tag_reg[reg] = next_reg;
-            payload_reg[reg] = next_reg + 1;
-            next_reg += 2;
+            ok_payload_reg[reg] = next_reg + 1;
+            err_payload_reg[reg] = next_reg + 2;
+            next_reg += 3;
         }
     }
 
-    // Live-after reconstruction recipes: `(variant_reg, payload_reg, Some(tag_reg))` ⇒
-    // rebuild `Ok(payload)` / `Err(payload)` from the tag at OSR-exit. Sound without a
-    // definite-assignment pass: `tag`/`payload` are written at every RES def, so they are
-    // in the deopt live set wherever the Result is live (see the doc comment).
+    // Live-after reconstruction recipes:
+    // `(variant_reg, ok_payload, err_payload, Some(tag_reg))` ⇒ rebuild `Ok(ok_payload)`
+    // / `Err(err_payload)` from the tag at OSR-exit. Sound without a definite-assignment
+    // pass: `tag` + the taken arm's payload are written at every RES def, so the payload
+    // matching the live tag is in the deopt live set wherever the Result is live (the
+    // other arm's payload is never read).
     let recipes: Vec<ResultRecipe> = reconstruct
         .iter()
         .enumerate()
         .filter(|&(_, &needs)| needs)
-        .map(|(reg, _)| (reg, payload_reg[reg], Some(tag_reg[reg])))
+        .map(|(reg, _)| (reg, ok_payload_reg[reg], err_payload_reg[reg], Some(tag_reg[reg])))
         .collect();
 
     // Rewrite, dissolving in-region Result ops; remap jump/match targets through the map.
@@ -6469,9 +6482,15 @@ fn native_scalar_replace_two_armed_results_in_region(
                     dst: tag_reg[*dst],
                     value: is_ok,
                 });
+                // Write only the taken arm's payload register (the tag routes the
+                // matching unwrap; the other arm's payload is never read for this value).
                 let (_, field_reg) = &fields[0];
                 new_code.push(RegInstr::Move {
-                    dst: payload_reg[*dst],
+                    dst: if is_ok {
+                        ok_payload_reg[*dst]
+                    } else {
+                        err_payload_reg[*dst]
+                    },
                     src: *field_reg,
                 });
             }
@@ -6481,8 +6500,12 @@ fn native_scalar_replace_two_armed_results_in_region(
                     src: tag_reg[*src],
                 });
                 new_code.push(RegInstr::Move {
-                    dst: payload_reg[*dst],
-                    src: payload_reg[*src],
+                    dst: ok_payload_reg[*dst],
+                    src: ok_payload_reg[*src],
+                });
+                new_code.push(RegInstr::Move {
+                    dst: err_payload_reg[*dst],
+                    src: err_payload_reg[*src],
                 });
             }
             RegInstr::MatchResult { src, ok_ip, err_ip } if region && res[*src] => {
@@ -6496,10 +6519,20 @@ fn native_scalar_replace_two_armed_results_in_region(
                 fixups.push((new_code.len(), Fix::Target(*err_ip)));
                 new_code.push(RegInstr::Jump { target: 0 });
             }
-            RegInstr::UnwrapVariantValue { dst, src, .. } if region && res[*src] => {
+            RegInstr::UnwrapVariantValue {
+                dst, src, expected, ..
+            } if region && res[*src] => {
+                // Read the payload register for the arm this unwrap belongs to: the `Err`
+                // unwrap (reached only on the `Err` branch) reads `err_payload`; `Ok`
+                // (the default) reads `ok_payload`.
+                let src_payload = if expected.as_str() == "Err" {
+                    err_payload_reg[*src]
+                } else {
+                    ok_payload_reg[*src]
+                };
                 new_code.push(RegInstr::Move {
                     dst: *dst,
-                    src: payload_reg[*src],
+                    src: src_payload,
                 });
             }
             RegInstr::Jump { target }

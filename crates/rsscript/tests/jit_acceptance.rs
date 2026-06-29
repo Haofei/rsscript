@@ -6171,12 +6171,12 @@ fn main() -> Unit {
     );
 }
 
-/// J0.1 #7 boundary guard: a two-armed `Result<Int, String>` (DIFFERENT-typed arms —
-/// Int `Ok`, heap `Err`) must run correctly. The shared-payload two-armed dissolution
-/// can't type a mixed Int/Handle payload, so this declines OSR (per-arm payload regs are
-/// future work) — but it MUST still produce byte-for-byte interpreter output and must not
-/// hang or miscompile. Locks the safe-decline boundary next to the same-typed case that
-/// now OSRs (native_osr_two_armed_heap_string_result_matches_interpreter).
+/// J0.1 #7 (heap-payload, DIFFERENT-typed dead-at-boundary): a two-armed
+/// `Result<Int, String>` (Int `Ok`, heap `Err`) consumed per-arm (`Ok` adds the Int,
+/// `Err` adds `String.len` of the heap payload), dead at the loop boundary. PER-ARM
+/// payload registers give each arm its own typed payload, so the mixed Int/Handle Result
+/// dissolves and OSRs (it previously declined — a shared payload couldn't be typed).
+/// Must OSR and match the interpreter byte-for-byte.
 #[cfg(feature = "native-jit")]
 #[test]
 fn native_osr_two_armed_mixed_result_matches_interpreter() {
@@ -6206,7 +6206,16 @@ fn main() -> Unit {
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
     let osr = rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
         .expect("osr native run");
-    // Correct regardless of whether it OSRs: sum of 0..50 (1225) + 50*5 (250) = 1475.
+    // Sum of 0..50 (1225) + 50*5 (250) = 1475.
     assert_eq!(interp.stdout, osr.stdout, "mixed-typed two-armed Result must match interpreter");
     assert_eq!(osr.stdout.trim_end(), "begin\n1475\n1475");
+
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (_osr2, stats) = exe
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run (stats)");
+    assert!(
+        stats.osr_entries > 0,
+        "the hot mixed-typed two-armed Result loop must OSR with per-arm payloads: {stats:?}",
+    );
 }
