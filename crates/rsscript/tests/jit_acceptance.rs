@@ -6170,3 +6170,43 @@ fn main() -> Unit {
         "the hot two-armed heap-payload Result loop must OSR: {stats:?}",
     );
 }
+
+/// J0.1 #7 boundary guard: a two-armed `Result<Int, String>` (DIFFERENT-typed arms —
+/// Int `Ok`, heap `Err`) must run correctly. The shared-payload two-armed dissolution
+/// can't type a mixed Int/Handle payload, so this declines OSR (per-arm payload regs are
+/// future work) — but it MUST still produce byte-for-byte interpreter output and must not
+/// hang or miscompile. Locks the safe-decline boundary next to the same-typed case that
+/// now OSRs (native_osr_two_armed_heap_string_result_matches_interpreter).
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_two_armed_mixed_result_matches_interpreter() {
+    let source = "\
+fn f(s: read String, limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        let mut r: Result<Int, String> = Ok(read 0)
+        if i < 50 { r = Ok(read i) } else { r = Err(s) }
+        match r {
+            Ok(v) => { total = total + v }
+            Err(b) => { total = total + String.len(value: read b) }
+        }
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return total
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(s: read \"hello\", limit: read 100)))
+    return Unit
+}
+";
+    let file = "j7-two-armed-mixed.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let osr = rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+        .expect("osr native run");
+    // Correct regardless of whether it OSRs: sum of 0..50 (1225) + 50*5 (250) = 1475.
+    assert_eq!(interp.stdout, osr.stdout, "mixed-typed two-armed Result must match interpreter");
+    assert_eq!(osr.stdout.trim_end(), "begin\n1475\n1475");
+}
