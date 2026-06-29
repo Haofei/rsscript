@@ -169,39 +169,6 @@ fn profile_closure_pic_arm_count(code: &[vm_jit::JitInstr], closure_id_ip: usize
     arms
 }
 
-#[cfg(feature = "native-jit")]
-/// Whether `jit_fn` contains a heap op that the **interpreter charges to `mem_budget`**
-/// per loop iteration but native does not yet account for in generated code.
-///
-/// J0.5 mem parity (the native tier must charge EXACTLY what the interpreter charges,
-/// no more, no less). The interpreter's only per-iteration `account_bytes` sites are
-/// flat list capacity growth (`List.push`/`List.append`) and list/map LITERAL
-/// construction (`MakeList`/`MakeMap`); strings, JSON, and map/set/deque/sorted-map
-/// inserts are charged ZERO. Of those charged ops, only `List.push` is reachable in the
-/// native subset (`MakeList`/`MakeMap`/`ListAppend` are not native-lowerable, so a loop
-/// using them is not native-eligible at all). So a native OSR loop charges `mem_budget`
-/// exactly the interpreter's amount UNLESS it calls a `ListPush*` helper — every other
-/// allocation (string build, map/set insert, …) is uncharged by BOTH, hence parity-safe
-/// to run under an armed `mem_budget`. A `ListPush*` loop still declines (native list-
-/// growth byte accounting is future). NOTE: live-in `ListPush` is already vetoed by the
-/// OSR growth-admissibility rule, so this is belt-and-suspenders for the region-local
-/// case.
-#[cfg(feature = "native-jit")]
-fn jit_fn_has_unaccounted_mem_charge(jit_fn: &vm_jit::JitFunction) -> bool {
-    jit_fn.code.iter().any(|instr| {
-        matches!(
-            instr,
-            vm_jit::JitInstr::HostCall { helper, .. }
-            | vm_jit::JitInstr::MemoizedHostCall { helper, .. }
-                if matches!(
-                    helper,
-                    vm_jit::HostHelper::ListPushInt
-                        | vm_jit::HostHelper::ListPushFloat
-                        | vm_jit::HostHelper::ListPushHandle
-                )
-        )
-    })
-}
 
 fn jit_function_scalar_leaf_callable(jit_fn: &vm_jit::JitFunction) -> bool {
     jit_fn.reg_types.iter().all(|ty| {
@@ -1717,13 +1684,11 @@ impl RegVm {
                                 string_literals,
                             )| {
                                 let n_jit_regs = jit_fn.n_regs as usize;
-                                // J0.5 mem: decline only a loop that charges `mem_budget`
-                                // in a way native does not yet account (a `ListPush*`
-                                // growth); every other allocation is uncharged by the
-                                // interpreter too, so running it natively is exact parity.
-                                if mem_armed && jit_fn_has_unaccounted_mem_charge(&jit_fn) {
-                                    return None;
-                                }
+                                // J0.5 mem: a `ListPush*` flat-capacity growth now charges
+                                // `mem_budget` in its host helper (the only native-subset op
+                                // the interpreter bills), so an allocating loop runs natively
+                                // under an armed budget and bails to the interpreter at the
+                                // exact over-budget push — no blanket decline needed.
                                 let heap_input_regs = osr_heap_input_regs(&jit_fn);
                                 match native.module.compile_osr(&jit_fn, lp.header as u32, emit_step, emit_cancel) {
                                     Ok(id) => {
@@ -2092,13 +2057,10 @@ impl RegVm {
                             )
                                 .and_then(|(jit_fn, params, derived_liveins, scalar_fields, reg_types, written_regs, string_literals)| {
                                     let n_jit_regs = jit_fn.n_regs as usize;
-                                    // J0.5 mem: decline only a `ListPush*`-charging loop
-                                    // (checked on the post-dissolution body, which reflects
-                                    // what actually runs); every other allocation is
-                                    // uncharged by the interpreter too — exact parity.
-                                    if mem_armed && jit_fn_has_unaccounted_mem_charge(&jit_fn) {
-                                        return None;
-                                    }
+                                    // J0.5 mem: `ListPush*` now charges `mem_budget` in its
+                                    // helper (the only native-subset billed op), so an
+                                    // allocating loop runs natively and bails at the exact
+                                    // over-budget push — no blanket decline needed.
                                     let heap_input_regs = osr_heap_input_regs(&jit_fn);
                                     match native.module.compile_osr(&jit_fn, lp.header as u32, emit_step, emit_cancel) {
                                         Ok(id) => {
@@ -2490,6 +2452,14 @@ impl RegVm {
                 .map_or(0, |flag| std::sync::Arc::as_ptr(flag) as i64);
             jit_set_limits_cell(self.steps as i64, step_budget, cancel_addr);
         }
+        // J0.5 mem: seed the mem cell before EVERY OSR call (armed budget or `-1` to
+        // disarm). The `ListPush*` helper charges flat-capacity growth against it; on a
+        // clean exit we read `live_bytes` back to commit, on a bail the rollback+rerun
+        // discards it. Independent of the step `limits_ptr` (helper-side).
+        {
+            let mem_budget = self.limits.mem_budget.map_or(-1, |b| b as i64);
+            jit_set_mem_cell(self.live_bytes as i64, mem_budget);
+        }
         let Some(native_ref) = self.native.as_ref() else {
             heap_tx.abort();
             drop(flat_guards);
@@ -2567,6 +2537,13 @@ impl RegVm {
                 };
                 for (slot, value) in writebacks {
                     self.set_reg(slot, value);
+                }
+                // J0.5 mem: this is the CLEAN OSR exit (heap writes committed above), so
+                // commit the `ListPush*` byte charges the native loop accumulated into the
+                // interpreter's live-set. (A bail takes the `_` arm below, which aborts the
+                // heap tx and reruns on the interpreter — discarding the native charges.)
+                if mem_armed {
+                    self.live_bytes = jit_mem_cell_live_bytes().max(0) as usize;
                 }
                 let mut scalar_writebacks: Vec<(usize, Vec<(usize, i64)>)> = Vec::new();
                 for field in scalar_fields.iter().filter(|field| field.writeback) {

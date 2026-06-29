@@ -2910,6 +2910,14 @@ thread_local! {
     /// host `AtomicBool` otherwise. The host seeds it before the call and reads `steps`
     /// back after, so one tick stream spans native and interpreter.
     static JIT_LIMITS_CELL: std::cell::Cell<[i64; 3]> = const { std::cell::Cell::new([0, -1, 0]) };
+    /// J0.5 mem cell: `[live_bytes, mem_budget]`. Unlike the step cell this is charged by
+    /// the `ListPush*` HOST HELPER (the only native-subset op the interpreter bills to
+    /// `mem_budget`), not by generated code. `mem_budget` is `-1` when unarmed (the helper
+    /// then charges nothing). The host seeds it before a native call and, on a CLEAN OSR
+    /// exit, reads `live_bytes` back to commit the charges; on a bail the OSR rolls back
+    /// the list writes and reruns on the interpreter, which recharges authoritatively, so
+    /// the native charges are simply discarded (exact `account_bytes` parity).
+    static JIT_MEM_CELL: std::cell::Cell<[i64; 2]> = const { std::cell::Cell::new([0, -1]) };
 }
 
 /// Seed the J0.5 limits cell before an armed OSR native call. `steps` is the current
@@ -2932,6 +2940,39 @@ fn jit_limits_cell_ptr() -> *const i64 {
 #[cfg(feature = "native-jit")]
 fn jit_limits_cell_steps() -> i64 {
     JIT_LIMITS_CELL.with(|cell| cell.get()[0])
+}
+
+/// Seed the J0.5 mem cell before a native call. `live_bytes` is the interpreter's current
+/// accounted live-set; `mem_budget` is the budget (or `-1` to disarm — every non-mem-armed
+/// native call MUST seed `-1` so a stale armed budget never leaks into the `ListPush*`
+/// helper).
+#[cfg(feature = "native-jit")]
+fn jit_set_mem_cell(live_bytes: i64, mem_budget: i64) {
+    JIT_MEM_CELL.with(|cell| cell.set([live_bytes, mem_budget]));
+}
+
+/// Read the accumulated live-byte count back out of the mem cell after a CLEAN OSR exit
+/// (to commit the native `ListPush*` charges into the interpreter's `live_bytes`).
+#[cfg(feature = "native-jit")]
+fn jit_mem_cell_live_bytes() -> i64 {
+    JIT_MEM_CELL.with(|cell| cell.get()[0])
+}
+
+/// Charge `grew` bytes (a `ListPush*` flat-capacity growth) against the armed mem cell,
+/// mirroring the interpreter's `account_bytes`. Returns `false` if the budget is now
+/// exceeded — the caller signals a bail, the OSR rolls back + reruns on the interpreter,
+/// which recharges and errors at the exact push. Unarmed (`mem_budget < 0`) ⇒ no charge.
+#[cfg(feature = "native-jit")]
+fn jit_mem_charge(grew: i64) -> bool {
+    JIT_MEM_CELL.with(|cell| {
+        let [live, budget] = cell.get();
+        if budget < 0 {
+            return true;
+        }
+        let live = live.saturating_add(grew);
+        cell.set([live, budget]);
+        live <= budget
+    })
 }
 
 #[cfg(feature = "native-jit")]
@@ -4696,10 +4737,20 @@ extern "C" fn rss_jit_list_push_int(_ctx: vm_jit::HostCtx, handle: i64, value: i
 #[cfg(feature = "native-jit")]
 fn rss_jit_list_push_int_with_ctx(ctx: JitHostCallCtx, handle: i64, value: i64) -> i64 {
     match ctx.with_journaled_list_write(handle, |list| {
-        list.checked_push(VmValue::Int(value)).ok()?;
-        Some(0)
+        // `checked_push_accounted` returns the flat-capacity growth in bytes — exactly
+        // what the interpreter's `List.push` bills to `mem_budget` (`account_bytes`).
+        list.checked_push_accounted(VmValue::Int(value)).ok()
     }) {
-        Some(value) => value,
+        Some(grew) => {
+            if jit_mem_charge(grew as i64) {
+                0
+            } else {
+                // Over budget: bail. The OSR rolls back this loop's list writes and
+                // reruns on the interpreter, which recharges and errors at the exact push.
+                vm_jit::signal_bail();
+                0
+            }
+        }
         None => {
             vm_jit::signal_bail();
             0
@@ -4733,10 +4784,16 @@ fn rss_jit_list_push_handle_with_ctx(ctx: JitHostCallCtx, handle: i64, value_han
         return 0;
     };
     match ctx.with_journaled_list_write(handle, move |list| {
-        list.checked_push(value).ok()?;
-        Some(0)
+        list.checked_push_accounted(value).ok()
     }) {
-        Some(value) => value,
+        Some(grew) => {
+            if jit_mem_charge(grew as i64) {
+                0
+            } else {
+                vm_jit::signal_bail();
+                0
+            }
+        }
         None => {
             vm_jit::signal_bail();
             0
@@ -4759,10 +4816,16 @@ extern "C" fn rss_jit_list_push_float(_ctx: vm_jit::HostCtx, handle: i64, value:
 #[cfg(feature = "native-jit")]
 fn rss_jit_list_push_float_with_ctx(ctx: JitHostCallCtx, handle: i64, value: f64) -> i64 {
     match ctx.with_journaled_list_write(handle, |list| {
-        list.checked_push(VmValue::Float(value)).ok()?;
-        Some(0)
+        list.checked_push_accounted(VmValue::Float(value)).ok()
     }) {
-        Some(value) => value,
+        Some(grew) => {
+            if jit_mem_charge(grew as i64) {
+                0
+            } else {
+                vm_jit::signal_bail();
+                0
+            }
+        }
         None => {
             vm_jit::signal_bail();
             0

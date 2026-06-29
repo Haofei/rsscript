@@ -6472,3 +6472,54 @@ fn main() -> Unit {
     assert_eq!(interp2.stdout, osr2.stdout, "SortedMap<String,Int> insert+lookup must match interpreter");
     assert_eq!(osr2.stdout.trim_end(), "begin\n199");
 }
+
+/// J0.5 mem (PARITY, #6): a flat `List<Int>` build loop now RUNS natively under an armed
+/// `mem_budget` — `ListPush*` charges the flat-capacity growth in its host helper,
+/// mirroring the interpreter's `account_bytes`. DISCRIMINATING: under a generous budget it
+/// OSRs and completes; under a tight budget it must ERROR exactly like the interpreter (if
+/// native failed to charge the pushes, it would complete and DIVERGE — returning a value
+/// where the interpreter errors). A mem-over-budget bail rolls back the loop's list writes
+/// and reruns on the interpreter, which recharges and errors at the precise push.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_list_push_int_charges_mem_budget() {
+    let source = "\
+fn build(n: Int) -> Int {
+    let mut xs = List<Int>.new()
+    let mut i = 0
+    while i < n {
+        List.push<Int>(list: mut xs, value: read i)
+        i = i + 1
+    }
+    return List.len(list: read xs)
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: build(n: read 20000)))
+    return Unit
+}
+";
+    let file = "j05-list-push-mem.rss";
+    // (A) Generous budget: the loop OSRs, charges per push, stays within budget, completes.
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let ok = rsscript::VmLimits { mem_budget: Some(1 << 24), ..rsscript::VmLimits::default() };
+    let (out, stats) = exe
+        .eval_main_with_args_native_osr_with_limits(std::iter::empty::<String>(), ok)
+        .expect("flat list-push loop must run under a generous mem_budget");
+    assert_eq!(out.stdout.trim_end(), "20000");
+    assert!(stats.osr_entries > 0, "list-push loop must OSR under mem_budget: {stats:?}");
+
+    // (B) Tight budget the build exceeds: native must ERROR identically to the interpreter.
+    let interp_err = rsscript::reg_vm_eval_source_main_with_limits(
+        file, source, std::iter::empty::<String>(),
+        rsscript::VmLimits { mem_budget: Some(16384), ..rsscript::VmLimits::default() },
+    ).expect_err("interpreter must exceed the tight mem_budget");
+    let exe2 = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let nat_err = exe2.eval_main_with_args_native_osr_with_limits(
+        std::iter::empty::<String>(),
+        rsscript::VmLimits { mem_budget: Some(16384), ..rsscript::VmLimits::default() },
+    ).expect_err("native must ALSO exceed (it charges ListPush growth)");
+    assert_eq!(
+        format!("{interp_err:?}"), format!("{nat_err:?}"),
+        "mem-over-budget error must match the interpreter exactly",
+    );
+}
