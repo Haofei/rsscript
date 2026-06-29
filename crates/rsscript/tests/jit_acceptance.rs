@@ -6219,3 +6219,42 @@ fn main() -> Unit {
         "the hot mixed-typed two-armed Result loop must OSR with per-arm payloads: {stats:?}",
     );
 }
+
+/// J0.1 #7 boundary guard: a LIVE-AFTER two-armed `Result<String, String>` (the Result
+/// is built in the loop and read AFTER it) with a HEAP payload. Reconstructing it at
+/// OSR-exit would require carrying the heap handle through the deopt record
+/// (`DeoptValue::Handle`) and resolving it across heap-table teardown — not yet
+/// supported, so the validation (both payloads must be scalar) safely declines this to
+/// the interpreter. It MUST still produce byte-for-byte interpreter output (no hang, no
+/// miscompile). Locks the safe boundary; flip to osr_entries>0 when the Handle-carrying
+/// deopt ABI lands.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_two_armed_heap_result_live_after_declines_safely() {
+    let source = "\
+fn f(s: read String, limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut r: Result<String, String> = Ok(read \"init\")
+    let mut i = 0
+    while i < limit {
+        if i < 50 { r = Ok(s) } else { r = Err(s) }
+        i = i + 1
+    }
+    match r {
+        Ok(a) => { return String.len(value: read a) }
+        Err(b) => { return String.len(value: read b) + 1000 }
+    }
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(s: read \"hello\", limit: read 100)))
+    return Unit
+}
+";
+    let file = "j7-two-armed-heap-live-after.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let osr = rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+        .expect("osr native run");
+    // Last iter (i=99) takes Err ⇒ String.len("hello") + 1000 = 1005.
+    assert_eq!(interp.stdout, osr.stdout, "live-after heap Result must match interpreter");
+    assert_eq!(osr.stdout.trim_end(), "begin\n1005");
+}
