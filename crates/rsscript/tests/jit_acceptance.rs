@@ -6526,12 +6526,20 @@ fn main() -> Unit {
 
 #[cfg(feature = "native-jit")]
 #[test]
-fn native_osr_aliased_struct_field_write_declines_safely() {
-    // A caller-aliased `mut Acc` struct, scalar field written in a hot loop. Does the
-    // native OSR propagate the in-place writes back to the caller's struct?
+fn native_osr_aliased_struct_field_write_matches_interpreter() {
+    // J0.4 #8 (aliased heap in-place write): a caller-aliased `mut Acc` struct whose
+    // scalar field is read-modify-written in a hot loop. The function is I/O-wrapped
+    // (`Log.write`) so it is whole-tier-INELIGIBLE and the loop reaches the OSR path
+    // (a body with no I/O is tier-0-dispatched at the call site and never OSRs). The
+    // OSR scalar-field replacement dissolves the field RMW to a loop-carried scalar,
+    // writes it back to the struct on OSR exit, and the `mut`-param propagation carries
+    // the result to the caller — so `main`'s `a.total` (read AFTER the call) must match
+    // the interpreter. DISCRIMINATING: reads the field back through the caller, not via
+    // the callee return alone, so a writeback that failed to propagate would diverge.
     let source = "\
 struct Acc { total: Int }
 fn bump(a: mut Acc, n: Int) -> Int {
+    Log.write(message: read \"begin\")
     let mut i = 0
     while i < n {
         a.total = a.total + 2
@@ -6550,7 +6558,102 @@ fn main() -> Unit {
     let file = "s4.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp");
     let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
-    let (nat, stats) = exe.eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>()).expect("osr");
-    eprintln!("S4 interp={:?} native={:?} osr_entries={}", interp.stdout.trim_end(), nat.stdout.trim_end(), stats.osr_entries);
-    assert_eq!(interp.stdout, nat.stdout, "aliased struct field write must match interpreter");
+    let (nat, stats) = exe
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr");
+    assert_eq!(
+        interp.stdout, nat.stdout,
+        "aliased struct field write must match interpreter"
+    );
+    assert!(
+        stats.osr_entries >= 1,
+        "aliased struct field RMW must OSR (entries={})",
+        stats.osr_entries
+    );
+}
+
+/// J0.4 #8 (aliased heap in-place write — Map): a caller-aliased `mut Map<Int,Int>`
+/// inserted into in a hot loop, then read back THROUGH the caller after the call. The
+/// function is I/O-wrapped so the loop reaches the OSR path. A Map is `Rc<RefCell<..>>`,
+/// so the in-place insert helper mutates the shared map and the caller observes it.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_aliased_map_insert_matches_interpreter() {
+    let source = "\
+fn fill(m: mut Map<Int, Int>, n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    while i < n {
+        Map.insert<Int, Int>(map: mut m, key: read i, value: read i)
+        i = i + 1
+    }
+    return n
+}
+fn main() -> Unit {
+    let mut m = Map<Int, Int>.new()
+    let r = fill(m: mut m, n: read 2000)
+    match Map.get<Int, Int>(map: read m, key: read 1999) {
+        Some(v) => { Log.write(message: read String.from_int(value: v)) }
+        None => { Log.write(message: read \"missing\") }
+    }
+    Log.write(message: read String.from_int(value: r))
+    return Unit
+}
+";
+    let file = "s4_map.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (nat, stats) = exe
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr");
+    assert_eq!(
+        interp.stdout, nat.stdout,
+        "aliased map insert must match interpreter"
+    );
+    assert!(
+        stats.osr_entries >= 1,
+        "aliased map insert must OSR (entries={})",
+        stats.osr_entries
+    );
+}
+
+/// J0.4 #8 (aliased heap in-place write — Deque): a caller-aliased `mut Deque<Int>`
+/// pushed to in a hot loop, then read back THROUGH the caller. Deque is `Rc<RefCell<..>>`
+/// so the in-place push propagates to the caller.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_aliased_deque_push_matches_interpreter() {
+    let source = "\
+fn fill(d: mut Deque<Int>, n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    while i < n {
+        Deque.push_back<Int>(deque: mut d, value: read i)
+        i = i + 1
+    }
+    return n
+}
+fn main() -> Unit {
+    let mut d = Deque<Int>.new()
+    let r = fill(d: mut d, n: read 2000)
+    Log.write(message: read String.from_int(value: Deque.len<Int>(deque: read d)))
+    Log.write(message: read String.from_int(value: r))
+    return Unit
+}
+";
+    let file = "s4_deque.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (nat, stats) = exe
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr");
+    assert_eq!(
+        interp.stdout, nat.stdout,
+        "aliased deque push must match interpreter"
+    );
+    assert!(
+        stats.osr_entries >= 1,
+        "aliased deque push must OSR (entries={})",
+        stats.osr_entries
+    );
 }
