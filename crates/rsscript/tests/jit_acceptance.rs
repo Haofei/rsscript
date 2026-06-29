@@ -6349,3 +6349,126 @@ fn main() -> Unit {
     let (_o, stats) = exe.eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>()).expect("osr");
     assert!(stats.osr_entries > 0, "hot heap-key insert loop must OSR: {stats:?}");
 }
+
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_whole_function_heap_key_get_matches_interpreter() {
+    // No internal hot loop in `lookup` → if it goes native it's the WHOLE-FUNCTION tier.
+    let source = "\
+fn lookup(m: read Map<String, Int>, k: read String) -> Int {
+    match Map.get<String, Int>(map: read m, key: read k) {
+        Some(v) => { return v }
+        None => { return 0 - 1 }
+    }
+}
+fn main() -> Unit {
+    let mut m = Map<String, Int>.new()
+    Map.insert<String, Int>(map: mut m, key: read \"alpha\", value: read 11)
+    Map.insert<String, Int>(map: mut m, key: read \"beta\", value: read 22)
+    let mut i = 0
+    let mut acc = 0
+    while i < 300 {
+        acc = acc + lookup(m: read m, k: read \"beta\")
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: acc))
+    return Unit
+}
+";
+    let file = "wf.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp");
+    let nat = rsscript::reg_vm_eval_source_main_native(file, source, std::iter::empty::<String>()).expect("native");
+    eprintln!("WF interp={:?} native={:?}", interp.stdout.trim_end(), nat.stdout.trim_end());
+    assert_eq!(interp.stdout, nat.stdout, "whole-function heap-key get correctness");
+}
+
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_whole_function_heap_key_insert_matches_interpreter() {
+    // `add` has NO internal loop → native compile would be the whole-function tier.
+    let source = "\
+fn add(m: mut Map<String, Int>, k: read String, v: Int) -> Int {
+    Map.insert<String, Int>(map: mut m, key: read k, value: read v)
+    match Map.get<String, Int>(map: read m, key: read k) {
+        Some(x) => { return x }
+        None => { return 0 - 1 }
+    }
+}
+fn main() -> Unit {
+    let mut m = Map<String, Int>.new()
+    let mut i = 0
+    let mut acc = 0
+    while i < 400 {
+        acc = add(m: mut m, k: read \"key\", v: read i)
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: acc))
+    return Unit
+}
+";
+    let file = "wf2.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (nat, stats) = exe.eval_main_with_args_native_with_stats(std::iter::empty::<String>()).expect("native");
+    eprintln!("WF2 interp={:?} native={:?} considered={} compiled={} native_calls={}", interp.stdout.trim_end(), nat.stdout.trim_end(), stats.considered, stats.compiled, stats.native_calls);
+    assert_eq!(interp.stdout, nat.stdout, "whole-function heap-key insert correctness");
+}
+
+/// J0.4 #1 correctness (heap Set/SortedMap): DISCRIMINATING guards. Insert distinct heap
+/// keys/values in a hot loop, then probe membership / look a value up. A mis-typed
+/// (handle-index Int) operand would store wrong keys and make the probe diverge.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_heap_set_and_sorted_map_discriminating() {
+    // Set<String>: insert two DISTINCT keys repeatedly, then test membership of each.
+    let set_src = "\
+fn build(a: read String, b: read String, n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut s = Set<String>.new()
+    let mut i = 0
+    while i < n {
+        Set.insert<String>(set: mut s, value: read a)
+        Set.insert<String>(set: mut s, value: read b)
+        i = i + 1
+    }
+    let mut r = 0
+    if Set.contains<String>(set: read s, value: read a) { r = r + 1 }
+    if Set.contains<String>(set: read s, value: read b) { r = r + 10 }
+    if Set.contains<String>(set: read s, value: read \"absent\") { r = r + 100 }
+    return r
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: build(a: read \"x\", b: read \"y\", n: read 200)))
+    return Unit
+}
+";
+    let interp = common::run_vm_source("j1-set-disc.rss", set_src, &[]).expect("interp");
+    let osr = rsscript::reg_vm_eval_source_main_native_osr("j1-set-disc.rss", set_src, std::iter::empty::<String>()).expect("osr");
+    assert_eq!(interp.stdout, osr.stdout, "Set<String> insert+contains must match interpreter");
+    assert_eq!(osr.stdout.trim_end(), "begin\n11");
+
+    // SortedMap<String,Int>: insert k -> i, then look k back up.
+    let sm_src = "\
+fn build(k: read String, n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut m = SortedMap<String, Int>.new()
+    let mut i = 0
+    while i < n {
+        SortedMap.insert<String, Int>(map: mut m, key: read k, value: read i)
+        i = i + 1
+    }
+    match SortedMap.get<String, Int>(map: read m, key: read k) {
+        Some(v) => { return v }
+        None => { return 0 - 1 }
+    }
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: build(k: read \"key\", n: read 200)))
+    return Unit
+}
+";
+    let interp2 = common::run_vm_source("j1-sortedmap-disc.rss", sm_src, &[]).expect("interp");
+    let osr2 = rsscript::reg_vm_eval_source_main_native_osr("j1-sortedmap-disc.rss", sm_src, std::iter::empty::<String>()).expect("osr");
+    assert_eq!(interp2.stdout, osr2.stdout, "SortedMap<String,Int> insert+lookup must match interpreter");
+    assert_eq!(osr2.stdout.trim_end(), "begin\n199");
+}
