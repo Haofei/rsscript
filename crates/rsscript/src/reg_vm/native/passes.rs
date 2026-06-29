@@ -4011,9 +4011,10 @@ pub(in crate::reg_vm) fn native_expand_option_result_combinators_in_region(
 /// Conservative bails (when unsure REJECT ⇒ no OSR, never unsound): any escaping
 /// string use (stored / returned / captured / compared / passed to a non-`len`
 /// intrinsic / live at a loop boundary); a `String.slice` of an unprovably-ASCII
-/// string; a `String.len` whose source is not a fully-foldable producer; a leaf
-/// non-foldable string reaching `String.len` (the real `StringLen` is NOT native-
-/// subset, so it would block OSR anyway). `RegFootprint::All` ⇒ bail.
+/// string; a `String.len` whose source is not a fully-foldable producer. A leaf
+/// non-foldable `String.len` is simply left un-folded — the `StringLen` host helper
+/// IS native-subset (a plain `String.len` loop OSRs), so it runs as a host call rather
+/// than blocking OSR; this pass only declines to FOLD it. `RegFootprint::All` ⇒ bail.
 ///
 /// Returns `(transformed_code, new_n_regs, ip_map)` with the same transformed→
 /// original `ip_map` discipline as the sibling region passes. Identity (no
@@ -6332,6 +6333,15 @@ pub(in crate::reg_vm) fn native_scalar_replace_results_in_region(
 /// the OSR-exit deopt live set whenever the Result is live there. `?`-short-circuit
 /// (`TryResult`) and a RES register written AFTER the region (post-loop reassignment) or
 /// read BEFORE it (live-in) are out of scope ⇒ bail. `res` is the move-closed RES set.
+///
+/// LIMITATION (the `Ok` and `Err` arms share ONE `payload` register): this only OSRs
+/// when both arms carry the SAME native type (e.g. `Result<Int, Int>`). A Result whose
+/// arms differ (e.g. `Result<Int, String>` — Int `Ok`, Handle `Err`) assigns the shared
+/// payload conflicting types, so the native type inference rejects it and the loop
+/// declines to OSR (SAFE — runs on the interpreter, never incorrect). Supporting
+/// different-typed arms needs a per-arm payload register; the heap arm additionally
+/// needs the extended deopt ABI (carrying Handle payloads) for the live-after case.
+/// Verified by probe 2026-06-28: same-typed arms OSR; `Result<Int,String>` declines.
 #[cfg(feature = "native-jit")]
 fn native_scalar_replace_two_armed_results_in_region(
     code: &[RegInstr],
