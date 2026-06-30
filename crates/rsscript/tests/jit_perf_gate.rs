@@ -63,6 +63,16 @@ const DEFAULT_CASES: &[&str] = &[
 /// steady-state native timing regressions are caught by the non-borderline timing kernels.
 const TIMING_NOISE_EXEMPT_CASES: &[&str] = &["profile_closure_pic.rss"];
 
+/// Kernels the Step 1 cost model is expected to DECLINE under
+/// `RSS_JIT_COST_MODEL=enforce` (their hot region is native ≈ interpreter). When the
+/// gate runs in enforce mode, these are proven by `unprofitable_declines > 0` instead
+/// of their native compile/PIC telemetry (which is gone — the point is they no longer
+/// compile native), and they become timing-gated again: declined onto the
+/// deterministic interpreter, they are no longer noise-dominated, so their wall time
+/// IS a meaningful check (it must stay within the native baseline — staying on the VM
+/// is the improvement the cost model promises).
+const COST_MODEL_DECLINED_CASES: &[&str] = &["profile_closure_pic.rss"];
+
 const TELEMETRY_ONLY_CASES: &[&str] = &[
     "profile_branch_cold_blocks.rss",
     "profile_branch_side_exits.rss",
@@ -98,6 +108,17 @@ fn jit_perf_gate_against_baseline() {
     // checking bails + telemetry — useful in debug) but skip the timing assertion. The
     // README's release command (`cargo test --release ...`) keeps full timing gating.
     let timing_meaningful = !cfg!(debug_assertions);
+    // The gate's in-process kernels consult the cost model via the same
+    // `RSS_JIT_COST_MODEL` env, so when it is `enforce` we must expect the
+    // cost-model-declined kernels to NOT compile native (and prove the decline
+    // instead). Mirrors `CostMode::from_env`'s enforce spellings.
+    let cost_mode_enforced = matches!(
+        std::env::var("RSS_JIT_COST_MODEL")
+            .ok()
+            .as_deref()
+            .map(str::trim),
+        Some("enforce") | Some("on") | Some("1")
+    );
 
     let mut rows = Vec::new();
     let mut failures = Vec::new();
@@ -127,8 +148,14 @@ fn jit_perf_gate_against_baseline() {
         let ref_ms = ref_ms.get_or_insert(cur_ms);
         let ref_ms = *ref_ms;
         let mut delta_pct = percent_delta(ref_ms, cur_ms);
-        let timing_gated =
-            timing_meaningful && !TIMING_NOISE_EXEMPT_CASES.contains(&case.case.as_str());
+        // A noise-exempt kernel is exempt only while it runs NATIVE (noisy). Under
+        // enforce the cost model declines it onto the deterministic interpreter, so it
+        // is timed again (and must stay within the native baseline).
+        let declined_here =
+            cost_mode_enforced && COST_MODEL_DECLINED_CASES.contains(&case.case.as_str());
+        let noise_exempt =
+            TIMING_NOISE_EXEMPT_CASES.contains(&case.case.as_str()) && !declined_here;
+        let timing_gated = timing_meaningful && !noise_exempt;
         let mut attempts = 1;
         for _ in 0..timing_retries {
             if !timing_gated || delta_pct <= threshold_pct {
@@ -173,7 +200,14 @@ fn jit_perf_gate_against_baseline() {
             failures.push(format!("{}: native bails={}", case.case, bails.unwrap()));
         }
         if !skip_telemetry {
-            for (counter, minimum) in expected_min_counters(&case.case) {
+            // Under enforce, a cost-model-declined kernel proves itself by the decline
+            // counter — it intentionally has NO native/PIC telemetry anymore.
+            let expected: &[(&str, i64)] = if declined_here {
+                &[("unprofitable_declines", 1)]
+            } else {
+                expected_min_counters(&case.case)
+            };
+            for (counter, minimum) in expected {
                 let value = jit_counter(jit, counter);
                 if value.is_none_or(|actual| actual < *minimum) {
                     verdict = "MISSING_TELEMETRY";

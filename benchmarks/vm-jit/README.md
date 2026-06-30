@@ -46,6 +46,24 @@ only observes already-cached code.
 
 In the table, `try` is the number of timing attempts used for that row.
 
+### Cost-model (profitability) proof
+
+The native-tier profitability cost model (`RSS_JIT_COST_MODEL`, default `off`) is
+proven by running the same gate under `enforce`:
+
+```sh
+docker compose run --rm dev env RSS_JIT_COST_MODEL=enforce cargo test --release -p rsscript --test runtime jit_perf_gate_against_baseline --features native-jit -- --test-threads=1 --nocapture
+```
+
+In `enforce` the gate adapts its expectations for the cost-model-declined kernels
+(currently `profile_closure_pic`, whose native PIC is ≈ the interpreter): they are
+proven by `unprofitable_declines > 0` instead of native/PIC telemetry, and — now
+running on the deterministic interpreter rather than the noise-dominated native
+PIC — their wall time is timing-gated again and must stay within the baseline.
+Both runs (default `off` for the native-win kernels, `enforce` for the cost-model
+proof) belong in the Docker perf check. `report` mode scores and logs every region
+(under `RSS_JIT_REPORT`) without changing execution, for calibration.
+
 The JSON files under `baseline/` are archived comparison points. The old
 script/Python baseline runner was removed with the public benchmark CLI; any new
 full-baseline runner should be a Rust harness or Make target, not a `rss`
