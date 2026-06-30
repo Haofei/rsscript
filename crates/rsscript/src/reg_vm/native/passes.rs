@@ -864,22 +864,14 @@ fn native_region_external_reads_or_writes_touch(
 
 #[cfg(feature = "native-jit")]
 fn native_global_def_counts(code: &[RegInstr], n_regs: usize) -> Option<Vec<usize>> {
-    let mut counts = vec![0usize; n_regs];
-    for instr in code {
-        match instr_written_reg(instr) {
-            RegFootprint::Some(writes) => {
-                for reg in writes {
-                    if reg < n_regs {
-                        counts[reg] += 1;
-                    }
-                }
-            }
-            RegFootprint::All => return None,
-        }
-    }
-    Some(counts)
+    // The whole program is just the region spanning the full instruction range.
+    native_region_def_counts(code, n_regs, 0, code.len())
 }
 
+/// Per-register definition counts over `code[header..exit]`. `None` if any
+/// instruction in the range has an unbounded write footprint (`RegFootprint::All`),
+/// since then no per-register count is knowable. Shared by the global and
+/// region-scoped callers (a region transform's def-use building block).
 #[cfg(feature = "native-jit")]
 fn native_region_def_counts(
     code: &[RegInstr],
