@@ -7009,12 +7009,11 @@ fn main() -> Unit {
     );
 }
 
-/// #7 cold-arm coverage slice (2026-06-29, arm-local Map write): the same arm-local-write
-/// pattern generalized to `Map` — `let m = {}; m.insert(k, v); return Map.len(m)`.
-/// `MapInsert` is a heap WRITE on an arm-local (non-escaping) map; native bails at the arm
-/// start and never executes it, so the interpreter re-runs the whole arm. Exercises the
-/// generalized `cold_arm_local_write_target` guard (the mutated `map` register must be
-/// arm-local) plus `MapLen` as a cold-arm pure reader. Must match the interpreter AND OSR.
+/// #7 cold-arm coverage slice (2026-06-29, Map write): the same cold-arm-write pattern
+/// generalized to `Map` — `let m = Map.new(); m.insert(k, v); return Map.len(m)`.
+/// `MapInsert` is a heap WRITE; native bails at the arm start and never executes it, so the
+/// interpreter re-runs the whole arm on replay. Exercises `MakeMap`/`MapInsert` in
+/// `cold_arm_pure_value_op` plus `MapNew`/`MapLen` as cold-arm builder/reader. Must OSR+match.
 #[cfg(feature = "native-jit")]
 #[test]
 fn native_osr_inlined_leaf_call_arm_local_map_write_cold_arm_matches_interpreter() {
@@ -7341,5 +7340,162 @@ fn main() -> Unit {
         stats.osr_entries >= 1,
         "higher-order combinator cold-arm inlined leaf must OSR (entries={})",
         stats.osr_entries
+    );
+}
+
+/// #7 cold-arm coverage (2026-06-29, CAPTURING-closure combinator): like the combinator
+/// test but the cold-arm closure CAPTURES a loop value (`|v| v + x`), so `MakeClosure` has
+/// a non-empty capture list — a distinct path from the captureless case. On the cold-arm
+/// bail the interpreter rebuilds the closure (capturing the replayed value) and runs it.
+/// Must match the interpreter AND OSR.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_inlined_leaf_call_capturing_combinator_cold_arm_matches_interpreter() {
+    let source = "\
+fn classify(x: Int) -> Int {
+    if x == 1500 {
+        let opt: Option<Int> = Some(read x)
+        let mapped = Option.map<Int, Int>(value: read opt, mapper: |v| { return v + x })
+        return Option.unwrap_or<Int>(value: read mapped, default: read 0)
+    }
+    return x + 1
+}
+fn run(n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut acc = 0
+    let mut i = 0
+    while i < n {
+        acc = acc + classify(x: read i)
+        i = i + 1
+    }
+    return acc
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    return Unit
+}
+";
+    let file = "p7p.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (nat, stats) = exe
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("run");
+    assert_eq!(interp.stdout, nat.stdout, "capturing-closure combinator cold arm must match interpreter");
+    assert!(
+        stats.osr_entries >= 1,
+        "capturing-closure combinator cold-arm leaf must OSR (entries={})",
+        stats.osr_entries
+    );
+}
+
+/// REVIEW PROBE (2026-06-29): the dangerous hot+cold aliased double-write. The HOT path
+/// does a native aliased `List.push` EVERY iteration (#8 in-place write to the caller's
+/// `acc`), and the cold arm (i==1500) forces a deopt-replaceable bail (heap build + pure
+/// reader). On the cold-arm bail, `heap_tx.abort()` MUST roll back the native hot-path
+/// pushes accumulated since OSR entry before the interpreter replays — otherwise `acc`
+/// double-counts. `run` reads `List.len(acc)` back, so a rollback gap shows as a wrong
+/// length. This is the exact case the aliased-write admission's soundness depends on and
+/// that the shipped aliased test did NOT exercise (its hot path never touched `acc`).
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_hot_and_cold_aliased_write_rollback_matches_interpreter() {
+    let source = "\
+fn classify(x: Int, acc: mut List<Int>) -> Int {
+    List.push(list: mut acc, value: read x)
+    if x == 1500 {
+        let s = String.from_int(value: read x)
+        return String.count(value: read s, needle: read \"5\")
+    }
+    return 0
+}
+fn run(n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut acc: List<Int> = []
+    let mut total = 0
+    let mut i = 0
+    while i < n {
+        total = total + classify(x: read i, acc: mut acc)
+        i = i + 1
+    }
+    return total + List.len(list: read acc)
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    return Unit
+}
+";
+    let file = "p7probe.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (nat, stats) = exe
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("run");
+    // `acc` is pushed every iteration (0..2999) = 3000 elems; classify returns 1 only at
+    // i==1500 (`String.count("1500","5")`), else 0 -> 1 + 3000 = 3001. A rollback gap on
+    // the cold-arm bail would double-count `acc`.
+    assert_eq!(nat.stdout.trim_end(), "begin\n3001");
+    assert_eq!(
+        interp.stdout, nat.stdout,
+        "hot+cold aliased write must match interpreter (rollback of native hot pushes)"
+    );
+    assert!(
+        stats.osr_entries >= 1,
+        "hot+cold aliased write loop must OSR (entries={})",
+        stats.osr_entries
+    );
+}
+
+/// REVIEW (2026-06-29) CHARACTERIZATION: the boundary of the mut-arg cold-arm support. A
+/// leaf that takes a `mut` collection PARAM and passes it as a `mut` ARG to a non-inlinable
+/// callee in a cold arm (run -> classify(mut acc) -> appendErr(mut acc)) currently DECLINES
+/// native OSR (osr_entries=0) and runs on the interpreter — correct, just not optimized.
+/// This pins the real boundary (correcting an earlier imprecise note): a mut-param leaf
+/// with a DIRECT heap write in its cold arm DOES inline+OSR (see
+/// `native_osr_inlined_leaf_call_aliased_write_cold_arm_matches_interpreter`); it is the
+/// two-level mut-arg writeback through the inline boundary to a caller-aliased target that
+/// declines. The arm-local mut-arg call (`..._mut_arg_nested_call_...`) OSRs. Output parity
+/// holds regardless; only OSR-ness differs.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_inlined_leaf_caller_aliased_mut_arg_call_cold_arm_matches_interpreter() {
+    let source = "\
+fn appendErr(acc: mut List<Int>, x: Int) -> Int {
+    Log.write(message: read \"appending\")
+    List.push(list: mut acc, value: read x)
+    return List.len(list: read acc)
+}
+fn classify(x: Int, acc: mut List<Int>) -> Int {
+    if x == 1500 {
+        return appendErr(acc: mut acc, x: read x)
+    }
+    return x + 1
+}
+fn run(n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut acc: List<Int> = []
+    let mut total = 0
+    let mut i = 0
+    while i < n {
+        total = total + classify(x: read i, acc: mut acc)
+        i = i + 1
+    }
+    return total + List.len(list: read acc)
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    return Unit
+}
+";
+    let file = "p7o.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (nat, _stats) = exe
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("run");
+    // Correctness is the contract; this shape declines OSR today (characterization).
+    assert_eq!(
+        interp.stdout, nat.stdout,
+        "caller-aliased mut-arg call cold arm must match interpreter even when it declines"
     );
 }
