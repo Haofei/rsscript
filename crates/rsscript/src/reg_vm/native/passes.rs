@@ -2341,15 +2341,14 @@ pub(in crate::reg_vm) fn cold_arm_pure_value_op(instr: &RegInstr) -> bool {
         | RegInstr::MakeVariant { .. }
         | RegInstr::MakeStruct { .. }
         | RegInstr::MakeSome { .. }
-        // Arm-LOCAL collection build/mutate/read: a freshly-built `List` the arm pushes to
-        // and queries, e.g. `let t = []; t.push(x); return List.len(t)`. `ListPush` is a
-        // heap WRITE, but it is SAFE in a deopt-replaceable cold arm because native bails
-        // at the arm start `s` and NEVER executes it — the interpreter re-runs the whole
-        // arm and performs the push itself. `deopt_replaceable_cold_arms` additionally
-        // requires every mutated collection register to be DEFINED INSIDE the arm
-        // (non-escaping / not caller-aliased) so the abandon-and-reinterpret fallback has
-        // no aliased-heap interaction to reason about. `MakeMap`/`ListAppend` etc. are
-        // intentionally NOT yet admitted — extend per-case with a directed repro.
+        // Collection build / mutate / read: a `List`/`Map`/`Set`/`Deque` the arm builds,
+        // writes, and queries, e.g. `let t = []; t.push(x); return List.len(t)`. The
+        // insert ops are heap WRITES but are SAFE in a deopt-replaceable cold arm — native
+        // bails at the arm start `s` and NEVER executes the arm, and a cold-arm `Bail`
+        // always takes the abort+replay fallback (see the soundness note in
+        // `deopt_replaceable_cold_arms`), so the interpreter re-runs the whole arm and
+        // performs the write itself. This holds even for caller-aliased collections.
+        // `ListAppend` etc. are intentionally NOT yet admitted — extend per-case.
         | RegInstr::MakeList { .. }
         | RegInstr::ListPush { .. }
         | RegInstr::ListLen { .. }
@@ -2360,26 +2359,6 @@ pub(in crate::reg_vm) fn cold_arm_pure_value_op(instr: &RegInstr) -> bool {
         | RegInstr::DequePushFront { .. } => true,
         RegInstr::CallIntrinsic { intrinsic, .. } => cold_arm_pure_intrinsic(intrinsic),
         _ => false,
-    }
-}
-
-/// The collection register an in-cold-arm heap WRITE op mutates, if any. Used by
-/// [`deopt_replaceable_cold_arms`]'s arm-local mutation guard: the returned register must
-/// be DEFINED INSIDE the arm (non-escaping / not caller-aliased), so the
-/// abandon-and-reinterpret fallback re-runs the write with no aliased-heap interaction.
-/// `None` ⇒ not a recognized write (no constraint). Extend per collection with a directed
-/// repro; caller-aliased mutation stays out of scope (it would interact with the native
-/// aliased-write rollback).
-#[cfg(feature = "native-jit")]
-fn cold_arm_local_write_target(instr: &RegInstr) -> Option<usize> {
-    match instr {
-        RegInstr::ListPush { list, .. } => Some(*list as usize),
-        RegInstr::MapInsert { map, .. } => Some(*map as usize),
-        RegInstr::SetInsert { set, .. } => Some(*set as usize),
-        RegInstr::DequePushBack { deque, .. } | RegInstr::DequePushFront { deque, .. } => {
-            Some(*deque as usize)
-        }
-        _ => None,
     }
 }
 
@@ -2542,30 +2521,25 @@ pub(in crate::reg_vm) fn deopt_replaceable_cold_arms(
                 }
             }
         }
-        // Arm-LOCAL mutation guard: every heap WRITE op in the arm must mutate a
-        // collection register that is DEFINED INSIDE the arm (built by an in-arm op such
-        // as `MakeList`), never a caller-aliased / live-in register. Native never executes
-        // the arm (it bails at `s`), so the interpreter re-runs the write on
-        // abandon-and-reinterpret; restricting writes to non-escaping arm-local
-        // collections keeps that fallback free of any aliased-heap reasoning (no
-        // interaction with native in-place writes elsewhere in the loop). Currently the
-        // only admitted write is `ListPush` (its mutated register is `list`).
-        if ok {
-            let mut defined_in_arm: Vec<usize> = Vec::new();
-            for j in s..=e {
-                if let RegFootprint::Some(ws) = instr_written_reg(&code[j]) {
-                    defined_in_arm.extend(ws);
-                }
-            }
-            for j in s..=e {
-                if let Some(target) = cold_arm_local_write_target(&code[j]) {
-                    if !defined_in_arm.contains(&target) {
-                        ok = false; // caller-aliased / live-in mutation — reject
-                        break;
-                    }
-                }
-            }
-        }
+        // Heap WRITE ops (`ListPush`/`MapInsert`/`SetInsert`/`DequePush*`) ARE permitted
+        // in the arm, INCLUDING writes to a caller-aliased / live-in collection. Soundness
+        // (no arm-local restriction needed):
+        //   1. Cold-arm splicing only ever runs on an INLINED leaf (`deopt_replaceable_
+        //      cold_arms` is called exclusively on a `callee.code` being inlined), so a
+        //      cold-arm `Bail` always lives inside a spliced region.
+        //   2. Splicing pushes the origin call-ip for every spliced instruction, so the
+        //      `ip_map` is NON-IDENTITY → `precise_resume_safe` is forced off
+        //      (translate.rs), and the precise-resume deopt path (tier.rs) is structurally
+        //      unreachable for a cold-arm `Bail`.
+        //   3. The OSR-exit handler honours a deopt only at the clean post-loop exit
+        //      (`resume_ip == trans_exit`); ANY mid-loop bail (a cold-arm `Bail`) takes the
+        //      fallback that `heap_tx.abort()`s and re-runs the loop on the interpreter.
+        // So native NEVER executes the arm and ALL of its journaled native heap writes (incl.
+        // aliased in-place writes elsewhere in the loop, §7.2) are rolled back before the
+        // interpreter replays — the interpreter performs the arm's write itself. Verified:
+        // the aliased directed test OSRs + matches the interpreter, and the full
+        // differential/soak suites stay green. (Register isolation above still applies to
+        // the arm's REGISTER writes.)
         if ok {
             for j in s..=e {
                 cold[j] = true;

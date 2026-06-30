@@ -7144,3 +7144,52 @@ fn main() -> Unit {
         stats.osr_entries
     );
 }
+
+/// #7 cold-arm coverage slice (2026-06-29, caller-ALIASED write): `classify` takes a
+/// `mut List` param and pushes to it ONLY in the cold arm (i==1500) — the caller (`run`)
+/// also holds `acc` and reads it back after the loop. This is the case the arm-local guard
+/// previously rejected; it is now admitted because a cold-arm `Bail` is provably handled by
+/// abort+replay (cold arms are inline-only → non-identity ip_map → precise resume is
+/// structurally unreachable; the OSR handler fallbacks any mid-loop bail). The loop OSRs and
+/// the rare cold path rolls back all journaled native writes and re-runs on the interpreter,
+/// which performs the aliased push itself. Must match the interpreter byte-for-byte AND OSR.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_inlined_leaf_call_aliased_write_cold_arm_matches_interpreter() {
+    let source = "\
+fn classify(x: Int, acc: mut List<Int>) -> Int {
+    if x == 1500 {
+        List.push(list: mut acc, value: read x)
+        return 0
+    }
+    return x + 1
+}
+fn run(n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut acc: List<Int> = []
+    let mut total = 0
+    let mut i = 0
+    while i < n {
+        total = total + classify(x: read i, acc: mut acc)
+        i = i + 1
+    }
+    return total + List.len(list: read acc)
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    return Unit
+}
+";
+    let file = "p7k.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (nat, stats) = exe
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("run");
+    assert_eq!(interp.stdout, nat.stdout, "aliased cold-arm write must match interpreter");
+    assert!(
+        stats.osr_entries >= 1,
+        "caller-aliased write cold-arm inlined leaf must OSR (entries={})",
+        stats.osr_entries
+    );
+}
