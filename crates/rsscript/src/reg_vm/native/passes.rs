@@ -2071,6 +2071,27 @@ fn native_is_heap_reg(ty: &[Option<NativeTy>], r: usize) -> bool {
     )
 }
 
+/// Whether an intrinsic's result is a freshly-allocated, PROVABLY-IMMUTABLE `String`/`Bytes`
+/// leaf. Deliberately an explicit allow-list, NOT `cold_arm_pure_builder`: that flag also
+/// marks the pure-but-MUTABLE collection constructors (`Map.new`/`Set.new`/`Deque.new`), and
+/// treating those as immutable in a soundness guard would be unsound (a `Map.new()` result
+/// flowing into a DeepCopy'd root could be wrongly proven immutable and left untainted).
+/// Conservative: an unlisted String/Bytes producer is simply not proven (over-declines, safe).
+#[cfg(feature = "native-jit")]
+fn native_intrinsic_produces_immutable_leaf(intrinsic: &RegIntrinsic) -> bool {
+    matches!(
+        intrinsic,
+        RegIntrinsic::StringFromInt
+            | RegIntrinsic::StringFromBool
+            | RegIntrinsic::StringFromFloat
+            | RegIntrinsic::StringCopy
+            | RegIntrinsic::StringSlice
+            | RegIntrinsic::StringPadLeft
+            | RegIntrinsic::BytesFromString
+            | RegIntrinsic::BytesSlice
+    )
+}
+
 /// Classify every register that PROVABLY holds an immutable `String`/`Bytes` value (so its
 /// `Rc` is safe to share). Used by the DeepCopy soundness guard to decide which DeepCopy'd
 /// roots are safe to leave untainted — crucially, this works AFTER inlining: an inlined
@@ -2120,7 +2141,7 @@ fn native_reg_proven_immutable_leaf(
                 }
             }
             RegInstr::CallIntrinsic { dst, intrinsic, .. }
-                if intrinsic_descriptor(*intrinsic).cold_arm_pure_builder =>
+                if native_intrinsic_produces_immutable_leaf(intrinsic) =>
             {
                 if *dst < n_regs {
                     has_def[*dst] = true;
