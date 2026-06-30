@@ -1003,6 +1003,20 @@ fn intrinsic_descriptor(intrinsic: RegIntrinsic) -> IntrinsicDescriptor {
             notes: "allocates a fresh empty map; pure builder (re-runnable after a cold-arm bail)",
             ..d()
         },
+        // `Set.new` / `Deque.new` — fresh empty collections (pure builders); their `.len`
+        // is a pure scalar size query (reader). Same arm-local cold-arm shape as Map.
+        RegIntrinsic::SetNew | RegIntrinsic::DequeNew => IntrinsicDescriptor {
+            effect: Allocate,
+            cold_arm_pure_builder: true,
+            notes: "allocates a fresh empty collection; pure builder (re-runnable after a cold-arm bail)",
+            ..d()
+        },
+        RegIntrinsic::SetLen | RegIntrinsic::DequeLen => IntrinsicDescriptor {
+            effect: Read,
+            cold_arm_pure_reader: true,
+            notes: "pure scalar collection-size query (re-runnable after a cold-arm bail)",
+            ..d()
+        },
 
         // --- Bytes-length fold: the foldable Bytes producers + the length query ---
         // `Bytes.len` is a pure raw-byte-length READ (`value.len()`); the Bytes fold

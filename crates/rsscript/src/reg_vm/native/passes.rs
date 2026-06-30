@@ -2354,7 +2354,10 @@ pub(in crate::reg_vm) fn cold_arm_pure_value_op(instr: &RegInstr) -> bool {
         | RegInstr::ListPush { .. }
         | RegInstr::ListLen { .. }
         | RegInstr::MakeMap { .. }
-        | RegInstr::MapInsert { .. } => true,
+        | RegInstr::MapInsert { .. }
+        | RegInstr::SetInsert { .. }
+        | RegInstr::DequePushBack { .. }
+        | RegInstr::DequePushFront { .. } => true,
         RegInstr::CallIntrinsic { intrinsic, .. } => cold_arm_pure_intrinsic(intrinsic),
         _ => false,
     }
@@ -2372,6 +2375,10 @@ fn cold_arm_local_write_target(instr: &RegInstr) -> Option<usize> {
     match instr {
         RegInstr::ListPush { list, .. } => Some(*list as usize),
         RegInstr::MapInsert { map, .. } => Some(*map as usize),
+        RegInstr::SetInsert { set, .. } => Some(*set as usize),
+        RegInstr::DequePushBack { deque, .. } | RegInstr::DequePushFront { deque, .. } => {
+            Some(*deque as usize)
+        }
         _ => None,
     }
 }

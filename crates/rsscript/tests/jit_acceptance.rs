@@ -7058,3 +7058,89 @@ fn main() -> Unit {
         stats.osr_entries
     );
 }
+
+/// #7 cold-arm coverage slice (2026-06-29, arm-local Set write): arm-local-write pattern
+/// generalized to `Set` — `let s = Set.new(); s.insert(x); return Set.len(s)`.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_inlined_leaf_call_arm_local_set_write_cold_arm_matches_interpreter() {
+    let source = "\
+fn classify(x: Int) -> Int {
+    if x == 1500 {
+        let mut s = Set<Int>.new()
+        Set.insert(set: mut s, value: read x)
+        return Set.len(set: read s)
+    }
+    return x + 1
+}
+fn run(n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut acc = 0
+    let mut i = 0
+    while i < n {
+        acc = acc + classify(x: read i)
+        i = i + 1
+    }
+    return acc
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    return Unit
+}
+";
+    let file = "p7i.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (nat, stats) = exe
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("run");
+    assert_eq!(interp.stdout, nat.stdout, "arm-local set write cold arm must match interpreter");
+    assert!(
+        stats.osr_entries >= 1,
+        "arm-local write (Set.insert) cold-arm inlined leaf must OSR (entries={})",
+        stats.osr_entries
+    );
+}
+
+/// #7 cold-arm coverage slice (2026-06-29, arm-local Deque write): arm-local-write pattern
+/// generalized to `Deque` — `let d = Deque.new(); d.push_back(x); return Deque.len(d)`.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_inlined_leaf_call_arm_local_deque_write_cold_arm_matches_interpreter() {
+    let source = "\
+fn classify(x: Int) -> Int {
+    if x == 1500 {
+        let mut d = Deque<Int>.new()
+        Deque.push_back(deque: mut d, value: read x)
+        return Deque.len(deque: read d)
+    }
+    return x + 1
+}
+fn run(n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut acc = 0
+    let mut i = 0
+    while i < n {
+        acc = acc + classify(x: read i)
+        i = i + 1
+    }
+    return acc
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    return Unit
+}
+";
+    let file = "p7j.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (nat, stats) = exe
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("run");
+    assert_eq!(interp.stdout, nat.stdout, "arm-local deque write cold arm must match interpreter");
+    assert!(
+        stats.osr_entries >= 1,
+        "arm-local write (Deque.push_back) cold-arm inlined leaf must OSR (entries={})",
+        stats.osr_entries
+    );
+}
