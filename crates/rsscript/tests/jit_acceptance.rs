@@ -7008,3 +7008,53 @@ fn main() -> Unit {
         stats.osr_entries
     );
 }
+
+/// #7 cold-arm coverage slice (2026-06-29, arm-local Map write): the same arm-local-write
+/// pattern generalized to `Map` — `let m = {}; m.insert(k, v); return Map.len(m)`.
+/// `MapInsert` is a heap WRITE on an arm-local (non-escaping) map; native bails at the arm
+/// start and never executes it, so the interpreter re-runs the whole arm. Exercises the
+/// generalized `cold_arm_local_write_target` guard (the mutated `map` register must be
+/// arm-local) plus `MapLen` as a cold-arm pure reader. Must match the interpreter AND OSR.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_inlined_leaf_call_arm_local_map_write_cold_arm_matches_interpreter() {
+    let source = "\
+fn classify(x: Int) -> Int {
+    if x == 1500 {
+        let mut m = Map<Int, Int>.new()
+        Map.insert(map: mut m, key: read x, value: read x)
+        return Map.len(map: read m)
+    }
+    return x + 1
+}
+fn run(n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut acc = 0
+    let mut i = 0
+    while i < n {
+        acc = acc + classify(x: read i)
+        i = i + 1
+    }
+    return acc
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    return Unit
+}
+";
+    let file = "p7h.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (nat, stats) = exe
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("run");
+    assert_eq!(
+        interp.stdout, nat.stdout,
+        "arm-local map write cold arm must match interpreter"
+    );
+    assert!(
+        stats.osr_entries >= 1,
+        "arm-local write (Map.insert) cold-arm inlined leaf must OSR (entries={})",
+        stats.osr_entries
+    );
+}

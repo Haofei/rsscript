@@ -2352,9 +2352,27 @@ pub(in crate::reg_vm) fn cold_arm_pure_value_op(instr: &RegInstr) -> bool {
         // intentionally NOT yet admitted — extend per-case with a directed repro.
         | RegInstr::MakeList { .. }
         | RegInstr::ListPush { .. }
-        | RegInstr::ListLen { .. } => true,
+        | RegInstr::ListLen { .. }
+        | RegInstr::MakeMap { .. }
+        | RegInstr::MapInsert { .. } => true,
         RegInstr::CallIntrinsic { intrinsic, .. } => cold_arm_pure_intrinsic(intrinsic),
         _ => false,
+    }
+}
+
+/// The collection register an in-cold-arm heap WRITE op mutates, if any. Used by
+/// [`deopt_replaceable_cold_arms`]'s arm-local mutation guard: the returned register must
+/// be DEFINED INSIDE the arm (non-escaping / not caller-aliased), so the
+/// abandon-and-reinterpret fallback re-runs the write with no aliased-heap interaction.
+/// `None` ⇒ not a recognized write (no constraint). Extend per collection with a directed
+/// repro; caller-aliased mutation stays out of scope (it would interact with the native
+/// aliased-write rollback).
+#[cfg(feature = "native-jit")]
+fn cold_arm_local_write_target(instr: &RegInstr) -> Option<usize> {
+    match instr {
+        RegInstr::ListPush { list, .. } => Some(*list as usize),
+        RegInstr::MapInsert { map, .. } => Some(*map as usize),
+        _ => None,
     }
 }
 
@@ -2427,6 +2445,7 @@ pub(in crate::reg_vm) fn deopt_replaceable_cold_arms(
                     | RegInstr::CallIntrinsic { .. }
                     | RegInstr::CallTypedIntrinsic { .. }
                     | RegInstr::MakeList { .. }
+                    | RegInstr::MakeMap { .. }
             )
         });
         if !has_undissolvable_heap_builder {
@@ -2532,8 +2551,8 @@ pub(in crate::reg_vm) fn deopt_replaceable_cold_arms(
                 }
             }
             for j in s..=e {
-                if let RegInstr::ListPush { list, .. } = &code[j] {
-                    if !defined_in_arm.contains(&(*list as usize)) {
+                if let Some(target) = cold_arm_local_write_target(&code[j]) {
+                    if !defined_in_arm.contains(&target) {
                         ok = false; // caller-aliased / live-in mutation — reject
                         break;
                     }

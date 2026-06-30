@@ -987,6 +987,22 @@ fn intrinsic_descriptor(intrinsic: RegIntrinsic) -> IntrinsicDescriptor {
                 ..d()
             }
         }
+        // `Map.len` is a pure scalar size query (Int); eligible as a cold-arm reader for
+        // the arm-local `let m = Map.new(); m.insert(k, v); return Map.len(m)` shape.
+        RegIntrinsic::MapLen => IntrinsicDescriptor {
+            effect: Read,
+            cold_arm_pure_reader: true,
+            notes: "pure scalar map-size query (re-runnable after a cold-arm bail)",
+            ..d()
+        },
+        // `Map.new` allocates a fresh empty map from no operands — a pure heap builder,
+        // re-runnable after a cold-arm bail (the arm-local `Map.new()` of the shape above).
+        RegIntrinsic::MapNew => IntrinsicDescriptor {
+            effect: Allocate,
+            cold_arm_pure_builder: true,
+            notes: "allocates a fresh empty map; pure builder (re-runnable after a cold-arm bail)",
+            ..d()
+        },
 
         // --- Bytes-length fold: the foldable Bytes producers + the length query ---
         // `Bytes.len` is a pure raw-byte-length READ (`value.len()`); the Bytes fold
