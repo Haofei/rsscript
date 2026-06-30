@@ -55,6 +55,14 @@ const DEFAULT_CASES: &[&str] = &[
     "native_bytes_slice_len_loop.rss",
 ];
 
+/// Cases whose WALL TIME is not gated even in a release build because native is, by design,
+/// within noise of the interpreter for them — gating their timing produces false regressions.
+/// `profile_closure_pic` dispatches a 1-instruction closure body (committed baseline
+/// nat/reg ≈ 1.04); repeated runs of the SAME release binary swing ~130–260ms in the
+/// container. The PIC *mechanism* is still gated via telemetry (sites/arms/code bytes), and
+/// steady-state native timing regressions are caught by the non-borderline timing kernels.
+const TIMING_NOISE_EXEMPT_CASES: &[&str] = &["profile_closure_pic.rss"];
+
 const TELEMETRY_ONLY_CASES: &[&str] = &[
     "profile_branch_cold_blocks.rss",
     "profile_branch_side_exits.rss",
@@ -83,6 +91,13 @@ fn jit_perf_gate_against_baseline() {
     let timing_retries = env_usize("RSS_JIT_PERF_TIMING_RETRIES").unwrap_or(1);
     let allow_bails = env_bool("RSS_JIT_PERF_ALLOW_BAILS");
     let skip_telemetry = env_bool("RSS_JIT_PERF_SKIP_TELEMETRY");
+    // Wall-time comparison is only meaningful against the (release) baseline in an OPTIMIZED
+    // build. The gate is also picked up by the plain `cargo test --test runtime` (debug)
+    // target, where native runs 2–15x slower than the release baseline and every timing
+    // kernel would spuriously "regress". So in a debug build we run the benchmarks (still
+    // checking bails + telemetry — useful in debug) but skip the timing assertion. The
+    // README's release command (`cargo test --release ...`) keeps full timing gating.
+    let timing_meaningful = !cfg!(debug_assertions);
 
     let mut rows = Vec::new();
     let mut failures = Vec::new();
@@ -112,9 +127,11 @@ fn jit_perf_gate_against_baseline() {
         let ref_ms = ref_ms.get_or_insert(cur_ms);
         let ref_ms = *ref_ms;
         let mut delta_pct = percent_delta(ref_ms, cur_ms);
+        let timing_gated =
+            timing_meaningful && !TIMING_NOISE_EXEMPT_CASES.contains(&case.case.as_str());
         let mut attempts = 1;
         for _ in 0..timing_retries {
-            if delta_pct <= threshold_pct {
+            if !timing_gated || delta_pct <= threshold_pct {
                 break;
             }
             let retry = match run_bench(&repo, &case, iterations, warmup) {
@@ -140,12 +157,16 @@ fn jit_perf_gate_against_baseline() {
         let native_call_edges = jit_counter(jit, "native_call_edges");
         let native_call_depth_max = jit_counter(jit, "native_call_depth_max");
         let mut verdict = "OK";
-        if delta_pct > threshold_pct {
+        if timing_gated && delta_pct > threshold_pct {
             verdict = "REGRESSION";
             failures.push(format!(
                 "{}: {:.1}% slower than baseline ({:.3}ms vs {:.3}ms)",
                 case.case, delta_pct, cur_ms, ref_ms
             ));
+        } else if !timing_gated && delta_pct > threshold_pct {
+            // Bench ran and telemetry is still checked, but timing is not asserted (debug
+            // build or a noise-exempt case). Surface it in the table without failing.
+            verdict = "OK(untimed)";
         }
         if !allow_bails && bails.is_some_and(|value| value != 0) {
             verdict = "BAILED";
