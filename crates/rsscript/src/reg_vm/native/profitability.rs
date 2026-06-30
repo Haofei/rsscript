@@ -20,10 +20,11 @@
 use vm_jit::{HostHelper, JitFunction, JitInstr};
 
 /// Tri-state env gate (`RSS_JIT_COST_MODEL`):
-/// - `off` (default): the cost model never runs; behaviour is unchanged.
+/// - `enforce` (DEFAULT, i.e. unset): an unprofitable region stays on the
+///   interpreter, so the JIT does not compile native code that is ≈ the interpreter.
 /// - `report`: score every region and surface the verdict via telemetry/log, but
 ///   NEVER change execution — lets us see what *would* decline before enforcing.
-/// - `enforce`: an unprofitable region stays on the interpreter.
+/// - `off`: the cost model never runs; behaviour as before the model existed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(in crate::reg_vm) enum CostMode {
     Off,
@@ -38,15 +39,54 @@ impl CostMode {
             .as_deref()
             .map(str::trim)
         {
+            Some("off") => CostMode::Off,
             Some("report") => CostMode::Report,
-            Some("enforce") | Some("on") | Some("1") => CostMode::Enforce,
-            _ => CostMode::Off,
+            // Default ON: an unset (or unrecognised) value enforces, so the JIT does
+            // not by default compile a region the cost model judges unprofitable
+            // (native ≈ interpreter). Explicit `off` opts out (e.g. native-mechanism
+            // tests that must see the region compile). See `effective_cost_mode` for
+            // the per-thread override used by those tests.
+            _ => CostMode::Enforce,
         }
     }
 
     /// Whether the model should run at all (report or enforce).
     pub(in crate::reg_vm) fn active(self) -> bool {
         !matches!(self, CostMode::Off)
+    }
+}
+
+thread_local! {
+    /// Per-thread cost-mode override. `None` falls back to `CostMode::from_env`.
+    /// This is the RACE-FREE way for a test to pin a mode while OTHER tests run in
+    /// parallel in the same process (the process-global `RSS_JIT_COST_MODEL` env
+    /// would leak across threads). Native compilation/execution runs synchronously
+    /// on the calling thread, so a guard set before the eval call governs it.
+    static COST_MODE_OVERRIDE: std::cell::Cell<Option<CostMode>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// The cost mode in effect on this thread: the thread-local override if set, else
+/// the process env (`CostMode::from_env`, which now defaults to enforce).
+pub(in crate::reg_vm) fn effective_cost_mode() -> CostMode {
+    COST_MODE_OVERRIDE
+        .with(std::cell::Cell::get)
+        .unwrap_or_else(CostMode::from_env)
+}
+
+/// RAII guard pinning this thread's cost mode for its lifetime; restores the prior
+/// value on drop (including across panics).
+pub(in crate::reg_vm) struct CostModeGuard(Option<CostMode>);
+
+impl CostModeGuard {
+    pub(in crate::reg_vm) fn new(mode: CostMode) -> Self {
+        CostModeGuard(COST_MODE_OVERRIDE.with(|c| c.replace(Some(mode))))
+    }
+}
+
+impl Drop for CostModeGuard {
+    fn drop(&mut self) {
+        COST_MODE_OVERRIDE.with(|c| c.set(self.0));
     }
 }
 
@@ -70,9 +110,12 @@ const W_CLOSURE_GUARD: i64 = 4; // GuardClosureId: monomorphic closure dispatch 
 // contains a PIC amid substantial real work keeps its (much larger) base score.
 const W_CLOSURE_PIC: i64 = 18;
 
-/// Per-region threshold: decline when `score <= DECLINE_AT`. `0` means "decline a
-/// region with no net benefit". Calibrated via `report` mode against the kernels.
-const DECLINE_AT: i64 = 0;
+/// Per-region threshold for BACK-EDGE (loop) regions: decline only when
+/// `score <= DECLINE_AT`, i.e. the estimated benefit is strictly NEGATIVE. A
+/// break-even loop (`score == 0`, e.g. a host-call-bound loop where native still
+/// saves the interpreter's per-iteration dispatch) is KEPT — declining it would be
+/// an over-decline. Conservative on purpose now that the model is on by default.
+const DECLINE_AT: i64 = -1;
 
 /// Explainable profitability verdict for one native region.
 #[derive(Clone, Debug, Default)]
@@ -213,17 +256,16 @@ pub(in crate::reg_vm) fn native_region_profitability(
                 p.closure_guards += 1;
                 score -= W_CLOSURE_GUARD;
             }
-            JitInstr::CallNative { .. } | JitInstr::CallSelf { .. } | JitInstr::CallGroup { .. } => {
+            JitInstr::CallNative { .. }
+            | JitInstr::CallSelf { .. }
+            | JitInstr::CallGroup { .. } => {
                 // Native->native call edges are neutral in v1: they avoid an
                 // interpreter re-entry (favourable) but a tiny callee is a debit.
                 // Without callee-size context here we leave them at 0 and revisit
                 // after report-mode data.
                 p.native_calls += 1;
             }
-            JitInstr::Nop
-            | JitInstr::Return { .. }
-            | JitInstr::Bail
-            | JitInstr::OsrExit => {}
+            JitInstr::Nop | JitInstr::Return { .. } | JitInstr::Bail | JitInstr::OsrExit => {}
         }
     }
     p.score = score;

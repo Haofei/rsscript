@@ -163,7 +163,7 @@ fn consult_profitability(
     has_backedge: bool,
     region: &str,
 ) -> bool {
-    let mode = CostMode::from_env();
+    let mode = effective_cost_mode();
     if !mode.active() {
         return false;
     }
@@ -206,7 +206,6 @@ fn profile_closure_pic_arm_count(code: &[vm_jit::JitInstr], closure_id_ip: usize
     }
     arms
 }
-
 
 fn jit_function_scalar_leaf_callable(jit_fn: &vm_jit::JitFunction) -> bool {
     jit_fn.reg_types.iter().all(|ty| {
@@ -998,59 +997,64 @@ impl RegVm {
                             if consult_profitability(native, &jit_fn, has_backedge, "whole-fn") {
                                 None
                             } else {
-                            let started = native.collect_stats.then(std::time::Instant::now);
-                            let compiled = if native.force_all_safepoints {
-                                native.module.compile_forcing_all_bails(&jit_fn)
-                            } else {
-                                match native.forced_safepoint {
-                                    Some(site) => native.module.compile_forcing_bail(&jit_fn, site),
-                                    None => native.module.compile(&jit_fn),
+                                let started = native.collect_stats.then(std::time::Instant::now);
+                                let compiled = if native.force_all_safepoints {
+                                    native.module.compile_forcing_all_bails(&jit_fn)
+                                } else {
+                                    match native.forced_safepoint {
+                                        Some(site) => {
+                                            native.module.compile_forcing_bail(&jit_fn, site)
+                                        }
+                                        None => native.module.compile(&jit_fn),
+                                    }
+                                };
+                                if let Some(started) = started {
+                                    native.stats.compile_nanos += started.elapsed().as_nanos();
                                 }
-                            };
-                            if let Some(started) = started {
-                                native.stats.compile_nanos += started.elapsed().as_nanos();
-                            }
-                            match compiled {
-                                Ok(id) => {
-                                    let verify_native =
-                                        cfg!(debug_assertions) || jit_native_verify_is_strict();
-                                    if verify_native {
-                                        if let Err(err) = jit_verify_compiled_native(
-                                            &native.module,
-                                            id,
-                                            &jit_fn,
-                                            native.forced_safepoint,
-                                        ) {
-                                            debug_assert!(false, "native verifier failed: {err}");
-                                            if jit_native_verify_is_strict() {
-                                                if native.collect_stats {
-                                                    native.stats.compile_failed += 1;
+                                match compiled {
+                                    Ok(id) => {
+                                        let verify_native =
+                                            cfg!(debug_assertions) || jit_native_verify_is_strict();
+                                        if verify_native {
+                                            if let Err(err) = jit_verify_compiled_native(
+                                                &native.module,
+                                                id,
+                                                &jit_fn,
+                                                native.forced_safepoint,
+                                            ) {
+                                                debug_assert!(
+                                                    false,
+                                                    "native verifier failed: {err}"
+                                                );
+                                                if jit_native_verify_is_strict() {
+                                                    if native.collect_stats {
+                                                        native.stats.compile_failed += 1;
+                                                    }
+                                                    return NativeAttempt::Fallback;
                                                 }
-                                                return NativeAttempt::Fallback;
                                             }
                                         }
+                                        record_native_compile_stats(native, id, &jit_fn);
+                                        // `has_backedge` (hoisted above for the cost-model gate)
+                                        // also drives `NATIVE_NOAMORTIZE_GIVEUP`: a loop-free body
+                                        // dispatched per interpreter iteration never amortizes FFI.
+                                        Some((
+                                            id,
+                                            ret,
+                                            params,
+                                            has_backedge,
+                                            scalar_leaf_callable,
+                                            string_literals,
+                                            precise_resume_safe,
+                                        ))
                                     }
-                                    record_native_compile_stats(native, id, &jit_fn);
-                                    // `has_backedge` (hoisted above for the cost-model gate)
-                                    // also drives `NATIVE_NOAMORTIZE_GIVEUP`: a loop-free body
-                                    // dispatched per interpreter iteration never amortizes FFI.
-                                    Some((
-                                        id,
-                                        ret,
-                                        params,
-                                        has_backedge,
-                                        scalar_leaf_callable,
-                                        string_literals,
-                                        precise_resume_safe,
-                                    ))
-                                }
-                                Err(_) => {
-                                    if native.collect_stats {
-                                        native.stats.compile_failed += 1;
+                                    Err(_) => {
+                                        if native.collect_stats {
+                                            native.stats.compile_failed += 1;
+                                        }
+                                        None
                                     }
-                                    None
                                 }
-                            }
                             }
                         }
                         None => {
@@ -1606,10 +1610,9 @@ impl RegVm {
             .map(|i| match self.reg(base + i) {
                 VmValue::Int(_) | VmValue::Bool(_) => Some(NativeTy::Int),
                 VmValue::Float(_) => Some(NativeTy::Float),
-                VmValue::String(_)
-                | VmValue::Struct(_)
-                | VmValue::Variant(_)
-                | VmValue::Map(_) => Some(NativeTy::Handle),
+                VmValue::String(_) | VmValue::Struct(_) | VmValue::Variant(_) | VmValue::Map(_) => {
+                    Some(NativeTy::Handle)
+                }
                 _ => None,
             })
             .collect();
@@ -1755,7 +1758,12 @@ impl RegVm {
                                     return None;
                                 }
                                 let heap_input_regs = osr_heap_input_regs(&jit_fn);
-                                match native.module.compile_osr(&jit_fn, lp.header as u32, emit_step, emit_cancel) {
+                                match native.module.compile_osr(
+                                    &jit_fn,
+                                    lp.header as u32,
+                                    emit_step,
+                                    emit_cancel,
+                                ) {
                                     Ok(id) => {
                                         let verify_native =
                                             cfg!(debug_assertions) || jit_native_verify_is_strict();
@@ -2670,8 +2678,7 @@ impl RegVm {
                 // For a two-armed Result (`tag_reg` is `Some`), the live-out tag selects
                 // the arm: non-zero ⇒ `Ok(payload)`, zero ⇒ `Err(payload)`. An always-`Ok`
                 // Result (`tag_reg` is `None`) always reconstructs `Ok(payload)`.
-                for (variant_reg, ok_payload_reg, err_payload_reg, tag_reg) in
-                    &variant_reconstructs
+                for (variant_reg, ok_payload_reg, err_payload_reg, tag_reg) in &variant_reconstructs
                 {
                     // The live tag selects the arm; read ONLY that arm's payload register
                     // (per-arm payloads — the other may be stale/undefined).

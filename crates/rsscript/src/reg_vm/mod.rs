@@ -81,6 +81,18 @@ use value_access::*;
 use value_convert::*;
 use value_ops::*;
 
+/// Run `f` with the native-tier profitability cost model DISABLED on the current
+/// thread, regardless of `RSS_JIT_COST_MODEL` (whose default is now `enforce`).
+/// Race-free across parallel tests because the override is thread-local and native
+/// compilation runs synchronously on the calling thread. Intended for native-tier
+/// MECHANISM tests that must observe a region compile (e.g. a polymorphic closure
+/// inline cache) which the cost model would otherwise decline as unprofitable.
+#[cfg(feature = "native-jit")]
+pub fn with_native_cost_model_disabled<R>(f: impl FnOnce() -> R) -> R {
+    let _guard = CostModeGuard::new(CostMode::Off);
+    f()
+}
+
 const MS_PER_DAY: i64 = 86_400_000;
 
 const URL_COMPONENT_SET: &percent_encoding::AsciiSet = &NON_ALPHANUMERIC
@@ -4196,7 +4208,10 @@ fn jit_value_contains_list_rc(value: &VmValue, needle: &Rc<RefCell<TypedVec>>) -
             }
             VmValue::Deque(deque) => {
                 first_visit(seen, Rc::as_ptr(deque) as usize)
-                    && deque.borrow().iter().any(|item| contains(item, needle, seen))
+                    && deque
+                        .borrow()
+                        .iter()
+                        .any(|item| contains(item, needle, seen))
             }
             VmValue::Map(map) => {
                 first_visit(seen, Rc::as_ptr(map) as usize)
@@ -4205,9 +4220,10 @@ fn jit_value_contains_list_rc(value: &VmValue, needle: &Rc<RefCell<TypedVec>>) -
                     })
             }
             VmValue::OptionSomeHeap(value) => contains(value, needle, seen),
-            VmValue::Struct(data) | VmValue::Variant(data) => {
-                data.fields.iter().any(|field| contains(field, needle, seen))
-            }
+            VmValue::Struct(data) | VmValue::Variant(data) => data
+                .fields
+                .iter()
+                .any(|field| contains(field, needle, seen)),
             VmValue::Managed(inner) => {
                 first_visit(seen, Rc::as_ptr(inner) as usize)
                     && contains(&inner.borrow(), needle, seen)
@@ -4566,7 +4582,10 @@ fn rss_jit_field_set_handle_with_ctx(
         };
         let field = fields.get_mut(slot)?;
         // A scalar field can never hold a heap value ⇒ shape mismatch ⇒ bail.
-        if matches!(field, VmValue::Int(_) | VmValue::Float(_) | VmValue::Bool(_)) {
+        if matches!(
+            field,
+            VmValue::Int(_) | VmValue::Float(_) | VmValue::Bool(_)
+        ) {
             return None;
         }
         *field = new_value;
@@ -4868,9 +4887,8 @@ fn rss_jit_list_push_handle_with_ctx(ctx: JitHostCallCtx, handle: i64, value_han
         vm_jit::signal_bail();
         return 0;
     };
-    match ctx.with_journaled_list_write(handle, move |list| {
-        list.checked_push_accounted(value).ok()
-    }) {
+    match ctx.with_journaled_list_write(handle, move |list| list.checked_push_accounted(value).ok())
+    {
         Some(grew) => {
             if jit_mem_charge(grew as i64) {
                 0
@@ -5327,7 +5345,9 @@ extern "C" fn rss_jit_sorted_set_insert_handle(
         return 0;
     };
     match _ctx.with_journaled_list_write(handle, move |list| {
-        sorted_insert_vm(list.as_boxed_mut(), value).ok().map(i64::from)
+        sorted_insert_vm(list.as_boxed_mut(), value)
+            .ok()
+            .map(i64::from)
     }) {
         Some(value) => value,
         None => {

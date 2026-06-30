@@ -2274,7 +2274,10 @@ pub(in crate::reg_vm) fn native_deepcopy_param_unsoundly_mutated(
         if let RegInstr::CallKnown { args, mut_args, .. }
         | RegInstr::CallClosure { args, mut_args, .. } = instr
         {
-            if mut_args.iter().any(|&p| args.get(p).is_some_and(is_tainted)) {
+            if mut_args
+                .iter()
+                .any(|&p| args.get(p).is_some_and(is_tainted))
+            {
                 return true;
             }
         }
@@ -2303,7 +2306,8 @@ pub(in crate::reg_vm) fn native_deepcopy_param_unsoundly_mutated(
                     return true;
                 }
             }
-            RegInstr::MapInsert { key, value, .. } | RegInstr::SortedMapInsert { key, value, .. } => {
+            RegInstr::MapInsert { key, value, .. }
+            | RegInstr::SortedMapInsert { key, value, .. } => {
                 if is_tainted(key) || is_tainted(value) {
                     return true;
                 }
@@ -6075,8 +6079,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_options_in_region(
         let def_ip = in_region_defs[0];
         for i in header..def_ip {
             match &code[i] {
-                RegInstr::JumpIfBool { target, .. }
-                | RegInstr::JumpIfIntCompare { target, .. }
+                RegInstr::JumpIfBool { target, .. } | RegInstr::JumpIfIntCompare { target, .. }
                     if *target >= exit => {}
                 RegInstr::Jump { .. }
                 | RegInstr::JumpIfBool { .. }
@@ -6520,8 +6523,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_results_in_region(
         for i in header..def_ip {
             match &code[i] {
                 // The header's loop-exit condition (target outside the loop) is fine.
-                RegInstr::JumpIfBool { target, .. }
-                | RegInstr::JumpIfIntCompare { target, .. }
+                RegInstr::JumpIfBool { target, .. } | RegInstr::JumpIfIntCompare { target, .. }
                     if *target >= exit => {}
                 // Any other branch/match/return between the header and the def could
                 // skip the def on some iteration ⇒ payload not definitely-assigned.
@@ -6768,7 +6770,11 @@ fn native_scalar_replace_two_armed_results_in_region(
     // are `MatchResult`/`UnwrapVariantValue`. `?` (`TryResult`) and any other touch bail.
     for i in header..exit {
         match &code[i] {
-            RegInstr::MakeVariant { dst, layout, fields } if res[*dst] => {
+            RegInstr::MakeVariant {
+                dst,
+                layout,
+                fields,
+            } if res[*dst] => {
                 let name = layout.name.as_ref();
                 if name != "Ok" && name != "Err" {
                     return None;
@@ -6867,7 +6873,14 @@ fn native_scalar_replace_two_armed_results_in_region(
         .iter()
         .enumerate()
         .filter(|&(_, &needs)| needs)
-        .map(|(reg, _)| (reg, ok_payload_reg[reg], err_payload_reg[reg], Some(tag_reg[reg])))
+        .map(|(reg, _)| {
+            (
+                reg,
+                ok_payload_reg[reg],
+                err_payload_reg[reg],
+                Some(tag_reg[reg]),
+            )
+        })
         .collect();
 
     // Rewrite, dissolving in-region Result ops; remap jump/match targets through the map.
@@ -6883,7 +6896,10 @@ fn native_scalar_replace_two_armed_results_in_region(
         let region = in_region(i);
         match instr {
             RegInstr::MakeVariant {
-                dst, layout, fields, ..
+                dst,
+                layout,
+                fields,
+                ..
             } if region && res[*dst] => {
                 let is_ok = layout.name.as_ref() == "Ok";
                 new_code.push(RegInstr::LoadBool {

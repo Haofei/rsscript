@@ -111,7 +111,7 @@ pub use reg_vm::{
     reg_vm_eval_source_main_native_force_all_safepoints,
     reg_vm_eval_source_main_native_force_deopt, reg_vm_eval_source_main_native_force_safepoint,
     reg_vm_eval_source_main_native_osr, reg_vm_eval_source_main_native_osr_report,
-    reg_vm_eval_source_main_native_precise,
+    reg_vm_eval_source_main_native_precise, with_native_cost_model_disabled,
 };
 pub use review::{
     ReviewFinding, ReviewFix, ReviewMap, ReviewMapCategorySummary, ReviewMapClassification,

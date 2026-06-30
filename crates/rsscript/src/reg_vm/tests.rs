@@ -221,7 +221,11 @@ mod intrinsic_registry_tests {
         // cold-arm bail, so any closure effect happens exactly as without the JIT.
         for i in [RegIntrinsic::OptionMap, RegIntrinsic::ResultAndThen] {
             let d = intrinsic_descriptor(i);
-            assert!(!d.cold_arm_pure_reader && !d.cold_arm_pure_builder, "{:?}", i);
+            assert!(
+                !d.cold_arm_pure_reader && !d.cold_arm_pure_builder,
+                "{:?}",
+                i
+            );
             assert!(d.combinator_kind.is_some(), "combinator {:?}", i);
         }
     }
@@ -7481,11 +7485,18 @@ fn main() -> Unit {
         let lp = OsrLoop { header: 0, exit: 7 };
         let ip_map: Vec<usize> = (0..code.len()).collect();
 
-        let (jit, _, _, _, _, _, _) =
-            translate_osr_loop_profiled(
-                &func, &code, 5, func.params, func.captures, lp, &ip_map, &[], &[],
-            )
-            .expect("profiled scalar loop should translate to OSR native IR");
+        let (jit, _, _, _, _, _, _) = translate_osr_loop_profiled(
+            &func,
+            &code,
+            5,
+            func.params,
+            func.captures,
+            lp,
+            &ip_map,
+            &[],
+            &[],
+        )
+        .expect("profiled scalar loop should translate to OSR native IR");
 
         assert!(
             jit.cold_blocks.contains(&(lp.exit as u32)),

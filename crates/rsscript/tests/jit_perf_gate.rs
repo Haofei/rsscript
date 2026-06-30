@@ -112,12 +112,15 @@ fn jit_perf_gate_against_baseline() {
     // `RSS_JIT_COST_MODEL` env, so when it is `enforce` we must expect the
     // cost-model-declined kernels to NOT compile native (and prove the decline
     // instead). Mirrors `CostMode::from_env`'s enforce spellings.
-    let cost_mode_enforced = matches!(
+    // Mirror CostMode::from_env: the model enforces unless RSS_JIT_COST_MODEL is
+    // explicitly `off` or `report`. The default (unset) now enforces, so the DEFAULT
+    // gate run proves the cost-model decline (not just an opt-in enforce run).
+    let cost_mode_enforced = !matches!(
         std::env::var("RSS_JIT_COST_MODEL")
             .ok()
             .as_deref()
             .map(str::trim),
-        Some("enforce") | Some("on") | Some("1")
+        Some("off") | Some("report")
     );
 
     let mut rows = Vec::new();

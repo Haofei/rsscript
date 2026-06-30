@@ -506,8 +506,7 @@ fn main() -> Unit {
     assert_fast_jit_backends_agree(file, source);
     // Directization: the is_empty-only flat param reaches the native tier (a host
     // call or a decline would still agree, so also assert it compiled).
-    let executable =
-        rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
     let (output, stats) = executable
         .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
         .expect("native eval succeeds");
@@ -2775,8 +2774,12 @@ fn main() -> Unit {
     // each of the three arms (A/B/C) is exercised and computes the correct result.
     assert_fast_jit_backends_agree(file, source);
 
+    // The cost model (default `enforce`) declines this loop-free polymorphic PIC as
+    // native ≈ interpreter; disable it here so the PIC mechanism compiles and its
+    // telemetry can be verified. (The differential above already passed under enforce
+    // because declining is correctness-safe.)
     #[cfg(feature = "native-jit")]
-    {
+    rsscript::with_native_cost_model_disabled(|| {
         let interp = common::run_vm_source(file, source, &[]).expect("interp run");
         let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
         let (native, stats) = executable
@@ -2806,7 +2809,7 @@ fn main() -> Unit {
             stats.compile_failed, 0,
             "native compilation must not fail: {stats:?}",
         );
-    }
+    });
 }
 
 /// J3 SCALAR REPLACEMENT — the optimization's payoff shape: a hot loop that
@@ -2980,8 +2983,10 @@ fn main() -> Unit {
     let file = "jit-accept-poly-inline-miss-bail.rss";
     assert_fast_jit_backends_agree(file, source);
 
+    // Disable the cost model (default `enforce` declines this loop-free PIC) so the
+    // inline-cache + bail mechanism compiles and its telemetry is verifiable.
     #[cfg(feature = "native-jit")]
-    {
+    rsscript::with_native_cost_model_disabled(|| {
         let interp = common::run_vm_source(file, source, &[]).expect("interp run");
         let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
         let (native, stats) = executable
@@ -3003,7 +3008,7 @@ fn main() -> Unit {
             stats.compile_failed, 0,
             "native compilation must not fail: {stats:?}",
         );
-    }
+    });
 }
 
 /// Pending #2 OSR hot-backedge AUTO-trigger: a hot native-subset scalar loop
@@ -4491,30 +4496,34 @@ fn main() -> Unit {
 }
 ";
     let file = "jit-report-profile-pic.rss";
-    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
-    let (out, stats, lines) = rsscript::reg_vm_eval_source_main_native_osr_report(
-        file,
-        source,
-        std::iter::empty::<String>(),
-    )
-    .expect("osr+report run");
-    assert_eq!(
-        interp.stdout, out.stdout,
-        "report run must be byte-identical"
-    );
-    let block = report_block(&lines, "dispatch");
-    assert!(
-        block.contains("profile: closure@")
-            && block.contains("polymorphic")
-            && block.contains("observed=[")
-            && block.contains("pic=hottest-first[")
-            && block.contains("pic_arms=3"),
-        "weighted closure dispatcher should report profile-guided PIC details, got:\n{block}",
-    );
-    assert!(
-        stats.profile_closure_id_reads > 0,
-        "report fixture should compile a polymorphic closure PIC: {stats:?}",
-    );
+    // Default `enforce` declines this loop-free PIC; disable the cost model so the
+    // PIC compiles and the profile-guided report details are present to assert.
+    rsscript::with_native_cost_model_disabled(|| {
+        let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+        let (out, stats, lines) = rsscript::reg_vm_eval_source_main_native_osr_report(
+            file,
+            source,
+            std::iter::empty::<String>(),
+        )
+        .expect("osr+report run");
+        assert_eq!(
+            interp.stdout, out.stdout,
+            "report run must be byte-identical"
+        );
+        let block = report_block(&lines, "dispatch");
+        assert!(
+            block.contains("profile: closure@")
+                && block.contains("polymorphic")
+                && block.contains("observed=[")
+                && block.contains("pic=hottest-first[")
+                && block.contains("pic_arms=3"),
+            "weighted closure dispatcher should report profile-guided PIC details, got:\n{block}",
+        );
+        assert!(
+            stats.profile_closure_id_reads > 0,
+            "report fixture should compile a polymorphic closure PIC: {stats:?}",
+        );
+    });
 }
 
 #[cfg(feature = "native-jit")]
@@ -5731,8 +5740,9 @@ fn main() -> Unit {
 ";
     let file = "j1-map-strkey.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
-    let osr = rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
-        .expect("osr native run");
+    let osr =
+        rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+            .expect("osr native run");
     assert_eq!(
         interp.stdout, osr.stdout,
         "string-key map insert OSR must match the interpreter"
@@ -5853,8 +5863,9 @@ fn main() -> Unit {
 ";
     let file = "j1-list-push-handle.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
-    let osr = rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
-        .expect("osr native run");
+    let osr =
+        rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+            .expect("osr native run");
     assert_eq!(
         interp.stdout, osr.stdout,
         "heap-value list push must match the interpreter (Boxed-list growth runs on the interpreter)"
@@ -5999,8 +6010,9 @@ fn main() -> Unit {
 ";
     let file = "j1-set-insert-string.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
-    let osr = rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
-        .expect("osr native run");
+    let osr =
+        rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+            .expect("osr native run");
     assert_eq!(
         interp.stdout, osr.stdout,
         "string set insert OSR must match the interpreter"
@@ -6044,9 +6056,15 @@ fn main() -> Unit {
     let (osr, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("osr");
-    assert_eq!(interp.stdout, osr.stdout, "sorted-set string insert must match interpreter");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "sorted-set string insert must match interpreter"
+    );
     assert_eq!(osr.stdout.trim_end(), "begin\n1");
-    assert!(stats.osr_entries > 0, "sorted-set string insert loop must OSR: {stats:?}");
+    assert!(
+        stats.osr_entries > 0,
+        "sorted-set string insert loop must OSR: {stats:?}"
+    );
 
     let map_src = "\
 fn build(k: read String, n: Int) -> Int {
@@ -6069,9 +6087,15 @@ fn main() -> Unit {
     let (osr2, stats2) = exe2
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("osr");
-    assert_eq!(interp2.stdout, osr2.stdout, "sorted-map string-key insert must match interpreter");
+    assert_eq!(
+        interp2.stdout, osr2.stdout,
+        "sorted-map string-key insert must match interpreter"
+    );
     assert_eq!(osr2.stdout.trim_end(), "begin\n1");
-    assert!(stats2.osr_entries > 0, "sorted-map string-key insert loop must OSR: {stats2:?}");
+    assert!(
+        stats2.osr_entries > 0,
+        "sorted-map string-key insert loop must OSR: {stats2:?}"
+    );
 }
 
 /// J0.4 #1 (heap-value struct field write): a hot loop setting a struct's `String` field
@@ -6103,8 +6127,9 @@ fn main() -> Unit {
 ";
     let file = "j1-field-set-handle.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
-    let osr = rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
-        .expect("osr native run");
+    let osr =
+        rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+            .expect("osr native run");
     assert_eq!(
         interp.stdout, osr.stdout,
         "heap-value field set OSR must match the interpreter"
@@ -6148,9 +6173,13 @@ fn main() -> Unit {
 ";
     let file = "j1-deque-push-handle.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
-    let osr = rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
-        .expect("osr native run");
-    assert_eq!(interp.stdout, osr.stdout, "deque heap push OSR must match the interpreter");
+    let osr =
+        rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+            .expect("osr native run");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "deque heap push OSR must match the interpreter"
+    );
     // 100 iters * 2 pushes = 200.
     assert_eq!(osr.stdout.trim_end(), "begin\n200");
 
@@ -6158,7 +6187,10 @@ fn main() -> Unit {
     let (_osr2, stats) = executable
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("osr native run (stats)");
-    assert!(stats.osr_entries > 0, "the hot deque heap-push loop must OSR: {stats:?}");
+    assert!(
+        stats.osr_entries > 0,
+        "the hot deque heap-push loop must OSR: {stats:?}"
+    );
 }
 
 #[cfg(feature = "native-jit")]
@@ -6197,8 +6229,9 @@ fn main() -> Unit {
 ";
     let file = "j7-two-armed-heap-string.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
-    let osr = rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
-        .expect("osr native run");
+    let osr =
+        rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+            .expect("osr native run");
     assert_eq!(
         interp.stdout, osr.stdout,
         "two-armed heap-payload Result OSR must match the interpreter"
@@ -6249,10 +6282,14 @@ fn main() -> Unit {
 ";
     let file = "j7-two-armed-mixed.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
-    let osr = rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
-        .expect("osr native run");
+    let osr =
+        rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+            .expect("osr native run");
     // Sum of 0..50 (1225) + 50*5 (250) = 1475.
-    assert_eq!(interp.stdout, osr.stdout, "mixed-typed two-armed Result must match interpreter");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "mixed-typed two-armed Result must match interpreter"
+    );
     assert_eq!(osr.stdout.trim_end(), "begin\n1475\n1475");
 
     let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
@@ -6296,10 +6333,14 @@ fn main() -> Unit {
 ";
     let file = "j7-two-armed-heap-live-after.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
-    let osr = rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
-        .expect("osr native run");
+    let osr =
+        rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+            .expect("osr native run");
     // Last iter (i=99) takes Err ⇒ String.len("hello") + 1000 = 1005.
-    assert_eq!(interp.stdout, osr.stdout, "live-after heap Result must match interpreter");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "live-after heap Result must match interpreter"
+    );
     assert_eq!(osr.stdout.trim_end(), "begin\n1005");
 }
 
@@ -6338,8 +6379,9 @@ fn main() -> Unit {
 ";
     let file = "j7-two-armed-heap-live-after.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
-    let osr = rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
-        .expect("osr native run");
+    let osr =
+        rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+            .expect("osr native run");
     // Loop: total += 1 each of 100 iters ⇒ 100. last = (i=99 ⇒ Err("hello")). Post-loop
     // Err arm ⇒ +5+1000 = 1005. total = 100 + 1005 = 1105.
     assert_eq!(
@@ -6387,15 +6429,24 @@ fn main() -> Unit {
 ";
     let file = "j1-map-strkey-lookup.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
-    let osr = rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
-        .expect("osr native run");
+    let osr =
+        rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+            .expect("osr native run");
     // Last inserted value for "key" is 199.
-    assert_eq!(interp.stdout, osr.stdout, "heap-key map insert+lookup must match interpreter");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "heap-key map insert+lookup must match interpreter"
+    );
     assert_eq!(osr.stdout.trim_end(), "begin\n199");
 
     let exe = rsscript::reg_vm_compile_source(file, source).expect("compiles");
-    let (_o, stats) = exe.eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>()).expect("osr");
-    assert!(stats.osr_entries > 0, "hot heap-key insert loop must OSR: {stats:?}");
+    let (_o, stats) = exe
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr");
+    assert!(
+        stats.osr_entries > 0,
+        "hot heap-key insert loop must OSR: {stats:?}"
+    );
 }
 
 #[cfg(feature = "native-jit")]
@@ -6425,9 +6476,17 @@ fn main() -> Unit {
 ";
     let file = "wf.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp");
-    let nat = rsscript::reg_vm_eval_source_main_native(file, source, std::iter::empty::<String>()).expect("native");
-    eprintln!("WF interp={:?} native={:?}", interp.stdout.trim_end(), nat.stdout.trim_end());
-    assert_eq!(interp.stdout, nat.stdout, "whole-function heap-key get correctness");
+    let nat = rsscript::reg_vm_eval_source_main_native(file, source, std::iter::empty::<String>())
+        .expect("native");
+    eprintln!(
+        "WF interp={:?} native={:?}",
+        interp.stdout.trim_end(),
+        nat.stdout.trim_end()
+    );
+    assert_eq!(
+        interp.stdout, nat.stdout,
+        "whole-function heap-key get correctness"
+    );
 }
 
 #[cfg(feature = "native-jit")]
@@ -6457,9 +6516,21 @@ fn main() -> Unit {
     let file = "wf2.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp");
     let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
-    let (nat, stats) = exe.eval_main_with_args_native_with_stats(std::iter::empty::<String>()).expect("native");
-    eprintln!("WF2 interp={:?} native={:?} considered={} compiled={} native_calls={}", interp.stdout.trim_end(), nat.stdout.trim_end(), stats.considered, stats.compiled, stats.native_calls);
-    assert_eq!(interp.stdout, nat.stdout, "whole-function heap-key insert correctness");
+    let (nat, stats) = exe
+        .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
+        .expect("native");
+    eprintln!(
+        "WF2 interp={:?} native={:?} considered={} compiled={} native_calls={}",
+        interp.stdout.trim_end(),
+        nat.stdout.trim_end(),
+        stats.considered,
+        stats.compiled,
+        stats.native_calls
+    );
+    assert_eq!(
+        interp.stdout, nat.stdout,
+        "whole-function heap-key insert correctness"
+    );
 }
 
 /// J0.4 #1 correctness (heap Set/SortedMap): DISCRIMINATING guards. Insert distinct heap
@@ -6491,8 +6562,16 @@ fn main() -> Unit {
 }
 ";
     let interp = common::run_vm_source("j1-set-disc.rss", set_src, &[]).expect("interp");
-    let osr = rsscript::reg_vm_eval_source_main_native_osr("j1-set-disc.rss", set_src, std::iter::empty::<String>()).expect("osr");
-    assert_eq!(interp.stdout, osr.stdout, "Set<String> insert+contains must match interpreter");
+    let osr = rsscript::reg_vm_eval_source_main_native_osr(
+        "j1-set-disc.rss",
+        set_src,
+        std::iter::empty::<String>(),
+    )
+    .expect("osr");
+    assert_eq!(
+        interp.stdout, osr.stdout,
+        "Set<String> insert+contains must match interpreter"
+    );
     assert_eq!(osr.stdout.trim_end(), "begin\n11");
 
     // SortedMap<String,Int>: insert k -> i, then look k back up.
@@ -6516,8 +6595,16 @@ fn main() -> Unit {
 }
 ";
     let interp2 = common::run_vm_source("j1-sortedmap-disc.rss", sm_src, &[]).expect("interp");
-    let osr2 = rsscript::reg_vm_eval_source_main_native_osr("j1-sortedmap-disc.rss", sm_src, std::iter::empty::<String>()).expect("osr");
-    assert_eq!(interp2.stdout, osr2.stdout, "SortedMap<String,Int> insert+lookup must match interpreter");
+    let osr2 = rsscript::reg_vm_eval_source_main_native_osr(
+        "j1-sortedmap-disc.rss",
+        sm_src,
+        std::iter::empty::<String>(),
+    )
+    .expect("osr");
+    assert_eq!(
+        interp2.stdout, osr2.stdout,
+        "SortedMap<String,Int> insert+lookup must match interpreter"
+    );
     assert_eq!(osr2.stdout.trim_end(), "begin\n199");
 }
 
@@ -6549,25 +6636,43 @@ fn main() -> Unit {
     let file = "j05-list-push-mem.rss";
     // (A) Generous budget: the loop OSRs, charges per push, stays within budget, completes.
     let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
-    let ok = rsscript::VmLimits { mem_budget: Some(1 << 24), ..rsscript::VmLimits::default() };
+    let ok = rsscript::VmLimits {
+        mem_budget: Some(1 << 24),
+        ..rsscript::VmLimits::default()
+    };
     let (out, stats) = exe
         .eval_main_with_args_native_osr_with_limits(std::iter::empty::<String>(), ok)
         .expect("flat list-push loop must run under a generous mem_budget");
     assert_eq!(out.stdout.trim_end(), "20000");
-    assert!(stats.osr_entries > 0, "list-push loop must OSR under mem_budget: {stats:?}");
+    assert!(
+        stats.osr_entries > 0,
+        "list-push loop must OSR under mem_budget: {stats:?}"
+    );
 
     // (B) Tight budget the build exceeds: native must ERROR identically to the interpreter.
     let interp_err = rsscript::reg_vm_eval_source_main_with_limits(
-        file, source, std::iter::empty::<String>(),
-        rsscript::VmLimits { mem_budget: Some(16384), ..rsscript::VmLimits::default() },
-    ).expect_err("interpreter must exceed the tight mem_budget");
-    let exe2 = rsscript::reg_vm_compile_source(file, source).expect("compile");
-    let nat_err = exe2.eval_main_with_args_native_osr_with_limits(
+        file,
+        source,
         std::iter::empty::<String>(),
-        rsscript::VmLimits { mem_budget: Some(16384), ..rsscript::VmLimits::default() },
-    ).expect_err("native must ALSO exceed (it charges ListPush growth)");
+        rsscript::VmLimits {
+            mem_budget: Some(16384),
+            ..rsscript::VmLimits::default()
+        },
+    )
+    .expect_err("interpreter must exceed the tight mem_budget");
+    let exe2 = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let nat_err = exe2
+        .eval_main_with_args_native_osr_with_limits(
+            std::iter::empty::<String>(),
+            rsscript::VmLimits {
+                mem_budget: Some(16384),
+                ..rsscript::VmLimits::default()
+            },
+        )
+        .expect_err("native must ALSO exceed (it charges ListPush growth)");
     assert_eq!(
-        format!("{interp_err:?}"), format!("{nat_err:?}"),
+        format!("{interp_err:?}"),
+        format!("{nat_err:?}"),
         "mem-over-budget error must match the interpreter exactly",
     );
 }
@@ -6749,7 +6854,10 @@ fn main() -> Unit {
     // digit-count arithmetic BEFORE the inlinability check — so the leaf becomes
     // pure-scalar native, inlines, and the loop OSRs (no heap arm left to bail on). The
     // fold is semantics-preserving, so output still matches the interpreter exactly.
-    assert_eq!(interp.stdout, nat.stdout, "inlined leaf call with foldable cold arm must match interpreter");
+    assert_eq!(
+        interp.stdout, nat.stdout,
+        "inlined leaf call with foldable cold arm must match interpreter"
+    );
     assert!(
         stats.osr_entries >= 1,
         "foldable cold-arm inlined leaf call must OSR after callee-fold (entries={})",
@@ -6783,7 +6891,9 @@ fn main() -> Unit {
     let file = "p7b.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp");
     let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
-    let (nat, stats) = exe.eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>()).expect("osr");
+    let (nat, stats) = exe
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr");
     assert_eq!(interp.stdout, nat.stdout);
     assert!(
         stats.osr_entries >= 1,
@@ -6829,7 +6939,10 @@ fn main() -> Unit {
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("osr");
-    assert_eq!(interp.stdout, nat.stdout, "bytes cold-arm inlined leaf must match interpreter");
+    assert_eq!(
+        interp.stdout, nat.stdout,
+        "bytes cold-arm inlined leaf must match interpreter"
+    );
     assert!(
         stats.osr_entries >= 1,
         "foldable bytes cold-arm inlined leaf must OSR (entries={})",
@@ -6886,7 +6999,10 @@ fn main() -> Unit {
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("osr");
-    assert_eq!(interp.stdout, nat.stdout, "pure-reader cold arm must match interpreter");
+    assert_eq!(
+        interp.stdout, nat.stdout,
+        "pure-reader cold arm must match interpreter"
+    );
     assert!(
         stats.osr_entries >= 1,
         "pure-reader (String.count) cold-arm inlined leaf must OSR (entries={})",
@@ -6936,7 +7052,10 @@ fn main() -> Unit {
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("osr");
-    assert_eq!(interp.stdout, nat.stdout, "String.slice cold-arm inlined leaf must match interpreter");
+    assert_eq!(
+        interp.stdout, nat.stdout,
+        "String.slice cold-arm inlined leaf must match interpreter"
+    );
     assert!(
         stats.osr_entries >= 1,
         "String.slice cold-arm inlined leaf must OSR after whitelist expansion (entries={})",
@@ -6990,7 +7109,10 @@ fn main() -> Unit {
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("osr");
-    assert_eq!(interp.stdout, nat.stdout, "String.pad_left cold-arm inlined leaf must match interpreter");
+    assert_eq!(
+        interp.stdout, nat.stdout,
+        "String.pad_left cold-arm inlined leaf must match interpreter"
+    );
     assert!(
         stats.osr_entries >= 1,
         "String.pad_left cold-arm inlined leaf must OSR after whitelist expansion (entries={})",
@@ -7141,7 +7263,10 @@ fn main() -> Unit {
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("run");
-    assert_eq!(interp.stdout, nat.stdout, "arm-local set write cold arm must match interpreter");
+    assert_eq!(
+        interp.stdout, nat.stdout,
+        "arm-local set write cold arm must match interpreter"
+    );
     assert!(
         stats.osr_entries >= 1,
         "arm-local write (Set.insert) cold-arm inlined leaf must OSR (entries={})",
@@ -7184,7 +7309,10 @@ fn main() -> Unit {
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("run");
-    assert_eq!(interp.stdout, nat.stdout, "arm-local deque write cold arm must match interpreter");
+    assert_eq!(
+        interp.stdout, nat.stdout,
+        "arm-local deque write cold arm must match interpreter"
+    );
     assert!(
         stats.osr_entries >= 1,
         "arm-local write (Deque.push_back) cold-arm inlined leaf must OSR (entries={})",
@@ -7233,7 +7361,10 @@ fn main() -> Unit {
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("run");
-    assert_eq!(interp.stdout, nat.stdout, "aliased cold-arm write must match interpreter");
+    assert_eq!(
+        interp.stdout, nat.stdout,
+        "aliased cold-arm write must match interpreter"
+    );
     assert!(
         stats.osr_entries >= 1,
         "caller-aliased write cold-arm inlined leaf must OSR (entries={})",
@@ -7283,7 +7414,10 @@ fn main() -> Unit {
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("run");
-    assert_eq!(interp.stdout, nat.stdout, "nested-call cold arm must match interpreter");
+    assert_eq!(
+        interp.stdout, nat.stdout,
+        "nested-call cold arm must match interpreter"
+    );
     assert!(
         stats.osr_entries >= 1,
         "nested-call cold-arm inlined leaf must OSR (entries={})",
@@ -7335,7 +7469,10 @@ fn main() -> Unit {
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("run");
-    assert_eq!(interp.stdout, nat.stdout, "mut-arg nested-call cold arm must match interpreter");
+    assert_eq!(
+        interp.stdout, nat.stdout,
+        "mut-arg nested-call cold arm must match interpreter"
+    );
     assert!(
         stats.osr_entries >= 1,
         "mut-arg nested-call cold-arm inlined leaf must OSR (entries={})",
@@ -7387,7 +7524,10 @@ fn main() -> Unit {
     // Caller's xs[0] must stay 7 (deep-copied); the local copy returns 199999. The native
     // path must DECLINE rather than mutate the caller's `Rc` in place (the soundness guard).
     assert_eq!(interp.stdout.trim_end(), "7\n199999");
-    assert_eq!(interp.stdout, nat.stdout, "non-mut heap param mutation must not leak to caller");
+    assert_eq!(
+        interp.stdout, nat.stdout,
+        "non-mut heap param mutation must not leak to caller"
+    );
 }
 
 /// REVIEW REPRO (2026-06-30): the store-and-reload leak. A non-`mut` `read List<Int>` param
@@ -7527,7 +7667,10 @@ fn main() -> Unit {
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("run");
-    assert_eq!(interp.stdout, nat.stdout, "combinator cold arm must match interpreter");
+    assert_eq!(
+        interp.stdout, nat.stdout,
+        "combinator cold arm must match interpreter"
+    );
     assert!(
         stats.osr_entries >= 1,
         "higher-order combinator cold-arm inlined leaf must OSR (entries={})",
@@ -7573,7 +7716,10 @@ fn main() -> Unit {
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("run");
-    assert_eq!(interp.stdout, nat.stdout, "capturing-closure combinator cold arm must match interpreter");
+    assert_eq!(
+        interp.stdout, nat.stdout,
+        "capturing-closure combinator cold arm must match interpreter"
+    );
     assert!(
         stats.osr_entries >= 1,
         "capturing-closure combinator cold-arm leaf must OSR (entries={})",

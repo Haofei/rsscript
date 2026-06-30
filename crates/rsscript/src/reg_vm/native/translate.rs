@@ -3489,7 +3489,16 @@ fn translate_osr_loop_inner(
                 } => {
                     native_set_ty(ty, *list, NativeTy::Handle, c)
                         && native_set_ty(ty, *index, NativeTy::Int, c)
-                        && native_set_ty(ty, *value, if heap_param(*value) { NativeTy::Handle } else { NativeTy::Int }, c)
+                        && native_set_ty(
+                            ty,
+                            *value,
+                            if heap_param(*value) {
+                                NativeTy::Handle
+                            } else {
+                                NativeTy::Int
+                            },
+                            c,
+                        )
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
                 RegInstr::ListPush {
@@ -3518,17 +3527,44 @@ fn translate_osr_loop_inner(
                     // lowering picks MapInsertInt/MapInsertFloat, and a wrong-value-type
                     // map bails at the helper.
                     native_set_ty(ty, *map, NativeTy::Handle, c)
-                        && native_set_ty(ty, *key, if heap_param(*key) { NativeTy::Handle } else { NativeTy::Int }, c)
+                        && native_set_ty(
+                            ty,
+                            *key,
+                            if heap_param(*key) {
+                                NativeTy::Handle
+                            } else {
+                                NativeTy::Int
+                            },
+                            c,
+                        )
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
                 RegInstr::SetInsert { dst, set, value } => {
                     native_set_ty(ty, *set, NativeTy::Handle, c)
-                        && native_set_ty(ty, *value, if heap_param(*value) { NativeTy::Handle } else { NativeTy::Int }, c)
+                        && native_set_ty(
+                            ty,
+                            *value,
+                            if heap_param(*value) {
+                                NativeTy::Handle
+                            } else {
+                                NativeTy::Int
+                            },
+                            c,
+                        )
                         && native_set_ty(ty, *dst, NativeTy::Bool, c)
                 }
                 RegInstr::SortedSetInsert { dst, set, value } => {
                     native_set_ty(ty, *set, NativeTy::Handle, c)
-                        && native_set_ty(ty, *value, if heap_param(*value) { NativeTy::Handle } else { NativeTy::Int }, c)
+                        && native_set_ty(
+                            ty,
+                            *value,
+                            if heap_param(*value) {
+                                NativeTy::Handle
+                            } else {
+                                NativeTy::Int
+                            },
+                            c,
+                        )
                         && native_set_ty(ty, *dst, NativeTy::Bool, c)
                 }
                 RegInstr::SortedMapInsert {
@@ -3538,8 +3574,26 @@ fn translate_osr_loop_inner(
                     value,
                 } => {
                     native_set_ty(ty, *map, NativeTy::Handle, c)
-                        && native_set_ty(ty, *key, if heap_param(*key) { NativeTy::Handle } else { NativeTy::Int }, c)
-                        && native_set_ty(ty, *value, if heap_param(*value) { NativeTy::Handle } else { NativeTy::Int }, c)
+                        && native_set_ty(
+                            ty,
+                            *key,
+                            if heap_param(*key) {
+                                NativeTy::Handle
+                            } else {
+                                NativeTy::Int
+                            },
+                            c,
+                        )
+                        && native_set_ty(
+                            ty,
+                            *value,
+                            if heap_param(*value) {
+                                NativeTy::Handle
+                            } else {
+                                NativeTy::Int
+                            },
+                            c,
+                        )
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
                 RegInstr::DequePushBack {
@@ -3566,13 +3620,31 @@ fn translate_osr_loop_inner(
                     // MatchMapGetInt/MatchMapGetFloat, and a wrong-value-type map
                     // bails at the helper.
                     native_set_ty(ty, *map, NativeTy::Handle, c)
-                        && native_set_ty(ty, *key, if heap_param(*key) { NativeTy::Handle } else { NativeTy::Int }, c)
+                        && native_set_ty(
+                            ty,
+                            *key,
+                            if heap_param(*key) {
+                                NativeTy::Handle
+                            } else {
+                                NativeTy::Int
+                            },
+                            c,
+                        )
                 }
                 RegInstr::MatchSortedMapGet { map, key, .. } => {
                     // value_dst flows (Int or Float); lowering picks
                     // MatchSortedMapGetInt/MatchSortedMapGetFloat.
                     native_set_ty(ty, *map, NativeTy::Handle, c)
-                        && native_set_ty(ty, *key, if heap_param(*key) { NativeTy::Handle } else { NativeTy::Int }, c)
+                        && native_set_ty(
+                            ty,
+                            *key,
+                            if heap_param(*key) {
+                                NativeTy::Handle
+                            } else {
+                                NativeTy::Int
+                            },
+                            c,
+                        )
                 }
                 RegInstr::GetFieldSlot { base, .. } => {
                     native_set_ty(ty, *base, NativeTy::Handle, c)
