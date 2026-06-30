@@ -2589,13 +2589,24 @@ fn jit_missed_opt_report(unit: &RegUnit, native: &NativeState) -> Vec<String> {
 
         // --- Native-tier verdict --------------------------------------------------
         match translate_to_native_jit(unit, func) {
-            Some(_) => {
+            Some((jit_fn, ..)) => {
                 if native.report_native_ok.contains(&key) {
                     block.push("  native: ok".to_string());
                 } else {
-                    // Statically eligible but never observed running natively this
-                    // run (tier-deferred, not called hot, or demoted by another gate).
-                    block.push("  native: eligible (not run natively this execution)".to_string());
+                    // Eligible but never observed running natively this run. Distinguish
+                    // the cost-model (profitability) decline — the common "why no JIT"
+                    // case now that the model enforces by default — from a plain
+                    // tier-deferred/not-hot miss.
+                    let profit = effective_cost_mode().active().then(|| {
+                        native_region_profitability(&jit_fn, jit_function_has_loop(&func.code))
+                    });
+                    match profit {
+                        Some(p) if p.decline => block
+                            .push(format!("  not native: declined by cost model — {}", p.reason(&func.name))),
+                        _ => block.push(
+                            "  native: eligible (not run natively this execution)".to_string(),
+                        ),
+                    }
                 }
             }
             None => {
@@ -2658,7 +2669,32 @@ fn jit_missed_opt_report(unit: &RegUnit, native: &NativeState) -> Vec<String> {
         out.push(block.join("\n"));
     }
     out.insert(1, jit_native_decline_summary_block(native_decline_counts));
+    out.insert(2, jit_cost_model_decline_summary_block(&native.stats));
     out
+}
+
+/// "Why did the cost model keep functions on the interpreter?" — the per-reason
+/// counts of profitability declines (each reason carries its score breakdown). Empty
+/// (`none`) when the model is off or nothing was declined. Distinct from the native
+/// ELIGIBILITY decline summary: these regions ARE valid native code, just judged
+/// not worth it (native ≈ interpreter).
+#[cfg(feature = "native-jit")]
+fn jit_cost_model_decline_summary_block(stats: &NativeStats) -> String {
+    let mut lines = vec!["jit-report: cost-model decline summary".to_string()];
+    if stats.unprofitable_decline_reasons.is_empty() {
+        lines.push("  none".to_string());
+        return lines.join("\n");
+    }
+    let mut counts: Vec<(&String, &u64)> = stats.unprofitable_decline_reasons.iter().collect();
+    counts.sort_by(|(lhs_reason, lhs_count), (rhs_reason, rhs_count)| {
+        rhs_count
+            .cmp(lhs_count)
+            .then_with(|| lhs_reason.cmp(rhs_reason))
+    });
+    for (reason, count) in counts {
+        lines.push(format!("  {count}× {reason}"));
+    }
+    lines.join("\n")
 }
 
 #[cfg(feature = "native-jit")]

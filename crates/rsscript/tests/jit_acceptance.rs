@@ -4526,6 +4526,65 @@ fn main() -> Unit {
     });
 }
 
+/// Telemetry (reviewer #5): the report must explain "why no JIT" for a cost-model
+/// decline. The SAME polymorphic-PIC program, run under the DEFAULT (enforce) cost
+/// model (no override), is declined as unprofitable — the report surfaces both a
+/// `cost-model decline summary` block (with the score breakdown) and the per-function
+/// `declined by cost model` verdict, so a developer sees why it stayed interpreted.
+#[cfg(feature = "native-jit")]
+#[test]
+fn report_explains_cost_model_decline_for_polymorphic_pic() {
+    let source = "\
+fn dispatch(f: read Fn(Int) -> Int, x: Int) -> Int {
+    return f(x)
+}
+
+fn main() -> Unit {
+    let mut i = 0
+    let mut total = 0
+    while i < 400 {
+        if i % 6 == 0 {
+            let c: Fn(Int) -> Int = |x| { return 0 - x }
+            total = total + dispatch(f: read c, x: read i)
+        } else if i % 6 < 3 {
+            let b: Fn(Int) -> Int = |x| { return x + 7 }
+            total = total + dispatch(f: read b, x: read i)
+        } else {
+            let a: Fn(Int) -> Int = |x| { return x * 2 - 1 }
+            total = total + dispatch(f: read a, x: read i)
+        }
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+";
+    let file = "jit-report-cost-model-decline.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    // No cost-model override: the default (enforce) declines the loop-free PIC.
+    let (out, stats, lines) = rsscript::reg_vm_eval_source_main_native_osr_report(
+        file,
+        source,
+        std::iter::empty::<String>(),
+    )
+    .expect("report run");
+    assert_eq!(interp.stdout, out.stdout, "decline must stay byte-identical");
+    assert!(
+        stats.unprofitable_declines > 0,
+        "the PIC must be declined under the default cost model: {stats:?}",
+    );
+    let report = lines.join("\n");
+    // The cost-model decline summary is built from the actual run's telemetry, so it
+    // reliably shows the PIC decline with its score breakdown. (The per-function
+    // verdict re-translates WITHOUT profile feedback, so it may not reproduce the
+    // profile-guided PIC — the summary block is the dependable signal here.)
+    assert!(
+        report.contains("jit-report: cost-model decline summary")
+            && report.contains("pic_sites=1"),
+        "report must summarize the cost-model decline with its score breakdown, got:\n{report}",
+    );
+}
+
 #[cfg(feature = "native-jit")]
 #[test]
 fn report_shows_profile_guided_branch_feedback() {
