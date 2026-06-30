@@ -2358,6 +2358,15 @@ pub(in crate::reg_vm) fn cold_arm_pure_value_op(instr: &RegInstr) -> bool {
         | RegInstr::DequePushBack { .. }
         | RegInstr::DequePushFront { .. } => true,
         RegInstr::CallIntrinsic { intrinsic, .. } => cold_arm_pure_intrinsic(intrinsic),
+        // A nested CALL to a known function is admissible in a bailable cold arm: native
+        // never executes the arm (it bails at `s`), and a cold-arm `Bail` always takes the
+        // abort+replay fallback (see the soundness note in `deopt_replaceable_cold_arms`),
+        // so the interpreter runs the call ONCE on replay — correct even if the callee does
+        // I/O, allocates, or mutates (those effects happen only on the interpreter, exactly
+        // as without the JIT). Restricted to `mut_args.is_empty()`: a `mut`-arg call writes
+        // back into caller registers across the inline boundary, which the simple
+        // register-isolation model does not track — leave those for a directed extension.
+        RegInstr::CallKnown { mut_args, .. } if mut_args.is_empty() => true,
         _ => false,
     }
 }
@@ -2432,6 +2441,7 @@ pub(in crate::reg_vm) fn deopt_replaceable_cold_arms(
                     | RegInstr::CallTypedIntrinsic { .. }
                     | RegInstr::MakeList { .. }
                     | RegInstr::MakeMap { .. }
+                    | RegInstr::CallKnown { .. }
             )
         });
         if !has_undissolvable_heap_builder {
@@ -8907,12 +8917,14 @@ fn native_inline_leaf_calls_inner(
     ) -> Option<()> {
         let id = splices.len();
         let reachable = native_reachable_instructions(&callee.code);
-        // Deopt-before-heap: a COLD arm that builds a heap value (`cold[ci]`) is
-        // replaced by a single native `Bail` (a `RuntimeError` sentinel) at the arm's
-        // start, with the rest of the arm emitting nothing. Because every op in the arm
-        // is side-effect-free, native does nothing observable before bailing, so the
-        // abandon-and-reinterpret-the-loop fallback re-runs the loop on the interpreter
-        // (which rebuilds the heap value itself) — Execution Spec §7.2 holds unchanged.
+        // Deopt-before-heap: a COLD arm (`cold[ci]`) is replaced by a single native
+        // `Bail` (a `RuntimeError` sentinel) at the arm's start, with the rest of the arm
+        // emitting nothing. Native bails at the arm start and NEVER executes the arm, and a
+        // cold-arm `Bail` always takes the abort+replay fallback (it can never reach the
+        // precise-resume path — see the soundness note in `deopt_replaceable_cold_arms`),
+        // so the interpreter re-runs the loop and performs the arm itself — even when the
+        // arm allocates, writes a (possibly caller-aliased) collection, or calls another
+        // function. Execution Spec §7.2 holds unchanged.
         let (cold, arm_start) = deopt_replaceable_cold_arms(&callee.code, &reachable);
         let mut cmap = vec![0usize; callee.code.len()];
         let mut direct_spawn_results = vec![false; callee.regs];

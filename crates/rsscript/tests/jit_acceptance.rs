@@ -7193,3 +7193,53 @@ fn main() -> Unit {
         stats.osr_entries
     );
 }
+
+/// #7 cold-arm coverage slice (2026-06-29, nested CALL): a cold arm that CALLS another
+/// function (`helper`, deliberately non-inlinable — it does I/O — so it stays a `CallKnown`
+/// rather than being inlined into a pure-value arm). The call is admitted in the bailable
+/// cold arm: native bails at the arm start and never executes it, and the cold-arm `Bail`
+/// always takes abort+replay, so the interpreter runs `helper` ONCE on replay — its I/O and
+/// return happen exactly as without the JIT. The loop OSRs; the rare cold path (i==1500)
+/// re-runs on the interpreter. Must match the interpreter byte-for-byte AND OSR.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_inlined_leaf_call_nested_call_cold_arm_matches_interpreter() {
+    let source = "\
+fn helper(x: Int) -> Int {
+    Log.write(message: read \"cold path hit\")
+    return x * 7
+}
+fn classify(x: Int) -> Int {
+    if x == 1500 {
+        return helper(x: read x)
+    }
+    return x + 1
+}
+fn run(n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut acc = 0
+    let mut i = 0
+    while i < n {
+        acc = acc + classify(x: read i)
+        i = i + 1
+    }
+    return acc
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    return Unit
+}
+";
+    let file = "p7l.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (nat, stats) = exe
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("run");
+    assert_eq!(interp.stdout, nat.stdout, "nested-call cold arm must match interpreter");
+    assert!(
+        stats.osr_entries >= 1,
+        "nested-call cold-arm inlined leaf must OSR (entries={})",
+        stats.osr_entries
+    );
+}
