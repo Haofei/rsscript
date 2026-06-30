@@ -7243,3 +7243,55 @@ fn main() -> Unit {
         stats.osr_entries
     );
 }
+
+/// #7 cold-arm coverage slice (2026-06-29, mut-arg nested CALL): a cold arm calls a
+/// non-inlinable function (`appendErr`, does I/O) passing a `mut` collection argument. The
+/// mut-arg writeback into the caller's register only happens on the cold/bail path
+/// (interpreter replay), never in native — the same situation as a caller-aliased heap
+/// write, sound under abort+replay. (`classify` itself takes no `mut` param — a mut-param
+/// *leaf* would not inline — so the mutated `tmp` is arm-local; what is exercised here is
+/// the mut-ARG `CallKnown` in the cold arm.) Must match the interpreter AND OSR.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_inlined_leaf_call_mut_arg_nested_call_cold_arm_matches_interpreter() {
+    let source = "\
+fn appendErr(acc: mut List<Int>, x: Int) -> Int {
+    Log.write(message: read \"appending\")
+    List.push(list: mut acc, value: read x)
+    return List.len(list: read acc)
+}
+fn classify(x: Int) -> Int {
+    if x == 1500 {
+        let mut tmp: List<Int> = []
+        return appendErr(acc: mut tmp, x: read x)
+    }
+    return x + 1
+}
+fn run(n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut acc = 0
+    let mut i = 0
+    while i < n {
+        acc = acc + classify(x: read i)
+        i = i + 1
+    }
+    return acc
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    return Unit
+}
+";
+    let file = "p7m.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (nat, stats) = exe
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("run");
+    assert_eq!(interp.stdout, nat.stdout, "mut-arg nested-call cold arm must match interpreter");
+    assert!(
+        stats.osr_entries >= 1,
+        "mut-arg nested-call cold-arm inlined leaf must OSR (entries={})",
+        stats.osr_entries
+    );
+}

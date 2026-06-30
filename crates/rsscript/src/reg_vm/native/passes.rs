@@ -2363,10 +2363,11 @@ pub(in crate::reg_vm) fn cold_arm_pure_value_op(instr: &RegInstr) -> bool {
         // abort+replay fallback (see the soundness note in `deopt_replaceable_cold_arms`),
         // so the interpreter runs the call ONCE on replay — correct even if the callee does
         // I/O, allocates, or mutates (those effects happen only on the interpreter, exactly
-        // as without the JIT). Restricted to `mut_args.is_empty()`: a `mut`-arg call writes
-        // back into caller registers across the inline boundary, which the simple
-        // register-isolation model does not track — leave those for a directed extension.
-        RegInstr::CallKnown { mut_args, .. } if mut_args.is_empty() => true,
+        // as without the JIT). `mut`-arg calls are included: the writeback into the caller's
+        // register only ever happens on the cold/bail path (the interpreter replay), never
+        // in native — the same situation as a caller-aliased heap write, which is likewise
+        // sound under abort+replay.
+        RegInstr::CallKnown { .. } => true,
         _ => false,
     }
 }
