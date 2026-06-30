@@ -195,13 +195,31 @@ mod intrinsic_registry_tests {
         ] {
             assert!(intrinsic_descriptor(i).cold_arm_pure_builder, "{:?}", i);
         }
-        // Not on the whitelist: queries, combinators, opaque allocators / mutators.
+        // Not on the builder whitelist: queries, combinators, opaque allocators / mutators.
         for i in [
             RegIntrinsic::StringLen,
             RegIntrinsic::OptionMap,
             RegIntrinsic::ListContains,
         ] {
             assert!(!intrinsic_descriptor(i).cold_arm_pure_builder, "{:?}", i);
+        }
+        // Pure first-order scalar READERS are cold-arm eligible via the separate
+        // `cold_arm_pure_reader` flag (NOT builders — they allocate nothing).
+        for i in [
+            RegIntrinsic::StringCount,
+            RegIntrinsic::StringContains,
+            RegIntrinsic::StringIndexOf,
+            RegIntrinsic::StringStartsWith,
+        ] {
+            let d = intrinsic_descriptor(i);
+            assert!(d.cold_arm_pure_reader, "reader {:?}", i);
+            assert!(!d.cold_arm_pure_builder, "reader is not a builder {:?}", i);
+        }
+        // Higher-order Pure combinators are NOT cold-arm eligible (closure can have
+        // arbitrary effects): neither flag may be set.
+        for i in [RegIntrinsic::OptionMap, RegIntrinsic::ResultAndThen] {
+            let d = intrinsic_descriptor(i);
+            assert!(!d.cold_arm_pure_reader && !d.cold_arm_pure_builder, "{:?}", i);
         }
     }
 }

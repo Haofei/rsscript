@@ -2309,10 +2309,14 @@ pub(in crate::reg_vm) fn native_offset_regs_j3(instr: &RegInstr, b: usize) -> Op
 /// and must NOT appear in a bailable cold arm. Unknown ⇒ false (reject).
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn cold_arm_pure_intrinsic(intrinsic: &RegIntrinsic) -> bool {
-    // Classification reads the central registry's `cold_arm_pure_builder` whitelist
-    // (StringCopy/StringFromBool/StringFromFloat/StringFromInt); the cold-arm pass
-    // keeps its exact arm-detection mechanism.
-    intrinsic_descriptor(*intrinsic).cold_arm_pure_builder
+    // Classification reads the central registry's two cold-arm whitelists: the pure heap
+    // BUILDERS (`cold_arm_pure_builder` — StringCopy/StringFrom*/StringSlice/StringPadLeft/
+    // BytesFromString/BytesSlice) and the pure first-order scalar READERS
+    // (`cold_arm_pure_reader` — String.count/contains/index_of/starts_with). Both are
+    // side-effect-free and faithfully re-runnable on the interpreter after a native
+    // `Bail`; the cold-arm pass keeps its exact arm-detection mechanism.
+    let d = intrinsic_descriptor(*intrinsic);
+    d.cold_arm_pure_builder || d.cold_arm_pure_reader
 }
 
 /// Whether `instr` is a pure, side-effect-free value-construction instruction that

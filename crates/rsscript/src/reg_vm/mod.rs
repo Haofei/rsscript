@@ -824,6 +824,16 @@ struct IntrinsicDescriptor {
     /// else). A tight whitelist; impure intrinsics (I/O, env, collections, time, RNG)
     /// are excluded. Distinct from `can_fold` (which also covers queries/combinators).
     cold_arm_pure_builder: bool,
+    /// Whether this intrinsic is a pure, first-order, side-effect-free *reader* that
+    /// returns a SCALAR (Int/Bool) and that the deopt cold-arm classifier permits inside
+    /// a bailable cold arm (e.g. `String.count`/`String.index_of`/`String.contains`):
+    /// it reads its operands, allocates nothing, and is faithfully re-runnable on the
+    /// interpreter after a native `Bail` (native never executes the arm). Distinct from
+    /// `cold_arm_pure_builder` (which allocates a fresh heap value). MUST be first-order:
+    /// a higher-order/closure-taking intrinsic (the `Pure` combinators) is NOT eligible
+    /// because the closure can have arbitrary effects — those are excluded by leaving
+    /// this `false`. A tight whitelist; when unsure, leave `false`.
+    cold_arm_pure_reader: bool,
     /// Short human-readable reason for the conservative classification, for the
     /// future missed-optimization report (e.g. "allocates", "suspends",
     /// "non-ASCII-dependent slice"). Empty for the trivial/expected cases.
@@ -843,6 +853,7 @@ impl Default for IntrinsicDescriptor {
             string_fold_role: None,
             bytes_fold_role: None,
             cold_arm_pure_builder: false,
+            cold_arm_pure_reader: false,
             notes: "default: opaque to JIT (allocate/not-foldable/not-native-lowerable)",
         }
     }
@@ -960,9 +971,22 @@ fn intrinsic_descriptor(intrinsic: RegIntrinsic) -> IntrinsicDescriptor {
         RegIntrinsic::StringStartsWith => IntrinsicDescriptor {
             effect: Read,
             native_lowerable: true,
-            notes: "string prefix query; native-lowerable as a typed host helper",
+            cold_arm_pure_reader: true,
+            notes: "string prefix query (Bool); native-lowerable; pure scalar reader (re-runnable after a cold-arm bail)",
             ..d()
         },
+        // Pure first-order scalar string queries: read the operands, allocate nothing,
+        // return Int/Bool. Eligible as cold-arm pure readers — faithfully re-runnable on
+        // the interpreter after a native `Bail` (e.g. a cold arm `return String.count(s, n)`
+        // whose heap source `s` is dead at the arm boundary; the scalar result is live-out).
+        RegIntrinsic::StringCount | RegIntrinsic::StringContains | RegIntrinsic::StringIndexOf => {
+            IntrinsicDescriptor {
+                effect: Read,
+                cold_arm_pure_reader: true,
+                notes: "pure scalar string query (re-runnable after a cold-arm bail)",
+                ..d()
+            }
+        }
 
         // --- Bytes-length fold: the foldable Bytes producers + the length query ---
         // `Bytes.len` is a pure raw-byte-length READ (`value.len()`); the Bytes fold

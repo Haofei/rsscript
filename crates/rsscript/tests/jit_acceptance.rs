@@ -6789,20 +6789,26 @@ fn main() -> Unit {
     );
 }
 
-/// #7 general frame-chain probe: a NON-foldable live-out cold arm. `classify`'s cold arm
-/// builds a heap String and returns an Int via a NON-length intrinsic (`String.count`),
-/// which no length-law fold can dissolve. CHARACTERIZATION: this DECLINES native OSR
-/// (osr_entries=0) and runs on the interpreter — correct, not native. Proven (2026-06-29)
-/// to be the irreducible boundary of the cold-arm path: relaxing the register-isolation
-/// check does NOT enable it, because `String.count` is not a `cold_arm_pure_value_op`, so
-/// the arm is never even detected as deopt-replaceable. Every DETECTABLE live-out cold arm
-/// is built from pure-value string ops and returns `String.len` of them — hence foldable
-/// and already handled by the callee-fold. Resuming into a non-pure-value callee body on
-/// mid-call bail needs the full inline frame-chain (the remaining #7 deep work). The guard
-/// locks correctness while the loop declines.
+/// #7 cold-arm coverage slice (2026-06-29, pure scalar READER): a cold arm that builds a
+/// heap String (`String.from_int`) and returns an Int via a NON-length, NON-foldable
+/// intrinsic (`String.count`). The heap source `s` is DEAD at the arm boundary (consumed
+/// by `count` inside the arm); the live-out value is the SCALAR `count` result — so this
+/// is a deopt-replaceable cold arm, NOT a frame-chain case. It previously declined OSR
+/// only because `String.count` was not classified as a `cold_arm_pure_value_op` (the arm
+/// was never detected). Now `String.count`/`contains`/`index_of`/`starts_with` are
+/// `cold_arm_pure_reader`s (pure, first-order, side-effect-free, scalar-returning,
+/// re-runnable after a `Bail`), so the arm is detected, spliced to a native `Bail`, the
+/// leaf inlines, and the loop OSRs. The rare cold path (i==1500) rolls back and re-runs
+/// on the interpreter, which recomputes the count faithfully. Must match the interpreter
+/// AND OSR.
+///
+/// The TRUE remaining frame-chain domain is a cold arm containing a WRITE/SUSPEND op or a
+/// higher-order closure combinator (not side-effect-free, so not re-runnable by a plain
+/// Bail) — those correctly decline today. Per the 2026-06-29 analysis that is a PERF-only
+/// gap (§7.2 makes abandon-and-reinterpret always correct), not a correctness gap.
 #[cfg(feature = "native-jit")]
 #[test]
-fn native_osr_inlined_leaf_call_nonfoldable_live_out_declines_safely() {
+fn native_osr_inlined_leaf_call_pure_reader_cold_arm_matches_interpreter() {
     let source = "\
 fn classify(x: Int) -> Int {
     if x == 1500 {
@@ -6832,8 +6838,12 @@ fn main() -> Unit {
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("osr");
-    let _ = stats;
-    assert_eq!(interp.stdout, nat.stdout, "non-foldable live-out cold arm must match interpreter");
+    assert_eq!(interp.stdout, nat.stdout, "pure-reader cold arm must match interpreter");
+    assert!(
+        stats.osr_entries >= 1,
+        "pure-reader (String.count) cold-arm inlined leaf must OSR (entries={})",
+        stats.osr_entries
+    );
 }
 
 /// #7 cold-arm coverage slice (2026-06-29): a leaf whose COLD arm RETURNS a heap value
