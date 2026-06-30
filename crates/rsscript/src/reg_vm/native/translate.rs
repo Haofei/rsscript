@@ -720,10 +720,20 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
 
     // SOUNDNESS: the interpreter deep-copies every non-`mut` heap param at the prologue
     // (`DeepCopy`); native lowers `DeepCopy` to a Nop but now performs in-place heap
-    // writes. Decline native if a DeepCopy'd heap param's value could be mutated in place
-    // or leaked (directly or via an alias) — otherwise the write would propagate to the
-    // caller while the interpreter mutates only the copy. Types are now final.
-    if native_deepcopy_param_unsoundly_mutated(&code, &ty, n_regs, |i| reachable[i]) {
+    // writes. Decline native if a DeepCopy'd heap param's value could be mutated in place,
+    // stored, returned, or otherwise leaked (directly or via an alias) — otherwise it would
+    // propagate to the caller while the interpreter only touches the copy. A `String`/`Bytes`
+    // param is exempt (immutable, safe to share). Types are now final.
+    let immutable_leaf_params: Vec<bool> = (0..func.params)
+        .map(|p| {
+            declared_signature
+                .and_then(|s| s.params.get(p))
+                .is_some_and(|t| native_declared_type_is_immutable_leaf(t))
+        })
+        .collect();
+    if native_deepcopy_param_unsoundly_mutated(&code, &ty, n_regs, &immutable_leaf_params, |i| {
+        reachable[i]
+    }) {
         return None;
     }
 
@@ -3215,6 +3225,9 @@ pub(in crate::reg_vm) fn translate_osr_loop(
         Vec::new(),
         HashMap::new(),
         &[],
+        // No signature available on the bare entry (unit tests): treat every param
+        // conservatively (none proven an immutable leaf) so the guard never under-declines.
+        &[],
     )
 }
 
@@ -3228,6 +3241,7 @@ pub(in crate::reg_vm) fn translate_osr_loop_profiled(
     lp: OsrLoop,
     ip_map: &[usize],
     param_native_types: &[Option<NativeTy>],
+    immutable_leaf_params: &[bool],
 ) -> Option<(
     vm_jit::JitFunction,
     Vec<NativeTy>,
@@ -3247,6 +3261,7 @@ pub(in crate::reg_vm) fn translate_osr_loop_profiled(
         profile_guidance.cold_blocks,
         profile_guidance.hot_branch_edges,
         param_native_types,
+        immutable_leaf_params,
     )
 }
 
@@ -3274,6 +3289,7 @@ fn translate_osr_loop_inner(
     cold_blocks: Vec<u32>,
     profile_hot_branch_edges: HashMap<usize, bool>,
     param_native_types: &[Option<NativeTy>],
+    immutable_leaf_params: &[bool],
 ) -> Option<(
     vm_jit::JitFunction,
     Vec<NativeTy>,
@@ -3605,7 +3621,9 @@ fn translate_osr_loop_inner(
     // the prologue `DeepCopy` and propagates through prologue + in-region aliasing. Types
     // are settled here (list/heap operands are `Handle`); the flat reclassification below
     // only narrows `Handle`→`Flat*`, both of which `native_is_heap_reg` already accepts.
-    if native_deepcopy_param_unsoundly_mutated(code, &ty, n_regs, |i| {
+    // `immutable_leaf_params` (plumbed from `try_osr`'s signature lookup) exempts
+    // `String`/`Bytes` params so a `read` string inserted into a `mut` collection still OSRs.
+    if native_deepcopy_param_unsoundly_mutated(code, &ty, n_regs, immutable_leaf_params, |i| {
         i >= lp.header && i < lp.exit
     }) {
         return None;

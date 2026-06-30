@@ -7342,6 +7342,53 @@ fn main() -> Unit {
     assert_eq!(interp.stdout, nat.stdout, "non-mut heap param mutation must not leak to caller");
 }
 
+/// REVIEW REPRO (2026-06-30): the store-and-reload leak. A non-`mut` `read List<Int>` param
+/// is stored into a struct field, read back, and mutated. Storing launders direct-alias
+/// taint, so the guard must also flag STORING a tainted (mutable) value into caller-visible
+/// heap. Interpreter mutates the deep copy (caller's `xs[0]` stays 7); native must DECLINE
+/// rather than store/mutate the caller's original handle. Companion to the direct-alias test.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_store_reload_mutate_non_mut_heap_param_does_not_leak() {
+    let source = "\
+features: local
+
+struct Box {
+    items: List<Int>
+}
+fn leak(xs: read List<Int>, n: Int) -> Int {
+    let b = Box(items: read xs)
+    let mut i = 0
+    while i < n {
+        let mut inner = b.items
+        List.set(list: mut inner, index: 0, value: read i)
+        i = i + 1
+    }
+    return List.get(list: read xs, index: 0)
+}
+fn main() -> Unit {
+    local xs = List<Int>.new()
+    List.push(list: mut xs, value: read 7)
+    let r = leak(xs: read xs, n: read 200000)
+    Log.write(message: read String.from_int(value: List.get(list: read xs, index: 0)))
+    Log.write(message: read String.from_int(value: r))
+    return Unit
+}
+";
+    let file = "store_reload_leak.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (nat, _stats) = exe
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("run");
+    // Caller's xs[0] stays 7 (interpreter mutated only the deep copy); native must match.
+    assert_eq!(interp.stdout.trim_end(), "7\n199999");
+    assert_eq!(
+        interp.stdout, nat.stdout,
+        "store-and-reload mutation of a non-mut heap param must not leak to caller"
+    );
+}
+
 #[cfg(feature = "native-jit")]
 #[test]
 fn native_osr_inlined_leaf_call_combinator_cold_arm_matches_interpreter() {

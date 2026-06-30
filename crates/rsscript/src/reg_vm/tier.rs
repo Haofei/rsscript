@@ -1569,6 +1569,14 @@ impl RegVm {
                 _ => None,
             })
             .collect();
+        // For the DeepCopy soundness guard: a non-`mut` param whose runtime value is an
+        // immutable `String`/`Bytes` is safe to share (it cannot be mutated and holds no
+        // mutable sub-value), so it must NOT be tainted — otherwise the guard would decline
+        // the common `read` string into `mut` collection pattern. Everything else (mutable
+        // containers, structs that may hold them) stays seeded.
+        let immutable_leaf_params: Vec<bool> = (0..func.params)
+            .map(|i| matches!(self.reg(base + i), VmValue::String(_) | VmValue::Bytes(_)))
+            .collect();
 
         // Phase 1: resolve (and lazily compile) the OSR loop body for this function,
         // then gate on being at the loop header. This runs at every instruction when
@@ -1678,6 +1686,7 @@ impl RegVm {
                             lp,
                             &identity_ip_map,
                             &param_native_types,
+                            &immutable_leaf_params,
                         )
                         .and_then(
                             |(
@@ -2060,6 +2069,7 @@ impl RegVm {
                                 lp,
                                 &real_ip_map,
                                 &param_native_types,
+                                &immutable_leaf_params,
                             )
                                 .and_then(|(jit_fn, params, derived_liveins, scalar_fields, reg_types, written_regs, string_literals)| {
                                     let n_jit_regs = jit_fn.n_regs as usize;

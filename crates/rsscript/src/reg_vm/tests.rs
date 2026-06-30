@@ -7482,8 +7482,10 @@ fn main() -> Unit {
         let ip_map: Vec<usize> = (0..code.len()).collect();
 
         let (jit, _, _, _, _, _, _) =
-            translate_osr_loop_profiled(&func, &code, 5, func.params, func.captures, lp, &ip_map, &[])
-                .expect("profiled scalar loop should translate to OSR native IR");
+            translate_osr_loop_profiled(
+                &func, &code, 5, func.params, func.captures, lp, &ip_map, &[], &[],
+            )
+            .expect("profiled scalar loop should translate to OSR native IR");
 
         assert!(
             jit.cold_blocks.contains(&(lp.exit as u32)),

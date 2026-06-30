@@ -2079,30 +2079,52 @@ fn native_is_heap_reg(ty: &[Option<NativeTy>], r: usize) -> bool {
 /// while the interpreter would mutate only the copy.
 ///
 /// Returns `true` (⇒ caller must DECLINE native) if such an unsound mutation/leak is
-/// possible. Conservative: taint every DeepCopy'd HEAP param register, propagate the taint
+/// possible. Taint every DeepCopy'd heap param register EXCEPT those proven to be an
+/// immutable `String`/`Bytes` (`immutable_leaf_params[reg] == true`) — sharing an immutable
+/// value's `Rc` is unobservable, so a `read` string stored into a `mut` collection is sound.
+/// Everything else (mutable containers, structs that may hold them, and any param whose type
+/// is unknown — e.g. inlined-leaf params) is tainted conservatively. Propagate the taint
 /// forward through `Move` and heap-extraction ops (the result aliases the source's inner
 /// `Rc`), then decline if any in-scope native op (a) mutates a tainted receiver in place,
-/// (b) passes a tainted value as a `mut` call arg, (c) stores a tainted value into a
-/// container/struct, or (d) returns a tainted value. `mutation_in_scope(i)` selects the
+/// (b) passes a tainted value as a `mut` call arg, (c) STORES a tainted value into a
+/// container/struct (it would be reloaded as the caller's original `Rc` and mutated — the
+/// store/reload leak), or (d) RETURNS a tainted value. `mutation_in_scope(i)` selects the
 /// instructions that actually run natively (whole function vs. the OSR region).
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn native_deepcopy_param_unsoundly_mutated(
     code: &[RegInstr],
     ty: &[Option<NativeTy>],
     n_regs: usize,
+    immutable_leaf_params: &[bool],
     mutation_in_scope: impl Fn(usize) -> bool,
 ) -> bool {
     // `DeepCopy` is emitted ONLY for non-`mut`, non-Copy (i.e. heap) parameters — scalars
     // are Copy and never deep-copied (RS0008) — so every DeepCopy'd register is a heap root.
-    // Seed them all (do not gate on `ty`, which a region pass may leave untyped for an
-    // unclassified heap param).
+    // Two taint sets, propagated together through the same alias edges:
+    //   * `tainted` — every DeepCopy'd root EXCEPT a proven-immutable `String`/`Bytes` leaf
+    //     (which cannot be mutated and holds no mutable sub-value). Includes inlined-leaf
+    //     params (unknown type ⇒ conservative). Drives the in-place-mutation and `mut`-arg
+    //     checks, which never fire on an immutable value, so the conservatism is harmless.
+    //   * `mut_tainted` — only roots PROVEN to be a mutable outer param (covered by, and not
+    //     flagged immutable in, `immutable_leaf_params`). Drives the STORE/RETURN checks,
+    //     which WOULD over-decline if applied to an inlined param of unknown kind (e.g. a
+    //     `read` string stored into a struct) — hence the narrower seed.
     let mut tainted = vec![false; n_regs];
+    let mut mut_tainted = vec![false; n_regs];
     let mut any = false;
     for instr in code {
         if let RegInstr::DeepCopy { reg } = instr {
-            if *reg < n_regs {
+            if *reg >= n_regs {
+                continue;
+            }
+            let known = immutable_leaf_params.get(*reg).copied();
+            if known != Some(true) {
                 tainted[*reg] = true;
                 any = true;
+            }
+            // Proven mutable outer param: in range AND not flagged immutable.
+            if known == Some(false) {
+                mut_tainted[*reg] = true;
             }
         }
     }
@@ -2113,40 +2135,36 @@ pub(in crate::reg_vm) fn native_deepcopy_param_unsoundly_mutated(
     let mut changed = true;
     while changed {
         changed = false;
-        let edge = |dst: usize, src: usize, tainted: &mut [bool], changed: &mut bool| {
-            if src < n_regs
-                && dst < n_regs
-                && tainted[src]
-                && !tainted[dst]
-                && native_is_heap_reg(ty, dst)
-            {
-                tainted[dst] = true;
+        let edge = |dst: usize, src: usize, set: &mut [bool], changed: &mut bool| {
+            if src < n_regs && dst < n_regs && set[src] && !set[dst] && native_is_heap_reg(ty, dst) {
+                set[dst] = true;
                 *changed = true;
             }
         };
         for instr in code {
-            match instr {
-                RegInstr::Move { dst, src }
-                | RegInstr::ListGet { dst, list: src, .. }
-                | RegInstr::MapGet { dst, map: src, .. }
-                | RegInstr::GetField { dst, base: src, .. }
-                | RegInstr::GetFieldSlot { dst, base: src, .. }
-                | RegInstr::UnwrapVariantValue { dst, src, .. }
-                | RegInstr::DequePopFront { dst, deque: src }
-                | RegInstr::DequePopBack { dst, deque: src } => {
-                    edge(*dst, *src, &mut tainted, &mut changed)
-                }
-                _ => {}
+            if let RegInstr::Move { dst, src }
+            | RegInstr::ListGet { dst, list: src, .. }
+            | RegInstr::MapGet { dst, map: src, .. }
+            | RegInstr::GetField { dst, base: src, .. }
+            | RegInstr::GetFieldSlot { dst, base: src, .. }
+            | RegInstr::UnwrapVariantValue { dst, src, .. }
+            | RegInstr::DequePopFront { dst, deque: src }
+            | RegInstr::DequePopBack { dst, deque: src } = instr
+            {
+                edge(*dst, *src, &mut tainted, &mut changed);
+                edge(*dst, *src, &mut mut_tainted, &mut changed);
             }
         }
     }
-    let is_tainted = |r: &usize| *r < n_regs && tainted[*r];
+    let mut_tainted_reg = |r: &usize| *r < n_regs && mut_tainted[*r];
     for (i, instr) in code.iter().enumerate() {
         if !mutation_in_scope(i) {
             continue;
         }
         // (a) IN-PLACE mutation of a tainted heap container — the leak: native mutates the
         // shared `Rc` the interpreter would have left untouched (it mutated only the copy).
+        // Uses the broad `tainted` set (incl. inlined params): an immutable value is never a
+        // mutation receiver, so this never over-declines.
         if let Some(recv) = native_heap_mutation_receiver(instr) {
             if recv < n_regs && tainted[recv] {
                 return true;
@@ -2154,25 +2172,83 @@ pub(in crate::reg_vm) fn native_deepcopy_param_unsoundly_mutated(
         }
         // (b) passing a tainted value as a `mut` arg to a (non-inlined) call: the callee
         // mutates it by reference, leaking to our caller. (`read` args are safe — the callee
-        // deep-copies them itself.)
-        //
-        // NOTE: STORING a tainted value into a container or RETURNING it is intentionally
-        // NOT flagged here. Native types collapse all heap values to `Handle`, so they
-        // cannot distinguish an immutable `String`/`Bytes` (sharing its `Rc` is
-        // unobservable) from a mutable container — flagging stores would wrongly decline the
-        // common, sound pattern of inserting a `read` string param into a `mut` collection.
-        // The reachable leak is the in-place mutation above; a returned/stored mutable
-        // container that is then mutated elsewhere would be caught by the receiver check at
-        // that mutation site (the differential suite is the backstop for the residual).
-        if let RegInstr::CallKnown { args, mut_args, .. } | RegInstr::CallClosure { args, mut_args, .. } =
-            instr
+        // deep-copies them itself.) Also uses the broad `tainted` set.
+        if let RegInstr::CallKnown { args, mut_args, .. }
+        | RegInstr::CallClosure { args, mut_args, .. } = instr
         {
-            if mut_args.iter().any(|&p| args.get(p).is_some_and(is_tainted)) {
+            if mut_args
+                .iter()
+                .any(|&p| args.get(p).is_some_and(|a| *a < n_regs && tainted[*a]))
+            {
                 return true;
             }
         }
+        // (c) STORING a tainted MUTABLE value into caller-visible heap, or (d) RETURNING it.
+        // Native would store/return the caller's original `Rc`; the interpreter stores/
+        // returns the deep copy. The stored value can then be reloaded (`GetFieldSlot` etc.)
+        // and mutated, or mutated by the caller through the escaping aggregate. Uses the
+        // NARROW `mut_tainted` set (proven-mutable outer params only): native types can't
+        // tell an immutable `String` from a mutable container, so flagging stores on the
+        // broad set would wrongly decline `read` string → `mut` collection (and inlined-leaf
+        // params of unknown kind). An inlined-param store/reload leak is a documented
+        // residual, far narrower than the in-place mutation this commit's predecessor closed.
+        let is_tainted = mut_tainted_reg;
+        match instr {
+            RegInstr::Return { src } if is_tainted(src) => return true,
+            RegInstr::SetFieldSlot { value, .. }
+            | RegInstr::ListSet { value, .. }
+            | RegInstr::ListPush { value, .. }
+            | RegInstr::SetInsert { value, .. }
+            | RegInstr::SortedSetInsert { value, .. }
+            | RegInstr::DequePushBack { value, .. }
+            | RegInstr::DequePushFront { value, .. }
+            | RegInstr::MakeSome { value, .. } => {
+                if is_tainted(value) {
+                    return true;
+                }
+            }
+            RegInstr::ListAppend { values, .. } => {
+                if is_tainted(values) {
+                    return true;
+                }
+            }
+            RegInstr::MapInsert { key, value, .. } | RegInstr::SortedMapInsert { key, value, .. } => {
+                if is_tainted(key) || is_tainted(value) {
+                    return true;
+                }
+            }
+            RegInstr::MakeStruct { fields, .. } | RegInstr::MakeVariant { fields, .. } => {
+                if fields.iter().any(|(_, r)| is_tainted(r)) {
+                    return true;
+                }
+            }
+            RegInstr::MakeList { items, .. } => {
+                if items.iter().any(is_tainted) {
+                    return true;
+                }
+            }
+            RegInstr::MakeMap { entries, .. } => {
+                if entries.iter().any(|(k, v)| is_tainted(k) || is_tainted(v)) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
     }
     false
+}
+
+/// Whether a declared HIR parameter type names a proven-immutable heap leaf — a `String` or
+/// `Bytes` (or their view forms) — whose `Rc` is safe to share because it can neither be
+/// mutated nor hold a mutable sub-value. Anything else (mutable containers, user structs/
+/// variants that may contain them, or an unrecognized name) is NOT proven immutable, so the
+/// [`native_deepcopy_param_unsoundly_mutated`] guard treats it conservatively.
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) fn native_declared_type_is_immutable_leaf(type_name: &str) -> bool {
+    matches!(
+        type_name.trim(),
+        "String" | "Bytes" | "StringView" | "BytesView"
+    )
 }
 
 /// Assign type `t` to register `reg`; return `false` on a conflicting reassignment.
