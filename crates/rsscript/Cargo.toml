@@ -74,3 +74,9 @@ path = "tests/differential.rs"
 [[test]]
 name = "soak"
 path = "tests/soak.rs"
+
+# Separate binary on purpose: the cost-model test sets `RSS_JIT_COST_MODEL=enforce`
+# process-wide, so it must not share a process with other tests' native tiering.
+[[test]]
+name = "jit_cost_model"
+path = "tests/jit_cost_model.rs"

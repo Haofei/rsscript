@@ -2410,6 +2410,18 @@ pub struct NativeStats {
     /// J5.2: OSR-entries that ran a loop natively mid-function and resumed at the
     /// post-loop ip (the forced-trigger success count).
     pub osr_entries: u64,
+    /// Step 1 cost model: regions that translated (were eligible) but the
+    /// profitability gate kept on the interpreter. In `report` mode this counts
+    /// regions that *would* decline without changing execution; in `enforce` mode
+    /// it counts regions actually held back. The per-region reason is recorded in
+    /// `unprofitable_decline_reasons`.
+    pub unprofitable_declines: u64,
+    /// Per-reason counts for cost-model profitability declines. Kept SEPARATE from
+    /// `native_decline_reasons` because that map is rebuilt wholesale from the
+    /// unit's native-ELIGIBILITY declines at run end (`add_native_decline_reasons`);
+    /// profitability is a distinct, post-eligibility judgement and must not be
+    /// clobbered by it.
+    pub unprofitable_decline_reasons: BTreeMap<String, u64>,
 }
 
 #[cfg(feature = "native-jit")]
@@ -2418,7 +2430,7 @@ impl NativeStats {
         format!(
             "native-jit: considered={} translated={} compiled={} ir_instrs={} code_bytes={} deopt_sites={} native_call_edges={} native_call_depth_max={} profile_closure_guards={} profile_closure_id_reads={} profile_closure_pic_sites={} profile_closure_pic_arms={} profile_branch_sites={} profile_branch_samples={} profile_branch_taken={} profile_branch_fallthrough={} profile_branch_cold_blocks={} profile_branch_side_exits={} not_eligible={} top_decline={} \
 compile_failed={} calls={} bails={} child_bails={} child_resumes={} arg_mismatch={} tier_deferred={} \
-compile_ms={:.3} run_ms={:.3} osr_entries={}",
+compile_ms={:.3} run_ms={:.3} osr_entries={} unprofitable_declines={}",
             self.considered,
             self.translated,
             self.compiled,
@@ -2449,6 +2461,7 @@ compile_ms={:.3} run_ms={:.3} osr_entries={}",
             self.compile_nanos as f64 / 1.0e6,
             self.run_nanos as f64 / 1.0e6,
             self.osr_entries,
+            self.unprofitable_declines,
         )
     }
 
@@ -2524,6 +2537,8 @@ compile_ms={:.3} run_ms={:.3} osr_entries={}",
             "compile_ms": self.compile_nanos as f64 / 1.0e6,
             "run_ms": self.run_nanos as f64 / 1.0e6,
             "osr_entries": self.osr_entries,
+            "unprofitable_declines": self.unprofitable_declines,
+            "unprofitable_decline_reasons": &self.unprofitable_decline_reasons,
         })
     }
 }

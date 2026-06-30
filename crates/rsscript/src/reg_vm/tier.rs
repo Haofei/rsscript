@@ -149,6 +149,44 @@ fn record_native_compile_stats(
         .map_or(0, |map| map.sites.len() as u64);
 }
 
+/// Step 1 cost model. Consult the profitability gate for a region that already
+/// translated (i.e. is ELIGIBLE native code). Returns `true` only when the gate is
+/// in `enforce` mode AND the region is unprofitable — the caller then keeps the
+/// function on the interpreter. In `off` mode this is a no-op (`false`); in
+/// `report` mode it records telemetry and logs (under `RSS_JIT_REPORT`) but always
+/// returns `false`, so execution is unchanged. Declining is correctness-safe, so
+/// this never affects the differential/eligibility contract.
+#[cfg(feature = "native-jit")]
+fn consult_profitability(
+    native: &mut NativeState,
+    jit_fn: &vm_jit::JitFunction,
+    has_backedge: bool,
+    region: &str,
+) -> bool {
+    let mode = CostMode::from_env();
+    if !mode.active() {
+        return false;
+    }
+    let p = native_region_profitability(jit_fn, has_backedge);
+    if matches!(mode, CostMode::Report) && std::env::var_os("RSS_JIT_REPORT").is_some() {
+        // Log EVERY scored region (kept and declined) so weights can be calibrated.
+        eprintln!("[cost-model] {}", p.summary(region));
+    }
+    if !p.decline {
+        return false;
+    }
+    if native.collect_stats {
+        native.stats.unprofitable_declines += 1;
+        *native
+            .stats
+            .unprofitable_decline_reasons
+            .entry(p.reason(region))
+            .or_insert(0) += 1;
+    }
+    // `report` observes but never changes execution; only `enforce` declines.
+    matches!(mode, CostMode::Enforce)
+}
+
 #[cfg(feature = "native-jit")]
 fn profile_closure_pic_arm_count(code: &[vm_jit::JitInstr], closure_id_ip: usize) -> u64 {
     let mut ip = closure_id_ip + 1;
@@ -952,6 +990,14 @@ impl RegVm {
                                 native.stats.translated += 1;
                             }
                             let scalar_leaf_callable = jit_function_scalar_leaf_callable(&jit_fn);
+                            // Step 1 cost model (eligibility already proven by `translate`):
+                            // in `enforce` mode, decline an unprofitable region and keep the
+                            // function on the interpreter (cached below as not-native). `off`
+                            // and `report` modes never change execution here.
+                            let has_backedge = jit_function_has_loop(&func.code);
+                            if consult_profitability(native, &jit_fn, has_backedge, "whole-fn") {
+                                None
+                            } else {
                             let started = native.collect_stats.then(std::time::Instant::now);
                             let compiled = if native.force_all_safepoints {
                                 native.module.compile_forcing_all_bails(&jit_fn)
@@ -985,12 +1031,9 @@ impl RegVm {
                                         }
                                     }
                                     record_native_compile_stats(native, id, &jit_fn);
-                                    // Static profitability signal: a body with an
-                                    // internal back-edge (a loop) does O(n) work per
-                                    // dispatch and amortizes FFI cost; a loop-free body
-                                    // does O(1) and, if dispatched per loop iteration,
-                                    // never does. Drives `NATIVE_NOAMORTIZE_GIVEUP`.
-                                    let has_backedge = jit_function_has_loop(&func.code);
+                                    // `has_backedge` (hoisted above for the cost-model gate)
+                                    // also drives `NATIVE_NOAMORTIZE_GIVEUP`: a loop-free body
+                                    // dispatched per interpreter iteration never amortizes FFI.
                                     Some((
                                         id,
                                         ret,
@@ -1007,6 +1050,7 @@ impl RegVm {
                                     }
                                     None
                                 }
+                            }
                             }
                         }
                         None => {
@@ -1704,6 +1748,12 @@ impl RegVm {
                                 // the interpreter bills), so an allocating loop runs natively
                                 // under an armed budget and bails to the interpreter at the
                                 // exact over-budget push — no blanket decline needed.
+                                // Step 1 cost model: an OSR loop is always a back-edge region;
+                                // in `enforce` mode decline an unprofitable loop and resume on
+                                // the interpreter (correctness-safe).
+                                if consult_profitability(native, &jit_fn, true, "osr") {
+                                    return None;
+                                }
                                 let heap_input_regs = osr_heap_input_regs(&jit_fn);
                                 match native.module.compile_osr(&jit_fn, lp.header as u32, emit_step, emit_cancel) {
                                     Ok(id) => {
@@ -2077,6 +2127,12 @@ impl RegVm {
                                     // helper (the only native-subset billed op), so an
                                     // allocating loop runs natively and bails at the exact
                                     // over-budget push — no blanket decline needed.
+                                    // Step 1 cost model: an OSR loop is always a back-edge
+                                    // region; in `enforce` mode decline an unprofitable loop
+                                    // and resume on the interpreter (correctness-safe).
+                                    if consult_profitability(native, &jit_fn, true, "osr") {
+                                        return None;
+                                    }
                                     let heap_input_regs = osr_heap_input_regs(&jit_fn);
                                     match native.module.compile_osr(&jit_fn, lp.header as u32, emit_step, emit_cancel) {
                                         Ok(id) => {

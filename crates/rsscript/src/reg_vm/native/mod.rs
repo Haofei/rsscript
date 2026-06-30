@@ -3,7 +3,9 @@
 use super::*;
 
 mod passes;
+mod profitability;
 mod translate;
 
 pub(super) use passes::*;
+pub(super) use profitability::*;
 pub(super) use translate::*;
