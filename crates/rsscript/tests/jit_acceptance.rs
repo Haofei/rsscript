@@ -6950,20 +6950,24 @@ fn main() -> Unit {
     );
 }
 
-/// #7 cold-arm path BOUNDARY (2026-06-29): the true remaining frame-chain domain. A cold
-/// arm that performs a WRITE (`List.push` to an arm-local collection) is NOT a pure-value
-/// op, so it is neither dissolvable nor a deopt-replaceable cold arm — the leaf is not
-/// inlinable and the loop correctly DECLINES native OSR, running on the interpreter.
-/// CHARACTERIZATION: output must still match the interpreter byte-for-byte (correctness is
-/// never at risk — §7.2 makes abandon-and-reinterpret always correct). This locks the
-/// boundary: pure builder/reader cold arms OSR (the slices shipped this session); arms with
-/// Write/Suspend ops or higher-order closure combinators decline safely. Lifting that
-/// decline is a PERF-only optimization (the inline frame-chain), not a correctness gap, and
-/// is deliberately NOT attempted without a directed per-case repro (the project's iron rule:
-/// "when unsure, REJECT"; never ship unverifiable native deopt).
+/// #7 cold-arm coverage slice (2026-06-29, arm-LOCAL WRITE): a cold arm that builds a
+/// fresh `List`, PUSHES to it, and returns a scalar query of it
+/// (`let t = []; t.push(x); return List.len(t)`). `ListPush` is a heap WRITE, but it is
+/// safe in a deopt-replaceable cold arm: native bails at the arm start and NEVER executes
+/// the arm, so the interpreter re-runs the whole arm (push included) on
+/// abandon-and-reinterpret. The classifier additionally requires the mutated collection
+/// to be DEFINED INSIDE the arm (non-escaping / not caller-aliased — guarded by the
+/// arm-local mutation check), so the fallback has no aliased-heap interaction to reason
+/// about. This is the safe, OUTPUT-TESTABLE half of the former frame-chain "boundary":
+/// the arm is spliced to a native `Bail`, the leaf inlines, and the loop OSRs, with the
+/// rare cold path re-running on the interpreter. Must match the interpreter AND OSR.
+///
+/// The remaining declined cases are now narrower still: cold arms mutating a CALLER-ALIASED
+/// collection, or containing a Suspend / higher-order closure combinator. Those are
+/// perf-only (§7.2 keeps correctness) and still decline pending a directed per-case repro.
 #[cfg(feature = "native-jit")]
 #[test]
-fn native_osr_inlined_leaf_call_write_cold_arm_declines_but_matches_interpreter() {
+fn native_osr_inlined_leaf_call_arm_local_write_cold_arm_matches_interpreter() {
     let source = "\
 fn classify(x: Int) -> Int {
     if x == 1500 {
@@ -6994,9 +6998,13 @@ fn main() -> Unit {
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("run");
-    let _ = stats; // may or may not OSR an unrelated region; correctness is the contract
     assert_eq!(
         interp.stdout, nat.stdout,
-        "write-cold-arm leaf must match interpreter even though it declines inlining"
+        "arm-local write cold arm must match interpreter"
+    );
+    assert!(
+        stats.osr_entries >= 1,
+        "arm-local write (List.push) cold-arm inlined leaf must OSR (entries={})",
+        stats.osr_entries
     );
 }

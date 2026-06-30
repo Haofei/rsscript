@@ -2340,7 +2340,19 @@ pub(in crate::reg_vm) fn cold_arm_pure_value_op(instr: &RegInstr) -> bool {
         | RegInstr::StringConcat { .. }
         | RegInstr::MakeVariant { .. }
         | RegInstr::MakeStruct { .. }
-        | RegInstr::MakeSome { .. } => true,
+        | RegInstr::MakeSome { .. }
+        // Arm-LOCAL collection build/mutate/read: a freshly-built `List` the arm pushes to
+        // and queries, e.g. `let t = []; t.push(x); return List.len(t)`. `ListPush` is a
+        // heap WRITE, but it is SAFE in a deopt-replaceable cold arm because native bails
+        // at the arm start `s` and NEVER executes it — the interpreter re-runs the whole
+        // arm and performs the push itself. `deopt_replaceable_cold_arms` additionally
+        // requires every mutated collection register to be DEFINED INSIDE the arm
+        // (non-escaping / not caller-aliased) so the abandon-and-reinterpret fallback has
+        // no aliased-heap interaction to reason about. `MakeMap`/`ListAppend` etc. are
+        // intentionally NOT yet admitted — extend per-case with a directed repro.
+        | RegInstr::MakeList { .. }
+        | RegInstr::ListPush { .. }
+        | RegInstr::ListLen { .. } => true,
         RegInstr::CallIntrinsic { intrinsic, .. } => cold_arm_pure_intrinsic(intrinsic),
         _ => false,
     }
@@ -2414,6 +2426,7 @@ pub(in crate::reg_vm) fn deopt_replaceable_cold_arms(
                     | RegInstr::StringConcat { .. }
                     | RegInstr::CallIntrinsic { .. }
                     | RegInstr::CallTypedIntrinsic { .. }
+                    | RegInstr::MakeList { .. }
             )
         });
         if !has_undissolvable_heap_builder {
@@ -2499,6 +2512,30 @@ pub(in crate::reg_vm) fn deopt_replaceable_cold_arms(
                             ok = false;
                             break 'outer;
                         }
+                    }
+                }
+            }
+        }
+        // Arm-LOCAL mutation guard: every heap WRITE op in the arm must mutate a
+        // collection register that is DEFINED INSIDE the arm (built by an in-arm op such
+        // as `MakeList`), never a caller-aliased / live-in register. Native never executes
+        // the arm (it bails at `s`), so the interpreter re-runs the write on
+        // abandon-and-reinterpret; restricting writes to non-escaping arm-local
+        // collections keeps that fallback free of any aliased-heap reasoning (no
+        // interaction with native in-place writes elsewhere in the loop). Currently the
+        // only admitted write is `ListPush` (its mutated register is `list`).
+        if ok {
+            let mut defined_in_arm: Vec<usize> = Vec::new();
+            for j in s..=e {
+                if let RegFootprint::Some(ws) = instr_written_reg(&code[j]) {
+                    defined_in_arm.extend(ws);
+                }
+            }
+            for j in s..=e {
+                if let RegInstr::ListPush { list, .. } = &code[j] {
+                    if !defined_in_arm.contains(&(*list as usize)) {
+                        ok = false; // caller-aliased / live-in mutation — reject
+                        break;
                     }
                 }
             }
