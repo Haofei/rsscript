@@ -53,6 +53,10 @@ const DEFAULT_CASES: &[&str] = &[
     "native_call_mut_handle_param.rss",
     "osr_closure_loop.rss",
     "native_bytes_slice_len_loop.rss",
+    // Real-project workload (reviewer #4): a collection-heavy daily path, gated for
+    // JIT ENGAGEMENT (compiles native, no bails) rather than wall time. The heavier
+    // mailbox/manifest real cases stay selectable via RSS_JIT_PERF_CASES.
+    "selfhost_stdlib_reporter.rss",
 ];
 
 /// Cases whose WALL TIME is not gated even in a release build because native is, by design,
@@ -74,6 +78,14 @@ const TIMING_NOISE_EXEMPT_CASES: &[&str] = &["profile_closure_pic.rss"];
 const COST_MODEL_DECLINED_CASES: &[&str] = &["profile_closure_pic.rss"];
 
 const TELEMETRY_ONLY_CASES: &[&str] = &[
+    // Real-project workloads (reviewer #4): gated for JIT ENGAGEMENT on daily code
+    // paths (does native compile? does it bail?), not yet wall-time gated against a
+    // committed baseline. `selfhost_stdlib_reporter` runs by default (light); the
+    // heavier `selfhost_mailbox_bench`/`selfhost_manifest_inspector` are selectable
+    // via RSS_JIT_PERF_CASES (release perf command) to see their native_ms.
+    "selfhost_mailbox_bench.rss",
+    "selfhost_manifest_inspector.rss",
+    "selfhost_stdlib_reporter.rss",
     "profile_branch_cold_blocks.rss",
     "profile_branch_side_exits.rss",
     "native_call_nested_chain.rss",
@@ -521,6 +533,10 @@ fn jit_counter(jit: &Value, key: &str) -> Option<i64> {
 fn expected_min_counters(case: &str) -> &'static [(&'static str, i64)] {
     match case {
         "native_scalar_loop.rss" => &[("compiled_code_bytes", 1)],
+        // Real-project workload: assert the JIT ENGAGES (compiles native) on a
+        // collection-heavy daily path. The default bails==0 check also guards against
+        // real code bailing. (Wall-time gating awaits a committed baseline.)
+        "selfhost_stdlib_reporter.rss" => &[("compiled_code_bytes", 1)],
         "native_call_chain.rss" => &[
             ("native_call_edges", 1),
             ("native_call_depth_max", 1),

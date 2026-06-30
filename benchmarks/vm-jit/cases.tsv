@@ -98,3 +98,4 @@ osr-inline-variant      benchmarks/vm-jit/kernels/osr_inline_variant_loop.rss   
 osr-closure             benchmarks/vm-jit/kernels/osr_closure_loop.rss               2700000   OSR × J2: inline capturing Int closure in loop
 osr-multifield-variant  benchmarks/vm-jit/kernels/osr_multifield_variant_loop.rss    1150000   OSR × J3: multi-field variant arms per iter
 osr-float-closure       benchmarks/vm-jit/kernels/osr_float_closure_loop.rss         2400000   OSR × J2: inline capturing Float closure in loop
+real-stdlib	benchmarks/micro/selfhost_stdlib_reporter.rss	2000	real workload: stdlib conformance — List/Map/Option/String (collection-heavy)
