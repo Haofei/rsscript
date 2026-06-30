@@ -1117,10 +1117,6 @@ impl NativeRegionAnalysis {
             .alias_class_readonly_for_list_slice(code, self.n_regs, slice_reg)
     }
 
-    fn external_reads_touch(&self, code: &[RegInstr], mask: &[bool]) -> Option<bool> {
-        native_region_external_reads_touch(code, self.n_regs, self.header, self.exit, mask)
-    }
-
     fn external_reads_or_writes_touch(&self, code: &[RegInstr], mask: &[bool]) -> Option<bool> {
         native_region_external_reads_or_writes_touch(
             code,
@@ -2032,6 +2028,151 @@ pub(in crate::reg_vm) fn native_instruction_has_heap_write(instr: &RegInstr) -> 
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn native_instruction_touches_field_slot(instr: &RegInstr) -> bool {
     native_instr_semantics(instr).field_slot_access
+}
+
+/// The register holding the heap object an instruction mutates IN PLACE, if any.
+/// Only the ops that mutate a shared `Rc<RefCell<..>>` in place qualify — `SetFieldSlot`
+/// is excluded (it is a copy-on-write struct rebuild, not an in-place mutation). Used by
+/// [`native_deepcopy_param_unsoundly_mutated`] to detect mutation of a DeepCopy'd param.
+#[cfg(feature = "native-jit")]
+fn native_heap_mutation_receiver(instr: &RegInstr) -> Option<usize> {
+    match instr {
+        RegInstr::ListSet { list, .. }
+        | RegInstr::ListPush { list, .. }
+        | RegInstr::ListAppend { list, .. }
+        | RegInstr::ListClear { list, .. }
+        | RegInstr::ListPop { list, .. }
+        | RegInstr::ListSort { list, .. }
+        | RegInstr::ListRemoveAt { list, .. } => Some(*list),
+        RegInstr::MapInsert { map, .. } | RegInstr::SortedMapInsert { map, .. } => Some(*map),
+        RegInstr::SetInsert { set, .. } | RegInstr::SortedSetInsert { set, .. } => Some(*set),
+        RegInstr::DequePushBack { deque, .. }
+        | RegInstr::DequePushFront { deque, .. }
+        | RegInstr::DequePopFront { deque, .. }
+        | RegInstr::DequePopBack { deque, .. } => Some(*deque),
+        _ => None,
+    }
+}
+
+/// Whether register `r` carries a heap value (a shared `Rc`) under the inferred native
+/// types. Scalars (`Int`/`Float`/`Bool`) copy by value and cannot alias, so a `DeepCopy`
+/// of one is a no-op and never a leak vector.
+#[cfg(feature = "native-jit")]
+fn native_is_heap_reg(ty: &[Option<NativeTy>], r: usize) -> bool {
+    matches!(
+        ty.get(r).copied().flatten(),
+        Some(
+            NativeTy::Handle
+                | NativeTy::FlatInt
+                | NativeTy::FlatIntMut
+                | NativeTy::FlatFloat
+                | NativeTy::FlatFloatMut
+        )
+    )
+}
+
+/// SOUNDNESS GUARD. The interpreter deep-copies every non-`mut` heap parameter at the
+/// function prologue (`DeepCopy`), giving the callee an isolated copy; a `mut` param is
+/// by-reference (no copy). Native lowers `DeepCopy` to a Nop. That was sound when native
+/// was read-only, but native now performs in-place heap WRITES — so mutating (or leaking)
+/// a DeepCopy'd param's value, directly or through an alias, would propagate to the caller
+/// while the interpreter would mutate only the copy.
+///
+/// Returns `true` (⇒ caller must DECLINE native) if such an unsound mutation/leak is
+/// possible. Conservative: taint every DeepCopy'd HEAP param register, propagate the taint
+/// forward through `Move` and heap-extraction ops (the result aliases the source's inner
+/// `Rc`), then decline if any in-scope native op (a) mutates a tainted receiver in place,
+/// (b) passes a tainted value as a `mut` call arg, (c) stores a tainted value into a
+/// container/struct, or (d) returns a tainted value. `mutation_in_scope(i)` selects the
+/// instructions that actually run natively (whole function vs. the OSR region).
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) fn native_deepcopy_param_unsoundly_mutated(
+    code: &[RegInstr],
+    ty: &[Option<NativeTy>],
+    n_regs: usize,
+    mutation_in_scope: impl Fn(usize) -> bool,
+) -> bool {
+    // `DeepCopy` is emitted ONLY for non-`mut`, non-Copy (i.e. heap) parameters — scalars
+    // are Copy and never deep-copied (RS0008) — so every DeepCopy'd register is a heap root.
+    // Seed them all (do not gate on `ty`, which a region pass may leave untyped for an
+    // unclassified heap param).
+    let mut tainted = vec![false; n_regs];
+    let mut any = false;
+    for instr in code {
+        if let RegInstr::DeepCopy { reg } = instr {
+            if *reg < n_regs {
+                tainted[*reg] = true;
+                any = true;
+            }
+        }
+    }
+    if !any {
+        return false;
+    }
+    // Forward alias closure: `dst` aliases `src`'s inner `Rc` (heap dsts only).
+    let mut changed = true;
+    while changed {
+        changed = false;
+        let edge = |dst: usize, src: usize, tainted: &mut [bool], changed: &mut bool| {
+            if src < n_regs
+                && dst < n_regs
+                && tainted[src]
+                && !tainted[dst]
+                && native_is_heap_reg(ty, dst)
+            {
+                tainted[dst] = true;
+                *changed = true;
+            }
+        };
+        for instr in code {
+            match instr {
+                RegInstr::Move { dst, src }
+                | RegInstr::ListGet { dst, list: src, .. }
+                | RegInstr::MapGet { dst, map: src, .. }
+                | RegInstr::GetField { dst, base: src, .. }
+                | RegInstr::GetFieldSlot { dst, base: src, .. }
+                | RegInstr::UnwrapVariantValue { dst, src, .. }
+                | RegInstr::DequePopFront { dst, deque: src }
+                | RegInstr::DequePopBack { dst, deque: src } => {
+                    edge(*dst, *src, &mut tainted, &mut changed)
+                }
+                _ => {}
+            }
+        }
+    }
+    let is_tainted = |r: &usize| *r < n_regs && tainted[*r];
+    for (i, instr) in code.iter().enumerate() {
+        if !mutation_in_scope(i) {
+            continue;
+        }
+        // (a) IN-PLACE mutation of a tainted heap container — the leak: native mutates the
+        // shared `Rc` the interpreter would have left untouched (it mutated only the copy).
+        if let Some(recv) = native_heap_mutation_receiver(instr) {
+            if recv < n_regs && tainted[recv] {
+                return true;
+            }
+        }
+        // (b) passing a tainted value as a `mut` arg to a (non-inlined) call: the callee
+        // mutates it by reference, leaking to our caller. (`read` args are safe — the callee
+        // deep-copies them itself.)
+        //
+        // NOTE: STORING a tainted value into a container or RETURNING it is intentionally
+        // NOT flagged here. Native types collapse all heap values to `Handle`, so they
+        // cannot distinguish an immutable `String`/`Bytes` (sharing its `Rc` is
+        // unobservable) from a mutable container — flagging stores would wrongly decline the
+        // common, sound pattern of inserting a `read` string param into a `mut` collection.
+        // The reachable leak is the in-place mutation above; a returned/stored mutable
+        // container that is then mutated elsewhere would be caught by the receiver check at
+        // that mutation site (the differential suite is the backstop for the residual).
+        if let RegInstr::CallKnown { args, mut_args, .. } | RegInstr::CallClosure { args, mut_args, .. } =
+            instr
+        {
+            if mut_args.iter().any(|&p| args.get(p).is_some_and(is_tainted)) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Assign type `t` to register `reg`; return `false` on a conflicting reassignment.

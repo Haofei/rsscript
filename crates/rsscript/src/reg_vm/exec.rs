@@ -91,6 +91,18 @@ impl RegVm {
         Ok(())
     }
 
+    /// Whether it is sound to dispatch Cranelift-native code right now: native code
+    /// polls neither the step budget nor the cancel flag and runs allocation off the
+    /// memory meter, so all three preemption/accounting limits must be unarmed (it
+    /// `tick()`s on the interpreter/tier-0 paths instead). The single source of truth
+    /// for both the native-tier gate (`try_native`) and the recursive native fast
+    /// paths (self-recursive + mutual-recursive); see execution spec §6.2 (Model A).
+    pub(super) fn native_limits_unarmed(&self) -> bool {
+        self.limits.step_budget.is_none()
+            && self.limits.cancel.is_none()
+            && self.limits.mem_budget.is_none()
+    }
+
     /// Charge one instruction against the step budget. Always increments the
     /// fuel gauge (the single unconditional add is the whole cost when the budget
     /// is off), and — only when `limits.step_budget` is `Some` — trips once the
@@ -113,18 +125,6 @@ impl RegVm {
     /// `CancellationToken` remains the cooperative, per-task mechanism (it only
     /// preempts at await points); this ambient flag is the blunt host-level kill.
     #[inline]
-    /// Whether it is sound to dispatch Cranelift-native code right now: native code
-    /// polls neither the step budget nor the cancel flag and runs allocation off the
-    /// memory meter, so all three preemption/accounting limits must be unarmed (it
-    /// `tick()`s on the interpreter/tier-0 paths instead). The single source of truth
-    /// for both the native-tier gate (`try_native`) and the recursive native fast
-    /// paths (self-recursive + mutual-recursive); see execution spec §6.2 (Model A).
-    pub(super) fn native_limits_unarmed(&self) -> bool {
-        self.limits.step_budget.is_none()
-            && self.limits.cancel.is_none()
-            && self.limits.mem_budget.is_none()
-    }
-
     pub(super) fn tick(&mut self) -> Result<(), EvalError> {
         self.steps += 1;
         if let Some(limit) = self.limits.step_budget

@@ -7302,6 +7302,46 @@ fn main() -> Unit {
 /// and its closure run ONLY on the interpreter replay (their effects happen exactly as
 /// without the JIT). The loop OSRs; the rare cold path re-runs on the interpreter. Must
 /// match the interpreter byte-for-byte AND OSR.
+/// REVIEW REPRO (2026-06-30): non-`mut` heap param mutated in native must NOT leak to the
+/// caller. The interpreter deep-copies a non-`mut` param at entry (pass-by-value), so the
+/// caller's list is unchanged; native drops `DeepCopy`, so if it writes the param's buffer
+/// in place it would leak. `xs` is non-`mut`; `mutate` sets index 0 in a hot loop.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_non_mut_heap_param_mutation_does_not_leak_to_caller() {
+    let source = "\
+features: local
+
+fn mutate(xs: read List<Int>, limit: Int) -> Int {
+    let mut ys = xs
+    let mut i = 0
+    while i < limit {
+        List.set(list: mut ys, index: 0, value: read i)
+        i = i + 1
+    }
+    return List.get(list: read ys, index: 0)
+}
+fn main() -> Unit {
+    local xs = List<Int>.new()
+    List.push(list: mut xs, value: read 7)
+    let r = mutate(xs: read xs, limit: read 200000)
+    Log.write(message: read String.from_int(value: List.get(list: read xs, index: 0)))
+    Log.write(message: read String.from_int(value: r))
+    return Unit
+}
+";
+    let file = "deepcopy_leak.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (nat, _stats) = exe
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("run");
+    // Caller's xs[0] must stay 7 (deep-copied); the local copy returns 199999. The native
+    // path must DECLINE rather than mutate the caller's `Rc` in place (the soundness guard).
+    assert_eq!(interp.stdout.trim_end(), "7\n199999");
+    assert_eq!(interp.stdout, nat.stdout, "non-mut heap param mutation must not leak to caller");
+}
+
 #[cfg(feature = "native-jit")]
 #[test]
 fn native_osr_inlined_leaf_call_combinator_cold_arm_matches_interpreter() {

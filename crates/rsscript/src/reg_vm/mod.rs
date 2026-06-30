@@ -4156,44 +4156,51 @@ fn jit_value_may_contain_list(value: &VmValue) -> bool {
 
 #[cfg(feature = "native-jit")]
 fn jit_value_contains_list_rc(value: &VmValue, needle: &Rc<RefCell<TypedVec>>) -> bool {
-    fn contains(
-        value: &VmValue,
-        needle: &Rc<RefCell<TypedVec>>,
-        seen_managed: &mut Vec<*const RefCell<VmValue>>,
-    ) -> bool {
+    // `seen` tracks the pointer identity of EVERY interior-mutable container already
+    // entered (`List`/`Deque`/`Map`/`Managed`), not just `Managed`. A heap graph can be
+    // cyclic (e.g. a `List` that, through a `RefCell`, contains itself), so without
+    // recording every container identity the recursion would loop forever / stack-overflow.
+    // A revisit returns `false`: the needle is matched by `Rc::ptr_eq` on FIRST visit, so a
+    // back-edge to an already-seen node cannot be (a fresh path to) the needle.
+    fn contains(value: &VmValue, needle: &Rc<RefCell<TypedVec>>, seen: &mut Vec<usize>) -> bool {
+        // Returns false if `ptr` was already visited; otherwise records it and returns true.
+        fn first_visit(seen: &mut Vec<usize>, ptr: usize) -> bool {
+            if seen.contains(&ptr) {
+                return false;
+            }
+            seen.push(ptr);
+            true
+        }
         match value {
             VmValue::List(list) => {
-                Rc::ptr_eq(list, needle) || {
-                    let borrowed = list.borrow();
-                    borrowed
-                        .iter()
-                        .any(|item| contains(&item, needle, seen_managed))
-                }
+                Rc::ptr_eq(list, needle)
+                    || (first_visit(seen, Rc::as_ptr(list) as usize) && {
+                        let borrowed = list.borrow();
+                        borrowed.iter().any(|item| contains(&item, needle, seen))
+                    })
             }
-            VmValue::Deque(deque) => deque
-                .borrow()
-                .iter()
-                .any(|item| contains(item, needle, seen_managed)),
-            VmValue::Map(map) => map.borrow().iter().any(|(key, value)| {
-                contains(key.value(), needle, seen_managed) || contains(value, needle, seen_managed)
-            }),
-            VmValue::OptionSomeHeap(value) => contains(value, needle, seen_managed),
-            VmValue::Struct(data) | VmValue::Variant(data) => data
-                .fields
-                .iter()
-                .any(|field| contains(field, needle, seen_managed)),
+            VmValue::Deque(deque) => {
+                first_visit(seen, Rc::as_ptr(deque) as usize)
+                    && deque.borrow().iter().any(|item| contains(item, needle, seen))
+            }
+            VmValue::Map(map) => {
+                first_visit(seen, Rc::as_ptr(map) as usize)
+                    && map.borrow().iter().any(|(key, value)| {
+                        contains(key.value(), needle, seen) || contains(value, needle, seen)
+                    })
+            }
+            VmValue::OptionSomeHeap(value) => contains(value, needle, seen),
+            VmValue::Struct(data) | VmValue::Variant(data) => {
+                data.fields.iter().any(|field| contains(field, needle, seen))
+            }
             VmValue::Managed(inner) => {
-                let ptr = Rc::as_ptr(inner);
-                if seen_managed.contains(&ptr) {
-                    return false;
-                }
-                seen_managed.push(ptr);
-                contains(&inner.borrow(), needle, seen_managed)
+                first_visit(seen, Rc::as_ptr(inner) as usize)
+                    && contains(&inner.borrow(), needle, seen)
             }
             VmValue::Closure(closure) => closure
                 .captures
                 .iter()
-                .any(|capture| contains(capture, needle, seen_managed)),
+                .any(|capture| contains(capture, needle, seen)),
             _ => false,
         }
     }

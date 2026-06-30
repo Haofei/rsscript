@@ -295,10 +295,9 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
         .and_then(|signature| signature.return_type.as_deref())
         .and_then(native_declared_type_name_to_ty);
     // The whole-function tier has no per-call runtime param classification (unlike OSR's
-    // `try_osr`), so it cannot identify a heap-typed param register here; `heap_param` is
-    // always false (heap collection key/value PARAMS are not specially typed on this path).
-    // A heap key/value LOCAL still flows its `Handle` type from its in-region definition.
-    let heap_param = |_reg: usize| false;
+    // `try_osr`), so it cannot identify a heap-typed param register here (there is no
+    // `heap_param` predicate on this path; heap collection key/value PARAMS are not specially
+    // typed). A heap key/value LOCAL still flows its `Handle` type from its in-region definition.
     let mut changed = true;
     while changed {
         changed = false;
@@ -717,6 +716,15 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
         if let Some(kind) = flat_param_kind[reg] {
             ty[reg] = Some(kind);
         }
+    }
+
+    // SOUNDNESS: the interpreter deep-copies every non-`mut` heap param at the prologue
+    // (`DeepCopy`); native lowers `DeepCopy` to a Nop but now performs in-place heap
+    // writes. Decline native if a DeepCopy'd heap param's value could be mutated in place
+    // or leaked (directly or via an alias) — otherwise the write would propagate to the
+    // caller while the interpreter mutates only the copy. Types are now final.
+    if native_deepcopy_param_unsoundly_mutated(&code, &ty, n_regs, |i| reachable[i]) {
+        return None;
     }
 
     // J3: a scalar-replaced Option's payload register must be a SCALAR (Int/Float/
@@ -3591,6 +3599,17 @@ fn translate_osr_loop_inner(
             }
         }
     }
+    // SOUNDNESS (OSR): mirror the whole-function DeepCopy guard. Only the loop region runs
+    // natively (the prologue, which the interpreter deep-copies, stays interpreted), so
+    // scope the in-place-mutation / leak check to `[header, exit)`. Taint still seeds from
+    // the prologue `DeepCopy` and propagates through prologue + in-region aliasing. Types
+    // are settled here (list/heap operands are `Handle`); the flat reclassification below
+    // only narrows `Handle`→`Flat*`, both of which `native_is_heap_reg` already accepts.
+    if native_deepcopy_param_unsoundly_mutated(code, &ty, n_regs, |i| {
+        i >= lp.header && i < lp.exit
+    }) {
+        return None;
+    }
     // TV2 flat-array classification on the OSR path. A `Handle` register that is
     // loop-invariant (never rewritten in-loop) and used as a scalar list can be
     // reclassified to a direct flat buffer. Read-only lists become `FlatInt`/
@@ -3981,14 +4000,21 @@ fn translate_osr_loop_inner(
         RegIntCompare::GreaterEqual => JitCompare::Ge,
     };
     let mut string_literals: Vec<Rc<String>> = Vec::new();
-    let intern_string_literal =
-        |literals: &mut Vec<Rc<String>>, value: &Rc<String>| -> Option<i64> {
-            if let Some(index) = literals.iter().position(|existing| **existing == **value) {
-                return i64::try_from(index).ok();
-            }
-            literals.push(Rc::clone(value));
-            i64::try_from(literals.len() - 1).ok()
-        };
+    // O(1)-amortized interning, mirroring the whole-function translator: a content-keyed
+    // `HashMap<Rc<String>, i64>` instead of an O(L) linear scan per literal (O(L²) total).
+    let mut string_literal_ids: HashMap<Rc<String>, i64> = HashMap::new();
+    let intern_string_literal = |literals: &mut Vec<Rc<String>>,
+                                 ids: &mut HashMap<Rc<String>, i64>,
+                                 value: &Rc<String>|
+     -> Option<i64> {
+        if let Some(index) = ids.get(value) {
+            return Some(*index);
+        }
+        let index = i64::try_from(literals.len()).ok()?;
+        literals.push(Rc::clone(value));
+        ids.insert(Rc::clone(value), index);
+        Some(index)
+    };
 
     let mut jit_code: Vec<JitInstr> = Vec::with_capacity(n);
     for (i, instr) in code.iter().enumerate() {
@@ -4018,7 +4044,8 @@ fn translate_osr_loop_inner(
                 value: *value,
             },
             RegInstr::LoadString { dst, value } => {
-                let literal_id = intern_string_literal(&mut string_literals, value)?;
+                let literal_id =
+                    intern_string_literal(&mut string_literals, &mut string_literal_ids, value)?;
                 JitInstr::HostCall {
                     helper: vm_jit::HostHelper::StringLiteral,
                     dst: r(*dst),
