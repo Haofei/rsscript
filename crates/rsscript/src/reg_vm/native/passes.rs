@@ -2316,7 +2316,11 @@ pub(in crate::reg_vm) fn cold_arm_pure_intrinsic(intrinsic: &RegIntrinsic) -> bo
     // side-effect-free and faithfully re-runnable on the interpreter after a native
     // `Bail`; the cold-arm pass keeps its exact arm-detection mechanism.
     let d = intrinsic_descriptor(*intrinsic);
-    d.cold_arm_pure_builder || d.cold_arm_pure_reader
+    // Also admit the Option/Result COMBINATORS (`Option.map`/`and_then`/`unwrap_or`,
+    // `Result.*`). They are higher-order (invoke a closure), but that is safe in a bailable
+    // cold arm: native never executes the arm, so the combinator and its closure run ONLY on
+    // the interpreter replay — any effect of the closure happens exactly as without the JIT.
+    d.cold_arm_pure_builder || d.cold_arm_pure_reader || d.combinator_kind.is_some()
 }
 
 /// Whether `instr` is a pure, side-effect-free value-construction instruction that
@@ -2356,7 +2360,11 @@ pub(in crate::reg_vm) fn cold_arm_pure_value_op(instr: &RegInstr) -> bool {
         | RegInstr::MapInsert { .. }
         | RegInstr::SetInsert { .. }
         | RegInstr::DequePushBack { .. }
-        | RegInstr::DequePushFront { .. } => true,
+        | RegInstr::DequePushFront { .. }
+        // A closure construction: builds a closure value the arm passes to a combinator.
+        // Sound in a bailable cold arm by the same argument — native never executes the arm;
+        // the interpreter rebuilds the closure and runs it once on replay.
+        | RegInstr::MakeClosure { .. } => true,
         RegInstr::CallIntrinsic { intrinsic, .. } => cold_arm_pure_intrinsic(intrinsic),
         // A nested CALL to a known function is admissible in a bailable cold arm: native
         // never executes the arm (it bails at `s`), and a cold-arm `Bail` always takes the

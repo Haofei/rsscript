@@ -7295,3 +7295,51 @@ fn main() -> Unit {
         stats.osr_entries
     );
 }
+
+/// #7 cold-arm coverage slice (2026-06-29, higher-order COMBINATOR): a cold arm that builds
+/// a closure and runs an `Option.map` / `Option.unwrap_or` combinator chain over it. The
+/// combinators are higher-order (they invoke the closure), but that is safe in a bailable
+/// cold arm — native bails at the arm start and never executes the arm, so the combinator
+/// and its closure run ONLY on the interpreter replay (their effects happen exactly as
+/// without the JIT). The loop OSRs; the rare cold path re-runs on the interpreter. Must
+/// match the interpreter byte-for-byte AND OSR.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_inlined_leaf_call_combinator_cold_arm_matches_interpreter() {
+    let source = "\
+fn classify(x: Int) -> Int {
+    if x == 1500 {
+        let opt: Option<Int> = Some(read x)
+        let mapped = Option.map<Int, Int>(value: read opt, mapper: |v| { return v * 2 })
+        return Option.unwrap_or<Int>(value: read mapped, default: read 0)
+    }
+    return x + 1
+}
+fn run(n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut acc = 0
+    let mut i = 0
+    while i < n {
+        acc = acc + classify(x: read i)
+        i = i + 1
+    }
+    return acc
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    return Unit
+}
+";
+    let file = "p7n.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (nat, stats) = exe
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("run");
+    assert_eq!(interp.stdout, nat.stdout, "combinator cold arm must match interpreter");
+    assert!(
+        stats.osr_entries >= 1,
+        "higher-order combinator cold-arm inlined leaf must OSR (entries={})",
+        stats.osr_entries
+    );
+}

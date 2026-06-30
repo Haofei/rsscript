@@ -215,11 +215,14 @@ mod intrinsic_registry_tests {
             assert!(d.cold_arm_pure_reader, "reader {:?}", i);
             assert!(!d.cold_arm_pure_builder, "reader is not a builder {:?}", i);
         }
-        // Higher-order Pure combinators are NOT cold-arm eligible (closure can have
-        // arbitrary effects): neither flag may be set.
+        // Higher-order combinators carry neither the builder nor the reader flag (they are
+        // not value producers/queries); they are cold-arm eligible via `combinator_kind`
+        // instead — a combinator + its closure run only on the interpreter replay after a
+        // cold-arm bail, so any closure effect happens exactly as without the JIT.
         for i in [RegIntrinsic::OptionMap, RegIntrinsic::ResultAndThen] {
             let d = intrinsic_descriptor(i);
             assert!(!d.cold_arm_pure_reader && !d.cold_arm_pure_builder, "{:?}", i);
+            assert!(d.combinator_kind.is_some(), "combinator {:?}", i);
         }
     }
 }
