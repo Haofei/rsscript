@@ -7389,6 +7389,63 @@ fn main() -> Unit {
     );
 }
 
+/// REVIEW REPRO (2026-06-30): the INLINED-callee store leak. A hot loop calls `stash`, a
+/// native-inlinable leaf taking `xs: read List<Int>` and storing it into a `mut` struct
+/// field; after the loop the field is reloaded and mutated. The callee param's `DeepCopy` is
+/// spliced into the loop with an offset register NOT covered by the outer signature — the
+/// previous two-set guard left it un-store-tainted, so the leak slipped through. The
+/// proven-immutable analysis now classifies the inlined param via its arg-marshalling `Move`
+/// (it resolves to a non-immutable local list ⇒ unproven ⇒ tainted), so the store is flagged
+/// and native declines. Interpreter stores a deep copy each call (caller's `xs[0]` stays 7);
+/// native must match.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_inlined_leaf_store_of_non_mut_heap_param_does_not_leak() {
+    let source = "\
+features: local
+
+struct Holder {
+    items: List<Int>
+}
+fn stash(xs: read List<Int>, h: mut Holder) -> Int {
+    h.items = read xs
+    return List.len(list: read xs)
+}
+fn run(n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    local holder = Holder(items: List<Int>.new())
+    local xs = List<Int>.new()
+    List.push(list: mut xs, value: read 7)
+    let mut i = 0
+    let mut acc = 0
+    while i < n {
+        acc = acc + stash(xs: read xs, h: mut holder)
+        i = i + 1
+    }
+    let mut inner = holder.items
+    List.set(list: mut inner, index: 0, value: read 999)
+    return List.get(list: read xs, index: 0)
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    return Unit
+}
+";
+    let file = "inlined_store_leak.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (nat, _stats) = exe
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("run");
+    // Caller's xs[0] must stay 7 (interpreter stored a deep copy); native must not leak the
+    // original handle into `holder` and then mutate it.
+    assert_eq!(interp.stdout.trim_end(), "begin\n7");
+    assert_eq!(
+        interp.stdout, nat.stdout,
+        "inlined-leaf store of a non-mut heap param must not leak to caller"
+    );
+}
+
 #[cfg(feature = "native-jit")]
 #[test]
 fn native_osr_inlined_leaf_call_combinator_cold_arm_matches_interpreter() {
