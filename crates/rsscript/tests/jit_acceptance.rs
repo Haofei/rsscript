@@ -470,6 +470,54 @@ fn main() -> Unit {
     );
 }
 
+/// `List.is_empty<Int>` on a `read List<Int>` param directizes to `ListIsEmptyDirect`
+/// (a `lens`-slot length read compared to zero — no per-iteration host call). The
+/// typed call lets flat classification pin the param even though it is used ONLY via
+/// is_empty, so the function reaches the native tier instead of declining. Must be
+/// byte-identical across every backend.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_jit_directizes_flat_list_is_empty() {
+    let source = "\
+fn count_nonempty(xs: read List<Int>, reps: Int) -> Int {
+    let mut i = 0
+    let mut total = 0
+    while i < reps {
+        if List.is_empty<Int>(list: read xs) {
+            total = total + 1
+        } else {
+            total = total + 2
+        }
+        i = i + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    let mut xs = List<Int>.new()
+    List.push<Int>(list: mut xs, value: read 1)
+    List.push<Int>(list: mut xs, value: read 2)
+    Log.write(message: read String.from_int(value: count_nonempty(xs: read xs, reps: read 5)))
+    return Unit
+}
+";
+    let file = "jit-accept-flat-is-empty.rss";
+    // Correctness across interp / tier-0 / native / deopt-every-safepoint backends.
+    assert_fast_jit_backends_agree(file, source);
+    // Directization: the is_empty-only flat param reaches the native tier (a host
+    // call or a decline would still agree, so also assert it compiled).
+    let executable =
+        rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (output, stats) = executable
+        .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
+        .expect("native eval succeeds");
+    assert_eq!(output.stdout, "10\n", "5 reps × 2 (xs non-empty) = 10");
+    assert!(
+        stats.compiled > 0,
+        "the flat List.is_empty function should compile native, not decline: {stats:?}"
+    );
+}
+
 /// Float-value map read: `Map.get` on a `Map<Int, Float>` fused with its Option
 /// match lowers to the new `MatchMapGetFloat` JitInstr (f64 value channel + the
 /// shared found-flag), the read-side counterpart of `MatchMapGetInt`. The lookup

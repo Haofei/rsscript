@@ -701,6 +701,38 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 RegInstr::ListSort { list, .. } if is_handle_param(*list) => {
                     st[*list] = S::Disq;
                 }
+                // `List.is_empty<T>` reads only the length (the `lens` slot), never
+                // elements, so it can ride the flat path. The typed call names the
+                // element type, letting us pin the flat kind even when the param is
+                // used ONLY via is_empty (a length read is element-type-agnostic, so
+                // the kind only sets how the buffer pointer is marshalled — never
+                // dereferenced here). Non-Int/Float element types stay neutral.
+                RegInstr::CallTypedIntrinsic {
+                    intrinsic: RegIntrinsic::ListIsEmpty,
+                    args,
+                    type_arg,
+                    ..
+                } if !args.is_empty()
+                    && is_handle_param(args[0])
+                    && matches!(type_arg.as_str(), "Int" | "Float") =>
+                {
+                    let kind = if type_arg.as_str() == "Float" {
+                        NativeTy::FlatFloat
+                    } else {
+                        NativeTy::FlatInt
+                    };
+                    st[args[0]] = match st[args[0]] {
+                        S::Unseen => S::Flat(kind),
+                        S::Flat(k) if k == kind => S::Flat(kind),
+                        S::Flat(NativeTy::FlatIntMut) if kind == NativeTy::FlatInt => {
+                            S::Flat(NativeTy::FlatIntMut)
+                        }
+                        S::Flat(NativeTy::FlatFloatMut) if kind == NativeTy::FlatFloat => {
+                            S::Flat(NativeTy::FlatFloatMut)
+                        }
+                        _ => S::Disq,
+                    };
+                }
                 // `ListLen` is kind-neutral — neither pins nor disqualifies.
                 _ => {}
             }
@@ -1841,6 +1873,26 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                     rounding,
                 }
             }
+            // `List.is_empty` on a flat-array param reads the length directly from the
+            // param's `lens` slot and compares to zero — no per-iteration host call.
+            // (Non-flat/`Handle` receivers fall through to the host-helper path below.)
+            RegInstr::CallIntrinsic {
+                intrinsic: RegIntrinsic::ListIsEmpty,
+                args,
+                dst,
+            }
+            | RegInstr::CallTypedIntrinsic {
+                intrinsic: RegIntrinsic::ListIsEmpty,
+                args,
+                dst,
+                ..
+            } if args.len() == 1 && flat_param(args[0]) => {
+                require(bool_ty(*dst))?;
+                JitInstr::ListIsEmptyDirect {
+                    dst: r(*dst),
+                    base: r(args[0]),
+                }
+            }
             RegInstr::CallIntrinsic {
                 intrinsic: RegIntrinsic::StringSplit,
                 dst,
@@ -2576,6 +2628,7 @@ fn native_jit_written_reg(instr: &vm_jit::JitInstr) -> Option<u32> {
         | vm_jit::JitInstr::ListGetFloatDirect { dst, .. }
         | vm_jit::JitInstr::ListSetFloatDirect { dst, .. }
         | vm_jit::JitInstr::ListLenDirect { dst, .. }
+        | vm_jit::JitInstr::ListIsEmptyDirect { dst, .. }
         | vm_jit::JitInstr::MatchMapGetInt { value_dst: dst, .. }
         | vm_jit::JitInstr::MatchMapGetFloat { value_dst: dst, .. }
         | vm_jit::JitInstr::MatchSortedMapGetInt { value_dst: dst, .. }
@@ -4791,6 +4844,26 @@ fn translate_osr_loop_inner(
                     dst: r(*dst),
                     src: r(args[0]),
                     rounding,
+                }
+            }
+            // `List.is_empty` on a flat-classified list: direct `len == 0` from the
+            // marshalled `lens` slot, no per-iteration host call. Non-flat receivers
+            // fall through to the host-helper path below.
+            RegInstr::CallIntrinsic {
+                intrinsic: RegIntrinsic::ListIsEmpty,
+                args,
+                dst,
+            }
+            | RegInstr::CallTypedIntrinsic {
+                intrinsic: RegIntrinsic::ListIsEmpty,
+                args,
+                dst,
+                ..
+            } if args.len() == 1 && flat_reg(args[0]) => {
+                require(bool_ty(*dst))?;
+                JitInstr::ListIsEmptyDirect {
+                    dst: r(*dst),
+                    base: r(args[0]),
                 }
             }
             RegInstr::CallIntrinsic {

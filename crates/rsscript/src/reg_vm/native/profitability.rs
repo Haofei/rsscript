@@ -181,7 +181,8 @@ pub(in crate::reg_vm) fn native_region_profitability(
             | JitInstr::ListGetFloatDirect { .. }
             | JitInstr::ListSetIntDirect { .. }
             | JitInstr::ListSetFloatDirect { .. }
-            | JitInstr::ListLenDirect { .. } => {
+            | JitInstr::ListLenDirect { .. }
+            | JitInstr::ListIsEmptyDirect { .. } => {
                 p.direct_reads += 1;
                 score += W_DIRECT_LIST;
             }

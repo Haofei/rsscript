@@ -1445,6 +1445,15 @@ pub enum JitInstr {
         dst: u32,
         base: u32,
     },
+    /// TV2 direct emptiness test: `dst = (len(base) == 0)` for the flat-array param
+    /// `base` (a `FlatInt`/`FlatFloat` register). Reads the length from the param's
+    /// `lens` slot and compares to zero — no host call. `dst` is an `Int` register
+    /// holding a 0/1 boolean (the same storage class as `Equal`/`Compare` results).
+    /// The flat-list counterpart of the `List.is_empty` host helper.
+    ListIsEmptyDirect {
+        dst: u32,
+        base: u32,
+    },
     /// Profile-guided monomorphic inlining guard (J2). `base` is a `Handle`
     /// register holding a closure handle; reads its underlying function id via
     /// [`HostHelpers::closure_id`] and, if it differs from `expected`, **bails** to
@@ -1609,6 +1618,7 @@ fn native_scalar_leaf_callable(function: &JitFunction, osr: bool, _returns_handl
                 | JitInstr::ListGetFloatDirect { .. }
                 | JitInstr::ListSetFloatDirect { .. }
                 | JitInstr::ListLenDirect { .. }
+                | JitInstr::ListIsEmptyDirect { .. }
         ) && !matches!(
             instr,
             JitInstr::HostCall { helper, .. } | JitInstr::MemoizedHostCall { helper, .. }
@@ -3277,6 +3287,30 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                 }
                 require_class(*dst, JitValueType::Int, "ListLenDirect result")?;
             }
+            JitInstr::ListIsEmptyDirect { dst, base } => {
+                check_reg(*base)?;
+                if !matches!(
+                    class(*base),
+                    JitValueType::FlatInt | JitValueType::FlatFloat
+                ) {
+                    return Err(JitError(format!(
+                        "ListIsEmptyDirect base: register {base} is {:?}, expected a flat-array param",
+                        class(*base)
+                    )));
+                }
+                let window = if osr {
+                    program.n_regs as usize
+                } else {
+                    program.n_params as usize
+                };
+                if (*base as usize) >= window {
+                    return Err(JitError(format!(
+                        "ListIsEmptyDirect base: register {base} is not a parameter"
+                    )));
+                }
+                // Result is a 0/1 boolean, stored in an Int register like `Equal`.
+                require_class(*dst, JitValueType::Int, "ListIsEmptyDirect result")?;
+            }
             JitInstr::GuardClosureId { base, expected } => {
                 require_class(*base, JitValueType::Handle, "GuardClosureId base")?;
                 if *expected < 0 {
@@ -3330,7 +3364,8 @@ fn instr_def(instr: &JitInstr) -> Option<u32> {
         | JitInstr::ListSetIntDirect { dst, .. }
         | JitInstr::ListGetFloatDirect { dst, .. }
         | JitInstr::ListSetFloatDirect { dst, .. }
-        | JitInstr::ListLenDirect { dst, .. } => Some(*dst),
+        | JitInstr::ListLenDirect { dst, .. }
+        | JitInstr::ListIsEmptyDirect { dst, .. } => Some(*dst),
         JitInstr::Nop
         | JitInstr::Jump { .. }
         | JitInstr::JumpIfBool { .. }
@@ -5510,6 +5545,21 @@ fn build_function(
                     (*base as i32) * 8,
                 );
                 bcx.def_var(reg(*dst), len);
+            }
+            JitInstr::ListIsEmptyDirect { dst, base } => {
+                // Same `lens`-slot length read as `ListLenDirect`, then `== 0` as a
+                // 0/1 boolean (mirrors the `Equal` lowering: icmp → uextend to i64).
+                // No host call, no bail.
+                let len = bcx.ins().load(
+                    types::I64,
+                    MemFlags::trusted(),
+                    lens_ptr,
+                    (*base as i32) * 8,
+                );
+                let zero = bcx.ins().iconst(types::I64, 0);
+                let empty = bcx.ins().icmp(IntCC::Equal, len, zero);
+                let empty64 = bcx.ins().uextend(types::I64, empty);
+                bcx.def_var(reg(*dst), empty64);
             }
             JitInstr::GuardClosureId { base, expected } => {
                 // Read the closure handle's underlying function id and bail to the
