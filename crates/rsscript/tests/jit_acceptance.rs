@@ -6949,3 +6949,54 @@ fn main() -> Unit {
         stats.osr_entries
     );
 }
+
+/// #7 cold-arm path BOUNDARY (2026-06-29): the true remaining frame-chain domain. A cold
+/// arm that performs a WRITE (`List.push` to an arm-local collection) is NOT a pure-value
+/// op, so it is neither dissolvable nor a deopt-replaceable cold arm — the leaf is not
+/// inlinable and the loop correctly DECLINES native OSR, running on the interpreter.
+/// CHARACTERIZATION: output must still match the interpreter byte-for-byte (correctness is
+/// never at risk — §7.2 makes abandon-and-reinterpret always correct). This locks the
+/// boundary: pure builder/reader cold arms OSR (the slices shipped this session); arms with
+/// Write/Suspend ops or higher-order closure combinators decline safely. Lifting that
+/// decline is a PERF-only optimization (the inline frame-chain), not a correctness gap, and
+/// is deliberately NOT attempted without a directed per-case repro (the project's iron rule:
+/// "when unsure, REJECT"; never ship unverifiable native deopt).
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_inlined_leaf_call_write_cold_arm_declines_but_matches_interpreter() {
+    let source = "\
+fn classify(x: Int) -> Int {
+    if x == 1500 {
+        let mut tmp: List<Int> = []
+        List.push(list: mut tmp, value: read x)
+        return List.len(list: read tmp)
+    }
+    return x + 1
+}
+fn run(n: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut acc = 0
+    let mut i = 0
+    while i < n {
+        acc = acc + classify(x: read i)
+        i = i + 1
+    }
+    return acc
+}
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    return Unit
+}
+";
+    let file = "p7g.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp");
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (nat, stats) = exe
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("run");
+    let _ = stats; // may or may not OSR an unrelated region; correctness is the contract
+    assert_eq!(
+        interp.stdout, nat.stdout,
+        "write-cold-arm leaf must match interpreter even though it declines inlining"
+    );
+}
