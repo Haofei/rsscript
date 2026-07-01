@@ -536,3 +536,41 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   the writeup does not overclaim — Phase 2 delivered a self-hosted *recognizer*.
 - **Tests:** `crate::selfhost_parity::parser_parity_corpus`.
 - **Status:** decided.
+
+### SH-022 — self-hosted lexer is ~5000× slower on the VM; cost is per-char intrinsic/collection dispatch, NOT string building
+
+- **Tool:** self-hosted lexer (`selfhost/lexer.rss`) run on the reg-VM vs native
+  `crate::lexer::lex`, over the whole 545-file corpus (712 KB).
+- **Symptom (measured, release):**
+  | lexer | time | throughput |
+  |-------|------|-----------|
+  | native Rust `lex()` | 15.3 ms | 46.5 MB/s |
+  | rss lexer on reg-VM | **79.5 s** | ~0.009 MB/s |
+  → **~5100× slowdown** (~112 µs per source char).
+- **Controlled experiment:** rewrote the token/output string building from repeated
+  `String.concat` (O(n²)) to `StringBuilder` (O(n)). **No measurable change**
+  (5140× → 5195×, within noise), parity still 544/544. So string-building is NOT
+  the bottleneck (most tokens are short, so the quadratic term never dominates).
+- **Backend:** vm (also relevant to tier-0/native — this code is intrinsic-bound,
+  not native-eligible, cf. SH-001/SH-004).
+- **Root cause:** the main loop is O(n) (single `String.chars` + one pass), but does
+  ~6 intrinsic dispatches PER CHARACTER — `List.get` on a `List<Char>` (VmValue
+  boxing + refcount) plus `Char.to_code`/`is_whitespace`/`is_digit`/… and the
+  `code_at` peeks (c1,c2). The dominant cost is the VM's per-op value-representation
+  + intrinsic-dispatch overhead over ~712 K chars, exactly the lever flagged by
+  SH-001/SH-004/SH-011 and the parked perf roadmap. This is the first REAL-workload
+  profile that is unambiguously VM-dispatch-bound.
+- **Classification:** VM (value representation + intrinsic dispatch) + stdlib
+  (no char-cursor / native String-iteration intrinsic; `String.chars → List<Char>`
+  forces per-char boxed access).
+- **Decision:** the real lever is cheaper per-char access, NOT string building:
+  e.g. a native string byte/char cursor intrinsic (iterate without materializing a
+  boxed `List<Char>`), and lower per-intrinsic dispatch overhead. Cross-ref SH-006:
+  AOT is ~144× faster than the VM on such code, so an AOT-compiled self-hosted lexer
+  would land ~0.5 s (~30× native Rust) — the residual being the intrinsic *count*
+  per char, which the char-cursor intrinsic would also cut. Feeds
+  [[perf-refactor-roadmap]] / [[jit-collection-perf-measurement]] with real-workload
+  evidence (the trigger that work was waiting for).
+- **Tests / bench:** `crate::selfhost_parity::lexer_perf_corpus`
+  (`--release -- --ignored`).
+- **Status:** open (VM/stdlib lever identified; feeds perf roadmap).

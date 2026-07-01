@@ -254,6 +254,50 @@ fn lexer_parity_corpus() {
     );
 }
 
+/// Phase-4 perf probe (ignored; run with `--release -- --ignored --nocapture`):
+/// how much slower is the self-hosted rss lexer (on the reg-VM) than the native
+/// Rust `lex()` over the whole corpus? This is the "is the self-hosted tool
+/// slow?" macro-benchmark — a real workload, not a microkernel. Feeds the parked
+/// VM value-representation / intrinsic-dispatch perf work.
+#[test]
+#[ignore]
+fn lexer_perf_corpus() {
+    use std::time::Instant;
+    let root = workspace_root();
+    let files = collect_rss_files(&root);
+    let exe = compile_lexer().expect("rss lexer should compile");
+    let mut rust_ns: u128 = 0;
+    let mut rss_ns: u128 = 0;
+    let mut bytes: usize = 0;
+    let mut n_ok = 0usize;
+    for file in &files {
+        let rel = file.strip_prefix(&root).unwrap_or(file).display().to_string();
+        let Ok(source) = std::fs::read_to_string(file) else {
+            continue;
+        };
+        bytes += source.len();
+        let t0 = Instant::now();
+        let _ = lex(&rel, &source);
+        rust_ns += t0.elapsed().as_nanos();
+        let t1 = Instant::now();
+        if exe.eval_main_with_args([source.clone()]).is_ok() {
+            n_ok += 1;
+        }
+        rss_ns += t1.elapsed().as_nanos();
+    }
+    let rust_ms = rust_ns as f64 / 1e6;
+    let rss_ms = rss_ns as f64 / 1e6;
+    eprintln!(
+        "\n=== lexer_perf_corpus ===\n  files: {} (ran {n_ok})\n  bytes: {bytes}\n  \
+         Rust lex():   {rust_ms:.1} ms  ({:.1} MB/s)\n  rss lexer/VM: {rss_ms:.1} ms  \
+         ({:.1} MB/s)\n  slowdown (rss/Rust): {:.1}x\n",
+        files.len(),
+        bytes as f64 / 1e6 / (rust_ms / 1e3),
+        bytes as f64 / 1e6 / (rss_ms / 1e3),
+        rss_ms / rust_ms,
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Phase 2 — parser recognition parity.
 //

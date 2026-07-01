@@ -8,6 +8,11 @@
 // rss constraints honored throughout (see ledger SH-016/SH-017):
 //  - no character literals: compare code points via Char.to_code.
 //  - statement-level expressions stay on ONE line.
+//
+// SH-022: string building uses StringBuilder (O(n)) not repeated String.concat
+// (O(n^2)) — `local` bindings require `features: local`.
+
+features: local
 
 // The 30 reserved keywords (crate::lexer::KEYWORDS). Contextual words
 // (await, native) and builtin constants (true false Ok Err Some None Unit)
@@ -41,39 +46,39 @@ fn code_at(chars: read List<Char>, n: read Int, i: read Int) -> Int {
 
 // Raw substring chars[from..to].
 fn slice(chars: read List<Char>, from: read Int, to: read Int) -> String {
-    let mut out = ""
+    local out = StringBuilder.new()
     let mut k = from
     while k < to {
         let c = List.get(list: read chars, index: read k)
-        out = String.concat(left: read out, right: read Char.to_string(value: read c))
+        StringBuilder.push(builder: mut out, value: read Char.to_string(value: read c))
         k = k + 1
     }
-    return out
+    return StringBuilder.finish(builder: take out)
 }
 
 // Escape a payload exactly like the harness: backslash->\\, \n, \t, \r.
 fn escape(s: read String) -> String {
     let cs = String.chars(value: read s)
     let m = List.len(list: read cs)
-    let mut out = ""
+    local out = StringBuilder.new()
     let mut k = 0
     while k < m {
         let c = List.get(list: read cs, index: read k)
         let code = Char.to_code(value: read c)
         if code == 92 {
-            out = String.concat(left: read out, right: read "\\\\")
+            StringBuilder.push(builder: mut out, value: read "\\\\")
         } else if code == 10 {
-            out = String.concat(left: read out, right: read "\\n")
+            StringBuilder.push(builder: mut out, value: read "\\n")
         } else if code == 9 {
-            out = String.concat(left: read out, right: read "\\t")
+            StringBuilder.push(builder: mut out, value: read "\\t")
         } else if code == 13 {
-            out = String.concat(left: read out, right: read "\\r")
+            StringBuilder.push(builder: mut out, value: read "\\r")
         } else {
-            out = String.concat(left: read out, right: read Char.to_string(value: read c))
+            StringBuilder.push(builder: mut out, value: read Char.to_string(value: read c))
         }
         k = k + 1
     }
-    return out
+    return StringBuilder.finish(builder: take out)
 }
 
 fn emit(kind: read String, payload: read String) -> Unit {
