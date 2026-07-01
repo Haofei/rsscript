@@ -4574,14 +4574,19 @@ fn main() -> Unit {
         "the PIC must be declined under the default cost model: {stats:?}",
     );
     let report = lines.join("\n");
-    // The cost-model decline summary is built from the actual run's telemetry, so it
-    // reliably shows the PIC decline with its score breakdown. (The per-function
-    // verdict re-translates WITHOUT profile feedback, so it may not reproduce the
-    // profile-guided PIC — the summary block is the dependable signal here.)
+    // The cost-model decline summary (built from this run's telemetry) shows the PIC
+    // decline with its score breakdown...
     assert!(
         report.contains("jit-report: cost-model decline summary")
             && report.contains("pic_sites=1"),
         "report must summarize the cost-model decline with its score breakdown, got:\n{report}",
+    );
+    // ...and the per-function verdict now attributes it to the actual declined
+    // function via runtime attribution (item #2) — reliable even for a profile-guided
+    // PIC, which a re-derivation would miss.
+    assert!(
+        report.contains("not native: declined by cost model"),
+        "a function block must be attributed to the cost-model decline, got:\n{report}",
     );
 }
 

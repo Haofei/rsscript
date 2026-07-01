@@ -2434,6 +2434,11 @@ pub struct NativeStats {
     /// profitability is a distinct, post-eligibility judgement and must not be
     /// clobbered by it.
     pub unprofitable_decline_reasons: BTreeMap<String, u64>,
+    /// Runtime attribution: for each function the cost model declined this run, the
+    /// (first) decline reason — ground truth for the report's per-function "declined
+    /// by cost model" verdict, so it need not re-derive (which loses profile-guided
+    /// PICs). Keyed by function name.
+    pub unprofitable_declined_fns: BTreeMap<String, String>,
 }
 
 #[cfg(feature = "native-jit")]
@@ -2551,6 +2556,7 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} unprofitable_declines={}",
             "osr_entries": self.osr_entries,
             "unprofitable_declines": self.unprofitable_declines,
             "unprofitable_decline_reasons": &self.unprofitable_decline_reasons,
+            "unprofitable_declined_fns": &self.unprofitable_declined_fns,
         })
     }
 }
@@ -2589,24 +2595,23 @@ fn jit_missed_opt_report(unit: &RegUnit, native: &NativeState) -> Vec<String> {
 
         // --- Native-tier verdict --------------------------------------------------
         match translate_to_native_jit(unit, func) {
-            Some((jit_fn, ..)) => {
+            Some(_) => {
                 if native.report_native_ok.contains(&key) {
                     block.push("  native: ok".to_string());
+                } else if let Some(reason) =
+                    native.stats.unprofitable_declined_fns.get(&func.name)
+                {
+                    // Runtime attribution (ground truth from this run's cost-model
+                    // consult) — the common "why no JIT" case now the model enforces
+                    // by default. Reliable even for profile-guided PICs, which a
+                    // re-derivation here would miss.
+                    block.push(format!("  not native: declined by cost model — {reason}"));
                 } else {
-                    // Eligible but never observed running natively this run. Distinguish
-                    // the cost-model (profitability) decline — the common "why no JIT"
-                    // case now that the model enforces by default — from a plain
-                    // tier-deferred/not-hot miss.
-                    let profit = effective_cost_mode().active().then(|| {
-                        native_region_profitability(&jit_fn, jit_function_has_loop(&func.code))
-                    });
-                    match profit {
-                        Some(p) if p.decline => block
-                            .push(format!("  not native: declined by cost model — {}", p.reason(&func.name))),
-                        _ => block.push(
-                            "  native: eligible (not run natively this execution)".to_string(),
-                        ),
-                    }
+                    // Eligible but never observed running natively this run
+                    // (tier-deferred, not called hot, or demoted by another gate).
+                    block.push(
+                        "  native: eligible (not run natively this execution)".to_string(),
+                    );
                 }
             }
             None => {

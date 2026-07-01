@@ -162,6 +162,7 @@ fn consult_profitability(
     jit_fn: &vm_jit::JitFunction,
     has_backedge: bool,
     region: &str,
+    func_name: &str,
 ) -> bool {
     let mode = effective_cost_mode();
     if !mode.active() {
@@ -170,7 +171,7 @@ fn consult_profitability(
     let p = native_region_profitability(jit_fn, has_backedge);
     if matches!(mode, CostMode::Report) && std::env::var_os("RSS_JIT_REPORT").is_some() {
         // Log EVERY scored region (kept and declined) so weights can be calibrated.
-        eprintln!("[cost-model] {}", p.summary(region));
+        eprintln!("[cost-model] {} fn=`{func_name}`", p.summary(region));
     }
     if !p.decline {
         return false;
@@ -182,6 +183,14 @@ fn consult_profitability(
             .unprofitable_decline_reasons
             .entry(p.reason(region))
             .or_insert(0) += 1;
+        // Runtime ATTRIBUTION: record which actual function/region was declined, so
+        // the report can say per-function "declined by cost model" from ground truth
+        // rather than a fragile re-derivation (which loses profile-guided PICs).
+        native
+            .stats
+            .unprofitable_declined_fns
+            .entry(func_name.to_string())
+            .or_insert_with(|| p.reason(region));
     }
     // `report` observes but never changes execution; only `enforce` declines.
     matches!(mode, CostMode::Enforce)
@@ -996,7 +1005,13 @@ impl RegVm {
                             // function on the interpreter (cached below as not-native). `off`
                             // and `report` modes never change execution here.
                             let has_backedge = jit_function_has_loop(&func.code);
-                            if consult_profitability(native, &jit_fn, has_backedge, "whole-fn") {
+                            if consult_profitability(
+                                native,
+                                &jit_fn,
+                                has_backedge,
+                                "whole-fn",
+                                &func.name,
+                            ) {
                                 None
                             } else {
                                 let started = native.collect_stats.then(std::time::Instant::now);
@@ -1756,7 +1771,7 @@ impl RegVm {
                                 // Step 1 cost model: an OSR loop is always a back-edge region;
                                 // in `enforce` mode decline an unprofitable loop and resume on
                                 // the interpreter (correctness-safe).
-                                if consult_profitability(native, &jit_fn, true, "osr") {
+                                if consult_profitability(native, &jit_fn, true, "osr", &func.name) {
                                     return None;
                                 }
                                 let heap_input_regs = osr_heap_input_regs(&jit_fn);
@@ -2140,7 +2155,7 @@ impl RegVm {
                                     // Step 1 cost model: an OSR loop is always a back-edge
                                     // region; in `enforce` mode decline an unprofitable loop
                                     // and resume on the interpreter (correctness-safe).
-                                    if consult_profitability(native, &jit_fn, true, "osr") {
+                                    if consult_profitability(native, &jit_fn, true, "osr", &func.name) {
                                         return None;
                                     }
                                     let heap_input_regs = osr_heap_input_regs(&jit_fn);
