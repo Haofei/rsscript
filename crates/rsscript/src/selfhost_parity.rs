@@ -115,12 +115,26 @@ fn parse_line(line: &str) -> Option<CanonTok> {
     })
 }
 
-/// Compile `selfhost/lexer.rss` once for reuse across many inputs.
+/// Read a self-hosted tool source, prepended with the shared `scan.rss` prelude.
+/// The single-file VM model has no cross-file import, so the shared scanner is
+/// concatenated (scan.rss first, then a newline, then the tool file) and the
+/// combined program is compiled as one unit. `features: local` therefore appears
+/// exactly once (only in scan.rss).
+fn combined_tool_source(tool: &str) -> Result<String, String> {
+    let dir = selfhost_dir();
+    let scan_path = dir.join("scan.rss");
+    let scan_src = std::fs::read_to_string(&scan_path)
+        .map_err(|e| format!("cannot read {}: {e}", scan_path.display()))?;
+    let tool_path = dir.join(tool);
+    let tool_src = std::fs::read_to_string(&tool_path)
+        .map_err(|e| format!("cannot read {}: {e}", tool_path.display()))?;
+    Ok(format!("{scan_src}\n{tool_src}"))
+}
+
+/// Compile `selfhost/lexer.rss` (with the shared prelude) once for reuse.
 fn compile_lexer() -> Result<RegVmExecutable, String> {
-    let lexer_path = selfhost_dir().join("lexer.rss");
-    let lexer_src = std::fs::read_to_string(&lexer_path)
-        .map_err(|e| format!("cannot read {}: {e}", lexer_path.display()))?;
-    reg_vm_compile_source("selfhost/lexer.rss", &lexer_src)
+    let combined = combined_tool_source("lexer.rss")?;
+    reg_vm_compile_source("selfhost/lexer.rss", &combined)
         .map_err(|e| format!("rss lexer failed to compile: {e:?}"))
 }
 
@@ -335,10 +349,8 @@ fn parse_position_tier() -> bool {
 }
 
 fn compile_parser() -> Result<RegVmExecutable, String> {
-    let path = selfhost_dir().join("parser.rss");
-    let src = std::fs::read_to_string(&path)
-        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    reg_vm_compile_source("selfhost/parser.rss", &src)
+    let combined = combined_tool_source("parser.rss")?;
+    reg_vm_compile_source("selfhost/parser.rss", &combined)
         .map_err(|e| format!("rss parser failed to compile: {e:?}"))
 }
 
@@ -483,10 +495,8 @@ fn checker_oracle_codes(file: &str, source: &str) -> Vec<String> {
 }
 
 fn compile_checker() -> Result<RegVmExecutable, String> {
-    let path = selfhost_dir().join("check.rss");
-    let src = std::fs::read_to_string(&path)
-        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    reg_vm_compile_source("selfhost/check.rss", &src)
+    let combined = combined_tool_source("check.rss")?;
+    reg_vm_compile_source("selfhost/check.rss", &combined)
         .map_err(|e| format!("rss checker failed to compile: {e:?}"))
 }
 
