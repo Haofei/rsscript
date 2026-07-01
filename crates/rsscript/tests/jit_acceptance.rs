@@ -7901,3 +7901,77 @@ fn main() -> Unit {
         "caller-aliased mut-arg call cold arm must match interpreter even when it declines"
     );
 }
+
+/// Item #2 prerequisite (transform-driver / deopt-mapping safety): a DEEP
+/// multi-transform OSR region — an inlined leaf call, a non-escaping `Option<Int>`,
+/// and a non-escaping `Result<Int,Int>` (user variant) all dissolved by scalar
+/// replacement inside one hot loop, so several region transforms and their ip-maps
+/// compose. Run through every fast backend INCLUDING deopt-every-safepoint, which
+/// forces a bail at each native safepoint and resumes via the composed ip-map — so a
+/// wrong ip-map composition (the exact failure a shared transform driver could
+/// introduce) would diverge here. Byte-identical parity is the guard.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_deep_multi_transform_survives_deopt_every_safepoint() {
+    let source = "\
+fn leaf(x: Int) -> Int {
+    return x * 3 - 1
+}
+
+fn hot(limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut acc = 0
+    let mut i = 0
+    while i < limit {
+        let mut o: Option<Int> = None
+        if i % 2 == 0 {
+            o = Some(leaf(x: read i))
+        } else {
+            o = None
+        }
+        let mut r: Result<Int, Int> = Ok(read 0)
+        if i % 3 == 0 {
+            r = Ok(read i)
+        } else {
+            let neg = 0 - i
+            r = Err(read neg)
+        }
+        match o {
+            Some(v) => {
+                acc = acc + v
+            }
+            None => {
+                acc = acc + 1
+            }
+        }
+        match r {
+            Ok(v) => {
+                acc = acc + v
+            }
+            Err(e) => {
+                acc = acc - e
+            }
+        }
+        i = i + 1
+    }
+    return acc
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: hot(limit: read 200)))
+    return Unit
+}
+";
+    let file = "jit-osr-deep-multi-transform.rss";
+    // Deopt-every parity across the whole composed transform pipeline.
+    assert_fast_jit_backends_agree(file, source);
+    // Confirm it actually exercises the OSR pipeline (not trivially declined).
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (_out, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert!(
+        stats.osr_entries > 0,
+        "the deep multi-transform loop should OSR natively: {stats:?}",
+    );
+}
