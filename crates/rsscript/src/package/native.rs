@@ -318,6 +318,7 @@ pub(super) fn native_binding_interface_sources(
                 profile_spans: Vec::new(),
                 unknown_top_level_spans: Vec::new(),
                 malformed_declaration_spans: Vec::new(),
+                char_literal_spans: Vec::new(),
                 protocols: Vec::new(),
                 protocol_impls: Vec::new(),
                 items: selected_items,

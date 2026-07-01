@@ -208,6 +208,7 @@ fn analyze_program(
         type_alias_params,
         in_task_group: false,
         async_let_names: Vec::new(),
+        char_literal_spans: HashSet::new(),
     };
     analyzer.run();
     let mut diagnostics = analyzer.diagnostics;
@@ -274,6 +275,7 @@ fn analyze_syntax_program(
         type_alias_params: Default::default(),
         in_task_group: false,
         async_let_names: Vec::new(),
+        char_literal_spans: HashSet::new(),
     };
     analyzer.run_syntax_only();
     let mut diagnostics = analyzer.diagnostics;
@@ -309,6 +311,11 @@ pub(crate) struct Analyzer<'a> {
     pub(crate) type_alias_params: std::collections::BTreeMap<String, Vec<String>>,
     in_task_group: bool,
     pub(crate) async_let_names: Vec<String>,
+    /// Spans of folded `'...'` character-literal tokens. These get one targeted
+    /// "no character-literal syntax" diagnostic; the generic `Expr::Unknown`
+    /// walk skips them so the lone `'` operand does not also emit a duplicate
+    /// RS0015.
+    pub(crate) char_literal_spans: HashSet<crate::diagnostic::Span>,
 }
 
 fn collect_task_group_async_lets(

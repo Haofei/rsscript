@@ -2,6 +2,19 @@ use super::*;
 
 impl Analyzer<'_> {
     pub(super) fn check_unsupported_syntax(&mut self) {
+        // A `'...'` character-literal attempt lexes to one `Symbol("'")` token.
+        // Report it once with a clear message and remember its span so the
+        // generic `Expr::Unknown` walk below does not emit a duplicate RS0015 for
+        // the same lone `'` operand.
+        let char_literal_spans = self.syntax_program.char_literal_spans.clone();
+        self.char_literal_spans = char_literal_spans.iter().cloned().collect();
+        for span in char_literal_spans {
+            self.unsupported_syntax(
+                span,
+                "character literal",
+                "RSScript has no character-literal syntax. Use a String literal (\"x\") or compare code points with Char.to_code(...).",
+            );
+        }
         for span in self.syntax_program.unknown_top_level_spans.clone() {
             self.unsupported_syntax(
                 span,
@@ -397,6 +410,7 @@ impl Analyzer<'_> {
                     );
                 }
                 for arm in &stmt.arms {
+                    self.check_positional_multifield_pattern(&arm.pattern);
                     self.check_unsupported_syntax_block(&arm.body);
                 }
             }
@@ -465,6 +479,7 @@ impl Analyzer<'_> {
             Expr::Match { value, arms, .. } => {
                 self.check_unsupported_syntax_expr(value);
                 for arm in arms {
+                    self.check_positional_multifield_pattern(&arm.pattern);
                     self.check_unsupported_syntax_block(&arm.body);
                 }
             }
@@ -488,11 +503,18 @@ impl Analyzer<'_> {
             | Expr::Number(_, _)
             | Expr::String(_, _)
             | Expr::MultilineString(_, _) => {}
-            Expr::Unknown(span) => self.unsupported_syntax(
-                span.clone(),
-                "unsupported expression",
-                "This expression is outside the current RSScript parser surface.",
-            ),
+            Expr::Unknown(span) => {
+                // A lone `'` operand from a character-literal attempt already got
+                // the targeted "character literal" diagnostic; do not also emit
+                // the generic unsupported-expression RS0015 for it.
+                if !self.char_literal_spans.contains(span) {
+                    self.unsupported_syntax(
+                        span.clone(),
+                        "unsupported expression",
+                        "This expression is outside the current RSScript parser surface.",
+                    );
+                }
+            }
         }
     }
 
@@ -584,6 +606,67 @@ impl Analyzer<'_> {
                 }
             }
         }
+    }
+
+    /// Walk a match pattern and emit RS0037 for any positional multi-field
+    /// variant attempt (`Both(a, b)`), descending through nested patterns so a
+    /// deeper `Some(Both(a, b))` is caught too.
+    pub(super) fn check_positional_multifield_pattern(&mut self, pattern: &MatchPattern) {
+        match pattern {
+            MatchPattern::Variant {
+                name,
+                positional_multifield,
+                span,
+                ..
+            } if !positional_multifield.is_empty() => {
+                self.positional_multifield_variant(span.clone(), name, positional_multifield);
+            }
+            MatchPattern::Variant {
+                binding: Some(binding),
+                ..
+            } => self.check_positional_multifield_pattern(binding),
+            MatchPattern::Struct { fields, .. } => {
+                for field in fields {
+                    if let Some(pattern) = &field.pattern {
+                        self.check_positional_multifield_pattern(pattern);
+                    }
+                }
+            }
+            MatchPattern::List { prefix, suffix, .. } => {
+                for pattern in prefix.iter().chain(suffix) {
+                    self.check_positional_multifield_pattern(pattern);
+                }
+            }
+            MatchPattern::Variant { .. }
+            | MatchPattern::Binding { .. }
+            | MatchPattern::Literal { .. }
+            | MatchPattern::Wildcard(_) => {}
+        }
+    }
+
+    fn positional_multifield_variant(
+        &mut self,
+        span: crate::diagnostic::Span,
+        name: &str,
+        fields: &[String],
+    ) {
+        let named = fields.join(", ");
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::POSITIONAL_MULTIFIELD_VARIANT,
+                format!("positional multi-field variant pattern `{name}(...)`."),
+                span,
+                "positional multi-field variant",
+            )
+            .with_cause(format!(
+                "multi-field variant `{name}` must be matched with named fields: `{name} {{ {named} }}`."
+            ))
+            .with_fix(
+                "use_named_variant_fields",
+                format!("Rewrite the pattern as `{name} {{ {named} }}`."),
+                "manual",
+            ),
+        );
     }
 
     pub(super) fn unsupported_syntax(

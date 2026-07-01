@@ -141,6 +141,21 @@ pub(super) fn parse_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt,
         );
     }
 
+    // A statement that begins with `||` is a leading empty-argument closure only
+    // in value position. As a bare statement it is almost always a dropped
+    // boolean continuation (e.g. `|| word == "fn"` wrapped onto its own line),
+    // which `parse_expr` would silently swallow as a discarded closure. Surface
+    // RS0015 ("unsupported statement") instead. This guard only affects the
+    // generic expression-statement fall-through; `if`/`while`/`match` conditions
+    // and closures used as values or arguments are handled by earlier branches
+    // and by `parse_expr` in value contexts.
+    if tokens[start].symbol("|") && tokens.get(start + 1).is_some_and(|token| token.symbol("|")) {
+        return (
+            Stmt::Unknown(tokens[start].span.clone()),
+            statement_end(tokens, start, limit),
+        );
+    }
+
     let end = statement_end(tokens, start, limit);
     if let Some(statement) = try_parse_assign_stmt(tokens, start, end) {
         return (statement, end);
@@ -246,6 +261,7 @@ fn try_parse_let_else(tokens: &[Token], start: usize, limit: usize) -> Option<(S
                 span: tokens[pattern_start + 2].span.clone(),
             }))
         },
+        positional_multifield: Vec::new(),
         span: tokens[pattern_start].span.clone(),
     };
     Some((

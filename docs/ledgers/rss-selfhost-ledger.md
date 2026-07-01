@@ -378,8 +378,14 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   non-cascading "no char literals" diagnostic) is the real fix — filed for a
   follow-up decision.
 - **Tests:** `crate::selfhost_parity::lexer_parity_tiny_sample` (drives the rss
-  lexer through the VM against `crate::lexer::lex`).
-- **Status:** open (worked around; language decision pending).
+  lexer through the VM against `crate::lexer::lex`);
+  `checker_frontend::misc::char_literal_reports_single_clear_diagnostic_without_try_operator_cascade`;
+  fixture `tests/fixtures/fail/char-literal-unsupported.rss`.
+- **Status:** fixed (diagnostics): `'` now lexes as one token (`Symbol("'")`,
+  `lexer.rs` `lex_char_literal`; mirrored in `selfhost/lexer.rss` `scan_char`) and
+  yields a clear "no character-literal syntax" RS0015; the misleading RS0013
+  cascade is gone and the lone `'` operand no longer double-reports. (Full
+  char-literal language support remains out of scope.)
 
 ### SH-017 — statement-level binary-operator expressions can't cross a newline (leading-operator continuation is SILENTLY wrong)
 
@@ -414,8 +420,14 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   helper predicates / early-return `if`s. Worked around by making `is_kw` a
   single-line chain. Language-side follow-up: either support operator
   continuation or make the leading-operator form a hard error.
-- **Tests:** `crate::selfhost_parity::lexer_parity_tiny_sample`.
-- **Status:** open (worked around; language decision pending).
+- **Tests:** `crate::selfhost_parity::lexer_parity_tiny_sample`;
+  fixture `tests/fixtures/fail/leading-operator-continuation.rss`.
+- **Status:** fixed: a leading-`||` statement continuation now emits RS0015
+  ("unsupported statement") instead of silently parsing as a discarded empty-arg
+  closure. Guard added in `syntax/parser/stmt.rs` `parse_stmt` (statement
+  fall-through only; `if`/`while`/`match` conditions and value/argument closures
+  are unaffected). Operator continuation itself is still not supported; keep
+  statement-level expressions on one line.
 
 ### SH-018 — no cursor/state object: scan helpers must thread `(chars, n, index)` and return the new index
 
@@ -467,18 +479,28 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   }
   ```
 - **Backend:** all (analyzer / freshness).
-- **Root cause:** the freshness checker treats a binding written through `mut`
-  (or passed as `mut` to `List.push`) as no longer provably fresh, so the natural
-  "allocate-empty, fill in a loop, return" builder pattern can't be annotated
-  `fresh`.
-- **Classification:** language (freshness analysis) — ergonomics gap.
-- **Decision:** worked around by dropping the `fresh` annotation
-  (`-> List<Tok>`); the value is still a freshly built list, the caller binds it
-  to a plain `let` and only reads it. The general lever (let a locally-built,
-  never-aliased mutable collection satisfy a `fresh` return) is an analyzer
-  follow-up, not a blocker.
-- **Tests:** `crate::selfhost_parity::parser_parity_corpus` (recognition, 545/545).
-- **Status:** decided (worked around).
+- **Root cause (CORRECTED):** the earlier writeup blamed `mut` + `List.push`, but
+  that is wrong — the straight-line form (`let mut xs = List.new(); List.push(...);
+  return xs`) already compiled. The real defect was the multi-predecessor flow
+  merge: `merge_flow_states` (and its sibling loop/branch merges) kept only
+  exclusive `local` bindings in `clean_locals`, dropping MANAGED (`let`/`let mut`)
+  fresh bindings. So the builder failed `RS0601` only when the `push` ran inside a
+  `while`/`if` (a control-flow merge), not in straight-line code.
+- **Classification:** language (freshness analysis) — flow-merge bug.
+- **Decision:** fixed. Managed fresh bindings now survive the merge: the
+  `clean_locals` filter keeps a name that is `locals.contains(name) ||
+  managed.contains(name)` in `checks/local.rs` (`merge_flow_states` ~3127 plus the
+  three siblings `merge_loop_state`, `fallthrough_projection`,
+  `merge_fallthrough_states`). Sound because any aliasing invalidation
+  (manage/retain/take/capture) already removes the name from the predecessor
+  `clean_locals` intersection, so an aliased binding can never reach the filter —
+  the existing fail fixtures `fresh-loop-managed-local.rss`,
+  `fresh-loop-retained-local.rss`, `fresh-branch-retained-local.rss` stay red.
+- **Tests:** `crate::selfhost_parity::parser_parity_corpus`;
+  fixture `tests/fixtures/pass/fresh-loop-built-list.rss` (fresh List built in a
+  `while` loop).
+- **Status:** fixed: managed fresh bindings now survive the flow merge
+  (`local.rs:3127` + siblings).
 
 ### SH-020 — recursive descent has to encode `(ok, new-index)` as a sentinel Int
 
@@ -650,12 +672,19 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   effect. The two rules compound into confusing errors for the natural
   `Variant(a, b)` shape.
 - **Classification:** language (parser / pattern binding) + docs.
-- **Decision:** worked around throughout the self-hosted code by using
-  `match read scrutinee { Variant { field, … } => … }`. Recorded here for
-  completeness — this was found in the initial spike and used to choose the AST
-  representation, but had not been written to the ledger. Language-side: allow
-  positional binding for multi-field variants (or emit a targeted diagnostic
-  pointing at the missing feature rather than `RS0026`).
+- **Decision:** fixed (diagnostic). Positional multi-field variant patterns now
+  emit a targeted `RS0037` ("multi-field variant `V` must be matched with named
+  fields: `V { a, b }`") with a rewrite hint, instead of a misleading per-binding
+  `RS0026`. The parser detects the `V(a, b)` shape and records the attempted
+  binder names on `MatchPattern::Variant.positional_multifield`
+  (`syntax/parser/pattern.rs`); `binding_names()` still exposes them so the arm
+  body's uses resolve (no RS0026) while the analyzer
+  (`analyzer/syntax_support.rs::check_positional_multifield_pattern`) emits the one
+  new code. Positional multi-field *binding* stays intentionally unsupported per
+  spec §20.1 — the fix is a clearer diagnostic, not the feature. Self-hosted code
+  keeps using `match read scrutinee { Variant { field, … } => … }`.
 - **Tests:** covered indirectly by every `match read … { V { … } }` in
-  `selfhost/parser.rss` / `selfhost/check.rss`.
-- **Status:** open (worked around; language decision pending).
+  `selfhost/parser.rss` / `selfhost/check.rss`;
+  fixture `tests/fixtures/fail/positional-multifield-variant.rss`.
+- **Status:** fixed (diagnostic): positional multi-field variant patterns now emit
+  RS0037 instead of misleading RS0026.

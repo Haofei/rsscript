@@ -304,6 +304,28 @@ fn diagnostics_json_uses_protocol_shape() {
 }
 
 #[test]
+fn char_literal_reports_single_clear_diagnostic_without_try_operator_cascade() {
+    // SH-016: a `'...'` character-literal attempt now lexes to one `Symbol("'")`
+    // token, so it yields a single clear RS0015 ("character literal") with no
+    // misleading RS0013 (try-operator) cascade and no duplicate generic RS0015.
+    let source = "fn f(c: read Char) -> Bool {\n    return c == '_'\n}\n";
+    let codes = common::error_codes("char-literal.rss", source);
+    assert!(
+        codes.iter().any(|code| code == "RS0015"),
+        "expected RS0015, got {codes:?}"
+    );
+    assert!(
+        !codes.iter().any(|code| code == "RS0013"),
+        "RS0013 try-operator cascade must be gone, got {codes:?}"
+    );
+    assert_eq!(
+        codes.iter().filter(|code| *code == "RS0015").count(),
+        1,
+        "exactly one RS0015 (no duplicate generic unsupported-expression), got {codes:?}"
+    );
+}
+
+#[test]
 fn diagnostic_explanations_are_available_by_code() {
     let explanation = explain_diagnostic_code("RS0401").expect("RS0401 should be registered");
     let formatted = format_diagnostic_explanation(explanation);

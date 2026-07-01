@@ -3121,10 +3121,17 @@ fn merge_flow_states(left: &BodyState, right: &BodyState) -> BodyState {
     }
     moved_paths.retain(|path, _| path_root(path).is_some_and(|root| locals.contains(root)));
 
+    // A fresh binding survives the merge when it is clean in both predecessors
+    // and still tracked as either an exclusive `local` or a managed `let`/`let
+    // mut` binding. Keeping managed bindings (not just exclusive locals) lets a
+    // fresh builder pattern that runs inside a loop/branch still return cleanly.
+    // This stays sound: any aliasing invalidation (manage/retain/take/capture)
+    // already removes the binding from the predecessor `clean_locals`
+    // intersection, so an aliased binding can never reach this filter.
     let clean_locals = left
         .clean_locals
         .intersection(&right.clean_locals)
-        .filter(|name| locals.contains(*name))
+        .filter(|name| locals.contains(*name) || managed.contains(*name))
         .cloned()
         .collect::<HashSet<_>>();
     let fresh_returnable_locals = left
@@ -3666,7 +3673,7 @@ pub(crate) fn merge_loop_state(
     state.clean_locals = base
         .clean_locals
         .intersection(&body_state.clean_locals)
-        .filter(|name| base.locals.contains(*name))
+        .filter(|name| base.locals.contains(*name) || base.managed.contains(*name))
         .cloned()
         .collect();
     state.fresh_returnable_locals = base
@@ -3695,7 +3702,7 @@ fn fallthrough_projection(base: &BodyState, branch: &BodyState) -> BodyState {
     let clean_locals = branch
         .clean_locals
         .intersection(&base.clean_locals)
-        .filter(|name| base.locals.contains(*name))
+        .filter(|name| base.locals.contains(*name) || base.managed.contains(*name))
         .cloned()
         .collect::<HashSet<_>>();
     let fresh_returnable_locals = branch
@@ -3734,7 +3741,7 @@ fn merge_fallthrough_states(base: &BodyState, left: &BodyState, right: &BodyStat
     let clean_locals = left
         .clean_locals
         .intersection(&right.clean_locals)
-        .filter(|name| base.locals.contains(*name))
+        .filter(|name| base.locals.contains(*name) || base.managed.contains(*name))
         .cloned()
         .collect::<HashSet<_>>();
     let fresh_returnable_locals = left

@@ -76,6 +76,7 @@ impl Lexer<'_> {
                 '"' => self.lex_string(),
                 ch if ch.is_ascii_digit() => self.lex_number(),
                 ch if is_ident_start(ch) => self.lex_ident_or_keyword(),
+                '\'' => self.lex_char_literal(),
                 '-' if self.peek_next() == Some('>') => self.push_two("->"),
                 '=' if self.peek_next() == Some('>') => self.push_two("=>"),
                 ':' | ',' | '.' | '(' | ')' | '{' | '}' | '<' | '>' | '[' | ']' | '?' | '|'
@@ -271,6 +272,39 @@ impl Lexer<'_> {
         }
         self.tokens.push(Token {
             kind: TokenKind::MultilineString(value),
+            span: Span {
+                file: self.file.to_string(),
+                line: start_line,
+                column: start_column,
+                length: self.index.saturating_sub(token_start).max(1),
+            },
+        });
+    }
+
+    /// RSScript has no character-literal syntax. Without a dedicated lexer arm a
+    /// leading `'` would be mapped to `Symbol("?")` by `push_one`, so `'x'` lexed
+    /// to `? x ?` and the trailing `?` produced a misleading RS0013 (try
+    /// operator) cascade. Instead, consume the whole `'...'` run as a single
+    /// `Symbol("'")` token so the analyzer can surface one clear "no
+    /// character-literal syntax" diagnostic. The scan stops at the closing `'`,
+    /// a newline, or EOF (so an unterminated `'` cannot swallow the rest of the
+    /// line).
+    fn lex_char_literal(&mut self) {
+        let start_line = self.line;
+        let start_column = self.column;
+        let token_start = self.index;
+        self.bump();
+        while let Some(ch) = self.peek() {
+            if ch == '\'' || ch == '\n' {
+                break;
+            }
+            self.bump();
+        }
+        if self.peek() == Some('\'') {
+            self.bump();
+        }
+        self.tokens.push(Token {
+            kind: TokenKind::Symbol("'"),
             span: Span {
                 file: self.file.to_string(),
                 line: start_line,

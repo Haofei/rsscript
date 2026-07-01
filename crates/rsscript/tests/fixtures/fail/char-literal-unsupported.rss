@@ -1,0 +1,4 @@
+// expect: RS0015
+fn f(c: read Char) -> Bool {
+    return c == '_'
+}

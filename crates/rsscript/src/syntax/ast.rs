@@ -39,6 +39,10 @@ pub struct Program {
     pub profile_spans: Vec<Span>,
     pub unknown_top_level_spans: Vec<Span>,
     pub malformed_declaration_spans: Vec<Span>,
+    /// Spans of `'...'` runs the lexer folded into a single `Symbol("'")` token.
+    /// RSScript has no character-literal syntax; the analyzer drains these into a
+    /// clear diagnostic instead of a misleading try-operator cascade.
+    pub char_literal_spans: Vec<Span>,
     pub protocols: Vec<ProtocolDecl>,
     pub protocol_impls: Vec<ProtocolImpl>,
     pub items: Vec<Item>,
@@ -69,6 +73,7 @@ pub fn merge_programs(programs: impl IntoIterator<Item = Program>) -> Program {
     let mut profile_spans = Vec::new();
     let mut unknown_top_level_spans = Vec::new();
     let mut malformed_declaration_spans = Vec::new();
+    let mut char_literal_spans = Vec::new();
     let mut protocols = Vec::new();
     let mut protocol_impls = Vec::new();
     let mut items = Vec::new();
@@ -97,6 +102,7 @@ pub fn merge_programs(programs: impl IntoIterator<Item = Program>) -> Program {
         duplicate_features.extend(program.duplicate_features);
         unknown_top_level_spans.extend(program.unknown_top_level_spans);
         malformed_declaration_spans.extend(program.malformed_declaration_spans);
+        char_literal_spans.extend(program.char_literal_spans);
         if program.feature_spans.len() > 1 {
             feature_spans.extend(program.feature_spans);
         }
@@ -115,6 +121,7 @@ pub fn merge_programs(programs: impl IntoIterator<Item = Program>) -> Program {
         profile_spans,
         unknown_top_level_spans,
         malformed_declaration_spans,
+        char_literal_spans,
         protocols,
         protocol_impls,
         items,
@@ -522,6 +529,14 @@ pub enum MatchPattern {
     Variant {
         name: String,
         binding: Option<Box<MatchPattern>>,
+        /// Non-empty only for a rejected positional multi-field attempt like
+        /// `Both(a, b)`. Positional records are excluded by spec §20.1 (only
+        /// single-payload positional `Some(v)` and named `V { a, b }` are
+        /// allowed). The parser keeps the attempted binder names here so the
+        /// analyzer can emit a targeted "use named fields" diagnostic and so the
+        /// names still register as arm bindings (suppressing a misleading
+        /// per-binding RS0026). `binding` stays `None` in this case.
+        positional_multifield: Vec<String>,
         span: Span,
     },
     Struct {
@@ -564,6 +579,17 @@ impl MatchPattern {
                 binding: Some(binding),
                 ..
             } => binding.binding_names(),
+            // A rejected positional multi-field variant (`Both(a, b)`) still
+            // exposes its attempted binders so the arm body's uses resolve and do
+            // not trigger a misleading per-binding RS0026 on top of the targeted
+            // diagnostic the analyzer emits.
+            Self::Variant {
+                binding: None,
+                positional_multifield,
+                ..
+            } if !positional_multifield.is_empty() => {
+                positional_multifield.iter().map(String::as_str).collect()
+            }
             Self::Struct { fields, .. } => fields
                 .iter()
                 .flat_map(|field| {

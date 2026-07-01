@@ -40,6 +40,7 @@ pub mod code {
     pub const UNINFERABLE_BINDING_TYPE: &str = "RS0034";
     pub const LOWER_NAME_CONFLICT: &str = "RS0035";
     pub const MESSAGE_PAYLOAD_NOT_TRANSFERABLE: &str = "RS0036";
+    pub const POSITIONAL_MULTIFIELD_VARIANT: &str = "RS0037";
     pub const FEATURE_VIOLATION: &str = "RS0101";
     pub const UNNAMED_ARGUMENT: &str = "RS0201";
     pub const MISSING_DATA_EFFECT: &str = "RS0202";
@@ -549,6 +550,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::UNKNOWN_BINDING,
         title: "unknown binding",
         explanation: "Value identifiers must resolve to a visible parameter, local binding, with-bound resource, or pattern binding before Rust lowering.",
+    },
+    DiagnosticExplanation {
+        code: code::POSITIONAL_MULTIFIELD_VARIANT,
+        title: "positional multi-field variant pattern",
+        explanation: "A sum-type variant with two or more fields must be matched with named fields (`V { a, b }`), not a positional payload (`V(a, b)`). RSScript excludes positional records (spec §20.1): only single-payload positional patterns like `Some(v)` or `Circle(r)` and named field patterns like `V { a, b }` are allowed. The parser keeps the attempted binder names so they still resolve inside the arm — avoiding a misleading per-binding `unknown value binding` (RS0026) — and reports this single targeted diagnostic instead.",
     },
     DiagnosticExplanation {
         code: code::UNKNOWN_PROTOCOL,

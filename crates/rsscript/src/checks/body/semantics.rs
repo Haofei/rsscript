@@ -505,6 +505,7 @@ pub(super) fn check_match_pattern_matches_type(
             name,
             binding,
             span,
+            ..
         } if root == "Option" => {
             if !matches!(name.as_str(), "Some" | "None") {
                 push_match_variant_type_mismatch(
@@ -528,6 +529,7 @@ pub(super) fn check_match_pattern_matches_type(
             name,
             binding,
             span,
+            ..
         } if root == "Result" => {
             if !matches!(name.as_str(), "Ok" | "Err") {
                 push_match_variant_type_mismatch(
@@ -556,6 +558,7 @@ pub(super) fn check_match_pattern_matches_type(
             name,
             binding,
             span,
+            ..
         } => {
             let Some((_, fields)) = pattern_sum_variant_fields(analyzer, root, name) else {
                 let allowed = allowed_sum_variant_names(analyzer, root);

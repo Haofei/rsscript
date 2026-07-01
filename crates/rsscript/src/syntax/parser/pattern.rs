@@ -245,6 +245,7 @@ pub(super) fn parse_match_pattern(
             span: tokens[start].span.clone(),
         });
     }
+    let mut positional_multifield = Vec::new();
     let binding = if tokens.get(head_end).is_some_and(|token| token.symbol("(")) {
         let close = find_matching(tokens, head_end, "(", ")")?;
         if close + 1 != end {
@@ -258,6 +259,13 @@ pub(super) fn parse_match_pattern(
             )))
         } else if head_end + 2 == close {
             parse_single_payload_pattern(tokens, head_end + 1)
+        } else if let Some(idents) = positional_multifield_idents(tokens, head_end + 1, close) {
+            // `Both(a, b)` — a positional multi-field attempt. Positional records
+            // are excluded by spec §20.1. Keep the attempted binder names so the
+            // analyzer can emit a targeted diagnostic (and so the names still
+            // resolve as arm bindings); `binding` stays `None`.
+            positional_multifield = idents;
+            None
         } else {
             parse_match_pattern(tokens, head_end + 1, close).map(Box::new)
         }
@@ -269,8 +277,35 @@ pub(super) fn parse_match_pattern(
     Some(MatchPattern::Variant {
         name,
         binding,
+        positional_multifield,
         span: tokens[start].span.clone(),
     })
+}
+
+/// Detect a positional multi-field variant payload: a parenthesised group of
+/// two or more top-level comma-separated bare identifiers (`a, b`, `a, b, c`).
+/// Returns the identifier names, or `None` if the payload is anything else (a
+/// single field, a nested pattern, a literal, or a wildcard).
+fn positional_multifield_idents(tokens: &[Token], start: usize, end: usize) -> Option<Vec<String>> {
+    let ranges: Vec<_> = split_param_ranges(tokens, start, end)
+        .into_iter()
+        .filter(|range| range.empty_span.is_none())
+        .collect();
+    if ranges.len() < 2 {
+        return None;
+    }
+    let mut idents = Vec::with_capacity(ranges.len());
+    for range in &ranges {
+        if range.start + 1 != range.end {
+            return None;
+        }
+        let name = ident_name(&tokens[range.start])?;
+        if name == "_" {
+            return None;
+        }
+        idents.push(name.to_string());
+    }
+    Some(idents)
 }
 
 /// Parse `(p0, p1, ..)` as the synthetic tuple struct pattern. Returns `None`
@@ -541,6 +576,7 @@ fn parse_single_literal_or_constructor_pattern(
                 Some(Box::new(MatchPattern::Variant {
                     name: name.to_string(),
                     binding: None,
+                    positional_multifield: Vec::new(),
                     span: tokens[index].span.clone(),
                 }))
             } else {

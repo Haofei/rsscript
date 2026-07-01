@@ -1,0 +1,5 @@
+// expect: RS0015
+fn is_kw(word: read String) -> Bool {
+    return word == "if" || word == "else"
+        || word == "fn"
+}
