@@ -12,7 +12,7 @@
 use std::path::PathBuf;
 
 use crate::lexer::{TokenKind, lex};
-use crate::reg_vm_eval_source_main_with_args;
+use crate::{RegVmExecutable, reg_vm_compile_source};
 
 /// One token in the canonical dump. Positions are `None` when the producer
 /// emitted placeholders (the rss lexer does so until spans are implemented).
@@ -115,20 +115,31 @@ fn parse_line(line: &str) -> Option<CanonTok> {
     })
 }
 
-/// Run the rss lexer over `source` and parse its dump.
-fn rss_dump(source: &str) -> Result<Vec<CanonTok>, String> {
+/// Compile `selfhost/lexer.rss` once for reuse across many inputs.
+fn compile_lexer() -> Result<RegVmExecutable, String> {
     let lexer_path = selfhost_dir().join("lexer.rss");
     let lexer_src = std::fs::read_to_string(&lexer_path)
         .map_err(|e| format!("cannot read {}: {e}", lexer_path.display()))?;
-    let output =
-        reg_vm_eval_source_main_with_args("selfhost/lexer.rss", &lexer_src, [source.to_string()])
-            .map_err(|e| format!("rss lexer failed to run: {e:?}"))?;
+    reg_vm_compile_source("selfhost/lexer.rss", &lexer_src)
+        .map_err(|e| format!("rss lexer failed to compile: {e:?}"))
+}
+
+/// Run a precompiled rss lexer over `source` and parse its dump.
+fn rss_dump_with(exe: &RegVmExecutable, source: &str) -> Result<Vec<CanonTok>, String> {
+    let output = exe
+        .eval_main_with_args([source.to_string()])
+        .map_err(|e| format!("rss lexer failed to run: {e:?}"))?;
     Ok(output
         .stdout
         .lines()
         .filter(|l| !l.is_empty())
         .filter_map(parse_line)
         .collect())
+}
+
+/// Convenience: compile + run once (used by the single-file smoke test).
+fn rss_dump(source: &str) -> Result<Vec<CanonTok>, String> {
+    rss_dump_with(&compile_lexer()?, source)
 }
 
 /// Compare two token streams at the active tier; `Ok(())` or a diff message.
@@ -200,6 +211,7 @@ fn lexer_parity_corpus() {
     let root = workspace_root();
     let files = collect_rss_files(&root);
     let tier = tier();
+    let exe = compile_lexer().expect("rss lexer should compile");
     let mut run_failures: Vec<String> = Vec::new();
     let mut mismatches: Vec<String> = Vec::new();
     let mut ok = 0usize;
@@ -213,7 +225,7 @@ fn lexer_parity_corpus() {
             }
         };
         let oracle = oracle_dump(&rel, &source);
-        match rss_dump(&source) {
+        match rss_dump_with(&exe, &source) {
             Err(e) => run_failures.push(format!("{rel}: {e}")),
             Ok(actual) => match compare(&oracle, &actual, tier) {
                 Ok(()) => ok += 1,
