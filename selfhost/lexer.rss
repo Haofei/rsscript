@@ -1,0 +1,113 @@
+// Self-hosted rss lexer — Phase 0/1.
+//
+// Reads rss source as argv[0], emits the canonical token dump (see FORMAT.md):
+//   <line>:<col>:<len>\t<KIND>\t<PAYLOAD>   one token per line, in lex order.
+// Phase 0 stub: idents/keywords, numbers, whitespace-skip, 1- and 2-char
+// symbols, Eof. Positions are placeholders (0:0:0) — tier-0 parity ignores them.
+// Strings/comments/spans are Phase 1 work.
+
+// NOTE (SH-017): a statement-level expression must stay on ONE line — a
+// wrapped `||` chain silently drops its continuation, so this stays single-line.
+fn is_kw(word: read String) -> Bool {
+    return word == "if" || word == "else" || word == "for" || word == "in" || word == "match" || word == "loop" || word == "while" || word == "break" || word == "continue" || word == "return" || word == "features" || word == "class" || word == "struct" || word == "resource" || word == "handle" || word == "fn" || word == "let" || word == "pub" || word == "async" || word == "effects" || word == "drop" || word == "with" || word == "as" || word == "read" || word == "mut" || word == "take" || word == "fresh" || word == "manage" || word == "weak" || word == "local"
+}
+
+// rss has no character-literal syntax (see ledger SH-016), so compare code
+// points: '_'=95, '-'=45, '>'=62, '='=61.
+fn is_ident_start(c: read Char) -> Bool {
+    return Char.is_alpha(value: read c) || Char.to_code(value: read c) == 95
+}
+
+fn is_ident_cont(c: read Char) -> Bool {
+    return Char.is_alphanumeric(value: read c) || Char.to_code(value: read c) == 95
+}
+
+fn emit(kind: read String, payload: read String) -> Unit {
+    let a = String.concat(left: read "0:0:0\t", right: read kind)
+    let b = String.concat(left: read a, right: read "\t")
+    let line = String.concat(left: read b, right: read payload)
+    Log.write(message: read line)
+    return Unit
+}
+
+fn main() -> Unit {
+    let source = Args.get_or_default(index: 0, default: read "")
+    let chars = String.chars(value: read source)
+    let n = List.len(list: read chars)
+    let mut i = 0
+    while i < n {
+        let c = List.get(list: read chars, index: read i)
+        if Char.is_whitespace(value: read c) {
+            i = i + 1
+        } else if is_ident_start(c: read c) {
+            let mut word = ""
+            let mut end = i
+            let mut scanning = true
+            while scanning {
+                if end < n {
+                    let ce = List.get(list: read chars, index: read end)
+                    if is_ident_cont(c: read ce) {
+                        word = String.concat(left: read word, right: read Char.to_string(value: read ce))
+                        end = end + 1
+                    } else {
+                        scanning = false
+                    }
+                } else {
+                    scanning = false
+                }
+            }
+            if is_kw(word: read word) {
+                emit(kind: read "Keyword", payload: read word)
+            } else {
+                emit(kind: read "Ident", payload: read word)
+            }
+            i = end
+        } else if Char.is_digit(value: read c) {
+            let mut num = ""
+            let mut end = i
+            let mut scanning = true
+            while scanning {
+                if end < n {
+                    let ce = List.get(list: read chars, index: read end)
+                    if Char.is_digit(value: read ce) {
+                        num = String.concat(left: read num, right: read Char.to_string(value: read ce))
+                        end = end + 1
+                    } else {
+                        scanning = false
+                    }
+                } else {
+                    scanning = false
+                }
+            }
+            emit(kind: read "Number", payload: read num)
+            i = end
+        } else {
+            // symbol: try two-char -> and => (see SH-016 for the code-point compares)
+            let code = Char.to_code(value: read c)
+            let ni = i + 1
+            let mut consumed = 1
+            if code == 45 && ni < n {
+                let nx = List.get(list: read chars, index: read ni)
+                if Char.to_code(value: read nx) == 62 {
+                    emit(kind: read "Symbol", payload: read "->")
+                    consumed = 2
+                } else {
+                    emit(kind: read "Symbol", payload: read Char.to_string(value: read c))
+                }
+            } else if code == 61 && ni < n {
+                let nx = List.get(list: read chars, index: read ni)
+                if Char.to_code(value: read nx) == 62 {
+                    emit(kind: read "Symbol", payload: read "=>")
+                    consumed = 2
+                } else {
+                    emit(kind: read "Symbol", payload: read Char.to_string(value: read c))
+                }
+            } else {
+                emit(kind: read "Symbol", payload: read Char.to_string(value: read c))
+            }
+            i = i + consumed
+        }
+    }
+    emit(kind: read "Eof", payload: read "")
+    return Unit
+}

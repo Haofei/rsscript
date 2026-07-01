@@ -349,3 +349,70 @@ Status:         open | decided | done
 Conclusion unchanged: the JIT gives ~0× on collection code (now without being
 *slower* than the VM); AOT is ~144× and remains the only fast path. The remaining
 gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
+
+### SH-016 — no character-literal syntax; `'` lexes to `?`
+
+- **Tool:** self-hosted lexer (`selfhost/lexer.rss`), Phase 1.
+- **Symptom:** A lexer naturally wants to compare a `Char` to a literal, e.g.
+  `c == '_'` or `next == '>'`. Every char literal is rejected `RS0015
+  "unsupported RSScript syntax"`, followed by a spurious `RS0013 "?` requires
+  `Result`" at the same span.
+- **Minimal RSS:**
+  ```
+  fn f(c: read Char) -> Bool { return c == '_' }
+  ```
+  → `RS0015` at the `'` plus a bogus `RS0013`.
+- **Backend:** all (frontend / parser surface).
+- **Root cause:** there is no character-literal token in the lexer — `'` is not
+  a recognized symbol, so `push_one` maps it to `"?"` (`lexer.rs`, unknown-char
+  fallthrough). The parser then sees a `?` token between operands and reports it
+  as a misused try operator, cascading a misleading diagnostic. So the language
+  has **no `Char` literal syntax at all**, and the failure mode is doubly
+  confusing because the surviving diagnostic points at `?`, not at the missing
+  feature.
+- **Classification:** language (missing char literals) + docs/diagnostics (the
+  `'` → `?` → RS0013 cascade is a misleading error for a common construct).
+- **Decision:** worked around in the lexer by comparing code points instead:
+  `Char.to_code(value: read c) == 95` (`_`), `== 45` (`-`), `== 62` (`>`),
+  `== 61` (`=`), etc. Language-side: a char-literal syntax (or at minimum a
+  non-cascading "no char literals" diagnostic) is the real fix — filed for a
+  follow-up decision.
+- **Tests:** `crate::selfhost_parity::lexer_parity_tiny_sample` (drives the rss
+  lexer through the VM against `crate::lexer::lex`).
+- **Status:** open (worked around; language decision pending).
+
+### SH-017 — statement-level binary-operator expressions can't cross a newline (leading-operator continuation is SILENTLY wrong)
+
+- **Tool:** self-hosted lexer (`selfhost/lexer.rss`), keyword classifier.
+- **Symptom:** A boolean `||`/`&&` chain wrapped across lines misbehaves two ways:
+  - **Trailing operator** (line ends with `||`): hard parse error `RS0015
+    "unsupported RSScript syntax"` pointing at the *start* of the `return`.
+  - **Leading operator** (next line starts with `||`): **compiles cleanly but
+    silently drops every continuation line** — only the first line's terms are
+    evaluated, so `is_kw("fn")` returned `false` because `"fn"` sat on line 2.
+    No diagnostic at all. This is the dangerous one: a wrong answer with no error.
+- **Minimal RSS:**
+  ```
+  fn is_kw(word: read String) -> Bool {
+      return word == "if" || word == "else"
+          || word == "fn"            // silently ignored
+  }
+  // is_kw("fn") == false
+  ```
+- **Backend:** all (parser / statement termination).
+- **Root cause:** at statement level a newline terminates the expression (the
+  parser does not treat a leading/trailing binary operator as a line
+  continuation). Inside brackets/parens/braces newlines ARE fine — multi-line
+  constructor calls and collection literals work — so the hazard is specifically
+  bare operator chains in statement position. A single-line chain of 30 `||`
+  terms works correctly.
+- **Classification:** language / parser (missing operator-continuation) + a
+  correctness-grade diagnostics gap (leading-operator form should error, not
+  silently truncate).
+- **Decision:** rule for all self-hosted rss — **keep a statement-level
+  expression on one line**; break long boolean tests into a single line or into
+  helper predicates / early-return `if`s. Worked around by making `is_kw` a
+  single-line chain. Language-side follow-up: either support operator
+  continuation or make the leading-operator form a hard error.
+- **Tests:** `crate::selfhost_parity::lexer_parity_tiny_sample`.
+- **Status:** open (worked around; language decision pending).

@@ -30,6 +30,8 @@ mod reg_vm;
 mod review;
 mod runtime_abi;
 mod rust_lower;
+#[cfg(test)]
+mod selfhost_parity;
 mod symbols;
 pub mod syntax;
 mod text_util;
