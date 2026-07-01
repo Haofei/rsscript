@@ -174,3 +174,54 @@ Known constraints to design around:
   full corpus.
 - Findings are the deliverable — recorded as `SH-NNN` entries in
   `docs/ledgers/rss-selfhost-ledger.md`; green oracle runs are the floor, not the goal.
+
+---
+
+## Results (2026-07-01)
+
+Implemented in worktree `rsscript-wt-selfhost` (detached off main), sub-agents porting,
+orchestrator gating parity. Harness lives in `crates/rsscript/src/selfhost_parity.rs`
+(`#[cfg(test)]` — zero new public API, zero new CLI; reaches the private lexer/parser and
+the VM entry point directly). It compiles each rss tool once (`reg_vm_compile_source`) and
+runs it on the reg-VM in-process, passing the corpus file's *content* as `argv[0]`.
+
+| Phase | rss tool | Oracle | Corpus result |
+|-------|----------|--------|---------------|
+| 1 — lexer | `selfhost/lexer.rss` | `crate::lexer::lex` (canonical token dump) | **544/544 tier-0**, 0 run-failures |
+| 2 — parser | `selfhost/parser.rss` | `crate::syntax::parse_source_raw` (accept/reject) | **545/545 recognition** |
+| 3 — checker | `selfhost/check.rss` | `crate::analyze_source` (code `RS0005`) | **546/546** |
+| 4 — perf | lexer on VM vs native | wall-clock over corpus | **~5100× slower** (see SH-022) |
+
+Gates (all green): `cargo test -p rsscript --features native-jit --lib` (3 tiny-sample
+tests); the corpus gates run with `-- --ignored` (`lexer_parity_corpus`,
+`parser_parity_corpus`, `checker_parity_corpus`, `lexer_perf_corpus`).
+
+### Findings (ledger `SH-016` … `SH-023`)
+- **SH-016** — no character-literal syntax; `'` lexes to `?`, cascading a misleading
+  `RS0013`. *(language + diagnostics)*
+- **SH-017** — statement-level binary-operator expressions can't cross a newline; the
+  leading-operator form **compiles but is silently wrong**. *(language + correctness-grade
+  diagnostics)*
+- **SH-018** — no cursor/state object (no methods/`impl`, `mut` params can't advance a
+  cursor); stateful passes thread state positionally. *(language ergonomics)*
+- **SH-019** — a `fresh`-returning fn can't build its result via `mut` + `List.push`
+  (`RS0601`). *(analyzer/freshness ergonomics)*
+- **SH-020** — recursive descent must encode `(ok, new-index)` as a sentinel `Int`. *(ergonomics)*
+- **SH-021** — `parse_source_raw` defers body validation, so recognition parity under-tests
+  the grammar (deep grammar is enforced in the analyzer, not the parser). *(methodology)*
+- **SH-022** — **the headline perf result:** the self-hosted lexer is ~5100× slower on the
+  reg-VM than native Rust (79.5 s vs 15.3 ms over 712 KB). A controlled `String.concat`(O(n²))
+  → `StringBuilder`(O(n)) swap moved nothing, isolating the cost to **per-character intrinsic
+  dispatch** (`List.get` on `List<Char>` + `Char.*` peeks — VM value-representation +
+  intrinsic-dispatch overhead), not string building. *(VM + stdlib)*
+- **SH-023** — the checker reaches `RS0005` parity; the load-bearing rule is the analyzer's
+  **merged callable namespace** (fn names + type-constructor names collide). *(insight)*
+
+### Highest-ROI next lever (from the data)
+SH-022 is the first real workload that unambiguously profiles as **VM-dispatch-bound**. The
+indicated fix is a native **string char/byte-cursor intrinsic** (iterate a `String` without
+materializing a boxed `List<Char>`) plus lower per-intrinsic dispatch cost — this feeds the
+parked collection-representation / perf roadmap with real-workload evidence. Deeper checker
+passes (name resolution, exhaustiveness) are the natural next self-hosting step but require a
+real expression/statement/pattern parser (the depth `parse_source_raw` let Phase 2 skip —
+SH-021).
