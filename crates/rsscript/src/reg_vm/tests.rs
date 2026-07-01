@@ -546,18 +546,116 @@ fn main() -> Unit {
 
         let list_len_id = executable.unit.function_ids["list_len"];
         let list_len = executable.unit.functions[list_len_id].as_ref();
+        // A `read` heap/value param always carries a prologue copy-isolation MARKER in
+        // its slot: an eager `DeepCopy` when elision is off, or a neutralized
+        // `DeepCopyElided` when the compile-time elision pass (default ON) proves the
+        // copy redundant. Either way the slot is present (scalars emit neither) — this
+        // is the scalar-vs-heap distinction the test guards, independent of the elision
+        // flag. The elision-specific assertion lives in
+        // `deepcopy_elision_fires_for_read_only_heap_param`.
         assert!(
-            list_len
-                .code
-                .iter()
-                .any(|instr| matches!(instr, RegInstr::DeepCopy { .. })),
-            "read heap/value params must retain copy isolation: {:#?}",
+            list_len.code.iter().any(|instr| matches!(
+                instr,
+                RegInstr::DeepCopy { .. } | RegInstr::DeepCopyElided { .. }
+            )),
+            "read heap/value params must carry a copy-isolation marker: {:#?}",
             list_len.code,
         );
         let output = executable
             .eval_main_with_args(Vec::<String>::new())
             .expect("program should still run");
         assert_eq!(output.stdout, "43\n");
+    }
+
+    /// Regression guard for the compile-time `DeepCopy`-elision perf win (the ~16x
+    /// speedup on `benchmarks/vm-jit/kernels/deepcopy_read_param.rss`). Mirrors that
+    /// kernel's hot shape: a NON-`mut` heap param (`g: read Bag`) used only through
+    /// read paths (`GetField` on `g`, then `List.len`/`List.get`), called from another
+    /// function. Under the DEFAULT (`RSS_VM_ELIDE_DEEPCOPY` unset ⇒ elision ON) the
+    /// lowerer must PROVE the prologue `DeepCopy` of `g` redundant and neutralize it to
+    /// `RegInstr::DeepCopyElided` — the marker that turns the per-call deep copy into a
+    /// cheap `Rc` share. If a future change re-introduces the eager copy (elision stops
+    /// firing) `DeepCopyElided` disappears and a raw `DeepCopy` returns, failing this
+    /// test. Run with `RSS_VM_ELIDE_DEEPCOPY=0` to see the guarded regression: the
+    /// elided marker is gone and the eager `DeepCopy` is back.
+    #[test]
+    fn deepcopy_elision_fires_for_read_only_heap_param() {
+        let source = r#"
+features: local
+
+struct Bag {
+    a: List<Int>,
+    b: List<Int>,
+}
+
+fn sum_reads(g: read Bag, i: Int) -> Int {
+    let na = List.len<Int>(list: read g.a)
+    let nb = List.len<Int>(list: read g.b)
+    let va = List.get<Int>(list: read g.a, index: i % na)
+    let vb = List.get<Int>(list: read g.b, index: i % nb)
+    return va + vb
+}
+
+fn caller(g: read Bag) -> Int {
+    return sum_reads(g: read g, i: 0)
+}
+
+fn main() -> Unit {
+    local a = List.new<Int>()
+    List.push<Int>(list: mut a, value: read 7)
+    local b = List.new<Int>()
+    List.push<Int>(list: mut b, value: read 5)
+    let bag = Bag(a: take a, b: take b)
+    Log.write(message: read String.from_int(value: caller(g: read bag)))
+    return Unit
+}
+"#;
+        let executable = reg_vm_compile_source("deepcopy-elision.rss", source)
+            .expect("lowering should succeed");
+
+        let sum_reads_id = executable.unit.function_ids["sum_reads"];
+        let sum_reads = executable.unit.functions[sum_reads_id].as_ref();
+        let elided = sum_reads
+            .code
+            .iter()
+            .filter(|instr| matches!(instr, RegInstr::DeepCopyElided { .. }))
+            .count();
+        let eager = sum_reads
+            .code
+            .iter()
+            .filter(|instr| matches!(instr, RegInstr::DeepCopy { .. }))
+            .count();
+        // Under the default the read-only heap param's copy is elided; the elision is
+        // gated (`elide_deepcopy_enabled`) so an explicit `RSS_VM_ELIDE_DEEPCOPY=0`
+        // process would instead leave the eager `DeepCopy` — which is exactly the
+        // regression this guard is meant to catch.
+        if crate::reg_vm::model::elide_deepcopy_enabled_for_test() {
+            assert!(
+                elided >= 1,
+                "elision ON: read-only heap param DeepCopy should be neutralized to \
+                 DeepCopyElided, got {elided} elided / {eager} eager: {:#?}",
+                sum_reads.code,
+            );
+            assert_eq!(
+                eager, 0,
+                "elision ON: no eager DeepCopy should remain for the read-only heap \
+                 param: {:#?}",
+                sum_reads.code,
+            );
+        } else {
+            assert!(
+                eager >= 1 && elided == 0,
+                "elision OFF: eager DeepCopy must be retained (perf-win regression path): \
+                 got {elided} elided / {eager} eager: {:#?}",
+                sum_reads.code,
+            );
+        }
+
+        // Elision (or its absence) must never change observable behavior.
+        let output = executable
+            .eval_main_with_args(Vec::<String>::new())
+            .expect("program should still run");
+        assert_eq!(output.stdout, "12\n");
     }
 
     #[test]
