@@ -1,0 +1,24 @@
+// A statement-level expression may now continue across newlines when a line
+// begins with, or ends with, an unambiguous binary operator (SH-017).
+
+// Leading-operator style: continuation lines start with `||`.
+fn is_kw_leading(word: read String) -> Bool {
+    return word == "if" || word == "else"
+        || word == "fn"
+        || word == "let"
+}
+
+// Trailing-operator style: lines end with the operator.
+fn sum_trailing(a: Int, b: Int, c: Int) -> Int {
+    return a +
+        b +
+        c
+}
+
+fn main() -> Unit {
+    let ok = is_kw_leading(word: read "fn")
+    let total = sum_trailing(a: 1, b: 2, c: 3)
+    Log.write(message: read String.from_bool(value: ok))
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}

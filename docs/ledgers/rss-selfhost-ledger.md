@@ -415,19 +415,23 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
 - **Classification:** language / parser (missing operator-continuation) + a
   correctness-grade diagnostics gap (leading-operator form should error, not
   silently truncate).
-- **Decision:** rule for all self-hosted rss — **keep a statement-level
-  expression on one line**; break long boolean tests into a single line or into
-  helper predicates / early-return `if`s. Worked around by making `is_kw` a
-  single-line chain. Language-side follow-up: either support operator
-  continuation or make the leading-operator form a hard error.
-- **Tests:** `crate::selfhost_parity::lexer_parity_tiny_sample`;
-  fixture `tests/fixtures/fail/leading-operator-continuation.rss`.
-- **Status:** fixed: a leading-`||` statement continuation now emits RS0015
-  ("unsupported statement") instead of silently parsing as a discarded empty-arg
-  closure. Guard added in `syntax/parser/stmt.rs` `parse_stmt` (statement
-  fall-through only; `if`/`while`/`match` conditions and value/argument closures
-  are unaffected). Operator continuation itself is still not supported; keep
-  statement-level expressions on one line.
+- **Decision:** FIXED PROPERLY (2026-07-01) — statement-level expressions now
+  **continue across newlines** on an unambiguous binary operator, so the wrapped
+  chain that used to be silently-wrong is now *valid and correct*. In
+  `syntax/parser/scan.rs` `statement_end`, a line that begins with, or follows a
+  line ending in, one of `| & + * / % ^` continues the current statement (leading
+  and trailing styles both work); `<`, `>`, `-`, `=`, `!` are excluded (generics /
+  comparison / unary-minus, plus a dangling `let x =` and a leading `!expr` must
+  NOT silently swallow the next line — that would reintroduce the SH-017 footgun),
+  so a wrap can never swallow the start of a new statement. `==`/`!=`/`<=`/`>=`/`=`
+  stay single-line. The interim safety guard in `stmt.rs` stays as a backstop for a
+  genuine leading-`||` at a block start. Spec §A.1 updated with the normative
+  statement-termination + continuation rule (reconciling the stale
+  "not layout-sensitive" claim).
+- **Tests:** `tests/fixtures/pass/multiline-operator-continuation.rss` (leading
+  and trailing styles); the former fail fixture was removed (the construct is now
+  valid). Full suite + differential + self-host parity green.
+- **Status:** fixed (operator continuation supported).
 
 ### SH-018 — no cursor/state object: scan helpers must thread `(chars, n, index)` and return the new index
 
@@ -521,17 +525,18 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   }
   ```
 - **Backend:** all (language ergonomics).
-- **Root cause:** no ergonomic multi-value/tuple return and no mutable cursor, so
-  the classic "parser returns Result<Node, Err> while advancing self.pos" shape
-  collapses into an overloaded sentinel Int. Fine for a recognizer (which only
-  needs accept/reject), but a node-building parser would want a real result
-  struct per nonterminal.
-- **Classification:** language (ergonomics) + docs — same family as SH-018.
-- **Decision:** worked around with the `-1`-sentinel convention; reaches full
-  recognition parity (545/545). Recorded so the plumbing cost of a stateful
-  recursive-descent pass in rss is visible alongside SH-018.
-- **Tests:** `crate::selfhost_parity::parser_parity_corpus` (recognition, 545/545).
-- **Status:** decided (worked around).
+- **Root cause (CORRECTED 2026-07-01):** the "no lightweight tuple return" premise
+  was WRONG — verified that `fn f() -> (Bool, Int) { return (true, 5) }` with
+  `let (ok, n) = f()` compiles and runs on the VM. Multi-value return via tuples
+  works today, so a node-building parser CAN return `(new_index, node)`; the
+  sentinel-`Int` convention was an unforced choice, not a language limit. The only
+  genuine residual is the cursor plumbing itself (SH-018), which the
+  `mut`-scalar-param write-back fix removes (pass the cursor as `mut pos`).
+- **Classification:** docs (the original entry over-claimed a non-existent gap).
+- **Decision:** WITHDRAWN as a language gap. Tuple returns work; the remaining
+  ergonomic cost folds into SH-018 (cursor mutation), fixed separately.
+- **Tests:** verified by probe (`fn f() -> (Bool, Int)` + tuple destructuring).
+- **Status:** closed (not a gap — tuple returns work; over-claim corrected).
 
 ### SH-021 — `parse_source_raw` defers body validation: recognition parity under-tests the grammar
 

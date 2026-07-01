@@ -58,7 +58,7 @@ fn starts_top_level_item(tokens: &[Token], index: usize) -> bool {
 }
 
 pub(super) fn statement_end(tokens: &[Token], start: usize, limit: usize) -> usize {
-    let line = tokens[start].span.line;
+    let mut line = tokens[start].span.line;
     let mut depth = 0usize;
     let mut angle_depth = 0usize;
     let mut postfix_continuation_line = None;
@@ -76,6 +76,20 @@ pub(super) fn statement_end(tokens: &[Token], start: usize, limit: usize) -> usi
                 // `.map(...)` chain.
             } else if is_statement_postfix_token(token) {
                 postfix_continuation_line = Some(token.span.line);
+            } else if is_continuation_operator(token)
+                || tokens
+                    .get(index - 1)
+                    .is_some_and(|prev| is_continuation_operator(prev))
+            {
+                // Binary-operator line continuation: a line that *begins* with a
+                // binary operator (leading style) or *follows* a line ending in
+                // one (trailing style) continues the current statement's
+                // expression rather than starting a new statement. Absorb this
+                // line by advancing the reference line. Only the unambiguous
+                // operators in `is_continuation_operator` qualify (see there for
+                // why `<`/`>`/`-`/`=`/`!` are excluded), so a wrapped chain can
+                // never swallow the start of a genuinely new statement.
+                line = token.span.line;
             } else {
                 return index;
             }
@@ -98,6 +112,28 @@ pub(super) fn statement_end(tokens: &[Token], start: usize, limit: usize) -> usi
 
 fn is_statement_postfix_token(token: &Token) -> bool {
     token.symbol("?") || token.symbol(".")
+}
+
+/// Binary operators that make a statement-level expression continue across a
+/// newline (SH-017): `|` `&` `+` `*` `/` `%` `^` (so `||`, `&&`, `+`, `*`, … may
+/// wrap). The set is deliberately conservative so a wrapped chain can NEVER
+/// absorb the start of a genuinely new statement:
+/// - `<` / `>` are excluded (generic brackets / comparison).
+/// - `-` is excluded (unary minus can legitimately start a statement).
+/// - `=` is excluded (a dangling `let x =` must stay a *malformed statement*, not
+///   silently swallow the next line — that would reintroduce the very
+///   silent-merge footgun SH-017 fixes).
+/// - `!` is excluded (a leading `!expr` is a valid statement start).
+/// Consequently `==` / `!=` / `<=` / `>=` / `=` cannot wrap across lines — keep
+/// those on one line.
+fn is_continuation_operator(token: &Token) -> bool {
+    token.symbol("|")
+        || token.symbol("&")
+        || token.symbol("+")
+        || token.symbol("*")
+        || token.symbol("/")
+        || token.symbol("%")
+        || token.symbol("^")
 }
 
 pub(super) fn find_control_body_open(

@@ -5815,8 +5815,20 @@ adds), but it fixes the surface shape so a parser and the prose agree.
 ```text
 Tokens         identifier | number | string | keyword | symbol | EOF
 Comment        `// ...` to end of line. There is no block-comment form.
-Whitespace     spaces, tabs, and newlines separate tokens and are otherwise
-               insignificant (the language is not layout-sensitive).
+Whitespace     spaces, tabs, and newlines separate tokens and produce no tokens
+               of their own. Newlines are significant only for statement
+               termination (below); they are otherwise insignificant.
+Statement end  A statement ends at a newline that sits at the top level of the
+               statement, EXCEPT when the expression is still open — i.e. an
+               unclosed `(` `[` `{`, a postfix continuation (`.`/`?` beginning or
+               ending the break), or a binary-operator continuation: a line that
+               begins with, or follows a line ending in, one of `| & + * / % ^`
+               (so `||`, `&&`, `+`, `*`, … chains may wrap across lines). `<`,
+               `>`, `-`, `=`, and `!` are deliberately NOT continuation operators
+               (generics/comparison, unary minus, and a dangling `let x =` or
+               leading `!expr` must not silently swallow the next line), so
+               `==`, `!=`, `<=`, `>=`, and `=` expressions must stay on one line.
+               An explicit `;` also ends a statement, allowing several per line.
 Identifier     ident-start (letter or `_`) followed by letters, digits, or `_`.
 Number         one or more digits, optionally `.` then one or more digits.
                A fractional part makes it a Float literal; otherwise an Int
