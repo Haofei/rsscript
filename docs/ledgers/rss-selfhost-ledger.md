@@ -448,3 +448,65 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   cost of self-hosting stateful passes is visible.
 - **Tests:** `crate::selfhost_parity::lexer_parity_corpus` (tier 0, 544/544).
 - **Status:** decided (worked around).
+
+### SH-019 — a `fresh`-returning fn can't build its result via `mut` + `List.push`
+
+- **Tool:** self-hosted parser (`selfhost/parser.rss`), Phase 2 tokenizer.
+- **Symptom:** `fn tokenize(...) -> fresh List<Tok>` that does
+  `let mut toks = List.new<Tok>()`, pushes in a loop, then `return toks` is
+  rejected at compile time with `RS0601 "fresh function \`tokenize\` returns
+  non-fresh value \`toks\`"`. The list *is* newly created in the function, but
+  having been mutated through a `mut` binding it no longer counts as a "clean
+  local binding created inside the function".
+- **Minimal RSS:**
+  ```
+  fn build() -> fresh List<Int> {
+      let mut xs = List.new<Int>()
+      List.push(list: mut xs, value: read 1)
+      return xs   // RS0601
+  }
+  ```
+- **Backend:** all (analyzer / freshness).
+- **Root cause:** the freshness checker treats a binding written through `mut`
+  (or passed as `mut` to `List.push`) as no longer provably fresh, so the natural
+  "allocate-empty, fill in a loop, return" builder pattern can't be annotated
+  `fresh`.
+- **Classification:** language (freshness analysis) — ergonomics gap.
+- **Decision:** worked around by dropping the `fresh` annotation
+  (`-> List<Tok>`); the value is still a freshly built list, the caller binds it
+  to a plain `let` and only reads it. The general lever (let a locally-built,
+  never-aliased mutable collection satisfy a `fresh` return) is an analyzer
+  follow-up, not a blocker.
+- **Tests:** `crate::selfhost_parity::parser_parity_corpus` (recognition, 545/545).
+- **Status:** decided (worked around).
+
+### SH-020 — recursive descent has to encode `(ok, new-index)` as a sentinel Int
+
+- **Tool:** self-hosted parser (`selfhost/parser.rss`), Phase 2.
+- **Symptom:** every declaration parser wants to return *both* success/failure
+  *and* the advanced cursor. With no lightweight tuple return and no cursor
+  mutation through `mut` params (SH-018), each `parse_*` returns a single `Int`:
+  `>= 0` is the new index, `-1` means "malformed". Callers re-derive the reject
+  position from the pre-call `start` index. Compound top-level dispatch conditions
+  (long `||` disjunctions) also had to be factored into single-line helper
+  predicates (`starts_type_decl`, `starts_fn_like`) to respect SH-017's
+  no-wrapped-boolean rule.
+- **Minimal RSS:**
+  ```
+  fn parse_thing(toks: read List<Tok>, i: read Int) -> Int {
+      if bad { return -1 }   // malformed
+      return newIndex        // success + advanced cursor
+  }
+  ```
+- **Backend:** all (language ergonomics).
+- **Root cause:** no ergonomic multi-value/tuple return and no mutable cursor, so
+  the classic "parser returns Result<Node, Err> while advancing self.pos" shape
+  collapses into an overloaded sentinel Int. Fine for a recognizer (which only
+  needs accept/reject), but a node-building parser would want a real result
+  struct per nonterminal.
+- **Classification:** language (ergonomics) + docs — same family as SH-018.
+- **Decision:** worked around with the `-1`-sentinel convention; reaches full
+  recognition parity (545/545). Recorded so the plumbing cost of a stateful
+  recursive-descent pass in rss is visible alongside SH-018.
+- **Tests:** `crate::selfhost_parity::parser_parity_corpus` (recognition, 545/545).
+- **Status:** decided (worked around).
