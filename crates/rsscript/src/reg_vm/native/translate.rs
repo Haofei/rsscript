@@ -1122,7 +1122,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                     args: args.iter().map(|arg| r(*arg)).collect(),
                 }
             }
-            RegInstr::DeepCopy { .. } => {
+            RegInstr::DeepCopy { .. } | RegInstr::DeepCopyElided { .. } => {
                 // Always a Nop in a native-eligible function: these are pure, leaf,
                 // side-effect-free, and never mutate a container, so an independent
                 // copy is never observably distinct from the original — for a scalar
@@ -2217,7 +2217,7 @@ where
             break;
         }
         let allowed_read = query_read(instr).or_else(|| match instr {
-            RegInstr::DeepCopy { reg } => Some(*reg),
+            RegInstr::DeepCopy { reg } | RegInstr::DeepCopyElided { reg } => Some(*reg),
             RegInstr::Move { dst, src }
                 if source[*dst].is_some() && source[*dst] == source[*src] =>
             {
@@ -4202,7 +4202,7 @@ fn translate_osr_loop_inner(
                     src: r(*src),
                 }
             }
-            RegInstr::DeepCopy { .. } => JitInstr::Nop,
+            RegInstr::DeepCopy { .. } | RegInstr::DeepCopyElided { .. } => JitInstr::Nop,
             RegInstr::AddInt { dst, lhs, rhs } => {
                 require(numeric_pair_or_int_free(*lhs, *rhs))?;
                 JitInstr::Add {

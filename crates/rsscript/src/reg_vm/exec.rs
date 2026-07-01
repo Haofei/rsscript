@@ -277,6 +277,10 @@ impl RegVm {
                 let copied = deep_copy_value(self.reg(base + *reg));
                 self.set_reg(base + *reg, copied);
             }
+            RegInstr::DeepCopyElided { .. } => {
+                // Elided by the `RSS_VM_ELIDE_DEEPCOPY` pass: the copy is provably redundant, so
+                // share the caller's `Rc` in place (skip the deep copy). This is the win.
+            }
             RegInstr::LoadString { dst, value } => {
                 self.set_reg(base + *dst, VmValue::String(Rc::clone(value)));
             }

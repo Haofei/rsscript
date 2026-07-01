@@ -1394,7 +1394,11 @@ impl NativeRegionEffects {
                 {
                     return true;
                 }
-                RegInstr::DeepCopy { reg } if *reg < n_regs && alias[*reg] => return true,
+                RegInstr::DeepCopy { reg } | RegInstr::DeepCopyElided { reg }
+                    if *reg < n_regs && alias[*reg] =>
+                {
+                    return true;
+                }
                 RegInstr::Move { dst, src }
                     if *dst < n_regs && *src < n_regs && alias[*dst] && alias[*src] =>
                 {
@@ -1686,6 +1690,7 @@ fn native_instr_semantics(instr: &RegInstr) -> NativeInstrSemantics {
         RegInstr::Move { src, .. }
         | RegInstr::Manage { src, .. }
         | RegInstr::DeepCopy { reg: src }
+        | RegInstr::DeepCopyElided { reg: src }
         | RegInstr::UnwrapSome { src, .. }
         | RegInstr::UnwrapVariantValue { src, .. }
         | RegInstr::AwaitJoin { src, .. } => S(vec![*src]),
@@ -1784,6 +1789,7 @@ fn native_instr_semantics(instr: &RegInstr) -> NativeInstrSemantics {
         | RegInstr::LoadBool { dst, .. }
         | RegInstr::Move { dst, .. }
         | RegInstr::DeepCopy { reg: dst, .. }
+        | RegInstr::DeepCopyElided { reg: dst, .. }
         | RegInstr::AddInt { dst, .. }
         | RegInstr::SubInt { dst, .. }
         | RegInstr::MulInt { dst, .. }
@@ -1839,6 +1845,7 @@ fn native_instr_semantics(instr: &RegInstr) -> NativeInstrSemantics {
         | RegInstr::NativeGuardClosureId { .. }
         | RegInstr::ResourceDrop { .. }
         | RegInstr::DeepCopy { .. }
+        | RegInstr::DeepCopyElided { .. }
         | RegInstr::Return { .. } => S(vec![]),
         RegInstr::LoadUnit { dst }
         | RegInstr::LoadInt { dst, .. }
@@ -1935,6 +1942,7 @@ fn native_instr_semantics(instr: &RegInstr) -> NativeInstrSemantics {
         | RegInstr::LoadString { .. }
         | RegInstr::Move { .. }
         | RegInstr::DeepCopy { .. }
+        | RegInstr::DeepCopyElided { .. }
         | RegInstr::AddInt { .. }
         | RegInstr::SubInt { .. }
         | RegInstr::MulInt { .. }
@@ -2215,7 +2223,7 @@ pub(in crate::reg_vm) fn native_deepcopy_param_unsoundly_mutated(
     let mut tainted = vec![false; n_regs];
     let mut any = false;
     for instr in code {
-        if let RegInstr::DeepCopy { reg } = instr {
+        if let RegInstr::DeepCopy { reg } | RegInstr::DeepCopyElided { reg } = instr {
             // Seed only HEAP roots that are not proven immutable. The `native_is_heap_reg`
             // gate matters for a generic `read T` param: the lowerer emits `DeepCopy` for it
             // unconditionally, but when `T` instantiates to a scalar the register is typed
@@ -2418,6 +2426,7 @@ pub(in crate::reg_vm) fn native_offset_regs(instr: &RegInstr, b: usize) -> Optio
             src: src + b,
         },
         RegInstr::DeepCopy { reg } => RegInstr::DeepCopy { reg: reg + b },
+        RegInstr::DeepCopyElided { reg } => RegInstr::DeepCopyElided { reg: reg + b },
         RegInstr::GetFieldSlot { dst, base, slot } => RegInstr::GetFieldSlot {
             dst: dst + b,
             base: base + b,
@@ -3543,7 +3552,7 @@ pub(in crate::reg_vm) fn subset_or_option_reads(instr: &RegInstr) -> Option<Vec<
         | RegInstr::RuntimeError { .. }
         | RegInstr::LoadNone { .. } => vec![],
         RegInstr::Move { src, .. } => vec![*src],
-        RegInstr::DeepCopy { reg } => vec![*reg],
+        RegInstr::DeepCopy { reg } | RegInstr::DeepCopyElided { reg } => vec![*reg],
         RegInstr::AddInt { lhs, rhs, .. }
         | RegInstr::SubInt { lhs, rhs, .. }
         | RegInstr::MulInt { lhs, rhs, .. }
@@ -7179,7 +7188,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_variants_in_region(
             // `DeepCopy` of a VAR register (e.g. from a `read`/param-marshalling of a
             // heap variant): a no-op once the variant is scalar-replaced (tag/payload
             // are copied by value). Allowed here; dropped in the rewrite.
-            RegInstr::DeepCopy { reg } if var[*reg] => {}
+            RegInstr::DeepCopy { reg } | RegInstr::DeepCopyElided { reg } if var[*reg] => {}
             RegInstr::Move { src, .. } if var[*src] => {}
             other => {
                 let reads = subset_or_option_reads(other)?;
@@ -7494,7 +7503,8 @@ pub(in crate::reg_vm) fn native_scalar_replace_variants_in_region(
                 });
             }
             // `DeepCopy` of a scalar-replaced variant: drop it (scalars copy by value).
-            RegInstr::DeepCopy { reg } if region && var[*reg] => {}
+            RegInstr::DeepCopy { reg } | RegInstr::DeepCopyElided { reg } if region && var[*reg] => {
+            }
             // Copy-through, remapping jump/match targets.
             RegInstr::Jump { target }
             | RegInstr::JumpIfBool { target, .. }

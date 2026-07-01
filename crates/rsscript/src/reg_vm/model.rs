@@ -581,6 +581,15 @@ pub(crate) enum RegInstr {
     DeepCopy {
         reg: Reg,
     },
+    /// Marker-preserving elided `DeepCopy`: produced ONLY by the compile-time elision pass
+    /// (`RSS_VM_ELIDE_DEEPCOPY`) in place of a `DeepCopy` proven redundant. The INTERPRETER
+    /// treats it as a no-op (share the caller's `Rc`, skip the copy — this is the win), while
+    /// EVERY native-tier site treats it BYTE-IDENTICALLY to `DeepCopy` (soundness seed, flat-param
+    /// ABI marker, tier-0 eligibility, `Nop` lowering). Keeping the marker — rather than rewriting
+    /// to a self-`Move` — is what lets the interp elide the copy without perturbing native tiering.
+    DeepCopyElided {
+        reg: Reg,
+    },
     Manage {
         dst: Reg,
         src: Reg,
@@ -1894,7 +1903,9 @@ fn deepcopy_collect_regs(instr: &RegInstr, out: &mut Vec<Reg>) {
             out.push(*dst);
             out.push(*src);
         }
-        RegInstr::DeepCopy { reg } | RegInstr::ResourceDrop { resource: reg } => out.push(*reg),
+        RegInstr::DeepCopy { reg }
+        | RegInstr::DeepCopyElided { reg }
+        | RegInstr::ResourceDrop { resource: reg } => out.push(*reg),
         RegInstr::NativeGuardClosureId { closure, .. } => out.push(*closure),
         RegInstr::SetFieldSlot {
             dst, base, value, ..
@@ -2197,6 +2208,116 @@ fn deepcopy_collect_regs(instr: &RegInstr, out: &mut Vec<Reg>) {
     }
 }
 
+/// Taint classification of a collection-read `RegIntrinsic` for `DeepCopy` elision. This is a
+/// WHITELIST: only intrinsics VERIFIED (against their `intrinsics/{list,map,set,deque}.rs` impl)
+/// to (a) never `borrow_mut` an arg and (b) never store an arg into `self.streams`/`self.channels`
+/// or resource state are classified; everything else is [`IntrinsicTaintClass::Keep`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IntrinsicTaintClass {
+    /// Reads its collection args and returns a FRESH scalar/bool/collection-of-scalars whose
+    /// contents never alias an arg's inner `Rc`. Safe: the call keeps no copy and needs no taint
+    /// propagation (the result can never be a live alias of the param).
+    PureFreshReader,
+    /// Reads its args, but the RESULT shares an arg's inner `Rc` (an element, a subview, or a
+    /// fresh collection holding cloned heap elements). The ARGS are read-only-safe, but taint MUST
+    /// propagate arg→dst (see `deepcopy_elidable_param_regs`) so a later mutation/store/return of
+    /// the aliased result correctly pins the copy.
+    AliasReturner,
+    /// Not proven read-only-and-non-storing: conservatively force-keep if it touches a tainted
+    /// register. Covers Tier-3 (channels/streams/IO/resource-pool/tensor/json/string/…) and every
+    /// variant not explicitly whitelisted below. This is the DEFAULT arm — soundness rests on it.
+    Keep,
+}
+
+/// Classify a `RegIntrinsic` for `DeepCopy`-elision taint tracking. EXPLICIT match with a
+/// conservative `Keep` default: an intrinsic is trusted only when its impl has been verified
+/// non-mutating and non-storing. Collection READS that lower to dedicated `RegInstr`s
+/// (`ListGet`/`ListLen`/`MapGet`) are NOT here — they are handled directly in
+/// `deepcopy_instr_forces_keep`/`deepcopy_elidable_param_regs`.
+fn deepcopy_intrinsic_class(intrinsic: RegIntrinsic) -> IntrinsicTaintClass {
+    use IntrinsicTaintClass::{AliasReturner, PureFreshReader};
+    match intrinsic {
+        // ---- PureFreshReader: fresh scalar/bool/collection-of-scalars, no arg aliasing. ----
+        // List
+        RegIntrinsic::ListIsEmpty
+        | RegIntrinsic::ListContains
+        | RegIntrinsic::ListAny
+        | RegIntrinsic::ListContainsValue
+        | RegIntrinsic::ListCountWhere
+        | RegIntrinsic::ListSum
+        | RegIntrinsic::ListMin
+        | RegIntrinsic::ListMax
+        | RegIntrinsic::ListJoin
+        | RegIntrinsic::ListConsume
+        | RegIntrinsic::ListNew
+        // Map
+        | RegIntrinsic::MapContainsKey
+        | RegIntrinsic::MapLen
+        | RegIntrinsic::MapIsEmpty
+        | RegIntrinsic::MapKeys
+        | RegIntrinsic::MapForEach
+        | RegIntrinsic::MapNew
+        // Set / SortedSet / SortedMap
+        | RegIntrinsic::SetContains
+        | RegIntrinsic::SetIsEmpty
+        | RegIntrinsic::SetLen
+        | RegIntrinsic::SetIsSubset
+        | RegIntrinsic::SetToList
+        | RegIntrinsic::SetNew
+        | RegIntrinsic::SortedSetContains
+        | RegIntrinsic::SortedSetIsEmpty
+        | RegIntrinsic::SortedSetLen
+        | RegIntrinsic::SortedSetNew
+        | RegIntrinsic::SortedMapContainsKey
+        | RegIntrinsic::SortedMapIsEmpty
+        | RegIntrinsic::SortedMapLen
+        | RegIntrinsic::SortedMapKeys
+        | RegIntrinsic::SortedMapNew
+        // Deque
+        | RegIntrinsic::DequeIsEmpty
+        | RegIntrinsic::DequeLen
+        | RegIntrinsic::DequeNew => PureFreshReader,
+
+        // ---- AliasReturner: result shares an arg's inner `Rc`; propagate taint arg→dst. ----
+        // List
+        RegIntrinsic::ListFirst
+        | RegIntrinsic::ListLast
+        | RegIntrinsic::ListFind
+        | RegIntrinsic::ListSlice
+        | RegIntrinsic::ListTake
+        | RegIntrinsic::ListSkip
+        | RegIntrinsic::ListReverse
+        | RegIntrinsic::ListEnumerate
+        | RegIntrinsic::ListPartition
+        | RegIntrinsic::ListZip
+        | RegIntrinsic::ListFlatten
+        | RegIntrinsic::ListFlatMap
+        | RegIntrinsic::ListDedup
+        | RegIntrinsic::ListGroupBy
+        | RegIntrinsic::ListTryFold
+        // Map
+        | RegIntrinsic::MapGetOrDefault
+        | RegIntrinsic::MapValues
+        | RegIntrinsic::MapFilter
+        | RegIntrinsic::MapFold
+        | RegIntrinsic::MapMapValues
+        | RegIntrinsic::MapMerge
+        | RegIntrinsic::MapTryFold
+        // Set / SortedSet / SortedMap
+        | RegIntrinsic::SetDifference
+        | RegIntrinsic::SetIntersection
+        | RegIntrinsic::SetUnion
+        | RegIntrinsic::SortedSetToList
+        | RegIntrinsic::SortedMapGet
+        | RegIntrinsic::SortedMapValues
+        // Deque
+        | RegIntrinsic::DequeToList => AliasReturner,
+
+        // Everything else (Tier-3 and any unclassified variant): conservative keep.
+        _ => IntrinsicTaintClass::Keep,
+    }
+}
+
 /// WHITELIST verdict for one instruction: does it force the DeepCopy'd param's copy to be
 /// KEPT (⇒ NOT elidable)? `tainted[r]` marks every register that aliases the param's inner
 /// `Rc`. This is the INTERPRETER-safe (whitelist) counterpart of the native blacklist
@@ -2213,10 +2334,14 @@ fn deepcopy_collect_regs(instr: &RegInstr, out: &mut Vec<Reg>) {
 ///   because the callee isolates its own returns under this same scheme.
 /// * A small set of pure, non-aliasing SCALAR/fresh producers (integer arithmetic/compare,
 ///   `ListLen`, `StringConcat`, discriminant `Match*`, `Jump*`, `Load*`) → safe.
+/// * Collection-read intrinsics (`CallIntrinsic`/`CallTypedIntrinsic`), per
+///   `deepcopy_intrinsic_class`: `PureFreshReader`/`AliasReturner` → safe (args read-only;
+///   result-aliasing is handled by taint propagation in `deepcopy_elidable_param_regs`);
+///   `Keep` (Tier-3 / unclassified) → keep if a tainted register is touched.
 /// * EVERYTHING ELSE (stores into aggregates, `Return`, `MakeClosure` capture, `SpawnTask`,
-///   `Manage`, `CallIntrinsic`, every unlisted mutator, …) → keep if it references ANY tainted
-///   register. This default is what makes the analysis a whitelist: an instruction is only
-///   trusted when explicitly classified read-only-safe above.
+///   `Manage`, every unlisted mutator, …) → keep if it references ANY tainted register. This
+///   default is what makes the analysis a whitelist: an instruction is only trusted when
+///   explicitly classified read-only-safe above.
 fn deepcopy_instr_forces_keep(instr: &RegInstr, tainted: &[bool], n_regs: usize) -> bool {
     let is_t = |r: Reg| r < n_regs && tainted[r];
     // In-place mutation of a tainted heap receiver — the direct leak.
@@ -2236,6 +2361,27 @@ fn deepcopy_instr_forces_keep(instr: &RegInstr, tainted: &[bool], n_regs: usize)
         | RegInstr::UnwrapVariantValue { .. }
         | RegInstr::DequePopFront { .. }
         | RegInstr::DequePopBack { .. } => false,
+
+        // A `DeepCopy` (or an already-elided one) is the taint SEED, not a use: it reads its
+        // register and yields a FRESH copy, never mutating through nor escaping the arg's `Rc`.
+        // It must never be the reason to keep a copy — in particular the prologue `DeepCopy` of
+        // the root under analysis must not veto its own elision.
+        RegInstr::DeepCopy { .. } | RegInstr::DeepCopyElided { .. } => false,
+
+        // Collection-read intrinsics, classified by `deepcopy_intrinsic_class`:
+        //   * PureFreshReader / AliasReturner → args are read-only; a PureFreshReader result is
+        //     fresh, and an AliasReturner result's aliasing is handled by taint propagation in
+        //     `deepcopy_elidable_param_regs` (so a later mutation/escape of the result pins the
+        //     copy there). Either way this CALL neither mutates nor escapes a tainted arg → safe.
+        //   * Keep (Tier-3 / unclassified) → conservatively keep if it touches a tainted register
+        //     (dst OR any arg), matching the former default-arm behavior.
+        RegInstr::CallIntrinsic { dst, intrinsic, args }
+        | RegInstr::CallTypedIntrinsic {
+            dst, intrinsic, args, ..
+        } => match deepcopy_intrinsic_class(*intrinsic) {
+            IntrinsicTaintClass::PureFreshReader | IntrinsicTaintClass::AliasReturner => false,
+            IntrinsicTaintClass::Keep => is_t(*dst) || args.iter().any(|&r| is_t(r)),
+        },
 
         // Calls: a tainted `mut` arg is mutated by-reference and leaks to our caller. `read`
         // args are safe (the callee deep-copies or has itself proven the param read-only), and
@@ -2328,6 +2474,25 @@ fn deepcopy_elidable_param_regs(code: &[RegInstr], n_regs: usize) -> std::collec
                 | RegInstr::DequePopBack { dst, deque: src } = instr
                 {
                     if *src < n_regs && *dst < n_regs && tainted[*src] && !tainted[*dst] {
+                        tainted[*dst] = true;
+                        changed = true;
+                    }
+                }
+                // AliasReturner intrinsics: the result shares an arg's inner `Rc`, so taint flows
+                // from ANY tainted arg to `dst` (conservative). This makes a downstream mutation
+                // or escape of the aliased result force the copy to be kept in
+                // `deepcopy_instr_forces_keep`. PureFreshReader/Keep intrinsics do not propagate
+                // (a fresh result cannot alias; a Keep result already vetoes elision directly).
+                if let RegInstr::CallIntrinsic { dst, args, intrinsic }
+                | RegInstr::CallTypedIntrinsic {
+                    dst, args, intrinsic, ..
+                } = instr
+                {
+                    if *dst < n_regs
+                        && !tainted[*dst]
+                        && deepcopy_intrinsic_class(*intrinsic) == IntrinsicTaintClass::AliasReturner
+                        && args.iter().any(|&r| r < n_regs && tainted[r])
+                    {
                         tainted[*dst] = true;
                         changed = true;
                     }
@@ -2425,21 +2590,20 @@ impl RegUnit {
             lowerer.emit(RegInstr::Return { src: unit });
             // Compile-time `DeepCopy` elision (gated behind `RSS_VM_ELIDE_DEEPCOPY`). Analyze
             // the fully-lowered body and neutralize the prologue `DeepCopy` of every parameter
-            // proven never mutated-through-alias and never escaping. Neutralize IN PLACE (a
-            // self-`Move`, a cheap shallow `Rc` clone) rather than removing the instruction,
-            // because jump/branch targets are ABSOLUTE instruction indices — dropping an
-            // instruction would shift them. When the flag is OFF this block is skipped and the
-            // lowering is byte-identical to before.
+            // proven never mutated-through-alias and never escaping. Rewrite IN PLACE to a
+            // `DeepCopyElided` (same slot, so jump/branch targets — ABSOLUTE instruction indices —
+            // stay valid) rather than removing the instruction. `DeepCopyElided` is a NO-OP in the
+            // interpreter (the win: share the caller's `Rc`, skip the copy) but is treated
+            // BYTE-IDENTICALLY to `DeepCopy` at every native-tier site, so native tiering/soundness
+            // is unperturbed. When the flag is OFF this block is skipped and the lowering is
+            // byte-identical to before.
             if elide_deepcopy_enabled() {
                 let n_regs = lowerer.function.regs;
                 let elidable = deepcopy_elidable_param_regs(&lowerer.function.code, n_regs);
                 for instr in lowerer.function.code.iter_mut() {
                     if let RegInstr::DeepCopy { reg } = instr {
                         if elidable.contains(reg) {
-                            *instr = RegInstr::Move {
-                                dst: *reg,
-                                src: *reg,
-                            };
+                            *instr = RegInstr::DeepCopyElided { reg: *reg };
                         }
                     }
                 }

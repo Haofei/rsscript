@@ -546,7 +546,12 @@ fn optimize_self_tail_calls(function: &mut RegFunction, function_id: usize) {
     let entry = function
         .code
         .iter()
-        .position(|instr| !matches!(instr, RegInstr::DeepCopy { .. }))
+        .position(|instr| {
+            !matches!(
+                instr,
+                RegInstr::DeepCopy { .. } | RegInstr::DeepCopyElided { .. }
+            )
+        })
         .unwrap_or(0);
 
     // Apply every site. Appends rebind blocks at the tail; existing indices are
@@ -601,7 +606,7 @@ fn instr_reads_register(instr: &RegInstr, reg: Reg) -> bool {
         | RegInstr::UnwrapSome { src, .. }
         | RegInstr::UnwrapVariantValue { src, .. }
         | RegInstr::AwaitJoin { src, .. } => *src == reg,
-        RegInstr::DeepCopy { reg: r } => *r == reg,
+        RegInstr::DeepCopy { reg: r } | RegInstr::DeepCopyElided { reg: r } => *r == reg,
         RegInstr::GetField { base, .. } | RegInstr::GetFieldSlot { base, .. } => *base == reg,
         RegInstr::SetField { base, value, .. } | RegInstr::SetFieldSlot { base, value, .. } => {
             *base == reg || *value == reg
@@ -669,6 +674,7 @@ fn jit_supported_instruction(instr: &RegInstr) -> bool {
             | RegInstr::LoadString { .. }
             | RegInstr::Move { .. }
             | RegInstr::DeepCopy { .. }
+            | RegInstr::DeepCopyElided { .. }
             | RegInstr::Manage { .. }
             | RegInstr::GetField { .. }
             | RegInstr::SetField { .. }

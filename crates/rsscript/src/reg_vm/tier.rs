@@ -3293,7 +3293,7 @@ impl RegVm {
                 RegInstr::Move { dst, src } => {
                     stack[base + *dst] = stack[base + *src];
                 }
-                RegInstr::DeepCopy { .. } => {
+                RegInstr::DeepCopy { .. } | RegInstr::DeepCopyElided { .. } => {
                     // Primitive scalar values are already independent; the bytecode
                     // instruction exists for heap/value isolation in the generic VM.
                 }
@@ -3565,7 +3565,9 @@ fn compute_recursive_int_member_inner(
                     require_scalar_kind(&mut kinds, *dst, ScalarSlotKind::Bool)
                 }
                 RegInstr::Move { dst, src } => propagate_same_kind(&mut kinds, *dst, *src),
-                RegInstr::DeepCopy { reg } => kinds.get(*reg).map(|_| false),
+                RegInstr::DeepCopy { reg } | RegInstr::DeepCopyElided { reg } => {
+                    kinds.get(*reg).map(|_| false)
+                }
                 RegInstr::AddInt { dst, lhs, rhs }
                 | RegInstr::SubInt { dst, lhs, rhs }
                 | RegInstr::MulInt { dst, lhs, rhs }
