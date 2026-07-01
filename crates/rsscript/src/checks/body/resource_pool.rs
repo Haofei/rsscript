@@ -23,7 +23,7 @@ pub(super) fn check_resource_pool_bindings(
 }
 pub(super) fn check_managed_closure_captures(
     analyzer: &mut Analyzer<'_>,
-    local_analysis: &LocalAnalysis,
+    local_analysis: &LocalAnalysis<'_>,
     statement_span: &crate::diagnostic::Span,
     state: &BodyState,
 ) {
@@ -47,7 +47,7 @@ pub(super) fn check_managed_closure_captures(
 
 pub(super) fn check_resource_escape(
     analyzer: &mut Analyzer<'_>,
-    local_analysis: &LocalAnalysis,
+    local_analysis: &LocalAnalysis<'_>,
     with_span: &crate::diagnostic::Span,
 ) {
     if let Some(escapes) = local_analysis.resource_escapes(with_span) {
@@ -1698,7 +1698,7 @@ pub(super) fn is_resource_pool_type(type_name: &str) -> bool {
 }
 
 pub(super) fn resource_is_active_at(
-    local_analysis: &LocalAnalysis,
+    local_analysis: &LocalAnalysis<'_>,
     binding: &str,
     span: &crate::diagnostic::Span,
 ) -> bool {

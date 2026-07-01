@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) fn check_block(
     analyzer: &mut Analyzer<'_>,
-    local_analysis: &LocalAnalysis,
+    local_analysis: &LocalAnalysis<'_>,
     block: &HirBlock,
     state: &mut BodyState,
     check_resource_contexts: bool,

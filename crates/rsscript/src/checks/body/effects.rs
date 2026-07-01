@@ -209,7 +209,7 @@ pub(super) fn arm_span(arms: &[HirMatchArm]) -> Span {
     )
 }
 
-pub(super) fn check_moved_uses(analyzer: &mut Analyzer<'_>, local_analysis: &LocalAnalysis) {
+pub(super) fn check_moved_uses(analyzer: &mut Analyzer<'_>, local_analysis: &LocalAnalysis<'_>) {
     for moved_use in local_analysis.moved_uses() {
         moved_use_diagnostic(analyzer, moved_use);
     }
@@ -217,7 +217,7 @@ pub(super) fn check_moved_uses(analyzer: &mut Analyzer<'_>, local_analysis: &Loc
 
 pub(super) fn check_managed_to_local_uses(
     analyzer: &mut Analyzer<'_>,
-    local_analysis: &LocalAnalysis,
+    local_analysis: &LocalAnalysis<'_>,
 ) {
     for managed_to_local in local_analysis.managed_to_local_uses() {
         managed_to_local_diagnostic(analyzer, managed_to_local);
@@ -226,7 +226,7 @@ pub(super) fn check_managed_to_local_uses(
 
 pub(super) fn check_retained_local_uses(
     analyzer: &mut Analyzer<'_>,
-    local_analysis: &LocalAnalysis,
+    local_analysis: &LocalAnalysis<'_>,
 ) {
     for retained in local_analysis.retained_local_uses() {
         retained_local_diagnostic(analyzer, retained);
@@ -235,7 +235,7 @@ pub(super) fn check_retained_local_uses(
 
 pub(super) fn check_retained_closure_captures(
     analyzer: &mut Analyzer<'_>,
-    local_analysis: &LocalAnalysis,
+    local_analysis: &LocalAnalysis<'_>,
 ) {
     for capture in local_analysis.retained_closure_captures() {
         retained_closure_capture_diagnostic(analyzer, capture);
@@ -244,7 +244,7 @@ pub(super) fn check_retained_closure_captures(
 
 pub(super) fn check_take_handle_fields(
     analyzer: &mut Analyzer<'_>,
-    local_analysis: &LocalAnalysis,
+    local_analysis: &LocalAnalysis<'_>,
 ) {
     for field in local_analysis.take_handle_fields() {
         take_handle_field_diagnostic(analyzer, field);
@@ -253,7 +253,7 @@ pub(super) fn check_take_handle_fields(
 
 pub(super) fn check_fresh_returns(
     analyzer: &mut Analyzer<'_>,
-    local_analysis: &LocalAnalysis,
+    local_analysis: &LocalAnalysis<'_>,
     function: &FunctionDecl,
 ) {
     if !function.returns_fresh {

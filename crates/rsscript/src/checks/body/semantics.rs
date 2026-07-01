@@ -3,7 +3,7 @@ use crate::checks::diagnostic_helpers::error_cause_manual_fix;
 
 pub(super) fn check_stmt_semantics(
     analyzer: &mut Analyzer<'_>,
-    local_analysis: &LocalAnalysis,
+    local_analysis: &LocalAnalysis<'_>,
     statement: &HirStmt,
     state: &mut BodyState,
     check_resource_contexts: bool,
@@ -342,7 +342,7 @@ pub(super) fn apply_stmt_effects(statement: &HirStmt, state: &mut BodyState) {
 
 pub(super) fn check_expr_semantics(
     analyzer: &mut Analyzer<'_>,
-    local_analysis: &LocalAnalysis,
+    local_analysis: &LocalAnalysis<'_>,
     expr: &HirExpr,
     state: &BodyState,
     live_after: &HashSet<String>,
@@ -1086,7 +1086,7 @@ pub(super) fn first_mutating_effect_stmt(
 
 pub(super) fn check_expr_semantics_with_context(
     analyzer: &mut Analyzer<'_>,
-    local_analysis: &LocalAnalysis,
+    local_analysis: &LocalAnalysis<'_>,
     expr: &HirExpr,
     state: &BodyState,
     allow_weak_upgrade_arg: bool,

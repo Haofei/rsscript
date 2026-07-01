@@ -76,8 +76,8 @@ pub(crate) struct FreshReturnIssue {
     pub(crate) span: Span,
 }
 
-pub(crate) struct LocalAnalysis {
-    body: Option<HirFunctionBody>,
+pub(crate) struct LocalAnalysis<'a> {
+    body: Option<&'a HirFunctionBody>,
     managed_closure_uses_by_span: HashMap<Span, Vec<(String, Span)>>,
     resource_escapes_by_with_span: HashMap<Span, Vec<ResourceEscape>>,
     take_handle_fields: Vec<TakeHandleField>,
@@ -149,27 +149,22 @@ pub(crate) struct ResourceEscape {
     pub(crate) span: Span,
 }
 
-impl LocalAnalysis {
-    pub(crate) fn new(body: Option<&HirFunctionBody>) -> Self {
-        let body = body.cloned();
+impl<'a> LocalAnalysis<'a> {
+    pub(crate) fn new(body: Option<&'a HirFunctionBody>) -> Self {
         let managed_closure_uses_by_span = body
-            .as_ref()
             .and_then(|body| body.block.as_ref())
             .map_or_else(HashMap::new, index_managed_closure_uses_from_block);
         let resource_escapes_by_with_span = body
-            .as_ref()
             .and_then(|body| body.block.as_ref())
             .map_or_else(HashMap::new, index_resource_escapes_from_block);
         let take_handle_fields = body
-            .as_ref()
             .and_then(|body| body.block.as_ref())
             .map_or_else(Vec::new, collect_take_handle_fields);
         let flow_steps = body
-            .as_ref()
             .and_then(|body| body.block.as_ref())
             .map_or_else(Vec::new, collect_local_flow_steps);
         let flow_entry_states_by_span =
-            collect_flow_entry_states(&flow_steps, initial_state_from_body(body.as_ref()));
+            collect_flow_entry_states(&flow_steps, initial_state_from_body(body));
 
         Self {
             body,
@@ -182,7 +177,7 @@ impl LocalAnalysis {
     }
 
     pub(crate) fn initial_state(&self) -> BodyState {
-        initial_state_from_body(self.body.as_ref())
+        initial_state_from_body(self.body)
     }
 
     pub(crate) fn managed_closure_ident_uses(&self, span: &Span) -> Option<&[(String, Span)]> {
@@ -207,7 +202,7 @@ impl LocalAnalysis {
 
     pub(crate) fn moved_uses(&self) -> Vec<MovedUse> {
         let mut moved_uses = Vec::new();
-        if let Some(block) = self.body.as_ref().and_then(|body| body.block.as_ref()) {
+        if let Some(block) = self.body.and_then(|body| body.block.as_ref()) {
             collect_ordered_moved_uses_from_block(
                 block,
                 &self.flow_entry_states_by_span,
@@ -278,7 +273,7 @@ impl LocalAnalysis {
 
     pub(crate) fn retained_closure_captures(&self) -> Vec<RetainedClosureCapture> {
         let mut captures = Vec::new();
-        if let Some(block) = self.body.as_ref().and_then(|body| body.block.as_ref()) {
+        if let Some(block) = self.body.and_then(|body| body.block.as_ref()) {
             collect_retained_closure_captures_from_block(
                 block,
                 &self.flow_entry_states_by_span,
@@ -290,7 +285,7 @@ impl LocalAnalysis {
 
     pub(crate) fn fresh_return_issues(&self) -> Vec<FreshReturnIssue> {
         let mut issues = Vec::new();
-        if let Some(block) = self.body.as_ref().and_then(|body| body.block.as_ref()) {
+        if let Some(block) = self.body.and_then(|body| body.block.as_ref()) {
             collect_fresh_return_issues_from_block(
                 block,
                 &self.flow_entry_states_by_span,
