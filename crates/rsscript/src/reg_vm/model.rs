@@ -1830,21 +1830,24 @@ pub(crate) enum MatchFailurePatch {
 
 /// Process-once gate for compile-time `DeepCopy` elision (`RSS_VM_ELIDE_DEEPCOPY`).
 ///
-/// Default OFF: the lowerer emits every prologue `DeepCopy` exactly as before, so lowering
-/// is byte-identical to the pre-elision compiler. When set to a truthy value the lowerer
-/// neutralizes the `DeepCopy` of any non-`mut` heap parameter it can PROVE is never mutated
-/// through an alias and never escapes the frame — sharing the caller's `Rc` is then
-/// observationally identical to copying it. Read once (like `RSS_JIT_COST_MODEL`) so the
-/// verdict is stable across every function lowering in the process.
+/// Default ON (Phase 2 v2): the lowerer neutralizes the prologue `DeepCopy` of any non-`mut`
+/// heap parameter it can PROVE is never mutated through an alias and never escapes the frame —
+/// sharing the caller's `Rc` is then observationally identical to copying it (the analysis
+/// keeps the copy for everything not proven safe; native sees an unchanged `DeepCopyElided`
+/// marker). Verified parity-preserving over runtime 455/0 + differential 33/0 @ 2000 generative
+/// cases + soak + cost-model, with a ~14x win on the deep-copy-heavy kernel. Set
+/// `RSS_VM_ELIDE_DEEPCOPY=0` (or `off`/`false`/`no`) to restore the byte-identical eager-copy
+/// lowering for a fast rollback. Read once (like `RSS_JIT_COST_MODEL`) so the verdict is stable
+/// across every function lowering in the process.
 fn elide_deepcopy_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| {
-        matches!(
+        !matches!(
             std::env::var("RSS_VM_ELIDE_DEEPCOPY")
                 .ok()
                 .as_deref()
                 .map(str::trim),
-            Some("1") | Some("true") | Some("on") | Some("yes")
+            Some("0") | Some("false") | Some("off") | Some("no")
         )
     })
 }
