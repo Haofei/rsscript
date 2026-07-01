@@ -227,7 +227,7 @@ fn jit_function_scalar_leaf_callable(jit_fn: &vm_jit::JitFunction) -> bool {
                 | vm_jit::JitValueType::FlatFloat
         )
     }) && jit_fn.code.iter().all(|instr| {
-        matches!(
+        (matches!(
             instr,
             vm_jit::JitInstr::Nop
                 | vm_jit::JitInstr::LoadInt { .. }
@@ -259,18 +259,16 @@ fn jit_function_scalar_leaf_callable(jit_fn: &vm_jit::JitFunction) -> bool {
                 | vm_jit::JitInstr::MemoizedHostCall { .. }
                 | vm_jit::JitInstr::Return { .. }
                 | vm_jit::JitInstr::Bail
-                | vm_jit::JitInstr::ListGetIntDirect { .. }
-                | vm_jit::JitInstr::ListSetIntDirect { .. }
-                | vm_jit::JitInstr::ListGetFloatDirect { .. }
-                | vm_jit::JitInstr::ListSetFloatDirect { .. }
-                | vm_jit::JitInstr::ListLenDirect { .. }
-                | vm_jit::JitInstr::ListIsEmptyDirect { .. }
-        ) && !matches!(
-            instr,
-            vm_jit::JitInstr::HostCall { helper, .. }
-                | vm_jit::JitInstr::MemoizedHostCall { helper, .. }
-                if helper.heap_effect().extends_input_handles()
-        )
+        // Flat-list direct ops (get/set/len/is_empty) come from the canonical
+        // `is_flat_list_direct` set so this list can't drift out of sync with the
+        // cost model / simple-subset sites (the historical leaf-set omission bug).
+        ) || instr.is_flat_list_direct())
+            && !matches!(
+                instr,
+                vm_jit::JitInstr::HostCall { helper, .. }
+                    | vm_jit::JitInstr::MemoizedHostCall { helper, .. }
+                    if helper.heap_effect().extends_input_handles()
+            )
     })
 }
 

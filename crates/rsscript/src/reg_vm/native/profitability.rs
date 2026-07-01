@@ -220,6 +220,10 @@ pub(in crate::reg_vm) fn native_region_profitability(
             JitInstr::ProfiledJumpIfBool { .. } | JitInstr::ProfiledJumpIfIntCompare { .. } => {
                 score += W_PROFILED_BRANCH;
             }
+            // Flat-list direct set (get/set/len/is_empty). Kept as explicit patterns
+            // (not `is_flat_list_direct`) so the exhaustive `match` still forces a new
+            // `*Direct` op to be classified here — the complementary drift guard to
+            // the shared predicate used by the boolean leaf/subset sites.
             JitInstr::ListGetIntDirect { .. }
             | JitInstr::ListGetFloatDirect { .. }
             | JitInstr::ListSetIntDirect { .. }

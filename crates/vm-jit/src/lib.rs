@@ -1478,6 +1478,27 @@ pub enum JitInstr {
     OsrExit,
 }
 
+impl JitInstr {
+    /// Canonical membership test for the TV2 flat-array *direct* ops (read the raw
+    /// param buffer / its `lens` slot with no host call). This is the SINGLE source
+    /// of truth so the several classification sites (native-leaf eligibility, the
+    /// cost model's direct-read credit, the simple-subset predicate) cannot drift —
+    /// adding a new `*Direct` op only needs updating here. (Historically this set was
+    /// hand-enumerated in each site and drifted: `ListSetFloatDirect`/`ListIsEmptyDirect`
+    /// were missing from the native-leaf set.)
+    pub fn is_flat_list_direct(&self) -> bool {
+        matches!(
+            self,
+            JitInstr::ListGetIntDirect { .. }
+                | JitInstr::ListSetIntDirect { .. }
+                | JitInstr::ListGetFloatDirect { .. }
+                | JitInstr::ListSetFloatDirect { .. }
+                | JitInstr::ListLenDirect { .. }
+                | JitInstr::ListIsEmptyDirect { .. }
+        )
+    }
+}
+
 /// Storage class of a register: an unboxed `i64` (integers and booleans) or an
 /// unboxed `f64` (floats). The arithmetic/compare instructions are
 /// type-polymorphic — the same `Add`/`Compare`/… opcode lowers to integer or
@@ -1579,7 +1600,7 @@ fn native_scalar_leaf_callable(function: &JitFunction, osr: bool, _returns_handl
                 | JitValueType::FlatFloat
         )
     }) && function.code.iter().all(|instr| {
-        matches!(
+        (matches!(
             instr,
             JitInstr::Nop
                 | JitInstr::LoadInt { .. }
@@ -1613,17 +1634,14 @@ fn native_scalar_leaf_callable(function: &JitFunction, osr: bool, _returns_handl
                 | JitInstr::MemoizedHostCall { .. }
                 | JitInstr::Return { .. }
                 | JitInstr::Bail
-                | JitInstr::ListGetIntDirect { .. }
-                | JitInstr::ListSetIntDirect { .. }
-                | JitInstr::ListGetFloatDirect { .. }
-                | JitInstr::ListSetFloatDirect { .. }
-                | JitInstr::ListLenDirect { .. }
-                | JitInstr::ListIsEmptyDirect { .. }
-        ) && !matches!(
-            instr,
-            JitInstr::HostCall { helper, .. } | JitInstr::MemoizedHostCall { helper, .. }
-                if helper.heap_effect().extends_input_handles()
-        )
+        // Flat-list direct ops via the canonical `is_flat_list_direct` set (single
+        // source of truth shared with the rsscript leaf/cost-model sites).
+        ) || instr.is_flat_list_direct())
+            && !matches!(
+                instr,
+                JitInstr::HostCall { helper, .. } | JitInstr::MemoizedHostCall { helper, .. }
+                    if helper.heap_effect().extends_input_handles()
+            )
     })
 }
 
