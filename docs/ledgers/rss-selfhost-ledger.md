@@ -416,3 +416,35 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   continuation or make the leading-operator form a hard error.
 - **Tests:** `crate::selfhost_parity::lexer_parity_tiny_sample`.
 - **Status:** open (worked around; language decision pending).
+
+### SH-018 — no cursor/state object: scan helpers must thread `(chars, n, index)` and return the new index
+
+- **Tool:** self-hosted lexer (`selfhost/lexer.rss`), Phase 1 full tokenizer.
+- **Symptom:** the oracle (`crate::lexer`) is a `Lexer` struct with `peek/peek_n/
+  bump` methods mutating `self.index`. rss has no ergonomic equivalent: there is
+  no `impl`/method syntax and a `mut` struct param only supports field/index
+  assignment (SH-007/SH-013), not the natural "advance my cursor" pattern. So
+  every scanner (`scan_string`, `scan_number`, `scan_interp`, …) takes
+  `(chars: read List<Char>, n: read Int, i: read Int)` and *returns the new
+  index*, and each peek is a free `code_at(chars, n, i)` call with an explicit
+  `-1` out-of-bounds sentinel instead of `Option<char>`. The dispatcher must
+  pre-read `c1`/`c2` (peek+1/+2) as locals every iteration.
+- **Minimal RSS:**
+  ```
+  fn code_at(chars: read List<Char>, n: read Int, i: read Int) -> Int {
+      if i < n { return Char.to_code(value: read List.get(list: read chars, index: read i)) }
+      return -1
+  }
+  ```
+- **Backend:** all (language ergonomics).
+- **Root cause:** no methods/`impl` blocks and no move-cursor mutation through a
+  `mut` param, so lexer state can't be encapsulated; it is threaded positionally
+  and returned. Also no `Option<char>` peek convenience → `-1` sentinel.
+- **Classification:** language (no method syntax / cursor mutation) + docs.
+- **Decision:** worked around by the return-the-new-index convention and a
+  `code_at` sentinel helper; it reads cleanly enough and reaches full tier-0
+  parity (544/544). The general lever (method syntax or a mutable-cursor pattern)
+  is a language-ergonomics follow-up, not a blocker. Recorded so the plumbing
+  cost of self-hosting stateful passes is visible.
+- **Tests:** `crate::selfhost_parity::lexer_parity_corpus` (tier 0, 544/544).
+- **Status:** decided (worked around).
