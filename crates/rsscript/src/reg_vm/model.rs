@@ -1819,6 +1819,531 @@ pub(crate) enum MatchFailurePatch {
     VariantOther(usize),
 }
 
+/// Process-once gate for compile-time `DeepCopy` elision (`RSS_VM_ELIDE_DEEPCOPY`).
+///
+/// Default OFF: the lowerer emits every prologue `DeepCopy` exactly as before, so lowering
+/// is byte-identical to the pre-elision compiler. When set to a truthy value the lowerer
+/// neutralizes the `DeepCopy` of any non-`mut` heap parameter it can PROVE is never mutated
+/// through an alias and never escapes the frame — sharing the caller's `Rc` is then
+/// observationally identical to copying it. Read once (like `RSS_JIT_COST_MODEL`) so the
+/// verdict is stable across every function lowering in the process.
+fn elide_deepcopy_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        matches!(
+            std::env::var("RSS_VM_ELIDE_DEEPCOPY")
+                .ok()
+                .as_deref()
+                .map(str::trim),
+            Some("1") | Some("true") | Some("on") | Some("yes")
+        )
+    })
+}
+
+/// The register mutated IN PLACE by an in-scope container mutator, if any — a NON-`native-jit`
+/// mirror of `native::passes::native_heap_mutation_receiver` (which is `cfg`-gated). Mutating
+/// one of these on a tainted receiver would write through the shared `Rc` the interpreter would
+/// have left untouched, so it forces the copy to be kept. (The broader set of interpreter-only
+/// mutators — `MapRemove`, `SetClear`, `ListSortBy`, … — is caught by the conservative default
+/// arm of [`deepcopy_instr_forces_keep`], which keeps the copy for any unclassified instruction
+/// that references a tainted register.)
+fn deepcopy_heap_mutation_receiver(instr: &RegInstr) -> Option<Reg> {
+    match instr {
+        RegInstr::ListSet { list, .. }
+        | RegInstr::ListPush { list, .. }
+        | RegInstr::ListAppend { list, .. }
+        | RegInstr::ListClear { list, .. }
+        | RegInstr::ListPop { list, .. }
+        | RegInstr::ListSort { list, .. }
+        | RegInstr::ListRemoveAt { list, .. } => Some(*list),
+        RegInstr::MapInsert { map, .. } | RegInstr::SortedMapInsert { map, .. } => Some(*map),
+        RegInstr::SetInsert { set, .. } | RegInstr::SortedSetInsert { set, .. } => Some(*set),
+        RegInstr::DequePushBack { deque, .. }
+        | RegInstr::DequePushFront { deque, .. }
+        | RegInstr::DequePopFront { deque, .. }
+        | RegInstr::DequePopBack { deque, .. } => Some(*deque),
+        _ => None,
+    }
+}
+
+/// Push every register referenced (read OR written) by `instr` into `out`. EXHAUSTIVE by
+/// design (no wildcard arm) so a future `RegInstr` variant is a COMPILE error rather than a
+/// silent hole — the conservative default arm of [`deepcopy_instr_forces_keep`] relies on this
+/// to keep the copy whenever a tainted register is touched by an instruction it has not
+/// explicitly classified as read-only-safe.
+fn deepcopy_collect_regs(instr: &RegInstr, out: &mut Vec<Reg>) {
+    match instr {
+        RegInstr::LoadUnit { dst }
+        | RegInstr::LoadInt { dst, .. }
+        | RegInstr::LoadFloat { dst, .. }
+        | RegInstr::LoadBool { dst, .. }
+        | RegInstr::LoadString { dst, .. }
+        | RegInstr::LoadNone { dst } => out.push(*dst),
+        RegInstr::Move { dst, src }
+        | RegInstr::Manage { dst, src }
+        | RegInstr::GetField { dst, base: src, .. }
+        | RegInstr::GetFieldSlot { dst, base: src, .. }
+        | RegInstr::UnwrapSome { dst, src }
+        | RegInstr::UnwrapVariantValue { dst, src, .. }
+        | RegInstr::AwaitJoin { dst, src }
+        | RegInstr::MakeSome { dst, value: src }
+        | RegInstr::NativeClosureId { dst, closure: src }
+        | RegInstr::NativeClosureCapture { dst, closure: src, .. }
+        | RegInstr::NativeFieldClosureId { dst, base: src, .. }
+        | RegInstr::NativeFieldClosureCapture { dst, base: src, .. } => {
+            out.push(*dst);
+            out.push(*src);
+        }
+        RegInstr::DeepCopy { reg } | RegInstr::ResourceDrop { resource: reg } => out.push(*reg),
+        RegInstr::NativeGuardClosureId { closure, .. } => out.push(*closure),
+        RegInstr::SetFieldSlot {
+            dst, base, value, ..
+        }
+        | RegInstr::SetField {
+            dst, base, value, ..
+        } => {
+            out.push(*dst);
+            out.push(*base);
+            out.push(*value);
+        }
+        RegInstr::MakeStruct { dst, fields, .. }
+        | RegInstr::MakeVariant { dst, fields, .. }
+        | RegInstr::MakeObject { dst, fields } => {
+            out.push(*dst);
+            out.extend(fields.iter().map(|(_, r)| *r));
+        }
+        RegInstr::MakeList { dst, items } => {
+            out.push(*dst);
+            out.extend(items.iter().copied());
+        }
+        RegInstr::MakeMap { dst, entries } => {
+            out.push(*dst);
+            for (k, v) in entries {
+                out.push(*k);
+                out.push(*v);
+            }
+        }
+        RegInstr::AddInt { dst, lhs, rhs }
+        | RegInstr::SubInt { dst, lhs, rhs }
+        | RegInstr::MulInt { dst, lhs, rhs }
+        | RegInstr::DivInt { dst, lhs, rhs }
+        | RegInstr::ModInt { dst, lhs, rhs }
+        | RegInstr::BitAndInt { dst, lhs, rhs }
+        | RegInstr::BitOrInt { dst, lhs, rhs }
+        | RegInstr::BitXorInt { dst, lhs, rhs }
+        | RegInstr::ShiftLeftInt { dst, lhs, rhs }
+        | RegInstr::ShiftRightInt { dst, lhs, rhs }
+        | RegInstr::LessInt { dst, lhs, rhs }
+        | RegInstr::LessEqualInt { dst, lhs, rhs }
+        | RegInstr::GreaterInt { dst, lhs, rhs }
+        | RegInstr::GreaterEqualInt { dst, lhs, rhs }
+        | RegInstr::Equal { dst, lhs, rhs }
+        | RegInstr::NotEqual { dst, lhs, rhs }
+        | RegInstr::StringConcat {
+            dst,
+            left: lhs,
+            right: rhs,
+        } => {
+            out.push(*dst);
+            out.push(*lhs);
+            out.push(*rhs);
+        }
+        RegInstr::Jump { .. } | RegInstr::RuntimeError { .. } => {}
+        RegInstr::JumpIfBool { cond, .. } => out.push(*cond),
+        RegInstr::JumpIfIntCompare { lhs, rhs, .. } => {
+            out.push(*lhs);
+            out.push(*rhs);
+        }
+        RegInstr::MatchOption { src, .. }
+        | RegInstr::MatchResult { src, .. }
+        | RegInstr::MatchVariant { src, .. }
+        | RegInstr::Return { src } => out.push(*src),
+        RegInstr::MatchMapGet {
+            map,
+            key,
+            value_dst,
+            ..
+        }
+        | RegInstr::MatchSortedMapGet {
+            map,
+            key,
+            value_dst,
+            ..
+        } => {
+            out.push(*map);
+            out.push(*key);
+            out.push(*value_dst);
+        }
+        RegInstr::MakeClosure { dst, captures, .. } => {
+            out.push(*dst);
+            out.extend(captures.iter().copied());
+        }
+        RegInstr::CallKnown { dst, args, .. }
+        | RegInstr::CallDynamic { dst, args, .. }
+        | RegInstr::SpawnTask { dst, args, .. }
+        | RegInstr::CallNative { dst, args, .. }
+        | RegInstr::CallIntrinsic { dst, args, .. }
+        | RegInstr::CallTypedIntrinsic { dst, args, .. } => {
+            out.push(*dst);
+            out.extend(args.iter().copied());
+        }
+        RegInstr::CallClosure {
+            dst,
+            closure,
+            args,
+            ..
+        } => {
+            out.push(*dst);
+            out.push(*closure);
+            out.extend(args.iter().copied());
+        }
+        RegInstr::SelectWait {
+            handles,
+            winner,
+            value,
+        } => {
+            out.extend(handles.iter().copied());
+            out.push(*winner);
+            out.push(*value);
+        }
+        RegInstr::ListFilter {
+            dst,
+            list,
+            predicate,
+        } => {
+            out.push(*dst);
+            out.push(*list);
+            out.push(*predicate);
+        }
+        RegInstr::ListFold {
+            dst,
+            list,
+            state,
+            folder,
+        } => {
+            out.push(*dst);
+            out.push(*list);
+            out.push(*state);
+            out.push(*folder);
+        }
+        RegInstr::ListGet {
+            dst,
+            list: base,
+            index: extra,
+        }
+        | RegInstr::ListRemoveAt {
+            dst,
+            list: base,
+            index: extra,
+        }
+        | RegInstr::ListMap {
+            dst,
+            list: base,
+            mapper: extra,
+        }
+        | RegInstr::ListAppend {
+            dst,
+            list: base,
+            values: extra,
+        }
+        | RegInstr::ListPush {
+            dst,
+            list: base,
+            value: extra,
+        }
+        | RegInstr::ListSortWith {
+            dst,
+            list: base,
+            compare: extra,
+        }
+        | RegInstr::DequePushBack {
+            dst,
+            deque: base,
+            value: extra,
+        }
+        | RegInstr::DequePushFront {
+            dst,
+            deque: base,
+            value: extra,
+        }
+        | RegInstr::SetInsert {
+            dst,
+            set: base,
+            value: extra,
+        }
+        | RegInstr::SetRemove {
+            dst,
+            set: base,
+            value: extra,
+        }
+        | RegInstr::SortedSetInsert {
+            dst,
+            set: base,
+            value: extra,
+        }
+        | RegInstr::SortedSetRemove {
+            dst,
+            set: base,
+            value: extra,
+        }
+        | RegInstr::SortedMapRemove {
+            dst,
+            map: base,
+            key: extra,
+        }
+        | RegInstr::MapGet {
+            dst,
+            map: base,
+            key: extra,
+        }
+        | RegInstr::MapRemove {
+            dst,
+            map: base,
+            key: extra,
+        }
+        | RegInstr::CounterAdd {
+            dst,
+            counter: base,
+            amount: extra,
+        }
+        | RegInstr::ConfigStoreReplace {
+            dst,
+            store: base,
+            value: extra,
+        }
+        | RegInstr::GlobalConfigReplace {
+            dst,
+            global: base,
+            value: extra,
+        }
+        | RegInstr::StringBuilderPush {
+            dst,
+            builder: base,
+            value: extra,
+        } => {
+            out.push(*dst);
+            out.push(*base);
+            out.push(*extra);
+        }
+        RegInstr::ListLen { dst, list: base }
+        | RegInstr::ListClear { dst, list: base }
+        | RegInstr::ListPop { dst, list: base }
+        | RegInstr::ListSort { dst, list: base }
+        | RegInstr::DequeClear { dst, deque: base }
+        | RegInstr::DequePopBack { dst, deque: base }
+        | RegInstr::DequePopFront { dst, deque: base }
+        | RegInstr::SetClear { dst, set: base }
+        | RegInstr::SortedSetClear { dst, set: base }
+        | RegInstr::SortedMapClear { dst, map: base }
+        | RegInstr::MapClear { dst, map: base }
+        | RegInstr::BufferClear { dst, buffer: base } => {
+            out.push(*dst);
+            out.push(*base);
+        }
+        RegInstr::SetForEach {
+            dst,
+            set: base,
+            callback: extra,
+        } => {
+            out.push(*dst);
+            out.push(*base);
+            out.push(*extra);
+        }
+        RegInstr::ListSet {
+            dst,
+            list,
+            index,
+            value,
+        }
+        | RegInstr::MapInsert {
+            dst,
+            map: list,
+            key: index,
+            value,
+        }
+        | RegInstr::MapInsertOld {
+            dst,
+            map: list,
+            key: index,
+            value,
+        }
+        | RegInstr::SortedMapInsert {
+            dst,
+            map: list,
+            key: index,
+            value,
+        } => {
+            out.push(*dst);
+            out.push(*list);
+            out.push(*index);
+            out.push(*value);
+        }
+        RegInstr::ListSortBy {
+            dst,
+            list,
+            key,
+            compare,
+        } => {
+            out.push(*dst);
+            out.push(*list);
+            out.push(*key);
+            out.push(*compare);
+        }
+        RegInstr::TryResult { dst, src, cleanup } => {
+            out.push(*dst);
+            out.push(*src);
+            out.extend(cleanup.iter().copied());
+        }
+    }
+}
+
+/// WHITELIST verdict for one instruction: does it force the DeepCopy'd param's copy to be
+/// KEPT (⇒ NOT elidable)? `tainted[r]` marks every register that aliases the param's inner
+/// `Rc`. This is the INTERPRETER-safe (whitelist) counterpart of the native blacklist
+/// `native_deepcopy_param_unsoundly_mutated`: the interpreter runs the FULL instruction set,
+/// so anything not PROVEN read-only defaults to keep-copy.
+///
+/// Classification:
+/// * In-place mutation of a tainted heap receiver → keep (mirrors native's receiver set;
+///   the broader interpreter-only mutators fall through to the conservative default).
+/// * Alias-PROPAGATION reads (`Move`/`*Get`/`GetField*`/`UnwrapVariantValue`/`DequePop*`) →
+///   safe: `dst` is already tainted by the closure, and the op does not itself mutate/escape.
+/// * Calls (`CallKnown`/`CallDynamic`/`CallNative`/`CallClosure`) → keep ONLY if a tainted
+///   value sits in a `mut_args` position; `read` args (and the `closure` receiver) are safe
+///   because the callee isolates its own returns under this same scheme.
+/// * A small set of pure, non-aliasing SCALAR/fresh producers (integer arithmetic/compare,
+///   `ListLen`, `StringConcat`, discriminant `Match*`, `Jump*`, `Load*`) → safe.
+/// * EVERYTHING ELSE (stores into aggregates, `Return`, `MakeClosure` capture, `SpawnTask`,
+///   `Manage`, `CallIntrinsic`, every unlisted mutator, …) → keep if it references ANY tainted
+///   register. This default is what makes the analysis a whitelist: an instruction is only
+///   trusted when explicitly classified read-only-safe above.
+fn deepcopy_instr_forces_keep(instr: &RegInstr, tainted: &[bool], n_regs: usize) -> bool {
+    let is_t = |r: Reg| r < n_regs && tainted[r];
+    // In-place mutation of a tainted heap receiver — the direct leak.
+    if let Some(recv) = deepcopy_heap_mutation_receiver(instr) {
+        if is_t(recv) {
+            return true;
+        }
+    }
+    match instr {
+        // Alias propagation: `dst` aliases `src`'s inner `Rc` (already tainted by the closure);
+        // the op only READS `src`, so it never leaks by itself.
+        RegInstr::Move { .. }
+        | RegInstr::ListGet { .. }
+        | RegInstr::MapGet { .. }
+        | RegInstr::GetField { .. }
+        | RegInstr::GetFieldSlot { .. }
+        | RegInstr::UnwrapVariantValue { .. }
+        | RegInstr::DequePopFront { .. }
+        | RegInstr::DequePopBack { .. } => false,
+
+        // Calls: a tainted `mut` arg is mutated by-reference and leaks to our caller. `read`
+        // args are safe (the callee deep-copies or has itself proven the param read-only), and
+        // the `closure` receiver is only invoked, not mutated.
+        RegInstr::CallKnown { args, mut_args, .. }
+        | RegInstr::CallDynamic { args, mut_args, .. }
+        | RegInstr::CallNative { args, mut_args, .. }
+        | RegInstr::CallClosure { args, mut_args, .. } => mut_args
+            .iter()
+            .any(|&p| args.get(p).is_some_and(|r| is_t(*r))),
+
+        // Pure, non-aliasing producers: read scalars/heap and yield a FRESH scalar or String,
+        // or merely branch. None can mutate/store/alias a tainted value.
+        RegInstr::AddInt { .. }
+        | RegInstr::SubInt { .. }
+        | RegInstr::MulInt { .. }
+        | RegInstr::DivInt { .. }
+        | RegInstr::ModInt { .. }
+        | RegInstr::BitAndInt { .. }
+        | RegInstr::BitOrInt { .. }
+        | RegInstr::BitXorInt { .. }
+        | RegInstr::ShiftLeftInt { .. }
+        | RegInstr::ShiftRightInt { .. }
+        | RegInstr::LessInt { .. }
+        | RegInstr::LessEqualInt { .. }
+        | RegInstr::GreaterInt { .. }
+        | RegInstr::GreaterEqualInt { .. }
+        | RegInstr::Equal { .. }
+        | RegInstr::NotEqual { .. }
+        | RegInstr::StringConcat { .. }
+        | RegInstr::ListLen { .. }
+        | RegInstr::Jump { .. }
+        | RegInstr::JumpIfBool { .. }
+        | RegInstr::JumpIfIntCompare { .. }
+        | RegInstr::MatchOption { .. }
+        | RegInstr::MatchResult { .. }
+        | RegInstr::MatchVariant { .. }
+        | RegInstr::LoadUnit { .. }
+        | RegInstr::LoadInt { .. }
+        | RegInstr::LoadFloat { .. }
+        | RegInstr::LoadBool { .. }
+        | RegInstr::LoadString { .. }
+        | RegInstr::LoadNone { .. }
+        | RegInstr::RuntimeError { .. } => false,
+
+        // Everything else (stores, returns, captures, spawns, `Manage`, intrinsics, and every
+        // unlisted mutator): conservatively keep the copy if a tainted register is involved.
+        other => {
+            let mut regs = Vec::new();
+            deepcopy_collect_regs(other, &mut regs);
+            regs.iter().any(|&r| is_t(r))
+        }
+    }
+}
+
+/// The set of DeepCopy'd parameter registers whose prologue `DeepCopy` is PROVABLY redundant
+/// and may be elided. For each such root, seed a taint set and forward-propagate the alias
+/// closure (mirroring `native_deepcopy_param_unsoundly_mutated`'s propagation ops, but with NO
+/// type gate — over-tainting only keeps MORE copies, which is always sound). The param is
+/// elidable iff NO instruction forces the copy to be kept (see [`deepcopy_instr_forces_keep`]).
+///
+/// Correctness-critical: when in doubt the analysis keeps the copy. It runs one independent
+/// pass per root so a keep verdict is attributed to exactly the responsible parameter.
+fn deepcopy_elidable_param_regs(code: &[RegInstr], n_regs: usize) -> std::collections::HashSet<Reg> {
+    let roots: Vec<Reg> = code
+        .iter()
+        .filter_map(|instr| match instr {
+            RegInstr::DeepCopy { reg } if *reg < n_regs => Some(*reg),
+            _ => None,
+        })
+        .collect();
+    let mut elidable = std::collections::HashSet::new();
+    for &root in &roots {
+        let mut tainted = vec![false; n_regs];
+        tainted[root] = true;
+        // Forward alias closure: `dst` aliases `src`'s inner `Rc`. No type gate (unlike the
+        // native pass) — the lowerer has no `NativeTy` yet, and tainting a would-be scalar only
+        // keeps more copies.
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for instr in code {
+                if let RegInstr::Move { dst, src }
+                | RegInstr::ListGet { dst, list: src, .. }
+                | RegInstr::MapGet { dst, map: src, .. }
+                | RegInstr::GetField { dst, base: src, .. }
+                | RegInstr::GetFieldSlot { dst, base: src, .. }
+                | RegInstr::UnwrapVariantValue { dst, src, .. }
+                | RegInstr::DequePopFront { dst, deque: src }
+                | RegInstr::DequePopBack { dst, deque: src } = instr
+                {
+                    if *src < n_regs && *dst < n_regs && tainted[*src] && !tainted[*dst] {
+                        tainted[*dst] = true;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if !code
+            .iter()
+            .any(|instr| deepcopy_instr_forces_keep(instr, &tainted, n_regs))
+        {
+            elidable.insert(root);
+        }
+    }
+    elidable
+}
+
 impl RegUnit {
     pub(crate) fn lower(hir: &Hir) -> Result<Self, EvalError> {
         let names = hir
@@ -1898,6 +2423,27 @@ impl RegUnit {
             let unit = lowerer.temp();
             lowerer.emit(RegInstr::LoadUnit { dst: unit });
             lowerer.emit(RegInstr::Return { src: unit });
+            // Compile-time `DeepCopy` elision (gated behind `RSS_VM_ELIDE_DEEPCOPY`). Analyze
+            // the fully-lowered body and neutralize the prologue `DeepCopy` of every parameter
+            // proven never mutated-through-alias and never escaping. Neutralize IN PLACE (a
+            // self-`Move`, a cheap shallow `Rc` clone) rather than removing the instruction,
+            // because jump/branch targets are ABSOLUTE instruction indices — dropping an
+            // instruction would shift them. When the flag is OFF this block is skipped and the
+            // lowering is byte-identical to before.
+            if elide_deepcopy_enabled() {
+                let n_regs = lowerer.function.regs;
+                let elidable = deepcopy_elidable_param_regs(&lowerer.function.code, n_regs);
+                for instr in lowerer.function.code.iter_mut() {
+                    if let RegInstr::DeepCopy { reg } = instr {
+                        if elidable.contains(reg) {
+                            *instr = RegInstr::Move {
+                                dst: *reg,
+                                src: *reg,
+                            };
+                        }
+                    }
+                }
+            }
             functions[function_id] = lowerer.function;
         }
         let mut resource_drop_functions = HashMap::new();
