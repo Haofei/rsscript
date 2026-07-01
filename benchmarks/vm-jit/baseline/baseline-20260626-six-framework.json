@@ -3844,7 +3844,7 @@
       "size": "60000",
       "reg_vm_ms": 86.051132,
       "jit_ms": 75.058807,
-      "native_ms": 41.2,
+      "native_ms": 40.8955,
       "rust_ms": 0.443415,
       "reg_vm": {
         "mean": 86.051132,
@@ -3877,18 +3877,17 @@
         ]
       },
       "native": {
-        "mean": 41.2,
-        "median": 41.2,
-        "min": 34.94295,
-        "max": 36.236915,
-        "p25": 35.377549,
-        "p75": 36.199209,
+        "mean": 40.7125,
+        "median": 40.8955,
+        "min": 39.336,
+        "max": 41.723,
+        "p25": 40.24575,
+        "p75": 41.36225,
         "samples": [
-          34.94295,
-          35.377549,
-          36.199166999999996,
-          36.199209,
-          36.236915
+          39.336,
+          40.549,
+          41.242,
+          41.723
         ]
       },
       "rust": {
@@ -3906,7 +3905,7 @@
           0.468139
         ]
       },
-      "note": "native refreshed 2026-06-30 (was ~36.2; ~15% drift since 06-26); stable ~2% run-to-run"
+      "note": "native refreshed 2026-06-30 from real release samples (was ~36.2; ~15% drift since 06-26); whole distribution consistent"
     },
     {
       "category": "mailbox-ring",
