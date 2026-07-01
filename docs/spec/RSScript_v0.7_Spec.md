@@ -978,15 +978,19 @@ place-conflict, effect, and resource checking as `mut` API calls (it is not an
 "expression-shaped" side effect). It comes in two forms:
 
 - **Rebind a `let mut` local:** `x = e`. The target's root must be a reassignable
-  local (a `let mut` binding). Parameters are never reassignable — even a `mut`
-  parameter: its fields/elements may be updated, but the parameter binding itself
-  cannot be rebound. The assigned value's type must match the local's type.
+  local (a `let mut` binding) or a `mut` **Copy-scalar** parameter. A non-Copy
+  `mut` parameter (struct/collection) is not reassignable: its fields/elements may
+  be updated, but the parameter binding itself cannot be rebound. A `mut`
+  parameter of a Copy scalar type (Int, Bool, Float, Char, …) **may** be reassigned;
+  the new value is written back to the caller, matching `&mut` (call-by-reference).
+  The assigned value's type must match the local's/parameter's type.
 - **Update a place inside a local:** `obj.field = e` or `list[i] = e`. The place
   must start from a `let mut` local in scope, and the same type rule applies.
 
 The target is validated to be a *place* during checking; assigning to a
-non-place, to a parameter root, or with a mismatched value type is a frontend
-diagnostic. Assignment to a place obeys the place-conflict rule (see pattern
+non-place, to a non-Copy parameter root (a `mut` Copy-scalar parameter root is
+allowed and written back to the caller), or with a mismatched value type is a
+frontend diagnostic. Assignment to a place obeys the place-conflict rule (see pattern
 matching), so a single statement cannot alias-mutate overlapping places. All
 *other* mutation — of container, managed, and resource state — is still expressed
 through explicit `mut` API calls (`Map.insert(map: mut m, ...)`), so mutation
@@ -5884,7 +5888,7 @@ stmt        = let | view | assign | return | if | match | for | loop | while
             | with | task-group | select | break | continue | expr ;
 let         = ( "let" | "local" ) [ "mut" ] pattern [ ":" type ] "=" expr ;
 view        = "view" ident "=" expr ;                (* borrowed-region binding, §20.2-1 *)
-assign      = place "=" expr ;                       (* §5A; place not parameter root *)
+assign      = place "=" expr ;                       (* §5A; place root not a non-Copy parameter; a `mut` Copy-scalar param root is allowed and written back *)
 return      = "return" [ expr ] ;
 if          = "if" expr block [ "else" ( if | block ) ] ;
 match       = "match" data-effect expr "{" { arm } "}" ;

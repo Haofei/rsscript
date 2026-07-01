@@ -600,10 +600,28 @@ impl<'a> RustLowerer<'a> {
             || self.native_bindings.contains_key(&key)
     }
 
+    /// Whether `name` is a `mut` parameter of a Copy scalar type (Int/Bool/Float/…).
+    /// Such a parameter lowers to `&mut T` (call-by-reference write-back), so a bare
+    /// ident read/target must dereference it. Non-Copy `mut` params (struct/collection)
+    /// keep their `&mut Struct` binding and are never dereferenced here.
+    fn is_mut_copy_scalar_param(&self, name: &str) -> bool {
+        matches!(self.param_effects.get(name), Some(DataEffect::Mut))
+            && self
+                .value_types
+                .get(name)
+                .is_some_and(is_copy_type_ref)
+    }
+
     pub(super) fn lower_expr(&mut self, expr: &Expr) -> String {
         match expr {
             Expr::Ident(name, _) => {
-                if self.drop_field_names.contains(name) {
+                if self.is_mut_copy_scalar_param(name) {
+                    // A `mut` Copy-scalar parameter lowers to `&mut T`; a bare read
+                    // dereferences it so the value (and assignment through it) works
+                    // against the `&mut i64`/`&mut bool`/… binding. As an assignment
+                    // target this yields `(*pos) = …`, writing back to the caller.
+                    format!("(*{})", rust_value_ident(name))
+                } else if self.drop_field_names.contains(name) {
                     format!("self.{}", rust_ident(name))
                 } else if self.read_view_bindings.contains(name)
                     && self

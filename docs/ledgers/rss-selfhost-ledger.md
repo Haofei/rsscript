@@ -459,11 +459,24 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
 - **Classification:** language (no method syntax / cursor mutation) + docs.
 - **Decision:** worked around by the return-the-new-index convention and a
   `code_at` sentinel helper; it reads cleanly enough and reaches full tier-0
-  parity (544/544). The general lever (method syntax or a mutable-cursor pattern)
-  is a language-ergonomics follow-up, not a blocker. Recorded so the plumbing
-  cost of self-hosting stateful passes is visible.
-- **Tests:** `crate::selfhost_parity::lexer_parity_corpus` (tier 0, 544/544).
-- **Status:** decided (worked around).
+  parity (544/544). The mutable-cursor lever is now available: a `mut`
+  **Copy-scalar** parameter (Int/Bool/Float/Char, …) may be reassigned inside the
+  callee and the new value is written back to the caller (`&mut` semantics), so a
+  scanner can take `i: mut Int` and do `i = i + 1` instead of returning the new
+  index. Method/`impl` syntax remains a separate follow-up.
+- **Fix:** the reg-VM already wrote a `mut` param's final register back to the
+  caller for every `mut` param (scalar included), so no reg-VM/native change was
+  needed. Only two frontend touch-points were added: (1) the assignment gate
+  (`analyzer/assign.rs`) now permits rebinding a `mut` Copy-scalar parameter
+  (checked via `checks::local::is_copy_type_name`), keeping RS0311 for plain
+  params and non-Copy `mut` params; (2) AOT lowering (`rust_lower/lowerer.rs`)
+  emits `(*pos)` on read and as the assignment target for such a param, since
+  `mut T` already lowers to `&mut T`. Non-Copy `mut` params keep their `&mut Struct`
+  lowering and stay non-reassignable (only fields/elements are mutable).
+- **Tests:** `crate::selfhost_parity::lexer_parity_corpus` (tier 0, 544/544);
+  `tests/fixtures/pass/mut-scalar-writeback.rss` (Int + Bool write-back).
+- **Status:** fixed (scalar Copy `mut` params are reassignable with caller
+  write-back; non-Copy `mut` params stay non-reassignable).
 
 ### SH-019 — a `fresh`-returning fn can't build its result via `mut` + `List.push`
 

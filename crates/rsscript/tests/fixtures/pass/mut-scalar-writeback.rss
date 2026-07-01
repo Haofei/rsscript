@@ -1,0 +1,29 @@
+// A `mut` parameter of a Copy scalar type may be reassigned inside the callee,
+// and the new value is written back to the caller (call-by-reference, `&mut`).
+// This lets self-hosted code pass a cursor as `mut pos` and advance it in place
+// instead of threading an index through return values (SH-018).
+
+fn advance(pos: mut Int) -> Unit {
+    pos = pos + 1
+    return Unit
+}
+
+fn toggle(flag: mut Bool) -> Unit {
+    flag = flag == false
+    return Unit
+}
+
+fn main() -> Unit {
+    let mut cursor = 0
+    advance(pos: mut cursor)
+    advance(pos: mut cursor)
+    // cursor is observably 2 after two write-backs.
+    Log.write(message: read String.from_int(value: cursor))
+
+    let mut flag = false
+    toggle(flag: mut flag)
+    if flag {
+        Log.write(message: read "on")
+    }
+    return Unit
+}

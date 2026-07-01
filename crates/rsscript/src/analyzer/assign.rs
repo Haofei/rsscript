@@ -358,13 +358,25 @@ impl<'a> AssignChecker<'a> {
                         self.check_assignment_type(name, &stmt.value, &span);
                         return;
                     }
+                    // A `mut` parameter of a Copy scalar type (Int/Bool/Float/Char, …)
+                    // MAY be reassigned: it lowers to `&mut T`, and the new value is
+                    // written back to the caller, matching `&mut` semantics. Non-Copy
+                    // `mut` params (struct/collection) stay non-rebindable below.
+                    Some(AssignBinding::MutParam)
+                        if self
+                            .resolve_type(name)
+                            .is_some_and(|ty| crate::checks::local::is_copy_type_name(&ty)) =>
+                    {
+                        self.check_assignment_type(name, &stmt.value, &span);
+                        return;
+                    }
                     Some(AssignBinding::ImmutableLocal) => (
                         format!("`{name}` is an immutable binding"),
                         format!("Declare `{name}` with `let mut` to allow reassignment."),
                     ),
                     Some(AssignBinding::Param | AssignBinding::MutParam) => (
                         format!("`{name}` is a parameter, not a reassignable local"),
-                        "Parameters are not reassignable (even `mut` ones): a `mut` parameter's fields/elements may be updated, but the parameter binding itself can't be rebound. Bind a `let mut` local instead."
+                        "Parameters are not reassignable (except a `mut` Copy-scalar one, which is written back to the caller): a non-Copy `mut` parameter's fields/elements may be updated, but the parameter binding itself can't be rebound. Bind a `let mut` local instead."
                             .to_string(),
                     ),
                     None => (
