@@ -1,0 +1,23 @@
+// Self-hosted rss parser — Phase 2 (recognition parity).
+//
+// Reads rss source as argv[0] and prints a verdict:
+//   OK               — accepts (no syntax error)
+//   ERR <line> <col> — first syntax error position
+// Oracle: crate::syntax::parse_source_raw (see selfhost_parity.rs). This is the
+// Phase-2 STUB (always accepts) — it proves the harness loop and establishes the
+// reject-set baseline. The real recursive-descent recognizer replaces it.
+//
+// rss constraints (ledger SH-016/SH-017): no char literals (use Char.to_code),
+// statement-level expressions stay on one line.
+
+fn main() -> Unit {
+    let source = Args.get_or_default(index: 0, default: read "")
+    let n = String.len(value: read source)
+    // Stub: accept everything. (n is read so the arg is not dead.)
+    if n < 0 {
+        Log.write(message: read "ERR 0 0")
+    } else {
+        Log.write(message: read "OK")
+    }
+    return Unit
+}

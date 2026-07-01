@@ -253,3 +253,157 @@ fn lexer_parity_corpus() {
         mismatches.len()
     );
 }
+
+// ---------------------------------------------------------------------------
+// Phase 2 — parser recognition parity.
+//
+// The rss parser (`selfhost/parser.rss`) recognizes rss source and prints a
+// verdict: `OK` if it accepts, or `ERR <line> <col>` at the first syntax error.
+// Oracle: the real Rust parser `crate::syntax::parse_source_raw`, which never
+// panics and collects parse errors as span vectors on the returned `Program`.
+// Recognition tier (default): compare accept-vs-reject only. Position tier
+// (`RSS_SELFHOST_PARSE_TIER=1`): also compare the first-error line:col.
+// ---------------------------------------------------------------------------
+
+/// Oracle verdict: `None` if the Rust parser accepts, else the first parse
+/// error's (line, column).
+fn parse_oracle_error(file: &str, source: &str) -> Option<(usize, usize)> {
+    let program = crate::syntax::parse_source_raw(file, source);
+    let mut spans: Vec<(usize, usize)> = Vec::new();
+    for s in &program.unknown_top_level_spans {
+        spans.push((s.line, s.column));
+    }
+    for s in &program.malformed_declaration_spans {
+        spans.push((s.line, s.column));
+    }
+    for f in &program.unknown_features {
+        spans.push((f.span.line, f.span.column));
+    }
+    for f in &program.duplicate_features {
+        spans.push((f.span.line, f.span.column));
+    }
+    spans.sort_unstable();
+    spans.into_iter().next()
+}
+
+fn parse_position_tier() -> bool {
+    std::env::var("RSS_SELFHOST_PARSE_TIER").ok().as_deref() == Some("1")
+}
+
+fn compile_parser() -> Result<RegVmExecutable, String> {
+    let path = selfhost_dir().join("parser.rss");
+    let src = std::fs::read_to_string(&path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    reg_vm_compile_source("selfhost/parser.rss", &src)
+        .map_err(|e| format!("rss parser failed to compile: {e:?}"))
+}
+
+/// Run the precompiled rss parser; parse its verdict line.
+fn run_parser(exe: &RegVmExecutable, source: &str) -> Result<Option<(usize, usize)>, String> {
+    let output = exe
+        .eval_main_with_args([source.to_string()])
+        .map_err(|e| format!("rss parser failed to run: {e:?}"))?;
+    let verdict = output
+        .stdout
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if verdict == "OK" {
+        Ok(None)
+    } else if let Some(rest) = verdict.strip_prefix("ERR") {
+        let mut nums = rest.split_whitespace();
+        let line = nums.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+        let col = nums.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+        Ok(Some((line, col)))
+    } else {
+        Err(format!("unrecognized parser verdict: {verdict:?}"))
+    }
+}
+
+/// Compare parser verdicts. Recognition tier: accept-vs-reject. Position tier:
+/// also the first-error coordinates.
+fn compare_parse(
+    oracle: Option<(usize, usize)>,
+    actual: Option<(usize, usize)>,
+    position: bool,
+) -> Result<(), String> {
+    if oracle.is_some() != actual.is_some() {
+        return Err(format!(
+            "accept/reject diverges: oracle={:?} rss={:?}",
+            oracle, actual
+        ));
+    }
+    if position && oracle != actual {
+        return Err(format!(
+            "first-error position diverges: oracle={:?} rss={:?}",
+            oracle, actual
+        ));
+    }
+    Ok(())
+}
+
+/// Phase-2 proof: the rss parser agrees with the Rust parser on a tiny sample.
+#[test]
+fn parser_parity_tiny_sample() {
+    let sample_path = selfhost_dir().join("samples/tiny.rss");
+    let source = std::fs::read_to_string(&sample_path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", sample_path.display()));
+    let oracle = parse_oracle_error("samples/tiny.rss", &source);
+    let exe = compile_parser().expect("rss parser should compile");
+    let actual = run_parser(&exe, &source).expect("rss parser should run");
+    compare_parse(oracle, actual, parse_position_tier()).unwrap_or_else(|msg| panic!("{msg}"));
+}
+
+/// Phase-2 gate (ignored by default): the rss parser's accept/reject matches the
+/// Rust parser over the whole `.rss` corpus.
+#[test]
+#[ignore]
+fn parser_parity_corpus() {
+    let root = workspace_root();
+    let files = collect_rss_files(&root);
+    let position = parse_position_tier();
+    let exe = compile_parser().expect("rss parser should compile");
+    let mut run_failures: Vec<String> = Vec::new();
+    let mut mismatches: Vec<String> = Vec::new();
+    let mut ok = 0usize;
+    for file in &files {
+        let rel = file.strip_prefix(&root).unwrap_or(file).display().to_string();
+        let source = match std::fs::read_to_string(file) {
+            Ok(s) => s,
+            Err(e) => {
+                run_failures.push(format!("{rel}: unreadable: {e}"));
+                continue;
+            }
+        };
+        let oracle = parse_oracle_error(&rel, &source);
+        match run_parser(&exe, &source) {
+            Err(e) => run_failures.push(format!("{rel}: {e}")),
+            Ok(actual) => match compare_parse(oracle, actual, position) {
+                Ok(()) => ok += 1,
+                Err(msg) => mismatches.push(format!("{rel}: {msg}")),
+            },
+        }
+    }
+    let total = files.len();
+    eprintln!(
+        "\n=== parser_parity_corpus (position={position}) ===\n  files: {total}\n  ok: {ok}\n  \
+         run-failures: {}\n  verdict-mismatches: {}\n",
+        run_failures.len(),
+        mismatches.len()
+    );
+    for line in run_failures.iter().take(20) {
+        eprintln!("[run-fail] {line}");
+    }
+    for line in mismatches.iter().take(20) {
+        eprintln!("[mismatch] {line}");
+    }
+    assert!(
+        run_failures.is_empty() && mismatches.is_empty(),
+        "parser parity failed: {} run-failures, {} mismatches (of {total})",
+        run_failures.len(),
+        mismatches.len()
+    );
+}
