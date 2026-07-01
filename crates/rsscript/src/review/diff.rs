@@ -1164,6 +1164,7 @@ pub(super) fn collect_boundary_expr(expr: &Expr, path: &str, boundary: &mut Boun
         | Expr::Ident(_, _)
         | Expr::Number(_, _)
         | Expr::String(_, _)
+        | Expr::CharLiteral(_, _)
         | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => {}
     }
@@ -1199,6 +1200,7 @@ pub(super) fn boundary_expr_subject(expr: &Expr) -> Option<String> {
         | Expr::Match { .. }
         | Expr::Number(_, _)
         | Expr::String(_, _)
+        | Expr::CharLiteral(_, _)
         | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => None,
     }

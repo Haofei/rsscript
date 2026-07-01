@@ -348,7 +348,7 @@ impl RustLowerer<'_> {
                 generated: generated.clone(),
                 ..Default::default()
             }),
-            Expr::String(_, span) | Expr::MultilineString(_, span) => {
+            Expr::String(_, span) | Expr::CharLiteral(_, span) | Expr::MultilineString(_, span) => {
                 self.source_map.push(RustSourceMapEntry {
                     kind: "string".to_string(),
                     source: span.clone(),

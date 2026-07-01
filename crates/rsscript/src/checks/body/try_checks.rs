@@ -177,6 +177,7 @@ pub(super) fn check_try_error_types_expr(
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => {}
     }
 }
@@ -199,6 +200,7 @@ pub(super) fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
         HirExpr::Field { access, .. } => access.type_name.as_deref(),
         HirExpr::Number { value, .. } => Some(crate::hir::number_literal_type_name(value)),
         HirExpr::String { .. } => Some("String"),
+        HirExpr::Char { .. } => Some("Char"),
         HirExpr::Binary { .. } | HirExpr::Index { .. } => None,
         HirExpr::ObjectLiteral { .. }
         | HirExpr::ArrayLiteral { .. }

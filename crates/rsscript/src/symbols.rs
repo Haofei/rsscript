@@ -910,6 +910,7 @@ impl Builder<'_> {
             Expr::Closure { body, .. } => self.visit_block(body),
             Expr::Number(_, _)
             | Expr::String(_, _)
+            | Expr::CharLiteral(_, _)
             | Expr::MultilineString(_, _)
             | Expr::Unknown(_) => {}
         }

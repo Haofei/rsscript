@@ -345,6 +345,10 @@ pub enum HirExpr {
         value: String,
         span: Span,
     },
+    Char {
+        value: String,
+        span: Span,
+    },
     ObjectLiteral {
         fields: Vec<HirObjectLiteralField>,
         type_name: Option<String>,

@@ -377,15 +377,26 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   `== 61` (`=`), etc. Language-side: a char-literal syntax (or at minimum a
   non-cascading "no char literals" diagnostic) is the real fix — filed for a
   follow-up decision.
-- **Tests:** `crate::selfhost_parity::lexer_parity_tiny_sample` (drives the rss
-  lexer through the VM against `crate::lexer::lex`);
-  `checker_frontend::misc::char_literal_reports_single_clear_diagnostic_without_try_operator_cascade`;
-  fixture `tests/fixtures/fail/char-literal-unsupported.rss`.
-- **Status:** fixed (diagnostics): `'` now lexes as one token (`Symbol("'")`,
-  `lexer.rs` `lex_char_literal`; mirrored in `selfhost/lexer.rss` `scan_char`) and
-  yields a clear "no character-literal syntax" RS0015; the misleading RS0013
-  cascade is gone and the lone `'` operand no longer double-reports. (Full
-  char-literal language support remains out of scope.)
+- **Tests:** `crate::selfhost_parity::lexer_parity_tiny_sample` /
+  `lexer_parity_corpus` (drives the rss lexer through the VM against
+  `crate::lexer::lex`, now including the new `Char` token kind);
+  `checker_frontend::misc::char_literal_is_a_real_char_value_and_type_checks`;
+  pass fixture `tests/fixtures/pass/char-literal.rss`; differential corpus
+  `tests/corpus/exec/char_literal.{rss,toml}` and
+  `vm_eval_parity::data::parity_char_literals_and_escapes` (interpreter≡AOT).
+- **Status:** fixed (language). `'x'` is now a real `Char` value end-to-end. The
+  lexer emits `TokenKind::Char(raw)` (`lexer.rs` `lex_char_literal`), the parser
+  produces `Expr::CharLiteral` / `MatchLiteral::Char`, HIR gains `HirExpr::Char`
+  typed `Char`, the reg-VM lowers a new `RegInstr::LoadChar` (`VmValue::Char`),
+  and the AOT backend emits a Rust `char` literal via `format!("{:?}", …)` (no
+  `.to_string()` — a `char` is Copy). Native never sees `Char` (`LoadChar` is
+  `native_subset: false`), so char-using functions stay on the interpreter tier,
+  a safe parity fallback. The old RS0015/RS0013 diagnostic scaffolding
+  (`Program.char_literal_spans`, the analyzer HashSet, and the "character
+  literal" emission) is removed. `selfhost/scan.rss` `scan_char` now emits a
+  matching `Char` token (kind 9, raw inner text, `\`-escape honored) so lexer
+  parity holds. Escapes `\n \r \t \\ \' \0` (and a literal `"`) round-trip
+  identically across interpreter and AOT.
 
 ### SH-017 — statement-level binary-operator expressions can't cross a newline (leading-operator continuation is SILENTLY wrong)
 

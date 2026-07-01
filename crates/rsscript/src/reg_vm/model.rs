@@ -568,6 +568,10 @@ pub(crate) enum RegInstr {
         dst: Reg,
         value: Rc<String>,
     },
+    LoadChar {
+        dst: Reg,
+        value: char,
+    },
     Move {
         dst: Reg,
         src: Reg,
@@ -1898,6 +1902,7 @@ fn deepcopy_collect_regs(instr: &RegInstr, out: &mut Vec<Reg>) {
         | RegInstr::LoadFloat { dst, .. }
         | RegInstr::LoadBool { dst, .. }
         | RegInstr::LoadString { dst, .. }
+        | RegInstr::LoadChar { dst, .. }
         | RegInstr::LoadNone { dst } => out.push(*dst),
         RegInstr::Move { dst, src }
         | RegInstr::Manage { dst, src }
@@ -2435,6 +2440,7 @@ fn deepcopy_instr_forces_keep(instr: &RegInstr, tainted: &[bool], n_regs: usize)
         | RegInstr::LoadFloat { .. }
         | RegInstr::LoadBool { .. }
         | RegInstr::LoadString { .. }
+        | RegInstr::LoadChar { .. }
         | RegInstr::LoadNone { .. }
         | RegInstr::RuntimeError { .. } => false,
 

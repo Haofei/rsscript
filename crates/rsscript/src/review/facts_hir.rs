@@ -108,6 +108,7 @@ pub(super) fn walk_hir_expr_children(expr: &HirExpr, visit: &mut dyn FnMut(HirCh
         | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => {}
     }
 }
@@ -533,6 +534,7 @@ pub(super) fn collect_managed_closure_capture_names_expr(
         | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => {}
     }
 }
@@ -592,6 +594,7 @@ pub(super) fn hir_place_path_root(expr: &HirExpr) -> Option<&str> {
         | HirExpr::Match { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => None,
     }
 }
@@ -618,6 +621,7 @@ pub(super) fn hir_place_path_crosses_handle_field(expr: &HirExpr) -> bool {
         | HirExpr::Match { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => false,
     }
 }

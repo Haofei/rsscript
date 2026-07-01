@@ -606,6 +606,7 @@ fn check_expr(
         | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => {}
     }
 }
@@ -2327,6 +2328,7 @@ fn infer_receiver_expr_type(
         | Expr::Binary { .. }
         | Expr::Number(_, _)
         | Expr::String(_, _)
+        | Expr::CharLiteral(_, _)
         | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => None,
     }
@@ -3058,6 +3060,7 @@ fn callback_expr_is_fresh_value(
         | HirExpr::Closure { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => false,
     }
 }
@@ -3083,6 +3086,7 @@ fn fresh_return_ident(expr: &HirExpr) -> Option<&str> {
         | HirExpr::Closure { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => None,
     }
 }
@@ -3187,6 +3191,7 @@ fn check_callback_call_argument_types(
         | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => {}
     }
 }
@@ -3291,6 +3296,7 @@ fn callback_retained_local_use(
         | HirExpr::Closure { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_)
         | HirExpr::Ident { .. } => None,
     }
@@ -3471,6 +3477,7 @@ fn check_callback_operator_operand_types(
         | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => {}
     }
 }
@@ -3915,6 +3922,7 @@ fn local_closure_escape_use<'a>(
         | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => None,
     }
 }
@@ -4014,6 +4022,7 @@ fn noescape_escape_use<'a>(
         | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => None,
     }
 }
@@ -4152,6 +4161,7 @@ fn noescape_any_use<'a>(
         | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => None,
     }
 }
@@ -4288,6 +4298,7 @@ fn local_closure_any_use<'a>(
         | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => None,
     }
 }
@@ -4511,7 +4522,7 @@ fn callee_display(callee: &Callee) -> String {
 fn call_expr_label(expr: &Expr) -> String {
     match expr {
         Expr::Ident(name, _) => name.clone(),
-        Expr::String(value, _) | Expr::MultilineString(value, _) => format!("{value:?}"),
+        Expr::String(value, _) | Expr::CharLiteral(value, _) | Expr::MultilineString(value, _) => format!("{value:?}"),
         Expr::Field { base, name, .. } => format!("{}.{}", call_expr_label(base), name),
         Expr::Index { base, .. } => format!("{}[]", call_expr_label(base)),
         Expr::Call { callee, .. } => format!("{}()", callee_display(callee)),
@@ -4546,6 +4557,7 @@ fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
             .or_else(|| builtin_value_type_name(name)),
         HirExpr::Number { value, .. } => Some(crate::hir::number_literal_type_name(value)),
         HirExpr::String { .. } => Some("String"),
+        HirExpr::Char { .. } => Some("Char"),
         HirExpr::ObjectLiteral { type_name, .. } => type_name.as_deref(),
         HirExpr::ArrayLiteral { type_name, .. } => type_name.as_deref(),
         HirExpr::MapLiteral { type_name, .. } => type_name.as_deref(),
@@ -4835,6 +4847,7 @@ fn hir_expr_span(expr: &HirExpr) -> &Span {
         HirExpr::Ident { span, .. }
         | HirExpr::Number { span, .. }
         | HirExpr::String { span, .. }
+        | HirExpr::Char { span, .. }
         | HirExpr::ObjectLiteral { span, .. }
         | HirExpr::ArrayLiteral { span, .. }
         | HirExpr::MapLiteral { span, .. }

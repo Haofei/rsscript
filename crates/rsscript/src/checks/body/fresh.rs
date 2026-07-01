@@ -23,6 +23,7 @@ pub(super) fn expr_is_fresh_shell(expr: &HirExpr) -> bool {
         | HirExpr::ArrayLiteral { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Binary { .. }
         | HirExpr::Field { .. }
         | HirExpr::Index { .. }
@@ -98,7 +99,7 @@ pub(super) fn body_callee_display(callee: &Callee) -> String {
 pub(super) fn body_expr_label(expr: &Expr) -> String {
     match expr {
         Expr::Ident(name, _) => name.clone(),
-        Expr::String(value, _) | Expr::MultilineString(value, _) => format!("{value:?}"),
+        Expr::String(value, _) | Expr::CharLiteral(value, _) | Expr::MultilineString(value, _) => format!("{value:?}"),
         Expr::Field { base, name, .. } => format!("{}.{}", body_expr_label(base), name),
         Expr::Index { base, .. } => format!("{}[]", body_expr_label(base)),
         Expr::Call { callee, .. } => format!("{}()", body_callee_display(callee)),
@@ -170,6 +171,7 @@ pub(super) fn weak_field_access_requiring_upgrade(
         | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => None,
     }
 }
@@ -373,6 +375,7 @@ pub(super) fn constructor_arg_place_path(expr: &HirExpr) -> Option<PlacePath> {
         | HirExpr::Closure { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => None,
     }
 }
@@ -436,6 +439,7 @@ pub(super) fn constructor_arg_uses_managed_inline_value(
         | HirExpr::Closure { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Spawn { .. }
         | HirExpr::Await { .. }
         | HirExpr::Unknown(_) => false,
@@ -599,7 +603,7 @@ pub(super) fn collect_spawn_capture_idents(expr: &HirExpr, captures: &mut Vec<(S
                 collect_spawn_capture_idents(item, captures);
             }
         }
-        HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Unknown(_) => {}
+        HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Char { .. } | HirExpr::Unknown(_) => {}
     }
 }
 

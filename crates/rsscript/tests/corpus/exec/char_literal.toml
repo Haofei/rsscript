@@ -1,0 +1,4 @@
+kind = "execution"
+backends = ["vm", "compiled"]
+stdout = "a\n97\nvowel\nnewline\ntab\nbackslash\nquote\ndquote\nnul\nother\neq\n"
+tags = ["char", "literal"]

@@ -149,6 +149,7 @@ pub(super) fn check_explicit_closure_captures_expr(
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => {}
     }
 }
@@ -479,6 +480,7 @@ pub(super) fn collect_syntax_expr_bindings(expr: &Expr, names: &mut HashSet<Stri
         Expr::Ident(_, _)
         | Expr::Number(_, _)
         | Expr::String(_, _)
+        | Expr::CharLiteral(_, _)
         | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => {}
     }
@@ -744,6 +746,7 @@ pub(super) fn check_explicit_closure_capture_effects_syntax_expr(
         Expr::Ident(_, _)
         | Expr::Number(_, _)
         | Expr::String(_, _)
+        | Expr::CharLiteral(_, _)
         | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => {}
     }
@@ -912,6 +915,7 @@ pub(super) fn collect_syntax_capture_effects_expr(
         }
         Expr::Number(_, _)
         | Expr::String(_, _)
+        | Expr::CharLiteral(_, _)
         | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => {}
     }

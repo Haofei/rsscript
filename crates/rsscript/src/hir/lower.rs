@@ -966,6 +966,7 @@ fn walk_expr_for_awaits(expr: &HirExpr, names: &mut HashSet<String>) {
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => {}
         HirExpr::ObjectLiteral { fields, .. } => {
             for field in fields {
@@ -1244,6 +1245,10 @@ fn lower_hir_expr(
             span: span.clone(),
         },
         Expr::MultilineString(value, span) => HirExpr::String {
+            value: value.clone(),
+            span: span.clone(),
+        },
+        Expr::CharLiteral(value, span) => HirExpr::Char {
             value: value.clone(),
             span: span.clone(),
         },
@@ -2013,6 +2018,7 @@ fn collect_body_facts_in_expr(
         Expr::Ident(_, _)
         | Expr::Number(_, _)
         | Expr::String(_, _)
+        | Expr::CharLiteral(_, _)
         | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => {}
     }

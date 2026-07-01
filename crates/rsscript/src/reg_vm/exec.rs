@@ -284,6 +284,9 @@ impl RegVm {
             RegInstr::LoadString { dst, value } => {
                 self.set_reg(base + *dst, VmValue::String(Rc::clone(value)));
             }
+            RegInstr::LoadChar { dst, value } => {
+                self.set_reg(base + *dst, VmValue::Char(*value));
+            }
             RegInstr::Manage { dst, src } => {
                 let value = self.reg(base + *src).clone();
                 // `manage` wraps a value in a shared mutable cell so it can be

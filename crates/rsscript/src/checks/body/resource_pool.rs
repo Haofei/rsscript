@@ -125,6 +125,7 @@ pub(super) fn check_resource_pool_lease_expr(
         | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => {}
     }
 }
@@ -197,6 +198,7 @@ pub(super) fn check_resource_producer_expr(
         | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => {}
     }
 }
@@ -680,6 +682,7 @@ pub(super) fn collect_resource_pool_factory_resource_captures_expr(
         | HirExpr::ArrayLiteral { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => {}
     }
 }
@@ -840,6 +843,7 @@ pub(super) fn check_lazy_factory_captures_expr(
         | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => {}
     }
 }
@@ -1017,6 +1021,7 @@ pub(super) fn collect_lazy_factory_capture_idents_expr(
         | HirExpr::ArrayLiteral { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => {}
     }
 }
@@ -1192,6 +1197,7 @@ pub(super) fn check_resource_pool_discards_expr(
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => {}
     }
 }
@@ -1241,6 +1247,7 @@ pub(super) fn resource_pool_fallible_factory_expr(expr: &HirExpr) -> Option<&Hir
         | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => None,
     }
 }
@@ -1635,6 +1642,7 @@ pub(super) fn check_resource_pool_active_lease_expr(
         | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => {}
     }
 }

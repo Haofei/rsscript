@@ -1,0 +1,23 @@
+fn is_vowel(c: read Char) -> Bool {
+    match c {
+        'a' => { return true }
+        'e' => { return true }
+        'i' => { return true }
+        'o' => { return true }
+        'u' => { return true }
+        _ => { return false }
+    }
+}
+
+fn classify(c: read Char) -> String {
+    if c == '\n' {
+        return "newline"
+    }
+    if c == '\t' {
+        return "tab"
+    }
+    if c == '\'' {
+        return "quote"
+    }
+    return "other"
+}

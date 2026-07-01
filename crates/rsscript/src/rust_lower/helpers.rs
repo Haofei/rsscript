@@ -1,4 +1,6 @@
-pub(super) use crate::text_util::{decode_string_token, type_arg_names, type_root_name};
+pub(super) use crate::text_util::{
+    decode_char_token, decode_string_token, type_arg_names, type_root_name,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::diagnostic::{Diagnostic, Span, code};
@@ -228,6 +230,7 @@ fn validate_executable_declarations_in_expr(
         | Expr::Ident(_, _)
         | Expr::Number(_, _)
         | Expr::String(_, _)
+        | Expr::CharLiteral(_, _)
         | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => {}
     }
@@ -848,6 +851,7 @@ pub(super) fn collect_mutated_bindings_from_expr(expr: &Expr, names: &mut BTreeS
         | Expr::Ident(_, _)
         | Expr::Number(_, _)
         | Expr::String(_, _)
+        | Expr::CharLiteral(_, _)
         | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => {}
     }
@@ -1049,6 +1053,7 @@ pub(super) fn closure_expr_mutates_unbound_name(expr: &Expr, bound: &BTreeSet<St
         Expr::Ident(_, _)
         | Expr::Number(_, _)
         | Expr::String(_, _)
+        | Expr::CharLiteral(_, _)
         | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => false,
     }
@@ -1184,6 +1189,7 @@ pub(super) fn lower_match_literal(value: &MatchLiteral) -> String {
     match value {
         MatchLiteral::Int(value) => value.clone(),
         MatchLiteral::String(value) => format!("{:?}", decode_string_token(value)),
+        MatchLiteral::Char(value) => format!("{:?}", decode_char_token(value)),
         MatchLiteral::Bool(value) => value.to_string(),
     }
 }

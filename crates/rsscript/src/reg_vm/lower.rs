@@ -750,6 +750,14 @@ impl RegLowerer<'_> {
                 });
                 Ok(dst)
             }
+            HirExpr::Char { value, .. } => {
+                let dst = self.temp();
+                self.emit(RegInstr::LoadChar {
+                    dst,
+                    value: decode_char_token(value),
+                });
+                Ok(dst)
+            }
             HirExpr::ArrayLiteral { items, .. } => {
                 let items = items
                     .iter()
@@ -2273,6 +2281,12 @@ impl RegLowerer<'_> {
                     value: Rc::new(decode_string_token(value)),
                 });
             }
+            MatchLiteral::Char(value) => {
+                self.emit(RegInstr::LoadChar {
+                    dst: expected,
+                    value: decode_char_token(value),
+                });
+            }
             MatchLiteral::Bool(value) => {
                 self.emit(RegInstr::LoadBool {
                     dst: expected,
@@ -3513,6 +3527,6 @@ fn collect_free_locals_expr(
                 collect_free_locals_block(&arm.body, &mut arm_bound, free);
             }
         }
-        HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Unknown(_) => {}
+        HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Char { .. } | HirExpr::Unknown(_) => {}
     }
 }

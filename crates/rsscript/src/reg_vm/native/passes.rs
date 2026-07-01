@@ -1684,6 +1684,7 @@ fn native_instr_semantics(instr: &RegInstr) -> NativeInstrSemantics {
         | RegInstr::LoadFloat { .. }
         | RegInstr::LoadBool { .. }
         | RegInstr::LoadString { .. }
+        | RegInstr::LoadChar { .. }
         | RegInstr::LoadNone { .. }
         | RegInstr::Jump { .. }
         | RegInstr::RuntimeError { .. } => S(vec![]),
@@ -1852,6 +1853,7 @@ fn native_instr_semantics(instr: &RegInstr) -> NativeInstrSemantics {
         | RegInstr::LoadFloat { dst, .. }
         | RegInstr::LoadBool { dst, .. }
         | RegInstr::LoadString { dst, .. }
+        | RegInstr::LoadChar { dst, .. }
         | RegInstr::LoadNone { dst }
         | RegInstr::Move { dst, .. }
         | RegInstr::Manage { dst, .. }

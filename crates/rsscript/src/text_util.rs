@@ -30,6 +30,44 @@ pub(crate) fn decode_string_token(value: &str) -> String {
     decoded
 }
 
+/// Decode a character-literal token's raw inner text into its single scalar.
+/// Handles the same escapes as [`decode_string_token`] plus `\'`, then asserts
+/// exactly one scalar value (empty / multi-char literals are rejected upstream
+/// by the analyzer/typing, but this is the single normalization point used by
+/// lowering). Unknown escapes preserve the backslash + char (yielding >1 char
+/// and thus the assert), matching the string decoder's leniency.
+pub(crate) fn decode_char_token(value: &str) -> char {
+    let mut decoded = String::new();
+    let mut chars = value.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            decoded.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => decoded.push('\n'),
+            Some('r') => decoded.push('\r'),
+            Some('t') => decoded.push('\t'),
+            Some('\\') => decoded.push('\\'),
+            Some('\'') => decoded.push('\''),
+            Some('"') => decoded.push('"'),
+            Some('0') => decoded.push('\0'),
+            Some(other) => {
+                decoded.push('\\');
+                decoded.push(other);
+            }
+            None => decoded.push('\\'),
+        }
+    }
+    let mut iter = decoded.chars();
+    let first = iter.next().expect("char literal must contain one scalar");
+    debug_assert!(
+        iter.next().is_none(),
+        "char literal must contain exactly one scalar: {value:?}"
+    );
+    first
+}
+
 /// `value[start .. start+len]` clamped to char boundaries and the string bounds.
 pub(crate) fn string_slice_range(value: &str, start: i64, len: i64) -> &str {
     let byte_start = clamp_to_char_boundary(value, start.max(0) as usize);

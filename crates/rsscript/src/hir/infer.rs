@@ -92,6 +92,7 @@ pub(crate) fn infer_hir_expr_type(
         Expr::Index { .. } => None,
         Expr::Number(value, _) => Some(number_literal_type_name(value).to_string()),
         Expr::String(_, _) | Expr::MultilineString(_, _) => Some("String".to_string()),
+        Expr::CharLiteral(_, _) => Some("Char".to_string()),
         Expr::ObjectLiteral { .. } => Some("JsonLiteral".to_string()),
         Expr::MapLiteral { .. } => Some("MapLiteral".to_string()),
         Expr::ArrayLiteral { items, .. } => {
@@ -330,6 +331,7 @@ fn infer_arg_expr_type(
         // type parameter (`Pair(item0: 1)` -> `A = Int`).
         Expr::Number(value, _) => Some(number_literal_type_name(value).to_string()),
         Expr::String(_, _) | Expr::MultilineString(_, _) => Some("String".to_string()),
+        Expr::CharLiteral(_, _) => Some("Char".to_string()),
         Expr::Index { .. } | Expr::Binary { .. } | Expr::Unknown(_) => None,
     }
 }
@@ -807,9 +809,10 @@ pub(super) fn classify_return_expr(
             HirReturnProof::FreshCall
         }
         // String / numeric literals own nothing borrowed; returning one is fresh.
-        Expr::Number(_, _) | Expr::String(_, _) | Expr::MultilineString(_, _) => {
-            HirReturnProof::Literal
-        }
+        Expr::Number(_, _)
+        | Expr::String(_, _)
+        | Expr::CharLiteral(_, _)
+        | Expr::MultilineString(_, _) => HirReturnProof::Literal,
         Expr::Field { .. }
         | Expr::Index { .. }
         | Expr::Binary { .. }

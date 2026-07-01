@@ -5,6 +5,7 @@ pub enum TokenKind {
     Ident(String),
     Number(String),
     String(String),
+    Char(String),
     InterpolatedString(String),
     MultilineString(String),
     Keyword(&'static str),
@@ -24,6 +25,7 @@ impl Token {
             TokenKind::Ident(value)
             | TokenKind::Number(value)
             | TokenKind::String(value)
+            | TokenKind::Char(value)
             | TokenKind::InterpolatedString(value)
             | TokenKind::MultilineString(value) => value.clone(),
             TokenKind::Keyword(value) | TokenKind::Symbol(value) => (*value).to_string(),
@@ -281,30 +283,34 @@ impl Lexer<'_> {
         });
     }
 
-    /// RSScript has no character-literal syntax. Without a dedicated lexer arm a
-    /// leading `'` would be mapped to `Symbol("?")` by `push_one`, so `'x'` lexed
-    /// to `? x ?` and the trailing `?` produced a misleading RS0013 (try
-    /// operator) cascade. Instead, consume the whole `'...'` run as a single
-    /// `Symbol("'")` token so the analyzer can surface one clear "no
-    /// character-literal syntax" diagnostic. The scan stops at the closing `'`,
-    /// a newline, or EOF (so an unterminated `'` cannot swallow the rest of the
-    /// line).
+    /// Lex a character literal `'c'` into a [`TokenKind::Char`] carrying the RAW
+    /// inner text (escapes decoded later, mirroring [`Self::lex_string`]). After
+    /// the opening `'` the scan honors a single `\`-escape and stops at the
+    /// closing `'`, a newline, or EOF (so an unterminated `'` cannot swallow the
+    /// rest of the line). Validation (exactly one scalar) happens downstream.
     fn lex_char_literal(&mut self) {
         let start_line = self.line;
         let start_column = self.column;
         let token_start = self.index;
         self.bump();
+        let start_index = self.index;
         while let Some(ch) = self.peek() {
             if ch == '\'' || ch == '\n' {
                 break;
             }
+            if ch == '\\' {
+                self.bump();
+            }
             self.bump();
         }
+        let value = self.chars[start_index..self.index.min(self.chars.len())]
+            .iter()
+            .collect();
         if self.peek() == Some('\'') {
             self.bump();
         }
         self.tokens.push(Token {
-            kind: TokenKind::Symbol("'"),
+            kind: TokenKind::Char(value),
             span: Span {
                 file: self.file.to_string(),
                 line: start_line,

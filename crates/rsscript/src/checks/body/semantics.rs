@@ -439,7 +439,7 @@ pub(super) fn check_match_scrutinee_type(analyzer: &mut Analyzer<'_>, expr: &Hir
     if matches!(type_root_name(type_name), "Option" | "Result" | "List") {
         return;
     }
-    if matches!(type_name, "Int" | "String" | "Bool") {
+    if matches!(type_name, "Int" | "String" | "Char" | "Bool") {
         return;
     }
     // Allow matching on user-defined sum/struct/class types.
@@ -451,7 +451,7 @@ pub(super) fn check_match_scrutinee_type(analyzer: &mut Analyzer<'_>, expr: &Hir
     }
     analyzer.diagnostics.push(error_cause_manual_fix(
         code::CONTROL_FLOW_TYPE_MISMATCH,
-        format!("match scrutinee has type `{type_name}`, expected `Option<T>`, `Result<T, E>`, `List<T>`, a declared sum/struct/class type, or an `Int`/`String`/`Bool` literal match."),
+        format!("match scrutinee has type `{type_name}`, expected `Option<T>`, `Result<T, E>`, `List<T>`, a declared sum/struct/class type, or an `Int`/`String`/`Char`/`Bool` literal match."),
         hir_expr_span(expr).clone(),
         "control-flow type mismatch",
         "RSScript v0.6 `match` is limited to review-visible `Option`, `Result`, declared sum/struct/class patterns, and simple scalar literal dispatch.",
@@ -485,6 +485,7 @@ pub(super) fn check_match_pattern_matches_type(
             let literal_type = match value {
                 MatchLiteral::Int(_) => "Int",
                 MatchLiteral::String(_) => "String",
+                MatchLiteral::Char(_) => "Char",
                 MatchLiteral::Bool(_) => "Bool",
             };
             if literal_type != type_name {
@@ -1034,6 +1035,7 @@ pub(super) fn first_mutating_effect_expr(
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => None,
     }
 }
@@ -1386,6 +1388,7 @@ pub(super) fn check_expr_semantics_with_context(
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => {}
     }
 }

@@ -39,10 +39,6 @@ pub struct Program {
     pub profile_spans: Vec<Span>,
     pub unknown_top_level_spans: Vec<Span>,
     pub malformed_declaration_spans: Vec<Span>,
-    /// Spans of `'...'` runs the lexer folded into a single `Symbol("'")` token.
-    /// RSScript has no character-literal syntax; the analyzer drains these into a
-    /// clear diagnostic instead of a misleading try-operator cascade.
-    pub char_literal_spans: Vec<Span>,
     pub protocols: Vec<ProtocolDecl>,
     pub protocol_impls: Vec<ProtocolImpl>,
     pub items: Vec<Item>,
@@ -73,7 +69,6 @@ pub fn merge_programs(programs: impl IntoIterator<Item = Program>) -> Program {
     let mut profile_spans = Vec::new();
     let mut unknown_top_level_spans = Vec::new();
     let mut malformed_declaration_spans = Vec::new();
-    let mut char_literal_spans = Vec::new();
     let mut protocols = Vec::new();
     let mut protocol_impls = Vec::new();
     let mut items = Vec::new();
@@ -102,7 +97,6 @@ pub fn merge_programs(programs: impl IntoIterator<Item = Program>) -> Program {
         duplicate_features.extend(program.duplicate_features);
         unknown_top_level_spans.extend(program.unknown_top_level_spans);
         malformed_declaration_spans.extend(program.malformed_declaration_spans);
-        char_literal_spans.extend(program.char_literal_spans);
         if program.feature_spans.len() > 1 {
             feature_spans.extend(program.feature_spans);
         }
@@ -121,7 +115,6 @@ pub fn merge_programs(programs: impl IntoIterator<Item = Program>) -> Program {
         profile_spans,
         unknown_top_level_spans,
         malformed_declaration_spans,
-        char_literal_spans,
         protocols,
         protocol_impls,
         items,
@@ -641,6 +634,7 @@ pub struct MatchFieldPattern {
 pub enum MatchLiteral {
     Int(String),
     String(String),
+    Char(String),
     Bool(bool),
 }
 
@@ -649,6 +643,7 @@ pub enum Expr {
     Ident(String, Span),
     Number(String, Span),
     String(String, Span),
+    CharLiteral(String, Span),
     MultilineString(String, Span),
     ObjectLiteral {
         fields: Vec<ObjectLiteralField>,
@@ -793,6 +788,7 @@ impl Expr {
             Self::Ident(_, span)
             | Self::Number(_, span)
             | Self::String(_, span)
+            | Self::CharLiteral(_, span)
             | Self::MultilineString(_, span)
             | Self::ObjectLiteral { span, .. }
             | Self::MapLiteral { span, .. }

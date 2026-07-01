@@ -1,0 +1,30 @@
+fn describe(c: read Char) -> String {
+    match c {
+        'a' => { return "vowel" }
+        '\n' => { return "newline" }
+        '\t' => { return "tab" }
+        '\\' => { return "backslash" }
+        '\'' => { return "quote" }
+        '"' => { return "dquote" }
+        '\0' => { return "nul" }
+        _ => { return "other" }
+    }
+}
+
+fn main() -> Unit {
+    let c = 'a'
+    Log.write(message: read Char.to_string(value: read c))
+    Log.write(message: read String.from_int(value: Char.to_code(value: read c)))
+    Log.write(message: read describe(c: read c))
+    Log.write(message: read describe(c: read '\n'))
+    Log.write(message: read describe(c: read '\t'))
+    Log.write(message: read describe(c: read '\\'))
+    Log.write(message: read describe(c: read '\''))
+    Log.write(message: read describe(c: read '"'))
+    Log.write(message: read describe(c: read '\0'))
+    Log.write(message: read describe(c: read 'z'))
+    if 'x' == 'x' {
+        Log.write(message: read "eq")
+    }
+    return Unit
+}

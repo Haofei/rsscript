@@ -650,6 +650,10 @@ impl<'a> RustLowerer<'a> {
                 }
             }
             Expr::String(value, _) => format!("{:?}.to_string()", decode_string_token(value)),
+            // A `char` is Copy: emit the bare Rust char literal (e.g. `'a'`,
+            // `'\n'`, `'\''`) with NO trailing `.to_string()` (that would change
+            // the type to String and break interpreter/native/AOT parity).
+            Expr::CharLiteral(value, _) => format!("{:?}", decode_char_token(value)),
             Expr::MultilineString(value, _) => format!("{value:?}.to_string()"),
             Expr::ObjectLiteral { .. } => self.lower_json_value(expr),
             Expr::MapLiteral { span, .. } => unreachable_lowering("map literal", span),
@@ -2801,6 +2805,7 @@ pub(super) fn expr_contains_await(expr: &Expr) -> bool {
         Expr::Ident(..)
         | Expr::Number(..)
         | Expr::String(..)
+        | Expr::CharLiteral(..)
         | Expr::MultilineString(..)
         | Expr::Unknown(_) => false,
     }
@@ -2831,6 +2836,7 @@ pub(super) fn expr_contains_try(expr: &Expr) -> bool {
         Expr::Ident(..)
         | Expr::Number(..)
         | Expr::String(..)
+        | Expr::CharLiteral(..)
         | Expr::MultilineString(..)
         | Expr::Unknown(_) => false,
     }
@@ -3171,6 +3177,7 @@ pub(super) fn infer_const_type(expr: &Expr) -> String {
             }
         }
         Expr::String(_, _) | Expr::MultilineString(_, _) => "&'static str".to_string(),
+        Expr::CharLiteral(_, _) => "char".to_string(),
         Expr::Ident(name, _) if name == "true" || name == "false" => "bool".to_string(),
         // Non-literal const initializers are rejected by the frontend (RS0015); a
         // value reaching here means that check regressed — fail loudly.
@@ -3185,6 +3192,7 @@ pub(super) fn lower_const_value(expr: &Expr) -> String {
             format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
         }
         Expr::MultilineString(value, _) => format!("{value:?}"),
+        Expr::CharLiteral(value, _) => format!("{:?}", decode_char_token(value)),
         Expr::Ident(name, _) if name == "true" || name == "false" => name.clone(),
         // The frontend rejects non-literal const initializers (RS0015), so anything
         // else here is a missing front-end check — fail loudly rather than emit a

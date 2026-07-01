@@ -36,7 +36,8 @@ use crate::syntax::parse_source;
 #[cfg(feature = "native-jit")]
 use crate::text_util::string_pad_len;
 use crate::text_util::{
-    decode_string_token, string_format, string_pad, string_slice_range, type_arg_names,
+    decode_char_token, decode_string_token, string_format, string_pad, string_slice_range,
+    type_arg_names,
     type_root_name,
 };
 use crate::vm_value::{
@@ -597,6 +598,7 @@ fn instr_reads_register(instr: &RegInstr, reg: Reg) -> bool {
         | RegInstr::LoadFloat { .. }
         | RegInstr::LoadBool { .. }
         | RegInstr::LoadString { .. }
+        | RegInstr::LoadChar { .. }
         | RegInstr::LoadNone { .. }
         | RegInstr::Jump { .. }
         | RegInstr::RuntimeError { .. } => false,
@@ -1883,6 +1885,7 @@ fn reg_expr_type_name(expr: &HirExpr) -> Option<&str> {
         HirExpr::Field { access, .. } => access.type_name.as_deref(),
         HirExpr::Number { value, .. } => Some(crate::hir::number_literal_type_name(value)),
         HirExpr::String { .. } => Some("String"),
+        HirExpr::Char { .. } => Some("Char"),
         HirExpr::ObjectLiteral { type_name, .. } | HirExpr::ArrayLiteral { type_name, .. } => {
             type_name.as_deref()
         }

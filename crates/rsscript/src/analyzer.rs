@@ -208,7 +208,6 @@ fn analyze_program(
         type_alias_params,
         in_task_group: false,
         async_let_names: Vec::new(),
-        char_literal_spans: HashSet::new(),
     };
     analyzer.run();
     let mut diagnostics = analyzer.diagnostics;
@@ -275,7 +274,6 @@ fn analyze_syntax_program(
         type_alias_params: Default::default(),
         in_task_group: false,
         async_let_names: Vec::new(),
-        char_literal_spans: HashSet::new(),
     };
     analyzer.run_syntax_only();
     let mut diagnostics = analyzer.diagnostics;
@@ -311,11 +309,6 @@ pub(crate) struct Analyzer<'a> {
     pub(crate) type_alias_params: std::collections::BTreeMap<String, Vec<String>>,
     in_task_group: bool,
     pub(crate) async_let_names: Vec<String>,
-    /// Spans of folded `'...'` character-literal tokens. These get one targeted
-    /// "no character-literal syntax" diagnostic; the generic `Expr::Unknown`
-    /// walk skips them so the lone `'` operand does not also emit a duplicate
-    /// RS0015.
-    pub(crate) char_literal_spans: HashSet<crate::diagnostic::Span>,
 }
 
 fn collect_task_group_async_lets(
@@ -586,6 +579,7 @@ where
         Expr::Ident(_, _)
         | Expr::Number(_, _)
         | Expr::String(_, _)
+        | Expr::CharLiteral(_, _)
         | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => {}
     }
@@ -974,6 +968,7 @@ fn find_nested_task_group_await_span_expr<'a>(
         Expr::Ident(_, _)
         | Expr::Number(_, _)
         | Expr::String(_, _)
+        | Expr::CharLiteral(_, _)
         | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => None,
     }
@@ -1467,6 +1462,7 @@ fn expr_first_cancellation_token(expr: &Expr) -> Option<crate::diagnostic::Span>
         | Expr::Ident(..)
         | Expr::Number(..)
         | Expr::String(..)
+        | Expr::CharLiteral(..)
         | Expr::MultilineString(..)
         | Expr::Unknown(_) => None,
     }
@@ -1534,6 +1530,7 @@ fn expr_first_await(expr: &Expr) -> Option<crate::diagnostic::Span> {
         Expr::Ident(..)
         | Expr::Number(..)
         | Expr::String(..)
+        | Expr::CharLiteral(..)
         | Expr::MultilineString(..)
         | Expr::Unknown(_) => None,
     }
@@ -1816,6 +1813,7 @@ fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
         HirExpr::Field { access, .. } => access.type_name.as_deref(),
         HirExpr::Number { value, .. } => Some(crate::hir::number_literal_type_name(value)),
         HirExpr::String { .. } => Some("String"),
+        HirExpr::Char { .. } => Some("Char"),
         HirExpr::Binary { .. } | HirExpr::Index { .. } => None,
         HirExpr::ObjectLiteral { .. }
         | HirExpr::ArrayLiteral { .. }
@@ -1909,7 +1907,7 @@ fn callee_display(callee: &Callee) -> String {
 fn analyzer_expr_label(expr: &Expr) -> String {
     match expr {
         Expr::Ident(name, _) => name.clone(),
-        Expr::String(value, _) | Expr::MultilineString(value, _) => format!("{value:?}"),
+        Expr::String(value, _) | Expr::CharLiteral(value, _) | Expr::MultilineString(value, _) => format!("{value:?}"),
         Expr::Field { base, name, .. } => format!("{}.{}", analyzer_expr_label(base), name),
         Expr::Index { base, .. } => format!("{}[]", analyzer_expr_label(base)),
         Expr::Call { callee, .. } => format!("{}()", callee_display(callee)),

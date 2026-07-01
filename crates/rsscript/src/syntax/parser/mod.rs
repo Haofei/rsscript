@@ -184,17 +184,6 @@ impl Parser<'_> {
             }
         }
 
-        // A `'` token is always an error: the lexer only emits `Symbol("'")` for a
-        // `'...'` character-literal attempt, which RSScript does not support. A
-        // flat scan of the token stream collects every such span for the analyzer
-        // to report with one clear message.
-        let char_literal_spans = self
-            .tokens
-            .iter()
-            .filter(|token| token.symbol("'"))
-            .map(|token| token.span.clone())
-            .collect();
-
         Program {
             feature_scopes: vec![FileFeatureScope {
                 file: self.file.to_string(),
@@ -207,7 +196,6 @@ impl Parser<'_> {
             profile_spans,
             unknown_top_level_spans,
             malformed_declaration_spans,
-            char_literal_spans,
             protocols,
             protocol_impls,
             items,

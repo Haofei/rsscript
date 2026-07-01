@@ -179,6 +179,7 @@ pub(super) fn apply_expr_effects(expr: &HirExpr, state: &mut BodyState) {
         | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => {}
     }
 }

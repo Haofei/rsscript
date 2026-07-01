@@ -587,6 +587,7 @@ impl Analyzer<'_> {
             | HirExpr::Ident { .. }
             | HirExpr::Number { .. }
             | HirExpr::String { .. }
+            | HirExpr::Char { .. }
             | HirExpr::Unknown(_) => {}
         }
     }

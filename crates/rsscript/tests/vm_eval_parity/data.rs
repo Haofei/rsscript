@@ -1386,3 +1386,51 @@ fn main() -> Unit {
         source,
     );
 }
+
+#[test]
+fn parity_char_literals_and_escapes() {
+    // SH-016: `'x'` is a real `Char` value. Exercise bind, `==`, `match` on char
+    // literals, and every escape (`\n \r \t \\ \' \0` and `"`) so the interpreter
+    // and the AOT Rust lowering (which emits `format!("{:?}", char)`) agree on the
+    // escaping — the #1 parity risk for this feature.
+    let source = r#"
+fn describe(c: read Char) -> String {
+    match c {
+        'a' => { return "vowel" }
+        '\n' => { return "newline" }
+        '\r' => { return "cr" }
+        '\t' => { return "tab" }
+        '\\' => { return "backslash" }
+        '\'' => { return "quote" }
+        '"' => { return "dquote" }
+        '\0' => { return "nul" }
+        _ => { return "other" }
+    }
+}
+
+fn main() -> Unit {
+    let c = 'a'
+    Log.write(message: read Char.to_string(value: read c))
+    Log.write(message: read String.from_int(value: Char.to_code(value: read c)))
+    Log.write(message: read describe(c: read c))
+    Log.write(message: read describe(c: read '\n'))
+    Log.write(message: read describe(c: read '\r'))
+    Log.write(message: read describe(c: read '\t'))
+    Log.write(message: read describe(c: read '\\'))
+    Log.write(message: read describe(c: read '\''))
+    Log.write(message: read describe(c: read '"'))
+    Log.write(message: read describe(c: read '\0'))
+    Log.write(message: read describe(c: read 'z'))
+    if 'x' == 'x' {
+        Log.write(message: read "eq")
+    }
+    if 'x' == 'y' {
+        Log.write(message: read "bad")
+    } else {
+        Log.write(message: read "neq")
+    }
+    return Unit
+}
+"#;
+    common::assert_vm_eval_matches_backend("parity-char.rss", "rsscript_parity_char", source);
+}

@@ -492,6 +492,7 @@ impl Formatter {
         match expr {
             Expr::Ident(name, _) | Expr::Number(name, _) => self.out.push_str(name),
             Expr::String(value, _) => self.string_literal_at(value, indent),
+            Expr::CharLiteral(value, _) => self.out.push_str(&format!("'{value}'")),
             Expr::MultilineString(value, _) => self.multiline_string_literal(value, indent),
             Expr::ObjectLiteral { fields, .. } => {
                 self.object_literal(fields, indent);
@@ -827,6 +828,11 @@ impl Formatter {
                     self.out.push_str(value);
                     self.out.push('"');
                 }
+                crate::syntax::ast::MatchLiteral::Char(value) => {
+                    self.out.push('\'');
+                    self.out.push_str(value);
+                    self.out.push('\'');
+                }
                 crate::syntax::ast::MatchLiteral::Bool(value) => {
                     self.out.push_str(if *value { "true" } else { "false" });
                 }
@@ -1122,6 +1128,7 @@ fn inline_expr(expr: &Expr) -> Option<String> {
     match expr {
         Expr::Ident(name, _) | Expr::Number(name, _) => Some(name.clone()),
         Expr::String(value, _) => Some(quoted_string(value)),
+        Expr::CharLiteral(value, _) => Some(format!("'{value}'")),
         Expr::MultilineString(value, _) => Some(format!("\"\"\"{value}\"\"\"")),
         Expr::ObjectLiteral { fields, .. } => inline_object_literal(fields),
         Expr::MapLiteral { entries, .. } => inline_map_literal(entries),

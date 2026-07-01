@@ -260,6 +260,21 @@ A string literal is a `String`, not a `Path`. Constructing the `Path` is explici
 through `Path.from_string` — there is no implicit `String -> Path` conversion
 (section 2.4). This is the canonical form; the bundled examples use it.
 
+A **character literal** is a single Unicode scalar delimited by single quotes and
+has type `Char` (a Copy scalar). Its grammar is:
+
+```text
+char-literal := "'" ( char-escape | any-scalar-except-quote-backslash-newline ) "'"
+char-escape  := "\n" | "\r" | "\t" | "\\" | "\'" | "\0"
+```
+
+Exactly one scalar must appear between the quotes: an empty literal (`''`) or a
+multi-scalar literal (`'ab'`) is rejected. A `Char` is a real value usable in
+expressions (`let c = 'a'`, `c == '\n'`) and in scalar-literal patterns (`match c
+{ 'a' => …, _ => … }`); it is distinct from a one-character `String` (`"a"`). The
+`\'` escape is valid inside a character literal (it is not required inside a
+string literal, where `'` is an ordinary character).
+
 ### 2.2 Fast when local
 
 Performance-sensitive code opts into local exclusive values with `features: local`.
@@ -1139,7 +1154,7 @@ or `take` is a diagnostic. The checker must not silently infer the scrutinee
 effect from the binding pattern.
 
 Patterns may match the standard `Option<T>` and `Result<T, E>` variant shapes,
-declared RSScript `sum` variants, scalar literals (`Int`, `String`, `Bool`), and
+declared RSScript `sum` variants, scalar literals (`Int`, `String`, `Char`, `Bool`), and
 structured fields of a matched variant or struct. Arm variants must match the
 scrutinee family: `Option<T>` arms may use `Some`/`None`, `Result<T, E>` arms may
 use `Ok`/`Err`, and sum-type arms use that sum's declared variants. Mixing
@@ -1157,7 +1172,7 @@ Struct { field, other: mut x }     // struct destructuring
 Struct { field, .. }               // ignore the remaining fields
 (a, name)                          // tuple pattern (see §6.10)
 [], [only], [first, ..rest]        // list slice patterns (see below)
-42, "ready", true                  // scalar literal patterns
+42, "ready", 'a', true             // scalar literal patterns (Int, String, Char, Bool)
 ```
 
 A **tuple pattern** `(p0, p1, ...)` matches a tuple scrutinee positionally; each
@@ -1311,7 +1326,9 @@ exhaustiveness.
 
 A `match` must be exhaustive before lowering. It covers `Some`/`None`, `Ok`/`Err`,
 every declared sum variant, every scalar literal subset with a `_` fallback, or
-includes `_`. Structured field patterns refine a variant or struct but do not by
+includes `_`. The scalar-literal domains `Int`, `String`, and `Char` are infinite,
+so a match on them always requires a `_` fallback (unlike `Bool`, whose two
+values `true`/`false` can be enumerated). Structured field patterns refine a variant or struct but do not by
 themselves add new top-level variants. Guarded arms are ignored for coverage.
 
 The checker may conservatively avoid proving unreachable arms for complex nested
@@ -1748,10 +1765,10 @@ binding, not a field, and reading it constructs no instance of the type.
 Rules:
 
 ```text
-- A `const` initializer must be a literal in v0.7: a number, a string, or a
-  boolean (`true`/`false`). Expressions and calls in `const` position are not
-  supported yet and are rejected (RS0015). Compute the value and write it as a
-  literal.
+- A `const` initializer must be a literal in v0.7: a number, a string, a
+  character (`'a'`), or a boolean (`true`/`false`). Expressions and calls in
+  `const` position are not supported yet and are rejected (RS0015). Compute the
+  value and write it as a literal.
 - The type annotation is optional; it is inferred from the literal when absent.
 - `pub const` makes the constant part of the public review surface.
 - A local binding of the same name shadows a constant within its scope.

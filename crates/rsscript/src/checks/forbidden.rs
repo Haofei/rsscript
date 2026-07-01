@@ -328,6 +328,7 @@ fn check_operator_overload_attempts_in_expr(analyzer: &mut Analyzer<'_>, expr: &
         | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => {}
     }
 }
@@ -545,6 +546,7 @@ fn inferred_operand_type<'a>(analyzer: &'a Analyzer<'_>, expr: &'a HirExpr) -> O
             }),
         HirExpr::Number { value, .. } => Some(crate::hir::number_literal_type_name(value)),
         HirExpr::String { .. } => Some("String"),
+        HirExpr::Char { .. } => Some("Char"),
         HirExpr::Call { type_name, .. }
         | HirExpr::Effect { type_name, .. }
         | HirExpr::Manage { type_name, .. }

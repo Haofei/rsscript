@@ -23,6 +23,7 @@ pub(crate) fn hir_expr_span(expr: &HirExpr) -> &Span {
         HirExpr::Ident { span, .. }
         | HirExpr::Number { span, .. }
         | HirExpr::String { span, .. }
+        | HirExpr::Char { span, .. }
         | HirExpr::ObjectLiteral { span, .. }
         | HirExpr::MapLiteral { span, .. }
         | HirExpr::ArrayLiteral { span, .. }

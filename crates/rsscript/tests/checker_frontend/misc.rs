@@ -304,24 +304,19 @@ fn diagnostics_json_uses_protocol_shape() {
 }
 
 #[test]
-fn char_literal_reports_single_clear_diagnostic_without_try_operator_cascade() {
-    // SH-016: a `'...'` character-literal attempt now lexes to one `Symbol("'")`
-    // token, so it yields a single clear RS0015 ("character literal") with no
-    // misleading RS0013 (try-operator) cascade and no duplicate generic RS0015.
+fn char_literal_is_a_real_char_value_and_type_checks() {
+    // SH-016: `'x'` is now a real `Char` value (not a diagnostic). Comparing a
+    // `Char` binding against a char literal type-checks cleanly, with neither the
+    // old RS0015 ("character literal") nor any RS0013 (try-operator) cascade.
     let source = "fn f(c: read Char) -> Bool {\n    return c == '_'\n}\n";
     let codes = common::error_codes("char-literal.rss", source);
     assert!(
-        codes.iter().any(|code| code == "RS0015"),
-        "expected RS0015, got {codes:?}"
+        !codes.iter().any(|code| code == "RS0015"),
+        "char literal must no longer emit RS0015, got {codes:?}"
     );
     assert!(
         !codes.iter().any(|code| code == "RS0013"),
         "RS0013 try-operator cascade must be gone, got {codes:?}"
-    );
-    assert_eq!(
-        codes.iter().filter(|code| *code == "RS0015").count(),
-        1,
-        "exactly one RS0015 (no duplicate generic unsupported-expression), got {codes:?}"
     );
 }
 

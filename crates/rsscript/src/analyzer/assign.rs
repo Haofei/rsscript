@@ -255,6 +255,7 @@ impl<'a> AssignChecker<'a> {
             | Expr::Ident(..)
             | Expr::Number(..)
             | Expr::String(..)
+            | Expr::CharLiteral(..)
             | Expr::MultilineString(..)
             | Expr::Unknown(_) => {}
         }

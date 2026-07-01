@@ -157,6 +157,7 @@ pub(super) fn check_await_placement_expr(
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => {}
     }
 }
@@ -262,6 +263,7 @@ pub(super) fn expr_span(expr: &HirExpr) -> &Span {
         HirExpr::Ident { span, .. }
         | HirExpr::Number { span, .. }
         | HirExpr::String { span, .. }
+        | HirExpr::Char { span, .. }
         | HirExpr::ObjectLiteral { span, .. }
         | HirExpr::MapLiteral { span, .. }
         | HirExpr::ArrayLiteral { span, .. }

@@ -210,6 +210,12 @@ pub(super) fn parse_match_pattern(
                     span: tokens[start].span.clone(),
                 });
             }
+            TokenKind::Char(value) => {
+                return Some(MatchPattern::Literal {
+                    value: MatchLiteral::Char(value.clone()),
+                    span: tokens[start].span.clone(),
+                });
+            }
             TokenKind::Ident(value) if matches!(value.as_str(), "true" | "false") => {
                 return Some(MatchPattern::Literal {
                     value: MatchLiteral::Bool(*value == "true"),
@@ -561,7 +567,7 @@ fn parse_single_literal_or_constructor_pattern(
     index: usize,
 ) -> Option<Box<MatchPattern>> {
     match &tokens[index].kind {
-        TokenKind::Number(_) | TokenKind::String(_) => {
+        TokenKind::Number(_) | TokenKind::String(_) | TokenKind::Char(_) => {
             parse_match_pattern(tokens, index, index + 1).map(Box::new)
         }
         TokenKind::Ident(value) if matches!(value.as_str(), "true" | "false") => {

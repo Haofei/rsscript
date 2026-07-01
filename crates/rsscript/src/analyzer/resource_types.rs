@@ -348,6 +348,7 @@ impl Analyzer<'_> {
             | Expr::Ident(_, _)
             | Expr::Number(_, _)
             | Expr::String(_, _)
+            | Expr::CharLiteral(_, _)
             | Expr::MultilineString(_, _)
             | Expr::Unknown(_) => {}
         }
@@ -481,6 +482,7 @@ impl Analyzer<'_> {
             | Expr::Ident(_, _)
             | Expr::Number(_, _)
             | Expr::String(_, _)
+            | Expr::CharLiteral(_, _)
             | Expr::MultilineString(_, _)
             | Expr::Unknown(_) => {}
         }

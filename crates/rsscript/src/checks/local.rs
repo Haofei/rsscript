@@ -441,6 +441,7 @@ fn collect_expr_take_handle_fields(expr: &HirExpr, fields: &mut Vec<TakeHandleFi
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => {}
     }
 }
@@ -611,6 +612,7 @@ fn fresh_field_access_base(expr: &HirExpr) -> Option<&str> {
         | HirExpr::Closure { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => None,
     }
 }
@@ -643,6 +645,7 @@ fn fresh_handle_or_weak_field_path(expr: &HirExpr) -> Option<String> {
         | HirExpr::Closure { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => None,
     }
 }
@@ -881,7 +884,7 @@ fn collect_ordered_moved_uses_from_expr(
                 }
             }
         }
-        HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Unknown(_) => {}
+        HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Char { .. } | HirExpr::Unknown(_) => {}
         HirExpr::Match {
             value,
             scrutinee_effect,
@@ -1176,6 +1179,7 @@ fn collect_closure_local_moved_uses_from_expr(expr: &HirExpr, moved_uses: &mut V
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => {}
     }
 }
@@ -1388,6 +1392,7 @@ fn collect_retained_closure_captures_from_expr(
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => {}
     }
 }
@@ -1416,6 +1421,7 @@ fn retained_closure_arg(expr: &HirExpr) -> Option<(&HirBlock, &Span)> {
         | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Field { .. }
         | HirExpr::Index { .. }
         | HirExpr::Call { .. }
@@ -1458,7 +1464,7 @@ fn callee_display(callee: &Callee) -> String {
 fn local_expr_label(expr: &Expr) -> String {
     match expr {
         Expr::Ident(name, _) => name.clone(),
-        Expr::String(value, _) | Expr::MultilineString(value, _) => format!("{value:?}"),
+        Expr::String(value, _) | Expr::CharLiteral(value, _) | Expr::MultilineString(value, _) => format!("{value:?}"),
         Expr::Field { base, name, .. } => format!("{}.{}", local_expr_label(base), name),
         Expr::Index { base, .. } => format!("{}[]", local_expr_label(base)),
         Expr::Call { callee, .. } => format!("{}()", callee_display(callee)),
@@ -1608,6 +1614,7 @@ fn collect_expr_resource_escapes(
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => {}
     }
 }
@@ -1799,6 +1806,7 @@ fn collect_resource_escapes_in_expr(
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => {}
     }
 }
@@ -2007,6 +2015,7 @@ fn collect_expr_managed_closure_uses(
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => {}
     }
 }
@@ -2229,6 +2238,7 @@ fn collect_hir_expr_effect_events(expr: &HirExpr, events: &mut Vec<HirEffectEven
         | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => {}
     }
 }
@@ -2276,6 +2286,7 @@ fn collect_hir_expr_idents(expr: &HirExpr, uses: &mut Vec<(String, Span)>) {
         HirExpr::Closure { body, .. } => collect_hir_block_idents(body, uses),
         HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Match { .. }
         | HirExpr::Unknown(_) => {}
     }
@@ -2405,6 +2416,7 @@ fn collect_hir_expr_inline_capture_uses(expr: &HirExpr, uses: &mut Vec<(String, 
         HirExpr::Closure { body, .. } => collect_hir_block_inline_capture_uses(body, uses),
         HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Match { .. }
         | HirExpr::Unknown(_) => {}
     }
@@ -2944,6 +2956,7 @@ fn collect_expr_managed_closure_capture_names(expr: &HirExpr, captures: &mut Vec
         | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => {}
     }
 }
@@ -3215,6 +3228,7 @@ fn hir_expr_is_fresh_value(value: &HirExpr) -> bool {
     match value {
         HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::ObjectLiteral { .. }
         | HirExpr::MapLiteral { .. }
         | HirExpr::ArrayLiteral { .. } => true,
@@ -3250,6 +3264,7 @@ fn local_binding_source_ident(value: &HirExpr) -> Option<(String, Span)> {
             .find_map(|arg| local_binding_source_ident(&arg.value)),
         HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::MapLiteral { .. }
         | HirExpr::ObjectLiteral { .. }
         | HirExpr::ArrayLiteral { .. }
@@ -3288,6 +3303,7 @@ fn local_binding_handle_field_source(value: &HirExpr) -> Option<(String, Span)> 
             .find_map(|arg| local_binding_handle_field_source(&arg.value)),
         HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::MapLiteral { .. }
         | HirExpr::ObjectLiteral { .. }
         | HirExpr::ArrayLiteral { .. }
@@ -3351,6 +3367,7 @@ fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
         HirExpr::Binary { .. } | HirExpr::Index { .. } => None,
         HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::ObjectLiteral { .. }
         | HirExpr::ArrayLiteral { .. }
         | HirExpr::Closure { .. }

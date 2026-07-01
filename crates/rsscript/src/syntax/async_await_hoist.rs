@@ -194,6 +194,7 @@ fn hoist_nested(expr: &mut Expr, hoisted: &mut Vec<Stmt>, counter: &mut usize) {
         | Expr::Ident(_, _)
         | Expr::Number(_, _)
         | Expr::String(_, _)
+        | Expr::CharLiteral(_, _)
         | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => {}
     }

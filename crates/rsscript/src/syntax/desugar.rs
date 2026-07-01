@@ -201,6 +201,7 @@ fn rewrite_expr(expr: &mut Expr, assoc: &HashMap<String, String>) {
         Expr::Ident(..)
         | Expr::Number(..)
         | Expr::String(..)
+        | Expr::CharLiteral(..)
         | Expr::MultilineString(..)
         | Expr::Unknown(_) => {}
     }
@@ -401,6 +402,7 @@ fn expand_expr_nested(expr: &mut Expr, counter: &mut usize) {
         Expr::Ident(..)
         | Expr::Number(..)
         | Expr::String(..)
+        | Expr::CharLiteral(..)
         | Expr::MultilineString(..)
         | Expr::Unknown(_) => {}
     }
@@ -685,6 +687,7 @@ fn collect_expr_arities(expr: &Expr, arities: &mut BTreeSet<usize>) {
         Expr::Ident(..)
         | Expr::Number(..)
         | Expr::String(..)
+        | Expr::CharLiteral(..)
         | Expr::MultilineString(..)
         | Expr::Unknown(_) => {}
     }

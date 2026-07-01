@@ -18,6 +18,7 @@ fn kind_name(k: read Int) -> String {
     if k == 5 { return "MultilineString" }
     if k == 6 { return "Keyword" }
     if k == 7 { return "Symbol" }
+    if k == 9 { return "Char" }
     return "Eof"
 }
 

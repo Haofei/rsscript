@@ -318,6 +318,7 @@ impl Analyzer<'_> {
             | HirExpr::ArrayLiteral { .. }
             | HirExpr::Number { .. }
             | HirExpr::String { .. }
+            | HirExpr::Char { .. }
             | HirExpr::Unknown(_) => {}
         }
     }

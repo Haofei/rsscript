@@ -126,6 +126,7 @@ pub(super) fn walk_ast_expr_children(expr: &Expr, visit: &mut dyn FnMut(AstChild
         | Expr::Ident(_, _)
         | Expr::Number(_, _)
         | Expr::String(_, _)
+        | Expr::CharLiteral(_, _)
         | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => {}
     }
@@ -291,6 +292,7 @@ pub(super) fn review_map_expr_type_name(expr: &Expr, hir: &Hir) -> Option<String
         }
         Expr::Await { value, .. } => review_map_expr_type_name(value, hir),
         Expr::String(_, _) | Expr::MultilineString(_, _) => Some("String".to_string()),
+        Expr::CharLiteral(_, _) => Some("Char".to_string()),
         Expr::Number(value, _) => Some(crate::hir::number_literal_type_name(value).to_string()),
         Expr::Ident(name, _) if matches!(name.as_str(), "true" | "false") => {
             Some("Bool".to_string())
@@ -446,6 +448,7 @@ pub(super) fn collect_review_map_facts_expr(
         | Expr::Ident(_, _)
         | Expr::Number(_, _)
         | Expr::String(_, _)
+        | Expr::CharLiteral(_, _)
         | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => {}
     }
@@ -552,6 +555,7 @@ pub(super) fn collect_spawn_capture_names(expr: &Expr, captures: &mut BTreeSet<S
         | Expr::ArrayLiteral { .. }
         | Expr::Number(_, _)
         | Expr::String(_, _)
+        | Expr::CharLiteral(_, _)
         | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => {}
     }
@@ -663,6 +667,7 @@ pub(super) fn spawn_capture_path(expr: &Expr) -> Option<String> {
         | Expr::Match { .. }
         | Expr::Number(_, _)
         | Expr::String(_, _)
+        | Expr::CharLiteral(_, _)
         | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => None,
     }

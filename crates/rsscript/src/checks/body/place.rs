@@ -272,6 +272,7 @@ pub(super) fn collect_closure_effect_accesses_expr(
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => {}
     }
 }
@@ -330,6 +331,7 @@ pub(super) fn expr_moves_path(expr: &HirExpr) -> bool {
         | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
+        | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => false,
     }
 }

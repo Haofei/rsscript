@@ -356,7 +356,7 @@ pub(super) fn collect_expr_uses(expr: &HirExpr, uses: &mut HashSet<String>) {
                 collect_expr_uses(item, uses);
             }
         }
-        HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Unknown(_) => {}
+        HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Char { .. } | HirExpr::Unknown(_) => {}
     }
 }
 
@@ -416,7 +416,7 @@ pub(super) fn collect_await_operand_live_uses(expr: &HirExpr, uses: &mut HashSet
                 collect_await_operand_live_uses(item, uses);
             }
         }
-        HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Unknown(_) => {}
+        HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Char { .. } | HirExpr::Unknown(_) => {}
     }
 }
 

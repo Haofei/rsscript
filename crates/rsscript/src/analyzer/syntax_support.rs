@@ -2,19 +2,6 @@ use super::*;
 
 impl Analyzer<'_> {
     pub(super) fn check_unsupported_syntax(&mut self) {
-        // A `'...'` character-literal attempt lexes to one `Symbol("'")` token.
-        // Report it once with a clear message and remember its span so the
-        // generic `Expr::Unknown` walk below does not emit a duplicate RS0015 for
-        // the same lone `'` operand.
-        let char_literal_spans = self.syntax_program.char_literal_spans.clone();
-        self.char_literal_spans = char_literal_spans.iter().cloned().collect();
-        for span in char_literal_spans {
-            self.unsupported_syntax(
-                span,
-                "character literal",
-                "RSScript has no character-literal syntax. Use a String literal (\"x\") or compare code points with Char.to_code(...).",
-            );
-        }
         for span in self.syntax_program.unknown_top_level_spans.clone() {
             self.unsupported_syntax(
                 span,
@@ -502,18 +489,14 @@ impl Analyzer<'_> {
             Expr::Ident(_, _)
             | Expr::Number(_, _)
             | Expr::String(_, _)
+            | Expr::CharLiteral(_, _)
             | Expr::MultilineString(_, _) => {}
             Expr::Unknown(span) => {
-                // A lone `'` operand from a character-literal attempt already got
-                // the targeted "character literal" diagnostic; do not also emit
-                // the generic unsupported-expression RS0015 for it.
-                if !self.char_literal_spans.contains(span) {
-                    self.unsupported_syntax(
-                        span.clone(),
-                        "unsupported expression",
-                        "This expression is outside the current RSScript parser surface.",
-                    );
-                }
+                self.unsupported_syntax(
+                    span.clone(),
+                    "unsupported expression",
+                    "This expression is outside the current RSScript parser surface.",
+                );
             }
         }
     }
