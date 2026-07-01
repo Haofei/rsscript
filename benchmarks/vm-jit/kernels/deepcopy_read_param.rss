@@ -1,0 +1,68 @@
+features: local
+
+// Phase 2 measurement kernel: a non-mut nested-struct param passed to a READ-ONLY
+// helper in a hot loop. Under the eager scheme `sum_reads` deep-copies all three
+// `List<Int>` fields of `Bag` on EVERY call (RegInstr::DeepCopy in the prologue);
+// with RSS_VM_ELIDE_DEEPCOPY the copy is elided because `g` is only ever read
+// (List.len / List.get / field reads — no mutation, store, or escape). The delta
+// between flag-off and flag-on runs is the per-call deep-copy cost this phase
+// targets. Reads go through ListGet/ListLen/GetField specifically (the analysis'
+// read-only-safe set), so elision fires; nothing routes `g` through an intrinsic,
+// a mut arg, an aggregate store, or a return.
+
+fn bench_size(default: Int) -> Int {
+    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
+    match String.parse_int(value: read raw) {
+        Some(value) => {
+            return value
+        }
+        None => {
+            return default
+        }
+    }
+}
+
+struct Bag {
+    a: List<Int>,
+    b: List<Int>,
+    c: List<Int>,
+}
+
+fn sum_reads(g: read Bag, i: Int) -> Int {
+    let na = List.len<Int>(list: read g.a)
+    let nb = List.len<Int>(list: read g.b)
+    let nc = List.len<Int>(list: read g.c)
+    let va = List.get<Int>(list: read g.a, index: i % na)
+    let vb = List.get<Int>(list: read g.b, index: i % nb)
+    let vc = List.get<Int>(list: read g.c, index: i % nc)
+    return va + vb + vc
+}
+
+fn hot(g: read Bag, limit: Int) -> Int {
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        total = total + sum_reads(g: read g, i: i)
+        i = i + 1
+    }
+    return total
+}
+
+fn build_list(n: Int) -> List<Int> {
+    local xs = List<Int>.new()
+    let mut k = 0
+    while k < n {
+        let v = k * k - k
+        List.push<Int>(list: mut xs, value: read v)
+        k = k + 1
+    }
+    return xs
+}
+
+fn main() -> Unit {
+    let limit = bench_size(default: 500000)
+    let bag = Bag(a: build_list(n: 256), b: build_list(n: 256), c: build_list(n: 256))
+    let result = hot(g: read bag, limit: limit)
+    Log.write(message: read String.from_int(value: result))
+    return Unit
+}
