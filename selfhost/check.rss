@@ -2,20 +2,1197 @@
 //
 // Reads rss source as argv[0] and prints the analyzer diagnostic codes it finds,
 // one per line, or `CLEAN` if none. Oracle: crate::analyze_source filtered to the
-// target codes (see selfhost_parity.rs). Target: RS0005 (DUPLICATE_DECLARATION —
-// duplicate top-level item names + duplicate struct/sum fields), decidable from
-// declaration structure alone (no body parsing; see ledger SH-021).
+// target codes (see selfhost_parity.rs). Target: RS0005 (DUPLICATE_DECLARATION).
 //
-// This is the Phase-3 STUB (reports CLEAN) — it proves the harness loop and the
-// reject-set baseline. The real duplicate-declaration checker replaces it.
+// Namespace grouping replicated from crate::hir::lower::collect_item_signatures:
+//   * callable namespace: fn names + type (struct/resource/class/opaque)
+//     constructor names — a collision in this set is a duplicate.
+//   * type namespace: type names + sum names — a collision is a duplicate.
+//   * per-type field names: a struct/resource/class field name declared twice
+//     within one type is a duplicate (sum variants are NOT field-checked).
+// A duplicate in ANY of these => RS0005. Decidable from declaration structure
+// alone (no body parsing; see ledger SH-021).
+//
+// Declaration scanning reuses the proven recognizer in selfhost/parser.rss; the
+// only addition is carrying identifier TEXT on each token so names can compare.
 //
 // rss constraints (SH-016/017/018): no char literals, single-line expressions,
 // cursors threaded positionally.
 
+// Token kinds.
+//   1 Ident   2 Number   3 String   4 Interp   5 Multiline   6 Keyword
+//   7 Symbol  8 Eof
+struct Tok {
+    kind: Int
+    val: Int
+    line: Int
+    col: Int
+    text: String
+}
+
+// ---------------------------------------------------------------------------
+// Tokenizer (from selfhost/parser.rss) — additionally carries identifier text.
+// ---------------------------------------------------------------------------
+
+fn is_kw(word: read String) -> Bool {
+    return word == "if" || word == "else" || word == "for" || word == "in" || word == "match" || word == "loop" || word == "while" || word == "break" || word == "continue" || word == "return" || word == "features" || word == "class" || word == "struct" || word == "resource" || word == "handle" || word == "fn" || word == "let" || word == "pub" || word == "async" || word == "effects" || word == "drop" || word == "with" || word == "as" || word == "read" || word == "mut" || word == "take" || word == "fresh" || word == "manage" || word == "weak" || word == "local"
+}
+
+fn is_known_symbol(code: read Int) -> Bool {
+    return code == 58 || code == 44 || code == 46 || code == 40 || code == 41 || code == 123 || code == 125 || code == 60 || code == 62 || code == 91 || code == 93 || code == 63 || code == 124 || code == 38 || code == 126 || code == 94 || code == 43 || code == 45 || code == 42 || code == 47 || code == 37 || code == 61 || code == 33 || code == 59 || code == 35
+}
+
+fn is_ident_start(c: read Char) -> Bool {
+    return Char.is_alpha(value: read c) || Char.to_code(value: read c) == 95
+}
+
+fn is_ident_cont(c: read Char) -> Bool {
+    return Char.is_alphanumeric(value: read c) || Char.to_code(value: read c) == 95
+}
+
+fn code_at(chars: read List<Char>, n: read Int, i: read Int) -> Int {
+    if i < n {
+        let c = List.get(list: read chars, index: read i)
+        return Char.to_code(value: read c)
+    }
+    return -1
+}
+
+fn slice(chars: read List<Char>, from: read Int, to: read Int) -> String {
+    let mut out = ""
+    let mut k = from
+    while k < to {
+        let c = List.get(list: read chars, index: read k)
+        out = String.concat(left: read out, right: read Char.to_string(value: read c))
+        k = k + 1
+    }
+    return out
+}
+
+fn scan_line_comment(chars: read List<Char>, n: read Int, i: read Int) -> Int {
+    let mut j = i
+    let mut scanning = true
+    while scanning {
+        if j < n {
+            let code = code_at(chars: read chars, n: read n, i: read j)
+            j = j + 1
+            if code == 10 {
+                scanning = false
+            }
+        } else {
+            scanning = false
+        }
+    }
+    return j
+}
+
+fn scan_string(chars: read List<Char>, n: read Int, i: read Int) -> Int {
+    let start = i + 1
+    let mut j = start
+    let mut scanning = true
+    while scanning {
+        if j >= n {
+            scanning = false
+        } else {
+            let code = code_at(chars: read chars, n: read n, i: read j)
+            if code == 34 {
+                scanning = false
+            } else if code == 92 {
+                j = j + 1
+                if j < n {
+                    j = j + 1
+                }
+            } else {
+                j = j + 1
+            }
+        }
+    }
+    if code_at(chars: read chars, n: read n, i: read j) == 34 {
+        return j + 1
+    }
+    return j
+}
+
+fn scan_multiline(chars: read List<Char>, n: read Int, i: read Int) -> Int {
+    let start = i + 3
+    let mut j = start
+    let mut scanning = true
+    while scanning {
+        if j >= n {
+            scanning = false
+        } else {
+            let c0 = code_at(chars: read chars, n: read n, i: read j)
+            let c1 = code_at(chars: read chars, n: read n, i: read (j + 1))
+            let c2 = code_at(chars: read chars, n: read n, i: read (j + 2))
+            if c0 == 34 && c1 == 34 && c2 == 34 {
+                scanning = false
+            } else {
+                j = j + 1
+            }
+        }
+    }
+    let d0 = code_at(chars: read chars, n: read n, i: read j)
+    let d1 = code_at(chars: read chars, n: read n, i: read (j + 1))
+    let d2 = code_at(chars: read chars, n: read n, i: read (j + 2))
+    if d0 == 34 && d1 == 34 && d2 == 34 {
+        return j + 3
+    }
+    return j
+}
+
+fn scan_interp(chars: read List<Char>, n: read Int, i: read Int) -> Int {
+    let start = i + 2
+    let mut j = start
+    let mut depth = 0
+    let mut scanning = true
+    while scanning {
+        if j >= n {
+            scanning = false
+        } else {
+            let code = code_at(chars: read chars, n: read n, i: read j)
+            if code == 34 && depth == 0 {
+                scanning = false
+            } else if code == 92 {
+                j = j + 1
+                if j < n {
+                    j = j + 1
+                }
+            } else if depth > 0 && code == 34 {
+                j = j + 1
+                let mut inner = true
+                while inner {
+                    if j >= n {
+                        inner = false
+                    } else {
+                        let sc = code_at(chars: read chars, n: read n, i: read j)
+                        if sc == 92 {
+                            j = j + 1
+                            if j < n {
+                                j = j + 1
+                            }
+                        } else {
+                            j = j + 1
+                            if sc == 34 {
+                                inner = false
+                            }
+                        }
+                    }
+                }
+            } else if code == 123 && depth == 0 && code_at(chars: read chars, n: read n, i: read (j + 1)) == 123 {
+                j = j + 2
+            } else if code == 125 && depth == 0 && code_at(chars: read chars, n: read n, i: read (j + 1)) == 125 {
+                j = j + 2
+            } else {
+                if code == 123 {
+                    depth = depth + 1
+                } else if code == 125 {
+                    if depth > 0 {
+                        depth = depth - 1
+                    }
+                }
+                j = j + 1
+            }
+        }
+    }
+    if code_at(chars: read chars, n: read n, i: read j) == 34 {
+        return j + 1
+    }
+    return j
+}
+
+fn scan_number(chars: read List<Char>, n: read Int, i: read Int) -> Int {
+    let mut j = i
+    let mut scanning = true
+    while scanning {
+        if j < n {
+            let c = List.get(list: read chars, index: read j)
+            if Char.is_digit(value: read c) {
+                j = j + 1
+            } else {
+                scanning = false
+            }
+        } else {
+            scanning = false
+        }
+    }
+    if code_at(chars: read chars, n: read n, i: read j) == 46 {
+        let after = j + 1
+        if after < n {
+            let cd = List.get(list: read chars, index: read after)
+            if Char.is_digit(value: read cd) {
+                j = after
+                let mut frac = true
+                while frac {
+                    if j < n {
+                        let c = List.get(list: read chars, index: read j)
+                        if Char.is_digit(value: read c) {
+                            j = j + 1
+                        } else {
+                            frac = false
+                        }
+                    } else {
+                        frac = false
+                    }
+                }
+            }
+        }
+    }
+    return j
+}
+
+fn scan_ident(chars: read List<Char>, n: read Int, i: read Int) -> Int {
+    let mut j = i
+    let mut scanning = true
+    while scanning {
+        if j < n {
+            let c = List.get(list: read chars, index: read j)
+            if is_ident_cont(c: read c) {
+                j = j + 1
+            } else {
+                scanning = false
+            }
+        } else {
+            scanning = false
+        }
+    }
+    return j
+}
+
+// Map an identifier/keyword's text to a small word id the scanner recognizes.
+fn word_id(word: read String) -> Int {
+    if word == "fn" { return 1 }
+    if word == "struct" { return 2 }
+    if word == "class" { return 3 }
+    if word == "resource" { return 4 }
+    if word == "opaque" { return 5 }
+    if word == "sum" { return 6 }
+    if word == "protocol" { return 7 }
+    if word == "impl" { return 8 }
+    if word == "native" { return 9 }
+    if word == "module" { return 10 }
+    if word == "type" { return 11 }
+    if word == "const" { return 12 }
+    if word == "pub" { return 13 }
+    if word == "async" { return 14 }
+    if word == "use" { return 15 }
+    if word == "profile" { return 16 }
+    if word == "features" { return 17 }
+    if word == "for" { return 18 }
+    if word == "deprecated" { return 19 }
+    if word == "lower_name" { return 20 }
+    if word == "derives" { return 21 }
+    if word == "effects" { return 22 }
+    if word == "fresh" { return 23 }
+    if word == "_" { return 24 }
+    if word == "as" { return 25 }
+    if word == "local" { return 26 }
+    if word == "unsafe" { return 27 }
+    if word == "device" { return 28 }
+    if word == "ffi" { return 29 }
+    if word == "reflection" { return 30 }
+    return 0
+}
+
+fn tokenize(source: read String) -> List<Tok> {
+    let chars = String.chars(value: read source)
+    let n = List.len(list: read chars)
+    let mut toks = List.new<Tok>()
+    let mut i = 0
+    let mut curLine = 1
+    let mut curCol = 1
+    while i < n {
+        let startLine = curLine
+        let startCol = curCol
+        let c = List.get(list: read chars, index: read i)
+        let code = Char.to_code(value: read c)
+        let c1 = code_at(chars: read chars, n: read n, i: read (i + 1))
+        let c2 = code_at(chars: read chars, n: read n, i: read (i + 2))
+        let mut j = i
+        let mut kind = 0
+        let mut val = 0
+        let mut text = ""
+        if Char.is_whitespace(value: read c) {
+            j = i + 1
+            kind = 0
+        } else if code == 47 && c1 == 47 {
+            j = scan_line_comment(chars: read chars, n: read n, i: read i)
+            kind = 0
+        } else if code == 34 && c1 == 34 && c2 == 34 {
+            j = scan_multiline(chars: read chars, n: read n, i: read i)
+            kind = 5
+        } else if code == 36 && c1 == 34 {
+            j = scan_interp(chars: read chars, n: read n, i: read i)
+            kind = 4
+        } else if code == 34 {
+            j = scan_string(chars: read chars, n: read n, i: read i)
+            kind = 3
+        } else if Char.is_digit(value: read c) {
+            j = scan_number(chars: read chars, n: read n, i: read i)
+            kind = 2
+        } else if is_ident_start(c: read c) {
+            j = scan_ident(chars: read chars, n: read n, i: read i)
+            let word = slice(chars: read chars, from: read i, to: read j)
+            if is_kw(word: read word) {
+                kind = 6
+            } else {
+                kind = 1
+            }
+            val = word_id(word: read word)
+            text = word
+        } else if code == 45 && c1 == 62 {
+            j = i + 2
+            kind = 7
+            val = 256
+        } else if code == 61 && c1 == 62 {
+            j = i + 2
+            kind = 7
+            val = 257
+        } else {
+            j = i + 1
+            kind = 7
+            if is_known_symbol(code: read code) {
+                val = code
+            } else {
+                val = 63
+            }
+        }
+        if kind != 0 {
+            let t = Tok(kind: kind, val: val, line: startLine, col: startCol, text: text)
+            List.push(list: mut toks, value: read t)
+        }
+        let mut k = i
+        while k < j {
+            let ch = List.get(list: read chars, index: read k)
+            if Char.to_code(value: read ch) == 10 {
+                curLine = curLine + 1
+                curCol = 1
+            } else {
+                curCol = curCol + 1
+            }
+            k = k + 1
+        }
+        i = j
+    }
+    let eof = Tok(kind: 8, val: 0, line: curLine, col: curCol, text: "")
+    List.push(list: mut toks, value: read eof)
+    return toks
+}
+
+// ---------------------------------------------------------------------------
+// Token accessors.
+// ---------------------------------------------------------------------------
+
+fn tk_kind(toks: read List<Tok>, i: read Int) -> Int {
+    if i < 0 { return -1 }
+    if i >= List.len(list: read toks) { return -1 }
+    let t = List.get(list: read toks, index: read i)
+    return t.kind
+}
+
+fn tk_val(toks: read List<Tok>, i: read Int) -> Int {
+    if i < 0 { return 0 }
+    if i >= List.len(list: read toks) { return 0 }
+    let t = List.get(list: read toks, index: read i)
+    return t.val
+}
+
+fn tk_line(toks: read List<Tok>, i: read Int) -> Int {
+    if i < 0 { return 0 }
+    if i >= List.len(list: read toks) { return 0 }
+    let t = List.get(list: read toks, index: read i)
+    return t.line
+}
+
+fn tk_text(toks: read List<Tok>, i: read Int) -> String {
+    if i < 0 { return "" }
+    if i >= List.len(list: read toks) { return "" }
+    let t = List.get(list: read toks, index: read i)
+    return t.text
+}
+
+fn is_ident_tok(toks: read List<Tok>, i: read Int) -> Bool {
+    let k = tk_kind(toks: read toks, i: read i)
+    return k == 1 || k == 6
+}
+
+fn at_ident(toks: read List<Tok>, i: read Int, wid: read Int) -> Bool {
+    if is_ident_tok(toks: read toks, i: read i) {
+        return tk_val(toks: read toks, i: read i) == wid
+    }
+    return false
+}
+
+fn at_symbol(toks: read List<Tok>, i: read Int, code: read Int) -> Bool {
+    if tk_kind(toks: read toks, i: read i) == 7 {
+        return tk_val(toks: read toks, i: read i) == code
+    }
+    return false
+}
+
+// ---------------------------------------------------------------------------
+// Scan helpers (from selfhost/parser.rss).
+// ---------------------------------------------------------------------------
+
+fn find_matching(toks: read List<Tok>, open: read Int, openSym: read Int, closeSym: read Int) -> Int {
+    if at_symbol(toks: read toks, i: read open, code: read openSym) == false {
+        return -1
+    }
+    let n = List.len(list: read toks)
+    let mut depth = 0
+    let mut idx = open
+    let mut result = -1
+    let mut scanning = true
+    while scanning {
+        if idx >= n {
+            scanning = false
+        } else {
+            if at_symbol(toks: read toks, i: read idx, code: read openSym) {
+                depth = depth + 1
+            } else if at_symbol(toks: read toks, i: read idx, code: read closeSym) {
+                depth = depth - 1
+                if depth == 0 {
+                    result = idx
+                    scanning = false
+                }
+            }
+            idx = idx + 1
+        }
+    }
+    return result
+}
+
+fn declaration_line_end(toks: read List<Tok>, start: read Int) -> Int {
+    let n = List.len(list: read toks)
+    if start >= n {
+        return start
+    }
+    let line = tk_line(toks: read toks, i: read start)
+    let mut idx = start
+    while idx < n {
+        if tk_line(toks: read toks, i: read idx) > line {
+            return idx
+        }
+        if tk_kind(toks: read toks, i: read idx) == 8 {
+            return idx
+        }
+        idx = idx + 1
+    }
+    return n
+}
+
+fn next_line_or_block_end(toks: read List<Tok>, start: read Int, end: read Int) -> Int {
+    if start >= end {
+        return end
+    }
+    let line = tk_line(toks: read toks, i: read start)
+    let mut idx = start
+    while idx < end {
+        if tk_line(toks: read toks, i: read idx) > line {
+            return idx
+        }
+        idx = idx + 1
+    }
+    return end
+}
+
+fn starts_top_level_item(toks: read List<Tok>, index: read Int) -> Bool {
+    let n = List.len(list: read toks)
+    if index < 0 || index >= n {
+        return false
+    }
+    if index > 0 && tk_line(toks: read toks, i: read (index - 1)) == tk_line(toks: read toks, i: read index) {
+        return false
+    }
+    if is_ident_tok(toks: read toks, i: read index) == false {
+        return false
+    }
+    let v = tk_val(toks: read toks, i: read index)
+    return v == 17 || v == 16 || v == 3 || v == 2 || v == 4 || v == 1 || v == 13 || v == 14 || v == 9 || v == 7 || v == 8
+}
+
+fn function_signature_end(toks: read List<Tok>, start: read Int) -> Int {
+    let n = List.len(list: read toks)
+    let mut depth = 0
+    let mut idx = start
+    while idx < n {
+        if depth == 0 && at_symbol(toks: read toks, i: read idx, code: read 123) {
+            return idx
+        }
+        if depth == 0 && at_symbol(toks: read toks, i: read idx, code: read 125) {
+            return idx
+        }
+        if idx > start && depth == 0 && starts_top_level_item(toks: read toks, index: read idx) {
+            return idx
+        }
+        let opener = at_symbol(toks: read toks, i: read idx, code: read 40) || at_symbol(toks: read toks, i: read idx, code: read 91) || at_symbol(toks: read toks, i: read idx, code: read 60)
+        let closer = at_symbol(toks: read toks, i: read idx, code: read 41) || at_symbol(toks: read toks, i: read idx, code: read 93) || at_symbol(toks: read toks, i: read idx, code: read 62)
+        if opener {
+            depth = depth + 1
+        } else if closer {
+            if depth > 0 {
+                depth = depth - 1
+            }
+        }
+        if tk_kind(toks: read toks, i: read idx) == 8 {
+            return idx
+        }
+        idx = idx + 1
+    }
+    return n
+}
+
+// ---------------------------------------------------------------------------
+// Name helpers.
+// ---------------------------------------------------------------------------
+
+fn take_ident_name(toks: read List<Tok>, i: read Int) -> Int {
+    if is_ident_tok(toks: read toks, i: read i) {
+        return i + 1
+    }
+    return -1
+}
+
+fn take_function_name(toks: read List<Tok>, i: read Int) -> Int {
+    let mut j = take_ident_name(toks: read toks, i: read i)
+    if j < 0 {
+        return -1
+    }
+    let mut going = true
+    while going {
+        if at_symbol(toks: read toks, i: read j, code: read 46) {
+            let j2 = take_ident_name(toks: read toks, i: read (j + 1))
+            if j2 < 0 {
+                return -1
+            }
+            j = j2
+        } else {
+            going = false
+        }
+    }
+    return j
+}
+
+fn parse_generic_params(toks: read List<Tok>, i: read Int) -> Int {
+    if at_symbol(toks: read toks, i: read i, code: read 60) == false {
+        return i
+    }
+    let close = find_matching(toks: read toks, open: read i, openSym: read 60, closeSym: read 62)
+    if close < 0 {
+        return i
+    }
+    return close + 1
+}
+
+fn parse_derives(toks: read List<Tok>, i: read Int) -> Int {
+    if at_ident(toks: read toks, i: read i, wid: read 21) == false {
+        return i
+    }
+    let j = i + 1
+    if at_symbol(toks: read toks, i: read j, code: read 40) == false {
+        return j
+    }
+    let close = find_matching(toks: read toks, open: read j, openSym: read 40, closeSym: read 41)
+    if close < 0 {
+        return j
+    }
+    return close + 1
+}
+
+// ---------------------------------------------------------------------------
+// Declaration parsers (from selfhost/parser.rss). Return new index, or -1.
+// ---------------------------------------------------------------------------
+
+fn parse_type_decl(toks: read List<Tok>, i: read Int) -> Int {
+    let startLine = tk_line(toks: read toks, i: read i)
+    let mut j = i
+    if at_ident(toks: read toks, i: read j, wid: read 13) {
+        j = j + 1
+    }
+    if at_ident(toks: read toks, i: read j, wid: read 5) {
+        j = j + 1
+    }
+    let isKind = at_ident(toks: read toks, i: read j, wid: read 3) || at_ident(toks: read toks, i: read j, wid: read 2) || at_ident(toks: read toks, i: read j, wid: read 4)
+    if isKind == false {
+        return -1
+    }
+    j = j + 1
+    j = take_function_name(toks: read toks, i: read j)
+    if j < 0 {
+        return -1
+    }
+    j = parse_generic_params(toks: read toks, i: read j)
+    j = parse_derives(toks: read toks, i: read j)
+    if at_symbol(toks: read toks, i: read j, code: read 123) {
+        let close = find_matching(toks: read toks, open: read j, openSym: read 123, closeSym: read 125)
+        if close < 0 {
+            return -1
+        }
+        return close + 1
+    }
+    let n = List.len(list: read toks)
+    if j < n && tk_line(toks: read toks, i: read j) == startLine {
+        return declaration_line_end(toks: read toks, start: read j)
+    }
+    return j
+}
+
+fn parse_sum_decl(toks: read List<Tok>, i: read Int) -> Int {
+    let mut j = i
+    if at_ident(toks: read toks, i: read j, wid: read 13) {
+        j = j + 1
+    }
+    if at_ident(toks: read toks, i: read j, wid: read 6) == false {
+        return -1
+    }
+    j = j + 1
+    j = take_ident_name(toks: read toks, i: read j)
+    if j < 0 {
+        return -1
+    }
+    j = parse_generic_params(toks: read toks, i: read j)
+    j = parse_derives(toks: read toks, i: read j)
+    if at_symbol(toks: read toks, i: read j, code: read 123) == false {
+        return -1
+    }
+    let close = find_matching(toks: read toks, open: read j, openSym: read 123, closeSym: read 125)
+    if close < 0 {
+        return -1
+    }
+    return close + 1
+}
+
+fn parse_protocol_decl(toks: read List<Tok>, i: read Int) -> Int {
+    let mut j = i + 1
+    j = take_ident_name(toks: read toks, i: read j)
+    if j < 0 {
+        return -1
+    }
+    if at_symbol(toks: read toks, i: read j, code: read 123) == false {
+        return -1
+    }
+    let close = find_matching(toks: read toks, open: read j, openSym: read 123, closeSym: read 125)
+    if close < 0 {
+        return -1
+    }
+    return close + 1
+}
+
+fn parse_impl_decl(toks: read List<Tok>, i: read Int) -> Int {
+    let mut j = i + 1
+    j = take_ident_name(toks: read toks, i: read j)
+    if j < 0 {
+        return -1
+    }
+    if at_ident(toks: read toks, i: read j, wid: read 18) == false {
+        return -1
+    }
+    j = j + 1
+    j = take_function_name(toks: read toks, i: read j)
+    if j < 0 {
+        return -1
+    }
+    if at_symbol(toks: read toks, i: read j, code: read 123) == false {
+        return -1
+    }
+    let close = find_matching(toks: read toks, open: read j, openSym: read 123, closeSym: read 125)
+    if close < 0 {
+        return -1
+    }
+    return close + 1
+}
+
+fn parse_native_module_decl(toks: read List<Tok>, i: read Int) -> Int {
+    let mut j = i + 2
+    j = take_ident_name(toks: read toks, i: read j)
+    if j < 0 {
+        return -1
+    }
+    if at_symbol(toks: read toks, i: read j, code: read 123) == false {
+        return -1
+    }
+    let close = find_matching(toks: read toks, open: read j, openSym: read 123, closeSym: read 125)
+    if close < 0 {
+        return -1
+    }
+    return close + 1
+}
+
+fn parse_type_alias_decl(toks: read List<Tok>, i: read Int) -> Int {
+    let mut j = i
+    if at_ident(toks: read toks, i: read j, wid: read 13) {
+        j = j + 1
+    }
+    if at_ident(toks: read toks, i: read j, wid: read 11) == false {
+        return -1
+    }
+    j = j + 1
+    j = take_ident_name(toks: read toks, i: read j)
+    if j < 0 {
+        return -1
+    }
+    j = parse_generic_params(toks: read toks, i: read j)
+    if at_symbol(toks: read toks, i: read j, code: read 61) == false {
+        return -1
+    }
+    j = j + 1
+    let n = List.len(list: read toks)
+    return next_line_or_block_end(toks: read toks, start: read j, end: read n)
+}
+
+fn parse_const_decl(toks: read List<Tok>, i: read Int) -> Int {
+    let n = List.len(list: read toks)
+    let mut j = i
+    if at_ident(toks: read toks, i: read j, wid: read 13) {
+        j = j + 1
+    }
+    if at_ident(toks: read toks, i: read j, wid: read 12) == false {
+        return -1
+    }
+    j = j + 1
+    j = take_function_name(toks: read toks, i: read j)
+    if j < 0 {
+        return -1
+    }
+    if at_symbol(toks: read toks, i: read j, code: read 58) {
+        j = j + 1
+        let mut eq = j
+        let mut scanning = true
+        while scanning {
+            if eq >= n {
+                scanning = false
+            } else if at_symbol(toks: read toks, i: read eq, code: read 61) {
+                scanning = false
+            } else {
+                eq = eq + 1
+            }
+        }
+        j = eq
+    }
+    if at_symbol(toks: read toks, i: read j, code: read 61) == false {
+        return -1
+    }
+    j = j + 1
+    return next_line_or_block_end(toks: read toks, start: read j, end: read n)
+}
+
+fn parse_function_decl(toks: read List<Tok>, i: read Int) -> Int {
+    let mut j = i
+    let mut attrs = true
+    while attrs {
+        if at_symbol(toks: read toks, i: read j, code: read 35) {
+            j = j + 1
+            let isAttr = at_ident(toks: read toks, i: read j, wid: read 19) || at_ident(toks: read toks, i: read j, wid: read 20)
+            if isAttr == false {
+                return -1
+            }
+            j = j + 1
+            if at_symbol(toks: read toks, i: read j, code: read 40) == false {
+                return -1
+            }
+            j = j + 1
+            if tk_kind(toks: read toks, i: read j) != 3 {
+                return -1
+            }
+            j = j + 1
+            if at_symbol(toks: read toks, i: read j, code: read 41) == false {
+                return -1
+            }
+            j = j + 1
+        } else {
+            attrs = false
+        }
+    }
+    let mut mods = true
+    while mods {
+        let isMod = at_ident(toks: read toks, i: read j, wid: read 13) || at_ident(toks: read toks, i: read j, wid: read 14) || at_ident(toks: read toks, i: read j, wid: read 9)
+        if isMod {
+            j = j + 1
+        } else {
+            mods = false
+        }
+    }
+    if at_ident(toks: read toks, i: read j, wid: read 1) == false {
+        return -1
+    }
+    j = j + 1
+    j = take_function_name(toks: read toks, i: read j)
+    if j < 0 {
+        return -1
+    }
+    j = parse_generic_params(toks: read toks, i: read j)
+    if at_symbol(toks: read toks, i: read j, code: read 40) {
+        let close = find_matching(toks: read toks, open: read j, openSym: read 40, closeSym: read 41)
+        if close < 0 {
+            return -1
+        }
+        j = close + 1
+    }
+    let sigEnd = function_signature_end(toks: read toks, start: read j)
+    if j < sigEnd && at_symbol(toks: read toks, i: read j, code: read 256) {
+        j = j + 1
+        if j < sigEnd && at_ident(toks: read toks, i: read j, wid: read 23) {
+            j = j + 1
+        }
+        let mut rt = true
+        while rt {
+            let stop = at_ident(toks: read toks, i: read j, wid: read 22) || at_symbol(toks: read toks, i: read j, code: read 123) || at_symbol(toks: read toks, i: read j, code: read 61)
+            if j < sigEnd && stop == false {
+                j = j + 1
+            } else {
+                rt = false
+            }
+        }
+    }
+    if j < sigEnd && at_ident(toks: read toks, i: read j, wid: read 22) && at_symbol(toks: read toks, i: read (j + 1), code: read 40) {
+        let open = j + 1
+        let close = find_matching(toks: read toks, open: read open, openSym: read 40, closeSym: read 41)
+        if close < 0 {
+            return -1
+        }
+        j = close + 1
+    }
+    if j + 1 < sigEnd && at_symbol(toks: read toks, i: read j, code: read 61) && at_ident(toks: read toks, i: read (j + 1), wid: read 24) {
+        j = j + 2
+    }
+    if at_symbol(toks: read toks, i: read j, code: read 123) {
+        let close = find_matching(toks: read toks, open: read j, openSym: read 123, closeSym: read 125)
+        if close < 0 {
+            return -1
+        }
+        return close + 1
+    }
+    return sigEnd
+}
+
+fn parse_dotted_path(toks: read List<Tok>, i: read Int) -> Int {
+    let mut j = take_ident_name(toks: read toks, i: read i)
+    if j < 0 {
+        return -1
+    }
+    let mut going = true
+    while going {
+        if at_symbol(toks: read toks, i: read j, code: read 46) {
+            let j2 = take_ident_name(toks: read toks, i: read (j + 1))
+            if j2 < 0 {
+                going = false
+            } else {
+                j = j2
+            }
+        } else {
+            going = false
+        }
+    }
+    return j
+}
+
+fn parse_module_decl(toks: read List<Tok>, i: read Int) -> Int {
+    return parse_dotted_path(toks: read toks, i: read (i + 1))
+}
+
+fn parse_use_decl(toks: read List<Tok>, i: read Int) -> Int {
+    let mut j = parse_dotted_path(toks: read toks, i: read (i + 1))
+    if j < 0 {
+        return -1
+    }
+    if at_symbol(toks: read toks, i: read j, code: read 42) {
+        j = j + 1
+    } else if at_ident(toks: read toks, i: read j, wid: read 25) {
+        j = j + 1
+        let j2 = take_ident_name(toks: read toks, i: read j)
+        if j2 >= 0 {
+            j = j2
+        }
+    }
+    return j
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch predicates (from selfhost/parser.rss).
+// ---------------------------------------------------------------------------
+
+fn starts_type_decl(toks: read List<Tok>, i: read Int, isPub: read Bool) -> Bool {
+    if at_ident(toks: read toks, i: read i, wid: read 3) || at_ident(toks: read toks, i: read i, wid: read 2) || at_ident(toks: read toks, i: read i, wid: read 4) || at_ident(toks: read toks, i: read i, wid: read 5) {
+        return true
+    }
+    if isPub {
+        return at_ident(toks: read toks, i: read (i + 1), wid: read 3) || at_ident(toks: read toks, i: read (i + 1), wid: read 2) || at_ident(toks: read toks, i: read (i + 1), wid: read 4) || at_ident(toks: read toks, i: read (i + 1), wid: read 5)
+    }
+    return false
+}
+
+fn starts_fn_like(toks: read List<Tok>, i: read Int, isPub: read Bool) -> Bool {
+    return isPub || at_ident(toks: read toks, i: read i, wid: read 14) || at_ident(toks: read toks, i: read i, wid: read 9) || at_ident(toks: read toks, i: read i, wid: read 1) || at_symbol(toks: read toks, i: read i, code: read 35)
+}
+
+// ---------------------------------------------------------------------------
+// Name / field extraction for the duplicate-declaration checker.
+// ---------------------------------------------------------------------------
+
+// Full dotted declaration name text starting at the name's first token index.
+fn dotted_name_text(toks: read List<Tok>, i: read Int) -> String {
+    if is_ident_tok(toks: read toks, i: read i) == false {
+        return ""
+    }
+    let mut out = tk_text(toks: read toks, i: read i)
+    let mut j = i + 1
+    let mut going = true
+    while going {
+        let dot = at_symbol(toks: read toks, i: read j, code: read 46)
+        let nextIdent = is_ident_tok(toks: read toks, i: read (j + 1))
+        if dot && nextIdent {
+            out = String.concat(left: read out, right: read ".")
+            out = String.concat(left: read out, right: read tk_text(toks: read toks, i: read (j + 1)))
+            j = j + 2
+        } else {
+            going = false
+        }
+    }
+    return out
+}
+
+// Index of the name token for a type decl (after optional pub, opaque, kind kw).
+fn type_name_start(toks: read List<Tok>, i: read Int) -> Int {
+    let mut j = i
+    if at_ident(toks: read toks, i: read j, wid: read 13) {
+        j = j + 1
+    }
+    if at_ident(toks: read toks, i: read j, wid: read 5) {
+        j = j + 1
+    }
+    j = j + 1
+    return j
+}
+
+// Index of the name token for a sum decl (after optional pub, sum kw).
+fn sum_name_start(toks: read List<Tok>, i: read Int) -> Int {
+    let mut j = i
+    if at_ident(toks: read toks, i: read j, wid: read 13) {
+        j = j + 1
+    }
+    j = j + 1
+    return j
+}
+
+// Index of the name token for a fn decl (after attrs, modifiers, fn kw).
+fn fn_name_start(toks: read List<Tok>, i: read Int) -> Int {
+    let mut j = i
+    let mut attrs = true
+    while attrs {
+        if at_symbol(toks: read toks, i: read j, code: read 35) {
+            j = j + 5
+        } else {
+            attrs = false
+        }
+    }
+    let mut mods = true
+    while mods {
+        let isMod = at_ident(toks: read toks, i: read j, wid: read 13) || at_ident(toks: read toks, i: read j, wid: read 14) || at_ident(toks: read toks, i: read j, wid: read 9)
+        if isMod {
+            j = j + 1
+        } else {
+            mods = false
+        }
+    }
+    j = j + 1
+    return j
+}
+
+// First `{` in the token range [i, end), or -1 if none.
+fn find_body_open(toks: read List<Tok>, i: read Int, end: read Int) -> Int {
+    let mut k = i
+    while k < end {
+        if at_symbol(toks: read toks, i: read k, code: read 123) {
+            return k
+        }
+        k = k + 1
+    }
+    return -1
+}
+
+// True if the type body (open brace `ob`, matching close `close`) declares any
+// field name twice. A field name is the token immediately before a `:` that sits
+// at the top level of the body (not inside (), [], <>, or a nested {}).
+fn body_has_duplicate_field(toks: read List<Tok>, ob: read Int, close: read Int) -> Bool {
+    let mut seen = Set<String>.new()
+    let mut dup = false
+    let mut paren = 0
+    let mut br = 0
+    let mut ang = 0
+    let mut brace = 0
+    let mut k = ob + 1
+    while k < close {
+        let isColon = at_symbol(toks: read toks, i: read k, code: read 58)
+        let atTop = paren == 0 && br == 0 && ang == 0 && brace == 0
+        if isColon && atTop && is_ident_tok(toks: read toks, i: read (k - 1)) {
+            let name = tk_text(toks: read toks, i: read (k - 1))
+            if Set.contains<String>(set: read seen, value: read name) {
+                dup = true
+            }
+            Set.insert<String>(set: mut seen, value: read name)
+        }
+        if at_symbol(toks: read toks, i: read k, code: read 40) {
+            paren = paren + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read 41) {
+            if paren > 0 {
+                paren = paren - 1
+            }
+        } else if at_symbol(toks: read toks, i: read k, code: read 91) {
+            br = br + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read 93) {
+            if br > 0 {
+                br = br - 1
+            }
+        } else if at_symbol(toks: read toks, i: read k, code: read 60) {
+            ang = ang + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read 62) {
+            if ang > 0 {
+                ang = ang - 1
+            }
+        } else if at_symbol(toks: read toks, i: read k, code: read 123) {
+            brace = brace + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read 125) {
+            if brace > 0 {
+                brace = brace - 1
+            }
+        }
+        k = k + 1
+    }
+    return dup
+}
+
+// ---------------------------------------------------------------------------
+// Driver.
+// ---------------------------------------------------------------------------
+
 fn main() -> Unit {
     let source = Args.get_or_default(index: 0, default: read "")
-    let n = String.len(value: read source)
-    if n < 0 {
+    let toks = tokenize(source: read source)
+    let ntok = List.len(list: read toks)
+    let mut callable = Set<String>.new()
+    let mut types = Set<String>.new()
+    let mut found = false
+    let mut i = 0
+    let mut running = true
+    while running {
+        if i >= ntok {
+            running = false
+        } else if tk_kind(toks: read toks, i: read i) == 8 {
+            running = false
+        } else {
+            let isPub = at_ident(toks: read toks, i: read i, wid: read 13)
+            let isFeatures = at_ident(toks: read toks, i: read i, wid: read 17) && at_symbol(toks: read toks, i: read (i + 1), code: read 58)
+            let isProfile = at_ident(toks: read toks, i: read i, wid: read 16) && at_symbol(toks: read toks, i: read (i + 1), code: read 58)
+            let isSum = at_ident(toks: read toks, i: read i, wid: read 6) || (isPub && at_ident(toks: read toks, i: read (i + 1), wid: read 6))
+            let isNativeMod = at_ident(toks: read toks, i: read i, wid: read 9) && at_ident(toks: read toks, i: read (i + 1), wid: read 10)
+            let isTypeAlias = at_ident(toks: read toks, i: read i, wid: read 11) || (isPub && at_ident(toks: read toks, i: read (i + 1), wid: read 11))
+            let isConst = at_ident(toks: read toks, i: read i, wid: read 12) || (isPub && at_ident(toks: read toks, i: read (i + 1), wid: read 12))
+            if isFeatures {
+                i = declaration_line_end(toks: read toks, start: read i)
+            } else if isProfile {
+                i = declaration_line_end(toks: read toks, start: read i)
+            } else if starts_type_decl(toks: read toks, i: read i, isPub: read isPub) {
+                let r = parse_type_decl(toks: read toks, i: read i)
+                if r < 0 {
+                    running = false
+                } else {
+                    let ns = type_name_start(toks: read toks, i: read i)
+                    let name = dotted_name_text(toks: read toks, i: read ns)
+                    let inTypes = Set.contains<String>(set: read types, value: read name)
+                    let inCallable = Set.contains<String>(set: read callable, value: read name)
+                    if inTypes || inCallable {
+                        found = true
+                    }
+                    Set.insert<String>(set: mut types, value: read name)
+                    Set.insert<String>(set: mut callable, value: read name)
+                    let ob = find_body_open(toks: read toks, i: read i, end: read r)
+                    if ob >= 0 {
+                        if body_has_duplicate_field(toks: read toks, ob: read ob, close: read (r - 1)) {
+                            found = true
+                        }
+                    }
+                    i = r
+                }
+            } else if isSum {
+                let r = parse_sum_decl(toks: read toks, i: read i)
+                if r < 0 {
+                    running = false
+                } else {
+                    let ns = sum_name_start(toks: read toks, i: read i)
+                    let name = dotted_name_text(toks: read toks, i: read ns)
+                    if Set.contains<String>(set: read types, value: read name) {
+                        found = true
+                    }
+                    Set.insert<String>(set: mut types, value: read name)
+                    i = r
+                }
+            } else if at_ident(toks: read toks, i: read i, wid: read 7) {
+                let r = parse_protocol_decl(toks: read toks, i: read i)
+                if r < 0 {
+                    running = false
+                } else {
+                    i = r
+                }
+            } else if at_ident(toks: read toks, i: read i, wid: read 8) {
+                let r = parse_impl_decl(toks: read toks, i: read i)
+                if r < 0 {
+                    running = false
+                } else {
+                    i = r
+                }
+            } else if isNativeMod {
+                let r = parse_native_module_decl(toks: read toks, i: read i)
+                if r < 0 {
+                    running = false
+                } else {
+                    i = r
+                }
+            } else if isTypeAlias {
+                let r = parse_type_alias_decl(toks: read toks, i: read i)
+                if r < 0 {
+                    running = false
+                } else {
+                    i = r
+                }
+            } else if isConst {
+                let r = parse_const_decl(toks: read toks, i: read i)
+                if r < 0 {
+                    running = false
+                } else {
+                    i = r
+                }
+            } else if at_ident(toks: read toks, i: read i, wid: read 10) {
+                let r = parse_module_decl(toks: read toks, i: read i)
+                if r < 0 {
+                    i = i + 1
+                } else {
+                    i = r
+                }
+            } else if at_ident(toks: read toks, i: read i, wid: read 15) {
+                let r = parse_use_decl(toks: read toks, i: read i)
+                if r < 0 {
+                    i = i + 1
+                } else {
+                    i = r
+                }
+            } else if starts_fn_like(toks: read toks, i: read i, isPub: read isPub) {
+                let r = parse_function_decl(toks: read toks, i: read i)
+                if r < 0 {
+                    running = false
+                } else {
+                    let ns = fn_name_start(toks: read toks, i: read i)
+                    let name = dotted_name_text(toks: read toks, i: read ns)
+                    if Set.contains<String>(set: read callable, value: read name) {
+                        found = true
+                    }
+                    Set.insert<String>(set: mut callable, value: read name)
+                    i = r
+                }
+            } else {
+                running = false
+            }
+        }
+    }
+    if found {
         Log.write(message: read "RS0005")
     } else {
         Log.write(message: read "CLEAN")

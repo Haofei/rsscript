@@ -574,3 +574,48 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
 - **Tests / bench:** `crate::selfhost_parity::lexer_perf_corpus`
   (`--release -- --ignored`).
 - **Status:** open (VM/stdlib lever identified; feeds perf roadmap).
+
+### SH-023 — self-hosted checker reaches RS0005 parity at declaration level; the merged callable namespace is the load-bearing rule
+
+- **Tool:** self-hosted checker (`selfhost/check.rss`) run on the reg-VM vs
+  `crate::analyze_source` filtered to error-severity `RS0005`
+  (DUPLICATE_DECLARATION), over the whole 546-file corpus.
+- **Symptom (positive):** the checker reproduces RS0005 with **546/546** parity
+  using ONLY top-level declaration structure — no statement/expression/pattern
+  body parsing (confirms SH-021: RS0005 is decidable from declaration shape). It
+  reuses the proven `selfhost/parser.rss` recognizer verbatim; the sole addition
+  is carrying identifier TEXT on each token so names can be compared (the parser
+  only kept a keyword/word id, which is 0 for all user identifiers).
+- **Namespace grouping replicated (the interesting part — truth per
+  `crate::hir::lower::collect_item_signatures`):** duplicates are detected across
+  exactly three groups —
+  1. **callable namespace = fn names + type CONSTRUCTOR names.** Every
+     `struct`/`resource`/`class`/`opaque` type registers BOTH a type-namespace
+     entry AND a constructor entry into the SAME map that free functions use, so
+     `fn Foo` collides with `struct Foo` (not "separate namespaces"). In the
+     corpus this only matters via `fn`-vs-`fn` (fixture `duplicate-declarations`),
+     but the faithful rule is the merge.
+  2. **type namespace = type names + sum names.** Sums register a type entry only
+     (no constructor, so sums never collide with functions), and sum variant
+     fields are NOT field-checked.
+  3. **per-type field names** for `struct`/`resource`/`class`/`opaque` only
+     (fixture `duplicate-fields`). Implemented as: the token immediately before
+     each `:` that sits at body-top-level (paren/bracket/angle/brace depth 0),
+     which cleanly skips `drop { ... }` bodies, fn-typed field params, and
+     generic type args.
+- **Backend:** vm (checker is intrinsic/collection-bound like the lexer, cf.
+  SH-022; not native-eligible).
+- **Root cause / gaps:** none new. All prior constraints held without surprise —
+  no char literals (SH-016), single-line boolean chains (SH-017), positionally
+  threaded cursors returned by value (SH-018). `Set<String>` (`Set<String>.new()`,
+  `Set.contains<String>`, `Set.insert<String>`) worked as the duplicate detector;
+  `features: local` was NOT needed (no `StringBuilder`/`local` bindings). The
+  scanner conservatively STOPS on the first malformed/unknown top-level item
+  (mirroring the recognizer), which can only under-report on syntactically broken
+  files — safe, since the analyzer emits RS0005 on exactly the 2 well-formed
+  fixtures and the other 544 files stay CLEAN (zero false positives).
+- **Classification:** docs (records the analyzer's duplicate-symbol namespace
+  rule and that RS0005 is a declaration-only property).
+- **Tests:** `crate::selfhost_parity::checker_parity_tiny_sample` and
+  `crate::selfhost_parity::checker_parity_corpus` (`--ignored`).
+- **Status:** done.
