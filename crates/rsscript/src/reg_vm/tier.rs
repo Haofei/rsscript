@@ -253,7 +253,9 @@ fn jit_function_scalar_leaf_callable(jit_fn: &vm_jit::JitFunction) -> bool {
                 | vm_jit::JitInstr::ListGetIntDirect { .. }
                 | vm_jit::JitInstr::ListSetIntDirect { .. }
                 | vm_jit::JitInstr::ListGetFloatDirect { .. }
+                | vm_jit::JitInstr::ListSetFloatDirect { .. }
                 | vm_jit::JitInstr::ListLenDirect { .. }
+                | vm_jit::JitInstr::ListIsEmptyDirect { .. }
         ) && !matches!(
             instr,
             vm_jit::JitInstr::HostCall { helper, .. }

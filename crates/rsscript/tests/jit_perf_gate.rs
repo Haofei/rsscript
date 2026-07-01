@@ -170,7 +170,11 @@ fn jit_perf_gate_against_baseline() {
             cost_mode_enforced && COST_MODEL_DECLINED_CASES.contains(&case.case.as_str());
         let noise_exempt =
             TIMING_NOISE_EXEMPT_CASES.contains(&case.case.as_str()) && !declined_here;
-        let timing_gated = timing_meaningful && !noise_exempt;
+        // A telemetry-only case is NEVER wall-time gated (only its JIT engagement /
+        // telemetry is checked), even when a baseline happens to exist — matching the
+        // name and the real-workload intent. Timing applies only to non-telemetry,
+        // non-noise-exempt cases in an optimized build.
+        let timing_gated = timing_meaningful && !telemetry_only && !noise_exempt;
         let mut attempts = 1;
         for _ in 0..timing_retries {
             if !timing_gated || delta_pct <= threshold_pct {
