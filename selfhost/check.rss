@@ -1,0 +1,24 @@
+// Self-hosted rss checker — Phase 3 (semantic diagnostic parity).
+//
+// Reads rss source as argv[0] and prints the analyzer diagnostic codes it finds,
+// one per line, or `CLEAN` if none. Oracle: crate::analyze_source filtered to the
+// target codes (see selfhost_parity.rs). Target: RS0005 (DUPLICATE_DECLARATION —
+// duplicate top-level item names + duplicate struct/sum fields), decidable from
+// declaration structure alone (no body parsing; see ledger SH-021).
+//
+// This is the Phase-3 STUB (reports CLEAN) — it proves the harness loop and the
+// reject-set baseline. The real duplicate-declaration checker replaces it.
+//
+// rss constraints (SH-016/017/018): no char literals, single-line expressions,
+// cursors threaded positionally.
+
+fn main() -> Unit {
+    let source = Args.get_or_default(index: 0, default: read "")
+    let n = String.len(value: read source)
+    if n < 0 {
+        Log.write(message: read "RS0005")
+    } else {
+        Log.write(message: read "CLEAN")
+    }
+    return Unit
+}

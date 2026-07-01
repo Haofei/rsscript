@@ -12,7 +12,7 @@
 use std::path::PathBuf;
 
 use crate::lexer::{TokenKind, lex};
-use crate::{RegVmExecutable, reg_vm_compile_source};
+use crate::{RegVmExecutable, Severity, analyze_source, reg_vm_compile_source};
 
 /// One token in the canonical dump. Positions are `None` when the producer
 /// emitted placeholders (the rss lexer does so until spans are implemented).
@@ -447,6 +447,124 @@ fn parser_parity_corpus() {
     assert!(
         run_failures.is_empty() && mismatches.is_empty(),
         "parser parity failed: {} run-failures, {} mismatches (of {total})",
+        run_failures.len(),
+        mismatches.len()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3 — checker parity (semantic diagnostics).
+//
+// The rss checker (`selfhost/check.rss`) reproduces a chosen subset of analyzer
+// diagnostics and prints the codes it finds (one per line, or `CLEAN`). Oracle:
+// the real analyzer `crate::analyze_source`, filtered to the same target codes.
+// We start with RS0005 (DUPLICATE_DECLARATION — duplicate top-level item names
+// and duplicate struct/sum fields), decidable from declaration structure alone
+// (no expression/statement parsing needed; see SH-021).
+// ---------------------------------------------------------------------------
+
+/// Diagnostic codes the rss checker is expected to reproduce.
+const CHECKER_TARGET_CODES: &[&str] = &["RS0005"];
+
+fn is_target_code(code: &str) -> bool {
+    CHECKER_TARGET_CODES.contains(&code)
+}
+
+/// Oracle: the set of target diagnostic codes the real analyzer reports.
+fn checker_oracle_codes(file: &str, source: &str) -> Vec<String> {
+    let mut codes: Vec<String> = analyze_source(file, source)
+        .into_iter()
+        .filter(|d| d.severity == Severity::Error && is_target_code(&d.code))
+        .map(|d| d.code)
+        .collect();
+    codes.sort();
+    codes.dedup();
+    codes
+}
+
+fn compile_checker() -> Result<RegVmExecutable, String> {
+    let path = selfhost_dir().join("check.rss");
+    let src = std::fs::read_to_string(&path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    reg_vm_compile_source("selfhost/check.rss", &src)
+        .map_err(|e| format!("rss checker failed to compile: {e:?}"))
+}
+
+/// Run the rss checker; parse the target codes it reports (`CLEAN` => none).
+fn run_checker(exe: &RegVmExecutable, source: &str) -> Result<Vec<String>, String> {
+    let output = exe
+        .eval_main_with_args([source.to_string()])
+        .map_err(|e| format!("rss checker failed to run: {e:?}"))?;
+    let mut codes: Vec<String> = output
+        .stdout
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty() && *l != "CLEAN" && is_target_code(l))
+        .map(|l| l.to_string())
+        .collect();
+    codes.sort();
+    codes.dedup();
+    Ok(codes)
+}
+
+/// Phase-3 proof: the rss checker agrees with the analyzer on a tiny sample
+/// (no duplicates → both report no target codes).
+#[test]
+fn checker_parity_tiny_sample() {
+    let sample_path = selfhost_dir().join("samples/tiny.rss");
+    let source = std::fs::read_to_string(&sample_path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", sample_path.display()));
+    let oracle = checker_oracle_codes("samples/tiny.rss", &source);
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker(&exe, &source).expect("rss checker should run");
+    assert_eq!(oracle, actual, "checker parity diverged on tiny sample");
+}
+
+/// Phase-3 gate (ignored by default): the rss checker's target-code diagnostics
+/// match the analyzer over the whole `.rss` corpus.
+#[test]
+#[ignore]
+fn checker_parity_corpus() {
+    let root = workspace_root();
+    let files = collect_rss_files(&root);
+    let exe = compile_checker().expect("rss checker should compile");
+    let mut run_failures: Vec<String> = Vec::new();
+    let mut mismatches: Vec<String> = Vec::new();
+    let mut ok = 0usize;
+    for file in &files {
+        let rel = file.strip_prefix(&root).unwrap_or(file).display().to_string();
+        let Ok(source) = std::fs::read_to_string(file) else {
+            run_failures.push(format!("{rel}: unreadable"));
+            continue;
+        };
+        let oracle = checker_oracle_codes(&rel, &source);
+        match run_checker(&exe, &source) {
+            Err(e) => run_failures.push(format!("{rel}: {e}")),
+            Ok(actual) => {
+                if actual == oracle {
+                    ok += 1;
+                } else {
+                    mismatches.push(format!("{rel}: oracle={oracle:?} rss={actual:?}"));
+                }
+            }
+        }
+    }
+    let total = files.len();
+    eprintln!(
+        "\n=== checker_parity_corpus (codes {CHECKER_TARGET_CODES:?}) ===\n  files: {total}\n  \
+         ok: {ok}\n  run-failures: {}\n  code-mismatches: {}\n",
+        run_failures.len(),
+        mismatches.len()
+    );
+    for line in run_failures.iter().take(20) {
+        eprintln!("[run-fail] {line}");
+    }
+    for line in mismatches.iter().take(20) {
+        eprintln!("[mismatch] {line}");
+    }
+    assert!(
+        run_failures.is_empty() && mismatches.is_empty(),
+        "checker parity failed: {} run-failures, {} mismatches (of {total})",
         run_failures.len(),
         mismatches.len()
     );
