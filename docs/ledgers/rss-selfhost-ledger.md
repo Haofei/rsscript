@@ -510,3 +510,29 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   recursive-descent pass in rss is visible alongside SH-018.
 - **Tests:** `crate::selfhost_parity::parser_parity_corpus` (recognition, 545/545).
 - **Status:** decided (worked around).
+
+### SH-021 — `parse_source_raw` defers body validation: recognition parity under-tests the grammar
+
+- **Tool:** self-hosted parser (`selfhost/parser.rss`), Phase 2 oracle.
+- **Symptom:** the recognition oracle (`parse_source_raw`) rejects a file only via
+  four span vectors (`unknown_top_level_spans`, `malformed_declaration_spans`,
+  `unknown_features`, `duplicate_features`). Function/type **bodies are never
+  validated at parse time** — the parser accepts arbitrary token soup inside a
+  well-formed `fn … { … }` shell. Of 545 corpus files only **15** are
+  parse-rejected (all `fixtures/fail/*` + `hostile-malformed/*`); the other 530
+  accept, including every *semantically* broken fail-fixture. So a self-hosted
+  "parser" reaches 545/545 recognition parity with only top-level dispatch +
+  balanced-bracket matching — **without an expression/statement/pattern parser**.
+- **Backend:** n/a (methodology / reference-parser design).
+- **Root cause:** the rss frontend is parse-then-analyze by design — the parser is
+  intentionally lenient and error-recovering, and the deep grammar (expression
+  forms, effects, match-scrutinee rules, …) is enforced in the **analyzer**, not
+  the parser. `parse_source` adds only desugaring, not validation.
+- **Classification:** docs / methodology (not an rss defect).
+- **Decision:** recognition parity is the right, tractable Phase-2 oracle, but it
+  is a SHALLOW stress test — the real grammar depth lives behind the analyzer, so
+  the deep-parsing stress belongs to Phase 3: a checker reproducing a specific
+  analyzer diagnostic must actually parse function bodies to decide it. Recorded so
+  the writeup does not overclaim — Phase 2 delivered a self-hosted *recognizer*.
+- **Tests:** `crate::selfhost_parity::parser_parity_corpus`.
+- **Status:** decided.
