@@ -537,7 +537,7 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
 - **Tests:** `crate::selfhost_parity::parser_parity_corpus`.
 - **Status:** decided.
 
-### SH-022 — self-hosted lexer is ~5000× slower on the VM; cost is per-char intrinsic/collection dispatch, NOT string building
+### SH-022 — self-hosted lexer is ~5100× slower on the VM; cost is per-char intrinsic/collection dispatch, NOT string building
 
 - **Tool:** self-hosted lexer (`selfhost/lexer.rss`) run on the reg-VM vs native
   `crate::lexer::lex`, over the whole 545-file corpus (712 KB).
@@ -565,15 +565,22 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   forces per-char boxed access).
 - **Decision:** the real lever is cheaper per-char access, NOT string building:
   e.g. a native string byte/char cursor intrinsic (iterate without materializing a
-  boxed `List<Char>`), and lower per-intrinsic dispatch overhead. Cross-ref SH-006:
-  AOT is ~144× faster than the VM on such code, so an AOT-compiled self-hosted lexer
-  would land ~0.5 s (~30× native Rust) — the residual being the intrinsic *count*
-  per char, which the char-cursor intrinsic would also cut. Feeds
+  boxed `List<Char>`), and lower per-intrinsic dispatch overhead. Feeds
   [[perf-refactor-roadmap]] / [[jit-collection-perf-measurement]] with real-workload
   evidence (the trigger that work was waiting for).
+- **Measured vs. extrapolated (be honest):** only two things here are *measured* —
+  (a) the VM-vs-native table above, and (b) the `String.concat`→`StringBuilder`
+  control. The VM-vs-**AOT** split is **NOT measured**: SH-006 measured AOT ~144×
+  faster than the VM on comparable tool code, which *would* put an AOT-compiled
+  self-hosted lexer near ~0.5 s (~30× native Rust), but this lexer has not actually
+  been run under AOT. That AOT number is the piece that would separate *fixable VM
+  per-op overhead* from the *inherent per-char intrinsic count* (which AOT also
+  pays) — worth measuring as a follow-up (needs a file-reading lexer variant so a
+  700 KB input isn't passed via `argv`).
 - **Tests / bench:** `crate::selfhost_parity::lexer_perf_corpus`
   (`--release -- --ignored`).
-- **Status:** open (VM/stdlib lever identified; feeds perf roadmap).
+- **Status:** open (VM/stdlib lever identified; feeds perf roadmap; AOT split
+  still to be measured).
 
 ### SH-023 — self-hosted checker reaches RS0005 parity at declaration level; the merged callable namespace is the load-bearing rule
 
@@ -619,3 +626,36 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
 - **Tests:** `crate::selfhost_parity::checker_parity_tiny_sample` and
   `crate::selfhost_parity::checker_parity_corpus` (`--ignored`).
 - **Status:** done.
+
+### SH-024 — multi-field variant destructuring is not positional; only struct-style field patterns bind
+
+- **Tool:** pre-code feasibility spike for the self-hosting effort (`rss run --vm`).
+- **Symptom:** matching a sum variant with ≥2 payload fields positionally —
+  `Add(l, r) => …` — fails: each binding is reported `RS0026 "unknown value
+  binding"`. The struct-style form `Add { left, right } => …` works, but it also
+  requires an explicit scrutinee effect (`match read e { … }`, else `RS0202`).
+  Single-field positional binding (`Circle(r) => …`) *does* work, so the
+  two-field failure is an inconsistency, not a blanket "no positional patterns".
+- **Minimal RSS:**
+  ```
+  sum Pair { Both(a: Int, b: Int)  Nothing }
+  // fails:  match p        { Both(a, b)      => ... }   // RS0026 on a, b
+  // fails:  match p        { Both { a, b }   => ... }   // RS0202 missing effect
+  // works:  match read p   { Both { a, b }   => ... }
+  ```
+- **Backend:** all (frontend / parser + binding resolution).
+- **Root cause:** positional binding is only wired for single-field variants;
+  multi-field variants must be destructured with named `{ field, … }` patterns,
+  which additionally project fields and so require a `read`/`mut`/`take` scrutinee
+  effect. The two rules compound into confusing errors for the natural
+  `Variant(a, b)` shape.
+- **Classification:** language (parser / pattern binding) + docs.
+- **Decision:** worked around throughout the self-hosted code by using
+  `match read scrutinee { Variant { field, … } => … }`. Recorded here for
+  completeness — this was found in the initial spike and used to choose the AST
+  representation, but had not been written to the ledger. Language-side: allow
+  positional binding for multi-field variants (or emit a targeted diagnostic
+  pointing at the missing feature rather than `RS0026`).
+- **Tests:** covered indirectly by every `match read … { V { … } }` in
+  `selfhost/parser.rss` / `selfhost/check.rss`.
+- **Status:** open (worked around; language decision pending).
