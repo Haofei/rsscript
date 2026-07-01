@@ -84,9 +84,13 @@ use value_ops::*;
 /// Run `f` with the native-tier profitability cost model DISABLED on the current
 /// thread, regardless of `RSS_JIT_COST_MODEL` (whose default is now `enforce`).
 /// Race-free across parallel tests because the override is thread-local and native
-/// compilation runs synchronously on the calling thread. Intended for native-tier
-/// MECHANISM tests that must observe a region compile (e.g. a polymorphic closure
-/// inline cache) which the cost model would otherwise decline as unprofitable.
+/// compilation runs synchronously on the calling thread.
+///
+/// NOT part of the public API — this is internal JIT test machinery, exposed only so
+/// the out-of-crate native-mechanism integration tests can observe a region compile
+/// (e.g. a polymorphic closure inline cache) that the cost model would otherwise
+/// decline. Hidden from docs; do not depend on it from user code.
+#[doc(hidden)]
 #[cfg(feature = "native-jit")]
 pub fn with_native_cost_model_disabled<R>(f: impl FnOnce() -> R) -> R {
     let _guard = CostModeGuard::new(CostMode::Off);

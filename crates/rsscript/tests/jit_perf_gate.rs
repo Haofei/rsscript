@@ -33,7 +33,30 @@ struct GateRow {
 }
 
 const DEFAULT_BASELINE: &str = "benchmarks/vm-jit/baseline/baseline-20260626-six-framework.json";
+/// Default wall-time regression threshold: catches only LARGE regressions. Stable
+/// kernels get a tighter per-case threshold below so the gate also catches moderate
+/// ones. `RSS_JIT_PERF_THRESHOLD_PCT` overrides both (global manual tuning).
 const DEFAULT_THRESHOLD_PCT: f64 = 75.0;
+
+/// Per-case wall-time thresholds (percent) for kernels stable enough to hold a
+/// tighter bound than the default 75%. Each is set well above the kernel's measured
+/// run-to-run noise so it never false-fails, but tight enough to catch a moderate
+/// regression. Kernels not listed here use `DEFAULT_THRESHOLD_PCT`.
+const CASE_THRESHOLD_PCT: &[(&str, f64)] = &[
+    ("native_scalar_loop.rss", 30.0), // pure scalar, ~7% observed
+    ("selfhost_mailbox_bench.rss", 25.0), // real workload, ~2% run-to-run (baseline refreshed)
+    ("selfhost_stdlib_reporter.rss", 40.0), // real workload, ~10% run-to-run
+];
+
+fn case_threshold_pct(case: &str, env_override: Option<f64>) -> f64 {
+    env_override.unwrap_or_else(|| {
+        CASE_THRESHOLD_PCT
+            .iter()
+            .find(|(name, _)| *name == case)
+            .map(|(_, pct)| *pct)
+            .unwrap_or(DEFAULT_THRESHOLD_PCT)
+    })
+}
 const DEFAULT_ITERATIONS: usize = 3;
 const DEFAULT_WARMUP: usize = 1;
 
@@ -106,7 +129,7 @@ fn jit_perf_gate_against_baseline() {
     let cases = load_cases(&cases_file);
     let baseline = load_baseline(&baseline_path);
     let selected = selected_cases(&cases);
-    let threshold_pct = env_f64("RSS_JIT_PERF_THRESHOLD_PCT").unwrap_or(DEFAULT_THRESHOLD_PCT);
+    let env_threshold = env_f64("RSS_JIT_PERF_THRESHOLD_PCT");
     let iterations = env_usize("RSS_JIT_PERF_ITERATIONS").unwrap_or(DEFAULT_ITERATIONS);
     let warmup = env_usize("RSS_JIT_PERF_WARMUP").unwrap_or(DEFAULT_WARMUP);
     let timing_retries = env_usize("RSS_JIT_PERF_TIMING_RETRIES").unwrap_or(1);
@@ -139,6 +162,7 @@ fn jit_perf_gate_against_baseline() {
     for case in selected {
         let key = (case.case.clone(), case.size.clone());
         let telemetry_only = TELEMETRY_ONLY_CASES.contains(&case.case.as_str());
+        let threshold_pct = case_threshold_pct(&case.case, env_threshold);
         let mut ref_ms = match baseline
             .get(&key)
             .and_then(|row| mode_center(row, "native"))
