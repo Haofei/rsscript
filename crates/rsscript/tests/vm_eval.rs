@@ -697,6 +697,195 @@ fn main() -> Unit {
     assert_eq!(output.stdout, "alpha:Alpha:1\nbeta:Beta:2\n");
 }
 
+/// Pin the reg-VM behavior of every closure-taking List/Map intrinsic that now
+/// iterates the receiver live (no defensive whole-collection snapshot clone).
+/// Exercises each converted op — including early-return paths (any/find hits)
+/// and a `try_fold` Err path — and asserts the exact emitted output.
+#[test]
+fn eval_reg_vm_closure_intrinsics_iterate_live() {
+    let source = r#"
+features: local
+
+fn is_even(value: Int) -> Bool {
+    let half = value / 2
+    return half * 2 == value
+}
+
+fn main() -> Unit {
+    let numbers: List<Int> = [1, 2, 3, 4, 5]
+
+    Log.write(message: read String.from_bool(value: List.all<Int>(list: read numbers, predicate: |item| {
+        return item > 0
+    })))
+    Log.write(message: read String.from_bool(value: List.any<Int>(list: read numbers, predicate: |item| {
+        return item == 2
+    })))
+    Log.write(message: read String.from_int(value: List.count_where<Int>(list: read numbers, predicate: |item| {
+        return item > 3
+    })))
+
+    match List.find<Int>(list: read numbers, predicate: |item| {
+        return item > 3
+    }) {
+        Some(value) => {
+            Log.write(message: read String.from_int(value: value))
+        }
+        None => {
+            Log.write(message: read "find-none")
+        }
+    }
+
+    let parts = List.partition<Int>(list: read numbers, predicate: |item| {
+        return is_even(value: item)
+    })
+    Log.write(message: read String.from_int(value: List.len<Int>(list: read parts[0])))
+    Log.write(message: read String.from_int(value: List.len<Int>(list: read parts[1])))
+
+    let flattened = List.flat_map<Int, Int>(list: read numbers, mapper: |item| {
+        let values: List<Int> = [item, item + 10]
+        return values
+    })
+    Log.write(message: read String.from_int(value: List.len<Int>(list: read flattened)))
+    Log.write(message: read String.from_int(value: flattened[1]))
+
+    let grouped = List.group_by<Int, String>(list: read numbers, key: |item| {
+        if is_even(value: item) {
+            return String.copy(value: read "even")
+        }
+        return String.copy(value: read "odd")
+    })
+    match Map.get(map: read grouped, key: read "even") {
+        Some(items) => {
+            Log.write(message: read String.from_int(value: List.len(list: read items)))
+        }
+        None => {
+            Log.write(message: read "even-missing")
+        }
+    }
+
+    match List.try_fold<Int, Int, String>(list: read [1, 2], initial: read 0, folder: |state, item| {
+        return Ok(state + item)
+    }) {
+        Ok(value) => {
+            Log.write(message: read String.from_int(value: value))
+        }
+        Err(error) => {
+            Log.write(message: read error)
+        }
+    }
+    match List.try_fold<Int, Int, String>(list: read numbers, initial: read 0, folder: |state, item| {
+        if item > 3 {
+            return Err(String.copy(value: read "too-large"))
+        }
+        return Ok(state + item)
+    }) {
+        Ok(value) => {
+            Log.write(message: read String.from_int(value: value))
+        }
+        Err(error) => {
+            Log.write(message: read error)
+        }
+    }
+
+    let mut left = Map<String, Int>.new()
+    Map.insert<String, Int>(map: mut left, key: read "a", value: read 1)
+    Map.insert<String, Int>(map: mut left, key: read "b", value: read 2)
+
+    let mapped = Map.map_values<String, Int, Int>(map: read left, mapper: |value| {
+        return value + 10
+    })
+    match Map.get<String, Int>(map: read mapped, key: read "a") {
+        Some(value) => {
+            Log.write(message: read String.from_int(value: value))
+        }
+        None => {
+            Log.write(message: read "mapped-missing")
+        }
+    }
+
+    let filtered = Map.filter<String, Int>(map: read mapped, predicate: |key, value| {
+        return key == "b" && value > 10
+    })
+    Log.write(message: read String.from_int(value: Map.len<String, Int>(map: read filtered)))
+
+    let mut single = Map<String, Int>.new()
+    Map.insert<String, Int>(map: mut single, key: read "only", value: read 8)
+    Map.for_each<String, Int>(map: read single, callback: |key, value| {
+        Log.write(message: read key)
+        Log.write(message: read String.from_int(value: value))
+        return Unit
+    })
+
+    let folded = Map.fold<String, Int, Int>(map: read left, initial: read 0, folder: |state, key, value| {
+        return state + value
+    })
+    Log.write(message: read String.from_int(value: folded))
+
+    match Map.try_fold<String, Int, Int, String>(map: read left, initial: read 0, folder: |state, key, value| {
+        if key == "b" {
+            return Err(String.copy(value: read "stop-b"))
+        }
+        return Ok(state + value)
+    }) {
+        Ok(value) => {
+            Log.write(message: read String.from_int(value: value))
+        }
+        Err(error) => {
+            Log.write(message: read error)
+        }
+    }
+
+    let mut right = Map<String, Int>.new()
+    Map.insert<String, Int>(map: mut right, key: read "b", value: read 20)
+    Map.insert<String, Int>(map: mut right, key: read "c", value: read 30)
+    let merged = Map.merge<String, Int>(left: read left, right: read right, resolver: |left_value, right_value| {
+        return left_value + right_value
+    })
+    match Map.get<String, Int>(map: read merged, key: read "b") {
+        Some(value) => {
+            Log.write(message: read String.from_int(value: value))
+        }
+        None => {
+            Log.write(message: read "merge-b-missing")
+        }
+    }
+    match Map.get<String, Int>(map: read merged, key: read "c") {
+        Some(value) => {
+            Log.write(message: read String.from_int(value: value))
+        }
+        None => {
+            Log.write(message: read "merge-c-missing")
+        }
+    }
+    return Unit
+}
+"#;
+
+    let output =
+        eval_source_main("reg-vm-live-closure-intrinsics.rss", source).expect("eval should succeed");
+
+    let expected = "true\n\
+true\n\
+2\n\
+4\n\
+2\n\
+3\n\
+10\n\
+11\n\
+2\n\
+3\n\
+too-large\n\
+11\n\
+1\n\
+only\n\
+8\n\
+3\n\
+stop-b\n\
+22\n\
+30\n";
+    assert_eq!(output.stdout, expected);
+}
+
 #[test]
 fn parity_native_host_bindings_match_lowered_backend() {
     fn host_open(args: Vec<NativeValue>) -> Result<NativeValue, String> {

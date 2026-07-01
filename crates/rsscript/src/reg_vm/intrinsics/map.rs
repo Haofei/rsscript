@@ -22,13 +22,13 @@ impl RegVm {
             RegIntrinsic::MapFilter => {
                 let map = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let predicate = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let entries = map
-                    .borrow()
-                    .iter()
-                    .map(|(key, value)| (key.clone(), value.clone()))
-                    .collect::<Vec<_>>();
+                let keys = map.borrow().keys().cloned().collect::<Vec<_>>();
                 let mut filtered = ValueMap::default();
-                for (key, value) in entries {
+                for key in keys {
+                    let value = match map.borrow().get(&key) {
+                        Some(value) => value.clone(),
+                        None => continue,
+                    };
                     let keep = self.call_closure_two(
                         unit,
                         &predicate,
@@ -46,12 +46,12 @@ impl RegVm {
                 let map = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let mut state = intrinsic_arg(&self.stack, base, args, 1)?.clone();
                 let folder = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 2)?)?;
-                let entries = map
-                    .borrow()
-                    .iter()
-                    .map(|(key, value)| (key.clone(), value.clone()))
-                    .collect::<Vec<_>>();
-                for (key, value) in entries {
+                let keys = map.borrow().keys().cloned().collect::<Vec<_>>();
+                for key in keys {
+                    let value = match map.borrow().get(&key) {
+                        Some(value) => value.clone(),
+                        None => continue,
+                    };
                     state = self.call_closure_three(
                         unit,
                         &folder,
@@ -66,12 +66,12 @@ impl RegVm {
             RegIntrinsic::MapForEach => {
                 let map = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let callback = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let entries = map
-                    .borrow()
-                    .iter()
-                    .map(|(key, value)| (key.clone(), value.clone()))
-                    .collect::<Vec<_>>();
-                for (key, value) in entries {
+                let keys = map.borrow().keys().cloned().collect::<Vec<_>>();
+                for key in keys {
+                    let value = match map.borrow().get(&key) {
+                        Some(value) => value.clone(),
+                        None => continue,
+                    };
                     let _ = self.call_closure_two(
                         unit,
                         &callback,
@@ -110,13 +110,13 @@ impl RegVm {
             RegIntrinsic::MapMapValues => {
                 let map = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let mapper = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let entries = map
-                    .borrow()
-                    .iter()
-                    .map(|(key, value)| (key.clone(), value.clone()))
-                    .collect::<Vec<_>>();
+                let keys = map.borrow().keys().cloned().collect::<Vec<_>>();
                 let mut mapped = ValueMap::default();
-                for (key, value) in entries {
+                for key in keys {
+                    let value = match map.borrow().get(&key) {
+                        Some(value) => value.clone(),
+                        None => continue,
+                    };
                     mapped.insert(key, self.call_closure_one(unit, &mapper, value, next_base)?);
                 }
                 Ok(VmValue::Map(Rc::new(RefCell::new(mapped))))
@@ -126,12 +126,12 @@ impl RegVm {
                 let right = expect_map_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 let resolver = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 2)?)?;
                 let mut merged = left.borrow().clone();
-                let right_entries = right
-                    .borrow()
-                    .iter()
-                    .map(|(key, value)| (key.clone(), value.clone()))
-                    .collect::<Vec<_>>();
-                for (key, right_value) in right_entries {
+                let right_keys = right.borrow().keys().cloned().collect::<Vec<_>>();
+                for key in right_keys {
+                    let right_value = match right.borrow().get(&key) {
+                        Some(value) => value.clone(),
+                        None => continue,
+                    };
                     if let Some(left_value) = merged.get(&key).cloned() {
                         let resolved = self.call_closure_two(
                             unit,
@@ -152,12 +152,12 @@ impl RegVm {
                 let map = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let mut state = intrinsic_arg(&self.stack, base, args, 1)?.clone();
                 let folder = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 2)?)?;
-                let entries = map
-                    .borrow()
-                    .iter()
-                    .map(|(key, value)| (key.clone(), value.clone()))
-                    .collect::<Vec<_>>();
-                for (key, value) in entries {
+                let keys = map.borrow().keys().cloned().collect::<Vec<_>>();
+                for key in keys {
+                    let value = match map.borrow().get(&key) {
+                        Some(value) => value.clone(),
+                        None => continue,
+                    };
                     let folded = self.call_closure_three(
                         unit,
                         &folder,

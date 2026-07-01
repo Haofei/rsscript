@@ -17,8 +17,9 @@ impl RegVm {
             RegIntrinsic::ListAll => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let predicate = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let values = list.borrow().clone();
-                for value in values {
+                let len = list.borrow().len();
+                for index in 0..len {
+                    let value = list_item_at(&list, index, "List.all")?;
                     let keep = self.call_closure_one(unit, &predicate, value, next_base)?;
                     if !expect_bool_ref(&keep)? {
                         return Ok(VmValue::Bool(false));
@@ -29,8 +30,9 @@ impl RegVm {
             RegIntrinsic::ListAny | RegIntrinsic::ListContains => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let predicate = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let values = list.borrow().clone();
-                for value in values {
+                let len = list.borrow().len();
+                for index in 0..len {
+                    let value = list_item_at(&list, index, "List.any")?;
                     let matched = self.call_closure_one(unit, &predicate, value, next_base)?;
                     if expect_bool_ref(&matched)? {
                         return Ok(VmValue::Bool(true));
@@ -48,9 +50,10 @@ impl RegVm {
             RegIntrinsic::ListCountWhere => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let predicate = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let values = list.borrow().clone();
+                let len = list.borrow().len();
                 let mut count = 0;
-                for value in values {
+                for index in 0..len {
+                    let value = list_item_at(&list, index, "List.count_where")?;
                     let matched = self.call_closure_one(unit, &predicate, value, next_base)?;
                     if expect_bool_ref(&matched)? {
                         count += 1;
@@ -65,8 +68,9 @@ impl RegVm {
             RegIntrinsic::ListFind => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let predicate = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let values = list.borrow().clone();
-                for value in values {
+                let len = list.borrow().len();
+                for index in 0..len {
+                    let value = list_item_at(&list, index, "List.find")?;
                     let matched =
                         self.call_closure_one(unit, &predicate, value.clone(), next_base)?;
                     if expect_bool_ref(&matched)? {
@@ -86,9 +90,10 @@ impl RegVm {
             RegIntrinsic::ListFlatMap => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let mapper = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let values = list.borrow().clone();
+                let len = list.borrow().len();
                 let mut flattened = Vec::new();
-                for value in values {
+                for index in 0..len {
+                    let value = list_item_at(&list, index, "List.flat_map")?;
                     let mapped = self.call_closure_one(unit, &mapper, value, next_base)?;
                     let mapped = expect_list_ref(&mapped)?;
                     flattened.extend(mapped.borrow().iter());
@@ -111,9 +116,10 @@ impl RegVm {
             RegIntrinsic::ListGroupBy => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let key_fn = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let values = list.borrow().clone();
+                let len = list.borrow().len();
                 let mut groups: ValueMap = ValueMap::default();
-                for value in values {
+                for index in 0..len {
+                    let value = list_item_at(&list, index, "List.group_by")?;
                     let key_value =
                         self.call_closure_one(unit, &key_fn, value.clone(), next_base)?;
                     let key = map_key_from_value(&key_value)?;
@@ -217,10 +223,11 @@ impl RegVm {
             RegIntrinsic::ListPartition => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let predicate = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let values = list.borrow().clone();
+                let len = list.borrow().len();
                 let mut matched = Vec::new();
                 let mut unmatched = Vec::new();
-                for value in values {
+                for index in 0..len {
+                    let value = list_item_at(&list, index, "List.partition")?;
                     let keep = self.call_closure_one(unit, &predicate, value.clone(), next_base)?;
                     if expect_bool_ref(&keep)? {
                         matched.push(value);
@@ -294,8 +301,9 @@ impl RegVm {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let mut state = intrinsic_arg(&self.stack, base, args, 1)?.clone();
                 let folder = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 2)?)?;
-                let values = list.borrow().clone();
-                for value in values {
+                let len = list.borrow().len();
+                for index in 0..len {
+                    let value = list_item_at(&list, index, "List.try_fold")?;
                     let folded = self.call_closure_two(unit, &folder, state, value, next_base)?;
                     match result_variant_payload(&folded)? {
                         Ok(value) => state = value,
