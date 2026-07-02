@@ -868,7 +868,7 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   across all backends; RS0037 removed as a restriction and repurposed for arity;
   spec §20.1 amended.
 
-### SH-025 — AST-dump parity: streaming rss producer at 286/576, residual grammar is the growing tail
+### SH-025 — AST-dump parity: streaming rss producer at 339/579, residual grammar is the growing tail
 
 - **Context:** step 2 of frontend object parity (after the AST-dump format +
   oracle keystone, SH-adjacent). `selfhost/astdump.rss` is a recursive-descent
@@ -900,10 +900,15 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   rest), **interpolated strings** (`$"…{e}…"` → String.format desugar, embedded
   exprs re-tokenized), and **statement_end line-continuation** (`;` terminator,
   `.`/`?` postfix, `| & + * / % ^` operator wrapping, generic-angle depth).
+  Also (async/resource sweep): **`manage`/`spawn`/`await` prefix exprs**,
+  **`with … as …`/`task_group`/`select` statements**, and a **type-annotated-let
+  fix** (`let x: Option<Int> = …` — the value split is the first `=`, not
+  top_assign whose `>=` guard skipped the `=` after a generic `>`).
 - **Milestones (each a commit + ratcheted floor):** base fns 58 → decls 121 →
   match 178 → generic calls 225 → closures 239 → for+literals 242 → unary/negative
-  245 → **effect-receiver 248 → no-effect-receiver+attrs+effects+body 273 →
-  explicit-fn+tuple/list-patterns 279 → interpolation 280 → line-continuation 286**.
+  245 → effect-receiver 248 → no-effect-receiver+attrs+effects+body 273 →
+  explicit-fn+tuple/list-patterns 279 → interpolation 280 → line-continuation 286 →
+  **manage/spawn/await+with/task-group/select 331 → typed-let fix 339**.
 - **Residual (the tail):** **protocols/impls/native-modules** — DEFERRED: needs a
   two-pass driver (items in source order, then protocol/impl decl sections) plus an
   `emit_function` refactor to reproduce the synthetic method transforms (inject

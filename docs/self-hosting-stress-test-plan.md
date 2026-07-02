@@ -285,7 +285,7 @@ materialized). Parity harness: `ast_parity_tiny_sample` + `ast_parity_samples`
 count still clears the floor). That corpus gate runs the reg-VM over ~570 files and
 is slow in a debug build — run it in `--release` for a quick measurement (~100s);
 the fast non-ignored inner-loop gate is `ast_parity_samples`. Current reach:
-**286/576 byte-exact (AST structure), 0 run-failures** (the producer never crashes; unsupported
+**339/579 byte-exact (AST structure), 0 run-failures** (the producer never crashes; unsupported
 constructs mismatch rather than panic), roughly doubled this session via ratcheted
 milestones: base fns 58 → declarations 121 → match 178 → generic calls 225 →
 closures 239 → for/literals 242 → unary/negative 245. Covered: fns (generics/
