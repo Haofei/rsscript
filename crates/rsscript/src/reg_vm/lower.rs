@@ -12,9 +12,45 @@ pub(crate) struct RegLowerer<'a> {
     /// `==`/`!=` could compare a closure-containing operand. Shared across all
     /// function lowerings so it summarizes the whole program.
     pub(crate) closure_identity_observable: &'a std::cell::Cell<bool>,
+    /// Registers proven to hold a `Copy` scalar (`Int`/`Bool`/`Float`/`Char`/…,
+    /// per [`scalar_param_type_needs_no_deep_copy`]). Such a value is inline with
+    /// no interior `Rc`, so extracting it from a collection/struct/variant cannot
+    /// alias the source. The DeepCopy-elision taint analysis reads this set to
+    /// avoid over-tainting an extraction's source collection (see
+    /// [`deepcopy_elidable_param_regs`]). Conservative by construction: a register
+    /// is only inserted when the extracted static type is a known scalar; absence
+    /// means "unknown", which keeps the (sound) over-tainting behavior.
+    pub(crate) scalar_regs: std::collections::HashSet<Reg>,
+}
+
+/// The element type produced by extracting from a collection type, or `None`
+/// when it cannot be determined (⇒ conservative: not marked scalar ⇒ copy kept).
+/// `List<T>`/`Deque<T>` → `T`; `Map<K, V>`/`SortedMap<K, V>` → `V` (the VALUE, the
+/// type `MapGet` yields). Any other root (or a missing generic arg) → `None`.
+fn list_elem_type(collection_ty: &str) -> Option<&str> {
+    let root = crate::text_util::type_root_name(collection_ty);
+    let args = crate::text_util::type_arg_names(collection_ty)?;
+    match root {
+        "List" | "Deque" => args.first().copied(),
+        "Map" | "SortedMap" => args.get(1).copied(),
+        _ => None,
+    }
 }
 
 impl RegLowerer<'_> {
+    /// Record that `dst` holds a `Copy` scalar when `elem_ty` is a known scalar
+    /// type (`Int`/`Bool`/`Float`/`Char`/…). Extracting such a value is a bit-copy
+    /// that cannot alias its source, so the elision taint analysis skips it. A
+    /// `None` / non-scalar `elem_ty` (e.g. `String`, unknown) leaves `dst`
+    /// unmarked — the sound, over-tainting default.
+    fn note_scalar(&mut self, dst: Reg, elem_ty: Option<&str>) {
+        if elem_ty.is_some_and(|ty| {
+            scalar_param_type_needs_no_deep_copy(crate::text_util::strip_fresh_type(ty))
+        }) {
+            self.scalar_regs.insert(dst);
+        }
+    }
+
     pub(crate) fn local(&mut self, name: &str) -> Reg {
         if let Some(reg) = self.function.local_regs.get(name) {
             return *reg;
@@ -502,6 +538,8 @@ impl RegLowerer<'_> {
                     list,
                     index,
                 });
+                let elem_ty = reg_expr_type_name(iterable).and_then(list_elem_type);
+                self.note_scalar(item, elem_ty);
 
                 self.loop_stack.push(LoopPatch {
                     cleanup_base: self.cleanup_stack.len(),
@@ -850,13 +888,18 @@ impl RegLowerer<'_> {
                         name: name.clone(),
                     });
                 }
+                // `access.type_name` is the field's own static type — the value
+                // this extraction yields — so it feeds `note_scalar` directly.
+                self.note_scalar(dst, access.type_name.as_deref());
                 Ok(dst)
             }
             HirExpr::Index { base, index, .. } => {
                 let list = self.expr(base)?;
+                let elem_ty = reg_expr_type_name(base).and_then(list_elem_type);
                 let index = self.expr(index)?;
                 let dst = self.temp();
                 self.emit(RegInstr::ListGet { dst, list, index });
+                self.note_scalar(dst, elem_ty);
                 Ok(dst)
             }
             HirExpr::Effect { value, .. } => self.expr(value),
@@ -927,6 +970,7 @@ impl RegLowerer<'_> {
                         loop_stack: Vec::new(),
                         cleanup_stack: Vec::new(),
                         closure_identity_observable: self.closure_identity_observable,
+                        scalar_regs: std::collections::HashSet::new(),
                     };
                     for capture in &capture_names {
                         lowerer.local(capture);
@@ -1244,6 +1288,11 @@ impl RegLowerer<'_> {
                                 dst,
                                 deque: arg_regs[0],
                             });
+                            let elem_ty = args
+                                .first()
+                                .and_then(|arg| reg_expr_type_name(&arg.value))
+                                .and_then(list_elem_type);
+                            self.note_scalar(dst, elem_ty);
                             return Ok(dst);
                         }
                         ("Deque", "pop_front") => {
@@ -1257,6 +1306,11 @@ impl RegLowerer<'_> {
                                 dst,
                                 deque: arg_regs[0],
                             });
+                            let elem_ty = args
+                                .first()
+                                .and_then(|arg| reg_expr_type_name(&arg.value))
+                                .and_then(list_elem_type);
+                            self.note_scalar(dst, elem_ty);
                             return Ok(dst);
                         }
                         ("Deque", "push_back") => {
@@ -1381,6 +1435,11 @@ impl RegLowerer<'_> {
                                 list: arg_regs[0],
                                 index: arg_regs[1],
                             });
+                            let elem_ty = args
+                                .first()
+                                .and_then(|arg| reg_expr_type_name(&arg.value))
+                                .and_then(list_elem_type);
+                            self.note_scalar(dst, elem_ty);
                             return Ok(dst);
                         }
                         ("List", "len") => {
@@ -1533,6 +1592,14 @@ impl RegLowerer<'_> {
                                 map: arg_regs[0],
                                 key: arg_regs[1],
                             });
+                            // `list_elem_type` returns the Map VALUE type (`V` of
+                            // `Map<K, V>`), which is what `MapGet` yields (as a
+                            // fresh `Option<V>` of a cloned value).
+                            let value_ty = args
+                                .first()
+                                .and_then(|arg| reg_expr_type_name(&arg.value))
+                                .and_then(list_elem_type);
+                            self.note_scalar(dst, value_ty);
                             return Ok(dst);
                         }
                         ("Map", "insert") => {

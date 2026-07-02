@@ -398,7 +398,7 @@ pub(crate) fn closure_captures_all_scalar(closure: &VmClosure) -> bool {
     })
 }
 
-fn scalar_param_type_needs_no_deep_copy(type_name: &str) -> bool {
+pub(crate) fn scalar_param_type_needs_no_deep_copy(type_name: &str) -> bool {
     matches!(
         type_name,
         "Bool"
@@ -2481,7 +2481,11 @@ fn deepcopy_instr_forces_keep(instr: &RegInstr, tainted: &[bool], n_regs: usize)
 ///
 /// Correctness-critical: when in doubt the analysis keeps the copy. It runs one independent
 /// pass per root so a keep verdict is attributed to exactly the responsible parameter.
-fn deepcopy_elidable_param_regs(code: &[RegInstr], n_regs: usize) -> std::collections::HashSet<Reg> {
+fn deepcopy_elidable_param_regs(
+    code: &[RegInstr],
+    n_regs: usize,
+    scalar_regs: &std::collections::HashSet<Reg>,
+) -> std::collections::HashSet<Reg> {
     let roots: Vec<Reg> = code
         .iter()
         .filter_map(|instr| match instr {
@@ -2500,8 +2504,25 @@ fn deepcopy_elidable_param_regs(code: &[RegInstr], n_regs: usize) -> std::collec
         while changed {
             changed = false;
             for instr in code {
-                if let RegInstr::Move { dst, src }
-                | RegInstr::ListGet { dst, list: src, .. }
+                // A `Move` copies the value whole, so taint always flows (a scalar
+                // dst is harmless — a never-tainted scalar already yields the right
+                // verdict, but a `Move` of a heap value must propagate).
+                if let RegInstr::Move { dst, src } = instr {
+                    if *src < n_regs && *dst < n_regs && tainted[*src] && !tainted[*dst] {
+                        tainted[*dst] = true;
+                        changed = true;
+                    }
+                }
+                // Extractions (`ListGet`/`MapGet`/`GetField`/`GetFieldSlot`/
+                // `UnwrapVariantValue`/`DequePop*`) pull an INTERIOR value out of a
+                // collection/struct/variant. When the lowerer proved `dst` holds a
+                // `Copy` scalar (`Int`/`Bool`/`Float`/`Char`/…), that value is inline
+                // with no interior `Rc`: it cannot alias `src` or carry `src`'s `Rc`
+                // into an escape, so the taint must NOT flow — that spurious edge is
+                // exactly what forced the O(n²) copy-keep for per-element helpers.
+                // Absence from `scalar_regs` (unknown/`String`/`Bytes`/`Json`/heap)
+                // keeps the sound over-tainting behavior.
+                else if let RegInstr::ListGet { dst, list: src, .. }
                 | RegInstr::MapGet { dst, map: src, .. }
                 | RegInstr::GetField { dst, base: src, .. }
                 | RegInstr::GetFieldSlot { dst, base: src, .. }
@@ -2509,7 +2530,12 @@ fn deepcopy_elidable_param_regs(code: &[RegInstr], n_regs: usize) -> std::collec
                 | RegInstr::DequePopFront { dst, deque: src }
                 | RegInstr::DequePopBack { dst, deque: src } = instr
                 {
-                    if *src < n_regs && *dst < n_regs && tainted[*src] && !tainted[*dst] {
+                    if *src < n_regs
+                        && *dst < n_regs
+                        && tainted[*src]
+                        && !tainted[*dst]
+                        && !scalar_regs.contains(dst)
+                    {
                         tainted[*dst] = true;
                         changed = true;
                     }
@@ -2608,6 +2634,7 @@ impl RegUnit {
                 loop_stack: Vec::new(),
                 cleanup_stack: Vec::new(),
                 closure_identity_observable: &closure_identity_observable,
+                scalar_regs: std::collections::HashSet::new(),
             };
             for param in &signature.params {
                 let reg = lowerer.local(&param.name);
@@ -2635,7 +2662,8 @@ impl RegUnit {
             // byte-identical to before.
             if elide_deepcopy_enabled() {
                 let n_regs = lowerer.function.regs;
-                let elidable = deepcopy_elidable_param_regs(&lowerer.function.code, n_regs);
+                let elidable =
+                    deepcopy_elidable_param_regs(&lowerer.function.code, n_regs, &lowerer.scalar_regs);
                 for instr in lowerer.function.code.iter_mut() {
                     if let RegInstr::DeepCopy { reg } = instr {
                         if elidable.contains(reg) {
@@ -2672,6 +2700,7 @@ impl RegUnit {
                 loop_stack: Vec::new(),
                 cleanup_stack: Vec::new(),
                 closure_identity_observable: &closure_identity_observable,
+                scalar_regs: std::collections::HashSet::new(),
             };
             if let Some(info) = hir.type_info(type_name) {
                 for field in &info.fields_ordered {

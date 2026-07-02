@@ -658,6 +658,30 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   (regression guard). Full differential + compiled-parity green (elision soundness).
 - **Status:** fixed (O(n²) removed; residual ~46× is the general VM per-op tax,
   tracked by the parked perf roadmap).
+- **GENERALIZED — Slice 1 of borrow-by-default (2026-07-01):** the SH-022 fix was
+  intrinsic-specific (it re-classified the 12 `Char.*` intrinsics so a tainted
+  extracted `Char` stopped pinning the copy). The general root cause was that the
+  taint pass OVER-tainted: extracting a `Copy` scalar (`Int`/`Bool`/`Float`/`Char`/…)
+  from a collection/struct/variant (`ListGet`/`MapGet`/`GetField`/`GetFieldSlot`/
+  `UnwrapVariantValue`/`DequePop*`) tainted the whole source, so ANY keep-forcing
+  use of the scalar (a `Return`, a store, an unclassified intrinsic) pinned the copy
+  → the same O(n²) class for every `read List<Scalar>` / `Map<_, Scalar>` /
+  scalar-field read, not just Char. **Fix:** a `Copy` scalar has no interior `Rc`,
+  so extracting one (a bit-copy; for `MapGet`/`DequePop*` a fresh `Option<Scalar>`
+  of a `.cloned()` scalar) cannot alias the source or carry its `Rc` into an escape.
+  The lowerer (which has HIR types) now threads a `scalar_regs` bitset — populated at
+  each extractor site whose extracted static type is a known scalar — into
+  `deepcopy_elidable_param_regs`, which SKIPS the taint edge `src→dst` for scalar
+  extractions (`Move` is unchanged; non-scalar values like `String`/`Bytes`/`Json`/
+  `List<T>` still taint, since their `.cloned()` shares the `Rc`). Now ALL
+  `read List<Scalar>` / `Map<_, Scalar>` / scalar-field reads elide their prologue
+  `DeepCopy`, independent of any per-intrinsic classification. Sound: over-tainting
+  was only a pessimization; the three `does_not_leak` JIT-acceptance guards stay
+  green. Perf holds at 45.9× (no regression). Sites NOT marked (conservative keep,
+  sound): list-pattern element extractions, variant-payload unwraps, and
+  struct-field pattern binds — pattern lowering does not thread the scrutinee's
+  static type, so those extractions keep the (sound) over-taint. New regression
+  guard: `reg_vm::tests::…::deepcopy_elision_fires_for_int_list_read_param`.
 
 ### SH-023 — self-hosted checker reaches RS0005 parity at declaration level; the merged callable namespace is the load-bearing rule
 

@@ -709,6 +709,68 @@ fn main() -> Unit {
         assert_eq!(output.stdout, "98\n");
     }
 
+    /// Slice 1 generalization (beyond SH-022's Char special-case): a `read
+    /// List<Int>` param whose extracted elements are RETURNED (a keep-forcing use)
+    /// must still have its prologue `DeepCopy` ELIDED. Extracting a `Copy` scalar
+    /// (`Int`) can no longer taint its source collection, so the returned element
+    /// is untainted and nothing pins the copy — even though `Return` of a tainted
+    /// register WOULD force a keep. This is the general kill for the O(n^2)
+    /// `read List<Scalar>` copy class, independent of any per-scalar intrinsic
+    /// classification. No `Char.*` (or any) intrinsic on the element is involved.
+    #[test]
+    fn deepcopy_elision_fires_for_int_list_read_param() {
+        let source = r#"
+features: local
+
+fn scan(xs: read List<Int>, i: Int) -> Int {
+    let a = List.get<Int>(list: read xs, index: i)
+    let b = List.get<Int>(list: read xs, index: i + 1)
+    if a > b {
+        return a
+    }
+    return b
+}
+
+fn main() -> Unit {
+    local xs = List.new<Int>()
+    List.push<Int>(list: mut xs, value: read 3)
+    List.push<Int>(list: mut xs, value: read 7)
+    Log.write(message: read String.from_int(value: scan(xs: read xs, i: 0)))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("deepcopy-elision-int.rss", source).expect("lowering succeeds");
+
+        let scan_id = executable.unit.function_ids["scan"];
+        let scan = executable.unit.functions[scan_id].as_ref();
+        let elided = scan
+            .code
+            .iter()
+            .filter(|instr| matches!(instr, RegInstr::DeepCopyElided { .. }))
+            .count();
+        let eager = scan
+            .code
+            .iter()
+            .filter(|instr| matches!(instr, RegInstr::DeepCopy { .. }))
+            .count();
+        if crate::reg_vm::model::elide_deepcopy_enabled_for_test() {
+            assert!(
+                elided >= 1 && eager == 0,
+                "elision ON: `read List<Int>` param whose extracted elements are \
+                 returned must be elided (scalar extraction must not taint the list), \
+                 got {elided} elided / {eager} eager: {:#?}",
+                scan.code,
+            );
+        }
+
+        // Elision must not change behavior: max(xs[0], xs[1]) == max(3, 7) == 7.
+        let output = executable
+            .eval_main_with_args(Vec::<String>::new())
+            .expect("program should still run");
+        assert_eq!(output.stdout, "7\n");
+    }
+
     #[test]
     fn jit_runs_scalar_self_recursion_on_flat_executor() {
         let source = r#"
