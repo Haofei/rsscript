@@ -1,0 +1,9 @@
+fn make_obj() -> Int {
+    let obj = { "name": "rss", "count": 3 }
+    return 0
+}
+
+fn make_map() -> Int {
+    let m = { "a" => 1, "b" => 2 }
+    return 0
+}

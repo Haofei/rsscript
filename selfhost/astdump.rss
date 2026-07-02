@@ -574,7 +574,61 @@ fn emit_primary(toks: read List<Tok>, start: read Int, end: read Int, d: read In
             return Unit
         }
     }
+    // Object / map literal: { fields } or { k => v, ... }.
+    if at_symbol(toks: read toks, i: read start, code: read SYM_LBRACE) && at_symbol(toks: read toks, i: read (end - 1), code: read SYM_RBRACE) {
+        let close = find_matching(toks: read toks, open: read start, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+        if close == end - 1 {
+            emit_object_or_map(toks: read toks, start: read start, close: read close, d: read d)
+            return Unit
+        }
+    }
     emit(depth: read d, s: read "unknown-expr")
+    return Unit
+}
+
+// `{ "field": v, ... }` (object) or `{ k => v, ... }` (map). A top-level `=>` in
+// any entry makes it a map; otherwise an object (empty `{}` is an object).
+fn emit_object_or_map(toks: read List<Tok>, start: read Int, close: read Int, d: read Int) -> Unit {
+    // Decide map vs object.
+    let mut isMap = false
+    let mut i = start + 1
+    while i < close {
+        let comma = split_comma(toks: read toks, start: read i, end: read close)
+        let entEnd = pick_end(comma: read comma, end: read close)
+        if find_top_sym(toks: read toks, start: read i, end: read entEnd, code: read SYM_FATARROW) >= 0 {
+            isMap = true
+        }
+        if comma < 0 { i = close } else { i = comma + 1 }
+    }
+    if isMap {
+        emit(depth: read d, s: read "map")
+        let mut k = start + 1
+        while k < close {
+            let comma = split_comma(toks: read toks, start: read k, end: read close)
+            let entEnd = pick_end(comma: read comma, end: read close)
+            let arrow = find_top_sym(toks: read toks, start: read k, end: read entEnd, code: read SYM_FATARROW)
+            emit(depth: read (d + 1), s: read "map-entry")
+            emit(depth: read (d + 2), s: read "key")
+            emit_expr(toks: read toks, start: read k, end: read arrow, d: read (d + 3))
+            emit(depth: read (d + 2), s: read "value")
+            emit_expr(toks: read toks, start: read (arrow + 1), end: read entEnd, d: read (d + 3))
+            if comma < 0 { k = close } else { k = comma + 1 }
+        }
+        return Unit
+    }
+    emit(depth: read d, s: read "object")
+    let mut k = start + 1
+    while k < close {
+        let comma = split_comma(toks: read toks, start: read k, end: read close)
+        let entEnd = pick_end(comma: read comma, end: read close)
+        let colon = find_top_sym(toks: read toks, start: read k, end: read entEnd, code: read SYM_COLON)
+        if colon >= 0 {
+            let nm = tk_text(toks: read toks, i: read k)
+            emit(depth: read (d + 1), s: read String.concat(left: read "object-field name=", right: read nm))
+            emit_expr(toks: read toks, start: read (colon + 1), end: read entEnd, d: read (d + 2))
+        }
+        if comma < 0 { k = close } else { k = comma + 1 }
+    }
     return Unit
 }
 
@@ -694,6 +748,13 @@ fn emit_stmt(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int
         emit_match(toks: read toks, matchPos: read start, braceOpen: read openb, braceClose: read close, tag: read "match", d: read d)
         return close + 1
     }
+    // for binding in iterable { body }  (and `await for ...`)
+    if is_kw_text(toks: read toks, i: read start, word: read "for") {
+        return emit_for(toks: read toks, forPos: read start, limit: read limit, d: read d, isAsync: read false)
+    }
+    if is_kw_text(toks: read toks, i: read start, word: read "await") && is_kw_text(toks: read toks, i: read (start + 1), word: read "for") {
+        return emit_for(toks: read toks, forPos: read (start + 1), limit: read limit, d: read d, isAsync: read true)
+    }
     // break / continue
     if is_kw_text(toks: read toks, i: read start, word: read "break") {
         emit(depth: read d, s: read "break")
@@ -789,6 +850,23 @@ fn emit_if(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int) 
         }
     }
     return next
+}
+
+fn emit_for(toks: read List<Tok>, forPos: read Int, limit: read Int, d: read Int, isAsync: read Bool) -> Int {
+    let openb = find_block_open(toks: read toks, start: read forPos, limit: read limit)
+    if openb < 0 {
+        emit(depth: read d, s: read "malformed-for")
+        return stmt_end(toks: read toks, start: read forPos, limit: read limit)
+    }
+    let close = find_matching(toks: read toks, open: read openb, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    let binding = tk_text(toks: read toks, i: read (forPos + 1))
+    let a = String.concat(left: read "for binding=", right: read binding)
+    let b = String.concat(left: read a, right: read " async=")
+    emit(depth: read d, s: read String.concat(left: read b, right: read boolstr(b: read isAsync)))
+    emit(depth: read (d + 1), s: read "iter")
+    emit_expr(toks: read toks, start: read (forPos + 3), end: read openb, d: read (d + 2))
+    emit_block(toks: read toks, open: read openb, close: read close, d: read (d + 1))
+    return close + 1
 }
 
 fn emit_loop(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int) -> Int {
