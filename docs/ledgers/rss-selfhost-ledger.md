@@ -868,7 +868,7 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   across all backends; RS0037 removed as a restriction and repurposed for arity;
   spec §20.1 amended.
 
-### SH-025 — AST-dump parity: streaming rss producer at 245/569, residual grammar is the growing tail
+### SH-025 — AST-dump parity: streaming rss producer at 286/576, residual grammar is the growing tail
 
 - **Context:** step 2 of frontend object parity (after the AST-dump format +
   oracle keystone, SH-adjacent). `selfhost/astdump.rss` is a recursive-descent
@@ -892,18 +892,57 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   **match expressions**, **`!`/`~` unary desugars**, **negative numbers**, try `?`,
   parens, literals. Patterns: variant/binding/wildcard/literal/struct (fields with
   shorthand/`_`/effect/nested, `..` rest).
-- **Milestones (this session, each a commit + ratcheted floor):** base fns 58 →
-  decls 121 → match 178 → generic calls 225 → closures 239 → for+literals 242 →
-  unary/negative 245.
-- **Residual (the tail):** interpolated strings, effect-receiver calls
-  (`read x.m()` → ReceiverCall), the explicit-`fn(...)` closure form (captures /
-  declared effects), fn attributes (`#deprecated`/`#lower_name`), effect/retains
-  clauses, tuple/list patterns, protocols/impls/native-modules (they dump in a
-  separate program section, not source order, so streaming can't place them), and
-  `statement_end` operator/postfix line continuation. Remaining mismatched files
-  typically stack several of these at once (diminishing per-feature ROI). Each is
-  additive; the floor ratchets as they land.
+  Also covered (2026-07-02 sweep): **effect-receiver + no-effect receiver calls**
+  (`read x.m()` / `self.m()` → ReceiverCall), **fn attributes** (`#deprecated`/
+  `#lower_name`), **effect/retains clauses**, **default-impl marker**, always-emit
+  `body`/`block` for no-body fns, **explicit-`fn` closures** (captures/declared-
+  effects), **tuple/list patterns** (`__TupleN` desugar, `pat-list` prefix/suffix/
+  rest), **interpolated strings** (`$"…{e}…"` → String.format desugar, embedded
+  exprs re-tokenized), and **statement_end line-continuation** (`;` terminator,
+  `.`/`?` postfix, `| & + * / % ^` operator wrapping, generic-angle depth).
+- **Milestones (each a commit + ratcheted floor):** base fns 58 → decls 121 →
+  match 178 → generic calls 225 → closures 239 → for+literals 242 → unary/negative
+  245 → **effect-receiver 248 → no-effect-receiver+attrs+effects+body 273 →
+  explicit-fn+tuple/list-patterns 279 → interpolation 280 → line-continuation 286**.
+- **Residual (the tail):** **protocols/impls/native-modules** — DEFERRED: needs a
+  two-pass driver (items in source order, then protocol/impl decl sections) plus an
+  `emit_function` refactor to reproduce the synthetic method transforms (inject
+  `Self: Managed` generic, append `native` effect, `protocol.method`/`module.fn`
+  name mangling) for only ~11 corpus files — lowest ROI/complexity ratio. Plus the
+  interpolation malformed-inner-expr case (emit_expr can't signal parse failure)
+  and any remaining stacked constructs. Each is additive; the floor ratchets.
+- **rss limitation found:** `if/else` is not valid as an *expression*
+  (`let x = if c {..} else {..}` → RS0015) — worked around with helper functions.
 - **Status:** open (growing tail). The producer + parity gate + risk mitigations
-  (curated fast gate; module-story decision recorded in AST_FORMAT.md) are in
-  place; full 556-file byte parity is incremental, tracked by the ratcheting
-  floor.
+  (curated fast gate; module-story decision in AST_FORMAT.md) are in place; full
+  byte parity is incremental, tracked by the ratcheting floor.
+
+### SH-026 — Frontend object parity: diagnostics-codes (step 2) + lexer spans (step 3)
+
+- **Context:** the frontend-object-parity ladder beyond AST structure. Two arms
+  advanced together with the SH-025 AST work.
+- **Diagnostics (step 2, milestone 2a):** `selfhost/check.rss` now reproduces
+  **RS0006 / RS0016 / RS0017** (duplicate feature-header / unknown file feature /
+  duplicate feature within a header) in addition to RS0005, all decidable from the
+  top-level token scan (per-header seen-set matches `parse_features`).
+  `CHECKER_TARGET_CODES` extended to the 4 codes; `checker_parity_corpus` is
+  byte-exact over **576 files, code-mismatches 0**; each code + CLEAN verified
+  firing on crafted inputs and the `unknown-file-feature` fixture. Next increments
+  (scoped, not done): RS0002/RS0003 (signature explicitness — needs all-function
+  traversal incl. protocol/native blocks); RS0021 exhaustiveness / RS0024
+  unknown-type (needs a `Map<String,Def>` symbol-table pass — the first genuinely
+  semantic self-hosted check).
+- **Lexer spans (step 3):** added a `len` field to the shared `Tok`
+  (= consumed source span `j-i`, matching the Rust lexer's `index-start`) and made
+  `lexer.rss` emit the real `<line>:<col>:<len>` prefix. `lexer_parity_corpus` is
+  now byte-exact at **all three tiers** (0 kind+payload, 1 +line/col, 2 +length) —
+  576 files, token-mismatches 0 each. The lexer span ladder is fully closed; the
+  additive `Tok.len` left parser/checker/astdump parity untouched.
+- **AST spans (step 3, remaining "last phase"):** NOT done. Would need each
+  `astdump.rss` `emit` to carry the correct token's span and the oracle serializer
+  to append ` @L:C:N` per node (plus a tier-strip so tier-0 stays green). Feasible
+  but large + precise: node spans are mostly `tokens[start]` but not uniformly
+  (`Try` uses the `?` token, some binary the operator, ReceiverCall the receiver),
+  so it is an invasive per-node-type effort across ~150 emit sites — its own phase.
+- **Status:** open. Step-2 milestone 2a and step-3 lexer spans are done and gated;
+  step-2 deeper checks and step-3 AST spans are the scoped remainder.
