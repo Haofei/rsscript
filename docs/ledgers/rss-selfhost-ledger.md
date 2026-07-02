@@ -501,7 +501,7 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   emits `(*pos)` on read and as the assignment target for such a param, since
   `mut T` already lowers to `&mut T`. Non-Copy `mut` params keep their `&mut Struct`
   lowering and stay non-reassignable (only fields/elements are mutable).
-- **Tests:** `crate::selfhost_parity::lexer_parity_corpus` (tier 0, 544/544);
+- **Tests:** `crate::selfhost_parity::lexer_parity_corpus` (tier 0, 556/556);
   `tests/fixtures/pass/mut-scalar-writeback.rss` (Int + Bool write-back).
 - **Status:** fixed (scalar Copy `mut` params are reassignable with caller
   write-back; non-Copy `mut` params stay non-reassignable).
@@ -770,8 +770,8 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
 
 - **Tool:** self-hosted checker (`selfhost/check.rss`) run on the reg-VM vs
   `crate::analyze_source` filtered to error-severity `RS0005`
-  (DUPLICATE_DECLARATION), over the whole 546-file corpus.
-- **Symptom (positive):** the checker reproduces RS0005 with **546/546** parity
+  (DUPLICATE_DECLARATION), over the whole 556-file corpus.
+- **Symptom (positive):** the checker reproduces RS0005 with **556/556** parity
   using ONLY top-level declaration structure — no statement/expression/pattern
   body parsing (confirms SH-021: RS0005 is decidable from declaration shape). It
   reuses the proven `selfhost/parser.rss` recognizer verbatim; the sole addition
@@ -801,10 +801,11 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   threaded cursors returned by value (SH-018). `Set<String>` (`Set<String>.new()`,
   `Set.contains<String>`, `Set.insert<String>`) worked as the duplicate detector;
   `features: local` was NOT needed (no `StringBuilder`/`local` bindings). The
-  scanner conservatively STOPS on the first malformed/unknown top-level item
-  (mirroring the recognizer), which can only under-report on syntactically broken
-  files — safe, since the analyzer emits RS0005 on exactly the 2 well-formed
-  fixtures and the other 544 files stay CLEAN (zero false positives).
+  scanner RECOVERS past an unrecognized top-level item (skips one token and keeps
+  scanning, mirroring the analyzer's recovery) rather than stopping at the first
+  one, so a later duplicate is not missed. Parity holds: the analyzer emits RS0005
+  on exactly the 2 well-formed duplicate fixtures and the other 554 files stay
+  CLEAN (zero false positives).
 - **Classification:** docs (records the analyzer's duplicate-symbol namespace
   rule and that RS0005 is a declaration-only property).
 - **Tests:** `crate::selfhost_parity::checker_parity_tiny_sample` and

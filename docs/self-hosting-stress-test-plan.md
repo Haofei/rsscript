@@ -187,14 +187,16 @@ runs it on the reg-VM in-process, passing the corpus file's *content* as `argv[0
 
 | Phase | rss tool | Oracle | Corpus result |
 |-------|----------|--------|---------------|
-| 1 — lexer | `selfhost/lexer.rss` | `crate::lexer::lex` (canonical token dump) | **544/544 tier-0**, 0 run-failures |
-| 2 — parser | `selfhost/parser.rss` | `crate::syntax::parse_source_raw` (accept/reject) | **545/545 recognition** |
-| 3 — checker | `selfhost/check.rss` | `crate::analyze_source` (code `RS0005`) | **546/546** |
-| 4 — perf | lexer on VM vs native | wall-clock over corpus | **~5100× slower** (see SH-022) |
+| 1 — lexer | `selfhost/lexer.rss` | `crate::lexer::lex` (canonical token dump) | **556/556 tier-0**, 0 run-failures |
+| 2 — parser | `selfhost/parser.rss` | `crate::syntax::parse_source_raw` (accept/reject) | **556/556 recognition** |
+| 3 — checker | `selfhost/check.rss` | `crate::analyze_source` (code `RS0005`) | **556/556** |
+| 4 — perf | lexer on VM vs native | wall-clock over corpus | **~46× slower** (post-SH-022; was ~5100×) |
 
 Gates (all green): `cargo test -p rsscript --features native-jit --lib` (3 tiny-sample
-tests); the corpus gates run with `-- --ignored` (`lexer_parity_corpus`,
-`parser_parity_corpus`, `checker_parity_corpus`, `lexer_perf_corpus`).
+tests plus a non-ignored negative-parser and positive-`RS0005`-checker smoke test, so
+a degenerate always-`OK`/always-`CLEAN` tool is caught without the corpus gate); the
+corpus gates run with `-- --ignored` (`lexer_parity_corpus`, `parser_parity_corpus`,
+`checker_parity_corpus`, `lexer_perf_corpus`).
 
 ### Findings (ledger `SH-016` … `SH-023`)
 - **SH-016** — no character-literal syntax; `'` lexes to `?`, cascading a misleading

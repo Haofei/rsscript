@@ -147,12 +147,17 @@ fn rss_dump_with(exe: &RegVmExecutable, source: &str) -> Result<Vec<CanonTok>, S
     let output = exe
         .eval_main_with_args([source.to_string()])
         .map_err(|e| format!("rss lexer failed to run: {e:?}"))?;
-    Ok(output
+    // Fail on any malformed non-empty dump line rather than silently dropping it
+    // (a stray debug line or a garbled token would otherwise vanish and let a
+    // broken lexer pass parity by emitting fewer/no tokens).
+    output
         .stdout
         .lines()
         .filter(|l| !l.is_empty())
-        .filter_map(parse_line)
-        .collect())
+        .map(|l| {
+            parse_line(l).ok_or_else(|| format!("rss lexer emitted a malformed dump line: {l:?}"))
+        })
+        .collect()
 }
 
 /// Convenience: compile + run once (used by the single-file smoke test).
@@ -417,6 +422,24 @@ fn parser_parity_tiny_sample() {
     compare_parse(oracle, actual, parse_position_tier()).unwrap_or_else(|msg| panic!("{msg}"));
 }
 
+/// Phase-2 NEGATIVE smoke (non-ignored): the rss parser must REJECT malformed
+/// source, matching the Rust oracle. The accept-only tiny sample above would
+/// still pass if the rss parser degenerated to always printing `OK`; this closes
+/// that gap without needing the (ignored) full-corpus gate.
+#[test]
+fn parser_rejects_malformed_source_smoke() {
+    let source = "fn main() -> Unit {\n    return Unit\n}\n\nfn\n";
+    let oracle = parse_oracle_error("parser-negative.rss", source);
+    assert!(
+        oracle.is_some(),
+        "oracle Rust parser must reject the malformed sample (else the smoke test proves nothing)"
+    );
+    let exe = compile_parser().expect("rss parser should compile");
+    let actual = run_parser(&exe, source).expect("rss parser should run");
+    // Recognition tier: both must reject (accept-vs-reject only).
+    compare_parse(oracle, actual, false).unwrap_or_else(|msg| panic!("{msg}"));
+}
+
 /// Phase-2 gate (ignored by default): the rss parser's accept/reject matches the
 /// Rust parser over the whole `.rss` corpus.
 #[test]
@@ -532,6 +555,27 @@ fn checker_parity_tiny_sample() {
     let exe = compile_checker().expect("rss checker should compile");
     let actual = run_checker(&exe, &source).expect("rss checker should run");
     assert_eq!(oracle, actual, "checker parity diverged on tiny sample");
+}
+
+/// Phase-3 POSITIVE smoke (non-ignored): the rss checker must REPORT RS0005 for a
+/// duplicate declaration, matching the analyzer. The no-duplicate tiny sample
+/// above would still pass if the rss checker degenerated to always printing
+/// `CLEAN`; this closes that gap without the (ignored) full-corpus gate.
+#[test]
+fn checker_reports_rs0005_for_duplicate_declaration_smoke() {
+    let source =
+        "fn dup() -> Unit {\n    return Unit\n}\nfn dup() -> Unit {\n    return Unit\n}\n";
+    let oracle = checker_oracle_codes("checker-duplicate.rss", source);
+    assert!(
+        oracle.contains(&"RS0005".to_string()),
+        "oracle analyzer must report RS0005 for the duplicate declaration; got {oracle:?}"
+    );
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker(&exe, source).expect("rss checker should run");
+    assert_eq!(
+        oracle, actual,
+        "checker parity diverged on the duplicate-declaration smoke test"
+    );
 }
 
 /// Phase-3 gate (ignored by default): the rss checker's target-code diagnostics
