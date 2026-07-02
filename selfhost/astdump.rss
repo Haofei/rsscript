@@ -76,6 +76,7 @@ fn boolstr(b: read Bool) -> String {
 // Tracks (){}[ ] bracket depth; operators only count at depth 0.
 fn scan_last_top_op(toks: read List<Tok>, start: read Int, end: read Int, tier: read Int) -> Int {
     let mut depth = 0
+    let mut angle = 0
     let mut idx = start
     let mut found = -1
     while idx < end {
@@ -83,6 +84,13 @@ fn scan_last_top_op(toks: read List<Tok>, start: read Int, end: read Int, tier: 
             depth = depth + 1
         } else if at_symbol(toks: read toks, i: read idx, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read idx, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read idx, code: read SYM_RBRACKET) {
             depth = depth - 1
+        } else if depth == 0 && angle == 0 && at_symbol(toks: read toks, i: read idx, code: read SYM_LANGLE) && is_generic_angle(toks: read toks, start: read start, end: read end, open: read idx) {
+            // A generic `<...>` (e.g. `Deque<Int>.new()`) — count its angles so its
+            // `<`/`>` are never mistaken for comparison operators.
+            angle = angle + 1
+        } else if depth == 0 && angle > 0 {
+            if at_symbol(toks: read toks, i: read idx, code: read SYM_LANGLE) { angle = angle + 1 }
+            else if at_symbol(toks: read toks, i: read idx, code: read SYM_RANGLE) { angle = angle - 1 }
         } else if depth == 0 {
             if op_matches_tier(toks: read toks, i: read idx, end: read end, tier: read tier) {
                 found = idx
@@ -91,6 +99,29 @@ fn scan_last_top_op(toks: read List<Tok>, start: read Int, end: read Int, tier: 
         idx = idx + 1
     }
     return found
+}
+
+// Mirrors is_generic_angle_open: token `open` is `<`, preceded by an ident, and
+// its matching `>` (by angle nesting) is followed by `.` or `(` — i.e. it opens a
+// generic argument list, not a comparison.
+fn is_generic_angle(toks: read List<Tok>, start: read Int, end: read Int, open: read Int) -> Bool {
+    if open <= start { return false }
+    if is_ident_tok(toks: read toks, i: read (open - 1)) == false { return false }
+    if at_symbol(toks: read toks, i: read open, code: read SYM_LANGLE) == false { return false }
+    let mut depth = 0
+    let mut i = open
+    while i < end {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LANGLE) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RANGLE) {
+            depth = depth - 1
+            if depth == 0 {
+                return at_symbol(toks: read toks, i: read (i + 1), code: read SYM_DOT) || at_symbol(toks: read toks, i: read (i + 1), code: read SYM_LPAREN)
+            }
+        }
+        i = i + 1
+    }
+    return false
 }
 
 // Does the operator at token i (within [.., end)) belong to precedence `tier`?
@@ -310,24 +341,96 @@ fn matching_open_bracket(toks: read List<Tok>, close: read Int, start: read Int)
     return -1
 }
 
-// Callee occupying [start, end): `name`, `Namespace.name`, or a receiver expr.
+// First top-level dot in [start, end) with `<`/`[`/`(` treated as depth, or -1.
+fn find_first_dot_angle(toks: read List<Tok>, start: read Int, end: read Int) -> Int {
+    let mut depth = 0
+    let mut i = start
+    while i < end {
+        if depth == 0 && at_symbol(toks: read toks, i: read i, code: read SYM_DOT) {
+            return i
+        }
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LANGLE) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RANGLE) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) {
+            depth = depth - 1
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+// Reproduce parse_named_callee_segment: "" unless [start,end) is `name` or
+// `name<arg, ...>` (args canonicalized via type_name_str, joined ", ").
+fn named_segment_str(toks: read List<Tok>, start: read Int, end: read Int) -> String {
+    if start >= end || is_ident_tok(toks: read toks, i: read start) == false { return "" }
+    let name = tk_text(toks: read toks, i: read start)
+    if start + 1 == end { return name }
+    if at_symbol(toks: read toks, i: read (start + 1), code: read SYM_LANGLE) == false { return "" }
+    let close = find_matching(toks: read toks, open: read (start + 1), openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
+    if close < 0 || close + 1 != end || start + 2 >= close { return "" }
+    let args = type_args_str(toks: read toks, start: read (start + 2), end: read close)
+    let a = String.concat(left: read name, right: read "<")
+    let b = String.concat(left: read a, right: read args)
+    return String.concat(left: read b, right: read ">")
+}
+
+// Canonical type name for [start, end): `Name` or `Name<arg, ...>` (matches
+// type_ref_name for the common subset; Fn/noescape/owned/fresh are not rendered).
+fn type_name_str(toks: read List<Tok>, start: read Int, end: read Int) -> String {
+    if start >= end || is_ident_tok(toks: read toks, i: read start) == false { return "" }
+    let name = tk_text(toks: read toks, i: read start)
+    if start + 1 < end && at_symbol(toks: read toks, i: read (start + 1), code: read SYM_LANGLE) {
+        let close = find_matching(toks: read toks, open: read (start + 1), openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
+        if close == end - 1 {
+            let args = type_args_str(toks: read toks, start: read (start + 2), end: read close)
+            let a = String.concat(left: read name, right: read "<")
+            let b = String.concat(left: read a, right: read args)
+            return String.concat(left: read b, right: read ">")
+        }
+    }
+    return name
+}
+
+// Comma-join canonical type names for the arg list [start, end), separator ", ".
+fn type_args_str(toks: read List<Tok>, start: read Int, end: read Int) -> String {
+    local sb = StringBuilder.new()
+    let mut k = start
+    let mut first = true
+    while k < end {
+        let comma = top_comma_ty(toks: read toks, start: read k, end: read end)
+        let aEnd = pick_end(comma: read comma, end: read end)
+        if first == false { StringBuilder.push(builder: mut sb, value: read ", ") }
+        StringBuilder.push(builder: mut sb, value: read type_name_str(toks: read toks, start: read k, end: read aEnd))
+        first = false
+        if comma < 0 { k = end } else { k = comma + 1 }
+    }
+    return StringBuilder.finish(builder: take sb)
+}
+
+// Callee occupying [start, end). Mirrors crate::syntax::parser::expr::parse_callee:
+// a whole-range named segment (`name` / `name<args>`) is Callee::Name; otherwise
+// the FIRST top-level dot splits a type-ref namespace from a method segment,
+// giving Callee::Qualified{namespace, name}. Bare `x.m()` is Qualified (namespace
+// "x"); Callee::ReceiverCall only arises with an explicit effect (handled in
+// emit_expr's effect branch).
 fn emit_callee(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) -> Unit {
-    // Simple name: single ident.
-    if end - start == 1 && is_ident_tok(toks: read toks, i: read start) {
-        emit(depth: read d, s: read String.concat(left: read "callee-name name=", right: read tk_text(toks: read toks, i: read start)))
+    let whole = named_segment_str(toks: read toks, start: read start, end: read end)
+    if String.len(value: read whole) > 0 {
+        emit(depth: read d, s: read String.concat(left: read "callee-name name=", right: read whole))
         return Unit
     }
-    // Qualified: Ident . Ident  (namespace.name), exactly three tokens.
-    if end - start == 3 && is_ident_tok(toks: read toks, i: read start) && at_symbol(toks: read toks, i: read (start + 1), code: read SYM_DOT) && is_ident_tok(toks: read toks, i: read (start + 2)) {
-        let ns = tk_text(toks: read toks, i: read start)
-        let nm = tk_text(toks: read toks, i: read (start + 2))
-        let a = String.concat(left: read "callee-qualified namespace=", right: read ns)
-        let b = String.concat(left: read a, right: read " name=")
-        let c = String.concat(left: read b, right: read nm)
-        emit(depth: read d, s: read c)
-        return Unit
+    let dot = find_first_dot_angle(toks: read toks, start: read start, end: read end)
+    if dot > start {
+        let ns = type_name_str(toks: read toks, start: read start, end: read dot)
+        let meth = named_segment_str(toks: read toks, start: read (dot + 1), end: read end)
+        if String.len(value: read ns) > 0 && String.len(value: read meth) > 0 {
+            let a = String.concat(left: read "callee-qualified namespace=", right: read ns)
+            let b = String.concat(left: read a, right: read " name=")
+            emit(depth: read d, s: read String.concat(left: read b, right: read meth))
+            return Unit
+        }
     }
-    // Receiver-call: <receiver expr>.method — method is the last ident.
+    // Fallback: a receiver expression `<expr>.method` (rare without an effect).
     if end - start >= 3 && is_ident_tok(toks: read toks, i: read (end - 1)) && at_symbol(toks: read toks, i: read (end - 2), code: read SYM_DOT) {
         let nm = tk_text(toks: read toks, i: read (end - 1))
         emit(depth: read d, s: read String.concat(left: read "callee-receiver method=", right: read nm))
