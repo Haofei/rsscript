@@ -748,6 +748,23 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   the change only ADDS elisions). New guards:
   `reg_vm::tests::…::deepcopy_elision_fires_for_string_read_param` (positive) and
   `…::deepcopy_elision_kept_for_stored_read_param` (negative / over-promotion).
+- **Slice 4 (copy-at-escape) — DEFERRED, data-backed NO-GO (2026-07-01):** the final
+  optimization would move a KEPT copy from the prologue to just before the single
+  escape point (so a cold/rare escape stops costing a per-call copy — AOT's
+  `retains`-driven clone-at-use). Scoped and declined for now: (1) mid-body copy
+  insertion shifts **absolute jump/back-edge indices** (`Jump*` targets are absolute,
+  `model.rs:~2659`), so it must renumber every downstream target and interacts with
+  the native tier's own renumbering (`passes.rs:~2431`) — large corruption blast
+  radius. (2) The *sound* applicability is narrow: only a SINGLE escape, NOT in a
+  loop (a per-iteration copy would be worse), and the escaping reg must be the root
+  param itself, not an interior alias (deep-copying the root before an alias escapes
+  does nothing) — all other cases must fall back to the prologue copy. (3) Expected
+  win is small (most escapes are stores of interior aliases inside loops). Verdict:
+  high risk / low reward — deferred until a corpus probe shows the simple case is
+  common enough and it can get its own session with a dedicated jump-renumbering
+  safety test. **Fix 3 is otherwise COMPLETE**: borrow-by-default (keep only on
+  proven escape) now holds for every non-escaping `read` param across scalars,
+  scalar pattern-binds, and pure `String`/`Bytes`/`Map`/`List` readers.
 
 ### SH-023 — self-hosted checker reaches RS0005 parity at declaration level; the merged callable namespace is the load-bearing rule
 
