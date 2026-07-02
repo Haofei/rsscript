@@ -198,32 +198,52 @@ a degenerate always-`OK`/always-`CLEAN` tool is caught without the corpus gate);
 corpus gates run with `-- --ignored` (`lexer_parity_corpus`, `parser_parity_corpus`,
 `checker_parity_corpus`, `lexer_perf_corpus`).
 
-### Findings (ledger `SH-016` … `SH-023`)
-- **SH-016** — no character-literal syntax; `'` lexes to `?`, cascading a misleading
-  `RS0013`. *(language + diagnostics)*
-- **SH-017** — statement-level binary-operator expressions can't cross a newline; the
-  leading-operator form **compiles but is silently wrong**. *(language + correctness-grade
-  diagnostics)*
-- **SH-018** — no cursor/state object (no methods/`impl`, `mut` params can't advance a
-  cursor); stateful passes thread state positionally. *(language ergonomics)*
-- **SH-019** — a `fresh`-returning fn can't build its result via `mut` + `List.push`
-  (`RS0601`). *(analyzer/freshness ergonomics)*
-- **SH-020** — recursive descent must encode `(ok, new-index)` as a sentinel `Int`. *(ergonomics)*
-- **SH-021** — `parse_source_raw` defers body validation, so recognition parity under-tests
-  the grammar (deep grammar is enforced in the analyzer, not the parser). *(methodology)*
-- **SH-022** — **the headline perf result:** the self-hosted lexer is ~5100× slower on the
-  reg-VM than native Rust (79.5 s vs 15.3 ms over 712 KB). A controlled `String.concat`(O(n²))
-  → `StringBuilder`(O(n)) swap moved nothing, isolating the cost to **per-character intrinsic
-  dispatch** (`List.get` on `List<Char>` + `Char.*` peeks — VM value-representation +
-  intrinsic-dispatch overhead), not string building. *(VM + stdlib)*
-- **SH-023** — the checker reaches `RS0005` parity; the load-bearing rule is the analyzer's
-  **merged callable namespace** (fn names + type-constructor names collide). *(insight)*
+### Findings (ledger `SH-016` … `SH-023`) — historical; current status per item
 
-### Highest-ROI next lever (from the data)
-SH-022 is the first real workload that unambiguously profiles as **VM-dispatch-bound**. The
-indicated fix is a native **string char/byte-cursor intrinsic** (iterate a `String` without
-materializing a boxed `List<Char>`) plus lower per-intrinsic dispatch cost — this feeds the
-parked collection-representation / perf roadmap with real-workload evidence. Deeper checker
-passes (name resolution, exhaustiveness) are the natural next self-hosting step but require a
-real expression/statement/pattern parser (the depth `parse_source_raw` let Phase 2 skip —
-SH-021).
+These are the findings the stress test surfaced. **All of the actionable ones have
+since been fixed or closed** — the table above (556/556, ~46×) is the current state;
+the list below records what each finding was and where it landed. See the linked
+ledger entry for the full write-up.
+
+- **SH-016** — *(was)* no character-literal syntax; `'` lexed to `?`, cascading a
+  misleading `RS0013`. **FIXED** — `'x'` is a real `Char` value end-to-end (and a
+  stray out-of-inventory char now lexes to an `Unknown` token the parser reports,
+  not `?`; empty/multi-char literals are `RS0038`). *(language + diagnostics)*
+- **SH-017** — *(was)* statement-level binary-operator expressions couldn't cross a
+  newline; the leading-operator form compiled but was silently wrong. **FIXED** —
+  operator-continuation lexing is supported. *(language + correctness diagnostics)*
+- **SH-018** — *(was)* no cursor/state object; `mut` params couldn't advance a
+  cursor. **FIXED** — scalar-`Copy` `mut` params are reassignable with caller
+  write-back (and, as of this review, `mut` field/element *places* are written back
+  too, on both backends). *(language ergonomics)*
+- **SH-019** — *(was)* a `fresh`-returning fn couldn't build its result via `mut` +
+  `List.push` (`RS0601`). **FIXED** — managed fresh bindings survive the flow merge.
+  *(analyzer/freshness)*
+- **SH-020** — *(was)* recursive descent had to encode `(ok, new-index)` as a
+  sentinel `Int`. **CLOSED** — not a real gap; tuple returns work (the original
+  over-claim was corrected). *(ergonomics)*
+- **SH-021** — `parse_source_raw` defers body validation, so recognition parity
+  under-tests the grammar (deep grammar is enforced in the analyzer, not the
+  parser). **Accepted methodology limitation** — partly mitigated by the
+  non-ignored negative-parser / positive-`RS0005` smoke tests. *(methodology)*
+- **SH-022** — *(was)* the self-hosted lexer was ~5100× slower on the reg-VM than
+  native Rust. **FIXED (→ ~46×).** NOTE: the original "per-character intrinsic
+  dispatch" hypothesis was **wrong**; the real root cause was **O(n²)** — every
+  lexer helper's `read List<Char>` param got an eager prologue `DeepCopy` that the
+  elision pass KEPT (taint flowed through `List.get` to the extracted `Char`, and
+  `Char.*` were classified `Keep`). The fix classifies the pure scalar `Char.*`
+  intrinsics as `PureFreshReader` so the copy is elided (VM-only, parity-safe):
+  lexer/VM 79.5 s → 732 ms (~108×), VM-vs-native 5100× → ~45.6×. *(VM elision)*
+- **SH-023** — the checker reaches `RS0005` parity; the load-bearing rule is the
+  analyzer's **merged callable namespace** (fn names + type-constructor names
+  collide). *(insight)*
+
+### Current residual perf problem (separate from SH-022)
+With SH-022's O(n²) removed, the remaining VM-vs-native gap is a flat **~46×**
+general per-op tax (HashMap/`Handle`/`Rc<RefCell>` per op + per-intrinsic dispatch),
+not an algorithmic blowup — real code (e.g. the mailbox) already runs ~2.4× native.
+The only remaining lever is a `TypedMap`/`TypedSet` representation rewrite (parked;
+~10–15% on collection-bound micro-kernels, med-high risk), tracked in the perf
+roadmap. Deeper checker passes (name resolution, exhaustiveness) are the natural
+next self-hosting step but need a real expression/statement/pattern parser (the
+depth `parse_source_raw` let Phase 2 skip — SH-021).
