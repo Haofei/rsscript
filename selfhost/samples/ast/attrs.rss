@@ -1,0 +1,9 @@
+#deprecated("use bar instead")
+#lower_name("rss_foo")
+fn foo() -> Int effects(io, retains(self)) {
+    return 1
+}
+
+fn plain() -> Int {
+    return 2
+}

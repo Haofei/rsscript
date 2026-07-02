@@ -1,0 +1,5 @@
+fn run(self: read Widget, x: read Thing) -> Int {
+    self.render()
+    x.compute(a: read 1)
+    return 0
+}

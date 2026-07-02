@@ -382,6 +382,20 @@ fn emit_postfix(toks: read List<Tok>, start: read Int, end: read Int, d: read In
     if end - start >= 2 && at_symbol(toks: read toks, i: read (end - 1), code: read SYM_RPAREN) {
         let openp = matching_open_paren(toks: read toks, close: read (end - 1), start: read start)
         if openp > start {
+            // No-effect receiver call: `recv.method(args)` with a lowercase/complex
+            // receiver parses as ReceiverCall{effect:None}, not Qualified (only an
+            // uppercase namespace path is Qualified).
+            let dot = find_receiver_call_dot(toks: read toks, recvStart: read start, end: read end)
+            if dot > start && is_qualified_ns_receiver(toks: read toks, start: read start, dot: read dot) == false {
+                let method = named_segment_str(toks: read toks, start: read (dot + 1), end: read openp)
+                if String.len(value: read method) > 0 {
+                    emit(depth: read d, s: read "call")
+                    emit(depth: read (d + 1), s: read String.concat(left: read "callee-receiver method=", right: read method))
+                    emit_expr(toks: read toks, start: read start, end: read dot, d: read (d + 2))
+                    emit_args(toks: read toks, start: read (openp + 1), end: read (end - 1), d: read (d + 1))
+                    return Unit
+                }
+            }
             // callee is [start, openp); args in (openp, end-1)
             emit(depth: read d, s: read "call")
             emit_callee(toks: read toks, start: read start, end: read openp, d: read (d + 1))
@@ -1033,6 +1047,22 @@ fn emit_block(toks: read List<Tok>, open: read Int, close: read Int, d: read Int
 
 fn emit_function(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
     let mut j = start
+    // Attributes: #deprecated("...") / #lower_name("...")  (before pub/async/native).
+    let mut depReason = ""
+    let mut haveDep = false
+    let mut lowerName = ""
+    let mut haveLower = false
+    let mut attrs = true
+    while attrs {
+        if at_symbol(toks: read toks, i: read j, code: read SYM_HASH) {
+            let isDep = at_ident(toks: read toks, i: read (j + 1), wid: read WORD_DEPRECATED)
+            let sval = tk_text(toks: read toks, i: read (j + 3))
+            if isDep { depReason = sval; haveDep = true } else { lowerName = sval; haveLower = true }
+            j = j + 5
+        } else {
+            attrs = false
+        }
+    }
     let mut isPub = false
     let mut isAsync = false
     let mut isNative = false
@@ -1060,6 +1090,11 @@ fn emit_function(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
     // body
     let bodyOpen = find_block_open(toks: read toks, start: read j, limit: read List.len(list: read toks))
     let hasBody = bodyOpen >= 0 && (isNative == false || same_stmt_line(toks: read toks, a: read start, b: read bodyOpen))
+    // Signature region [pclose+1, sigEnd): return type, effects(...), and the
+    // default-impl marker `= _`.
+    let sigEnd = function_signature_end(toks: read toks, start: read (pclose + 1))
+    let effPos = find_effects_kw(toks: read toks, start: read (pclose + 1), end: read sigEnd)
+    let defaultImpl = has_default_impl(toks: read toks, start: read (pclose + 1), end: read sigEnd)
     // Emit fn line.
     local sb = StringBuilder.new()
     StringBuilder.push(builder: mut sb, value: read "fn name=")
@@ -1072,10 +1107,20 @@ fn emit_function(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
     StringBuilder.push(builder: mut sb, value: read boolstr(b: read isNative))
     StringBuilder.push(builder: mut sb, value: read " has-body=")
     StringBuilder.push(builder: mut sb, value: read boolstr(b: read hasBody))
+    if defaultImpl {
+        StringBuilder.push(builder: mut sb, value: read " default-impl=true")
+    }
     if hasRet && retFresh {
         StringBuilder.push(builder: mut sb, value: read " returns-fresh=true")
     }
     emit(depth: read d, s: read StringBuilder.finish(builder: take sb))
+    // deprecated / lower-name attribute child lines (before generics).
+    if haveDep {
+        emit(depth: read (d + 1), s: read String.concat(left: read "deprecated ", right: read escape(s: read depReason)))
+    }
+    if haveLower {
+        emit(depth: read (d + 1), s: read String.concat(left: read "lower-name ", right: read lowerName))
+    }
     // generics
     emit_generics(toks: read toks, i: read genStart, d: read (d + 1))
     // params
@@ -1084,19 +1129,74 @@ fn emit_function(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
     if hasRet {
         emit_type_ref(toks: read toks, i: read retStart, tag: read "return-type", eff: read "", d: read (d + 1))
     }
-    // body
+    // effect-name / effect-retains clauses.
+    if effPos >= 0 {
+        let eopen = effPos + 1
+        let eclose = find_matching(toks: read toks, open: read eopen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+        emit_effects(toks: read toks, open: read eopen, close: read eclose, d: read (d + 1))
+    }
+    // body — the oracle always emits `body`/`block`, empty when there is no body.
+    emit(depth: read (d + 1), s: read "body")
     if hasBody {
-        emit(depth: read (d + 1), s: read "body")
         let bclose = find_matching(toks: read toks, open: read bodyOpen, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
         emit_block(toks: read toks, open: read bodyOpen, close: read bclose, d: read (d + 2))
         return bclose + 1
     }
+    emit(depth: read (d + 2), s: read "block")
     // native no-body: consume to end of declaration line.
     return declaration_line_end(toks: read toks, start: read start)
 }
 
 fn same_stmt_line(toks: read List<Tok>, a: read Int, b: read Int) -> Bool {
     return tk_line(toks: read toks, i: read a) == tk_line(toks: read toks, i: read b)
+}
+
+// Index of a top-level `effects(` keyword in [start, end), or -1.
+fn find_effects_kw(toks: read List<Tok>, start: read Int, end: read Int) -> Int {
+    let mut depth = 0
+    let mut i = start
+    while i < end {
+        let opener = at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read i, code: read SYM_LANGLE)
+        let closer = at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read i, code: read SYM_RANGLE)
+        if depth == 0 && at_ident(toks: read toks, i: read i, wid: read WORD_EFFECTS) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_LPAREN) {
+            return i
+        }
+        if opener { depth = depth + 1 } else if closer { if depth > 0 { depth = depth - 1 } }
+        i = i + 1
+    }
+    return -1
+}
+
+// The default-impl marker `= _` appears at top level in the signature region.
+fn has_default_impl(toks: read List<Tok>, start: read Int, end: read Int) -> Bool {
+    let mut depth = 0
+    let mut i = start
+    while i < end {
+        let opener = at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read i, code: read SYM_LANGLE)
+        let closer = at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read i, code: read SYM_RANGLE)
+        if depth == 0 && at_symbol(toks: read toks, i: read i, code: read SYM_EQ) && at_ident(toks: read toks, i: read (i + 1), wid: read WORD_UNDERSCORE) {
+            return true
+        }
+        if opener { depth = depth + 1 } else if closer { if depth > 0 { depth = depth - 1 } }
+        i = i + 1
+    }
+    return false
+}
+
+// `effects(a, retains(self), ...)` → one `effect-name`/`effect-retains` per entry.
+fn emit_effects(toks: read List<Tok>, open: read Int, close: read Int, d: read Int) -> Unit {
+    let mut i = open + 1
+    while i < close {
+        let comma = split_comma(toks: read toks, start: read i, end: read close)
+        let segEnd = pick_end(comma: read comma, end: read close)
+        if is_kw_text(toks: read toks, i: read i, word: read "retains") && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_LPAREN) {
+            emit(depth: read d, s: read String.concat(left: read "effect-retains ", right: read tk_text(toks: read toks, i: read (i + 2))))
+        } else if is_ident_tok(toks: read toks, i: read i) && (i + 1) == segEnd {
+            emit(depth: read d, s: read String.concat(left: read "effect-name ", right: read tk_text(toks: read toks, i: read i)))
+        }
+        if comma < 0 { i = close } else { i = comma + 1 }
+    }
+    return Unit
 }
 
 // Join a dotted name's identifier tokens [start,end) with '.'.
