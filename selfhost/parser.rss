@@ -38,7 +38,7 @@ fn is_feature_tok(toks: read List<Tok>, i: read Int) -> Bool {
         return false
     }
     let v = tk_val(toks: read toks, i: read i)
-    return v == 26 || v == 9 || v == 27 || v == 14 || v == 28 || v == 29 || v == 30
+    return v == WORD_LOCAL || v == WORD_NATIVE || v == WORD_UNSAFE || v == WORD_ASYNC || v == WORD_DEVICE || v == WORD_FFI || v == WORD_REFLECTION
 }
 
 fn feature_dup(toks: read List<Tok>, fstart: read Int, k: read Int) -> Bool {

@@ -36,8 +36,14 @@ struct Tok {
 }
 
 // --- Named ids (replace the raw numeric tables the scanner/parser/checker share).
-// These are the single source of truth for token kinds, symbol codes, and
-// declaration-keyword ids; every `kind`/`code:`/`wid:` site refers to one of them.
+// These are the single source of truth for the three id spaces: token KINDS
+// (Tok.kind), symbol token CODES (Tok.val for symbols), and declaration-keyword
+// WORD ids (Tok.val for idents/keywords). Every token-kind, symbol-code, and
+// word-id site — assignments, `code:`/`wid:` args, `word_id` returns, and the
+// comparisons in is_ident_tok / starts_top_level_item / is_feature_tok — refers
+// to one of these constants. NOT covered (intentionally): the raw ASCII
+// character-code compares inside the low-level char scanners (e.g. `c1 == 34`
+// for `"`), which pair with adjacent char literals, and the 0 / -1 sentinels.
 
 // Token kinds (Tok.kind). 0 = "no token emitted this step" and -1 = "index past
 // end" are sentinels, NOT token kinds, so they stay as bare literals.
@@ -415,36 +421,36 @@ fn scan_ident(chars: read List<Char>, n: read Int, i: read Int) -> Int {
 // Map an identifier/keyword's text to a small word id the tools recognize.
 // Anything the tools never check by name maps to 0.
 fn word_id(word: read String) -> Int {
-    if word == "fn" { return 1 }
-    if word == "struct" { return 2 }
-    if word == "class" { return 3 }
-    if word == "resource" { return 4 }
-    if word == "opaque" { return 5 }
-    if word == "sum" { return 6 }
-    if word == "protocol" { return 7 }
-    if word == "impl" { return 8 }
-    if word == "native" { return 9 }
-    if word == "module" { return 10 }
-    if word == "type" { return 11 }
-    if word == "const" { return 12 }
-    if word == "pub" { return 13 }
-    if word == "async" { return 14 }
-    if word == "use" { return 15 }
-    if word == "profile" { return 16 }
-    if word == "features" { return 17 }
-    if word == "for" { return 18 }
-    if word == "deprecated" { return 19 }
-    if word == "lower_name" { return 20 }
-    if word == "derives" { return 21 }
-    if word == "effects" { return 22 }
-    if word == "fresh" { return 23 }
-    if word == "_" { return 24 }
-    if word == "as" { return 25 }
-    if word == "local" { return 26 }
-    if word == "unsafe" { return 27 }
-    if word == "device" { return 28 }
-    if word == "ffi" { return 29 }
-    if word == "reflection" { return 30 }
+    if word == "fn" { return WORD_FN }
+    if word == "struct" { return WORD_STRUCT }
+    if word == "class" { return WORD_CLASS }
+    if word == "resource" { return WORD_RESOURCE }
+    if word == "opaque" { return WORD_OPAQUE }
+    if word == "sum" { return WORD_SUM }
+    if word == "protocol" { return WORD_PROTOCOL }
+    if word == "impl" { return WORD_IMPL }
+    if word == "native" { return WORD_NATIVE }
+    if word == "module" { return WORD_MODULE }
+    if word == "type" { return WORD_TYPE }
+    if word == "const" { return WORD_CONST }
+    if word == "pub" { return WORD_PUB }
+    if word == "async" { return WORD_ASYNC }
+    if word == "use" { return WORD_USE }
+    if word == "profile" { return WORD_PROFILE }
+    if word == "features" { return WORD_FEATURES }
+    if word == "for" { return WORD_FOR }
+    if word == "deprecated" { return WORD_DEPRECATED }
+    if word == "lower_name" { return WORD_LOWER_NAME }
+    if word == "derives" { return WORD_DERIVES }
+    if word == "effects" { return WORD_EFFECTS }
+    if word == "fresh" { return WORD_FRESH }
+    if word == "_" { return WORD_UNDERSCORE }
+    if word == "as" { return WORD_AS }
+    if word == "local" { return WORD_LOCAL }
+    if word == "unsafe" { return WORD_UNSAFE }
+    if word == "device" { return WORD_DEVICE }
+    if word == "ffi" { return WORD_FFI }
+    if word == "reflection" { return WORD_REFLECTION }
     return 0
 }
 
@@ -604,7 +610,7 @@ fn tk_line(toks: read List<Tok>, i: read Int) -> Int {
 
 fn is_ident_tok(toks: read List<Tok>, i: read Int) -> Bool {
     let k = tk_kind(toks: read toks, i: read i)
-    return k == 1 || k == 6
+    return k == TOK_IDENT || k == TOK_KEYWORD
 }
 
 // at_ident: token i is an Ident/Keyword with the given word id.
@@ -697,7 +703,7 @@ fn starts_top_level_item(toks: read List<Tok>, index: read Int) -> Bool {
         return false
     }
     let v = tk_val(toks: read toks, i: read index)
-    return v == 17 || v == 16 || v == 3 || v == 2 || v == 4 || v == 1 || v == 13 || v == 14 || v == 9 || v == 7 || v == 8
+    return v == WORD_FEATURES || v == WORD_PROFILE || v == WORD_CLASS || v == WORD_STRUCT || v == WORD_RESOURCE || v == WORD_FN || v == WORD_PUB || v == WORD_ASYNC || v == WORD_NATIVE || v == WORD_PROTOCOL || v == WORD_IMPL
 }
 
 fn function_signature_end(toks: read List<Tok>, start: read Int) -> Int {
