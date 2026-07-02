@@ -1825,14 +1825,15 @@ fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
 fn constructor_pattern_is_irrefutable(pattern: &MatchPattern) -> bool {
     match pattern {
         MatchPattern::Binding { .. } | MatchPattern::Wildcard(_) => true,
-        MatchPattern::Variant { binding: None, .. } => true,
-        MatchPattern::Variant {
-            binding: Some(binding),
-            ..
-        } => matches!(
-            binding.as_ref(),
-            MatchPattern::Binding { .. } | MatchPattern::Wildcard(_)
-        ),
+        // A variant pattern is irrefutable (over its own constructor) iff every
+        // positional sub-pattern is itself irrefutable (a bare binder or `_`).
+        // Payload-free (`bindings` empty) is trivially irrefutable.
+        MatchPattern::Variant { bindings, .. } => bindings.iter().all(|binding| {
+            matches!(
+                binding,
+                MatchPattern::Binding { .. } | MatchPattern::Wildcard(_)
+            )
+        }),
         MatchPattern::Struct { fields, .. } => fields.iter().all(|field| {
             field.pattern.is_none()
                 || field.pattern.as_deref().is_some_and(|pattern| {
@@ -1856,16 +1857,9 @@ fn constructor_pattern_is_irrefutable(pattern: &MatchPattern) -> bool {
 
 fn constrained_field_patterns(pattern: &MatchPattern) -> Vec<(String, &MatchPattern)> {
     match pattern {
-        MatchPattern::Variant {
-            binding: Some(binding),
-            ..
-        } if !matches!(
-            binding.as_ref(),
-            MatchPattern::Binding { .. } | MatchPattern::Wildcard(_)
-        ) =>
-        {
-            vec![("value".to_string(), binding.as_ref())]
-        }
+        // Variant patterns are matched positionally against the constructor's
+        // declared fields; see `pattern_matches_fields` in the exhaustiveness
+        // module, which zips `bindings` with the witness fields by index.
         MatchPattern::Variant { .. } => Vec::new(),
         MatchPattern::Struct { fields, .. } => fields
             .iter()

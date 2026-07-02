@@ -837,14 +837,15 @@ impl Formatter {
                     self.out.push_str(if *value { "true" } else { "false" });
                 }
             },
-            MatchPattern::Variant {
-                name,
-                binding: Some(binding),
-                ..
-            } => {
+            MatchPattern::Variant { name, bindings, .. } if !bindings.is_empty() => {
                 self.out.push_str(name);
                 self.out.push('(');
-                self.match_pattern(binding);
+                for (index, binding) in bindings.iter().enumerate() {
+                    if index > 0 {
+                        self.out.push_str(", ");
+                    }
+                    self.match_pattern(binding);
+                }
                 self.out.push(')');
             }
             MatchPattern::Variant { name, .. } => self.out.push_str(name),

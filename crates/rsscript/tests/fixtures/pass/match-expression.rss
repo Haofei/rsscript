@@ -25,7 +25,7 @@ fn direction_name(d: read Direction) -> String {
 fn area(s: read Shape) -> Int {
     let result = match s {
         Circle(r) => { read r }
-        Rectangle(w) => { read w }
+        Rectangle(w, _) => { read w }
     }
     return result
 }

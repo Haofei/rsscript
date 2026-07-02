@@ -521,15 +521,14 @@ pub enum MatchPattern {
     },
     Variant {
         name: String,
-        binding: Option<Box<MatchPattern>>,
-        /// Non-empty only for a rejected positional multi-field attempt like
-        /// `Both(a, b)`. Positional records are excluded by spec §20.1 (only
-        /// single-payload positional `Some(v)` and named `V { a, b }` are
-        /// allowed). The parser keeps the attempted binder names here so the
-        /// analyzer can emit a targeted "use named fields" diagnostic and so the
-        /// names still register as arm bindings (suppressing a misleading
-        /// per-binding RS0026). `binding` stays `None` in this case.
-        positional_multifield: Vec<String>,
+        /// Positional sub-patterns bound by declared field order:
+        /// - `bindings.len() == 0` → payload-free (`None`, bare `Variant`)
+        /// - `bindings.len() == 1` → single-payload sugar (`Some(v)`, `Ok(e)`,
+        ///   single-field user variant)
+        /// - `bindings.len() >= 2` → positional multi-field binding
+        ///   (`Both(a, b)`), mapped to declared fields by position in each
+        ///   type-aware consumer.
+        bindings: Vec<MatchPattern>,
         span: Span,
     },
     Struct {
@@ -568,20 +567,8 @@ impl MatchPattern {
     pub fn binding_names(&self) -> Vec<&str> {
         match self {
             Self::Binding { name, .. } => vec![name.as_str()],
-            Self::Variant {
-                binding: Some(binding),
-                ..
-            } => binding.binding_names(),
-            // A rejected positional multi-field variant (`Both(a, b)`) still
-            // exposes its attempted binders so the arm body's uses resolve and do
-            // not trigger a misleading per-binding RS0026 on top of the targeted
-            // diagnostic the analyzer emits.
-            Self::Variant {
-                binding: None,
-                positional_multifield,
-                ..
-            } if !positional_multifield.is_empty() => {
-                positional_multifield.iter().map(String::as_str).collect()
+            Self::Variant { bindings, .. } => {
+                bindings.iter().flat_map(MatchPattern::binding_names).collect()
             }
             Self::Struct { fields, .. } => fields
                 .iter()
@@ -613,9 +600,7 @@ impl MatchPattern {
                 }
                 names
             }
-            Self::Variant { binding: None, .. } | Self::Literal { .. } | Self::Wildcard(_) => {
-                Vec::new()
-            }
+            Self::Literal { .. } | Self::Wildcard(_) => Vec::new(),
         }
     }
 }

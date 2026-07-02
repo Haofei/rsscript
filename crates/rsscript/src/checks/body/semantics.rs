@@ -504,7 +504,7 @@ pub(super) fn check_match_pattern_matches_type(
         }
         MatchPattern::Variant {
             name,
-            binding,
+            bindings,
             span,
             ..
         } if root == "Option" => {
@@ -518,8 +518,20 @@ pub(super) fn check_match_pattern_matches_type(
                 );
                 return;
             }
+            // `Some` carries one payload, `None` carries none.
+            let expected = if name == "Some" { 1 } else { 0 };
+            if !bindings.is_empty() && bindings.len() != expected {
+                push_variant_pattern_arity_mismatch(
+                    analyzer,
+                    name,
+                    expected,
+                    bindings.len(),
+                    span,
+                );
+                return;
+            }
             if name == "Some"
-                && let Some(binding) = binding
+                && let Some(binding) = bindings.first()
                 && let Some(inner) =
                     type_arg_names(type_name).and_then(|args| args.first().copied())
             {
@@ -528,7 +540,7 @@ pub(super) fn check_match_pattern_matches_type(
         }
         MatchPattern::Variant {
             name,
-            binding,
+            bindings,
             span,
             ..
         } if root == "Result" => {
@@ -542,7 +554,11 @@ pub(super) fn check_match_pattern_matches_type(
                 );
                 return;
             }
-            if let Some(binding) = binding
+            if !bindings.is_empty() && bindings.len() != 1 {
+                push_variant_pattern_arity_mismatch(analyzer, name, 1, bindings.len(), span);
+                return;
+            }
+            if let Some(binding) = bindings.first()
                 && let Some(args) = type_arg_names(type_name)
             {
                 let payload_type = if name == "Ok" {
@@ -557,7 +573,7 @@ pub(super) fn check_match_pattern_matches_type(
         }
         MatchPattern::Variant {
             name,
-            binding,
+            bindings,
             span,
             ..
         } => {
@@ -570,9 +586,21 @@ pub(super) fn check_match_pattern_matches_type(
                 }
                 return;
             };
-            if let Some(binding) = binding
-                && let Some(field) = fields.first()
-            {
+            // A bare variant name (`V`) matches without binding any field. Once a
+            // positional payload is written, its arity must equal the declared
+            // field count, and each sub-pattern is checked against the field type
+            // at the same position (the RS0037 safety net for positional binding).
+            if !bindings.is_empty() && bindings.len() != fields.len() {
+                push_variant_pattern_arity_mismatch(
+                    analyzer,
+                    name,
+                    fields.len(),
+                    bindings.len(),
+                    span,
+                );
+                return;
+            }
+            for (binding, field) in bindings.iter().zip(fields.iter()) {
                 check_match_pattern_matches_type(analyzer, binding, &field.type_name);
             }
         }
@@ -651,6 +679,29 @@ pub(super) fn push_variant_or_struct_cannot_match(
             "match pattern type mismatch",
         )
         .with_cause("RSScript match patterns must belong to the scrutinee's type."),
+    );
+}
+
+pub(super) fn push_variant_pattern_arity_mismatch(
+    analyzer: &mut Analyzer<'_>,
+    name: &str,
+    expected: usize,
+    found: usize,
+    span: &Span,
+) {
+    let field_word = if expected == 1 { "field" } else { "fields" };
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::VARIANT_PATTERN_ARITY_MISMATCH,
+            format!(
+                "variant pattern `{name}` binds {found} sub-pattern(s) but `{name}` declares {expected} {field_word}."
+            ),
+            span.clone(),
+            "variant pattern arity mismatch",
+        )
+        .with_cause(
+            "A positional variant pattern must bind exactly as many sub-patterns as the variant declares fields, in declared order.",
+        ),
     );
 }
 

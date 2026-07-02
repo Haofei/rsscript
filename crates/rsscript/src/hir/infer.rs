@@ -526,12 +526,11 @@ pub(super) fn match_pattern_binding_type(
     if let MatchPattern::Binding { name, .. } = pattern {
         return value_type.map(|ty| (name.clone(), ty.to_string()));
     }
-    let MatchPattern::Variant {
-        name,
-        binding: Some(binding),
-        ..
-    } = pattern
-    else {
+    let MatchPattern::Variant { name, bindings, .. } = pattern else {
+        return None;
+    };
+    // Option/Result carry a single positional payload.
+    let Some(binding) = bindings.first() else {
         return None;
     };
     let value_type = value_type?;
@@ -570,11 +569,8 @@ pub(super) fn match_pattern_binding_types(
         return vec![binding];
     }
 
-    if let MatchPattern::Variant {
-        name,
-        binding: Some(binding),
-        ..
-    } = pattern
+    if let MatchPattern::Variant { name, bindings, .. } = pattern
+        && !bindings.is_empty()
     {
         let Some(value_type) = value_type else {
             return Vec::new();
@@ -584,11 +580,21 @@ pub(super) fn match_pattern_binding_types(
             .sum_type_for_variant(name)
             .is_some_and(|sum| sum == root)
             && let Some(field_types) = hir.sum_variant_fields.get(name)
-            && let Some(field_type) = field_types.first()
         {
             let substitutions = binding_substitutions(hir, value_type);
-            let field_type_name = substitute_type_params(&field_type.type_name, &substitutions);
-            return match_pattern_binding_types(hir, binding, Some(&field_type_name));
+            // Zip each positional sub-pattern with the variant's declared fields
+            // by index.
+            let mut result = Vec::new();
+            for (binding, field_type) in bindings.iter().zip(field_types.iter()) {
+                let field_type_name =
+                    substitute_type_params(&field_type.type_name, &substitutions);
+                result.extend(match_pattern_binding_types(
+                    hir,
+                    binding,
+                    Some(&field_type_name),
+                ));
+            }
+            return result;
         }
     }
 

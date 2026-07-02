@@ -1167,6 +1167,7 @@ _                                  // fallback; binds nothing
 Some(value), Ok(value), Err(error) // single-payload variant binding
 Some(_), Ok(_), Err(_)             // payload wildcard
 Variant                            // payload-free variant
+V(a, b), V(a, _, c)                // positional multi-field variant binding (by declared field order; §20.1 SH-024)
 Variant { field, other: read x }   // structured variant payload
 Struct { field, other: mut x }     // struct destructuring
 Struct { field, .. }               // ignore the remaining fields
@@ -1175,9 +1176,17 @@ Struct { field, .. }               // ignore the remaining fields
 42, "ready", 'a', true             // scalar literal patterns (Int, String, Char, Bool)
 ```
 
+A positional payload `V(a, b, ...)` on a *declared sum variant* binds that
+variant's fields by declared order (the bounded SH-024 exception, §20.1); its
+arity must equal the variant's declared field count (RS0037) and it is fully
+equivalent to the named form `V { first: a, second: b }`. Note the disambiguation
+with tuple patterns below: `(a, b)` with no leading constructor is a tuple
+pattern, whereas `V(a, b)` is a positional variant binding.
+
 A **tuple pattern** `(p0, p1, ...)` matches a tuple scrutinee positionally; each
 element pattern is a binding, wildcard, or scalar literal and is checked against
-the corresponding tuple element type (§6.10).
+the corresponding tuple element type (§6.10). Unlike a positional variant binding
+`V(a, b)`, a tuple pattern has no leading constructor name.
 
 A **list slice pattern** matches a `List<T>` scrutinee by shape. The element
 patterns are checked against `T`, and an optional rest segment captures the
@@ -5644,9 +5653,23 @@ extension methods /          conflicts with explicit Type.method(self: ...) call
 implicit method resolution   and no auto method resolution; receiver-call shorthand
                              (§14.6.1) is NOT implicit — it requires a visible
                              effect keyword and unique resolution
-positional records /         conflicts with named-everything canonical style;
-implicit flow promotion       any record-like form must use named fields
+anonymous positional records conflicts with named-everything canonical style;
+/ implicit flow promotion     struct literals and record-like construction must
+                             use named fields, and control flow is never promoted
+                             implicitly
 ```
+
+**Bounded exception — positional variant binding (SH-024).** A match pattern
+MAY bind a declared sum-type variant's fields positionally, by declared field
+order: `Circle(r)`, `Rectangle(w, h)`, `Prism(w, _, d)`, and nested per-position
+forms such as `Pair(k, Some(v))`. This is allowed ONLY against a variant's own
+declared fields — it does NOT reintroduce anonymous positional records, positional
+struct literals, or implicit flow promotion. When a parenthesised payload is
+written its arity must equal the declared field count (enforced by RS0037); a
+payload-free variant may still be matched by its bare name (`Empty`). Named-field
+patterns (`Rectangle { width, height }`) remain fully equivalent and are the
+canonical form for wide variants. All backends (interpreter, JIT, native, compiled)
+agree on the semantics.
 
 ### 20.2 In scope: committed implementation roadmap
 

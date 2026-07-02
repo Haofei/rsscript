@@ -670,12 +670,11 @@ pub(super) fn review_map_match_binding_type(
     if let MatchPattern::Binding { name, .. } = pattern {
         return value_type.map(|ty| (name.clone(), ty.to_string()));
     }
-    let MatchPattern::Variant {
-        name,
-        binding: Some(binding),
-        ..
-    } = pattern
-    else {
+    let MatchPattern::Variant { name, bindings, .. } = pattern else {
+        return None;
+    };
+    // Option/Result carry a single positional payload.
+    let Some(binding) = bindings.first() else {
         return None;
     };
     let value_type = value_type?;

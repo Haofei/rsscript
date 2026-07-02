@@ -1097,11 +1097,14 @@ pub(super) fn lower_match_pattern(pattern: &MatchPattern) -> String {
         MatchPattern::Binding { name, .. } => rust_ident(name),
         MatchPattern::Wildcard(_) => "_".to_string(),
         MatchPattern::Literal { value, .. } => lower_match_literal(value),
-        MatchPattern::Variant {
-            name,
-            binding: Some(binding),
-            ..
-        } => format!("{}({})", rust_ident(name), lower_match_pattern(binding)),
+        MatchPattern::Variant { name, bindings, .. } if !bindings.is_empty() => {
+            let parts = bindings
+                .iter()
+                .map(lower_match_pattern)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{}({parts})", rust_ident(name))
+        }
         MatchPattern::Variant { name, .. } if matches!(name.as_str(), "Some" | "Ok" | "Err") => {
             format!("{}(_)", rust_ident(name))
         }

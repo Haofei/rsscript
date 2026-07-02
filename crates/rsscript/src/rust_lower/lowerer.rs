@@ -2733,12 +2733,11 @@ pub(super) fn match_binding_type_ref(
     if let MatchPattern::Binding { name, .. } = pattern {
         return value_type.cloned().map(|ty| (name.clone(), ty));
     }
-    let MatchPattern::Variant {
-        name,
-        binding: Some(binding),
-        ..
-    } = pattern
-    else {
+    let MatchPattern::Variant { name, bindings, .. } = pattern else {
+        return None;
+    };
+    // Option/Result carry a single positional payload.
+    let Some(binding) = bindings.first() else {
         return None;
     };
     let value_type = value_type?;

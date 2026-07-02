@@ -2029,8 +2029,8 @@ impl RegLowerer<'_> {
                 Ok(Vec::new())
             }
             MatchPattern::Wildcard(_) => Ok(Vec::new()),
-            MatchPattern::Variant { name, binding, .. } if name == "Some" => {
-                self.lower_option_some_pattern(src, binding.as_deref())
+            MatchPattern::Variant { name, bindings, .. } if name == "Some" => {
+                self.lower_option_some_pattern(src, bindings.first())
             }
             MatchPattern::Variant { name, .. } if name == "None" => {
                 let match_ip = self.emit(RegInstr::MatchOption {
@@ -2042,13 +2042,13 @@ impl RegLowerer<'_> {
                 self.patch_match_none(match_ip, pass_ip);
                 Ok(vec![MatchFailurePatch::OptionSome(match_ip)])
             }
-            MatchPattern::Variant { name, binding, .. } if name == "Ok" || name == "Err" => {
-                self.lower_result_variant_pattern(src, name, binding.as_deref())
+            MatchPattern::Variant { name, bindings, .. } if name == "Ok" || name == "Err" => {
+                self.lower_result_variant_pattern(src, name, bindings.first())
             }
-            MatchPattern::Variant { name, binding, .. }
+            MatchPattern::Variant { name, bindings, .. }
                 if self.hir.sum_type_for_variant(name).is_some() =>
             {
-                self.lower_user_variant_pattern(src, name, binding.as_deref())
+                self.lower_user_variant_pattern(src, name, bindings)
             }
             MatchPattern::Struct { name, fields, .. }
                 if self.hir.sum_type_for_variant(name).is_some() =>
@@ -2074,18 +2074,18 @@ impl RegLowerer<'_> {
             MatchPattern::Binding { .. }
             | MatchPattern::Literal { .. }
             | MatchPattern::Wildcard(_) => true,
-            MatchPattern::Variant { name, binding, .. }
+            MatchPattern::Variant { name, bindings, .. }
                 if matches!(name.as_str(), "Some" | "None" | "Ok" | "Err") =>
             {
-                binding
-                    .as_deref()
-                    .is_none_or(|binding| self.is_supported_match_pattern(binding))
+                bindings
+                    .iter()
+                    .all(|binding| self.is_supported_match_pattern(binding))
             }
-            MatchPattern::Variant { name, binding, .. } => {
+            MatchPattern::Variant { name, bindings, .. } => {
                 self.hir.sum_type_for_variant(name).is_some()
-                    && binding
-                        .as_deref()
-                        .is_none_or(|binding| self.is_supported_match_pattern(binding))
+                    && bindings
+                        .iter()
+                        .all(|binding| self.is_supported_match_pattern(binding))
             }
             MatchPattern::Struct { name, fields, .. } => {
                 (self.hir.sum_type_for_variant(name).is_some()
@@ -2390,9 +2390,15 @@ impl RegLowerer<'_> {
         &mut self,
         src: Reg,
         variant: &str,
-        binding: Option<&MatchPattern>,
+        bindings: &[MatchPattern],
     ) -> Result<Vec<MatchFailurePatch>, EvalError> {
-        let fields = self.hir.sum_variant_fields(variant).unwrap_or(&[]);
+        let field_names: Vec<String> = self
+            .hir
+            .sum_variant_fields(variant)
+            .unwrap_or(&[])
+            .iter()
+            .map(|field| field.name.clone())
+            .collect();
         let match_ip = self.emit(RegInstr::MatchVariant {
             src,
             expected: variant.to_string(),
@@ -2402,14 +2408,19 @@ impl RegLowerer<'_> {
         let pass_ip = self.function.code.len();
         self.patch_jump(match_ip, pass_ip);
         let mut failures = vec![MatchFailurePatch::VariantOther(match_ip)];
-        if let Some(binding) = binding {
-            if fields.len() != 1 {
-                return Err(EvalError::Runtime(format!(
-                    "reg VM variant `{variant}` binding requires exactly one field, got {}.",
-                    fields.len()
-                )));
-            }
-            match binding {
+        if bindings.len() != field_names.len() && !bindings.is_empty() {
+            return Err(EvalError::Runtime(format!(
+                "reg VM variant `{variant}` pattern binds {} sub-pattern(s) but declares {} field(s).",
+                bindings.len(),
+                field_names.len()
+            )));
+        }
+        match bindings {
+            // A bare variant name (no positional payload) only tests the tag.
+            [] => {}
+            // Single-payload sugar keeps the `UnwrapVariantValue` projection so the
+            // native scalar-replacement pass can still dissolve the variant.
+            [binding] => match binding {
                 MatchPattern::Binding { name, .. } => {
                     let dst = self.local(name);
                     self.emit(RegInstr::UnwrapVariantValue {
@@ -2428,11 +2439,35 @@ impl RegLowerer<'_> {
                     });
                     failures.extend(self.lower_match_pattern(binding, payload)?);
                 }
+            },
+            // Positional multi-field binding routes through the same per-field
+            // `GetField` projection as `lower_user_struct_variant_pattern`, so the
+            // reg-VM and AOT share the struct-variant field-projection semantics.
+            _ => {
+                for (binding, field_name) in bindings.iter().zip(field_names.iter()) {
+                    if matches!(binding, MatchPattern::Wildcard(_)) {
+                        continue;
+                    }
+                    let field_reg = self.temp();
+                    self.emit(RegInstr::GetField {
+                        dst: field_reg,
+                        base: src,
+                        name: field_name.clone(),
+                    });
+                    match binding {
+                        MatchPattern::Binding { name, .. } => {
+                            let dst = self.local(name);
+                            self.emit(RegInstr::Move {
+                                dst,
+                                src: field_reg,
+                            });
+                        }
+                        _ => {
+                            failures.extend(self.lower_match_pattern(binding, field_reg)?);
+                        }
+                    }
+                }
             }
-        } else if !fields.is_empty() {
-            return Err(EvalError::Runtime(format!(
-                "reg VM variant `{variant}` pattern requires a payload binding."
-            )));
         }
         Ok(failures)
     }
@@ -2526,12 +2561,13 @@ impl RegLowerer<'_> {
         let mut has_none = false;
         for arm in arms {
             match &arm.pattern {
-                MatchPattern::Variant {
-                    name,
-                    binding: Some(binding),
-                    ..
-                } if name == "Some" => {
-                    some_binding = binding.binding_names().into_iter().next();
+                MatchPattern::Variant { name, bindings, .. }
+                    if name == "Some" && !bindings.is_empty() =>
+                {
+                    some_binding = bindings
+                        .iter()
+                        .flat_map(MatchPattern::binding_names)
+                        .next();
                 }
                 MatchPattern::Variant { name, .. } if name == "None" => {
                     has_none = true;

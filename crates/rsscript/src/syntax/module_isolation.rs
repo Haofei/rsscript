@@ -533,7 +533,7 @@ impl Resolver {
     /// a user type and are left alone.
     fn rewrite_pattern(&self, pattern: &mut MatchPattern, file: &str) {
         match pattern {
-            MatchPattern::Variant { name, binding, .. } => {
+            MatchPattern::Variant { name, bindings, .. } => {
                 if let Some(mangled) = self.resolve_bare(file, name) {
                     *name = mangled;
                 } else if let Some((namespace, variant)) = name.rsplit_once('.') {
@@ -549,7 +549,7 @@ impl Resolver {
                         *name = variant.to_string();
                     }
                 }
-                if let Some(binding) = binding {
+                for binding in bindings {
                     self.rewrite_pattern(binding, file);
                 }
             }

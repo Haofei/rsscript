@@ -690,9 +690,9 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
 - **Minimal RSS:**
   ```
   sum Pair { Both(a: Int, b: Int)  Nothing }
-  // fails:  match p        { Both(a, b)      => ... }   // RS0026 on a, b
-  // fails:  match p        { Both { a, b }   => ... }   // RS0202 missing effect
-  // works:  match read p   { Both { a, b }   => ... }
+  // works now: match read p { Both(a, b)    => ... }   // positional (SH-024)
+  // works:     match read p { Both { a, b } => ... }   // named (equivalent)
+  // arity err: match read p { Both(a)       => ... }   // RS0037 (1 != 2 fields)
   ```
 - **Backend:** all (frontend / parser + binding resolution).
 - **Root cause:** positional binding is only wired for single-field variants;
@@ -700,20 +700,36 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   which additionally project fields and so require a `read`/`mut`/`take` scrutinee
   effect. The two rules compound into confusing errors for the natural
   `Variant(a, b)` shape.
-- **Classification:** language (parser / pattern binding) + docs.
-- **Decision:** fixed (diagnostic). Positional multi-field variant patterns now
-  emit a targeted `RS0037` ("multi-field variant `V` must be matched with named
-  fields: `V { a, b }`") with a rewrite hint, instead of a misleading per-binding
-  `RS0026`. The parser detects the `V(a, b)` shape and records the attempted
-  binder names on `MatchPattern::Variant.positional_multifield`
-  (`syntax/parser/pattern.rs`); `binding_names()` still exposes them so the arm
-  body's uses resolve (no RS0026) while the analyzer
-  (`analyzer/syntax_support.rs::check_positional_multifield_pattern`) emits the one
-  new code. Positional multi-field *binding* stays intentionally unsupported per
-  spec §20.1 — the fix is a clearer diagnostic, not the feature. Self-hosted code
-  keeps using `match read scrutinee { Variant { field, … } => … }`.
-- **Tests:** covered indirectly by every `match read … { V { … } }` in
-  `selfhost/parser.rss` / `selfhost/check.rss`;
-  fixture `tests/fixtures/fail/positional-multifield-variant.rss`.
-- **Status:** fixed (diagnostic): positional multi-field variant patterns now emit
-  RS0037 instead of misleading RS0026.
+- **Classification:** language (parser / pattern binding + all lowerings) + docs.
+- **Decision:** fixed (feature). Positional multi-field variant binding is now a
+  first-class, cross-backend pattern form. `MatchPattern::Variant` unifies its
+  payload into a single `bindings: Vec<MatchPattern>` (0 = payload-free, 1 =
+  single-payload sugar, ≥2 = positional multi-field); each element is a full
+  sub-pattern, so nested positions (`V(Some(x), _, 3)`) work for free. The parser
+  keeps the positional list (no type info); the position→declared-field mapping
+  happens in each type-aware consumer, reusing each backend's existing
+  struct-variant field projection: the type checker
+  (`checks/body/semantics.rs`) zips `bindings` with declared fields by position,
+  the reg-VM (`reg_vm/lower.rs::lower_user_variant_pattern`) emits per-field
+  `GetField` after the `MatchVariant` tag test (single-payload keeps
+  `UnwrapVariantValue` so native scalar-replacement still dissolves it), and the
+  AOT (`rust_lower/lower_match.rs`) emits the named form
+  `Sum::V { first: a, second: b }`. The old RS0037 (`POSITIONAL_MULTIFIELD_VARIANT`)
+  and `check_positional_multifield_pattern` are removed; RS0037 is repurposed as
+  the arity safety net (`VARIANT_PATTERN_ARITY_MISMATCH`): a written positional
+  payload must bind exactly as many sub-patterns as the variant declares fields.
+  Spec §20.1 amended (positional variant binding moved out of the "positional
+  records rejected" tenet into a bounded allowed feature; anonymous positional
+  records / implicit flow promotion stay rejected).
+- **Tests:** pass fixtures
+  `tests/fixtures/pass/positional-multifield-variant.rss` (2-/3-field, ignored
+  positions, named≡positional) and `…/positional-multifield-nested.rss`
+  (nested per-position); negative arity fixture
+  `tests/fixtures/fail/variant-pattern-arity-mismatch.rss` (RS0037);
+  backend-parity `backend_differential::backends_agree_on_positional_multifield_variant`
+  + `…_nested_variant` (interp ≡ jit ≡ native ≡ compiled); corpus exec
+  `tests/corpus/exec/positional_multifield_variant.rss` (vm ≡ compiled). The old
+  `fail/positional-multifield-variant.rss` fixture was deleted.
+- **Status:** fixed (feature): positional multi-field variant binding supported
+  across all backends; RS0037 removed as a restriction and repurposed for arity;
+  spec §20.1 amended.

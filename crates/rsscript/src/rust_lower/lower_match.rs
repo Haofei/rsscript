@@ -200,12 +200,16 @@ impl RustLowerer<'_> {
         pattern: &MatchPattern,
         value_type: Option<&TypeRef>,
     ) -> Option<(String, TypeRef)> {
-        let MatchPattern::Variant { name, binding, .. } = pattern else {
+        let MatchPattern::Variant { name, bindings, .. } = pattern else {
+            return None;
+        };
+        // Single-payload sugar only: exactly one bound sub-pattern.
+        let [binding] = bindings.as_slice() else {
             return None;
         };
         let MatchPattern::Binding {
             name: bind_name, ..
-        } = binding.as_deref()?
+        } = binding
         else {
             return None;
         };
@@ -243,6 +247,30 @@ impl RustLowerer<'_> {
                 .owned_rebinding_for(&bind_name, &field_ty)
                 .into_iter()
                 .collect();
+        }
+        // Positional multi-field variant patterns (`Both(a, b)`): each positional
+        // binding of a by-ref scrutinee is `&T` under match ergonomics; rebind to
+        // its owned form, mapping positions to declared fields and recursing
+        // through nested sub-patterns.
+        if let MatchPattern::Variant { name, bindings, .. } = pattern
+            && bindings.len() >= 2
+            && let Some((_, fields)) = self.sum_variant_fields_for_type(value_type, name)
+        {
+            let params = self.pattern_type_params(value_type, name);
+            let args: Vec<TypeRef> = value_type.map(|ty| ty.args.clone()).unwrap_or_default();
+            let mut rebindings = Vec::new();
+            for (binding, field) in bindings.iter().zip(fields.iter()) {
+                let field_ty = substitute_generic_type(&field.ty, &params, &args);
+                match binding {
+                    MatchPattern::Binding { name, .. } => {
+                        rebindings.extend(self.owned_rebinding_for(name, &field_ty));
+                    }
+                    MatchPattern::Wildcard(_) => {}
+                    _ => rebindings
+                        .extend(self.owned_payload_rebindings(binding, Some(&field_ty))),
+                }
+            }
+            return rebindings;
         }
         // Struct / tuple patterns: each bound field of a by-ref scrutinee is `&T`
         // under match ergonomics, but the arm should see an owned `T` — so shadow
@@ -370,17 +398,17 @@ impl RustLowerer<'_> {
             MatchPattern::Binding { name, .. } => rust_ident(name),
             MatchPattern::Wildcard(_) => "_".to_string(),
             MatchPattern::Literal { value, .. } => lower_match_literal(value),
-            MatchPattern::Variant { name, binding, .. }
+            MatchPattern::Variant { name, bindings, .. }
                 if name == "Some" && value_type.is_some_and(|ty| ty.name == "Option") =>
             {
                 let inner = value_type.and_then(|ty| ty.args.first());
-                let payload = binding
-                    .as_ref()
+                let payload = bindings
+                    .first()
                     .map(|binding| self.lower_match_pattern_typed(binding, inner, by_ref))
                     .unwrap_or_else(|| "_".to_string());
                 format!("Some({payload})")
             }
-            MatchPattern::Variant { name, binding, .. }
+            MatchPattern::Variant { name, bindings, .. }
                 if matches!(name.as_str(), "Ok" | "Err")
                     && value_type.is_some_and(|ty| ty.name == "Result") =>
             {
@@ -391,31 +419,30 @@ impl RustLowerer<'_> {
                         ty.args.get(1)
                     }
                 });
-                let payload = binding
-                    .as_ref()
+                let payload = bindings
+                    .first()
                     .map(|binding| self.lower_match_pattern_typed(binding, inner, by_ref))
                     .unwrap_or_else(|| "_".to_string());
                 format!("{}({payload})", rust_ident(name))
             }
-            MatchPattern::Variant { name, binding, .. } => {
+            MatchPattern::Variant { name, bindings, .. } => {
                 if let Some((sum_name, fields)) = self.sum_variant_fields_for_type(value_type, name)
                 {
                     if fields.is_empty() {
                         return format!("{}::{}", rust_ident(&sum_name), rust_ident(name));
                     }
+                    // Zip each positional sub-pattern with the declared fields by
+                    // index; a genuinely absent/ignored position lowers to `_`. The
+                    // output stays the named form `Sum::V { first: a, second: b }`
+                    // (valid Rust), matching the reg-VM's per-field projection.
                     let mut parts = Vec::new();
-                    let single_field = fields.len() == 1;
-                    for field in &fields {
-                        let field_pattern = if single_field {
-                            binding
-                                .as_ref()
-                                .map(|binding| {
-                                    self.lower_match_pattern_typed(binding, Some(&field.ty), by_ref)
-                                })
-                                .unwrap_or_else(|| "_".to_string())
-                        } else {
-                            "_".to_string()
-                        };
+                    for (index, field) in fields.iter().enumerate() {
+                        let field_pattern = bindings
+                            .get(index)
+                            .map(|binding| {
+                                self.lower_match_pattern_typed(binding, Some(&field.ty), by_ref)
+                            })
+                            .unwrap_or_else(|| "_".to_string());
                         parts.push(format!("{}: {}", rust_ident(&field.name), field_pattern));
                     }
                     return format!(

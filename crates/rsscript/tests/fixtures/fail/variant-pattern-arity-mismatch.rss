@@ -1,0 +1,12 @@
+// expect: RS0037
+sum Shape {
+    Rectangle(width: Int, height: Int)
+    Prism(width: Int, height: Int, depth: Int)
+}
+fn f(shape: read Shape) -> Int {
+    match read shape {
+        // Prism declares three fields but only two are bound positionally.
+        Prism(w, h) => { return read w * read h }
+        Rectangle(w, h) => { return read w * read h }
+    }
+}

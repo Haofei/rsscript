@@ -253,15 +253,14 @@ fn try_parse_let_else(tokens: &[Token], start: usize, limit: usize) -> Option<(S
     let else_body = parse_block(tokens, open + 1, close);
     let pattern = MatchPattern::Variant {
         name: variant_name.to_string(),
-        binding: if binding_name.is_empty() {
-            None
+        bindings: if binding_name.is_empty() {
+            Vec::new()
         } else {
-            Some(Box::new(MatchPattern::Binding {
+            vec![MatchPattern::Binding {
                 name: binding_name.clone(),
                 span: tokens[pattern_start + 2].span.clone(),
-            }))
+            }]
         },
-        positional_multifield: Vec::new(),
         span: tokens[pattern_start].span.clone(),
     };
     Some((

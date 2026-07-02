@@ -192,13 +192,13 @@ impl Analyzer<'_> {
         if root == "Option" {
             let args = type_arg_names(type_name).unwrap_or_default();
             let some_has_irrefutable_payload = patterns.iter().any(|pattern| {
-                matches!(pattern, MatchPattern::Variant { name, binding: None, .. } if name == "Some")
+                matches!(pattern, MatchPattern::Variant { name, bindings, .. } if name == "Some" && bindings.is_empty())
             });
             let some_patterns = patterns
                 .iter()
                 .filter_map(|pattern| match pattern {
-                    MatchPattern::Variant { name, binding, .. } if name == "Some" => {
-                        binding.as_deref()
+                    MatchPattern::Variant { name, bindings, .. } if name == "Some" => {
+                        bindings.first()
                     }
                     _ => None,
                 })
@@ -215,16 +215,16 @@ impl Analyzer<'_> {
         if root == "Result" {
             let args = type_arg_names(type_name).unwrap_or_default();
             let ok_has_irrefutable_payload = patterns.iter().any(|pattern| {
-                matches!(pattern, MatchPattern::Variant { name, binding: None, .. } if name == "Ok")
+                matches!(pattern, MatchPattern::Variant { name, bindings, .. } if name == "Ok" && bindings.is_empty())
             });
             let err_has_irrefutable_payload = patterns.iter().any(|pattern| {
-                matches!(pattern, MatchPattern::Variant { name, binding: None, .. } if name == "Err")
+                matches!(pattern, MatchPattern::Variant { name, bindings, .. } if name == "Err" && bindings.is_empty())
             });
             let ok_patterns = patterns
                 .iter()
                 .filter_map(|pattern| match pattern {
-                    MatchPattern::Variant { name, binding, .. } if name == "Ok" => {
-                        binding.as_deref()
+                    MatchPattern::Variant { name, bindings, .. } if name == "Ok" => {
+                        bindings.first()
                     }
                     _ => None,
                 })
@@ -232,8 +232,8 @@ impl Analyzer<'_> {
             let err_patterns = patterns
                 .iter()
                 .filter_map(|pattern| match pattern {
-                    MatchPattern::Variant { name, binding, .. } if name == "Err" => {
-                        binding.as_deref()
+                    MatchPattern::Variant { name, bindings, .. } if name == "Err" => {
+                        bindings.first()
                     }
                     _ => None,
                 })
@@ -425,6 +425,15 @@ impl Analyzer<'_> {
         if constructor_pattern_is_irrefutable(pattern) {
             return true;
         }
+        // Variant patterns bind positionally: zip each sub-pattern with the
+        // constructor's declared fields (the witness order) by index.
+        if let MatchPattern::Variant { bindings, .. } = pattern {
+            return bindings.iter().enumerate().all(|(index, sub)| {
+                fields
+                    .get(index)
+                    .is_some_and(|(_, witness)| self.pattern_matches_witness(sub, witness))
+            });
+        }
         constrained_field_patterns(pattern)
             .into_iter()
             .all(|(name, pattern)| {
@@ -447,7 +456,7 @@ impl Analyzer<'_> {
                 ..
             } => matches!(witness, PatternWitness::Bool(candidate) if candidate == value),
             MatchPattern::Literal { .. } | MatchPattern::List { .. } => false,
-            MatchPattern::Variant { name, binding, .. } => {
+            MatchPattern::Variant { name, bindings, .. } => {
                 let PatternWitness::Constructor {
                     name: witness_name,
                     fields,
@@ -458,19 +467,19 @@ impl Analyzer<'_> {
                 if name != witness_name {
                     return false;
                 }
-                if let Some(binding) = binding {
+                // Zip each positional sub-pattern with the constructor's declared
+                // fields by index; a bare binder/`_` matches anything.
+                bindings.iter().enumerate().all(|(index, sub)| {
                     if matches!(
-                        binding.as_ref(),
+                        sub,
                         MatchPattern::Binding { .. } | MatchPattern::Wildcard(_)
                     ) {
                         return true;
                     }
                     fields
-                        .first()
-                        .is_some_and(|(_, witness)| self.pattern_matches_witness(binding, witness))
-                } else {
-                    true
-                }
+                        .get(index)
+                        .is_some_and(|(_, witness)| self.pattern_matches_witness(sub, witness))
+                })
             }
             MatchPattern::Struct {
                 name, fields: _, ..

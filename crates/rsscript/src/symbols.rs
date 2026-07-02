@@ -822,10 +822,11 @@ impl Builder<'_> {
             MatchPattern::Binding { name, span } => {
                 self.define(name, SymbolKind::Local, span, None);
             }
-            MatchPattern::Variant {
-                binding: Some(binding),
-                ..
-            } => self.visit_pattern(binding),
+            MatchPattern::Variant { bindings, .. } => {
+                for binding in bindings {
+                    self.visit_pattern(binding);
+                }
+            }
             MatchPattern::Struct { fields, .. } => {
                 for field in fields {
                     if let Some(pattern) = &field.pattern {
@@ -850,9 +851,7 @@ impl Builder<'_> {
                     self.define(rest_name, SymbolKind::Local, span, None);
                 }
             }
-            MatchPattern::Variant { binding: None, .. }
-            | MatchPattern::Literal { .. }
-            | MatchPattern::Wildcard(_) => {}
+            MatchPattern::Literal { .. } | MatchPattern::Wildcard(_) => {}
         }
     }
 

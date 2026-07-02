@@ -1,8 +1,0 @@
-// expect: RS0037
-sum Pair { Both(a: Int, b: Int)  Nothing }
-fn f(p: read Pair) -> Int {
-    match read p {
-        Both(a, b) => { return read a }
-        Nothing => { return 0 }
-    }
-}

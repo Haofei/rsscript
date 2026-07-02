@@ -306,6 +306,63 @@ fn main() -> Unit {
     common::differential::assert_backends_agree("jit-params.rss", source, &[]);
 }
 
+/// Positional multi-field variant binding (SH-024): matching a 2-/3-field sum
+/// variant by declared field order (`Rectangle(w, h)`, `Prism(w, _, d)`) and a
+/// nested per-position pattern must agree across every backend. This surfaces
+/// both danger zones: the reg-VM per-field `GetField` projection and the AOT
+/// named-form lowering (`Sum::V { first: a, second: b }`).
+#[test]
+fn backends_agree_on_positional_multifield_variant() {
+    let source = "\
+sum Shape {
+    Circle(radius: Int)
+    Rectangle(width: Int, height: Int)
+    Prism(width: Int, height: Int, depth: Int)
+}
+
+fn area(shape: read Shape) -> Int {
+    match read shape {
+        Circle(r) => { return read r * read r }
+        Rectangle(w, h) => { return read w * read h }
+        Prism(w, _, d) => { return read w * read d }
+    }
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: area(shape: read Circle(radius: 4))))
+    Log.write(message: read String.from_int(value: area(shape: read Rectangle(width: 3, height: 5))))
+    Log.write(message: read String.from_int(value: area(shape: read Prism(width: 2, height: 9, depth: 7))))
+    return Unit
+}
+";
+    common::differential::assert_backends_agree("multifield-variant.rss", source, &[]);
+}
+
+/// Nested per-position destructuring inside a positional multi-field variant
+/// (`Pair(k, Some(v))`) must agree across every backend.
+#[test]
+fn backends_agree_on_positional_multifield_nested_variant() {
+    let source = "\
+sum Entry {
+    Pair(key: Int, value: Option<Int>)
+}
+
+fn value_or_zero(entry: read Entry) -> Int {
+    match read entry {
+        Pair(k, Some(v)) => { return read k + read v }
+        Pair(k, None) => { return read k }
+    }
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: value_or_zero(entry: read Pair(key: 10, value: Some(5)))))
+    Log.write(message: read String.from_int(value: value_or_zero(entry: read Pair(key: 10, value: None))))
+    return Unit
+}
+";
+    common::differential::assert_backends_agree("multifield-variant-nested.rss", source, &[]);
+}
+
 /// Eligible function with comparisons and branches (LessInt / JumpIfBool /
 /// JumpIfIntCompare in the JIT).
 #[test]

@@ -2662,15 +2662,14 @@ fn fresh_match_pattern_binding(
     if source.is_none() && !fresh_from_scrutinee {
         return None;
     }
-    let crate::syntax::ast::MatchPattern::Variant {
-        name,
-        binding: Some(binding),
-        ..
-    } = &arm.pattern
-    else {
+    let crate::syntax::ast::MatchPattern::Variant { name, bindings, .. } = &arm.pattern else {
         return None;
     };
-    let crate::syntax::ast::MatchPattern::Binding { name: binding, .. } = binding.as_ref() else {
+    // Fresh-payload tracking applies only to the single-payload sugar.
+    let [binding] = bindings.as_slice() else {
+        return None;
+    };
+    let crate::syntax::ast::MatchPattern::Binding { name: binding, .. } = binding else {
         return None;
     };
     let payload_type = fresh_payload_type_for_variant(value_type, name)?;
