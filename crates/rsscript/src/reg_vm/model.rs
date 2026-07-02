@@ -2362,7 +2362,7 @@ fn deepcopy_intrinsic_class(intrinsic: RegIntrinsic) -> IntrinsicTaintClass {
 /// Classification:
 /// * In-place mutation of a tainted heap receiver → keep (mirrors native's receiver set;
 ///   the broader interpreter-only mutators fall through to the conservative default).
-/// * Alias-PROPAGATION reads (`Move`/`*Get`/`GetField*`/`UnwrapVariantValue`/`DequePop*`) →
+/// * Alias-PROPAGATION reads (`Move`/`*Get`/`GetField*`/`UnwrapSome`/`UnwrapVariantValue`/`DequePop*`) →
 ///   safe: `dst` is already tainted by the closure, and the op does not itself mutate/escape.
 /// * Calls (`CallKnown`/`CallDynamic`/`CallNative`/`CallClosure`) → keep ONLY if a tainted
 ///   value sits in a `mut_args` position; `read` args (and the `closure` receiver) are safe
@@ -2393,6 +2393,7 @@ fn deepcopy_instr_forces_keep(instr: &RegInstr, tainted: &[bool], n_regs: usize)
         | RegInstr::MapGet { .. }
         | RegInstr::GetField { .. }
         | RegInstr::GetFieldSlot { .. }
+        | RegInstr::UnwrapSome { .. }
         | RegInstr::UnwrapVariantValue { .. }
         | RegInstr::DequePopFront { .. }
         | RegInstr::DequePopBack { .. } => false,
@@ -2514,7 +2515,7 @@ fn deepcopy_elidable_param_regs(
                     }
                 }
                 // Extractions (`ListGet`/`MapGet`/`GetField`/`GetFieldSlot`/
-                // `UnwrapVariantValue`/`DequePop*`) pull an INTERIOR value out of a
+                // `UnwrapSome`/`UnwrapVariantValue`/`DequePop*`) pull an INTERIOR value out of a
                 // collection/struct/variant. When the lowerer proved `dst` holds a
                 // `Copy` scalar (`Int`/`Bool`/`Float`/`Char`/…), that value is inline
                 // with no interior `Rc`: it cannot alias `src` or carry `src`'s `Rc`
@@ -2526,6 +2527,7 @@ fn deepcopy_elidable_param_regs(
                 | RegInstr::MapGet { dst, map: src, .. }
                 | RegInstr::GetField { dst, base: src, .. }
                 | RegInstr::GetFieldSlot { dst, base: src, .. }
+                | RegInstr::UnwrapSome { dst, src }
                 | RegInstr::UnwrapVariantValue { dst, src, .. }
                 | RegInstr::DequePopFront { dst, deque: src }
                 | RegInstr::DequePopBack { dst, deque: src } = instr

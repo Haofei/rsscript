@@ -771,6 +771,60 @@ fn main() -> Unit {
         assert_eq!(output.stdout, "7\n");
     }
 
+    /// Slice 2: a scalar payload extracted by a PATTERN bind must not taint the
+    /// scrutinee. Here `pick(opt: read Option<Int>)` unwraps `Some(v)` via
+    /// `UnwrapSome`; because `Int` is a `Copy` scalar the unwrap is a bit-copy that
+    /// cannot alias/escape the `Option`'s `Rc`, so `v` is marked scalar (`note_scalar`)
+    /// and the prologue `DeepCopy` of the `read Option<Int>` param is ELIDED. Before
+    /// Slice 2 the pattern lowerer didn't thread the scrutinee type, so `v` stayed
+    /// tainted and `UnwrapSome` (unclassified) pinned the copy.
+    #[test]
+    fn deepcopy_elision_fires_for_option_scalar_pattern_bind() {
+        let source = r#"
+fn pick(opt: read Option<Int>) -> Int {
+    match read opt {
+        Some(v) => { return read v }
+        None => { return 0 }
+    }
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: pick(opt: read Some(42))))
+    return Unit
+}
+"#;
+        let executable = reg_vm_compile_source("deepcopy-elision-option.rss", source)
+            .expect("lowering succeeds");
+
+        let pick_id = executable.unit.function_ids["pick"];
+        let pick = executable.unit.functions[pick_id].as_ref();
+        let elided = pick
+            .code
+            .iter()
+            .filter(|instr| matches!(instr, RegInstr::DeepCopyElided { .. }))
+            .count();
+        let eager = pick
+            .code
+            .iter()
+            .filter(|instr| matches!(instr, RegInstr::DeepCopy { .. }))
+            .count();
+        if crate::reg_vm::model::elide_deepcopy_enabled_for_test() {
+            assert!(
+                elided >= 1 && eager == 0,
+                "elision ON: `read Option<Int>` param whose `Some(v)` scalar payload is \
+                 pattern-bound and returned must be elided (scalar unwrap must not taint \
+                 the scrutinee), got {elided} elided / {eager} eager: {:#?}",
+                pick.code,
+            );
+        }
+
+        // Elision must not change behavior: pick(Some(42)) == 42.
+        let output = executable
+            .eval_main_with_args(Vec::<String>::new())
+            .expect("program should still run");
+        assert_eq!(output.stdout, "42\n");
+    }
+
     #[test]
     fn jit_runs_scalar_self_recursion_on_flat_executor() {
         let source = r#"

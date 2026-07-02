@@ -682,6 +682,31 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   struct-field pattern binds — pattern lowering does not thread the scrutinee's
   static type, so those extractions keep the (sound) over-taint. New regression
   guard: `reg_vm::tests::…::deepcopy_elision_fires_for_int_list_read_param`.
+- **Slice 2 of borrow-by-default (2026-07-01):** closed the pattern-site gap Slice 1
+  left open. The scrutinee's static type (`reg_expr_type_name` at the `match` entry)
+  now threads through the pattern lowerers (`lower_match_pattern` →
+  `lower_list_pattern` / `lower_struct_field_patterns` / `lower_option_some_pattern` /
+  `lower_result_variant_pattern` / `lower_user_variant_pattern` /
+  `lower_user_struct_variant_pattern`), so each scalar-extracting emission calls
+  `note_scalar(dst, ty)` with the right element/field/payload type derived as it
+  descends (list element via `list_elem_type`; struct field via
+  `type_info(root).fields`; sum-variant payload via `sum_variant_fields`; `Option<T>` /
+  `Result<T, E>` payload via `nth_type_arg`). So `match read xs { [a, b, ..] }` on
+  `List<Scalar>`, `match read p { Point { x, y } }` on a scalar-field struct, and
+  scalar variant/`Option`/`Result` payload binds now elide the read param's prologue
+  `DeepCopy`. Required making `UnwrapSome` behave exactly like `UnwrapVariantValue` in
+  the elision analysis (added to both the taint-PROPAGATION set — so a heap `Some`
+  payload still taints unless marked scalar — and the safe alias-read list in
+  `deepcopy_instr_forces_keep`), which is what unblocked the `Option<Scalar>` unwrap
+  chain (previously `UnwrapSome` fell through to the conservative keep default and
+  pinned the copy). Where the scrutinee type is statically unavailable the site stays
+  unmarked (sound over-taint), same as Slice 1. Soundness: a `VmValue::Int/Float/
+  Bool/Char` is inline with no interior `Rc`, so a pattern-bind bit-copy can neither
+  alias the scrutinee nor carry its `Rc` into an escape; non-scalar binds stay
+  tainted. Full suite + all three `does_not_leak` guards green; parity 556/556, 0
+  mismatches; lexer perf holds (~46× ratio, rss/VM time ~700 ms stable — the ratio's
+  jitter is the tiny Rust denominator, not the VM). New guard:
+  `reg_vm::tests::…::deepcopy_elision_fires_for_option_scalar_pattern_bind`.
 
 ### SH-023 — self-hosted checker reaches RS0005 parity at declaration level; the merged callable namespace is the load-bearing rule
 

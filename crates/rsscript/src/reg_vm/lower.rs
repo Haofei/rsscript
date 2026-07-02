@@ -37,6 +37,17 @@ fn list_elem_type(collection_ty: &str) -> Option<&str> {
     }
 }
 
+/// The `index`-th top-level generic argument of a (possibly `None`) type spelling,
+/// or `None` when the type is unknown / not generic / has too few arguments.
+/// Used to derive a pattern payload type from the scrutinee's static type:
+/// arg 0 of `Option<Int>` / `Result<Int, E>` is the `Some`/`Ok` payload, arg 1 of
+/// `Result<T, Int>` is the `Err` payload. `None` ⇒ conservative: bind stays tainted.
+fn nth_type_arg(type_name: Option<&str>, index: usize) -> Option<&str> {
+    crate::text_util::type_arg_names(type_name?)?
+        .get(index)
+        .copied()
+}
+
 impl RegLowerer<'_> {
     /// Record that `dst` holds a `Copy` scalar when `elem_ty` is a known scalar
     /// type (`Int`/`Bool`/`Float`/`Char`/…). Extracting such a value is a bit-copy
@@ -2018,12 +2029,16 @@ impl RegLowerer<'_> {
         }
 
         let src = self.expr(value)?;
+        // Scrutinee's static type threads into pattern lowering so a scalar
+        // element/field/payload extraction can be marked `note_scalar` and thus
+        // not taint the (read-param) scrutinee. `None` ⇒ conservative (unmarked).
+        let scrutinee_ty = reg_expr_type_name(value);
         let mut failure_patches = Vec::new();
         let mut end_jumps = Vec::new();
         for arm in arms {
             let arm_ip = self.function.code.len();
             self.patch_match_failures(failure_patches, arm_ip);
-            failure_patches = self.lower_match_pattern(&arm.pattern, src)?;
+            failure_patches = self.lower_match_pattern(&arm.pattern, src, scrutinee_ty)?;
             if let Some(guard) = &arm.guard {
                 let guard_failure = self.condition_jump(guard, false, usize::MAX)?;
                 failure_patches.push(MatchFailurePatch::Jump(guard_failure));
@@ -2056,13 +2071,14 @@ impl RegLowerer<'_> {
         }
 
         let src = self.expr(value)?;
+        let scrutinee_ty = reg_expr_type_name(value);
         let dst = self.temp();
         let mut failure_patches = Vec::new();
         let mut end_jumps = Vec::new();
         for arm in arms {
             let arm_ip = self.function.code.len();
             self.patch_match_failures(failure_patches, arm_ip);
-            failure_patches = self.lower_match_pattern(&arm.pattern, src)?;
+            failure_patches = self.lower_match_pattern(&arm.pattern, src, scrutinee_ty)?;
             if let Some(guard) = &arm.guard {
                 let guard_failure = self.condition_jump(guard, false, usize::MAX)?;
                 failure_patches.push(MatchFailurePatch::Jump(guard_failure));
@@ -2088,6 +2104,7 @@ impl RegLowerer<'_> {
         &mut self,
         pattern: &MatchPattern,
         src: Reg,
+        scrutinee_ty: Option<&str>,
     ) -> Result<Vec<MatchFailurePatch>, EvalError> {
         match pattern {
             MatchPattern::Binding { name, .. } => {
@@ -2097,7 +2114,9 @@ impl RegLowerer<'_> {
             }
             MatchPattern::Wildcard(_) => Ok(Vec::new()),
             MatchPattern::Variant { name, bindings, .. } if name == "Some" => {
-                self.lower_option_some_pattern(src, bindings.first())
+                // `Some(x)` on `Option<T>` unwraps the payload `T` (arg 0).
+                let payload_ty = nth_type_arg(scrutinee_ty, 0);
+                self.lower_option_some_pattern(src, bindings.first(), payload_ty)
             }
             MatchPattern::Variant { name, .. } if name == "None" => {
                 let match_ip = self.emit(RegInstr::MatchOption {
@@ -2110,7 +2129,9 @@ impl RegLowerer<'_> {
                 Ok(vec![MatchFailurePatch::OptionSome(match_ip)])
             }
             MatchPattern::Variant { name, bindings, .. } if name == "Ok" || name == "Err" => {
-                self.lower_result_variant_pattern(src, name, bindings.first())
+                // `Ok`/`Err` on `Result<T, E>` unwrap arg 0 / arg 1 respectively.
+                let payload_ty = nth_type_arg(scrutinee_ty, if name == "Ok" { 0 } else { 1 });
+                self.lower_result_variant_pattern(src, name, bindings.first(), payload_ty)
             }
             MatchPattern::Variant { name, bindings, .. }
                 if self.hir.sum_type_for_variant(name).is_some() =>
@@ -2122,13 +2143,15 @@ impl RegLowerer<'_> {
             {
                 self.lower_user_struct_variant_pattern(src, name, fields)
             }
-            MatchPattern::Struct { fields, .. } => self.lower_struct_field_patterns(src, fields),
+            MatchPattern::Struct { fields, .. } => {
+                self.lower_struct_field_patterns(src, fields, scrutinee_ty)
+            }
             MatchPattern::List {
                 prefix,
                 rest,
                 suffix,
                 ..
-            } => self.lower_list_pattern(src, prefix, rest, suffix),
+            } => self.lower_list_pattern(src, prefix, rest, suffix, scrutinee_ty),
             MatchPattern::Literal { value, .. } => self.lower_literal_pattern(src, value),
             _ => Err(EvalError::Runtime(
                 "reg VM v0 does not support this match pattern.".to_string(),
@@ -2182,20 +2205,33 @@ impl RegLowerer<'_> {
         &mut self,
         src: Reg,
         fields: &[MatchFieldPattern],
+        scrutinee_ty: Option<&str>,
     ) -> Result<Vec<MatchFailurePatch>, EvalError> {
         let mut failures = Vec::new();
+        // Resolve the struct decl once (decoupled from `self` so `note_scalar`'s
+        // `&mut self` borrow is free); each field's declared type gates the mark.
+        let hir = self.hir;
+        let owner = scrutinee_ty
+            .map(|ty| crate::text_util::type_root_name(ty))
+            .and_then(|root| hir.type_info(root));
         for field in fields {
             if field.ignored {
                 continue;
             }
+            let field_ty = owner
+                .and_then(|info| info.fields.get(&field.name))
+                .map(|info| info.type_name.as_str());
             let field_reg = self.temp();
             self.emit(RegInstr::GetField {
                 dst: field_reg,
                 base: src,
                 name: field.name.clone(),
             });
+            // A scalar field is a bit-copy: marking `field_reg` stops the `GetField`
+            // from tainting the scrutinee (the read param). Non-scalar ⇒ unmarked.
+            self.note_scalar(field_reg, field_ty);
             if let Some(pattern) = field.pattern.as_deref() {
-                failures.extend(self.lower_match_pattern(pattern, field_reg)?);
+                failures.extend(self.lower_match_pattern(pattern, field_reg, field_ty)?);
             } else if let Some(binding) = field.binding.as_ref() {
                 let dst = self.local(binding);
                 self.emit(RegInstr::Move {
@@ -2221,7 +2257,11 @@ impl RegLowerer<'_> {
         prefix: &[MatchPattern],
         rest: &Option<Option<String>>,
         suffix: &[MatchPattern],
+        scrutinee_ty: Option<&str>,
     ) -> Result<Vec<MatchFailurePatch>, EvalError> {
+        // Element type of the matched `List<T>`/`Deque<T>` (the `ListGet` result);
+        // a scalar `T` lets the per-element extraction skip tainting the scrutinee.
+        let elem_ty = scrutinee_ty.and_then(list_elem_type);
         let mut failures = Vec::new();
         let required = (prefix.len() + suffix.len()) as i64;
         let len = self.temp();
@@ -2267,7 +2307,8 @@ impl RegLowerer<'_> {
                 list: src,
                 index: idx,
             });
-            failures.extend(self.lower_match_pattern(pattern, elem)?);
+            self.note_scalar(elem, elem_ty);
+            failures.extend(self.lower_match_pattern(pattern, elem, elem_ty)?);
         }
         if let Some(Some(rest_name)) = rest {
             let start = self.temp();
@@ -2318,7 +2359,8 @@ impl RegLowerer<'_> {
                     list: src,
                     index: idx,
                 });
-                failures.extend(self.lower_match_pattern(pattern, elem)?);
+                self.note_scalar(elem, elem_ty);
+                failures.extend(self.lower_match_pattern(pattern, elem, elem_ty)?);
             }
         }
         Ok(failures)
@@ -2379,6 +2421,7 @@ impl RegLowerer<'_> {
         &mut self,
         src: Reg,
         binding: Option<&MatchPattern>,
+        payload_ty: Option<&str>,
     ) -> Result<Vec<MatchFailurePatch>, EvalError> {
         let match_ip = self.emit(RegInstr::MatchOption {
             src,
@@ -2393,12 +2436,16 @@ impl RegLowerer<'_> {
                 MatchPattern::Binding { name, .. } => {
                     let dst = self.local(name);
                     self.emit(RegInstr::UnwrapSome { dst, src });
+                    // A scalar `Some` payload is a bit-copy ⇒ the unwrap must not
+                    // taint the scrutinee (the read-param `Option<Scalar>`).
+                    self.note_scalar(dst, payload_ty);
                 }
                 MatchPattern::Wildcard(_) => {}
                 _ => {
                     let payload = self.temp();
                     self.emit(RegInstr::UnwrapSome { dst: payload, src });
-                    failures.extend(self.lower_match_pattern(binding, payload)?);
+                    self.note_scalar(payload, payload_ty);
+                    failures.extend(self.lower_match_pattern(binding, payload, payload_ty)?);
                 }
             }
         }
@@ -2410,6 +2457,7 @@ impl RegLowerer<'_> {
         src: Reg,
         variant: &str,
         binding: Option<&MatchPattern>,
+        payload_ty: Option<&str>,
     ) -> Result<Vec<MatchFailurePatch>, EvalError> {
         let match_ip = self.emit(RegInstr::MatchResult {
             src,
@@ -2437,6 +2485,8 @@ impl RegLowerer<'_> {
                         src,
                         expected: variant.to_string(),
                     });
+                    // Scalar `Ok`/`Err` payload ⇒ bit-copy ⇒ don't taint scrutinee.
+                    self.note_scalar(dst, payload_ty);
                 }
                 MatchPattern::Wildcard(_) => {}
                 _ => {
@@ -2446,7 +2496,8 @@ impl RegLowerer<'_> {
                         src,
                         expected: variant.to_string(),
                     });
-                    failures.extend(self.lower_match_pattern(binding, payload)?);
+                    self.note_scalar(payload, payload_ty);
+                    failures.extend(self.lower_match_pattern(binding, payload, payload_ty)?);
                 }
             }
         }
@@ -2459,13 +2510,11 @@ impl RegLowerer<'_> {
         variant: &str,
         bindings: &[MatchPattern],
     ) -> Result<Vec<MatchFailurePatch>, EvalError> {
-        let field_names: Vec<String> = self
-            .hir
-            .sum_variant_fields(variant)
-            .unwrap_or(&[])
-            .iter()
-            .map(|field| field.name.clone())
-            .collect();
+        // Variant field decls (name + declared type). Bound to a `&'a` slice via a
+        // local copy of `self.hir` so `note_scalar`'s `&mut self` is free below.
+        let hir = self.hir;
+        let field_infos = hir.sum_variant_fields(variant).unwrap_or(&[]);
+        let field_names: Vec<String> = field_infos.iter().map(|field| field.name.clone()).collect();
         let match_ip = self.emit(RegInstr::MatchVariant {
             src,
             expected: variant.to_string(),
@@ -2487,40 +2536,50 @@ impl RegLowerer<'_> {
             [] => {}
             // Single-payload sugar keeps the `UnwrapVariantValue` projection so the
             // native scalar-replacement pass can still dissolve the variant.
-            [binding] => match binding {
-                MatchPattern::Binding { name, .. } => {
-                    let dst = self.local(name);
-                    self.emit(RegInstr::UnwrapVariantValue {
-                        dst,
-                        src,
-                        expected: variant.to_string(),
-                    });
+            [binding] => {
+                // Single-field variant: the payload type is the sole field's type.
+                let payload_ty = field_infos.first().map(|field| field.type_name.as_str());
+                match binding {
+                    MatchPattern::Binding { name, .. } => {
+                        let dst = self.local(name);
+                        self.emit(RegInstr::UnwrapVariantValue {
+                            dst,
+                            src,
+                            expected: variant.to_string(),
+                        });
+                        self.note_scalar(dst, payload_ty);
+                    }
+                    MatchPattern::Wildcard(_) => {}
+                    _ => {
+                        let payload = self.temp();
+                        self.emit(RegInstr::UnwrapVariantValue {
+                            dst: payload,
+                            src,
+                            expected: variant.to_string(),
+                        });
+                        self.note_scalar(payload, payload_ty);
+                        failures.extend(self.lower_match_pattern(binding, payload, payload_ty)?);
+                    }
                 }
-                MatchPattern::Wildcard(_) => {}
-                _ => {
-                    let payload = self.temp();
-                    self.emit(RegInstr::UnwrapVariantValue {
-                        dst: payload,
-                        src,
-                        expected: variant.to_string(),
-                    });
-                    failures.extend(self.lower_match_pattern(binding, payload)?);
-                }
-            },
+            }
             // Positional multi-field binding routes through the same per-field
             // `GetField` projection as `lower_user_struct_variant_pattern`, so the
             // reg-VM and AOT share the struct-variant field-projection semantics.
             _ => {
-                for (binding, field_name) in bindings.iter().zip(field_names.iter()) {
+                for (index, (binding, field_name)) in
+                    bindings.iter().zip(field_names.iter()).enumerate()
+                {
                     if matches!(binding, MatchPattern::Wildcard(_)) {
                         continue;
                     }
+                    let field_ty = field_infos.get(index).map(|field| field.type_name.as_str());
                     let field_reg = self.temp();
                     self.emit(RegInstr::GetField {
                         dst: field_reg,
                         base: src,
                         name: field_name.clone(),
                     });
+                    self.note_scalar(field_reg, field_ty);
                     match binding {
                         MatchPattern::Binding { name, .. } => {
                             let dst = self.local(name);
@@ -2530,7 +2589,7 @@ impl RegLowerer<'_> {
                             });
                         }
                         _ => {
-                            failures.extend(self.lower_match_pattern(binding, field_reg)?);
+                            failures.extend(self.lower_match_pattern(binding, field_reg, field_ty)?);
                         }
                     }
                 }
@@ -2554,18 +2613,26 @@ impl RegLowerer<'_> {
         let pass_ip = self.function.code.len();
         self.patch_jump(match_ip, pass_ip);
         let mut failures = vec![MatchFailurePatch::VariantOther(match_ip)];
+        // Struct-variant field decls (name → declared type), decoupled from `self`.
+        let hir = self.hir;
+        let field_infos = hir.sum_variant_fields(variant).unwrap_or(&[]);
         for field in fields {
             if field.ignored {
                 continue;
             }
+            let field_ty = field_infos
+                .iter()
+                .find(|info| info.name == field.name)
+                .map(|info| info.type_name.as_str());
             let field_reg = self.temp();
             self.emit(RegInstr::GetField {
                 dst: field_reg,
                 base: src,
                 name: field.name.clone(),
             });
+            self.note_scalar(field_reg, field_ty);
             if let Some(pattern) = field.pattern.as_deref() {
-                failures.extend(self.lower_match_pattern(pattern, field_reg)?);
+                failures.extend(self.lower_match_pattern(pattern, field_reg, field_ty)?);
             } else if let Some(binding) = field.binding.as_ref() {
                 let dst = self.local(binding);
                 self.emit(RegInstr::Move {
