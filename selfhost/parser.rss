@@ -18,8 +18,9 @@
 // time). Only the parser-unique column accessor, feature-line predicates, and
 // the driver remain here.
 //
-// rss constraints honored (ledger SH-016/SH-017/SH-018): no char literals,
-// statement-level expressions on ONE line, cursors threaded positionally.
+// rss constraints honored (ledger SH-016/SH-017/SH-018): char literals for
+// code-point tests, `||` chains wrapped via operator continuation (both in the
+// shared scan.rss prelude), cursors threaded positionally.
 
 fn tk_col(toks: read List<Tok>, i: read Int) -> Int {
     if i < 0 { return 0 }

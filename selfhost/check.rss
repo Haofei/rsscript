@@ -18,8 +18,9 @@
 // time). The unified `Tok` carries identifier TEXT so names can compare. Only the
 // checker-unique text accessor, name/field extraction, and the driver are here.
 //
-// rss constraints (SH-016/017/018): no char literals, single-line expressions,
-// cursors threaded positionally.
+// rss constraints (SH-016/017/018): char literals for code-point tests and
+// `||` chains wrapped via operator continuation (both in the shared scan.rss
+// prelude), cursors threaded positionally.
 
 fn tk_text(toks: read List<Tok>, i: read Int) -> String {
     if i < 0 { return "" }
