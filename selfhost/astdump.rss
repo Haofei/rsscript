@@ -1049,6 +1049,17 @@ fn is_cont_op(toks: read List<Tok>, i: read Int) -> Bool {
 }
 
 // First top-level standalone `=` (assignment, not == != <= >=) in [start, end), or -1.
+// First `=` symbol token in [start, end), or -1 (used for let value split;
+// `=>` is a distinct FatArrow token, not matched).
+fn first_eq(toks: read List<Tok>, start: read Int, end: read Int) -> Int {
+    let mut i = start
+    while i < end {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_EQ) { return i }
+        i = i + 1
+    }
+    return -1
+}
+
 fn top_assign(toks: read List<Tok>, start: read Int, end: read Int) -> Int {
     let mut depth = 0
     let mut i = start
@@ -1172,8 +1183,11 @@ fn emit_let(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int)
     let g = String.concat(left: read f, right: read boolstr(b: read isMut))
     let h = String.concat(left: read g, right: read " async=false")
     emit(depth: read d, s: read h)
-    // Optional type annotation.
-    let asg = top_assign(toks: read toks, start: read j, end: read e)
+    // Value split is the FIRST `=` after the name (matching parse_let_stmt): a
+    // let's name/annotation never contains `=`, so no `>=`/`==` guard is needed —
+    // and top_assign's guard would wrongly skip the `=` after a generic `>`
+    // (`let x: Option<Int> = …`).
+    let asg = first_eq(toks: read toks, start: read j, end: read e)
     if at_symbol(toks: read toks, i: read j, code: read SYM_COLON) {
         emit_type_ref(toks: read toks, i: read (j + 1), tag: read "type", eff: read "", d: read (d + 1))
     }

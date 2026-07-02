@@ -1,0 +1,6 @@
+fn hot(seed: Int) -> Int {
+    let value: Option<Int> = Some(seed)
+    let names: List<String> = List<String>.new()
+    let flag: Bool = seed >= 0
+    return 0
+}
