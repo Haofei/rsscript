@@ -1,0 +1,6 @@
+fn work(pool: read Pool) -> Int {
+    let r = manage pool.acquire()
+    let h = spawn compute()
+    let v = await h
+    return 0
+}

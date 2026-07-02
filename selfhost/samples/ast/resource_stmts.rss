@@ -1,0 +1,15 @@
+fn run(pool: read Pool) -> Int {
+    with pool.acquire() as r {
+        return 0
+    }
+    task_group {
+        return 1
+    }
+}
+
+fn pick(a: read Chan, b: read Chan) -> Int {
+    select {
+        x = await a => { return x }
+        y = await b => { return y }
+    }
+}

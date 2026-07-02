@@ -317,6 +317,22 @@ fn emit_expr(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) 
         emit_expr(toks: read toks, start: read (s + 1), end: read e, d: read (d + 1))
         return Unit
     }
+    // Prefix expression forms `manage X` / `spawn X` / `await X` (value child).
+    if is_kw_text(toks: read toks, i: read s, word: read "manage") {
+        emit(depth: read d, s: read "manage")
+        emit_expr(toks: read toks, start: read (s + 1), end: read e, d: read (d + 1))
+        return Unit
+    }
+    if is_kw_text(toks: read toks, i: read s, word: read "spawn") {
+        emit(depth: read d, s: read "spawn")
+        emit_expr(toks: read toks, start: read (s + 1), end: read e, d: read (d + 1))
+        return Unit
+    }
+    if is_kw_text(toks: read toks, i: read s, word: read "await") {
+        emit(depth: read d, s: read "await")
+        emit_expr(toks: read toks, start: read (s + 1), end: read e, d: read (d + 1))
+        return Unit
+    }
     emit_postfix(toks: read toks, start: read s, end: read e, d: read d)
     return Unit
 }
@@ -1090,6 +1106,18 @@ fn emit_stmt(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int
     if is_kw_text(toks: read toks, i: read start, word: read "await") && is_kw_text(toks: read toks, i: read (start + 1), word: read "for") {
         return emit_for(toks: read toks, forPos: read (start + 1), limit: read limit, d: read d, isAsync: read true)
     }
+    // with <resource> as <binding> { body }
+    if is_kw_text(toks: read toks, i: read start, word: read "with") {
+        return emit_with(toks: read toks, start: read start, limit: read limit, d: read d)
+    }
+    // task_group { body }
+    if is_kw_text(toks: read toks, i: read start, word: read "task_group") {
+        return emit_task_group(toks: read toks, start: read start, limit: read limit, d: read d)
+    }
+    // select { arms }
+    if is_kw_text(toks: read toks, i: read start, word: read "select") {
+        return emit_select(toks: read toks, start: read start, limit: read limit, d: read d)
+    }
     // break / continue
     if is_kw_text(toks: read toks, i: read start, word: read "break") {
         emit(depth: read d, s: read "break")
@@ -1202,6 +1230,98 @@ fn emit_for(toks: read List<Tok>, forPos: read Int, limit: read Int, d: read Int
     emit_expr(toks: read toks, start: read (forPos + 3), end: read openb, d: read (d + 2))
     emit_block(toks: read toks, open: read openb, close: read close, d: read (d + 1))
     return close + 1
+}
+
+// with <resource> as <binding> { body }. Mirrors parse_with_stmt: the FIRST `as`
+// (not depth-aware) splits resource from binding; `as` must be immediately before
+// the body brace.
+fn emit_with(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int) -> Int {
+    let mut asIdx = -1
+    let mut i = start + 1
+    while i < limit && asIdx < 0 {
+        if is_kw_text(toks: read toks, i: read i, word: read "as") { asIdx = i }
+        i = i + 1
+    }
+    if asIdx < 0 {
+        emit(depth: read d, s: read "malformed-with")
+        return stmt_end(toks: read toks, start: read start, limit: read limit)
+    }
+    let open = find_block_open(toks: read toks, start: read (asIdx + 1), limit: read limit)
+    if open < 0 {
+        emit(depth: read d, s: read "malformed-with")
+        return stmt_end(toks: read toks, start: read start, limit: read limit)
+    }
+    let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    let binding = tk_text(toks: read toks, i: read (asIdx + 1))
+    emit(depth: read d, s: read String.concat(left: read "with binding=", right: read binding))
+    emit(depth: read (d + 1), s: read "resource")
+    emit_expr(toks: read toks, start: read (start + 1), end: read asIdx, d: read (d + 2))
+    emit_block(toks: read toks, open: read open, close: read close, d: read (d + 1))
+    return close + 1
+}
+
+// task_group { body }
+fn emit_task_group(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int) -> Int {
+    let open = start + 1
+    if at_symbol(toks: read toks, i: read open, code: read SYM_LBRACE) == false {
+        emit(depth: read d, s: read "unknown-stmt")
+        return stmt_end(toks: read toks, start: read start, limit: read limit)
+    }
+    let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    emit(depth: read d, s: read "task-group")
+    emit_block(toks: read toks, open: read open, close: read close, d: read (d + 1))
+    return close + 1
+}
+
+// select { <binding> = <operation> => { body } ... }
+fn emit_select(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int) -> Int {
+    let open = start + 1
+    if at_symbol(toks: read toks, i: read open, code: read SYM_LBRACE) == false {
+        emit(depth: read d, s: read "unknown-stmt")
+        return stmt_end(toks: read toks, start: read start, limit: read limit)
+    }
+    let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    emit(depth: read d, s: read "select")
+    emit_select_arms(toks: read toks, start: read (open + 1), end: read close, d: read (d + 1))
+    return close + 1
+}
+
+fn emit_select_arms(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) -> Unit {
+    let mut i = start
+    while i < end {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_SEMI) {
+            i = i + 1
+        } else {
+            let lineEnd = next_line_or_block_end(toks: read toks, start: read i, end: read end)
+            let arrow = find_top_sym(toks: read toks, start: read i, end: read lineEnd, code: read SYM_FATARROW)
+            if arrow < 0 {
+                if lineEnd > i { i = lineEnd } else { i = i + 1 }
+            } else {
+                let eq = find_top_sym(toks: read toks, start: read i, end: read arrow, code: read SYM_EQ)
+                if eq < 0 {
+                    i = arrow + 1
+                } else {
+                    let mut binding = "_"
+                    if is_ident_tok(toks: read toks, i: read i) { binding = tk_text(toks: read toks, i: read i) }
+                    emit(depth: read d, s: read String.concat(left: read "select-arm binding=", right: read binding))
+                    emit(depth: read (d + 1), s: read "operation")
+                    emit_expr(toks: read toks, start: read (eq + 1), end: read arrow, d: read (d + 2))
+                    let bodyStart = arrow + 1
+                    if at_symbol(toks: read toks, i: read bodyStart, code: read SYM_LBRACE) {
+                        let bclose = find_matching(toks: read toks, open: read bodyStart, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+                        emit_block(toks: read toks, open: read bodyStart, close: read bclose, d: read (d + 1))
+                        i = bclose + 1
+                    } else {
+                        let bEnd = next_line_or_block_end(toks: read toks, start: read bodyStart, end: read end)
+                        emit(depth: read (d + 1), s: read "block")
+                        emit_stmt(toks: read toks, start: read bodyStart, limit: read bEnd, d: read (d + 2))
+                        if bEnd > i { i = bEnd } else { i = i + 1 }
+                    }
+                }
+            }
+        }
+    }
+    return Unit
 }
 
 fn emit_loop(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int) -> Int {
