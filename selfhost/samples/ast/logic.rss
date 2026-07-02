@@ -1,0 +1,3 @@
+fn check(a: read Int, b: read Int) -> Bool {
+    return a == b || a > b
+}

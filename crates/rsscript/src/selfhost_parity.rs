@@ -1412,3 +1412,146 @@ fn ast_oracle_total_over_corpus() {
     }
     assert!(empty.is_empty(), "{} files produced a degenerate dump", empty.len());
 }
+
+// ---------------------------------------------------------------------------
+// AST-dump PARITY — the rss producer (`selfhost/astdump.rss`) vs the oracle.
+//
+// Step 2: the rss recursive-descent parser streams the canonical AST dump; the
+// harness compares it byte-for-byte against `ast_oracle_dump`. Coverage is a
+// growing core (see astdump.rss): the curated `samples/ast/*.rss` set is a
+// non-ignored fast gate (also the risk mitigation for corpus-gate runtime — AST
+// dumps are much larger than token dumps), while `ast_parity_corpus` measures
+// unaided reach over all 556 files and ratchets a floor. Residual divergences
+// are tracked as SH-025.
+// ---------------------------------------------------------------------------
+
+fn compile_astdump() -> Result<RegVmExecutable, String> {
+    let combined = combined_tool_source("astdump.rss")?;
+    reg_vm_compile_source("selfhost/astdump.rss", &combined)
+        .map_err(|e| format!("rss astdump failed to compile: {e:?}"))
+}
+
+/// Run the precompiled rss AST-dump producer; its stdout IS the dump.
+fn run_astdump(exe: &RegVmExecutable, source: &str) -> Result<String, String> {
+    let output = exe
+        .eval_main_with_args([source.to_string()])
+        .map_err(|e| format!("rss astdump failed to run: {e:?}"))?;
+    Ok(output.stdout)
+}
+
+/// Curated AST-parity samples under `selfhost/samples/ast/`, sorted for stable order.
+fn ast_sample_files() -> Vec<PathBuf> {
+    let dir = selfhost_dir().join("samples/ast");
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "rss"))
+        .collect();
+    files.sort();
+    files
+}
+
+/// Step-2 gate (non-ignored): the rss producer matches the oracle byte-for-byte
+/// on the tiny sample — the end-to-end proof that the streaming producer, the
+/// dump format, and the oracle all agree.
+#[test]
+fn ast_parity_tiny_sample() {
+    let sample_path = selfhost_dir().join("samples/tiny.rss");
+    let source = std::fs::read_to_string(&sample_path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", sample_path.display()));
+    let oracle = ast_oracle_dump("samples/tiny.rss", &source);
+    let exe = compile_astdump().expect("rss astdump should compile");
+    let actual = run_astdump(&exe, &source).expect("rss astdump should run");
+    assert_eq!(
+        actual, oracle,
+        "AST parity mismatch on tiny.rss\n--- oracle ---\n{oracle}\n--- rss ---\n{actual}"
+    );
+}
+
+/// Step-2 gate (non-ignored): the rss producer matches the oracle byte-for-byte
+/// on every curated sample. This is the fast inner-loop gate; keep the samples
+/// within the producer's supported core so it stays green as coverage grows.
+#[test]
+fn ast_parity_samples() {
+    let exe = compile_astdump().expect("rss astdump should compile");
+    let mut mismatches: Vec<String> = Vec::new();
+    let files = ast_sample_files();
+    for file in &files {
+        let rel = file
+            .strip_prefix(selfhost_dir())
+            .unwrap_or(file)
+            .display()
+            .to_string();
+        let source = std::fs::read_to_string(file)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", file.display()));
+        let oracle = ast_oracle_dump(&rel, &source);
+        match run_astdump(&exe, &source) {
+            Err(e) => mismatches.push(format!("{rel}: run error: {e}")),
+            Ok(actual) => {
+                if actual != oracle {
+                    mismatches.push(format!(
+                        "{rel}: mismatch\n--- oracle ---\n{oracle}\n--- rss ---\n{actual}"
+                    ));
+                }
+            }
+        }
+    }
+    assert!(
+        mismatches.is_empty(),
+        "AST parity failed on {} of {} samples:\n{}",
+        mismatches.len(),
+        files.len(),
+        mismatches.join("\n\n")
+    );
+}
+
+/// Floor for `ast_parity_corpus` — the number of corpus files whose rss AST dump
+/// already matches the oracle byte-for-byte. Ratchets up as the producer's
+/// coverage grows; a drop signals a regression. (Full parity = files.len().)
+const AST_CORPUS_PARITY_FLOOR: usize = 58;
+
+/// Step-2 measurement gate (ignored by default): how many of the 556 corpus files
+/// the rss producer already reproduces byte-for-byte. Not full parity yet — this
+/// ratchets a floor so coverage can only grow, and prints the current count so
+/// the residual (SH-025) is visible.
+#[test]
+#[ignore]
+fn ast_parity_corpus() {
+    let root = workspace_root();
+    let files = collect_rss_files(&root);
+    let exe = compile_astdump().expect("rss astdump should compile");
+    let mut ok = 0usize;
+    let mut run_failures = 0usize;
+    let mut sample_mismatches: Vec<String> = Vec::new();
+    for file in &files {
+        let rel = file.strip_prefix(&root).unwrap_or(file).display().to_string();
+        let Ok(source) = std::fs::read_to_string(file) else {
+            continue;
+        };
+        let oracle = ast_oracle_dump(&rel, &source);
+        match run_astdump(&exe, &source) {
+            Err(_) => run_failures += 1,
+            Ok(actual) => {
+                if actual == oracle {
+                    ok += 1;
+                } else if sample_mismatches.len() < 10 {
+                    sample_mismatches.push(rel);
+                }
+            }
+        }
+    }
+    let total = files.len();
+    eprintln!(
+        "\n=== ast_parity_corpus ===\n  files: {total}\n  byte-exact: {ok}\n  \
+         run-failures: {run_failures}\n  floor: {AST_CORPUS_PARITY_FLOOR}\n"
+    );
+    for rel in &sample_mismatches {
+        eprintln!("[mismatch] {rel}");
+    }
+    assert!(
+        ok >= AST_CORPUS_PARITY_FLOOR,
+        "AST corpus parity regressed: {ok} byte-exact < floor {AST_CORPUS_PARITY_FLOOR}"
+    );
+}
