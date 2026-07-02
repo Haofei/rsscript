@@ -247,3 +247,31 @@ The only remaining lever is a `TypedMap`/`TypedSet` representation rewrite (park
 roadmap. Deeper checker passes (name resolution, exhaustiveness) are the natural
 next self-hosting step but need a real expression/statement/pattern parser (the
 depth `parse_source_raw` let Phase 2 skip — SH-021).
+
+## Next architectural step — frontend object parity (started 2026-07-02)
+
+The agreed next move is from **tool parity** to **frontend object parity**, keeping
+the same safe-oracle model. Ordered ladder (a real dependency, not just taste):
+
+1. **AST-dump parity** — the unlock. RS0005 was reachable at the token level, but
+   arity/type/effect/resolution diagnostics all need a real AST + symbol table.
+2. **Diagnostics parity by category** — largely blocked on (1).
+3. **Spans/positions** — last, mirroring the lexer's tier-0→1→2 ladder.
+
+**Step-1 keystone shipped (this is a serialization contract, not parser code):**
+- `selfhost/AST_FORMAT.md` — the canonical AST-dump format (indentation tree, one
+  node per line, structure+payload at tier 0, spans deferred to a trailing field).
+- A **total** Rust oracle serializer over `crate::syntax::parse_source_raw` (the
+  surface-preserving tree, never the desugared `parse_source`) in
+  `crate::selfhost_parity`.
+- Tests: `ast_oracle_dump_tiny_sample_golden` + `ast_oracle_dump_is_deterministic_smoke`
+  (non-ignored) pin the format; `ast_oracle_total_over_corpus` (ignored) proves the
+  serializer renders all 556 corpus files deterministically without panicking — i.e.
+  it is total over the real grammar, the precondition for being a trustworthy oracle.
+
+This deliberately lands **before** `parser.rss` builds an AST (same reason the token
+`FORMAT.md` + oracle preceded the rss lexer): the target is fixed and reviewable
+first. Two risks to treat as their own line items when `parser.rss` starts emitting
+AST: the `scan.rss`-prepend hack (no module/import story) becomes a scaling pain once
+an AST type module is added; and corpus-gate runtime (AST dumps ≫ token dumps) will
+likely want a sampled fast inner-loop gate plus the full corpus pre-push.

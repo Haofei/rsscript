@@ -627,3 +627,788 @@ fn checker_parity_corpus() {
         mismatches.len()
     );
 }
+
+// ---------------------------------------------------------------------------
+// AST-dump parity — format contract + Rust oracle (step 1 of frontend object
+// parity). The rss parser will one day emit the canonical AST dump defined in
+// `selfhost/AST_FORMAT.md`; this oracle emits it from the surface-preserving
+// tree (`crate::syntax::parse_source_raw`, NOT the desugared `parse_source`).
+// Byte-identical dumps = AST parity. This ships BEFORE `parser.rss` builds an
+// AST, exactly as the token FORMAT.md + oracle preceded the rss lexer.
+//
+// The serializer is TOTAL over the AST (every Item/Stmt/Expr/Pattern variant is
+// rendered) so a future producer cannot pass by silently dropping a node. Tier 0:
+// structure + payload, spans omitted (span parity is the final phase).
+// ---------------------------------------------------------------------------
+
+use crate::syntax::ast;
+
+fn push_line(out: &mut String, depth: usize, content: &str) {
+    for _ in 0..depth {
+        out.push_str("  ");
+    }
+    out.push_str(content);
+    out.push('\n');
+}
+
+fn feature_name(f: ast::FileFeature) -> &'static str {
+    match f {
+        ast::FileFeature::Local => "local",
+        ast::FileFeature::Native => "native",
+        ast::FileFeature::Unsafe => "unsafe",
+        ast::FileFeature::Async => "async",
+        ast::FileFeature::Device => "device",
+        ast::FileFeature::Ffi => "ffi",
+        ast::FileFeature::Reflection => "reflection",
+    }
+}
+
+fn type_kind_str(k: ast::TypeKind) -> &'static str {
+    match k {
+        ast::TypeKind::Class => "class",
+        ast::TypeKind::Struct => "struct",
+        ast::TypeKind::Resource => "resource",
+    }
+}
+
+fn let_kind_str(k: ast::LetKind) -> &'static str {
+    match k {
+        ast::LetKind::Managed => "managed",
+        ast::LetKind::Local => "local",
+    }
+}
+
+fn binop_name(op: ast::BinaryOp) -> &'static str {
+    match op {
+        ast::BinaryOp::Add => "add",
+        ast::BinaryOp::Subtract => "subtract",
+        ast::BinaryOp::Multiply => "multiply",
+        ast::BinaryOp::Divide => "divide",
+        ast::BinaryOp::Modulo => "modulo",
+        ast::BinaryOp::BitAnd => "bit-and",
+        ast::BinaryOp::BitOr => "bit-or",
+        ast::BinaryOp::BitXor => "bit-xor",
+        ast::BinaryOp::ShiftLeft => "shift-left",
+        ast::BinaryOp::ShiftRight => "shift-right",
+        ast::BinaryOp::Equal => "equal",
+        ast::BinaryOp::NotEqual => "not-equal",
+        ast::BinaryOp::Less => "less",
+        ast::BinaryOp::LessEqual => "less-equal",
+        ast::BinaryOp::Greater => "greater",
+        ast::BinaryOp::GreaterEqual => "greater-equal",
+        ast::BinaryOp::LogicalAnd => "logical-and",
+        ast::BinaryOp::LogicalOr => "logical-or",
+    }
+}
+
+/// Truth: the canonical AST dump of the surface-preserving parse tree.
+fn ast_oracle_dump(file: &str, source: &str) -> String {
+    let program = crate::syntax::parse_source_raw(file, source);
+    let mut out = String::new();
+    push_line(&mut out, 0, "program");
+    for f in &program.features {
+        push_line(&mut out, 1, &format!("feature {}", feature_name(*f)));
+    }
+    for item in &program.items {
+        dump_item(&mut out, 1, item);
+    }
+    for p in &program.protocols {
+        push_line(&mut out, 1, &format!("protocol {}", p.name));
+    }
+    for pi in &program.protocol_impls {
+        push_line(
+            &mut out,
+            1,
+            &format!("protocol-impl protocol={} type={}", pi.protocol, pi.type_name),
+        );
+        for m in &pi.mappings {
+            push_line(
+                &mut out,
+                2,
+                &format!("mapping method={} target={}", m.method, m.target),
+            );
+        }
+    }
+    for f in &program.unknown_features {
+        push_line(&mut out, 1, &format!("unknown-feature {}", escape(&f.name)));
+    }
+    for f in &program.duplicate_features {
+        push_line(&mut out, 1, &format!("duplicate-feature {}", escape(&f.name)));
+    }
+    for _ in &program.unknown_top_level_spans {
+        push_line(&mut out, 1, "unknown-top-level");
+    }
+    for _ in &program.malformed_declaration_spans {
+        push_line(&mut out, 1, "malformed-declaration");
+    }
+    out
+}
+
+fn dump_item(out: &mut String, depth: usize, item: &ast::Item) {
+    match item {
+        ast::Item::Module(m) => {
+            push_line(out, depth, &format!("module path={}", m.path.join(".")));
+        }
+        ast::Item::Use(u) => {
+            let mut line = format!("use path={} glob={}", u.path.join("."), u.glob);
+            if let Some(a) = &u.alias {
+                line.push_str(&format!(" alias={a}"));
+            }
+            push_line(out, depth, &line);
+        }
+        ast::Item::Type(t) => {
+            push_line(
+                out,
+                depth,
+                &format!(
+                    "type kind={} name={} public={} opaque={}",
+                    type_kind_str(t.kind),
+                    t.name,
+                    t.is_public,
+                    t.is_opaque
+                ),
+            );
+            for g in &t.type_params {
+                dump_generic(out, depth + 1, g);
+            }
+            for d in &t.derives {
+                push_line(out, depth + 1, &format!("derive {d}"));
+            }
+            for f in &t.fields {
+                dump_field(out, depth + 1, f);
+            }
+            for _ in &t.malformed_generic_param_spans {
+                push_line(out, depth + 1, "malformed-generic");
+            }
+            for _ in &t.malformed_field_spans {
+                push_line(out, depth + 1, "malformed-field");
+            }
+            if let Some(b) = &t.drop_body {
+                push_line(out, depth + 1, "drop");
+                dump_block(out, depth + 2, b);
+            }
+        }
+        ast::Item::SumType(s) => {
+            push_line(
+                out,
+                depth,
+                &format!("sum name={} public={}", s.name, s.is_public),
+            );
+            for g in &s.type_params {
+                dump_generic(out, depth + 1, g);
+            }
+            for d in &s.derives {
+                push_line(out, depth + 1, &format!("derive {d}"));
+            }
+            for v in &s.variants {
+                push_line(out, depth + 1, &format!("variant name={}", v.name));
+                for f in &v.fields {
+                    dump_field(out, depth + 2, f);
+                }
+            }
+        }
+        ast::Item::TypeAlias(a) => {
+            push_line(
+                out,
+                depth,
+                &format!("type-alias name={} public={}", a.name, a.is_public),
+            );
+            for g in &a.type_params {
+                dump_generic(out, depth + 1, g);
+            }
+            dump_type_ref(out, depth + 1, &a.target, "target", None);
+        }
+        ast::Item::Const(c) => {
+            push_line(
+                out,
+                depth,
+                &format!("const name={} public={}", c.name, c.is_public),
+            );
+            if let Some(t) = &c.type_annotation {
+                dump_type_ref(out, depth + 1, t, "type", None);
+            }
+            push_line(out, depth + 1, "value");
+            dump_expr(out, depth + 2, &c.value);
+        }
+        ast::Item::Function(f) => dump_function(out, depth, f),
+    }
+}
+
+fn dump_function(out: &mut String, depth: usize, f: &ast::FunctionDecl) {
+    let mut line = format!(
+        "fn name={} public={} async={} native={} has-body={}",
+        f.name, f.is_public, f.is_async, f.is_native, f.has_body
+    );
+    if f.default_impl_marker {
+        line.push_str(" default-impl=true");
+    }
+    if f.returns_fresh {
+        line.push_str(" returns-fresh=true");
+    }
+    push_line(out, depth, &line);
+    if let Some(r) = &f.deprecated_reason {
+        push_line(out, depth + 1, &format!("deprecated {}", escape(r)));
+    }
+    if let Some(l) = &f.lower_name {
+        push_line(out, depth + 1, &format!("lower-name {l}"));
+    }
+    for g in &f.type_params {
+        dump_generic(out, depth + 1, g);
+    }
+    for p in &f.params {
+        dump_param(out, depth + 1, p);
+    }
+    if let Some(r) = &f.return_ty {
+        dump_type_ref(out, depth + 1, r, "return-type", None);
+    }
+    for e in &f.effects {
+        match e {
+            ast::EffectDecl::Name(n) => push_line(out, depth + 1, &format!("effect-name {n}")),
+            ast::EffectDecl::Retains(n) => {
+                push_line(out, depth + 1, &format!("effect-retains {n}"))
+            }
+        }
+    }
+    for _ in &f.malformed_generic_param_spans {
+        push_line(out, depth + 1, "malformed-generic");
+    }
+    for _ in &f.malformed_param_spans {
+        push_line(out, depth + 1, "malformed-param");
+    }
+    for _ in &f.malformed_effect_spans {
+        push_line(out, depth + 1, "malformed-effect");
+    }
+    push_line(out, depth + 1, "body");
+    dump_block(out, depth + 2, &f.body);
+}
+
+fn dump_generic(out: &mut String, depth: usize, g: &ast::GenericParam) {
+    push_line(out, depth, &format!("generic name={}", g.name));
+    if let Some(b) = &g.bound {
+        let s = match b {
+            ast::GenericBound::Managed => "bound managed".to_string(),
+            ast::GenericBound::Struct => "bound struct".to_string(),
+            ast::GenericBound::Resource => "bound resource".to_string(),
+            ast::GenericBound::Protocol(p) => format!("bound protocol={p}"),
+        };
+        push_line(out, depth + 1, &s);
+    }
+}
+
+fn dump_field(out: &mut String, depth: usize, f: &ast::FieldDecl) {
+    push_line(
+        out,
+        depth,
+        &format!(
+            "field name={} handle={} weak={}",
+            f.name, f.is_handle, f.is_weak
+        ),
+    );
+    dump_type_ref(out, depth + 1, &f.ty, "type", None);
+    if let Some(d) = &f.default {
+        push_line(out, depth + 1, "default");
+        dump_expr(out, depth + 2, d);
+    }
+}
+
+fn dump_param(out: &mut String, depth: usize, p: &ast::Param) {
+    let mut line = format!("param name={}", p.name);
+    if let Some(e) = p.effect {
+        line.push_str(&format!(" effect={}", e.as_str()));
+    }
+    push_line(out, depth, &line);
+    dump_type_ref(out, depth + 1, &p.ty, "type", None);
+    if let Some(d) = &p.default {
+        push_line(out, depth + 1, "default");
+        dump_expr(out, depth + 2, d);
+    }
+}
+
+fn dump_type_ref(
+    out: &mut String,
+    depth: usize,
+    tr: &ast::TypeRef,
+    tag: &str,
+    eff: Option<ast::DataEffect>,
+) {
+    let mut line = String::from(tag);
+    if let Some(e) = eff {
+        line.push_str(&format!(" effect={}", e.as_str()));
+    }
+    line.push_str(&format!(
+        " name={} fresh={} noescape={} owned={}",
+        tr.name, tr.is_fresh, tr.is_noescape, tr.is_owned
+    ));
+    push_line(out, depth, &line);
+    for a in &tr.args {
+        dump_type_ref(out, depth + 1, a, "arg", None);
+    }
+    for (i, p) in tr.fn_params.iter().enumerate() {
+        let e = tr.fn_param_effects.get(i).copied().flatten();
+        dump_type_ref(out, depth + 1, p, "fn-param", e);
+    }
+    if let Some(r) = &tr.fn_return {
+        dump_type_ref(out, depth + 1, r, "fn-return", None);
+    }
+}
+
+fn dump_block(out: &mut String, depth: usize, b: &ast::Block) {
+    push_line(out, depth, "block");
+    for s in &b.statements {
+        dump_stmt(out, depth + 1, s);
+    }
+}
+
+fn dump_match(
+    out: &mut String,
+    depth: usize,
+    value: &ast::Expr,
+    eff: Option<ast::DataEffect>,
+    arms: &[ast::MatchArm],
+    malformed_arms: usize,
+    tag: &str,
+) {
+    let mut line = String::from(tag);
+    if let Some(e) = eff {
+        line.push_str(&format!(" effect={}", e.as_str()));
+    }
+    push_line(out, depth, &line);
+    push_line(out, depth + 1, "value");
+    dump_expr(out, depth + 2, value);
+    for arm in arms {
+        push_line(out, depth + 1, "arm");
+        push_line(out, depth + 2, "pattern");
+        dump_pattern(out, depth + 3, &arm.pattern);
+        if let Some(g) = &arm.guard {
+            push_line(out, depth + 2, "guard");
+            dump_expr(out, depth + 3, g);
+        }
+        dump_block(out, depth + 2, &arm.body);
+    }
+    for _ in 0..malformed_arms {
+        push_line(out, depth + 1, "malformed-arm");
+    }
+}
+
+fn dump_stmt(out: &mut String, depth: usize, s: &ast::Stmt) {
+    match s {
+        ast::Stmt::Let(l) => {
+            let mut line = format!(
+                "let kind={} name={} mut={} async={}",
+                let_kind_str(l.kind),
+                l.name,
+                l.is_mut,
+                l.is_async
+            );
+            if l.malformed {
+                line.push_str(" malformed=true");
+            }
+            if let Some(names) = &l.destructure {
+                line.push_str(&format!(" destructure={}", names.join(",")));
+            }
+            push_line(out, depth, &line);
+            if let Some(t) = &l.type_annotation {
+                dump_type_ref(out, depth + 1, t, "type", None);
+            }
+            if let Some(v) = &l.value {
+                push_line(out, depth + 1, "value");
+                dump_expr(out, depth + 2, v);
+            }
+        }
+        ast::Stmt::Return(r) => {
+            push_line(out, depth, "return");
+            if let Some(v) = &r.value {
+                push_line(out, depth + 1, "value");
+                dump_expr(out, depth + 2, v);
+            }
+        }
+        ast::Stmt::With(w) => {
+            push_line(out, depth, &format!("with binding={}", w.binding));
+            push_line(out, depth + 1, "resource");
+            dump_expr(out, depth + 2, &w.resource);
+            dump_block(out, depth + 1, &w.body);
+        }
+        ast::Stmt::MalformedWith(_) => push_line(out, depth, "malformed-with"),
+        ast::Stmt::If(i) => {
+            push_line(out, depth, "if");
+            push_line(out, depth + 1, "cond");
+            dump_expr(out, depth + 2, &i.condition);
+            push_line(out, depth + 1, "then");
+            dump_block(out, depth + 2, &i.then_body);
+            if let Some(e) = &i.else_body {
+                push_line(out, depth + 1, "else");
+                dump_block(out, depth + 2, e);
+            }
+        }
+        ast::Stmt::MalformedIf(_) => push_line(out, depth, "malformed-if"),
+        ast::Stmt::Loop(l) => {
+            push_line(out, depth, "loop");
+            if let Some(c) = &l.condition {
+                push_line(out, depth + 1, "cond");
+                dump_expr(out, depth + 2, c);
+            }
+            dump_block(out, depth + 1, &l.body);
+        }
+        ast::Stmt::MalformedLoop(_) => push_line(out, depth, "malformed-loop"),
+        ast::Stmt::For(f) => {
+            push_line(
+                out,
+                depth,
+                &format!("for binding={} async={}", f.binding, f.is_async),
+            );
+            push_line(out, depth + 1, "iter");
+            dump_expr(out, depth + 2, &f.iterable);
+            dump_block(out, depth + 1, &f.body);
+        }
+        ast::Stmt::MalformedFor(_) => push_line(out, depth, "malformed-for"),
+        ast::Stmt::Match(m) => dump_match(
+            out,
+            depth,
+            &m.value,
+            m.scrutinee_effect,
+            &m.arms,
+            m.malformed_arm_spans.len(),
+            "match",
+        ),
+        ast::Stmt::MalformedMatch(_) => push_line(out, depth, "malformed-match"),
+        ast::Stmt::TaskGroup(t) => {
+            push_line(out, depth, "task-group");
+            dump_block(out, depth + 1, &t.body);
+        }
+        ast::Stmt::Select(s) => {
+            push_line(out, depth, "select");
+            for arm in &s.arms {
+                push_line(out, depth + 1, &format!("select-arm binding={}", arm.binding));
+                push_line(out, depth + 2, "operation");
+                dump_expr(out, depth + 3, &arm.operation);
+                dump_block(out, depth + 2, &arm.body);
+            }
+        }
+        ast::Stmt::Break(_) => push_line(out, depth, "break"),
+        ast::Stmt::Continue(_) => push_line(out, depth, "continue"),
+        ast::Stmt::LetElse(l) => {
+            push_line(out, depth, &format!("let-else binding={}", l.binding_name));
+            push_line(out, depth + 1, "pattern");
+            dump_pattern(out, depth + 2, &l.pattern);
+            push_line(out, depth + 1, "value");
+            dump_expr(out, depth + 2, &l.value);
+            push_line(out, depth + 1, "else");
+            dump_block(out, depth + 2, &l.else_body);
+        }
+        ast::Stmt::Assign(a) => {
+            push_line(out, depth, "assign");
+            push_line(out, depth + 1, "target");
+            dump_expr(out, depth + 2, &a.target);
+            push_line(out, depth + 1, "value");
+            dump_expr(out, depth + 2, &a.value);
+        }
+        ast::Stmt::Expr(e) => {
+            push_line(out, depth, "expr-stmt");
+            dump_expr(out, depth + 1, e);
+        }
+        ast::Stmt::Unknown(_) => push_line(out, depth, "unknown-stmt"),
+    }
+}
+
+fn dump_pattern(out: &mut String, depth: usize, p: &ast::MatchPattern) {
+    match p {
+        ast::MatchPattern::Binding { name, .. } => {
+            push_line(out, depth, &format!("pat-binding name={name}"));
+        }
+        ast::MatchPattern::Variant { name, bindings, .. } => {
+            push_line(out, depth, &format!("pat-variant name={name}"));
+            for b in bindings {
+                dump_pattern(out, depth + 1, b);
+            }
+        }
+        ast::MatchPattern::Struct {
+            name,
+            fields,
+            has_rest,
+            ..
+        } => {
+            push_line(
+                out,
+                depth,
+                &format!("pat-struct name={name} rest={has_rest}"),
+            );
+            for f in fields {
+                let mut line = format!("pat-field name={} ignored={}", f.name, f.ignored);
+                if let Some(b) = &f.binding {
+                    line.push_str(&format!(" binding={b}"));
+                }
+                if let Some(e) = f.effect {
+                    line.push_str(&format!(" effect={}", e.as_str()));
+                }
+                push_line(out, depth + 1, &line);
+                if let Some(sub) = &f.pattern {
+                    dump_pattern(out, depth + 2, sub);
+                }
+            }
+        }
+        ast::MatchPattern::Literal { value, .. } => {
+            let (kind, payload) = match value {
+                ast::MatchLiteral::Int(s) => ("int", escape(s)),
+                ast::MatchLiteral::String(s) => ("string", escape(s)),
+                ast::MatchLiteral::Char(s) => ("char", escape(s)),
+                ast::MatchLiteral::Bool(b) => ("bool", b.to_string()),
+            };
+            push_line(out, depth, &format!("pat-literal kind={kind} {payload}"));
+        }
+        ast::MatchPattern::List {
+            prefix,
+            rest,
+            suffix,
+            ..
+        } => {
+            let rest_s = match rest {
+                None => "none".to_string(),
+                Some(None) => "ignore".to_string(),
+                Some(Some(n)) => n.clone(),
+            };
+            push_line(out, depth, &format!("pat-list rest={rest_s}"));
+            if !prefix.is_empty() {
+                push_line(out, depth + 1, "list-prefix");
+                for pp in prefix {
+                    dump_pattern(out, depth + 2, pp);
+                }
+            }
+            if !suffix.is_empty() {
+                push_line(out, depth + 1, "list-suffix");
+                for pp in suffix {
+                    dump_pattern(out, depth + 2, pp);
+                }
+            }
+        }
+        ast::MatchPattern::Wildcard(_) => push_line(out, depth, "pat-wildcard"),
+    }
+}
+
+fn dump_callee(out: &mut String, depth: usize, c: &ast::Callee) {
+    match c {
+        ast::Callee::Name(n) => push_line(out, depth, &format!("callee-name name={n}")),
+        ast::Callee::Qualified { namespace, name } => push_line(
+            out,
+            depth,
+            &format!("callee-qualified namespace={namespace} name={name}"),
+        ),
+        ast::Callee::ReceiverCall {
+            receiver,
+            method,
+            effect,
+        } => {
+            let mut line = format!("callee-receiver method={method}");
+            if let Some(e) = effect {
+                line.push_str(&format!(" effect={}", e.as_str()));
+            }
+            push_line(out, depth, &line);
+            dump_expr(out, depth + 1, receiver);
+        }
+    }
+}
+
+fn dump_expr(out: &mut String, depth: usize, e: &ast::Expr) {
+    match e {
+        ast::Expr::Ident(s, _) => push_line(out, depth, &format!("ident {}", escape(s))),
+        ast::Expr::Number(s, _) => push_line(out, depth, &format!("number {}", escape(s))),
+        ast::Expr::String(s, _) => push_line(out, depth, &format!("string {}", escape(s))),
+        ast::Expr::CharLiteral(s, _) => push_line(out, depth, &format!("char {}", escape(s))),
+        ast::Expr::MultilineString(s, _) => {
+            push_line(out, depth, &format!("multiline {}", escape(s)))
+        }
+        ast::Expr::ObjectLiteral { fields, .. } => {
+            push_line(out, depth, "object");
+            for f in fields {
+                push_line(out, depth + 1, &format!("object-field name={}", f.name));
+                dump_expr(out, depth + 2, &f.value);
+            }
+        }
+        ast::Expr::MapLiteral { entries, .. } => {
+            push_line(out, depth, "map");
+            for en in entries {
+                push_line(out, depth + 1, "map-entry");
+                push_line(out, depth + 2, "key");
+                dump_expr(out, depth + 3, &en.key);
+                push_line(out, depth + 2, "value");
+                dump_expr(out, depth + 3, &en.value);
+            }
+        }
+        ast::Expr::ArrayLiteral { items, .. } => {
+            push_line(out, depth, "array");
+            for it in items {
+                dump_expr(out, depth + 1, it);
+            }
+        }
+        ast::Expr::Binary {
+            op, left, right, ..
+        } => {
+            push_line(out, depth, &format!("binary op={}", binop_name(*op)));
+            dump_expr(out, depth + 1, left);
+            dump_expr(out, depth + 1, right);
+        }
+        ast::Expr::Field { base, name, .. } => {
+            push_line(out, depth, &format!("field-access name={name}"));
+            dump_expr(out, depth + 1, base);
+        }
+        ast::Expr::Index { base, index, .. } => {
+            push_line(out, depth, "index");
+            dump_expr(out, depth + 1, base);
+            dump_expr(out, depth + 1, index);
+        }
+        ast::Expr::Call { callee, args, .. } => {
+            push_line(out, depth, "call");
+            dump_callee(out, depth + 1, callee);
+            for a in args {
+                let mut line = String::from("arg");
+                if let Some(n) = &a.name {
+                    line.push_str(&format!(" name={n}"));
+                }
+                if a.malformed {
+                    line.push_str(" malformed=true");
+                }
+                push_line(out, depth + 1, &line);
+                dump_expr(out, depth + 2, &a.value);
+            }
+        }
+        ast::Expr::Effect { effect, value, .. } => {
+            push_line(out, depth, &format!("effect kind={}", effect.as_str()));
+            dump_expr(out, depth + 1, value);
+        }
+        ast::Expr::Manage { value, .. } => {
+            push_line(out, depth, "manage");
+            dump_expr(out, depth + 1, value);
+        }
+        ast::Expr::Spawn { value, .. } => {
+            push_line(out, depth, "spawn");
+            dump_expr(out, depth + 1, value);
+        }
+        ast::Expr::Await { value, .. } => {
+            push_line(out, depth, "await");
+            dump_expr(out, depth + 1, value);
+        }
+        ast::Expr::Try { value, .. } => {
+            push_line(out, depth, "try");
+            dump_expr(out, depth + 1, value);
+        }
+        ast::Expr::Closure {
+            params,
+            captures,
+            declared_effects,
+            explicit,
+            body,
+            ..
+        } => {
+            push_line(out, depth, &format!("closure explicit={explicit}"));
+            for p in params {
+                push_line(out, depth + 1, &format!("closure-param {p}"));
+            }
+            for c in captures {
+                push_line(
+                    out,
+                    depth + 1,
+                    &format!("capture effect={} name={}", c.effect.as_str(), c.name),
+                );
+            }
+            for d in declared_effects {
+                push_line(out, depth + 1, &format!("declared-effect {d}"));
+            }
+            push_line(out, depth + 1, "body");
+            dump_block(out, depth + 2, body);
+        }
+        ast::Expr::Match {
+            value,
+            scrutinee_effect,
+            arms,
+            malformed_arm_spans,
+            ..
+        } => dump_match(
+            out,
+            depth,
+            value,
+            *scrutinee_effect,
+            arms,
+            malformed_arm_spans.len(),
+            "match-expr",
+        ),
+        ast::Expr::Unknown(_) => push_line(out, depth, "unknown-expr"),
+    }
+}
+
+/// Phase-5 proof (non-ignored): the AST oracle is deterministic and total —
+/// dumping the tiny sample twice is identical, non-empty, and the serializer
+/// panics on no node (totality is exercised more broadly by the corpus test).
+#[test]
+fn ast_oracle_dump_is_deterministic_smoke() {
+    let sample_path = selfhost_dir().join("samples/tiny.rss");
+    let source = std::fs::read_to_string(&sample_path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", sample_path.display()));
+    let a = ast_oracle_dump("samples/tiny.rss", &source);
+    let b = ast_oracle_dump("samples/tiny.rss", &source);
+    assert_eq!(a, b, "AST oracle dump must be deterministic");
+    assert!(!a.is_empty(), "AST oracle dump must be non-empty");
+    assert!(a.starts_with("program\n"), "dump must start with `program`");
+}
+
+/// Phase-5 golden (non-ignored): pins the exact AST dump of the tiny sample so
+/// the format contract in `selfhost/AST_FORMAT.md` is locked BEFORE `parser.rss`
+/// targets it. When the rss parser is built, its dump must equal this byte for
+/// byte at tier 0.
+#[test]
+fn ast_oracle_dump_tiny_sample_golden() {
+    let sample_path = selfhost_dir().join("samples/tiny.rss");
+    let source = std::fs::read_to_string(&sample_path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", sample_path.display()));
+    let dump = ast_oracle_dump("samples/tiny.rss", &source);
+    let expected = "\
+program
+  fn name=add public=false async=false native=false has-body=true
+    param name=x
+      type name=Int fresh=false noescape=false owned=false
+    return-type name=Int fresh=false noescape=false owned=false
+    body
+      block
+        return
+          value
+            binary op=add
+              ident x
+              number 1
+";
+    assert_eq!(dump, expected, "AST dump golden mismatch\n--- actual ---\n{dump}");
+}
+
+/// Phase-5 totality gate (ignored by default): the AST oracle renders every file
+/// in the corpus without panicking and deterministically. This proves the
+/// serializer is total over the real grammar — no unhandled node — which is the
+/// precondition for it being a trustworthy parity oracle once `parser.rss` emits
+/// the same dump.
+#[test]
+#[ignore]
+fn ast_oracle_total_over_corpus() {
+    let root = workspace_root();
+    let files = collect_rss_files(&root);
+    let mut ok = 0usize;
+    let mut empty: Vec<String> = Vec::new();
+    for file in &files {
+        let rel = file.strip_prefix(&root).unwrap_or(file).display().to_string();
+        let Ok(source) = std::fs::read_to_string(file) else {
+            continue;
+        };
+        let a = ast_oracle_dump(&rel, &source);
+        let b = ast_oracle_dump(&rel, &source);
+        assert_eq!(a, b, "{rel}: AST oracle dump is non-deterministic");
+        if a.trim().is_empty() || !a.starts_with("program\n") {
+            empty.push(rel);
+        } else {
+            ok += 1;
+        }
+    }
+    eprintln!(
+        "\n=== ast_oracle_total_over_corpus ===\n  files: {}\n  ok: {ok}\n  degenerate: {}\n",
+        files.len(),
+        empty.len()
+    );
+    for line in empty.iter().take(20) {
+        eprintln!("[degenerate] {line}");
+    }
+    assert!(empty.is_empty(), "{} files produced a degenerate dump", empty.len());
+}
