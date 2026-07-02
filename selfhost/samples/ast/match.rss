@@ -1,0 +1,38 @@
+fn describe(n: read Int) -> String {
+    match n {
+        0 => {
+            return "zero"
+        }
+        1 => {
+            return "one"
+        }
+        other => {
+            return "many"
+        }
+    }
+    return "x"
+}
+
+fn unwrap(r: read Result<Int, String>) -> Int {
+    match read r {
+        Ok(value) => {
+            return value
+        }
+        Err(msg) => {
+            return 0
+        }
+    }
+    return 0
+}
+
+fn label(n: read Int) -> String {
+    let r = match n {
+        0 => {
+            "zero"
+        }
+        _ => {
+            "other"
+        }
+    }
+    return r
+}

@@ -219,6 +219,14 @@ fn emit_expr(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) 
         emit_expr(toks: read toks, start: read s, end: read (e - 1), d: read (d + 1))
         return Unit
     }
+    // Match expression: match [effect] value { arms }.
+    if is_kw_text(toks: read toks, i: read s, word: read "match") && at_symbol(toks: read toks, i: read (e - 1), code: read SYM_RBRACE) {
+        let braceOpen = matching_open_brace(toks: read toks, close: read (e - 1), start: read s)
+        if braceOpen > s {
+            emit_match(toks: read toks, matchPos: read s, braceOpen: read braceOpen, braceClose: read (e - 1), tag: read "match-expr", d: read d)
+            return Unit
+        }
+    }
     // Effect prefix: read/mut/take <value>  (plain-value form; receiver-call form
     // `read x.m()` is a documented gap — see SH-025).
     let effWord = effect_kw(toks: read toks, i: read s)
@@ -353,6 +361,31 @@ fn emit_args(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) 
 fn pick_end(comma: read Int, end: read Int) -> Int {
     if comma < 0 { return end }
     return comma
+}
+
+// Like top_comma but also tracks generic `<...>` angle depth, for TYPE contexts
+// (params, fields, generic params) where `Result<Int, String>` must not split at
+// the inner comma. Only valid where `<`/`>` are generic delimiters, never
+// comparison operators.
+fn top_comma_ty(toks: read List<Tok>, start: read Int, end: read Int) -> Int {
+    let mut depth = 0
+    let mut angle = 0
+    let mut i = start
+    while i < end {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) {
+            depth = depth - 1
+        } else if depth == 0 && at_symbol(toks: read toks, i: read i, code: read SYM_LANGLE) {
+            angle = angle + 1
+        } else if depth == 0 && angle > 0 && at_symbol(toks: read toks, i: read i, code: read SYM_RANGLE) {
+            angle = angle - 1
+        } else if depth == 0 && angle == 0 && at_symbol(toks: read toks, i: read i, code: read SYM_COMMA) {
+            return i
+        }
+        i = i + 1
+    }
+    return -1
 }
 
 // Index of the first top-level comma in [start, end), or -1.
@@ -520,6 +553,17 @@ fn emit_stmt(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int
     // while/loop [cond] { body }
     if is_kw_text(toks: read toks, i: read start, word: read "while") || is_kw_text(toks: read toks, i: read start, word: read "loop") {
         return emit_loop(toks: read toks, start: read start, limit: read limit, d: read d)
+    }
+    // match [effect] value { arms }
+    if is_kw_text(toks: read toks, i: read start, word: read "match") {
+        let openb = find_block_open(toks: read toks, start: read (start + 1), limit: read limit)
+        if openb < 0 {
+            emit(depth: read d, s: read "malformed-match")
+            return stmt_end(toks: read toks, start: read start, limit: read limit)
+        }
+        let close = find_matching(toks: read toks, open: read openb, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+        emit_match(toks: read toks, matchPos: read start, braceOpen: read openb, braceClose: read close, tag: read "match", d: read d)
+        return close + 1
     }
     // break / continue
     if is_kw_text(toks: read toks, i: read start, word: read "break") {
@@ -756,7 +800,7 @@ fn dotted_text(toks: read List<Tok>, start: read Int, end: read Int) -> String {
 fn emit_params(toks: read List<Tok>, open: read Int, close: read Int, d: read Int) -> Unit {
     let mut i = open + 1
     while i < close {
-        let comma = top_comma(toks: read toks, start: read i, end: read close)
+        let comma = top_comma_ty(toks: read toks, start: read i, end: read close)
         // name
         let pname = tk_text(toks: read toks, i: read i)
         // after `name :`
@@ -788,7 +832,7 @@ fn emit_generics(toks: read List<Tok>, i: read Int, d: read Int) -> Int {
     if close < 0 { return i }
     let mut k = i + 1
     while k < close {
-        let comma = top_comma(toks: read toks, start: read k, end: read close)
+        let comma = top_comma_ty(toks: read toks, start: read k, end: read close)
         let name = tk_text(toks: read toks, i: read k)
         emit(depth: read d, s: read String.concat(left: read "generic name=", right: read name))
         // Optional bound: `Name: Bound`.
@@ -960,7 +1004,7 @@ fn emit_sum(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
 fn emit_variant_fields(toks: read List<Tok>, open: read Int, close: read Int, d: read Int) -> Unit {
     let mut i = open + 1
     while i < close {
-        let comma = top_comma(toks: read toks, start: read i, end: read close)
+        let comma = top_comma_ty(toks: read toks, start: read i, end: read close)
         let fend = pick_end(comma: read comma, end: read close)
         if is_ident_tok(toks: read toks, i: read i) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_COLON) {
             emit_field(toks: read toks, start: read i, lineEnd: read fend, d: read d)
@@ -1055,6 +1099,295 @@ fn emit_use(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
     }
     emit(depth: read d, s: read line)
     return e
+}
+
+// -------------------------------------------------------------------------
+// match (statement + expression) and patterns.
+// -------------------------------------------------------------------------
+
+// First top-level symbol with `code` in [start, end), or -1.
+fn find_top_sym(toks: read List<Tok>, start: read Int, end: read Int, code: read Int) -> Int {
+    let mut depth = 0
+    let mut i = start
+    while i < end {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) {
+            depth = depth - 1
+        } else if depth == 0 && at_symbol(toks: read toks, i: read i, code: read code) {
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+// First top-level `if` keyword in [start, end), or -1.
+fn find_top_if(toks: read List<Tok>, start: read Int, end: read Int) -> Int {
+    let mut depth = 0
+    let mut i = start
+    while i < end {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) {
+            depth = depth - 1
+        } else if depth == 0 && is_kw_text(toks: read toks, i: read i, word: read "if") {
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+// The matching '{' for the '}' at close, scanning back to start, or -1.
+fn matching_open_brace(toks: read List<Tok>, close: read Int, start: read Int) -> Int {
+    let mut depth = 0
+    let mut i = close
+    while i >= start {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_RBRACE) { depth = depth + 1 }
+        else if at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) {
+            depth = depth - 1
+            if depth == 0 { return i }
+        }
+        i = i - 1
+    }
+    return -1
+}
+
+// End index of a dotted pattern/name head starting at `start` (Ident(.Ident)*).
+fn dotted_name_end(toks: read List<Tok>, start: read Int, end: read Int) -> Int {
+    let mut j = start + 1
+    let mut going = true
+    while going {
+        if j + 1 < end && at_symbol(toks: read toks, i: read j, code: read SYM_DOT) && is_ident_tok(toks: read toks, i: read (j + 1)) {
+            j = j + 2
+        } else {
+            going = false
+        }
+    }
+    return j
+}
+
+// True if the name's first char is ASCII-uppercase (constructor-like).
+fn is_upper_first(name: read String) -> Bool {
+    let cs = String.chars(value: read name)
+    if List.len(list: read cs) == 0 { return false }
+    let c0 = List.get(list: read cs, index: read 0)
+    let code = Char.to_code(value: read c0)
+    return code >= 65 && code <= 90
+}
+
+fn emit_match(toks: read List<Tok>, matchPos: read Int, braceOpen: read Int, braceClose: read Int, tag: read String, d: read Int) -> Unit {
+    let mut vstart = matchPos + 1
+    let eff = effect_kw(toks: read toks, i: read vstart)
+    let mut line = tag
+    if String.len(value: read eff) > 0 {
+        let l2 = String.concat(left: read tag, right: read " effect=")
+        line = String.concat(left: read l2, right: read eff)
+        vstart = vstart + 1
+    }
+    emit(depth: read d, s: read line)
+    emit(depth: read (d + 1), s: read "value")
+    emit_expr(toks: read toks, start: read vstart, end: read braceOpen, d: read (d + 2))
+    emit_match_arms(toks: read toks, start: read (braceOpen + 1), end: read braceClose, d: read (d + 1))
+    return Unit
+}
+
+fn emit_match_arms(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) -> Unit {
+    let mut i = start
+    while i < end {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_SEMI) {
+            i = i + 1
+        } else {
+            let lineEnd = next_line_or_block_end(toks: read toks, start: read i, end: read end)
+            let arrow = find_top_sym(toks: read toks, start: read i, end: read lineEnd, code: read SYM_FATARROW)
+            if arrow < 0 {
+                emit(depth: read d, s: read "malformed-arm")
+                if lineEnd > i { i = lineEnd } else { i = i + 1 }
+            } else {
+                let ifPos = find_top_if(toks: read toks, start: read i, end: read arrow)
+                let mut patEnd = arrow
+                if ifPos >= 0 { patEnd = ifPos }
+                emit(depth: read d, s: read "arm")
+                emit(depth: read (d + 1), s: read "pattern")
+                emit_pattern(toks: read toks, start: read i, end: read patEnd, d: read (d + 2))
+                if ifPos >= 0 {
+                    emit(depth: read (d + 1), s: read "guard")
+                    emit_expr(toks: read toks, start: read (ifPos + 1), end: read arrow, d: read (d + 2))
+                }
+                let bodyStart = arrow + 1
+                if at_symbol(toks: read toks, i: read bodyStart, code: read SYM_LBRACE) {
+                    let bclose = find_matching(toks: read toks, open: read bodyStart, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+                    emit_block(toks: read toks, open: read bodyStart, close: read bclose, d: read (d + 1))
+                    i = bclose + 1
+                } else {
+                    let bEnd = next_line_or_block_end(toks: read toks, start: read bodyStart, end: read end)
+                    emit(depth: read (d + 1), s: read "block")
+                    emit_stmt(toks: read toks, start: read bodyStart, limit: read bEnd, d: read (d + 2))
+                    if bEnd > i { i = bEnd } else { i = i + 1 }
+                }
+            }
+        }
+    }
+    return Unit
+}
+
+fn emit_pattern(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) -> Unit {
+    // Trim wrapping parens.
+    let mut s = start
+    let mut e = end
+    let mut trimming = true
+    while trimming {
+        if s < e && at_symbol(toks: read toks, i: read s, code: read SYM_LPAREN) {
+            let close = find_matching(toks: read toks, open: read s, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+            if close == e - 1 { s = s + 1; e = close } else { trimming = false }
+        } else { trimming = false }
+    }
+    if s >= e { emit(depth: read d, s: read "pat-wildcard"); return Unit }
+    // Single-token: literal / wildcard / bare variant.
+    if s + 1 == e {
+        let k = tk_kind(toks: read toks, i: read s)
+        let t = tk_text(toks: read toks, i: read s)
+        if k == TOK_NUMBER { emit(depth: read d, s: read String.concat(left: read "pat-literal kind=int ", right: read escape(s: read t))); return Unit }
+        if k == TOK_STRING { emit(depth: read d, s: read String.concat(left: read "pat-literal kind=string ", right: read escape(s: read t))); return Unit }
+        if k == TOK_CHAR { emit(depth: read d, s: read String.concat(left: read "pat-literal kind=char ", right: read escape(s: read t))); return Unit }
+        if t == "true" || t == "false" { emit(depth: read d, s: read String.concat(left: read "pat-literal kind=bool ", right: read t)); return Unit }
+        if t == "_" { emit(depth: read d, s: read "pat-wildcard"); return Unit }
+        emit(depth: read d, s: read String.concat(left: read "pat-variant name=", right: read t))
+        return Unit
+    }
+    // Dotted head.
+    let headEnd = dotted_name_end(toks: read toks, start: read s, end: read e)
+    let name = dotted_text(toks: read toks, start: read s, end: read headEnd)
+    if at_symbol(toks: read toks, i: read headEnd, code: read SYM_LBRACE) {
+        let close = find_matching(toks: read toks, open: read headEnd, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+        let rest = struct_pattern_has_rest(toks: read toks, open: read headEnd, close: read close)
+        let a = String.concat(left: read "pat-struct name=", right: read name)
+        let b = String.concat(left: read a, right: read " rest=")
+        let c = String.concat(left: read b, right: read boolstr(b: read rest))
+        emit(depth: read d, s: read c)
+        emit_struct_fields(toks: read toks, open: read headEnd, close: read close, d: read (d + 1))
+        return Unit
+    }
+    if at_symbol(toks: read toks, i: read headEnd, code: read SYM_LPAREN) {
+        let close = find_matching(toks: read toks, open: read headEnd, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+        emit(depth: read d, s: read String.concat(left: read "pat-variant name=", right: read name))
+        let mut k = headEnd + 1
+        while k < close {
+            let comma = top_comma(toks: read toks, start: read k, end: read close)
+            let elEnd = pick_end(comma: read comma, end: read close)
+            emit_payload_element(toks: read toks, start: read k, end: read elEnd, d: read (d + 1))
+            if comma < 0 { k = close } else { k = comma + 1 }
+        }
+        return Unit
+    }
+    // Bare (possibly dotted) name → variant with no bindings.
+    emit(depth: read d, s: read String.concat(left: read "pat-variant name=", right: read name))
+    return Unit
+}
+
+// A payload element: single-token disambiguates binding/literal/constructor;
+// multi-token is a nested pattern.
+fn emit_payload_element(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) -> Unit {
+    if start + 1 == end {
+        let k = tk_kind(toks: read toks, i: read start)
+        let t = tk_text(toks: read toks, i: read start)
+        if k == TOK_NUMBER { emit(depth: read d, s: read String.concat(left: read "pat-literal kind=int ", right: read escape(s: read t))); return Unit }
+        if k == TOK_STRING { emit(depth: read d, s: read String.concat(left: read "pat-literal kind=string ", right: read escape(s: read t))); return Unit }
+        if k == TOK_CHAR { emit(depth: read d, s: read String.concat(left: read "pat-literal kind=char ", right: read escape(s: read t))); return Unit }
+        if t == "true" || t == "false" { emit(depth: read d, s: read String.concat(left: read "pat-literal kind=bool ", right: read t)); return Unit }
+        if t == "_" { emit(depth: read d, s: read "pat-wildcard"); return Unit }
+        if is_upper_first(name: read t) {
+            emit(depth: read d, s: read String.concat(left: read "pat-variant name=", right: read t))
+        } else {
+            emit(depth: read d, s: read String.concat(left: read "pat-binding name=", right: read t))
+        }
+        return Unit
+    }
+    emit_pattern(toks: read toks, start: read start, end: read end, d: read d)
+    return Unit
+}
+
+// True if the struct-pattern body (open,close) contains a top-level `..` rest.
+fn struct_pattern_has_rest(toks: read List<Tok>, open: read Int, close: read Int) -> Bool {
+    let mut i = open + 1
+    while i < close {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_DOT) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_DOT) {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+// Struct-pattern fields: `name` | `name: _` | `name: [effect] binding|pattern`.
+fn emit_struct_fields(toks: read List<Tok>, open: read Int, close: read Int, d: read Int) -> Unit {
+    let mut i = open + 1
+    while i < close {
+        let comma = top_comma(toks: read toks, start: read i, end: read close)
+        let fEnd = pick_end(comma: read comma, end: read close)
+        // Skip a `..` rest segment.
+        if at_symbol(toks: read toks, i: read i, code: read SYM_DOT) {
+            // rest, already reflected in rest=; emit nothing
+            let x = 0
+        } else if is_ident_tok(toks: read toks, i: read i) {
+            let fname = tk_text(toks: read toks, i: read i)
+            let colon = find_top_sym(toks: read toks, start: read i, end: read fEnd, code: read SYM_COLON)
+            if colon < 0 {
+                // shorthand `name` → binding=name
+                let a = String.concat(left: read "pat-field name=", right: read fname)
+                let b = String.concat(left: read a, right: read " ignored=false binding=")
+                emit(depth: read d, s: read String.concat(left: read b, right: read fname))
+            } else {
+                emit_struct_field_rhs(toks: read toks, fname: read fname, rhsStart: read (colon + 1), fEnd: read fEnd, d: read d)
+            }
+        }
+        if comma < 0 { i = close } else { i = comma + 1 }
+    }
+    return Unit
+}
+
+fn emit_struct_field_rhs(toks: read List<Tok>, fname: read String, rhsStart: read Int, fEnd: read Int, d: read Int) -> Unit {
+    // `name: _` → ignored.
+    if rhsStart + 1 == fEnd && is_kw_text(toks: read toks, i: read rhsStart, word: read "_") {
+        let a = String.concat(left: read "pat-field name=", right: read fname)
+        emit(depth: read d, s: read String.concat(left: read a, right: read " ignored=true"))
+        return Unit
+    }
+    // Optional effect prefix.
+    let mut bstart = rhsStart
+    let eff = effect_kw(toks: read toks, i: read rhsStart)
+    if String.len(value: read eff) > 0 { bstart = rhsStart + 1 }
+    let a = String.concat(left: read "pat-field name=", right: read fname)
+    let mut head = String.concat(left: read a, right: read " ignored=false")
+    if bstart + 1 == fEnd {
+        let t = tk_text(toks: read toks, i: read bstart)
+        let k = tk_kind(toks: read toks, i: read bstart)
+        let isLit = k == TOK_NUMBER || k == TOK_STRING || k == TOK_CHAR || t == "true" || t == "false"
+        if isLit || is_upper_first(name: read t) {
+            // literal/constructor → nested pattern child, no binding=
+            if String.len(value: read eff) > 0 { head = add_effect(line: read head, eff: read eff) }
+            emit(depth: read d, s: read head)
+            emit_payload_element(toks: read toks, start: read bstart, end: read fEnd, d: read (d + 1))
+            return Unit
+        }
+        // binding
+        head = String.concat(left: read head, right: read " binding=")
+        head = String.concat(left: read head, right: read t)
+        if String.len(value: read eff) > 0 { head = add_effect(line: read head, eff: read eff) }
+        emit(depth: read d, s: read head)
+        return Unit
+    }
+    // Nested multi-token pattern.
+    if String.len(value: read eff) > 0 { head = add_effect(line: read head, eff: read eff) }
+    emit(depth: read d, s: read head)
+    emit_pattern(toks: read toks, start: read bstart, end: read fEnd, d: read (d + 1))
+    return Unit
+}
+
+fn add_effect(line: read String, eff: read String) -> String {
+    let a = String.concat(left: read line, right: read " effect=")
+    return String.concat(left: read a, right: read eff)
 }
 
 // -------------------------------------------------------------------------
