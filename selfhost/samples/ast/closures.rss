@@ -1,0 +1,7 @@
+fn transform(xs: read List<Int>) -> List<Int> {
+    return List.map(items: read xs, fn: |x| { x + 1 })
+}
+
+fn total(xs: read List<Int>) -> Int {
+    return List.fold(items: read xs, init: read 0, fn: |acc, x| acc + x)
+}

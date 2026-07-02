@@ -234,6 +234,12 @@ fn emit_expr(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) 
         emit(depth: read d, s: read "unknown-expr")
         return Unit
     }
+    // Closure `|params| body` — checked before binary split so its `|` pipes are
+    // not read as bit-or (matches parse_expr's ordering).
+    if at_symbol(toks: read toks, i: read s, code: read SYM_PIPE) {
+        emit_closure(toks: read toks, start: read s, end: read e, d: read d)
+        return Unit
+    }
     // Binary split (lowest precedence, last top-level occurrence).
     let opIdx = find_binop(toks: read toks, start: read s, end: read e)
     if opIdx >= 0 {
@@ -267,6 +273,45 @@ fn emit_expr(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) 
         return Unit
     }
     emit_postfix(toks: read toks, start: read s, end: read e, d: read d)
+    return Unit
+}
+
+// Closure `|params| body`. `body` is a `{ }` block or a single expression (which
+// becomes a block with one expr-stmt). Captures/declared-effects are the explicit
+// `fn(...)` form only (a documented gap); the `|...|` form has neither.
+fn emit_closure(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) -> Unit {
+    // Second `|` closes the parameter list.
+    let mut closePipe = -1
+    let mut i = start + 1
+    while i < end && closePipe < 0 {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_PIPE) { closePipe = i }
+        i = i + 1
+    }
+    if closePipe < 0 { emit(depth: read d, s: read "unknown-expr"); return Unit }
+    emit(depth: read d, s: read "closure explicit=false")
+    // Params: comma-separated single idents.
+    let mut k = start + 1
+    while k < closePipe {
+        let comma = split_comma(toks: read toks, start: read k, end: read closePipe)
+        let pEnd = pick_end(comma: read comma, end: read closePipe)
+        if is_ident_tok(toks: read toks, i: read k) {
+            emit(depth: read (d + 1), s: read String.concat(left: read "closure-param ", right: read tk_text(toks: read toks, i: read k)))
+        }
+        if comma < 0 { k = closePipe } else { k = comma + 1 }
+    }
+    emit(depth: read (d + 1), s: read "body")
+    let bodyStart = closePipe + 1
+    if at_symbol(toks: read toks, i: read bodyStart, code: read SYM_LBRACE) {
+        let close = find_matching(toks: read toks, open: read bodyStart, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+        if close == end - 1 {
+            emit_block(toks: read toks, open: read bodyStart, close: read close, d: read (d + 2))
+            return Unit
+        }
+    }
+    // Single-expression body → a block with one expr-stmt.
+    emit(depth: read (d + 2), s: read "block")
+    emit(depth: read (d + 3), s: read "expr-stmt")
+    emit_expr(toks: read toks, start: read bodyStart, end: read end, d: read (d + 4))
     return Unit
 }
 
@@ -397,7 +442,7 @@ fn type_args_str(toks: read List<Tok>, start: read Int, end: read Int) -> String
     let mut k = start
     let mut first = true
     while k < end {
-        let comma = top_comma_ty(toks: read toks, start: read k, end: read end)
+        let comma = split_comma(toks: read toks, start: read k, end: read end)
         let aEnd = pick_end(comma: read comma, end: read end)
         if first == false { StringBuilder.push(builder: mut sb, value: read ", ") }
         StringBuilder.push(builder: mut sb, value: read type_name_str(toks: read toks, start: read k, end: read aEnd))
@@ -445,7 +490,7 @@ fn emit_callee(toks: read List<Tok>, start: read Int, end: read Int, d: read Int
 fn emit_args(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) -> Unit {
     let mut i = start
     while i < end {
-        let comma = top_comma(toks: read toks, start: read i, end: read end)
+        let comma = split_comma(toks: read toks, start: read i, end: read end)
         let argEnd = pick_end(comma: read comma, end: read end)
         // Named arg: `name: value` when a top-level `:` follows an ident at i.
         let mut vstart = i
@@ -466,41 +511,22 @@ fn pick_end(comma: read Int, end: read Int) -> Int {
     return comma
 }
 
-// Like top_comma but also tracks generic `<...>` angle depth, for TYPE contexts
-// (params, fields, generic params) where `Result<Int, String>` must not split at
-// the inner comma. Only valid where `<`/`>` are generic delimiters, never
-// comparison operators.
-fn top_comma_ty(toks: read List<Tok>, start: read Int, end: read Int) -> Int {
+// First top-level comma in [start, end), or -1. Mirrors split_param_ranges: a
+// single `depth` counts ()[]{} AND generic `<>`, and a `|` at depth 0 toggles
+// `pipe` so closure-parameter commas (`|acc, x|`) don't split. This is the
+// canonical splitter for args, params, generic args, and pattern payloads.
+fn split_comma(toks: read List<Tok>, start: read Int, end: read Int) -> Int {
     let mut depth = 0
-    let mut angle = 0
+    let mut pipe = 0
     let mut i = start
     while i < end {
-        if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) {
+        if depth == 0 && at_symbol(toks: read toks, i: read i, code: read SYM_PIPE) {
+            pipe = 1 - pipe
+        } else if pipe == 0 && (at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read i, code: read SYM_LANGLE)) {
             depth = depth + 1
-        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) {
-            depth = depth - 1
-        } else if depth == 0 && at_symbol(toks: read toks, i: read i, code: read SYM_LANGLE) {
-            angle = angle + 1
-        } else if depth == 0 && angle > 0 && at_symbol(toks: read toks, i: read i, code: read SYM_RANGLE) {
-            angle = angle - 1
-        } else if depth == 0 && angle == 0 && at_symbol(toks: read toks, i: read i, code: read SYM_COMMA) {
-            return i
-        }
-        i = i + 1
-    }
-    return -1
-}
-
-// Index of the first top-level comma in [start, end), or -1.
-fn top_comma(toks: read List<Tok>, start: read Int, end: read Int) -> Int {
-    let mut depth = 0
-    let mut i = start
-    while i < end {
-        if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) {
-            depth = depth + 1
-        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) {
-            depth = depth - 1
-        } else if depth == 0 && at_symbol(toks: read toks, i: read i, code: read SYM_COMMA) {
+        } else if pipe == 0 && (at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read i, code: read SYM_RANGLE)) {
+            if depth > 0 { depth = depth - 1 }
+        } else if depth == 0 && pipe == 0 && at_symbol(toks: read toks, i: read i, code: read SYM_COMMA) {
             return i
         }
         i = i + 1
@@ -540,7 +566,7 @@ fn emit_primary(toks: read List<Tok>, start: read Int, end: read Int, d: read In
             emit(depth: read d, s: read "array")
             let mut i = start + 1
             while i < end - 1 {
-                let comma = top_comma(toks: read toks, start: read i, end: read (end - 1))
+                let comma = split_comma(toks: read toks, start: read i, end: read (end - 1))
                 let itemEnd = pick_end(comma: read comma, end: read (end - 1))
                 emit_expr(toks: read toks, start: read i, end: read itemEnd, d: read (d + 1))
                 if comma < 0 { i = end - 1 } else { i = comma + 1 }
@@ -903,7 +929,7 @@ fn dotted_text(toks: read List<Tok>, start: read Int, end: read Int) -> String {
 fn emit_params(toks: read List<Tok>, open: read Int, close: read Int, d: read Int) -> Unit {
     let mut i = open + 1
     while i < close {
-        let comma = top_comma_ty(toks: read toks, start: read i, end: read close)
+        let comma = split_comma(toks: read toks, start: read i, end: read close)
         // name
         let pname = tk_text(toks: read toks, i: read i)
         // after `name :`
@@ -935,7 +961,7 @@ fn emit_generics(toks: read List<Tok>, i: read Int, d: read Int) -> Int {
     if close < 0 { return i }
     let mut k = i + 1
     while k < close {
-        let comma = top_comma_ty(toks: read toks, start: read k, end: read close)
+        let comma = split_comma(toks: read toks, start: read k, end: read close)
         let name = tk_text(toks: read toks, i: read k)
         emit(depth: read d, s: read String.concat(left: read "generic name=", right: read name))
         // Optional bound: `Name: Bound`.
@@ -1107,7 +1133,7 @@ fn emit_sum(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
 fn emit_variant_fields(toks: read List<Tok>, open: read Int, close: read Int, d: read Int) -> Unit {
     let mut i = open + 1
     while i < close {
-        let comma = top_comma_ty(toks: read toks, start: read i, end: read close)
+        let comma = split_comma(toks: read toks, start: read i, end: read close)
         let fend = pick_end(comma: read comma, end: read close)
         if is_ident_tok(toks: read toks, i: read i) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_COLON) {
             emit_field(toks: read toks, start: read i, lineEnd: read fend, d: read d)
@@ -1377,7 +1403,7 @@ fn emit_pattern(toks: read List<Tok>, start: read Int, end: read Int, d: read In
         emit(depth: read d, s: read String.concat(left: read "pat-variant name=", right: read name))
         let mut k = headEnd + 1
         while k < close {
-            let comma = top_comma(toks: read toks, start: read k, end: read close)
+            let comma = split_comma(toks: read toks, start: read k, end: read close)
             let elEnd = pick_end(comma: read comma, end: read close)
             emit_payload_element(toks: read toks, start: read k, end: read elEnd, d: read (d + 1))
             if comma < 0 { k = close } else { k = comma + 1 }
@@ -1427,7 +1453,7 @@ fn struct_pattern_has_rest(toks: read List<Tok>, open: read Int, close: read Int
 fn emit_struct_fields(toks: read List<Tok>, open: read Int, close: read Int, d: read Int) -> Unit {
     let mut i = open + 1
     while i < close {
-        let comma = top_comma(toks: read toks, start: read i, end: read close)
+        let comma = split_comma(toks: read toks, start: read i, end: read close)
         let fEnd = pick_end(comma: read comma, end: read close)
         // Skip a `..` rest segment.
         if at_symbol(toks: read toks, i: read i, code: read SYM_DOT) {
