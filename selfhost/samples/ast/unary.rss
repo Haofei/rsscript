@@ -1,0 +1,7 @@
+fn checks(a: read Int, done: read Bool) -> Int {
+    let neg = -5
+    if !done {
+        return neg
+    }
+    return ~a
+}

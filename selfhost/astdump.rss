@@ -234,6 +234,12 @@ fn emit_expr(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) 
         emit(depth: read d, s: read "unknown-expr")
         return Unit
     }
+    // Negative number literal: `-` <number> exactly (before binary/closure, as in
+    // parse_expr) so it doesn't split as subtraction.
+    if e - s == 2 && at_symbol(toks: read toks, i: read s, code: read SYM_MINUS) && tk_kind(toks: read toks, i: read (s + 1)) == TOK_NUMBER {
+        emit(depth: read d, s: read String.concat(left: read "number -", right: read escape(s: read tk_text(toks: read toks, i: read (s + 1)))))
+        return Unit
+    }
     // Closure `|params| body` — checked before binary split so its `|` pipes are
     // not read as bit-or (matches parse_expr's ordering).
     if at_symbol(toks: read toks, i: read s, code: read SYM_PIPE) {
@@ -248,6 +254,20 @@ fn emit_expr(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) 
         emit(depth: read d, s: read String.concat(left: read "binary op=", right: read name))
         emit_expr(toks: read toks, start: read s, end: read opIdx, d: read (d + 1))
         emit_expr(toks: read toks, start: read (opIdx + w), end: read e, d: read (d + 1))
+        return Unit
+    }
+    // Prefix `!x` desugars to `x == false`; `~x` to `Int.bit_not(value: x)`.
+    if at_symbol(toks: read toks, i: read s, code: read SYM_BANG) {
+        emit(depth: read d, s: read "binary op=equal")
+        emit_unary_operand(toks: read toks, start: read (s + 1), end: read e, d: read (d + 1))
+        emit(depth: read (d + 1), s: read "ident false")
+        return Unit
+    }
+    if at_symbol(toks: read toks, i: read s, code: read SYM_TILDE) {
+        emit(depth: read d, s: read "call")
+        emit(depth: read (d + 1), s: read "callee-qualified namespace=Int name=bit_not")
+        emit(depth: read (d + 1), s: read "arg name=value")
+        emit_unary_operand(toks: read toks, start: read (s + 1), end: read e, d: read (d + 2))
         return Unit
     }
     // Trailing top-level `?` => try.
@@ -312,6 +332,19 @@ fn emit_closure(toks: read List<Tok>, start: read Int, end: read Int, d: read In
     emit(depth: read (d + 2), s: read "block")
     emit(depth: read (d + 3), s: read "expr-stmt")
     emit_expr(toks: read toks, start: read bodyStart, end: read end, d: read (d + 4))
+    return Unit
+}
+
+// A unary operand [start, end): strip parens wrapping the whole operand (matches
+// unary_operand_range), then emit the expression.
+fn emit_unary_operand(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) -> Unit {
+    let mut s = start
+    let mut e = end
+    if s < e && at_symbol(toks: read toks, i: read s, code: read SYM_LPAREN) {
+        let close = find_matching(toks: read toks, open: read s, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+        if close == e - 1 { s = s + 1; e = close }
+    }
+    emit_expr(toks: read toks, start: read s, end: read e, d: read d)
     return Unit
 }
 
