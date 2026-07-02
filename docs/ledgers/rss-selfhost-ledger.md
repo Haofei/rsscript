@@ -474,7 +474,24 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   **Copy-scalar** parameter (Int/Bool/Float/Char, …) may be reassigned inside the
   callee and the new value is written back to the caller (`&mut` semantics), so a
   scanner can take `i: mut Int` and do `i = i + 1` instead of returning the new
-  index. Method/`impl` syntax remains a separate follow-up.
+  index.
+- **CORRECTION (2026-07-01):** the Symptom's "no `impl`/method syntax" was an
+  over-claim (same class as SH-020). rss DOES have inherent methods — spelled as
+  top-level qualified functions with a `self` receiver: `fn Type.method(self:
+  read/mut/take Type, …)`, called with dot-syntax `x.method(args)` /
+  `mut x.method()` (spec §14.6.1). Static, monomorphic, one-per-(type,name),
+  effect-explicit, resolved by the receiver's concrete type in HIR
+  (`resolve_receiver_call`), lowered like any namespaced function on all backends.
+  Verified: `fn Lexer.bump(self: mut Lexer) { self.pos = self.pos + 1 }` +
+  `mut lexer.bump()` mutates and writes back. So a self-hosted lexer CAN
+  encapsulate its cursor as `fn Lexer.bump(self: mut Lexer)` — the pain was using
+  free helpers, not a language gap. The ONLY thing rss lacks is the
+  `impl Type { fn m() }` BLOCK grouping, which the spec DELIBERATELY rejects
+  (§2B.2/§2B.3: methods are flat qualified functions "not bodies buried in an impl
+  block"; §2.3 single-canonical-form). Decision (user, 2026-07-01): adopt the
+  existing `fn Type.method(self:…)` form; do NOT add the `impl` block (it adds no
+  capability and would reverse a considered spec position). Method syntax is
+  therefore RESOLVED, not a follow-up.
 - **Fix:** the reg-VM already wrote a `mut` param's final register back to the
   caller for every `mut` param (scalar included), so no reg-VM/native change was
   needed. Only two frontend touch-points were added: (1) the assignment gate
