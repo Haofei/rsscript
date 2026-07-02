@@ -2292,7 +2292,26 @@ fn deepcopy_intrinsic_class(intrinsic: RegIntrinsic) -> IntrinsicTaintClass {
         // Deque
         | RegIntrinsic::DequeIsEmpty
         | RegIntrinsic::DequeLen
-        | RegIntrinsic::DequeNew => PureFreshReader,
+        | RegIntrinsic::DequeNew
+        // Char — pure scalar readers: each takes `Char`/`Int` by value and returns
+        // a fresh `Int`/`Bool`/`Char`/`String`; none borrow_mut, store into
+        // streams/channels/resources, or alias an arg (verified in
+        // `intrinsics/char.rs`). Classifying them PureFreshReader lets the elision
+        // pass drop a redundant `read List<Char>` prologue DeepCopy when the only
+        // keep-forcing use of a `ListGet`-extracted `Char` is one of these — the
+        // SH-022 O(n^2) fix (a `read List<Char>` param was deep-copied per call).
+        | RegIntrinsic::CharToCode
+        | RegIntrinsic::CharFromCode
+        | RegIntrinsic::CharToString
+        | RegIntrinsic::CharToLower
+        | RegIntrinsic::CharToUpper
+        | RegIntrinsic::CharIsDigit
+        | RegIntrinsic::CharIsAlpha
+        | RegIntrinsic::CharIsAlphanumeric
+        | RegIntrinsic::CharIsLower
+        | RegIntrinsic::CharIsUpper
+        | RegIntrinsic::CharIsWhitespace
+        | RegIntrinsic::CharCompare => PureFreshReader,
 
         // ---- AliasReturner: result shares an arg's inner `Rc`; propagate taint arg→dst. ----
         // List

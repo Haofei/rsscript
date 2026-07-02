@@ -605,7 +605,7 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
 - **Tests:** `crate::selfhost_parity::parser_parity_corpus`.
 - **Status:** decided.
 
-### SH-022 — self-hosted lexer is ~5100× slower on the VM; cost is per-char intrinsic/collection dispatch, NOT string building
+### SH-022 — self-hosted lexer was ~5100× slower on the VM: O(n²) DeepCopy of a `read List<Char>` param per helper call (FIXED → 45.6×)
 
 - **Tool:** self-hosted lexer (`selfhost/lexer.rss`) run on the reg-VM vs native
   `crate::lexer::lex`, over the whole 545-file corpus (712 KB).
@@ -619,36 +619,45 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   `String.concat` (O(n²)) to `StringBuilder` (O(n)). **No measurable change**
   (5140× → 5195×, within noise), parity still 544/544. So string-building is NOT
   the bottleneck (most tokens are short, so the quadratic term never dominates).
-- **Backend:** vm (also relevant to tier-0/native — this code is intrinsic-bound,
-  not native-eligible, cf. SH-001/SH-004).
-- **Root cause:** the main loop is O(n) (single `String.chars` + one pass), but does
-  ~6 intrinsic dispatches PER CHARACTER — `List.get` on a `List<Char>` (VmValue
-  boxing + refcount) plus `Char.to_code`/`is_whitespace`/`is_digit`/… and the
-  `code_at` peeks (c1,c2). The dominant cost is the VM's per-op value-representation
-  + intrinsic-dispatch overhead over ~712 K chars, exactly the lever flagged by
-  SH-001/SH-004/SH-011 and the parked perf roadmap. This is the first REAL-workload
-  profile that is unambiguously VM-dispatch-bound.
-- **Classification:** VM (value representation + intrinsic dispatch) + stdlib
-  (no char-cursor / native String-iteration intrinsic; `String.chars → List<Char>`
-  forces per-char boxed access).
-- **Decision:** the real lever is cheaper per-char access, NOT string building:
-  e.g. a native string byte/char cursor intrinsic (iterate without materializing a
-  boxed `List<Char>`), and lower per-intrinsic dispatch overhead. Feeds
-  [[perf-refactor-roadmap]] / [[jit-collection-perf-measurement]] with real-workload
-  evidence (the trigger that work was waiting for).
-- **Measured vs. extrapolated (be honest):** only two things here are *measured* —
-  (a) the VM-vs-native table above, and (b) the `String.concat`→`StringBuilder`
-  control. The VM-vs-**AOT** split is **NOT measured**: SH-006 measured AOT ~144×
-  faster than the VM on comparable tool code, which *would* put an AOT-compiled
-  self-hosted lexer near ~0.5 s (~30× native Rust), but this lexer has not actually
-  been run under AOT. That AOT number is the piece that would separate *fixable VM
-  per-op overhead* from the *inherent per-char intrinsic count* (which AOT also
-  pays) — worth measuring as a follow-up (needs a file-reading lexer variant so a
-  700 KB input isn't passed via `argv`).
+- **Backend:** vm.
+- **ROOT CAUSE (CORRECTED 2026-07-01 — earlier "per-char dispatch" was WRONG):** a
+  genuine **O(n²)**. Every lexer helper takes `chars: read List<Char>`; a `read`
+  non-Copy param gets an eager prologue `DeepCopy`. The DeepCopy-elision pass
+  *should* drop that copy (the list is never mutated), but it was KEPT: the taint
+  pass propagates through `ListGet` to the extracted scalar `Char`, and the
+  `Char.*` intrinsics were classified `Keep`, so `Char.to_code(c)` pinned the copy.
+  Result: every per-char helper call (`code_at`, `slice`, `scan_*` — called O(n)
+  times) deep-copied the whole O(n) char list ⇒ **O(n²)**. Measured attribution:
+  a helper taking `read List<Char>` per char is O(n²) (10k→588ms, 20k→2319ms,
+  40k→9127ms, 80k→37099ms, ~4×/doubling); the same work inlined (no per-call copy)
+  is flat O(n) (~15–20ms). `RSS_VM_ELIDE_DEEPCOPY=0` vs on = identical (the copy was
+  kept either way). AOT of the same source = ~1ms (borrows `read` params). So
+  ~9000× of the gap was VM-specific redundant DeepCopy — NOT dispatch, NOT boxing
+  (dispatch measured ~60ns/char), NOT string building (the StringBuilder control
+  correctly ruled that out; its "so it's dispatch" inference was the mistake).
+- **Classification:** VM (DeepCopy-elision classifier) — exactly the
+  [[perf-refactor-phase2-deepcopy-elision]] "v2 classifier" follow-up (v1 was
+  sound-but-no-win because "intrinsic reads force keep").
+- **FIX (landed):** classify the 12 pure scalar `Char.*` intrinsics
+  (`CharToCode`, `CharFromCode`, `CharToString`, `CharToLower`, `CharToUpper`,
+  `CharIsDigit`, `CharIsAlpha`, `CharIsAlphanumeric`, `CharIsLower`, `CharIsUpper`,
+  `CharIsWhitespace`, `CharCompare`) as `PureFreshReader` in
+  `deepcopy_intrinsic_class` (`reg_vm/model.rs`) — they take `Char`/`Int` by value
+  and return a fresh scalar/Bool/String, never mutate/store/alias (verified in
+  `intrinsics/char.rs`). The existing elision pass then proves the `read List<Char>`
+  copy redundant and drops it → O(n²)→O(n). ONE match arm; VM-only; no new
+  intrinsic, no spec, no AOT/native change. Parity-safe: elision only removes a
+  provably-redundant copy (native treats `DeepCopyElided` == `DeepCopy`; AOT borrows).
+- **RESULT (measured, release, `lexer_perf_corpus`, 556 files / 724 KB):** rss
+  lexer/VM **79.5 s → 732.7 ms** (~**108× speedup**); slowdown vs native
+  `lex()` **5100× → 45.6×**. The ~46× residual is the real VM per-op tax over native
+  Rust (AOT would remove most of it); cutting that further = the parked
+  [[perf-refactor-roadmap]] collection-rep work, not this bounded fix.
 - **Tests / bench:** `crate::selfhost_parity::lexer_perf_corpus`
-  (`--release -- --ignored`).
-- **Status:** open (VM/stdlib lever identified; feeds perf roadmap; AOT split
-  still to be measured).
+  (`--release -- --ignored`); `reg_vm::tests::…::deepcopy_elision_fires_for_char_list_read_param`
+  (regression guard). Full differential + compiled-parity green (elision soundness).
+- **Status:** fixed (O(n²) removed; residual ~46× is the general VM per-op tax,
+  tracked by the parked perf roadmap).
 
 ### SH-023 — self-hosted checker reaches RS0005 parity at declaration level; the merged callable namespace is the load-bearing rule
 

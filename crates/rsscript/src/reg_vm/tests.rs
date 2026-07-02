@@ -658,6 +658,57 @@ fn main() -> Unit {
         assert_eq!(output.stdout, "12\n");
     }
 
+    /// SH-022 regression: a `read List<Char>` param whose only keep-forcing use is
+    /// a pure scalar `Char.*` intrinsic (here `Char.to_code` on a `ListGet`-extracted
+    /// element) must have its prologue `DeepCopy` ELIDED. Before the `Char.*`
+    /// intrinsics were classified `PureFreshReader`, `Char.to_code(c)` pinned the
+    /// copy, so every per-char lexer helper call deep-copied the whole char list —
+    /// a genuine O(n^2) that made the self-hosted lexer ~5000x slower than native.
+    #[test]
+    fn deepcopy_elision_fires_for_char_list_read_param() {
+        let source = r#"
+fn scan(chars: read List<Char>, i: Int) -> Int {
+    let c = List.get<Char>(list: read chars, index: i)
+    return Char.to_code(value: read c)
+}
+
+fn main() -> Unit {
+    let chars = String.chars(value: read "abc")
+    Log.write(message: read String.from_int(value: scan(chars: read chars, i: 1)))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("deepcopy-elision-char.rss", source).expect("lowering succeeds");
+
+        let scan_id = executable.unit.function_ids["scan"];
+        let scan = executable.unit.functions[scan_id].as_ref();
+        let elided = scan
+            .code
+            .iter()
+            .filter(|instr| matches!(instr, RegInstr::DeepCopyElided { .. }))
+            .count();
+        let eager = scan
+            .code
+            .iter()
+            .filter(|instr| matches!(instr, RegInstr::DeepCopy { .. }))
+            .count();
+        if crate::reg_vm::model::elide_deepcopy_enabled_for_test() {
+            assert!(
+                elided >= 1 && eager == 0,
+                "elision ON: `read List<Char>` param whose only use is ListGet + \
+                 Char.to_code must be elided, got {elided} elided / {eager} eager: {:#?}",
+                scan.code,
+            );
+        }
+
+        // Elision must not change behavior: scan("abc"[1]) == code of 'b' == 98.
+        let output = executable
+            .eval_main_with_args(Vec::<String>::new())
+            .expect("program should still run");
+        assert_eq!(output.stdout, "98\n");
+    }
+
     #[test]
     fn jit_runs_scalar_self_recursion_on_flat_executor() {
         let source = r#"
