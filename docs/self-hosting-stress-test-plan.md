@@ -280,18 +280,25 @@ likely want a sampled fast inner-loop gate plus the full corpus pre-push.
 recursive-descent rss parser that STREAMS the canonical dump (no handle-based AST is
 materialized). Parity harness: `ast_parity_tiny_sample` + `ast_parity_samples`
 (non-ignored, byte-exact vs the oracle over curated `samples/ast/*`) and
-`ast_parity_corpus` (`#[ignore]`, ratchets a floor over all 563 files and asserts
+`ast_parity_corpus` (`#[ignore]`, ratchets a floor over all files and asserts
 **0 run-failures** so a producer crash regresses the gate even if the byte-exact
-count still clears the floor). That corpus gate runs the reg-VM over ~560 files and
-is slow in a debug build — run it in `--release` for a quick measurement; the fast
-non-ignored inner-loop gate is `ast_parity_samples`. Current reach: **121/563
-byte-exact, 0 run-failures** (the producer never crashes; unsupported constructs
-mismatch rather than panic). Covered: fns (generics/effects/
-return/body), struct/class/resource (opaque/generics/derives/handle-weak/defaults/
-drop), sum, const/type-alias/module/use, the core statements, and a precedence-exact
-expression parser (calls, field/index, array, try, effects, literals). Both risks are
-handled: the curated set is the fast inner-loop gate; the module story is decided in
-`selfhost/AST_FORMAT.md` (commit to concatenation). The residual grammar (for/match/
-closures/object-map/interp/unary-desugars/effect-receiver/attributes/protocols/
-line-continuation) is the additive tail, tracked as **SH-025** and gated by the
-ratcheting floor.
+count still clears the floor). That corpus gate runs the reg-VM over ~570 files and
+is slow in a debug build — run it in `--release` for a quick measurement (~100s);
+the fast non-ignored inner-loop gate is `ast_parity_samples`. Current reach:
+**245/569 byte-exact, 0 run-failures** (the producer never crashes; unsupported
+constructs mismatch rather than panic), roughly doubled this session via ratcheted
+milestones: base fns 58 → declarations 121 → match 178 → generic calls 225 →
+closures 239 → for/literals 242 → unary/negative 245. Covered: fns (generics/
+effects/return/body), struct/class/resource (opaque/generics/derives/handle-weak/
+defaults/drop), sum, const/type-alias/module/use, statements (return/let/assign/
+if-else/while/**for**/**match**/break/continue/expr), and a precedence-exact
+expression parser with generic-`<>` disambiguation (calls incl. **generic-qualified**,
+field/index, array, **object/map literals**, **closures**, **match-expr**, **unary
+`!`/`~`**, **negative numbers**, try, effects, literals) plus variant/binding/
+wildcard/literal/struct patterns. Both risks are handled: the curated set is the
+fast inner-loop gate; the module story is decided in `selfhost/AST_FORMAT.md`
+(commit to concatenation). The residual grammar (interpolation, effect-receiver
+calls, explicit-`fn` closures, attributes, effect/retains clauses, tuple/list
+patterns, protocols/impls/native-modules, line-continuation) is the additive tail —
+mismatched files now typically stack several at once — tracked as **SH-025** and
+gated by the ratcheting floor.
