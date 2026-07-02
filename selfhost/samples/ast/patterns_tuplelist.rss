@@ -1,0 +1,15 @@
+fn classify(pair: read Int) -> Int {
+    match pair {
+        (a, b) => { return a }
+        _ => { return 0 }
+    }
+}
+
+fn first_of(xs: read List<Int>) -> Int {
+    match xs {
+        [first, ..rest] => { return first }
+        [a, b] => { return a }
+        [] => { return 0 }
+        _ => { return 0 }
+    }
+}

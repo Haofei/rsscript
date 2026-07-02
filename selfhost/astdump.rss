@@ -246,6 +246,11 @@ fn emit_expr(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) 
         emit_closure(toks: read toks, start: read s, end: read e, d: read d)
         return Unit
     }
+    // Explicit closure: `fn(params) captures(...) [effects(...)] { body }`.
+    if is_kw_text(toks: read toks, i: read s, word: read "fn") && at_symbol(toks: read toks, i: read (s + 1), code: read SYM_LPAREN) {
+        emit_explicit_fn(toks: read toks, start: read s, end: read e, d: read d)
+        return Unit
+    }
     // Binary split (lowest precedence, last top-level occurrence).
     let opIdx = find_binop(toks: read toks, start: read s, end: read e)
     if opIdx >= 0 {
@@ -352,6 +357,66 @@ fn emit_closure(toks: read List<Tok>, start: read Int, end: read Int, d: read In
     emit(depth: read (d + 2), s: read "block")
     emit(depth: read (d + 3), s: read "expr-stmt")
     emit_expr(toks: read toks, start: read bodyStart, end: read end, d: read (d + 4))
+    return Unit
+}
+
+// Explicit closure `fn(params) captures(<eff name>, ...) [effects(a, ...)] { body }`.
+// Mirrors parse_explicit_fn_expr: explicit=true, capture/declared-effect children.
+fn emit_explicit_fn(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) -> Unit {
+    let pOpen = start + 1
+    let pClose = find_matching(toks: read toks, open: read pOpen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    if pClose < 0 { emit(depth: read d, s: read "unknown-expr"); return Unit }
+    emit(depth: read d, s: read "closure explicit=true")
+    // params: comma-separated single idents.
+    let mut k = pOpen + 1
+    while k < pClose {
+        let comma = split_comma(toks: read toks, start: read k, end: read pClose)
+        if is_ident_tok(toks: read toks, i: read k) {
+            emit(depth: read (d + 1), s: read String.concat(left: read "closure-param ", right: read tk_text(toks: read toks, i: read k)))
+        }
+        if comma < 0 { k = pClose } else { k = comma + 1 }
+    }
+    // captures(...) — each entry is `<effect> <ident>`.
+    let mut cur = pClose + 1
+    if is_kw_text(toks: read toks, i: read cur, word: read "captures") && at_symbol(toks: read toks, i: read (cur + 1), code: read SYM_LPAREN) {
+        let cOpen = cur + 1
+        let cClose = find_matching(toks: read toks, open: read cOpen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+        let mut j = cOpen + 1
+        while j < cClose {
+            let comma = split_comma(toks: read toks, start: read j, end: read cClose)
+            let eff = effect_kw(toks: read toks, i: read j)
+            if String.len(value: read eff) > 0 && is_ident_tok(toks: read toks, i: read (j + 1)) {
+                let a = String.concat(left: read "capture effect=", right: read eff)
+                let b = String.concat(left: read a, right: read " name=")
+                emit(depth: read (d + 1), s: read String.concat(left: read b, right: read tk_text(toks: read toks, i: read (j + 1))))
+            }
+            if comma < 0 { j = cClose } else { j = comma + 1 }
+        }
+        cur = cClose + 1
+    }
+    // optional effects(a, b) — each entry a single ident → `declared-effect <n>`.
+    if is_kw_text(toks: read toks, i: read cur, word: read "effects") && at_symbol(toks: read toks, i: read (cur + 1), code: read SYM_LPAREN) {
+        let eOpen = cur + 1
+        let eClose = find_matching(toks: read toks, open: read eOpen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+        let mut m = eOpen + 1
+        while m < eClose {
+            let comma = split_comma(toks: read toks, start: read m, end: read eClose)
+            if is_ident_tok(toks: read toks, i: read m) {
+                emit(depth: read (d + 1), s: read String.concat(left: read "declared-effect ", right: read tk_text(toks: read toks, i: read m)))
+            }
+            if comma < 0 { m = eClose } else { m = comma + 1 }
+        }
+        cur = eClose + 1
+    }
+    emit(depth: read (d + 1), s: read "body")
+    if at_symbol(toks: read toks, i: read cur, code: read SYM_LBRACE) {
+        let bClose = find_matching(toks: read toks, open: read cur, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+        if bClose == end - 1 {
+            emit_block(toks: read toks, open: read cur, close: read bClose, d: read (d + 2))
+            return Unit
+        }
+    }
+    emit(depth: read (d + 2), s: read "block")
     return Unit
 }
 
@@ -1651,6 +1716,23 @@ fn emit_match_arms(toks: read List<Tok>, start: read Int, end: read Int, d: read
 }
 
 fn emit_pattern(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) -> Unit {
+    // Tuple pattern `(p0, .., pN)` (>=2 elements) — checked before paren-trim, which
+    // would otherwise strip the wrapping parens. Desugars to a `__TupleN` struct.
+    if at_symbol(toks: read toks, i: read start, code: read SYM_LPAREN) && at_symbol(toks: read toks, i: read (end - 1), code: read SYM_RPAREN) {
+        let tclose = find_matching(toks: read toks, open: read start, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+        if tclose == end - 1 && count_pat_elems(toks: read toks, open: read start, close: read tclose) >= 2 {
+            emit_tuple(toks: read toks, open: read start, close: read tclose, d: read d)
+            return Unit
+        }
+    }
+    // List / slice pattern `[a, ..rest, z]`.
+    if at_symbol(toks: read toks, i: read start, code: read SYM_LBRACKET) && at_symbol(toks: read toks, i: read (end - 1), code: read SYM_RBRACKET) {
+        let lclose = find_matching(toks: read toks, open: read start, openSym: read SYM_LBRACKET, closeSym: read SYM_RBRACKET)
+        if lclose == end - 1 {
+            emit_list_pattern(toks: read toks, open: read start, close: read lclose, d: read d)
+            return Unit
+        }
+    }
     // Trim wrapping parens.
     let mut s = start
     let mut e = end
@@ -1806,6 +1888,115 @@ fn emit_struct_field_rhs(toks: read List<Tok>, fname: read String, rhsStart: rea
 fn add_effect(line: read String, eff: read String) -> String {
     let a = String.concat(left: read line, right: read " effect=")
     return String.concat(left: read a, right: read eff)
+}
+
+// Count comma-separated pattern elements in (open, close).
+fn count_pat_elems(toks: read List<Tok>, open: read Int, close: read Int) -> Int {
+    let mut n = 0
+    let mut k = open + 1
+    while k < close {
+        let comma = split_comma(toks: read toks, start: read k, end: read close)
+        n = n + 1
+        if comma < 0 { k = close } else { k = comma + 1 }
+    }
+    return n
+}
+
+// Tuple pattern → `pat-struct name=__TupleN rest=false` with item0..itemN fields
+// (element mapping identical to a struct-field RHS; no effects).
+fn emit_tuple(toks: read List<Tok>, open: read Int, close: read Int, d: read Int) -> Unit {
+    let n = count_pat_elems(toks: read toks, open: read open, close: read close)
+    let hdr = String.concat(left: read String.concat(left: read "pat-struct name=__Tuple", right: read String.from_int(value: n)), right: read " rest=false")
+    emit(depth: read d, s: read hdr)
+    let mut k = open + 1
+    let mut idx = 0
+    while k < close {
+        let comma = split_comma(toks: read toks, start: read k, end: read close)
+        let elEnd = pick_end(comma: read comma, end: read close)
+        let fname = String.concat(left: read "item", right: read String.from_int(value: idx))
+        emit_struct_field_rhs(toks: read toks, fname: read fname, rhsStart: read k, fEnd: read elEnd, d: read (d + 1))
+        idx = idx + 1
+        if comma < 0 { k = close } else { k = comma + 1 }
+    }
+    return Unit
+}
+
+// True if the comma-segment at [segStart, segEnd) is a `..`/`..name` rest segment.
+fn is_rest_segment(toks: read List<Tok>, segStart: read Int) -> Bool {
+    return at_symbol(toks: read toks, i: read segStart, code: read SYM_DOT) && at_symbol(toks: read toks, i: read (segStart + 1), code: read SYM_DOT)
+}
+
+// List pattern: `rest=none|ignore|NAME`, with non-empty `list-prefix`/`list-suffix`.
+fn emit_list_pattern(toks: read List<Tok>, open: read Int, close: read Int, d: read Int) -> Unit {
+    // Pass 1: find the rest segment and its rendered name.
+    let mut restStart = -1
+    let mut restStr = "none"
+    let mut k = open + 1
+    while k < close {
+        let comma = split_comma(toks: read toks, start: read k, end: read close)
+        let segEnd = pick_end(comma: read comma, end: read close)
+        if is_rest_segment(toks: read toks, segStart: read k) {
+            restStart = k
+            let aft = k + 2
+            if aft >= segEnd { restStr = "ignore" }
+            else if is_kw_text(toks: read toks, i: read aft, word: read "_") { restStr = "ignore" }
+            else if is_ident_tok(toks: read toks, i: read aft) { restStr = tk_text(toks: read toks, i: read aft) }
+            else { restStr = "ignore" }
+        }
+        if comma < 0 { k = close } else { k = comma + 1 }
+    }
+    emit(depth: read d, s: read String.concat(left: read "pat-list rest=", right: read restStr))
+    // Prefix: elements before the rest (or all elements when there is no rest).
+    let prefixCount = count_list_side(toks: read toks, open: read open, close: read close, restStart: read restStart, before: read true)
+    if prefixCount > 0 {
+        emit(depth: read (d + 1), s: read "list-prefix")
+        emit_list_side(toks: read toks, open: read open, close: read close, restStart: read restStart, before: read true, d: read (d + 2))
+    }
+    // Suffix: elements after the rest.
+    if restStart >= 0 {
+        let suffixCount = count_list_side(toks: read toks, open: read open, close: read close, restStart: read restStart, before: read false)
+        if suffixCount > 0 {
+            emit(depth: read (d + 1), s: read "list-suffix")
+            emit_list_side(toks: read toks, open: read open, close: read close, restStart: read restStart, before: read false, d: read (d + 2))
+        }
+    }
+    return Unit
+}
+
+// Whether the element starting at k falls on the requested side of the rest.
+// (rss has no if-expression, so this is a helper rather than an inline ternary.)
+fn on_list_side(restStart: read Int, k: read Int, before: read Bool) -> Bool {
+    if before { return restStart < 0 || k < restStart }
+    return restStart >= 0 && k > restStart
+}
+
+// Count list elements on one side of the rest (before/after), excluding the rest.
+fn count_list_side(toks: read List<Tok>, open: read Int, close: read Int, restStart: read Int, before: read Bool) -> Int {
+    let mut n = 0
+    let mut k = open + 1
+    while k < close {
+        let comma = split_comma(toks: read toks, start: read k, end: read close)
+        let isRest = k == restStart
+        let onSide = on_list_side(restStart: read restStart, k: read k, before: read before)
+        if isRest == false && onSide { n = n + 1 }
+        if comma < 0 { k = close } else { k = comma + 1 }
+    }
+    return n
+}
+
+fn emit_list_side(toks: read List<Tok>, open: read Int, close: read Int, restStart: read Int, before: read Bool, d: read Int) -> Unit {
+    let mut k = open + 1
+    while k < close {
+        let comma = split_comma(toks: read toks, start: read k, end: read close)
+        let segEnd = pick_end(comma: read comma, end: read close)
+        let isRest = k == restStart
+        let onSide = on_list_side(restStart: read restStart, k: read k, before: read before)
+        if isRest == false && onSide {
+            emit_payload_element(toks: read toks, start: read k, end: read segEnd, d: read d)
+        }
+        if comma < 0 { k = close } else { k = comma + 1 }
+    }
+    return Unit
 }
 
 // -------------------------------------------------------------------------

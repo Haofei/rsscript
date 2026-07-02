@@ -1,0 +1,4 @@
+fn run() -> Int {
+    let f = fn(x) captures(read a, mut b) effects(io) { x }
+    return 0
+}
