@@ -165,6 +165,12 @@ fn body_has_duplicate_field(toks: read List<Tok>, ob: read Int, close: read Int)
     return dup
 }
 
+// The file features recognized by the compiler (parse_file_feature). Anything
+// else in a `features:` header is an unknown feature (RS0016).
+fn is_known_feature(name: read String) -> Bool {
+    return name == "local" || name == "native" || name == "unsafe" || name == "async" || name == "device" || name == "ffi" || name == "reflection"
+}
+
 // ---------------------------------------------------------------------------
 // Driver.
 // ---------------------------------------------------------------------------
@@ -176,6 +182,11 @@ fn main() -> Unit {
     let mut callable = Set<String>.new()
     let mut types = Set<String>.new()
     let mut found = false
+    // Feature-header diagnostics: RS0016 (unknown feature), RS0017 (duplicate
+    // feature within a header), RS0006 (a second `features:` header).
+    let mut headerCount = 0
+    let mut hasUnknownFeat = false
+    let mut hasDupFeat = false
     let mut i = 0
     let mut running = true
     while running {
@@ -193,7 +204,33 @@ fn main() -> Unit {
             let isTypeAlias = cls.isTypeAlias
             let isConst = cls.isConst
             if isFeatures {
-                i = declaration_line_end(toks: read toks, start: read i)
+                headerCount = headerCount + 1
+                let lineEnd = declaration_line_end(toks: read toks, start: read i)
+                // Feature list is [i+2, lineEnd) (skip the `features :` prefix).
+                // Duplicate detection is per-header (seen is reset each header),
+                // matching parse_features.
+                let mut seen = Set<String>.new()
+                let mut j = i + 2
+                while j < lineEnd {
+                    if at_symbol(toks: read toks, i: read j, code: read SYM_COMMA) {
+                        j = j + 1
+                    } else if tk_kind(toks: read toks, i: read j) == TOK_EOF {
+                        j = j + 1
+                    } else {
+                        let fname = tk_text(toks: read toks, i: read j)
+                        if is_known_feature(name: read fname) {
+                            if Set.contains<String>(set: read seen, value: read fname) {
+                                hasDupFeat = true
+                            } else {
+                                Set.insert<String>(set: mut seen, value: read fname)
+                            }
+                        } else {
+                            hasUnknownFeat = true
+                        }
+                        j = j + 1
+                    }
+                }
+                i = lineEnd
             } else if isProfile {
                 i = declaration_line_end(toks: read toks, start: read i)
             } else if starts_type_decl(toks: read toks, i: read i, isPub: read isPub) {
@@ -304,7 +341,17 @@ fn main() -> Unit {
     }
     if found {
         Log.write(message: read "RS0005")
-    } else {
+    }
+    if hasUnknownFeat {
+        Log.write(message: read "RS0016")
+    }
+    if hasDupFeat {
+        Log.write(message: read "RS0017")
+    }
+    if headerCount >= 2 {
+        Log.write(message: read "RS0006")
+    }
+    if found == false && hasUnknownFeat == false && hasDupFeat == false && headerCount < 2 {
         Log.write(message: read "CLEAN")
     }
     return Unit
