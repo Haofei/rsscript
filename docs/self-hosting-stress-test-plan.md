@@ -275,3 +275,19 @@ first. Two risks to treat as their own line items when `parser.rss` starts emitt
 AST: the `scan.rss`-prepend hack (no module/import story) becomes a scaling pain once
 an AST type module is added; and corpus-gate runtime (AST dumps ≫ token dumps) will
 likely want a sampled fast inner-loop gate plus the full corpus pre-push.
+
+**Step-2 producer shipped (in progress, ratcheting).** `selfhost/astdump.rss` is a
+recursive-descent rss parser that STREAMS the canonical dump (no handle-based AST is
+materialized). Parity harness: `ast_parity_tiny_sample` + `ast_parity_samples`
+(non-ignored, byte-exact vs the oracle over curated `samples/ast/*`) and
+`ast_parity_corpus` (`#[ignore]`, ratchets a floor over all 563 files). Current
+reach: **121/563 byte-exact, 0 run-failures** (the producer never crashes;
+unsupported constructs mismatch rather than panic). Covered: fns (generics/effects/
+return/body), struct/class/resource (opaque/generics/derives/handle-weak/defaults/
+drop), sum, const/type-alias/module/use, the core statements, and a precedence-exact
+expression parser (calls, field/index, array, try, effects, literals). Both risks are
+handled: the curated set is the fast inner-loop gate; the module story is decided in
+`selfhost/AST_FORMAT.md` (commit to concatenation). The residual grammar (for/match/
+closures/object-map/interp/unary-desugars/effect-receiver/attributes/protocols/
+line-continuation) is the additive tail, tracked as **SH-025** and gated by the
+ratcheting floor.

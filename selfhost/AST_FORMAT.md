@@ -152,6 +152,23 @@ Binary op names: `add subtract multiply divide modulo bit-and bit-or bit-xor
 shift-left shift-right equal not-equal less less-equal greater greater-equal
 logical-and logical-or`.
 
+## Producer & the module-story decision
+
+The rss producer is `selfhost/astdump.rss`, a recursive-descent parser that
+**streams** this dump (the dump is a pre-order traversal, so no handle-based AST is
+materialized — each parse fn emits its node line(s) at a threaded depth and returns
+the next token index). It reuses the shared `scan.rss` tokenizer/accessors, which
+the harness prepends at compile time.
+
+**Decision (module story):** the single-file VM model still has no cross-file
+import, so — like the lexer/parser/checker — `astdump.rss` is authored as one file
+and concatenated after `scan.rss` by the harness. We commit to concatenation for
+now rather than blocking AST parity on a new language module feature; if the
+producer grows unwieldy, the mitigation is to split the *Rust-side* corpus gate
+into sampled + full tiers (already done: curated `samples/ast/*` is the fast
+non-ignored gate, the full corpus is `#[ignore]`), not to invent an import system.
+Revisit only if a genuine multi-file need appears.
+
 ## Oracle
 
 `crate::syntax::parse_source_raw` (never the desugared `parse_source`) is truth.

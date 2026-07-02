@@ -867,3 +867,35 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
 - **Status:** fixed (feature): positional multi-field variant binding supported
   across all backends; RS0037 removed as a restriction and repurposed for arity;
   spec §20.1 amended.
+
+### SH-025 — AST-dump parity: streaming rss producer at 121/563, residual grammar is the growing tail
+
+- **Context:** step 2 of frontend object parity (after the AST-dump format +
+  oracle keystone, SH-adjacent). `selfhost/astdump.rss` is a recursive-descent
+  rss parser that STREAMS the canonical dump (`selfhost/AST_FORMAT.md`); the
+  harness (`crate::selfhost_parity`) diffs it byte-for-byte against the Rust
+  oracle over `parse_source_raw`.
+- **Reach:** 121 / 563 corpus files byte-exact, **0 run-failures** — the producer
+  never crashes; unsupported constructs mismatch (partial/`unknown-*` markers)
+  rather than panic. Curated `samples/ast/*.rss` (6 files: functions, effects,
+  control flow, calls, structs+generics+derives+handle fields, sums, module/use/
+  const/type-alias) are byte-exact and gate non-ignored; `ast_parity_corpus`
+  (`#[ignore]`) ratchets the floor (currently 121).
+- **Covered:** top-level fns (pub/async/native, generic params + bounds, params
+  with read/mut/take effects, generic-arg types, return type, body); struct/class/
+  resource (opaque, generics, derives, handle/weak fields, defaults, drop); sum
+  (variants + fields); const/type-alias/module/use; statements return/let/local/
+  assign/if-else/while-loop/break/continue/expr; a split-at-last-top-level-operator
+  expression parser matching the oracle's precedence, plus call (name/qualified/
+  receiver, named + effect args), field/index, array, try `?`, parens, literals.
+- **Residual (the tail):** for-loops, match statements/expressions, closures,
+  object/map literals, interpolated strings, `!`/`~` unary desugars, negative
+  number literals, effect-receiver calls (`read x.m()`), fn attributes
+  (`#deprecated`/`#lower_name`), effect/retains clauses, protocols/impls/
+  native-modules (they dump in a separate program section, not source order, so
+  streaming can't place them), and `statement_end` operator/postfix line
+  continuation. Each is additive; the floor ratchets as they land.
+- **Status:** open (growing tail). The producer + parity gate + risk mitigations
+  (curated fast gate; module-story decision recorded in AST_FORMAT.md) are in
+  place; full 556-file byte parity is incremental, tracked by the ratcheting
+  floor.

@@ -681,11 +681,9 @@ fn emit_function(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
     j = j + 1
     let nameEnd = take_function_name(toks: read toks, i: read j)
     let name = dotted_text(toks: read toks, start: read j, end: read nameEnd)
-    j = nameEnd
-    // generics (skip; emit none for now)
-    j = parse_generic_params(toks: read toks, i: read j)
+    let genStart = nameEnd
     // params
-    let popen = j
+    let popen = parse_generic_params(toks: read toks, i: read genStart)
     let pclose = find_matching(toks: read toks, open: read popen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
     j = pclose + 1
     // return type
@@ -716,6 +714,8 @@ fn emit_function(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
         StringBuilder.push(builder: mut sb, value: read " returns-fresh=true")
     }
     emit(depth: read d, s: read StringBuilder.finish(builder: take sb))
+    // generics
+    emit_generics(toks: read toks, i: read genStart, d: read (d + 1))
     // params
     emit_params(toks: read toks, open: read popen, close: read pclose, d: read (d + 1))
     // return type
@@ -778,6 +778,286 @@ fn emit_params(toks: read List<Tok>, open: read Int, close: read Int, d: read In
 }
 
 // -------------------------------------------------------------------------
+// Generic params, derives, fields, and declaration items.
+// -------------------------------------------------------------------------
+
+// Emit `generic` children for a `<...>` param list at i; return index past `>`.
+fn emit_generics(toks: read List<Tok>, i: read Int, d: read Int) -> Int {
+    if at_symbol(toks: read toks, i: read i, code: read SYM_LANGLE) == false { return i }
+    let close = find_matching(toks: read toks, open: read i, openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
+    if close < 0 { return i }
+    let mut k = i + 1
+    while k < close {
+        let comma = top_comma(toks: read toks, start: read k, end: read close)
+        let name = tk_text(toks: read toks, i: read k)
+        emit(depth: read d, s: read String.concat(left: read "generic name=", right: read name))
+        // Optional bound: `Name: Bound`.
+        if at_symbol(toks: read toks, i: read (k + 1), code: read SYM_COLON) {
+            let bw = tk_text(toks: read toks, i: read (k + 2))
+            emit(depth: read (d + 1), s: read bound_line(word: read bw))
+        }
+        if comma < 0 { k = close } else { k = comma + 1 }
+    }
+    return close + 1
+}
+
+fn bound_line(word: read String) -> String {
+    if word == "Managed" { return "bound managed" }
+    if word == "Struct" { return "bound struct" }
+    if word == "Resource" { return "bound resource" }
+    return String.concat(left: read "bound protocol=", right: read word)
+}
+
+// Emit `derive` children for `derives(...)` at i; return index past `)`.
+fn emit_derives(toks: read List<Tok>, i: read Int, d: read Int) -> Int {
+    if at_ident(toks: read toks, i: read i, wid: read WORD_DERIVES) == false { return i }
+    if at_symbol(toks: read toks, i: read (i + 1), code: read SYM_LPAREN) == false { return i }
+    let close = find_matching(toks: read toks, open: read (i + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    if close < 0 { return i }
+    let mut k = i + 2
+    while k < close {
+        if is_ident_tok(toks: read toks, i: read k) {
+            emit(depth: read d, s: read String.concat(left: read "derive ", right: read tk_text(toks: read toks, i: read k)))
+        }
+        k = k + 1
+    }
+    return close + 1
+}
+
+// Index of a top-level `drop` keyword followed by `{` in body (open,close), or -1.
+fn find_drop(toks: read List<Tok>, open: read Int, close: read Int) -> Int {
+    let mut depth = 0
+    let mut i = open + 1
+    while i < close {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) {
+            depth = depth - 1
+        } else if depth == 0 && is_kw_text(toks: read toks, i: read i, word: read "drop") {
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+// One field `name: [handle|weak] Type [= default]` on the line ending at lineEnd.
+fn emit_field(toks: read List<Tok>, start: read Int, lineEnd: read Int, d: read Int) -> Unit {
+    let name = tk_text(toks: read toks, i: read start)
+    let mut k = start + 2
+    let mut isHandle = false
+    let mut isWeak = false
+    if is_kw_text(toks: read toks, i: read k, word: read "handle") { isHandle = true; k = k + 1 }
+    else if is_kw_text(toks: read toks, i: read k, word: read "weak") { isWeak = true; k = k + 1 }
+    let a = String.concat(left: read "field name=", right: read name)
+    let b = String.concat(left: read a, right: read " handle=")
+    let c = String.concat(left: read b, right: read boolstr(b: read isHandle))
+    let e2 = String.concat(left: read c, right: read " weak=")
+    let f = String.concat(left: read e2, right: read boolstr(b: read isWeak))
+    emit(depth: read d, s: read f)
+    let afterType = emit_type_ref(toks: read toks, i: read k, tag: read "type", eff: read "", d: read (d + 1))
+    if at_symbol(toks: read toks, i: read afterType, code: read SYM_EQ) {
+        emit(depth: read (d + 1), s: read "default")
+        emit_expr(toks: read toks, start: read (afterType + 1), end: read lineEnd, d: read (d + 2))
+    }
+    return Unit
+}
+
+// Emit `field` children for a type/variant body region [start, end).
+fn emit_fields(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) -> Unit {
+    let mut i = start
+    while i < end {
+        if is_ident_tok(toks: read toks, i: read i) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_COLON) {
+            let le = stmt_end(toks: read toks, start: read i, limit: read end)
+            emit_field(toks: read toks, start: read i, lineEnd: read le, d: read d)
+            i = le
+        } else {
+            i = i + 1
+        }
+    }
+    return Unit
+}
+
+// class/struct/resource declaration. Returns the next token index.
+fn emit_type_decl(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
+    let mut j = start
+    let mut isPub = false
+    let mut isOpaque = false
+    if is_kw_text(toks: read toks, i: read j, word: read "pub") { isPub = true; j = j + 1 }
+    if is_kw_text(toks: read toks, i: read j, word: read "opaque") { isOpaque = true; j = j + 1 }
+    let mut kind = "struct"
+    if is_kw_text(toks: read toks, i: read j, word: read "class") { kind = "class" }
+    else if is_kw_text(toks: read toks, i: read j, word: read "resource") { kind = "resource" }
+    j = j + 1
+    let name = tk_text(toks: read toks, i: read j)
+    j = j + 1
+    let a = String.concat(left: read "type kind=", right: read kind)
+    let b = String.concat(left: read a, right: read " name=")
+    let c = String.concat(left: read b, right: read name)
+    let e2 = String.concat(left: read c, right: read " public=")
+    let f = String.concat(left: read e2, right: read boolstr(b: read isPub))
+    let g = String.concat(left: read f, right: read " opaque=")
+    let h = String.concat(left: read g, right: read boolstr(b: read isOpaque))
+    emit(depth: read d, s: read h)
+    j = emit_generics(toks: read toks, i: read j, d: read (d + 1))
+    j = emit_derives(toks: read toks, i: read j, d: read (d + 1))
+    let openb = find_block_open(toks: read toks, start: read j, limit: read List.len(list: read toks))
+    if openb < 0 { return declaration_line_end(toks: read toks, start: read start) }
+    let close = find_matching(toks: read toks, open: read openb, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    let dropPos = find_drop(toks: read toks, open: read openb, close: read close)
+    let mut fieldsEnd = close
+    if dropPos >= 0 { fieldsEnd = dropPos }
+    emit_fields(toks: read toks, start: read (openb + 1), end: read fieldsEnd, d: read (d + 1))
+    if dropPos >= 0 {
+        let dopen = find_block_open(toks: read toks, start: read dropPos, limit: read close)
+        if dopen >= 0 {
+            let dclose = find_matching(toks: read toks, open: read dopen, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+            emit(depth: read (d + 1), s: read "drop")
+            emit_block(toks: read toks, open: read dopen, close: read dclose, d: read (d + 2))
+        }
+    }
+    return close + 1
+}
+
+// sum declaration. Returns the next token index.
+fn emit_sum(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
+    let mut j = start
+    let mut isPub = false
+    if is_kw_text(toks: read toks, i: read j, word: read "pub") { isPub = true; j = j + 1 }
+    j = j + 1
+    let name = tk_text(toks: read toks, i: read j)
+    j = j + 1
+    let a = String.concat(left: read "sum name=", right: read name)
+    let b = String.concat(left: read a, right: read " public=")
+    let c = String.concat(left: read b, right: read boolstr(b: read isPub))
+    emit(depth: read d, s: read c)
+    j = emit_generics(toks: read toks, i: read j, d: read (d + 1))
+    j = emit_derives(toks: read toks, i: read j, d: read (d + 1))
+    let openb = find_block_open(toks: read toks, start: read j, limit: read List.len(list: read toks))
+    if openb < 0 { return declaration_line_end(toks: read toks, start: read start) }
+    let close = find_matching(toks: read toks, open: read openb, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    // Variants: newline-separated `Name` or `Name(fields)`.
+    let mut i = openb + 1
+    while i < close {
+        if is_ident_tok(toks: read toks, i: read i) {
+            let vname = tk_text(toks: read toks, i: read i)
+            emit(depth: read (d + 1), s: read String.concat(left: read "variant name=", right: read vname))
+            if at_symbol(toks: read toks, i: read (i + 1), code: read SYM_LPAREN) {
+                let vclose = find_matching(toks: read toks, open: read (i + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+                emit_variant_fields(toks: read toks, open: read (i + 1), close: read vclose, d: read (d + 2))
+                i = stmt_end(toks: read toks, start: read i, limit: read close)
+            } else {
+                i = stmt_end(toks: read toks, start: read i, limit: read close)
+            }
+        } else {
+            i = i + 1
+        }
+    }
+    return close + 1
+}
+
+// Variant fields inside parens: comma-separated `name: Type`.
+fn emit_variant_fields(toks: read List<Tok>, open: read Int, close: read Int, d: read Int) -> Unit {
+    let mut i = open + 1
+    while i < close {
+        let comma = top_comma(toks: read toks, start: read i, end: read close)
+        let fend = pick_end(comma: read comma, end: read close)
+        if is_ident_tok(toks: read toks, i: read i) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_COLON) {
+            emit_field(toks: read toks, start: read i, lineEnd: read fend, d: read d)
+        }
+        if comma < 0 { i = close } else { i = comma + 1 }
+    }
+    return Unit
+}
+
+// const declaration. Returns the next token index.
+fn emit_const(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
+    let mut j = start
+    let mut isPub = false
+    if is_kw_text(toks: read toks, i: read j, word: read "pub") { isPub = true; j = j + 1 }
+    j = j + 1
+    let nameEnd = take_function_name(toks: read toks, i: read j)
+    let name = dotted_text(toks: read toks, start: read j, end: read nameEnd)
+    let e = stmt_end(toks: read toks, start: read start, limit: read List.len(list: read toks))
+    let a = String.concat(left: read "const name=", right: read name)
+    let b = String.concat(left: read a, right: read " public=")
+    let c = String.concat(left: read b, right: read boolstr(b: read isPub))
+    emit(depth: read d, s: read c)
+    let mut k = nameEnd
+    if at_symbol(toks: read toks, i: read k, code: read SYM_COLON) {
+        k = emit_type_ref(toks: read toks, i: read (k + 1), tag: read "type", eff: read "", d: read (d + 1))
+    }
+    let asg = top_assign(toks: read toks, start: read k, end: read e)
+    if asg >= 0 {
+        emit(depth: read (d + 1), s: read "value")
+        emit_expr(toks: read toks, start: read (asg + 1), end: read e, d: read (d + 2))
+    }
+    return e
+}
+
+// type alias declaration. Returns the next token index.
+fn emit_type_alias(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
+    let mut j = start
+    let mut isPub = false
+    if is_kw_text(toks: read toks, i: read j, word: read "pub") { isPub = true; j = j + 1 }
+    j = j + 1
+    let name = tk_text(toks: read toks, i: read j)
+    j = j + 1
+    let e = stmt_end(toks: read toks, start: read start, limit: read List.len(list: read toks))
+    let a = String.concat(left: read "type-alias name=", right: read name)
+    let b = String.concat(left: read a, right: read " public=")
+    let c = String.concat(left: read b, right: read boolstr(b: read isPub))
+    emit(depth: read d, s: read c)
+    j = emit_generics(toks: read toks, i: read j, d: read (d + 1))
+    let asg = top_assign(toks: read toks, start: read j, end: read e)
+    if asg >= 0 {
+        emit_type_ref(toks: read toks, i: read (asg + 1), tag: read "target", eff: read "", d: read (d + 1))
+    }
+    return e
+}
+
+// module declaration: `module a.b.c`.
+fn emit_module(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
+    let e = stmt_end(toks: read toks, start: read start, limit: read List.len(list: read toks))
+    let path = dotted_text(toks: read toks, start: read (start + 1), end: read e)
+    emit(depth: read d, s: read String.concat(left: read "module path=", right: read path))
+    return e
+}
+
+// use declaration: `use a.b.c [as alias]` or `use a.b.*`.
+fn emit_use(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
+    let e = stmt_end(toks: read toks, start: read start, limit: read List.len(list: read toks))
+    // Find `as` alias / `*` glob within the line.
+    let mut isGlob = false
+    let mut aliasName = ""
+    let mut pathEnd = e
+    let mut k = start + 1
+    while k < e {
+        if is_kw_text(toks: read toks, i: read k, word: read "as") {
+            pathEnd = k
+            aliasName = tk_text(toks: read toks, i: read (k + 1))
+            k = e
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_STAR) {
+            isGlob = true
+            pathEnd = k - 1
+            k = e
+        } else {
+            k = k + 1
+        }
+    }
+    let path = dotted_text(toks: read toks, start: read (start + 1), end: read pathEnd)
+    let a = String.concat(left: read "use path=", right: read path)
+    let b = String.concat(left: read a, right: read " glob=")
+    let mut line = String.concat(left: read b, right: read boolstr(b: read isGlob))
+    if String.len(value: read aliasName) > 0 {
+        let l2 = String.concat(left: read line, right: read " alias=")
+        line = String.concat(left: read l2, right: read aliasName)
+    }
+    emit(depth: read d, s: read line)
+    return e
+}
+
+// -------------------------------------------------------------------------
 // Driver.
 // -------------------------------------------------------------------------
 
@@ -810,17 +1090,36 @@ fn main() -> Unit {
                 i = fend
             } else if cls.isProfile {
                 i = declaration_line_end(toks: read toks, start: read i)
-            } else if starts_fn_like(toks: read toks, i: read i, isPub: read cls.isPub) && starts_type_decl(toks: read toks, i: read i, isPub: read cls.isPub) == false {
-                let r = emit_function(toks: read toks, start: read i, d: read 1)
-                if r > i { i = r } else { i = i + 1 }
+            } else if starts_type_decl(toks: read toks, i: read i, isPub: read cls.isPub) {
+                i = advance(toks: read toks, i: read i, r: read emit_type_decl(toks: read toks, start: read i, d: read 1))
+            } else if cls.isSum {
+                i = advance(toks: read toks, i: read i, r: read emit_sum(toks: read toks, start: read i, d: read 1))
+            } else if cls.isTypeAlias {
+                i = advance(toks: read toks, i: read i, r: read emit_type_alias(toks: read toks, start: read i, d: read 1))
+            } else if cls.isConst {
+                i = advance(toks: read toks, i: read i, r: read emit_const(toks: read toks, start: read i, d: read 1))
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_MODULE) {
+                i = advance(toks: read toks, i: read i, r: read emit_module(toks: read toks, start: read i, d: read 1))
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_USE) {
+                i = advance(toks: read toks, i: read i, r: read emit_use(toks: read toks, start: read i, d: read 1))
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_PROTOCOL) || at_ident(toks: read toks, i: read i, wid: read WORD_IMPL) || cls.isNativeMod {
+                // protocols/impls/native-modules emit in a separate program section
+                // (not source order) — skip to keep the stream valid (SH-025).
+                i = advance(toks: read toks, i: read i, r: read next_decl_skip(toks: read toks, start: read i))
+            } else if starts_fn_like(toks: read toks, i: read i, isPub: read cls.isPub) {
+                i = advance(toks: read toks, i: read i, r: read emit_function(toks: read toks, start: read i, d: read 1))
             } else {
-                // Unsupported top-level item for now: skip to keep the stream valid.
-                let r = next_decl_skip(toks: read toks, start: read i)
-                if r > i { i = r } else { i = i + 1 }
+                i = advance(toks: read toks, i: read i, r: read next_decl_skip(toks: read toks, start: read i))
             }
         }
     }
     return Unit
+}
+
+// Progress guard: never let the driver stall on a decl that returned <= i.
+fn advance(toks: read List<Tok>, i: read Int, r: read Int) -> Int {
+    if r > i { return r }
+    return i + 1
 }
 
 fn is_feature_word(toks: read List<Tok>, i: read Int) -> Bool {

@@ -1,0 +1,5 @@
+sum Shape {
+    Circle(radius: Int)
+    Square(side: Int)
+    Empty
+}

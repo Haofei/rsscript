@@ -1,0 +1,8 @@
+module app.core
+
+use app.util.Helper
+use app.data.Thing as Widget
+
+const MAX: Int = 5
+
+type IntList = List<Int>
