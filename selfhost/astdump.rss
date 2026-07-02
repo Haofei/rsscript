@@ -982,21 +982,54 @@ fn emit_type_ref(toks: read List<Tok>, i: read Int, tag: read String, eff: read 
 
 // Statement end: first token on a strictly-later line at bracket depth 0 (simple
 // line model; operator-continuation and postfix chains are a documented gap).
+// Statement boundary, mirroring parser/scan.rs statement_end. A statement ends at
+// the first token on a strictly-later line at bracket+angle depth 0, EXCEPT: a
+// top-level `;` terminates immediately; a line starting with `.`/`?` (postfix) or
+// with/after a continuation operator (`| & + * / % ^`) continues the statement.
 fn stmt_end(toks: read List<Tok>, start: read Int, limit: read Int) -> Int {
-    let ln = tk_line(toks: read toks, i: read start)
+    let mut line = tk_line(toks: read toks, i: read start)
     let mut depth = 0
+    let mut angle = 0
+    let mut postfixLine = -1
     let mut i = start + 1
     while i < limit {
+        if depth == 0 && angle == 0 && at_symbol(toks: read toks, i: read i, code: read SYM_SEMI) {
+            return i
+        }
+        if depth == 0 && angle == 0 && tk_line(toks: read toks, i: read i) > line {
+            if postfixLine == tk_line(toks: read toks, i: read i) {
+                // still on a postfix-continuation line — keep scanning.
+            } else if is_stmt_postfix(toks: read toks, i: read i) {
+                postfixLine = tk_line(toks: read toks, i: read i)
+            } else if is_cont_op(toks: read toks, i: read i) || is_cont_op(toks: read toks, i: read (i - 1)) {
+                line = tk_line(toks: read toks, i: read i)
+            } else {
+                return i
+            }
+        }
         if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) {
             depth = depth + 1
         } else if at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) {
-            depth = depth - 1
-        } else if depth == 0 && tk_line(toks: read toks, i: read i) > ln {
-            return i
+            if depth > 0 { depth = depth - 1 }
+        } else if depth == 0 && at_symbol(toks: read toks, i: read i, code: read SYM_LANGLE) && is_generic_angle(toks: read toks, start: read start, end: read limit, open: read i) {
+            angle = angle + 1
+        } else if depth == 0 && angle > 0 && at_symbol(toks: read toks, i: read i, code: read SYM_RANGLE) {
+            angle = angle - 1
         }
         i = i + 1
     }
     return limit
+}
+
+fn is_stmt_postfix(toks: read List<Tok>, i: read Int) -> Bool {
+    return at_symbol(toks: read toks, i: read i, code: read SYM_QUESTION) || at_symbol(toks: read toks, i: read i, code: read SYM_DOT)
+}
+
+// Continuation operators (SH-017): `| & + * / % ^` — a statement-level expression
+// wraps across a newline when a line begins with, or ends before, one of these.
+// `< > - = !` are deliberately excluded (see scan.rs).
+fn is_cont_op(toks: read List<Tok>, i: read Int) -> Bool {
+    return at_symbol(toks: read toks, i: read i, code: read SYM_PIPE) || at_symbol(toks: read toks, i: read i, code: read SYM_AMP) || at_symbol(toks: read toks, i: read i, code: read SYM_PLUS) || at_symbol(toks: read toks, i: read i, code: read SYM_STAR) || at_symbol(toks: read toks, i: read i, code: read SYM_SLASH) || at_symbol(toks: read toks, i: read i, code: read SYM_PERCENT) || at_symbol(toks: read toks, i: read i, code: read SYM_CARET)
 }
 
 // First top-level standalone `=` (assignment, not == != <= >=) in [start, end), or -1.

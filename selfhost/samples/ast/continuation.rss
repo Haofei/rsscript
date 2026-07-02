@@ -1,0 +1,7 @@
+fn calc(a: read Int, b: read Int) -> Int {
+    let total = a
+        + b
+        + a
+    return total
+        + b
+}
