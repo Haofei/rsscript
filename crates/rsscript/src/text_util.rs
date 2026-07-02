@@ -30,13 +30,12 @@ pub(crate) fn decode_string_token(value: &str) -> String {
     decoded
 }
 
-/// Decode a character-literal token's raw inner text into its single scalar.
-/// Handles the same escapes as [`decode_string_token`] plus `\'`, then asserts
-/// exactly one scalar value (empty / multi-char literals are rejected upstream
-/// by the analyzer/typing, but this is the single normalization point used by
-/// lowering). Unknown escapes preserve the backslash + char (yielding >1 char
-/// and thus the assert), matching the string decoder's leniency.
-pub(crate) fn decode_char_token(value: &str) -> char {
+/// Decode a character-literal token's raw inner text (escapes applied) into the
+/// full sequence of scalars it denotes. A well-formed literal decodes to exactly
+/// one scalar; `''` decodes to zero and `'ab'` to two. Handles the same escapes
+/// as [`decode_string_token`] plus `\'`; unknown escapes preserve the backslash
+/// + char (so they decode to >1 scalar and are rejected upstream).
+fn decode_char_escapes(value: &str) -> String {
     let mut decoded = String::new();
     let mut chars = value.chars();
     while let Some(ch) = chars.next() {
@@ -59,8 +58,26 @@ pub(crate) fn decode_char_token(value: &str) -> char {
             None => decoded.push('\\'),
         }
     }
+    decoded
+}
+
+/// The number of Unicode scalars a char-literal's raw inner text decodes to.
+/// A well-formed `'c'` yields exactly `1`; the frontend rejects any other count
+/// (see `check_char_literal_scalar`) before lowering runs.
+pub(crate) fn char_literal_scalar_count(value: &str) -> usize {
+    decode_char_escapes(value).chars().count()
+}
+
+/// Decode a character-literal token's raw inner text into its single scalar.
+/// The frontend guarantees exactly one scalar (see `char_literal_scalar_count`),
+/// so this is the single normalization point used by lowering. It is TOTAL: a
+/// malformed literal that somehow reaches here yields the first scalar (or the
+/// Unicode replacement character for the empty case) rather than panicking, so a
+/// missed frontend check can never crash the compiler in release builds.
+pub(crate) fn decode_char_token(value: &str) -> char {
+    let decoded = decode_char_escapes(value);
     let mut iter = decoded.chars();
-    let first = iter.next().expect("char literal must contain one scalar");
+    let first = iter.next().unwrap_or('\u{FFFD}');
     debug_assert!(
         iter.next().is_none(),
         "char literal must contain exactly one scalar: {value:?}"

@@ -114,16 +114,21 @@ impl RegVm {
                 Ok(VmValue::Int(value.len() as i64))
             }
             RegIntrinsic::StringPadLeft => {
-                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let width = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let fill = expect_string_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
-                Ok(VmValue::string(string_pad(value, width, fill, true)))
+                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_owned();
+                let fill = expect_string_ref(intrinsic_arg(&self.stack, base, args, 2)?)?.to_owned();
+                // Charge the (size-parameterized) result against `mem_budget` BEFORE
+                // allocating, so `pad_*` cannot allocate an arbitrarily large string
+                // in one step and bypass the memory ceiling.
+                self.account_bytes(value.len().max(width.max(0) as usize))?;
+                Ok(VmValue::string(string_pad(&value, width, &fill, true)))
             }
             RegIntrinsic::StringPadRight => {
-                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let width = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let fill = expect_string_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
-                Ok(VmValue::string(string_pad(value, width, fill, false)))
+                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_owned();
+                let fill = expect_string_ref(intrinsic_arg(&self.stack, base, args, 2)?)?.to_owned();
+                self.account_bytes(value.len().max(width.max(0) as usize))?;
+                Ok(VmValue::string(string_pad(&value, width, &fill, false)))
             }
             RegIntrinsic::StringParseFloat => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -140,8 +145,12 @@ impl RegVm {
                 })
             }
             RegIntrinsic::StringRepeat => {
-                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let count = nonnegative_count(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_owned();
+                // Charge the projected result against `mem_budget` BEFORE allocating,
+                // so `"x".repeat(2_000_000_000)` trips the memory ceiling instead of
+                // eagerly allocating ~2 GB in a single intrinsic step.
+                self.account_bytes(value.len().saturating_mul(count))?;
                 Ok(VmValue::string(value.repeat(count)))
             }
             RegIntrinsic::StringReplace => {

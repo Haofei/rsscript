@@ -26,7 +26,7 @@ features: local
 
 // Token kinds.
 //   1 Ident   2 Number   3 String   4 Interp   5 Multiline   6 Keyword
-//   7 Symbol  8 Eof  9 Char
+//   7 Symbol  8 Eof  9 Char  10 Unknown
 struct Tok {
     kind: Int
     val: Int
@@ -148,7 +148,13 @@ fn scan_char(chars: read List<Char>, n: read Int, i: read Int) -> Int {
             } else if c == '\n' {
                 scanning = false
             } else if c == '\\' {
-                j = j + 2
+                // Skip the backslash and its escaped char, but stay in bounds so a
+                // file ending in `'\` cannot advance past `n` (mirrors scan_string /
+                // scan_interp; the Rust reference lexer recovers here too).
+                j = j + 1
+                if j < n {
+                    j = j + 1
+                }
             } else {
                 j = j + 1
             }
@@ -463,13 +469,18 @@ fn tokenize(source: read String) -> fresh List<Tok> {
             text = "=>"
         } else {
             j = i + 1
-            kind = 7
             if is_known_symbol(c: read c) {
+                kind = 7
                 val = Char.to_code(value: read c)
                 text = Char.to_string(value: read c)
             } else {
-                val = 63
-                text = "?"
+                // Outside the lexical inventory: emit an Unknown token carrying the
+                // raw char (kind 10), mirroring crate::lexer's TokenKind::Unknown.
+                // (Previously mapped to Symbol "?", which aliased a stray char to
+                // the try operator.)
+                kind = 10
+                val = Char.to_code(value: read c)
+                text = Char.to_string(value: read c)
             }
         }
         if kind != 0 {

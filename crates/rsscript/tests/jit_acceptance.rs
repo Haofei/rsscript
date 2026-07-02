@@ -7594,6 +7594,91 @@ fn main() -> Unit {
     );
 }
 
+/// REVIEW REPRO (2026-07-02): the `scalar_regs` register-reuse elision leak.
+/// `local(name)` reuses one register per variable name, so a loop var bound to a
+/// scalar in one loop and a heap value in another shared a register; the (default-on)
+/// DeepCopy-elision analysis then wrongly marked the heap binding scalar and elided
+/// its copy, so the returned inner list aliased the caller's `grid` and a later push
+/// mutated it. With the poison fix the copy is kept: `grid[0]` stays length 1.
+#[test]
+fn elision_reused_loop_var_scalar_then_heap_does_not_leak() {
+    let source = "\
+features: local
+
+fn pick(nums: read List<Int>, grid: read List<List<Int>>) -> List<Int> {
+    for item in nums {
+        let bump = item + 1
+        Log.write(message: read String.from_int(value: bump))
+    }
+    for item in grid {
+        return item
+    }
+    return List<Int>.new()
+}
+fn main() -> Unit {
+    let grid = [ [1] ]
+    let nums = [ 7 ]
+    local got = pick(nums: read nums, grid: read grid)
+    List.push<Int>(list: mut got, value: read 99)
+    let first = List.get<List<Int>>(list: read grid, index: 0)
+    Log.write(message: read String.from_int(value: List.len(list: read first)))
+    return Unit
+}
+";
+    let interp = common::run_vm_source("elision_reuse_leak.rss", source, &[]).expect("interp run");
+    // `8` from the scalar loop, then `1` — grid[0] must NOT have grown to 2.
+    assert_eq!(interp.stdout.trim_end(), "8\n1");
+}
+
+/// REVIEW REPRO (2026-07-02): returning a `mut` scalar parameter used to panic in
+/// the reg-VM ("read uninitialized register") because `Return` moved the value out
+/// of the register the subsequent `mut`-writeback still needed. It must return the
+/// value cleanly.
+#[test]
+fn mut_scalar_param_returned_does_not_crash() {
+    let source = "\
+features: local
+
+fn ident(i: mut Int) -> Int {
+    return i
+}
+fn main() -> Unit {
+    local x = 5
+    let y = ident(i: mut x)
+    Log.write(message: read String.from_int(value: y))
+    return Unit
+}
+";
+    let interp = common::run_vm_source("mut_return.rss", source, &[]).expect("interp run");
+    assert_eq!(interp.stdout.trim_end(), "5");
+}
+
+/// REVIEW REPRO (2026-07-02): a `mut` scalar CLASS-FIELD argument used to be a
+/// silent no-op on the reg-VM — the field was lowered to a temp for the call, the
+/// callee's mutation was written back into the temp, but never stored back into
+/// the field. The VM now restores `mut`-place args after the call (matching AOT's
+/// `&mut` place semantics), so `w.count` reflects the callee's increment.
+#[test]
+fn mut_scalar_class_field_arg_is_written_back() {
+    let source = "\
+class Widget {
+    count: Int
+}
+fn bump(n: mut Int) -> Unit {
+    n = n + 1
+    return Unit
+}
+fn main() -> Unit {
+    let w = Widget(count: 5)
+    bump(n: mut w.count)
+    Log.write(message: read String.from_int(value: w.count))
+    return Unit
+}
+";
+    let interp = common::run_vm_source("mut_field_writeback.rss", source, &[]).expect("interp run");
+    assert_eq!(interp.stdout.trim_end(), "6");
+}
+
 /// REVIEW REPRO (2026-06-30): the store-and-reload leak. A non-`mut` `read List<Int>` param
 /// is stored into a struct field, read back, and mutated. Storing launders direct-alias
 /// taint, so the guard must also flag STORING a tainted (mutable) value into caller-visible

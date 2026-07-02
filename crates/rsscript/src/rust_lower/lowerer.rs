@@ -1784,8 +1784,12 @@ impl<'a> RustLowerer<'a> {
                 }
             }
             Expr::Index { base, index, .. } => {
+                // Parenthesize the index so `as` binds to the whole expression,
+                // not just its trailing literal (mirrors the read path in
+                // `lower_expr`): `xs[i + 1] = v` must emit `xs[(i + 1) as usize]`,
+                // not the unbuildable `xs[i + 1i64 as usize]`.
                 format!(
-                    "{}[{} as usize]",
+                    "{}[({}) as usize]",
                     self.lower_assignment_target(base),
                     self.lower_expr(index)
                 )
@@ -1827,6 +1831,11 @@ impl<'a> RustLowerer<'a> {
                         && self.param_effects.get(name) == Some(&DataEffect::Mut)
                     {
                         rust_value_ident(name)
+                    } else if matches!(inner, Expr::Field { .. } | Expr::Index { .. }) {
+                        // A `mut` place (`mut cache.items`) must borrow the live
+                        // storage via the write path, not a read-view clone (which
+                        // would silently drop the closure's mutation).
+                        format!("&mut {}", self.lower_assignment_target(inner))
                     } else {
                         format!("&mut {}", self.lower_expr(inner))
                     }
@@ -1968,6 +1977,15 @@ impl<'a> RustLowerer<'a> {
                         self.lower_expr(value),
                         lower_source_span(span)
                     )
+                } else if matches!(value.as_ref(), Expr::Field { .. } | Expr::Index { .. }) {
+                    // A `mut` place argument (`mut cache.items`, `mut xs[i]`) must
+                    // borrow the LIVE storage, not a read-view clone: the default
+                    // `lower_expr` path lowers a managed-class field through
+                    // `try_read_at(..).field.clone()`, so the callee mutates a
+                    // throwaway copy and the write is silently lost (VM mutates,
+                    // AOT does not). `lower_assignment_target` routes the place
+                    // through `try_write_at` (no clone).
+                    format!("&mut {}", self.lower_assignment_target(value))
                 } else {
                     format!(
                         "&mut {}",
@@ -2861,19 +2879,26 @@ pub(super) fn balanced_logical_join(leaves: &[String], op: &str) -> String {
     }
 }
 
+/// Binding tightness of a `BinaryOp` in the *Rust* grammar (higher binds
+/// tighter). `lower_binary_operand` uses this to decide when a child operand
+/// needs parentheses to preserve the RSScript AST's grouping in the emitted
+/// Rust. It MUST mirror Rust's precedence, not C's: Rust binds the bitwise
+/// operators (`&`, `^`, `|`) TIGHTER than the comparison operators, so
+/// `a & (b == c)` must be parenthesized (unparenthesized, `a & b == c` regroups
+/// to `(a & b) == c` in Rust and mis-lowers).
 pub(super) fn rust_binary_precedence(op: BinaryOp) -> u8 {
     match op {
         BinaryOp::LogicalOr => 1,
         BinaryOp::LogicalAnd => 2,
-        BinaryOp::BitOr => 3,
-        BinaryOp::BitXor => 4,
-        BinaryOp::BitAnd => 5,
         BinaryOp::Equal
         | BinaryOp::NotEqual
         | BinaryOp::Less
         | BinaryOp::LessEqual
         | BinaryOp::Greater
-        | BinaryOp::GreaterEqual => 6,
+        | BinaryOp::GreaterEqual => 3,
+        BinaryOp::BitOr => 4,
+        BinaryOp::BitXor => 5,
+        BinaryOp::BitAnd => 6,
         BinaryOp::ShiftLeft | BinaryOp::ShiftRight => 7,
         BinaryOp::Add | BinaryOp::Subtract => 8,
         BinaryOp::Multiply | BinaryOp::Divide | BinaryOp::Modulo => 9,

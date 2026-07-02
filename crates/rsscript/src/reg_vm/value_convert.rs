@@ -471,10 +471,22 @@ pub(super) fn deep_copy_value(value: &VmValue) -> VmValue {
             VmValue::Deque(Rc::new(RefCell::new(copied)))
         }
         VmValue::Map(entries) => {
+            // Deep-copy BOTH key and value. Keys are not restricted to scalars
+            // (`Set<List<Int>>` / `Map<List<Int>, _>` are legal), so cloning a
+            // key only bumps its inner `Rc` — leaving the copy's key aliasing the
+            // original's. A caller mutating that shared key through a `read`
+            // argument would then mutate the source (and corrupt the set/map hash
+            // invariant), diverging from the compiled backend. Rebuilding the key
+            // from a deep-copied value severs the alias.
             let copied = entries
                 .borrow()
                 .iter()
-                .map(|(key, value)| (key.clone(), deep_copy_value(value)))
+                .map(|(key, value)| {
+                    (
+                        VmMapKey::new(deep_copy_value(key.value())),
+                        deep_copy_value(value),
+                    )
+                })
                 .collect::<ValueMap>();
             VmValue::Map(Rc::new(RefCell::new(copied)))
         }

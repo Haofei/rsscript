@@ -10,6 +10,11 @@ pub enum TokenKind {
     MultilineString(String),
     Keyword(&'static str),
     Symbol(&'static str),
+    /// A source character outside RSScript's lexical inventory. Kept as a token
+    /// (rather than silently mapped to a valid operator) so the parser surfaces it
+    /// as unsupported syntax instead of, e.g., turning a stray `©` into the `?`
+    /// try operator.
+    Unknown(char),
     Eof,
 }
 
@@ -29,6 +34,7 @@ impl Token {
             | TokenKind::InterpolatedString(value)
             | TokenKind::MultilineString(value) => value.clone(),
             TokenKind::Keyword(value) | TokenKind::Symbol(value) => (*value).to_string(),
+            TokenKind::Unknown(ch) => ch.to_string(),
             TokenKind::Eof => "<eof>".to_string(),
         }
     }
@@ -337,7 +343,8 @@ impl Lexer<'_> {
 
     fn push_one(&mut self) {
         let span = self.span(1);
-        let symbol = match self.bump().unwrap() {
+        let ch = self.bump().unwrap();
+        let symbol = match ch {
             ':' => ":",
             ',' => ",",
             '.' => ".",
@@ -363,7 +370,16 @@ impl Lexer<'_> {
             '!' => "!",
             ';' => ";",
             '#' => "#",
-            _ => "?",
+            // Not in the lexical inventory: keep the character verbatim as an
+            // `Unknown` token so the parser reports it, instead of silently
+            // aliasing it to the `?` try operator.
+            _ => {
+                self.tokens.push(Token {
+                    kind: TokenKind::Unknown(ch),
+                    span,
+                });
+                return;
+            }
         };
         self.tokens.push(Token {
             kind: TokenKind::Symbol(symbol),

@@ -67,6 +67,7 @@ fn kind_name(kind: &TokenKind) -> &'static str {
         TokenKind::MultilineString(_) => "MultilineString",
         TokenKind::Keyword(_) => "Keyword",
         TokenKind::Symbol(_) => "Symbol",
+        TokenKind::Unknown(_) => "Unknown",
         TokenKind::Eof => "Eof",
     }
 }
@@ -80,6 +81,7 @@ fn payload(kind: &TokenKind) -> String {
         | TokenKind::InterpolatedString(s)
         | TokenKind::MultilineString(s) => escape(s),
         TokenKind::Keyword(k) | TokenKind::Symbol(k) => escape(k),
+        TokenKind::Unknown(c) => escape(&c.to_string()),
         TokenKind::Eof => String::new(),
     }
 }

@@ -101,6 +101,11 @@ impl RegVm {
         self.limits.step_budget.is_none()
             && self.limits.cancel.is_none()
             && self.limits.mem_budget.is_none()
+            // Native code runs whole-function without routing intrinsic dispatch
+            // through `charge_host_call`, so an armed `host_call_budget` must also
+            // force the interpreter/tier-0 path — otherwise the host-call cap is
+            // silently unenforced once a function tiers up to native.
+            && self.limits.host_call_budget.is_none()
     }
 
     /// Charge one instruction against the step budget. Always increments the
@@ -767,7 +772,16 @@ impl RegVm {
                 );
             }
             RegInstr::Return { src } => {
-                return Ok(PureStep::Return(self.take_reg(base + *src)));
+                // Clone rather than move the return value out of its register. A
+                // `mut` parameter register can be BOTH the return source and a
+                // `mut_writeback` target (`fn f(i: mut Int) -> Int { return i }`):
+                // moving would clear the register, so the writeback that runs after
+                // the frame pops would read an uninitialized slot (panic) or, worse,
+                // write `Unit` back to the caller. Cloning leaves the register live
+                // for `apply_mut_writeback`; the leftover copy is dropped when the
+                // frame window is reused (see `prepare_frame`). The extra clone is a
+                // scalar/`Rc` bump on the interpreter-tier return path only.
+                return Ok(PureStep::Return(self.reg(base + *src).clone()));
             }
             // Anything else is outside the pure subset; the caller handles it.
             _ => return Ok(PureStep::NotPure),

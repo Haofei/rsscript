@@ -293,7 +293,11 @@ fn main() -> Unit {
                     i = r
                 }
             } else {
-                running = false
+                // Unrecognized top-level token: skip it and keep scanning, so a
+                // single malformed item doesn't truncate the scan and miss a later
+                // duplicate. The Rust analyzer recovers here too; advancing by one
+                // token guarantees progress (no infinite loop).
+                i = i + 1
             }
         }
     }

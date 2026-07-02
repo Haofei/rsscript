@@ -1390,6 +1390,7 @@ fn lower_hir_expr(
             scrutinee_effect,
             arms,
             span,
+            ..
         } => {
             let value_type = infer_hir_expr_type(hir, value, value_types);
             let lowered_value = lower_hir_expr(hir, function_name, value, value_types);

@@ -558,18 +558,16 @@ impl RustLowerer<'_> {
     }
 
     pub(super) fn lower_param(&self, param: &Param) -> String {
-        let ty = if param.effect == Some(DataEffect::Read)
-            && self.current_retained_params.contains(&param.name)
-            && !self.is_class_type(&param.ty)
-            && self.type_kinds.contains_key(&param.ty.name)
-        {
-            format!(
-                "rsscript_runtime::Managed<{}>",
-                self.lower_type_ref(&param.ty, ManagedPosition::Bare)
-            )
-        } else {
-            self.lower_type_ref(&param.ty, ManagedPosition::Param)
-        };
+        // A `read` param that the function `retains` uses VALUE semantics on both
+        // backends: the reg-VM deep-copies and the compiled backend clones the
+        // borrowed value at the point it is stored (see the retained-param arm of
+        // `should_clone_read_binding_at_use`). It must NOT be wrapped in
+        // `Managed<T>` — that treated a value struct as a reference handle, but
+        // call sites pass a plain `&T` and the body stores into a `T` field, so
+        // the `&Managed<T>` ABI never type-checked (unbuildable Rust; the feature
+        // only ever survived in check-only fixtures). A normal `read` `&T` param
+        // plus clone-at-store matches the VM.
+        let ty = self.lower_type_ref(&param.ty, ManagedPosition::Param);
         let rust_ty = match param.effect {
             // Copy primitives are passed `read` by value (call sites already lower
             // `read <int>` by value via `read_effect_lowers_by_value`); the param

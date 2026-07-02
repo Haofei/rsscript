@@ -696,6 +696,11 @@ pub enum Expr {
         value: Box<Expr>,
         scrutinee_effect: Option<DataEffect>,
         arms: Vec<MatchArm>,
+        /// Spans of arms the parser could not parse (missing `=>`, malformed
+        /// pattern, unbalanced body). Reported by the syntax checker exactly like
+        /// `MatchStmt::malformed_arm_spans`, so an expression-form match cannot
+        /// silently drop an unparseable arm into an accidental wildcard.
+        malformed_arm_spans: Vec<Span>,
         span: Span,
     },
     Unknown(Span),

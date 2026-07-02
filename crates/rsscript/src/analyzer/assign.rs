@@ -250,9 +250,21 @@ impl<'a> AssignChecker<'a> {
                     self.expr(&entry.value);
                 }
             }
-            Expr::ObjectLiteral { .. }
-            | Expr::ArrayLiteral { .. }
-            | Expr::Ident(..)
+            // Recurse into literal contents: a closure nested in a struct/list
+            // literal (`let fs = [|x| { total = x }]`) must still have its body
+            // assignment-checked, or it could mutate an immutable outer binding
+            // with no diagnostic.
+            Expr::ObjectLiteral { fields, .. } => {
+                for field in fields {
+                    self.expr(&field.value);
+                }
+            }
+            Expr::ArrayLiteral { items, .. } => {
+                for item in items {
+                    self.expr(item);
+                }
+            }
+            Expr::Ident(..)
             | Expr::Number(..)
             | Expr::String(..)
             | Expr::CharLiteral(..)

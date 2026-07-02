@@ -462,8 +462,20 @@ impl Analyzer<'_> {
                 self.check_unsupported_syntax_expr(value);
             }
             Expr::Closure { body, .. } => self.check_unsupported_syntax_block(body),
-            Expr::Match { value, arms, .. } => {
+            Expr::Match {
+                value,
+                arms,
+                malformed_arm_spans,
+                ..
+            } => {
                 self.check_unsupported_syntax_expr(value);
+                for span in malformed_arm_spans {
+                    self.unsupported_syntax(
+                        span.clone(),
+                        "malformed match arm",
+                        "Match arms must use `pattern => statement` or `pattern => { ... }`.",
+                    );
+                }
                 for arm in arms {
                     self.check_unsupported_syntax_block(&arm.body);
                 }

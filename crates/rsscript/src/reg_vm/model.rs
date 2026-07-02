@@ -2277,7 +2277,6 @@ fn deepcopy_intrinsic_class(intrinsic: RegIntrinsic) -> IntrinsicTaintClass {
         | RegIntrinsic::MapContainsKey
         | RegIntrinsic::MapLen
         | RegIntrinsic::MapIsEmpty
-        | RegIntrinsic::MapKeys
         | RegIntrinsic::MapForEach
         | RegIntrinsic::MapNew
         // Set / SortedSet / SortedMap
@@ -2285,7 +2284,6 @@ fn deepcopy_intrinsic_class(intrinsic: RegIntrinsic) -> IntrinsicTaintClass {
         | RegIntrinsic::SetIsEmpty
         | RegIntrinsic::SetLen
         | RegIntrinsic::SetIsSubset
-        | RegIntrinsic::SetToList
         | RegIntrinsic::SetNew
         | RegIntrinsic::SortedSetContains
         | RegIntrinsic::SortedSetIsEmpty
@@ -2294,7 +2292,6 @@ fn deepcopy_intrinsic_class(intrinsic: RegIntrinsic) -> IntrinsicTaintClass {
         | RegIntrinsic::SortedMapContainsKey
         | RegIntrinsic::SortedMapIsEmpty
         | RegIntrinsic::SortedMapLen
-        | RegIntrinsic::SortedMapKeys
         | RegIntrinsic::SortedMapNew
         // Deque
         | RegIntrinsic::DequeIsEmpty
@@ -2409,7 +2406,13 @@ fn deepcopy_intrinsic_class(intrinsic: RegIntrinsic) -> IntrinsicTaintClass {
         | RegIntrinsic::MapMapValues
         | RegIntrinsic::MapMerge
         | RegIntrinsic::MapTryFold
-        // Set / SortedSet / SortedMap
+        // Map / Set / SortedSet / SortedMap key & element extractors: the result
+        // is a `List` of the map/set's KEYS, which for heap keys (`Set<List<Int>>`,
+        // `Map<List<Int>, _>`) share the container's inner `Rc`. Taint must flow
+        // arg→dst so the source is not wrongly elided (matches `SortedSetToList`).
+        | RegIntrinsic::MapKeys
+        | RegIntrinsic::SetToList
+        | RegIntrinsic::SortedMapKeys
         | RegIntrinsic::SetDifference
         | RegIntrinsic::SetIntersection
         | RegIntrinsic::SetUnion
@@ -2715,6 +2718,7 @@ impl RegUnit {
                 cleanup_stack: Vec::new(),
                 closure_identity_observable: &closure_identity_observable,
                 scalar_regs: std::collections::HashSet::new(),
+                scalar_poison_regs: std::collections::HashSet::new(),
             };
             for param in &signature.params {
                 let reg = lowerer.local(&param.name);
@@ -2781,6 +2785,7 @@ impl RegUnit {
                 cleanup_stack: Vec::new(),
                 closure_identity_observable: &closure_identity_observable,
                 scalar_regs: std::collections::HashSet::new(),
+                scalar_poison_regs: std::collections::HashSet::new(),
             };
             if let Some(info) = hir.type_info(type_name) {
                 for field in &info.fields_ordered {

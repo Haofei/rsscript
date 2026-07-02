@@ -21,6 +21,16 @@ pub(crate) struct RegLowerer<'a> {
     /// is only inserted when the extracted static type is a known scalar; absence
     /// means "unknown", which keeps the (sound) over-tainting behavior.
     pub(crate) scalar_regs: std::collections::HashSet<Reg>,
+    /// Registers that have EVER been bound to a non-scalar (heap / unknown) value.
+    /// `local(name)` reuses one register per variable name, so a name bound to a
+    /// scalar in one place and a heap value in another shares a register; without
+    /// this poison set a scalar binding could (re-)add that shared register to
+    /// [`Self::scalar_regs`] and wrongly elide the heap binding's copy (the taint
+    /// analysis is flat/order-insensitive, so "last write wins" is not enough).
+    /// Once poisoned, a register can never (re-)enter `scalar_regs`, so a reused
+    /// register is treated as scalar only when EVERY binding of it is scalar —
+    /// the sound, over-tainting default.
+    pub(crate) scalar_poison_regs: std::collections::HashSet<Reg>,
 }
 
 /// The element type produced by extracting from a collection type, or `None`
@@ -48,17 +58,77 @@ fn nth_type_arg(type_name: Option<&str>, index: usize) -> Option<&str> {
         .copied()
 }
 
+/// Strip any `Effect`/`Try` wrapper from a call-argument value to reach the
+/// underlying place expression (e.g. `mut cache.items` → `cache.items`).
+fn unwrap_arg_place(value: &HirExpr) -> &HirExpr {
+    match value {
+        HirExpr::Effect { value, .. } | HirExpr::Try { value, .. } => unwrap_arg_place(value),
+        other => other,
+    }
+}
+
+/// Plan which `mut` arguments are PLACES (field/index) that need their final
+/// (written-back) value stored back into the place after the call. Returns
+/// `(arg_index, arg_register)` pairs. A `mut` local argument needs nothing — its
+/// argument register IS the local, so the runtime `mut`-writeback already updates
+/// it. A `mut` field/index argument was lowered to a temp (a field READ), so
+/// without an explicit restore the callee's mutation is silently dropped (a
+/// `mut` scalar field would print the pre-call value; heap places re-store the
+/// same handle, a harmless no-op that also makes a callee *reassignment* of a
+/// heap `mut` param visible). Mirrors AOT's `&mut <place>` semantics.
+fn mut_place_restore_plan(
+    args: &[HirCallArg],
+    mut_positions: &[usize],
+    arg_regs: &[Reg],
+) -> Vec<(usize, Reg)> {
+    mut_positions
+        .iter()
+        .filter_map(|&pos| {
+            let arg = args.get(pos)?;
+            let reg = *arg_regs.get(pos)?;
+            match unwrap_arg_place(&arg.value) {
+                HirExpr::Field { .. } | HirExpr::Index { .. } => Some((pos, reg)),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
 impl RegLowerer<'_> {
+    /// Store each `mut`-place argument's written-back register value back into its
+    /// place after a call (see [`mut_place_restore_plan`]).
+    fn restore_mut_place_args(
+        &mut self,
+        args: &[HirCallArg],
+        plan: Vec<(usize, Reg)>,
+    ) -> Result<(), EvalError> {
+        for (index, reg) in plan {
+            self.lower_assign(unwrap_arg_place(&args[index].value), reg)?;
+        }
+        Ok(())
+    }
+
     /// Record that `dst` holds a `Copy` scalar when `elem_ty` is a known scalar
     /// type (`Int`/`Bool`/`Float`/`Char`/…). Extracting such a value is a bit-copy
     /// that cannot alias its source, so the elision taint analysis skips it. A
     /// `None` / non-scalar `elem_ty` (e.g. `String`, unknown) leaves `dst`
     /// unmarked — the sound, over-tainting default.
     fn note_scalar(&mut self, dst: Reg, elem_ty: Option<&str>) {
-        if elem_ty.is_some_and(|ty| {
+        let is_scalar = elem_ty.is_some_and(|ty| {
             scalar_param_type_needs_no_deep_copy(crate::text_util::strip_fresh_type(ty))
-        }) {
-            self.scalar_regs.insert(dst);
+        });
+        if is_scalar {
+            // Only mark scalar if this register has never held a non-scalar; see
+            // `scalar_poison_regs`. Reusing `local(name)` across a scalar and a
+            // heap binding of the same name must NOT elide the heap copy.
+            if !self.scalar_poison_regs.contains(&dst) {
+                self.scalar_regs.insert(dst);
+            }
+        } else {
+            // Non-scalar (or unknown) binding: poison the register permanently and
+            // drop any scalar mark a prior binding of the same name may have set.
+            self.scalar_poison_regs.insert(dst);
+            self.scalar_regs.remove(&dst);
         }
     }
 
@@ -982,6 +1052,7 @@ impl RegLowerer<'_> {
                         cleanup_stack: Vec::new(),
                         closure_identity_observable: self.closure_identity_observable,
                         scalar_regs: std::collections::HashSet::new(),
+                        scalar_poison_regs: std::collections::HashSet::new(),
                     };
                     for capture in &capture_names {
                         lowerer.local(capture);
@@ -1090,12 +1161,14 @@ impl RegLowerer<'_> {
                     // declared `mut` parameter), so mirror `CallKnown`'s
                     // `mut_args` from it.
                     let mut_args = call_arg_mut_positions(args);
+                    let restore = mut_place_restore_plan(args, &mut_args, &arg_regs);
                     self.emit(RegInstr::CallClosure {
                         dst,
                         closure,
                         args: arg_regs,
                         mut_args,
                     });
+                    self.restore_mut_place_args(args, restore)?;
                     return Ok(dst);
                 }
                 // A generic call carries its type args in `name` (e.g.
@@ -1104,20 +1177,24 @@ impl RegLowerer<'_> {
                 // call falls through and is mis-lowered as a struct construction.
                 if let Some(function) = self.function_ids.get(type_root_name(name)).copied() {
                     let mut_args = self.user_mut_arg_positions(name);
+                    let restore = mut_place_restore_plan(args, &mut_args, &arg_regs);
                     self.emit(RegInstr::CallKnown {
                         dst,
                         function,
                         args: arg_regs,
                         mut_args,
                     });
+                    self.restore_mut_place_args(args, restore)?;
                 } else if self.is_native_function(None, name) {
                     let mut_args = self.native_mut_arg_positions(None, name);
+                    let restore = mut_place_restore_plan(args, &mut_args, &arg_regs);
                     self.emit(RegInstr::CallNative {
                         dst,
                         key: type_root_name(name).to_string(),
                         args: arg_regs,
                         mut_args,
                     });
+                    self.restore_mut_place_args(args, restore)?;
                 } else if type_root_name(name) == "Some" {
                     if arg_regs.len() != 1 {
                         return Err(EvalError::Runtime(format!(
@@ -1873,12 +1950,14 @@ impl RegLowerer<'_> {
                             if self.is_native_function(Some(namespace_root), name_root) {
                                 let mut_args =
                                     self.native_mut_arg_positions(Some(namespace_root), name_root);
+                                let restore = mut_place_restore_plan(args, &mut_args, &arg_regs);
                                 self.emit(RegInstr::CallNative {
                                     dst,
                                     key: qualified_key,
                                     args: arg_regs,
                                     mut_args,
                                 });
+                                self.restore_mut_place_args(args, restore)?;
                                 return Ok(dst);
                             }
                             // Dynamic protocol dispatch: `Protocol.method(self: x, ...)`
@@ -1903,23 +1982,27 @@ impl RegLowerer<'_> {
                             if !dispatch.is_empty() {
                                 let mut_args =
                                     self.native_mut_arg_positions(Some(namespace_root), name_root);
+                                let restore = mut_place_restore_plan(args, &mut_args, &arg_regs);
                                 self.emit(RegInstr::CallDynamic {
                                     dst,
                                     dispatch,
                                     args: arg_regs,
                                     mut_args,
                                 });
+                                self.restore_mut_place_args(args, restore)?;
                                 return Ok(dst);
                             }
                             if let Some(function) = self.function_ids.get(&qualified_key).copied() {
                                 let mut_args =
                                     self.native_mut_arg_positions(Some(namespace_root), name_root);
+                                let restore = mut_place_restore_plan(args, &mut_args, &arg_regs);
                                 self.emit(RegInstr::CallKnown {
                                     dst,
                                     function,
                                     args: arg_regs,
                                     mut_args,
                                 });
+                                self.restore_mut_place_args(args, restore)?;
                                 return Ok(dst);
                             }
                             // `.clone()` (a derived `Clone`) deep-copies any value. A

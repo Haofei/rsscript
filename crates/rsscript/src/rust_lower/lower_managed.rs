@@ -126,14 +126,11 @@ impl RustLowerer<'_> {
         if is_copy_type_ref(ty) || Self::read_effect_lowers_by_value(ty) {
             return false;
         }
-        // Retained non-class params lower to `&Managed<T>`, not a plain `&T`;
-        // cloning that would clone the `Managed` handle, not produce an owned `T`.
-        if self.current_retained_params.contains(name)
-            && !self.is_class_type(ty)
-            && self.type_kinds.contains_key(&ty.name)
-        {
-            return false;
-        }
+        // A retained non-class `read` param is a plain `&T` (value semantics, see
+        // `lower_param`); it MUST be cloned at the point it is stored to produce
+        // the owned `T` the field/collection expects — exactly like any other
+        // borrowed `read` binding. (It used to lower to `&Managed<T>` and skip the
+        // clone, but that ABI never built.)
         true
     }
 

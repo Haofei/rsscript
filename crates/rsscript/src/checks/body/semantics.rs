@@ -379,6 +379,28 @@ pub(super) fn check_integer_literal_range(analyzer: &mut Analyzer<'_>, expr: &Hi
     }
 }
 
+/// A `Char` literal denotes exactly one Unicode scalar. Reject `''` (empty) and
+/// `'ab'` (multi-scalar) at the frontend so they never reach lowering (which
+/// would otherwise silently truncate to the first scalar) or the VM/compiled
+/// backend. Well-formed single-scalar literals are left alone.
+pub(super) fn check_char_literal_scalar(analyzer: &mut Analyzer<'_>, expr: &HirExpr) {
+    let HirExpr::Char { value, span } = expr else {
+        return;
+    };
+    let count = crate::text_util::char_literal_scalar_count(value);
+    if count != 1 {
+        analyzer.diagnostics.push(error_cause_manual_fix(
+            code::CHAR_LITERAL_NOT_SINGLE_SCALAR,
+            format!("character literal must contain exactly one character, found {count}."),
+            span.clone(),
+            "invalid character literal",
+            "A `Char` is a single Unicode scalar value; `''` is empty and `'ab'` holds more than one.",
+            "use_single_char_literal",
+            "Put exactly one character between the single quotes, or use a `String` literal (double quotes) for text.",
+        ));
+    }
+}
+
 pub(super) fn check_bool_condition(analyzer: &mut Analyzer<'_>, expr: &HirExpr, construct: &str) {
     let Some(type_name) = hir_expr_type_name(expr) else {
         return;
@@ -482,6 +504,22 @@ pub(super) fn check_match_pattern_matches_type(
     match pattern {
         MatchPattern::Binding { .. } | MatchPattern::Wildcard(_) => {}
         MatchPattern::Literal { value, span } => {
+            if let MatchLiteral::Char(raw) = value {
+                if crate::text_util::char_literal_scalar_count(raw) != 1 {
+                    analyzer.diagnostics.push(error_cause_manual_fix(
+                        code::CHAR_LITERAL_NOT_SINGLE_SCALAR,
+                        format!(
+                            "character literal must contain exactly one character, found {}.",
+                            crate::text_util::char_literal_scalar_count(raw)
+                        ),
+                        span.clone(),
+                        "invalid character literal",
+                        "A `Char` is a single Unicode scalar value; `''` is empty and `'ab'` holds more than one.",
+                        "use_single_char_literal",
+                        "Put exactly one character between the single quotes.",
+                    ));
+                }
+            }
             let literal_type = match value {
                 MatchLiteral::Int(_) => "Int",
                 MatchLiteral::String(_) => "String",
@@ -1150,6 +1188,7 @@ pub(super) fn check_expr_semantics_with_context(
     live_after: &HashSet<String>,
 ) {
     check_integer_literal_range(analyzer, expr);
+    check_char_literal_scalar(analyzer, expr);
     match expr {
         HirExpr::Call {
             callee,

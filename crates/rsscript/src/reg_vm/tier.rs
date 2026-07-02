@@ -216,6 +216,7 @@ fn profile_closure_pic_arm_count(code: &[vm_jit::JitInstr], closure_id_ip: usize
     arms
 }
 
+#[cfg(feature = "native-jit")]
 fn jit_function_scalar_leaf_callable(jit_fn: &vm_jit::JitFunction) -> bool {
     jit_fn.reg_types.iter().all(|ty| {
         matches!(

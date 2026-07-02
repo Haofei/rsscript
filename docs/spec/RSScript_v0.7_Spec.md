@@ -999,8 +999,12 @@ place-conflict, effect, and resource checking as `mut` API calls (it is not an
   parameter of a Copy scalar type (Int, Bool, Float, Char, …) **may** be reassigned;
   the new value is written back to the caller, matching `&mut` (call-by-reference).
   The assigned value's type must match the local's/parameter's type.
-- **Update a place inside a local:** `obj.field = e` or `list[i] = e`. The place
-  must start from a `let mut` local in scope, and the same type rule applies.
+- **Update a place inside a local or `mut` parameter:** `obj.field = e` or
+  `list[i] = e`. The place must start from a reassignable root — a `let mut` local
+  in scope, or a `mut` parameter (whose fields/elements may be updated even though
+  the parameter binding itself is not rebindable, per the previous bullet) — and
+  the same type rule applies. For a managed-class field the update writes through
+  the live handle, so the mutation is visible to the caller.
 
 The target is validated to be a *place* during checking; assigning to a
 non-place, to a non-Copy parameter root (a `mut` Copy-scalar parameter root is
@@ -5857,7 +5861,9 @@ adds), but it fixes the surface shape so a parser and the prose agree.
 ### A.1 Lexical structure
 
 ```text
-Tokens         identifier | number | string | keyword | symbol | EOF
+Tokens         identifier | number | string | char | keyword | symbol | EOF
+               (a source character outside this inventory lexes to an `unknown`
+               error token, which the parser reports as unsupported syntax)
 Comment        `// ...` to end of line. There is no block-comment form.
 Whitespace     spaces, tabs, and newlines separate tokens and produce no tokens
                of their own. Newlines are significant only for statement
@@ -5884,14 +5890,16 @@ Bool/Unit etc. `true`, `false`, `Ok`, `Err`, `Some`, `None`, `Unit` are built-in
                constants, not user identifiers.
 ```
 
-Reserved words are lexed as keywords: `fn let local struct class resource match
-if else for loop while return with async await pub native features manage weak
-handle effects`. Other declaration introducers — `sum const module use protocol
-impl derives noescape spawn task_group select unsafe` — are recognized
-contextually in declaration position. Operators and punctuation are formed from
-the symbol tokens `-> => : , . ( ) { } < > [ ] ? | & ~ + - * / = ! ; #`;
-multi-character operators (`== != <= >= && ||`) are built from adjacent symbol
-tokens at parse time.
+Reserved words are lexed as keywords: `if else for in match loop while break
+continue return features class struct resource handle fn let pub async effects
+drop with as read mut take fresh manage weak local`. Contextual keywords —
+`await` and `native` — are lexed as plain identifiers and interpreted as keywords
+only in specific positions; likewise the declaration introducers `sum const
+module use protocol impl derives noescape spawn task_group select unsafe` are
+recognized contextually in declaration position. Operators and punctuation are
+formed from the symbol tokens `-> => : , . ( ) { } < > [ ] ? | & ~ ^ + - * / % =
+! ; #`; multi-character operators (`== != <= >= && ||`) are built from adjacent
+symbol tokens at parse time.
 
 ### A.2 Grammar sketch (EBNF-style)
 

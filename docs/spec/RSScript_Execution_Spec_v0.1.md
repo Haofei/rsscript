@@ -435,7 +435,13 @@ location, and runs to completion (or deopts back per §7.2 on any guard).
 to the interpreter's at the loop header, the compiled code computes the same values
 (it is the same lowering, entered at a different block), and any guard failure
 deopts into the interpreter (the reference semantics) — so the result is identical
-to running the loop interpreted. Float formatting and `Map` order stay bit-identical.
+to running the loop interpreted. Float formatting stays bit-identical, and OSR
+observes the SAME `Map`/`Set` object as the interpreter, so their iteration order
+is unchanged by tiering. (This is a within-backend guarantee only: `Map`/`Set`
+iteration order is *not* pinned across backends — it is implementation-defined
+nondeterminism, see the seeding note in §2. Programs needing a deterministic order
+across backends MUST use `SortedMap`/`SortedSet` or sort explicitly; the
+differential harness does not compare raw `Map`/`Set` iteration order.)
 The hot-loop backedge counter guides only *whether/when* to OSR, never the values
 computed (determinism, per §2). This section fixes the OSR-entry contract; its
 implementation is staged (`vm-optimizing-jit-plan.md` J5.2) and the
