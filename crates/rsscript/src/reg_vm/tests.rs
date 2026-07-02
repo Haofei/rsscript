@@ -825,6 +825,143 @@ fn main() -> Unit {
         assert_eq!(output.stdout, "42\n");
     }
 
+    /// Slice 3 (borrow-by-default): a `read String` param whose only use is a
+    /// proven-pure reader (`String.len`, now classified `PureFreshReader`) must have
+    /// its prologue `DeepCopy` ELIDED. Before Slice 3 every `String.*` intrinsic hit
+    /// the conservative `Keep` arm, so `String.len(read s)` pinned the copy and each
+    /// call deep-copied the whole string. `String.len` returns a fresh `Int` and never
+    /// mutates/stores/aliases its arg, so sharing the caller's `Rc` is sound.
+    #[test]
+    fn deepcopy_elision_fires_for_string_read_param() {
+        let source = r#"
+fn measure(s: read String) -> Int {
+    return String.len(value: read s)
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: measure(s: read "hello")))
+    return Unit
+}
+"#;
+        let executable = reg_vm_compile_source("deepcopy-elision-string.rss", source)
+            .expect("lowering succeeds");
+
+        let measure_id = executable.unit.function_ids["measure"];
+        let measure = executable.unit.functions[measure_id].as_ref();
+        let elided = measure
+            .code
+            .iter()
+            .filter(|instr| matches!(instr, RegInstr::DeepCopyElided { .. }))
+            .count();
+        let eager = measure
+            .code
+            .iter()
+            .filter(|instr| matches!(instr, RegInstr::DeepCopy { .. }))
+            .count();
+        if crate::reg_vm::model::elide_deepcopy_enabled_for_test() {
+            assert!(
+                elided >= 1 && eager == 0,
+                "elision ON: `read String` param whose only use is the pure reader \
+                 `String.len` must be elided, got {elided} elided / {eager} eager: {:#?}",
+                measure.code,
+            );
+        } else {
+            assert!(
+                eager >= 1 && elided == 0,
+                "elision OFF: eager DeepCopy must be retained: got {elided} elided / \
+                 {eager} eager: {:#?}",
+                measure.code,
+            );
+        }
+
+        // Elision must not change behavior: len("hello") == 5.
+        let output = executable
+            .eval_main_with_args(Vec::<String>::new())
+            .expect("program should still run");
+        assert_eq!(output.stdout, "5\n");
+    }
+
+    /// Slice 3 NEGATIVE guard (over-promotion): a `read List<Int>` param that IS STORED
+    /// into a struct (then reloaded and mutated in a loop) must KEEP its prologue
+    /// `DeepCopy`, even though a promoted pure reader (`String.len` on a fresh string
+    /// derived from it) is also called. Storing lowers to `MakeStruct`, an UNCLASSIFIED
+    /// instruction that references the tainted param register and so hits the fail-safe
+    /// `Keep` default — the param stays tainted and the copy is retained. This proves
+    /// Slice 3 widened only the READ-ONLY-SAFE set, not the ESCAPE set: a storing op is
+    /// still caught, and behavior is byte-for-byte unchanged (caller's `xs[0]` stays 7,
+    /// the callee mutated only its own deep copy). Mirrors the shape of the native
+    /// `native_store_reload_mutate_non_mut_heap_param_does_not_leak` leak guard.
+    #[test]
+    fn deepcopy_elision_kept_for_stored_read_param() {
+        let source = r#"
+features: local
+
+struct Box {
+    items: List<Int>
+}
+
+fn stash(xs: read List<Int>, n: Int) -> Int {
+    let probe = String.len(value: read String.from_int(value: List.get<Int>(list: read xs, index: 0)))
+    let b = Box(items: read xs)
+    let mut i = 0
+    while i < n {
+        let mut inner = b.items
+        List.set<Int>(list: mut inner, index: 0, value: read i)
+        i = i + 1
+    }
+    return List.get<Int>(list: read xs, index: 0) + probe
+}
+
+fn main() -> Unit {
+    local xs = List.new<Int>()
+    List.push<Int>(list: mut xs, value: read 7)
+    let r = stash(xs: read xs, n: read 3)
+    Log.write(message: read String.from_int(value: List.get<Int>(list: read xs, index: 0)))
+    Log.write(message: read String.from_int(value: r))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("deepcopy-elision-store.rss", source).expect("lowering succeeds");
+
+        let stash_id = executable.unit.function_ids["stash"];
+        let stash = executable.unit.functions[stash_id].as_ref();
+        let elided = stash
+            .code
+            .iter()
+            .filter(|instr| matches!(instr, RegInstr::DeepCopyElided { .. }))
+            .count();
+        let eager = stash
+            .code
+            .iter()
+            .filter(|instr| matches!(instr, RegInstr::DeepCopy { .. }))
+            .count();
+        // The store forces the copy to be kept regardless of the elision gate: with the
+        // gate ON the DeepCopy must NOT be neutralized (elided == 0); with it OFF the eager
+        // DeepCopy is likewise retained. Either way, no elision for the stored param.
+        assert_eq!(
+            elided, 0,
+            "over-promotion guard: a `read Map` param stored into a struct must KEEP its \
+             copy (no DeepCopyElided), got {elided} elided / {eager} eager: {:#?}",
+            stash.code,
+        );
+        assert!(
+            eager >= 1,
+            "over-promotion guard: the eager DeepCopy of the stored `read Map` param must \
+             be retained, got {elided} elided / {eager} eager: {:#?}",
+            stash.code,
+        );
+
+        // Soundness check — elision must not leak to the caller: the caller's xs[0] stays 7
+        // (line 1), proving the prologue copy was KEPT. The callee's own xs is a separate deep
+        // copy; via the stored `b.items` alias the loop drives it to 2 (last i in 0..3), so
+        // `xs[0] + probe == 2 + len("7") == 3` (line 2). Deterministic either way.
+        let output = executable
+            .eval_main_with_args(Vec::<String>::new())
+            .expect("program should still run");
+        assert_eq!(output.stdout, "7\n3\n");
+    }
+
     #[test]
     fn jit_runs_scalar_self_recursion_on_flat_executor() {
         let source = r#"

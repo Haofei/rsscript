@@ -2252,8 +2252,15 @@ enum IntrinsicTaintClass {
 /// `deepcopy_instr_forces_keep`/`deepcopy_elidable_param_regs`.
 fn deepcopy_intrinsic_class(intrinsic: RegIntrinsic) -> IntrinsicTaintClass {
     use IntrinsicTaintClass::{AliasReturner, PureFreshReader};
+    // Three-way split, all POSITIVE (an intrinsic is trusted only when named):
+    //   1. PureFreshReader  → READ-ONLY-SAFE, result is fresh (no arg aliasing).
+    //   2. AliasReturner    → READ-ONLY-SAFE args, but result aliases an arg's `Rc`
+    //                          (taint propagates arg→dst in `deepcopy_elidable_param_regs`).
+    //   3. everything else  → UNCLASSIFIED ⇒ `Keep` (the fail-safe default arm; soundness
+    //                          rests on it — Tier-3 IO/channels/streams/tensor/json/… and any
+    //                          not-yet-audited variant conservatively pins the copy).
     match intrinsic {
-        // ---- PureFreshReader: fresh scalar/bool/collection-of-scalars, no arg aliasing. ----
+        // ---- (1) PureFreshReader: fresh scalar/bool/collection-of-scalars, no arg aliasing. ----
         // List
         RegIntrinsic::ListIsEmpty
         | RegIntrinsic::ListContains
@@ -2311,7 +2318,71 @@ fn deepcopy_intrinsic_class(intrinsic: RegIntrinsic) -> IntrinsicTaintClass {
         | RegIntrinsic::CharIsLower
         | RegIntrinsic::CharIsUpper
         | RegIntrinsic::CharIsWhitespace
-        | RegIntrinsic::CharCompare => PureFreshReader,
+        | RegIntrinsic::CharCompare
+        // String — pure readers (Slice 3). Each takes its receiver by `&`
+        // (`expect_string_ref`, never `borrow_mut`), never stores an arg into
+        // `self.streams`/`self.channels`/resource state, and RETURNS a FRESH value:
+        // a scalar (`Int`/`Bool`/`Char`), a brand-new `Rc<String>` (every
+        // `VmValue::string(..)` is `Rc::new(into())`, so even `String.copy`/`slice`/
+        // `trim`/`replace` allocate — the result NEVER aliases the arg's `Rc`), a fresh
+        // `List` (`chars`/`lines`/`split`), or an `Option`/`Result` wrapping one of those.
+        // Verified against `intrinsics/string.rs`: none mutate/store/alias an arg. This
+        // lets the elision pass drop a redundant `read String` prologue DeepCopy whose
+        // only keep-forcing use is one of these read-only string ops (borrow-by-default).
+        | RegIntrinsic::StringAfter
+        | RegIntrinsic::StringBefore
+        | RegIntrinsic::StringBuilderNew
+        | RegIntrinsic::StringCharAt
+        | RegIntrinsic::StringChars
+        | RegIntrinsic::StringContains
+        | RegIntrinsic::StringCount
+        | RegIntrinsic::StringCopy
+        | RegIntrinsic::StringEndsWith
+        | RegIntrinsic::StringFormat
+        | RegIntrinsic::StringFromBool
+        | RegIntrinsic::StringFromFloat
+        | RegIntrinsic::StringFromInt
+        | RegIntrinsic::StringIndexOf
+        | RegIntrinsic::StringIsEmpty
+        | RegIntrinsic::StringJoin
+        | RegIntrinsic::StringLines
+        | RegIntrinsic::StringLen
+        | RegIntrinsic::StringPadLeft
+        | RegIntrinsic::StringPadRight
+        | RegIntrinsic::StringParseFloat
+        | RegIntrinsic::StringParseInt
+        | RegIntrinsic::StringRepeat
+        | RegIntrinsic::StringReplace
+        | RegIntrinsic::StringReplaceFirst
+        | RegIntrinsic::StringReverse
+        | RegIntrinsic::StringSlice
+        | RegIntrinsic::StringSplit
+        | RegIntrinsic::StringStartsWith
+        | RegIntrinsic::StringStripPrefix
+        | RegIntrinsic::StringToLowercase
+        | RegIntrinsic::StringToUppercase
+        | RegIntrinsic::StringTrim
+        | RegIntrinsic::StringTrimEnd
+        | RegIntrinsic::StringTrimStart
+        // Bytes — pure readers (Slice 3). Each takes its receiver by `&`
+        // (`expect_bytes_ref`, never `borrow_mut`), never stores an arg, and returns a
+        // FRESH value: a scalar (`BytesLen`→`Int`, `BytesIsEmpty`/`BytesViewStartsWith`→
+        // `Bool`), a freshly-allocated `Rc<Vec<u8>>` (`concat`/`slice`/`from_string`/
+        // `from_uints`/`view_to_bytes` all `Rc::new` a new `Vec`), a fresh `Rc<String>`
+        // (`to_string`), or a fresh `List` (`to_uints`). Verified against
+        // `intrinsics/bytes.rs`: none mutate/store/alias an arg (`BytesConsume` merely
+        // reads and returns `Unit`).
+        | RegIntrinsic::BytesConcat
+        | RegIntrinsic::BytesConsume
+        | RegIntrinsic::BytesFromString
+        | RegIntrinsic::BytesFromUints
+        | RegIntrinsic::BytesIsEmpty
+        | RegIntrinsic::BytesLen
+        | RegIntrinsic::BytesSlice
+        | RegIntrinsic::BytesToString
+        | RegIntrinsic::BytesToUints
+        | RegIntrinsic::BytesViewStartsWith
+        | RegIntrinsic::BytesViewToBytes => PureFreshReader,
 
         // ---- AliasReturner: result shares an arg's inner `Rc`; propagate taint arg→dst. ----
         // List
@@ -2348,7 +2419,7 @@ fn deepcopy_intrinsic_class(intrinsic: RegIntrinsic) -> IntrinsicTaintClass {
         // Deque
         | RegIntrinsic::DequeToList => AliasReturner,
 
-        // Everything else (Tier-3 and any unclassified variant): conservative keep.
+        // ---- (3) UNCLASSIFIED → KEEP (fail-safe default; Tier-3 + any un-audited variant). ----
         _ => IntrinsicTaintClass::Keep,
     }
 }
@@ -2379,12 +2450,16 @@ fn deepcopy_intrinsic_class(intrinsic: RegIntrinsic) -> IntrinsicTaintClass {
 ///   explicitly classified read-only-safe above.
 fn deepcopy_instr_forces_keep(instr: &RegInstr, tainted: &[bool], n_regs: usize) -> bool {
     let is_t = |r: Reg| r < n_regs && tainted[r];
-    // In-place mutation of a tainted heap receiver — the direct leak.
+    // ---- POSITIVE ESCAPE (keep): in-place mutation of a tainted heap receiver — the direct
+    // leak. This is the one escape we detect structurally rather than via the default arm. ----
     if let Some(recv) = deepcopy_heap_mutation_receiver(instr) {
         if is_t(recv) {
             return true;
         }
     }
+    // ---- POSITIVE READ-ONLY-SAFE (elide): the arms below return `false` (or key only off a
+    // tainted `mut`-arg / classified-`Keep` intrinsic). Anything not matched here falls through
+    // to the UNCLASSIFIED → KEEP fail-safe default at the bottom. ----
     match instr {
         // Alias propagation: `dst` aliases `src`'s inner `Rc` (already tainted by the closure);
         // the op only READS `src`, so it never leaks by itself.
@@ -2464,8 +2539,11 @@ fn deepcopy_instr_forces_keep(instr: &RegInstr, tainted: &[bool], n_regs: usize)
         | RegInstr::LoadNone { .. }
         | RegInstr::RuntimeError { .. } => false,
 
-        // Everything else (stores, returns, captures, spawns, `Manage`, intrinsics, and every
-        // unlisted mutator): conservatively keep the copy if a tainted register is involved.
+        // ---- UNCLASSIFIED → KEEP (fail-safe default; SOUNDNESS BACKBONE — DO NOT WEAKEN). ----
+        // Everything else (stores, returns, captures, spawns, `Manage`, `Match*MapGet` extractions,
+        // and every unlisted mutator): conservatively keep the copy if a tainted register is
+        // involved. `deepcopy_collect_regs` is exhaustive (no wildcard) so a new `RegInstr` variant
+        // lands here by default rather than silently escaping the analysis.
         other => {
             let mut regs = Vec::new();
             deepcopy_collect_regs(other, &mut regs);

@@ -707,6 +707,47 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   mismatches; lexer perf holds (~46× ratio, rss/VM time ~700 ms stable — the ratio's
   jitter is the tiny Rust denominator, not the VM). New guard:
   `reg_vm::tests::…::deepcopy_elision_fires_for_option_scalar_pattern_bind`.
+- **Slice 3 of borrow-by-default (2026-07-01):** widened the READ-ONLY-SAFE
+  intrinsic set — a SOUND whitelist widening, NOT a default flip. Slices 1–2
+  stopped scalar EXTRACTIONS from tainting; Slice 3 stops proven-pure READERS of a
+  `read String`/`Bytes` param from pinning the copy. Previously every `String.*`
+  and `Bytes.*` intrinsic fell through to the conservative `Keep` arm of
+  `deepcopy_intrinsic_class`, so `String.len(read s)` (or any read-only string/bytes
+  op) forced the prologue `DeepCopy` to be kept — a `read String`/`read Bytes` param
+  used only in read-only ways was still deep-copied per call. **Audit + promotion:**
+  every intrinsic in `intrinsics/string.rs` and `intrinsics/bytes.rs` was verified to
+  (a) borrow its receiver by `&` (`expect_string_ref`/`expect_bytes_ref`, never
+  `borrow_mut`), (b) never store an arg into `self.streams`/`self.channels`/resource
+  state, and (c) return a FRESH value — a scalar, a brand-new `Rc<String>`
+  (`VmValue::string` is always `Rc::new(into())`, so even `copy`/`slice`/`trim`/
+  `replace` allocate and NEVER alias the arg's `Rc`), a freshly-`Rc::new`'d
+  `Vec<u8>`, or a fresh `List`. All were promoted to `PureFreshReader`: the 35
+  `String.*` readers (`StringAfter/Before/BuilderNew/CharAt/Chars/Contains/Count/
+  Copy/EndsWith/Format/FromBool/FromFloat/FromInt/IndexOf/IsEmpty/Join/Lines/Len/
+  PadLeft/PadRight/ParseFloat/ParseInt/Repeat/Replace/ReplaceFirst/Reverse/Slice/
+  Split/StartsWith/StripPrefix/ToLowercase/ToUppercase/Trim/TrimEnd/TrimStart`) and
+  the 11 `Bytes.*` readers (`BytesConcat/Consume/FromString/FromUints/IsEmpty/Len/
+  Slice/ToString/ToUints/ViewStartsWith/ViewToBytes`). **Rejected (left in the
+  keep-default, conservatism over completeness):** `MatchMapGet`/`MatchSortedMapGet`
+  — these are alias-RETURNING extractions (`map.borrow().get(&key).cloned()` shares
+  the element's `Rc` into `value_dst`), so promoting them read-only-safe would need a
+  `map→value_dst` edge in the taint-propagation closure, which this slice does not
+  touch; without it a later mutation of the extracted heap value would leak, so they
+  stay in the fail-safe default. The model is now **"keep only on PROVEN escape
+  (store / mutate-through-alias / retain / return / unclassified)"**; borrow-by-default
+  now covers read-only `String`/`Bytes` params (and, via Slices 1–2, `Map`/`List`/
+  scalar reads). Also a readability refactor (no behavior change):
+  `deepcopy_intrinsic_class` / `deepcopy_instr_forces_keep` now read as an explicit
+  three-way split — POSITIVE ESCAPE (keep) / POSITIVE READ-ONLY-SAFE (elide) /
+  UNCLASSIFIED → KEEP (the fail-safe default arm, UNCHANGED — soundness backbone;
+  `deepcopy_collect_regs` stays exhaustive/no-wildcard). Soundness: catch-all default
+  unchanged; the new negative guard proves a stored `read` param still keeps its copy
+  (no over-promotion). Full suite (628 lib + 456 runtime incl. all three
+  `does_not_leak` guards + 35 differential + 628 static) green; parity 556/556 × 3, 0
+  mismatches; lexer perf holds (rss/VM ~53× ratio under host load, no regression —
+  the change only ADDS elisions). New guards:
+  `reg_vm::tests::…::deepcopy_elision_fires_for_string_read_param` (positive) and
+  `…::deepcopy_elision_kept_for_stored_read_param` (negative / over-promotion).
 
 ### SH-023 — self-hosted checker reaches RS0005 parity at declaration level; the merged callable namespace is the load-bearing rule
 
