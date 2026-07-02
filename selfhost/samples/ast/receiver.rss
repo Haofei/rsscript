@@ -1,0 +1,5 @@
+fn run(cache: mut Cache, xs: mut List<Int>) -> Int {
+    mut xs.push(value: read 1)
+    read cache.get(key: read 2)
+    return 0
+}

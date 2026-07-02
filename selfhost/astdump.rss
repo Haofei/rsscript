@@ -284,10 +284,30 @@ fn emit_expr(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) 
             return Unit
         }
     }
-    // Effect prefix: read/mut/take <value>  (plain-value form; receiver-call form
-    // `read x.m()` is a documented gap — see SH-025).
+    // Effect prefix: read/mut/take <value>. The receiver-call shorthand
+    // `<effect> recv.method(args)` (lowercase receiver) parses as a ReceiverCall,
+    // NOT an Effect wrapper; an uppercase namespace (`read Cache.put()`) stays a
+    // qualified call under the effect.
     let effWord = effect_kw(toks: read toks, i: read s)
     if String.len(value: read effWord) > 0 {
+        let recvStart = s + 1
+        if at_symbol(toks: read toks, i: read recvStart, code: read SYM_BANG) == false {
+            let dot = find_receiver_call_dot(toks: read toks, recvStart: read recvStart, end: read e)
+            if dot > recvStart && is_qualified_ns_receiver(toks: read toks, start: read recvStart, dot: read dot) == false {
+                let mpos = dot + 1
+                let open = find_call_open(toks: read toks, start: read mpos, end: read e)
+                let method = named_segment_str(toks: read toks, start: read mpos, end: read open)
+                if open > 0 && String.len(value: read method) > 0 {
+                    let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+                    emit(depth: read d, s: read "call")
+                    let cl = String.concat(left: read "callee-receiver method=", right: read method)
+                    emit(depth: read (d + 1), s: read String.concat(left: read String.concat(left: read cl, right: read " effect="), right: read effWord))
+                    emit_expr(toks: read toks, start: read recvStart, end: read dot, d: read (d + 2))
+                    emit_args(toks: read toks, start: read (open + 1), end: read close, d: read (d + 1))
+                    return Unit
+                }
+            }
+        }
         emit(depth: read d, s: read String.concat(left: read "effect kind=", right: read effWord))
         emit_expr(toks: read toks, start: read (s + 1), end: read e, d: read (d + 1))
         return Unit
@@ -450,6 +470,64 @@ fn named_segment_str(toks: read List<Tok>, start: read Int, end: read Int) -> St
     let a = String.concat(left: read name, right: read "<")
     let b = String.concat(left: read a, right: read args)
     return String.concat(left: read b, right: read ">")
+}
+
+// Opening `(` of a call in [start, end), or -1. Skips generic `<...>`/`[...]`
+// (mirrors find_call_open: only `<`/`[` nest, `>`/`]` close). Scan begins at
+// start+1 (the callee/method name occupies start).
+fn find_call_open(toks: read List<Tok>, start: read Int, end: read Int) -> Int {
+    let mut depth = 0
+    let mut i = start + 1
+    while i < end {
+        if depth == 0 && at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) { return i }
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LANGLE) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RANGLE) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) {
+            if depth > 0 { depth = depth - 1 }
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+// Last top-level `.` in [recvStart, end) that opens a valid receiver call:
+// dot+1 is an ident, a call `(` follows, and its matching `)` closes at end-1.
+// Mirrors find_receiver_call_dot (()[]{} nest; `<>` do NOT). -1 if none.
+fn find_receiver_call_dot(toks: read List<Tok>, recvStart: read Int, end: read Int) -> Int {
+    let mut depth = 0
+    let mut best = -1
+    let mut i = recvStart
+    while i < end {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) {
+            if depth > 0 { depth = depth - 1 }
+        } else if depth == 0 && at_symbol(toks: read toks, i: read i, code: read SYM_DOT) && i > recvStart && (i + 1) < end && is_ident_tok(toks: read toks, i: read (i + 1)) {
+            let open = find_call_open(toks: read toks, start: read (i + 1), end: read end)
+            if open > 0 {
+                let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+                if close == end - 1 { best = i }
+            }
+        }
+        i = i + 1
+    }
+    return best
+}
+
+// True when the receiver [start, dot) is an uppercase-led namespace path (only
+// idents / `<` / `>` / `,`) — those parse as Qualified, not a ReceiverCall.
+fn is_qualified_ns_receiver(toks: read List<Tok>, start: read Int, dot: read Int) -> Bool {
+    if is_ident_tok(toks: read toks, i: read start) == false { return false }
+    if is_upper_first(name: read tk_text(toks: read toks, i: read start)) == false { return false }
+    let mut i = start + 1
+    while i < dot {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LANGLE) || at_symbol(toks: read toks, i: read i, code: read SYM_RANGLE) || at_symbol(toks: read toks, i: read i, code: read SYM_COMMA) || is_ident_tok(toks: read toks, i: read i) {
+            i = i + 1
+        } else {
+            return false
+        }
+    }
+    return true
 }
 
 // Canonical type name for [start, end): `Name` or `Name<arg, ...>` (matches
