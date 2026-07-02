@@ -1478,6 +1478,14 @@ fn ast_parity_samples() {
     let exe = compile_astdump().expect("rss astdump should compile");
     let mut mismatches: Vec<String> = Vec::new();
     let files = ast_sample_files();
+    // Guard against a vacuous pass: a missing/unreadable samples dir would make
+    // `files` empty and this test green while covering nothing.
+    assert!(
+        files.len() >= AST_SAMPLE_MIN,
+        "expected >= {AST_SAMPLE_MIN} curated AST samples under selfhost/samples/ast/, found {} \
+         (missing or unreadable dir makes this test pass vacuously)",
+        files.len()
+    );
     for file in &files {
         let rel = file
             .strip_prefix(selfhost_dir())
@@ -1507,15 +1515,25 @@ fn ast_parity_samples() {
     );
 }
 
+/// Minimum number of curated AST samples that must exist (guards `ast_parity_samples`
+/// against a vacuous pass if the samples dir goes missing).
+const AST_SAMPLE_MIN: usize = 6;
+
 /// Floor for `ast_parity_corpus` — the number of corpus files whose rss AST dump
 /// already matches the oracle byte-for-byte. Ratchets up as the producer's
 /// coverage grows; a drop signals a regression. (Full parity = files.len().)
 const AST_CORPUS_PARITY_FLOOR: usize = 121;
 
-/// Step-2 measurement gate (ignored by default): how many of the 556 corpus files
-/// the rss producer already reproduces byte-for-byte. Not full parity yet — this
-/// ratchets a floor so coverage can only grow, and prints the current count so
-/// the residual (SH-025) is visible.
+/// Step-2 measurement gate (ignored by default): how many corpus files the rss
+/// producer reproduces byte-for-byte. Not full parity yet — this ratchets a floor
+/// so coverage can only grow, asserts the producer never crashes (0 run-failures),
+/// and prints the current count so the residual (SH-025) is visible.
+///
+/// RUNTIME: this compiles the rss producer once and runs it over all ~560 corpus
+/// files on the reg-VM; in a debug build that is slow (minutes). Run it in release
+/// for a quick measurement:
+/// `cargo test -p rsscript --release --lib selfhost_parity::ast_parity_corpus -- --ignored --nocapture`.
+/// The fast inner-loop gate is `ast_parity_samples` (non-ignored, curated subset).
 #[test]
 #[ignore]
 fn ast_parity_corpus() {
@@ -1550,6 +1568,14 @@ fn ast_parity_corpus() {
     for rel in &sample_mismatches {
         eprintln!("[mismatch] {rel}");
     }
+    // The producer must never crash on corpus input — unsupported constructs are
+    // expected to mismatch (partial/`unknown-*` output), not error. A run-failure
+    // is a real regression even if `ok` still clears the floor.
+    assert_eq!(
+        run_failures, 0,
+        "rss AST producer had {run_failures} run-failures over {total} corpus files \
+         (it must degrade to a mismatch, never crash)"
+    );
     assert!(
         ok >= AST_CORPUS_PARITY_FLOOR,
         "AST corpus parity regressed: {ok} byte-exact < floor {AST_CORPUS_PARITY_FLOOR}"

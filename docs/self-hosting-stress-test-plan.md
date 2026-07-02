@@ -280,9 +280,13 @@ likely want a sampled fast inner-loop gate plus the full corpus pre-push.
 recursive-descent rss parser that STREAMS the canonical dump (no handle-based AST is
 materialized). Parity harness: `ast_parity_tiny_sample` + `ast_parity_samples`
 (non-ignored, byte-exact vs the oracle over curated `samples/ast/*`) and
-`ast_parity_corpus` (`#[ignore]`, ratchets a floor over all 563 files). Current
-reach: **121/563 byte-exact, 0 run-failures** (the producer never crashes;
-unsupported constructs mismatch rather than panic). Covered: fns (generics/effects/
+`ast_parity_corpus` (`#[ignore]`, ratchets a floor over all 563 files and asserts
+**0 run-failures** so a producer crash regresses the gate even if the byte-exact
+count still clears the floor). That corpus gate runs the reg-VM over ~560 files and
+is slow in a debug build — run it in `--release` for a quick measurement; the fast
+non-ignored inner-loop gate is `ast_parity_samples`. Current reach: **121/563
+byte-exact, 0 run-failures** (the producer never crashes; unsupported constructs
+mismatch rather than panic). Covered: fns (generics/effects/
 return/body), struct/class/resource (opaque/generics/derives/handle-weak/defaults/
 drop), sum, const/type-alias/module/use, the core statements, and a precedence-exact
 expression parser (calls, field/index, array, try, effects, literals). Both risks are
