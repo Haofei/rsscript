@@ -42,7 +42,7 @@ fn dotted_name_text(toks: read List<Tok>, i: read Int) -> String {
     let mut j = i + 1
     let mut going = true
     while going {
-        let dot = at_symbol(toks: read toks, i: read j, code: read 46)
+        let dot = at_symbol(toks: read toks, i: read j, code: read SYM_DOT)
         let nextIdent = is_ident_tok(toks: read toks, i: read (j + 1))
         if dot && nextIdent {
             out = String.concat(left: read out, right: read ".")
@@ -58,10 +58,10 @@ fn dotted_name_text(toks: read List<Tok>, i: read Int) -> String {
 // Index of the name token for a type decl (after optional pub, opaque, kind kw).
 fn type_name_start(toks: read List<Tok>, i: read Int) -> Int {
     let mut j = i
-    if at_ident(toks: read toks, i: read j, wid: read 13) {
+    if at_ident(toks: read toks, i: read j, wid: read WORD_PUB) {
         j = j + 1
     }
-    if at_ident(toks: read toks, i: read j, wid: read 5) {
+    if at_ident(toks: read toks, i: read j, wid: read WORD_OPAQUE) {
         j = j + 1
     }
     j = j + 1
@@ -71,7 +71,7 @@ fn type_name_start(toks: read List<Tok>, i: read Int) -> Int {
 // Index of the name token for a sum decl (after optional pub, sum kw).
 fn sum_name_start(toks: read List<Tok>, i: read Int) -> Int {
     let mut j = i
-    if at_ident(toks: read toks, i: read j, wid: read 13) {
+    if at_ident(toks: read toks, i: read j, wid: read WORD_PUB) {
         j = j + 1
     }
     j = j + 1
@@ -83,7 +83,7 @@ fn fn_name_start(toks: read List<Tok>, i: read Int) -> Int {
     let mut j = i
     let mut attrs = true
     while attrs {
-        if at_symbol(toks: read toks, i: read j, code: read 35) {
+        if at_symbol(toks: read toks, i: read j, code: read SYM_HASH) {
             j = j + 5
         } else {
             attrs = false
@@ -91,7 +91,7 @@ fn fn_name_start(toks: read List<Tok>, i: read Int) -> Int {
     }
     let mut mods = true
     while mods {
-        let isMod = at_ident(toks: read toks, i: read j, wid: read 13) || at_ident(toks: read toks, i: read j, wid: read 14) || at_ident(toks: read toks, i: read j, wid: read 9)
+        let isMod = at_ident(toks: read toks, i: read j, wid: read WORD_PUB) || at_ident(toks: read toks, i: read j, wid: read WORD_ASYNC) || at_ident(toks: read toks, i: read j, wid: read WORD_NATIVE)
         if isMod {
             j = j + 1
         } else {
@@ -106,7 +106,7 @@ fn fn_name_start(toks: read List<Tok>, i: read Int) -> Int {
 fn find_body_open(toks: read List<Tok>, i: read Int, end: read Int) -> Int {
     let mut k = i
     while k < end {
-        if at_symbol(toks: read toks, i: read k, code: read 123) {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE) {
             return k
         }
         k = k + 1
@@ -126,7 +126,7 @@ fn body_has_duplicate_field(toks: read List<Tok>, ob: read Int, close: read Int)
     let mut brace = 0
     let mut k = ob + 1
     while k < close {
-        let isColon = at_symbol(toks: read toks, i: read k, code: read 58)
+        let isColon = at_symbol(toks: read toks, i: read k, code: read SYM_COLON)
         let atTop = paren == 0 && br == 0 && ang == 0 && brace == 0
         if isColon && atTop && is_ident_tok(toks: read toks, i: read (k - 1)) {
             let name = tk_text(toks: read toks, i: read (k - 1))
@@ -135,27 +135,27 @@ fn body_has_duplicate_field(toks: read List<Tok>, ob: read Int, close: read Int)
             }
             Set.insert<String>(set: mut seen, value: read name)
         }
-        if at_symbol(toks: read toks, i: read k, code: read 40) {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) {
             paren = paren + 1
-        } else if at_symbol(toks: read toks, i: read k, code: read 41) {
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) {
             if paren > 0 {
                 paren = paren - 1
             }
-        } else if at_symbol(toks: read toks, i: read k, code: read 91) {
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) {
             br = br + 1
-        } else if at_symbol(toks: read toks, i: read k, code: read 93) {
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) {
             if br > 0 {
                 br = br - 1
             }
-        } else if at_symbol(toks: read toks, i: read k, code: read 60) {
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE) {
             ang = ang + 1
-        } else if at_symbol(toks: read toks, i: read k, code: read 62) {
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) {
             if ang > 0 {
                 ang = ang - 1
             }
-        } else if at_symbol(toks: read toks, i: read k, code: read 123) {
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE) {
             brace = brace + 1
-        } else if at_symbol(toks: read toks, i: read k, code: read 125) {
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE) {
             if brace > 0 {
                 brace = brace - 1
             }
@@ -181,16 +181,17 @@ fn main() -> Unit {
     while running {
         if i >= ntok {
             running = false
-        } else if tk_kind(toks: read toks, i: read i) == 8 {
+        } else if tk_kind(toks: read toks, i: read i) == TOK_EOF {
             running = false
         } else {
-            let isPub = at_ident(toks: read toks, i: read i, wid: read 13)
-            let isFeatures = at_ident(toks: read toks, i: read i, wid: read 17) && at_symbol(toks: read toks, i: read (i + 1), code: read 58)
-            let isProfile = at_ident(toks: read toks, i: read i, wid: read 16) && at_symbol(toks: read toks, i: read (i + 1), code: read 58)
-            let isSum = at_ident(toks: read toks, i: read i, wid: read 6) || (isPub && at_ident(toks: read toks, i: read (i + 1), wid: read 6))
-            let isNativeMod = at_ident(toks: read toks, i: read i, wid: read 9) && at_ident(toks: read toks, i: read (i + 1), wid: read 10)
-            let isTypeAlias = at_ident(toks: read toks, i: read i, wid: read 11) || (isPub && at_ident(toks: read toks, i: read (i + 1), wid: read 11))
-            let isConst = at_ident(toks: read toks, i: read i, wid: read 12) || (isPub && at_ident(toks: read toks, i: read (i + 1), wid: read 12))
+            let cls = classify_top(toks: read toks, i: read i)
+            let isPub = cls.isPub
+            let isFeatures = cls.isFeatures
+            let isProfile = cls.isProfile
+            let isSum = cls.isSum
+            let isNativeMod = cls.isNativeMod
+            let isTypeAlias = cls.isTypeAlias
+            let isConst = cls.isConst
             if isFeatures {
                 i = declaration_line_end(toks: read toks, start: read i)
             } else if isProfile {
@@ -230,14 +231,14 @@ fn main() -> Unit {
                     Set.insert<String>(set: mut types, value: read name)
                     i = r
                 }
-            } else if at_ident(toks: read toks, i: read i, wid: read 7) {
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_PROTOCOL) {
                 let r = parse_protocol_decl(toks: read toks, i: read i)
                 if r < 0 {
                     running = false
                 } else {
                     i = r
                 }
-            } else if at_ident(toks: read toks, i: read i, wid: read 8) {
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_IMPL) {
                 let r = parse_impl_decl(toks: read toks, i: read i)
                 if r < 0 {
                     running = false
@@ -265,14 +266,14 @@ fn main() -> Unit {
                 } else {
                     i = r
                 }
-            } else if at_ident(toks: read toks, i: read i, wid: read 10) {
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_MODULE) {
                 let r = parse_module_decl(toks: read toks, i: read i)
                 if r < 0 {
                     i = i + 1
                 } else {
                     i = r
                 }
-            } else if at_ident(toks: read toks, i: read i, wid: read 15) {
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_USE) {
                 let r = parse_use_decl(toks: read toks, i: read i)
                 if r < 0 {
                     i = i + 1

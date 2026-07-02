@@ -11,16 +11,17 @@
 
 // Map a Tok.kind int to the canonical KIND name.
 fn kind_name(k: read Int) -> String {
-    if k == 1 { return "Ident" }
-    if k == 2 { return "Number" }
-    if k == 3 { return "String" }
-    if k == 4 { return "InterpolatedString" }
-    if k == 5 { return "MultilineString" }
-    if k == 6 { return "Keyword" }
-    if k == 7 { return "Symbol" }
-    if k == 9 { return "Char" }
-    if k == 10 { return "Unknown" }
-    return "Eof"
+    if k == TOK_IDENT { return "Ident" }
+    if k == TOK_NUMBER { return "Number" }
+    if k == TOK_STRING { return "String" }
+    if k == TOK_INTERP { return "InterpolatedString" }
+    if k == TOK_MULTILINE { return "MultilineString" }
+    if k == TOK_KEYWORD { return "Keyword" }
+    if k == TOK_SYMBOL { return "Symbol" }
+    if k == TOK_EOF { return "Eof" }
+    if k == TOK_CHAR { return "Char" }
+    if k == TOK_UNKNOWN { return "Unknown" }
+    return "UnknownKind"
 }
 
 fn main() -> Unit {

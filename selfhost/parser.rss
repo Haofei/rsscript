@@ -71,23 +71,24 @@ fn main() -> Unit {
     while running {
         if i >= ntok {
             running = false
-        } else if tk_kind(toks: read toks, i: read i) == 8 {
+        } else if tk_kind(toks: read toks, i: read i) == TOK_EOF {
             running = false
         } else {
-            let isPub = at_ident(toks: read toks, i: read i, wid: read 13)
-            let isFeatures = at_ident(toks: read toks, i: read i, wid: read 17) && at_symbol(toks: read toks, i: read (i + 1), code: read 58)
-            let isProfile = at_ident(toks: read toks, i: read i, wid: read 16) && at_symbol(toks: read toks, i: read (i + 1), code: read 58)
-            let isSum = at_ident(toks: read toks, i: read i, wid: read 6) || (isPub && at_ident(toks: read toks, i: read (i + 1), wid: read 6))
-            let isNativeMod = at_ident(toks: read toks, i: read i, wid: read 9) && at_ident(toks: read toks, i: read (i + 1), wid: read 10)
-            let isTypeAlias = at_ident(toks: read toks, i: read i, wid: read 11) || (isPub && at_ident(toks: read toks, i: read (i + 1), wid: read 11))
-            let isConst = at_ident(toks: read toks, i: read i, wid: read 12) || (isPub && at_ident(toks: read toks, i: read (i + 1), wid: read 12))
+            let cls = classify_top(toks: read toks, i: read i)
+            let isPub = cls.isPub
+            let isFeatures = cls.isFeatures
+            let isProfile = cls.isProfile
+            let isSum = cls.isSum
+            let isNativeMod = cls.isNativeMod
+            let isTypeAlias = cls.isTypeAlias
+            let isConst = cls.isConst
             if isFeatures {
                 let fstart = i + 2
                 let fend = declaration_line_end(toks: read toks, start: read fstart)
                 let mut k = fstart
                 let mut ferr = -1
                 while k < fend {
-                    if at_symbol(toks: read toks, i: read k, code: read 44) {
+                    if at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
                         k = k + 1
                     } else {
                         if is_feature_tok(toks: read toks, i: read k) {
@@ -96,7 +97,7 @@ fn main() -> Unit {
                             }
                         } else {
                             let kd = tk_kind(toks: read toks, i: read k)
-                            if ferr < 0 && kd != 8 && kd != -1 {
+                            if ferr < 0 && kd != TOK_EOF && kd != -1 {
                                 ferr = k
                             }
                         }
@@ -130,7 +131,7 @@ fn main() -> Unit {
                 } else {
                     i = r
                 }
-            } else if at_ident(toks: read toks, i: read i, wid: read 7) {
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_PROTOCOL) {
                 let r = parse_protocol_decl(toks: read toks, i: read i)
                 if r < 0 {
                     errLine = tk_line(toks: read toks, i: read i)
@@ -139,7 +140,7 @@ fn main() -> Unit {
                 } else {
                     i = r
                 }
-            } else if at_ident(toks: read toks, i: read i, wid: read 8) {
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_IMPL) {
                 let r = parse_impl_decl(toks: read toks, i: read i)
                 if r < 0 {
                     errLine = tk_line(toks: read toks, i: read i)
@@ -175,14 +176,14 @@ fn main() -> Unit {
                 } else {
                     i = r
                 }
-            } else if at_ident(toks: read toks, i: read i, wid: read 10) {
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_MODULE) {
                 let r = parse_module_decl(toks: read toks, i: read i)
                 if r < 0 {
                     i = i + 1
                 } else {
                     i = r
                 }
-            } else if at_ident(toks: read toks, i: read i, wid: read 15) {
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_USE) {
                 let r = parse_use_decl(toks: read toks, i: read i)
                 if r < 0 {
                     i = i + 1

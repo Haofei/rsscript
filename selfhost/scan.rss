@@ -24,9 +24,9 @@
 
 features: local
 
-// Token kinds.
-//   1 Ident   2 Number   3 String   4 Interp   5 Multiline   6 Keyword
-//   7 Symbol  8 Eof  9 Char  10 Unknown
+// The unified token. `kind` is one of the TOK_* constants below; `val` carries
+// the symbol code (SYM_*) for symbols or the declaration-keyword id (WORD_*) for
+// idents/keywords.
 struct Tok {
     kind: Int
     val: Int
@@ -34,6 +34,75 @@ struct Tok {
     col: Int
     text: String
 }
+
+// --- Named ids (replace the raw numeric tables the scanner/parser/checker share).
+// These are the single source of truth for token kinds, symbol codes, and
+// declaration-keyword ids; every `kind`/`code:`/`wid:` site refers to one of them.
+
+// Token kinds (Tok.kind). 0 = "no token emitted this step" and -1 = "index past
+// end" are sentinels, NOT token kinds, so they stay as bare literals.
+const TOK_IDENT: Int = 1
+const TOK_NUMBER: Int = 2
+const TOK_STRING: Int = 3
+const TOK_INTERP: Int = 4
+const TOK_MULTILINE: Int = 5
+const TOK_KEYWORD: Int = 6
+const TOK_SYMBOL: Int = 7
+const TOK_EOF: Int = 8
+const TOK_CHAR: Int = 9
+const TOK_UNKNOWN: Int = 10
+
+// Symbol token codes (Tok.val when kind == TOK_SYMBOL): the ASCII code of the
+// single char, or a synthetic code for a multi-char operator.
+const SYM_HASH: Int = 35        // '#'
+const SYM_LPAREN: Int = 40      // '('
+const SYM_RPAREN: Int = 41      // ')'
+const SYM_STAR: Int = 42        // '*'
+const SYM_COMMA: Int = 44       // ','
+const SYM_DOT: Int = 46         // '.'
+const SYM_COLON: Int = 58       // ':'
+const SYM_LANGLE: Int = 60      // '<'
+const SYM_EQ: Int = 61          // '='
+const SYM_RANGLE: Int = 62      // '>'
+const SYM_LBRACKET: Int = 91    // '['
+const SYM_RBRACKET: Int = 93    // ']'
+const SYM_LBRACE: Int = 123     // '{'
+const SYM_RBRACE: Int = 125     // '}'
+const SYM_ARROW: Int = 256      // '->'
+const SYM_FATARROW: Int = 257   // '=>'
+
+// Declaration-keyword ids (word_id → Tok.val for the lead ident/keyword of a
+// top-level declaration). 0 means "not a declaration keyword".
+const WORD_FN: Int = 1
+const WORD_STRUCT: Int = 2
+const WORD_CLASS: Int = 3
+const WORD_RESOURCE: Int = 4
+const WORD_OPAQUE: Int = 5
+const WORD_SUM: Int = 6
+const WORD_PROTOCOL: Int = 7
+const WORD_IMPL: Int = 8
+const WORD_NATIVE: Int = 9
+const WORD_MODULE: Int = 10
+const WORD_TYPE: Int = 11
+const WORD_CONST: Int = 12
+const WORD_PUB: Int = 13
+const WORD_ASYNC: Int = 14
+const WORD_USE: Int = 15
+const WORD_PROFILE: Int = 16
+const WORD_FEATURES: Int = 17
+const WORD_FOR: Int = 18
+const WORD_DEPRECATED: Int = 19
+const WORD_LOWER_NAME: Int = 20
+const WORD_DERIVES: Int = 21
+const WORD_EFFECTS: Int = 22
+const WORD_FRESH: Int = 23
+const WORD_UNDERSCORE: Int = 24
+const WORD_AS: Int = 25
+const WORD_LOCAL: Int = 26
+const WORD_UNSAFE: Int = 27
+const WORD_DEVICE: Int = 28
+const WORD_FFI: Int = 29
+const WORD_REFLECTION: Int = 30
 
 // The 30 reserved keywords (crate::lexer::KEYWORDS). Contextual words
 // (await, native) and builtin constants (true false Ok Err Some None Unit)
@@ -407,7 +476,7 @@ fn tokenize(source: read String) -> fresh List<Tok> {
         } else if c == '"' && c1 == 34 && c2 == 34 {
             let cend = scan_multiline(chars: read chars, n: read n, i: read i)
             text = slice(chars: read chars, from: read (i + 3), to: read cend)
-            kind = 5
+            kind = TOK_MULTILINE
             let d0 = code_at(chars: read chars, n: read n, i: read cend)
             let d1 = code_at(chars: read chars, n: read n, i: read (cend + 1))
             let d2 = code_at(chars: read chars, n: read n, i: read (cend + 2))
@@ -419,7 +488,7 @@ fn tokenize(source: read String) -> fresh List<Tok> {
         } else if c == '$' && c1 == 34 {
             let cend = scan_interp(chars: read chars, n: read n, i: read i)
             text = slice(chars: read chars, from: read (i + 2), to: read cend)
-            kind = 4
+            kind = TOK_INTERP
             if code_at(chars: read chars, n: read n, i: read cend) == 34 {
                 j = cend + 1
             } else {
@@ -428,7 +497,7 @@ fn tokenize(source: read String) -> fresh List<Tok> {
         } else if c == '"' {
             let cend = scan_string(chars: read chars, n: read n, i: read i)
             text = slice(chars: read chars, from: read (i + 1), to: read cend)
-            kind = 3
+            kind = TOK_STRING
             if code_at(chars: read chars, n: read n, i: read cend) == 34 {
                 j = cend + 1
             } else {
@@ -437,7 +506,7 @@ fn tokenize(source: read String) -> fresh List<Tok> {
         } else if c == '\'' {
             let cend = scan_char(chars: read chars, n: read n, i: read i)
             text = slice(chars: read chars, from: read (i + 1), to: read cend)
-            kind = 9
+            kind = TOK_CHAR
             if code_at(chars: read chars, n: read n, i: read cend) == 39 {
                 j = cend + 1
             } else {
@@ -445,32 +514,32 @@ fn tokenize(source: read String) -> fresh List<Tok> {
             }
         } else if Char.is_digit(value: read c) {
             j = scan_number(chars: read chars, n: read n, i: read i)
-            kind = 2
+            kind = TOK_NUMBER
             text = slice(chars: read chars, from: read i, to: read j)
         } else if is_ident_start(c: read c) {
             j = scan_ident(chars: read chars, n: read n, i: read i)
             let word = slice(chars: read chars, from: read i, to: read j)
             if is_kw(word: read word) {
-                kind = 6
+                kind = TOK_KEYWORD
             } else {
-                kind = 1
+                kind = TOK_IDENT
             }
             val = word_id(word: read word)
             text = word
         } else if c == '-' && c1 == 62 {
             j = i + 2
-            kind = 7
-            val = 256
+            kind = TOK_SYMBOL
+            val = SYM_ARROW
             text = "->"
         } else if c == '=' && c1 == 62 {
             j = i + 2
-            kind = 7
-            val = 257
+            kind = TOK_SYMBOL
+            val = SYM_FATARROW
             text = "=>"
         } else {
             j = i + 1
             if is_known_symbol(c: read c) {
-                kind = 7
+                kind = TOK_SYMBOL
                 val = Char.to_code(value: read c)
                 text = Char.to_string(value: read c)
             } else {
@@ -478,7 +547,7 @@ fn tokenize(source: read String) -> fresh List<Tok> {
                 // raw char (kind 10), mirroring crate::lexer's TokenKind::Unknown.
                 // (Previously mapped to Symbol "?", which aliased a stray char to
                 // the try operator.)
-                kind = 10
+                kind = TOK_UNKNOWN
                 val = Char.to_code(value: read c)
                 text = Char.to_string(value: read c)
             }
@@ -501,7 +570,7 @@ fn tokenize(source: read String) -> fresh List<Tok> {
         }
         i = j
     }
-    let eof = Tok(kind: 8, val: 0, line: curLine, col: curCol, text: "")
+    let eof = Tok(kind: TOK_EOF, val: 0, line: curLine, col: curCol, text: "")
     List.push(list: mut toks, value: read eof)
     return toks
 }
@@ -548,7 +617,7 @@ fn at_ident(toks: read List<Tok>, i: read Int, wid: read Int) -> Bool {
 
 // at_symbol: token i is a Symbol with the given symbol code.
 fn at_symbol(toks: read List<Tok>, i: read Int, code: read Int) -> Bool {
-    if tk_kind(toks: read toks, i: read i) == 7 {
+    if tk_kind(toks: read toks, i: read i) == TOK_SYMBOL {
         return tk_val(toks: read toks, i: read i) == code
     }
     return false
@@ -593,7 +662,7 @@ fn declaration_line_end(toks: read List<Tok>, start: read Int) -> Int {
         if tk_line(toks: read toks, i: read idx) > line {
             return idx
         }
-        if tk_kind(toks: read toks, i: read idx) == 8 {
+        if tk_kind(toks: read toks, i: read idx) == TOK_EOF {
             return idx
         }
         idx = idx + 1
@@ -636,17 +705,17 @@ fn function_signature_end(toks: read List<Tok>, start: read Int) -> Int {
     let mut depth = 0
     let mut idx = start
     while idx < n {
-        if depth == 0 && at_symbol(toks: read toks, i: read idx, code: read 123) {
+        if depth == 0 && at_symbol(toks: read toks, i: read idx, code: read SYM_LBRACE) {
             return idx
         }
-        if depth == 0 && at_symbol(toks: read toks, i: read idx, code: read 125) {
+        if depth == 0 && at_symbol(toks: read toks, i: read idx, code: read SYM_RBRACE) {
             return idx
         }
         if idx > start && depth == 0 && starts_top_level_item(toks: read toks, index: read idx) {
             return idx
         }
-        let opener = at_symbol(toks: read toks, i: read idx, code: read 40) || at_symbol(toks: read toks, i: read idx, code: read 91) || at_symbol(toks: read toks, i: read idx, code: read 60)
-        let closer = at_symbol(toks: read toks, i: read idx, code: read 41) || at_symbol(toks: read toks, i: read idx, code: read 93) || at_symbol(toks: read toks, i: read idx, code: read 62)
+        let opener = at_symbol(toks: read toks, i: read idx, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read idx, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read idx, code: read SYM_LANGLE)
+        let closer = at_symbol(toks: read toks, i: read idx, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read idx, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read idx, code: read SYM_RANGLE)
         if opener {
             depth = depth + 1
         } else if closer {
@@ -654,7 +723,7 @@ fn function_signature_end(toks: read List<Tok>, start: read Int) -> Int {
                 depth = depth - 1
             }
         }
-        if tk_kind(toks: read toks, i: read idx) == 8 {
+        if tk_kind(toks: read toks, i: read idx) == TOK_EOF {
             return idx
         }
         idx = idx + 1
@@ -680,7 +749,7 @@ fn take_function_name(toks: read List<Tok>, i: read Int) -> Int {
     }
     let mut going = true
     while going {
-        if at_symbol(toks: read toks, i: read j, code: read 46) {
+        if at_symbol(toks: read toks, i: read j, code: read SYM_DOT) {
             let j2 = take_ident_name(toks: read toks, i: read (j + 1))
             if j2 < 0 {
                 return -1
@@ -694,10 +763,10 @@ fn take_function_name(toks: read List<Tok>, i: read Int) -> Int {
 }
 
 fn parse_generic_params(toks: read List<Tok>, i: read Int) -> Int {
-    if at_symbol(toks: read toks, i: read i, code: read 60) == false {
+    if at_symbol(toks: read toks, i: read i, code: read SYM_LANGLE) == false {
         return i
     }
-    let close = find_matching(toks: read toks, open: read i, openSym: read 60, closeSym: read 62)
+    let close = find_matching(toks: read toks, open: read i, openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
     if close < 0 {
         return i
     }
@@ -705,14 +774,14 @@ fn parse_generic_params(toks: read List<Tok>, i: read Int) -> Int {
 }
 
 fn parse_derives(toks: read List<Tok>, i: read Int) -> Int {
-    if at_ident(toks: read toks, i: read i, wid: read 21) == false {
+    if at_ident(toks: read toks, i: read i, wid: read WORD_DERIVES) == false {
         return i
     }
     let j = i + 1
-    if at_symbol(toks: read toks, i: read j, code: read 40) == false {
+    if at_symbol(toks: read toks, i: read j, code: read SYM_LPAREN) == false {
         return j
     }
-    let close = find_matching(toks: read toks, open: read j, openSym: read 40, closeSym: read 41)
+    let close = find_matching(toks: read toks, open: read j, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
     if close < 0 {
         return j
     }
@@ -726,13 +795,13 @@ fn parse_derives(toks: read List<Tok>, i: read Int) -> Int {
 fn parse_type_decl(toks: read List<Tok>, i: read Int) -> Int {
     let startLine = tk_line(toks: read toks, i: read i)
     let mut j = i
-    if at_ident(toks: read toks, i: read j, wid: read 13) {
+    if at_ident(toks: read toks, i: read j, wid: read WORD_PUB) {
         j = j + 1
     }
-    if at_ident(toks: read toks, i: read j, wid: read 5) {
+    if at_ident(toks: read toks, i: read j, wid: read WORD_OPAQUE) {
         j = j + 1
     }
-    let isKind = at_ident(toks: read toks, i: read j, wid: read 3) || at_ident(toks: read toks, i: read j, wid: read 2) || at_ident(toks: read toks, i: read j, wid: read 4)
+    let isKind = at_ident(toks: read toks, i: read j, wid: read WORD_CLASS) || at_ident(toks: read toks, i: read j, wid: read WORD_STRUCT) || at_ident(toks: read toks, i: read j, wid: read WORD_RESOURCE)
     if isKind == false {
         return -1
     }
@@ -743,8 +812,8 @@ fn parse_type_decl(toks: read List<Tok>, i: read Int) -> Int {
     }
     j = parse_generic_params(toks: read toks, i: read j)
     j = parse_derives(toks: read toks, i: read j)
-    if at_symbol(toks: read toks, i: read j, code: read 123) {
-        let close = find_matching(toks: read toks, open: read j, openSym: read 123, closeSym: read 125)
+    if at_symbol(toks: read toks, i: read j, code: read SYM_LBRACE) {
+        let close = find_matching(toks: read toks, open: read j, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
         if close < 0 {
             return -1
         }
@@ -759,10 +828,10 @@ fn parse_type_decl(toks: read List<Tok>, i: read Int) -> Int {
 
 fn parse_sum_decl(toks: read List<Tok>, i: read Int) -> Int {
     let mut j = i
-    if at_ident(toks: read toks, i: read j, wid: read 13) {
+    if at_ident(toks: read toks, i: read j, wid: read WORD_PUB) {
         j = j + 1
     }
-    if at_ident(toks: read toks, i: read j, wid: read 6) == false {
+    if at_ident(toks: read toks, i: read j, wid: read WORD_SUM) == false {
         return -1
     }
     j = j + 1
@@ -772,10 +841,10 @@ fn parse_sum_decl(toks: read List<Tok>, i: read Int) -> Int {
     }
     j = parse_generic_params(toks: read toks, i: read j)
     j = parse_derives(toks: read toks, i: read j)
-    if at_symbol(toks: read toks, i: read j, code: read 123) == false {
+    if at_symbol(toks: read toks, i: read j, code: read SYM_LBRACE) == false {
         return -1
     }
-    let close = find_matching(toks: read toks, open: read j, openSym: read 123, closeSym: read 125)
+    let close = find_matching(toks: read toks, open: read j, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
     if close < 0 {
         return -1
     }
@@ -788,10 +857,10 @@ fn parse_protocol_decl(toks: read List<Tok>, i: read Int) -> Int {
     if j < 0 {
         return -1
     }
-    if at_symbol(toks: read toks, i: read j, code: read 123) == false {
+    if at_symbol(toks: read toks, i: read j, code: read SYM_LBRACE) == false {
         return -1
     }
-    let close = find_matching(toks: read toks, open: read j, openSym: read 123, closeSym: read 125)
+    let close = find_matching(toks: read toks, open: read j, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
     if close < 0 {
         return -1
     }
@@ -804,7 +873,7 @@ fn parse_impl_decl(toks: read List<Tok>, i: read Int) -> Int {
     if j < 0 {
         return -1
     }
-    if at_ident(toks: read toks, i: read j, wid: read 18) == false {
+    if at_ident(toks: read toks, i: read j, wid: read WORD_FOR) == false {
         return -1
     }
     j = j + 1
@@ -812,10 +881,10 @@ fn parse_impl_decl(toks: read List<Tok>, i: read Int) -> Int {
     if j < 0 {
         return -1
     }
-    if at_symbol(toks: read toks, i: read j, code: read 123) == false {
+    if at_symbol(toks: read toks, i: read j, code: read SYM_LBRACE) == false {
         return -1
     }
-    let close = find_matching(toks: read toks, open: read j, openSym: read 123, closeSym: read 125)
+    let close = find_matching(toks: read toks, open: read j, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
     if close < 0 {
         return -1
     }
@@ -828,10 +897,10 @@ fn parse_native_module_decl(toks: read List<Tok>, i: read Int) -> Int {
     if j < 0 {
         return -1
     }
-    if at_symbol(toks: read toks, i: read j, code: read 123) == false {
+    if at_symbol(toks: read toks, i: read j, code: read SYM_LBRACE) == false {
         return -1
     }
-    let close = find_matching(toks: read toks, open: read j, openSym: read 123, closeSym: read 125)
+    let close = find_matching(toks: read toks, open: read j, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
     if close < 0 {
         return -1
     }
@@ -840,10 +909,10 @@ fn parse_native_module_decl(toks: read List<Tok>, i: read Int) -> Int {
 
 fn parse_type_alias_decl(toks: read List<Tok>, i: read Int) -> Int {
     let mut j = i
-    if at_ident(toks: read toks, i: read j, wid: read 13) {
+    if at_ident(toks: read toks, i: read j, wid: read WORD_PUB) {
         j = j + 1
     }
-    if at_ident(toks: read toks, i: read j, wid: read 11) == false {
+    if at_ident(toks: read toks, i: read j, wid: read WORD_TYPE) == false {
         return -1
     }
     j = j + 1
@@ -852,23 +921,23 @@ fn parse_type_alias_decl(toks: read List<Tok>, i: read Int) -> Int {
         return -1
     }
     j = parse_generic_params(toks: read toks, i: read j)
-    if at_symbol(toks: read toks, i: read j, code: read 61) == false {
+    if at_symbol(toks: read toks, i: read j, code: read SYM_EQ) == false {
         return -1
     }
     j = j + 1
     let n = List.len(list: read toks)
     // The type reference itself is recognize-and-skipped: parse_type_ref only
-    // rejects on shapes no accepted corpus file (and none of the 15 rejects) hit.
+    // rejects on shapes no accepted corpus file (nor any rejected-corpus file) hit.
     return next_line_or_block_end(toks: read toks, start: read j, end: read n)
 }
 
 fn parse_const_decl(toks: read List<Tok>, i: read Int) -> Int {
     let n = List.len(list: read toks)
     let mut j = i
-    if at_ident(toks: read toks, i: read j, wid: read 13) {
+    if at_ident(toks: read toks, i: read j, wid: read WORD_PUB) {
         j = j + 1
     }
-    if at_ident(toks: read toks, i: read j, wid: read 12) == false {
+    if at_ident(toks: read toks, i: read j, wid: read WORD_CONST) == false {
         return -1
     }
     j = j + 1
@@ -876,14 +945,14 @@ fn parse_const_decl(toks: read List<Tok>, i: read Int) -> Int {
     if j < 0 {
         return -1
     }
-    if at_symbol(toks: read toks, i: read j, code: read 58) {
+    if at_symbol(toks: read toks, i: read j, code: read SYM_COLON) {
         j = j + 1
         let mut eq = j
         let mut scanning = true
         while scanning {
             if eq >= n {
                 scanning = false
-            } else if at_symbol(toks: read toks, i: read eq, code: read 61) {
+            } else if at_symbol(toks: read toks, i: read eq, code: read SYM_EQ) {
                 scanning = false
             } else {
                 eq = eq + 1
@@ -891,12 +960,12 @@ fn parse_const_decl(toks: read List<Tok>, i: read Int) -> Int {
         }
         j = eq
     }
-    if at_symbol(toks: read toks, i: read j, code: read 61) == false {
+    if at_symbol(toks: read toks, i: read j, code: read SYM_EQ) == false {
         return -1
     }
     j = j + 1
     // Value expression recognize-and-skipped (parse_expr cannot reject any file
-    // in the corpus that the oracle accepts, nor any of the 15 rejects).
+    // in the corpus that the oracle accepts, nor any rejected-corpus file).
     return next_line_or_block_end(toks: read toks, start: read j, end: read n)
 }
 
@@ -905,22 +974,22 @@ fn parse_function_decl(toks: read List<Tok>, i: read Int) -> Int {
     // Attributes: #deprecated("...") / #lower_name("...").
     let mut attrs = true
     while attrs {
-        if at_symbol(toks: read toks, i: read j, code: read 35) {
+        if at_symbol(toks: read toks, i: read j, code: read SYM_HASH) {
             j = j + 1
-            let isAttr = at_ident(toks: read toks, i: read j, wid: read 19) || at_ident(toks: read toks, i: read j, wid: read 20)
+            let isAttr = at_ident(toks: read toks, i: read j, wid: read WORD_DEPRECATED) || at_ident(toks: read toks, i: read j, wid: read WORD_LOWER_NAME)
             if isAttr == false {
                 return -1
             }
             j = j + 1
-            if at_symbol(toks: read toks, i: read j, code: read 40) == false {
+            if at_symbol(toks: read toks, i: read j, code: read SYM_LPAREN) == false {
                 return -1
             }
             j = j + 1
-            if tk_kind(toks: read toks, i: read j) != 3 {
+            if tk_kind(toks: read toks, i: read j) != TOK_STRING {
                 return -1
             }
             j = j + 1
-            if at_symbol(toks: read toks, i: read j, code: read 41) == false {
+            if at_symbol(toks: read toks, i: read j, code: read SYM_RPAREN) == false {
                 return -1
             }
             j = j + 1
@@ -931,14 +1000,14 @@ fn parse_function_decl(toks: read List<Tok>, i: read Int) -> Int {
     // Modifiers: pub / async / native.
     let mut mods = true
     while mods {
-        let isMod = at_ident(toks: read toks, i: read j, wid: read 13) || at_ident(toks: read toks, i: read j, wid: read 14) || at_ident(toks: read toks, i: read j, wid: read 9)
+        let isMod = at_ident(toks: read toks, i: read j, wid: read WORD_PUB) || at_ident(toks: read toks, i: read j, wid: read WORD_ASYNC) || at_ident(toks: read toks, i: read j, wid: read WORD_NATIVE)
         if isMod {
             j = j + 1
         } else {
             mods = false
         }
     }
-    if at_ident(toks: read toks, i: read j, wid: read 1) == false {
+    if at_ident(toks: read toks, i: read j, wid: read WORD_FN) == false {
         return -1
     }
     j = j + 1
@@ -947,22 +1016,22 @@ fn parse_function_decl(toks: read List<Tok>, i: read Int) -> Int {
         return -1
     }
     j = parse_generic_params(toks: read toks, i: read j)
-    if at_symbol(toks: read toks, i: read j, code: read 40) {
-        let close = find_matching(toks: read toks, open: read j, openSym: read 40, closeSym: read 41)
+    if at_symbol(toks: read toks, i: read j, code: read SYM_LPAREN) {
+        let close = find_matching(toks: read toks, open: read j, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
         if close < 0 {
             return -1
         }
         j = close + 1
     }
     let sigEnd = function_signature_end(toks: read toks, start: read j)
-    if j < sigEnd && at_symbol(toks: read toks, i: read j, code: read 256) {
+    if j < sigEnd && at_symbol(toks: read toks, i: read j, code: read SYM_ARROW) {
         j = j + 1
-        if j < sigEnd && at_ident(toks: read toks, i: read j, wid: read 23) {
+        if j < sigEnd && at_ident(toks: read toks, i: read j, wid: read WORD_FRESH) {
             j = j + 1
         }
         let mut rt = true
         while rt {
-            let stop = at_ident(toks: read toks, i: read j, wid: read 22) || at_symbol(toks: read toks, i: read j, code: read 123) || at_symbol(toks: read toks, i: read j, code: read 61)
+            let stop = at_ident(toks: read toks, i: read j, wid: read WORD_EFFECTS) || at_symbol(toks: read toks, i: read j, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read j, code: read SYM_EQ)
             if j < sigEnd && stop == false {
                 j = j + 1
             } else {
@@ -970,19 +1039,19 @@ fn parse_function_decl(toks: read List<Tok>, i: read Int) -> Int {
             }
         }
     }
-    if j < sigEnd && at_ident(toks: read toks, i: read j, wid: read 22) && at_symbol(toks: read toks, i: read (j + 1), code: read 40) {
+    if j < sigEnd && at_ident(toks: read toks, i: read j, wid: read WORD_EFFECTS) && at_symbol(toks: read toks, i: read (j + 1), code: read SYM_LPAREN) {
         let open = j + 1
-        let close = find_matching(toks: read toks, open: read open, openSym: read 40, closeSym: read 41)
+        let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
         if close < 0 {
             return -1
         }
         j = close + 1
     }
-    if j + 1 < sigEnd && at_symbol(toks: read toks, i: read j, code: read 61) && at_ident(toks: read toks, i: read (j + 1), wid: read 24) {
+    if j + 1 < sigEnd && at_symbol(toks: read toks, i: read j, code: read SYM_EQ) && at_ident(toks: read toks, i: read (j + 1), wid: read WORD_UNDERSCORE) {
         j = j + 2
     }
-    if at_symbol(toks: read toks, i: read j, code: read 123) {
-        let close = find_matching(toks: read toks, open: read j, openSym: read 123, closeSym: read 125)
+    if at_symbol(toks: read toks, i: read j, code: read SYM_LBRACE) {
+        let close = find_matching(toks: read toks, open: read j, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
         if close < 0 {
             return -1
         }
@@ -999,7 +1068,7 @@ fn parse_dotted_path(toks: read List<Tok>, i: read Int) -> Int {
     }
     let mut going = true
     while going {
-        if at_symbol(toks: read toks, i: read j, code: read 46) {
+        if at_symbol(toks: read toks, i: read j, code: read SYM_DOT) {
             let j2 = take_ident_name(toks: read toks, i: read (j + 1))
             if j2 < 0 {
                 going = false
@@ -1022,9 +1091,9 @@ fn parse_use_decl(toks: read List<Tok>, i: read Int) -> Int {
     if j < 0 {
         return -1
     }
-    if at_symbol(toks: read toks, i: read j, code: read 42) {
+    if at_symbol(toks: read toks, i: read j, code: read SYM_STAR) {
         j = j + 1
-    } else if at_ident(toks: read toks, i: read j, wid: read 25) {
+    } else if at_ident(toks: read toks, i: read j, wid: read WORD_AS) {
         j = j + 1
         let j2 = take_ident_name(toks: read toks, i: read j)
         if j2 >= 0 {
@@ -1039,15 +1108,40 @@ fn parse_use_decl(toks: read List<Tok>, i: read Int) -> Int {
 // ---------------------------------------------------------------------------
 
 fn starts_type_decl(toks: read List<Tok>, i: read Int, isPub: read Bool) -> Bool {
-    if at_ident(toks: read toks, i: read i, wid: read 3) || at_ident(toks: read toks, i: read i, wid: read 2) || at_ident(toks: read toks, i: read i, wid: read 4) || at_ident(toks: read toks, i: read i, wid: read 5) {
+    if at_ident(toks: read toks, i: read i, wid: read WORD_CLASS) || at_ident(toks: read toks, i: read i, wid: read WORD_STRUCT) || at_ident(toks: read toks, i: read i, wid: read WORD_RESOURCE) || at_ident(toks: read toks, i: read i, wid: read WORD_OPAQUE) {
         return true
     }
     if isPub {
-        return at_ident(toks: read toks, i: read (i + 1), wid: read 3) || at_ident(toks: read toks, i: read (i + 1), wid: read 2) || at_ident(toks: read toks, i: read (i + 1), wid: read 4) || at_ident(toks: read toks, i: read (i + 1), wid: read 5)
+        return at_ident(toks: read toks, i: read (i + 1), wid: read WORD_CLASS) || at_ident(toks: read toks, i: read (i + 1), wid: read WORD_STRUCT) || at_ident(toks: read toks, i: read (i + 1), wid: read WORD_RESOURCE) || at_ident(toks: read toks, i: read (i + 1), wid: read WORD_OPAQUE)
     }
     return false
 }
 
 fn starts_fn_like(toks: read List<Tok>, i: read Int, isPub: read Bool) -> Bool {
-    return isPub || at_ident(toks: read toks, i: read i, wid: read 14) || at_ident(toks: read toks, i: read i, wid: read 9) || at_ident(toks: read toks, i: read i, wid: read 1) || at_symbol(toks: read toks, i: read i, code: read 35)
+    return isPub || at_ident(toks: read toks, i: read i, wid: read WORD_ASYNC) || at_ident(toks: read toks, i: read i, wid: read WORD_NATIVE) || at_ident(toks: read toks, i: read i, wid: read WORD_FN) || at_symbol(toks: read toks, i: read i, code: read SYM_HASH)
+}
+
+// Top-level declaration classification shared by the parser and the checker
+// drivers, which both dispatch on exactly these predicates at token `i`. Keeping
+// the logic here (rather than duplicated in each `main`) is the single source of
+// truth so the two drivers can never drift as more declaration forms are added.
+struct TopClass {
+    isPub: Bool
+    isFeatures: Bool
+    isProfile: Bool
+    isSum: Bool
+    isNativeMod: Bool
+    isTypeAlias: Bool
+    isConst: Bool
+}
+
+fn classify_top(toks: read List<Tok>, i: read Int) -> TopClass {
+    let isPub = at_ident(toks: read toks, i: read i, wid: read WORD_PUB)
+    let isFeatures = at_ident(toks: read toks, i: read i, wid: read WORD_FEATURES) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_COLON)
+    let isProfile = at_ident(toks: read toks, i: read i, wid: read WORD_PROFILE) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_COLON)
+    let isSum = at_ident(toks: read toks, i: read i, wid: read WORD_SUM) || (isPub && at_ident(toks: read toks, i: read (i + 1), wid: read WORD_SUM))
+    let isNativeMod = at_ident(toks: read toks, i: read i, wid: read WORD_NATIVE) && at_ident(toks: read toks, i: read (i + 1), wid: read WORD_MODULE)
+    let isTypeAlias = at_ident(toks: read toks, i: read i, wid: read WORD_TYPE) || (isPub && at_ident(toks: read toks, i: read (i + 1), wid: read WORD_TYPE))
+    let isConst = at_ident(toks: read toks, i: read i, wid: read WORD_CONST) || (isPub && at_ident(toks: read toks, i: read (i + 1), wid: read WORD_CONST))
+    return TopClass(isPub: isPub, isFeatures: isFeatures, isProfile: isProfile, isSum: isSum, isNativeMod: isNativeMod, isTypeAlias: isTypeAlias, isConst: isConst)
 }
