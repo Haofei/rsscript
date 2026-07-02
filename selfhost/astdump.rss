@@ -745,6 +745,10 @@ fn emit_primary(toks: read List<Tok>, start: read Int, end: read Int, d: read In
             emit(depth: read d, s: read String.concat(left: read "multiline ", right: read escape(s: read t)))
             return Unit
         }
+        if k == TOK_INTERP {
+            emit_interp(text: read t, d: read d)
+            return Unit
+        }
         // Ident or keyword-as-ident (true/false/etc lex as ident).
         emit(depth: read d, s: read String.concat(left: read "ident ", right: read escape(s: read t)))
         return Unit
@@ -774,6 +778,114 @@ fn emit_primary(toks: read List<Tok>, start: read Int, end: read Int, d: read In
     }
     emit(depth: read d, s: read "unknown-expr")
     return Unit
+}
+
+// Interpolated string `"...{expr}..."` desugars to
+// String.format(template: read "<{}-collapsed>", args: read [<exprs>]).
+// Mirrors parse_interpolated_string_parts. The only unreproducible case is a
+// syntactically-invalid embedded expr (emit_expr can't signal parse failure), so
+// `malformed` is set only for an unterminated `{` — a documented residual.
+fn emit_interp(text: read String, d: read Int) -> Unit {
+    local tmpl = StringBuilder.new()
+    local items = List.new()
+    let mut malformed = false
+    let cs = String.chars(value: read text)
+    let n = List.len(list: read cs)
+    let mut i = 0
+    while i < n {
+        let c = code_at(chars: read cs, n: read n, i: read i)
+        if c == 92 {
+            // backslash: copy it and the next char verbatim (escaped later).
+            StringBuilder.push(builder: mut tmpl, value: read Char.to_string(value: read List.get(list: read cs, index: read i)))
+            i = i + 1
+            if i < n {
+                StringBuilder.push(builder: mut tmpl, value: read Char.to_string(value: read List.get(list: read cs, index: read i)))
+                i = i + 1
+            }
+        } else if c == 123 && code_at(chars: read cs, n: read n, i: read (i + 1)) == 123 {
+            StringBuilder.push(builder: mut tmpl, value: read "{{"); i = i + 2
+        } else if c == 125 && code_at(chars: read cs, n: read n, i: read (i + 1)) == 125 {
+            StringBuilder.push(builder: mut tmpl, value: read "}}"); i = i + 2
+        } else if c == 123 {
+            let close = interp_end(cs: read cs, n: read n, start: read (i + 1))
+            if close < 0 {
+                malformed = true
+                StringBuilder.push(builder: mut tmpl, value: read "{")
+                i = i + 1
+            } else {
+                StringBuilder.push(builder: mut tmpl, value: read "{}")
+                List.push(list: mut items, value: read slice(chars: read cs, from: read (i + 1), to: read close))
+                i = close + 1
+            }
+        } else if c == 125 {
+            StringBuilder.push(builder: mut tmpl, value: read "}}"); i = i + 1
+        } else {
+            StringBuilder.push(builder: mut tmpl, value: read Char.to_string(value: read List.get(list: read cs, index: read i)))
+            i = i + 1
+        }
+    }
+    let template = StringBuilder.finish(builder: take tmpl)
+    let mut suffix = ""
+    if malformed { suffix = " malformed=true" }
+    emit(depth: read d, s: read "call")
+    emit(depth: read (d + 1), s: read "callee-qualified namespace=String name=format")
+    emit(depth: read (d + 1), s: read String.concat(left: read "arg name=template", right: read suffix))
+    emit(depth: read (d + 2), s: read "effect kind=read")
+    emit(depth: read (d + 3), s: read String.concat(left: read "string ", right: read escape(s: read template)))
+    emit(depth: read (d + 1), s: read String.concat(left: read "arg name=args", right: read suffix))
+    emit(depth: read (d + 2), s: read "effect kind=read")
+    emit(depth: read (d + 3), s: read "array")
+    let m = List.len(list: read items)
+    let mut j = 0
+    while j < m {
+        let subToks = tokenize(source: read List.get(list: read items, index: read j))
+        let stop = first_eof(toks: read subToks)
+        emit_expr(toks: read subToks, start: read 0, end: read stop, d: read (d + 4))
+        j = j + 1
+    }
+    return Unit
+}
+
+// Matching top-level `}` for an interpolation opening at `start`, or -1. Mirrors
+// find_interpolation_end (skips string literals; `([{` nest, `)]` and `}` close).
+fn interp_end(cs: read List<Char>, n: read Int, start: read Int) -> Int {
+    let mut i = start
+    let mut depth = 0
+    while i < n {
+        let c = code_at(chars: read cs, n: read n, i: read i)
+        if c == 34 {
+            i = i + 1
+            let mut inStr = true
+            while i < n && inStr {
+                let sc = code_at(chars: read cs, n: read n, i: read i)
+                if sc == 92 { i = i + 2 }
+                else if sc == 34 { i = i + 1; inStr = false }
+                else { i = i + 1 }
+            }
+        } else if c == 40 || c == 91 || c == 123 {
+            depth = depth + 1; i = i + 1
+        } else if c == 41 || c == 93 {
+            if depth > 0 { depth = depth - 1 }
+            i = i + 1
+        } else if c == 125 {
+            if depth == 0 { return i }
+            depth = depth - 1; i = i + 1
+        } else {
+            i = i + 1
+        }
+    }
+    return -1
+}
+
+// Index of the first TOK_EOF in a freshly tokenized list (its logical end).
+fn first_eof(toks: read List<Tok>) -> Int {
+    let m = List.len(list: read toks)
+    let mut i = 0
+    while i < m {
+        if tk_kind(toks: read toks, i: read i) == TOK_EOF { return i }
+        i = i + 1
+    }
+    return m
 }
 
 // `{ "field": v, ... }` (object) or `{ k => v, ... }` (map). A top-level `=>` in

@@ -1,0 +1,3 @@
+fn greet(name: read String, count: read Int) -> String {
+    return $"hi {name}, you have {count} left {{brace}}"
+}
