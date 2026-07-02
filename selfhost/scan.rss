@@ -32,6 +32,7 @@ struct Tok {
     val: Int
     line: Int
     col: Int
+    len: Int
     text: String
 }
 
@@ -559,7 +560,7 @@ fn tokenize(source: read String) -> fresh List<Tok> {
             }
         }
         if kind != 0 {
-            let t = Tok(kind: kind, val: val, line: startLine, col: startCol, text: text)
+            let t = Tok(kind: kind, val: val, line: startLine, col: startCol, len: (j - i), text: text)
             List.push(list: mut toks, value: read t)
         }
         // Advance line/col over the consumed span [i, j).
@@ -576,7 +577,7 @@ fn tokenize(source: read String) -> fresh List<Tok> {
         }
         i = j
     }
-    let eof = Tok(kind: TOK_EOF, val: 0, line: curLine, col: curCol, text: "")
+    let eof = Tok(kind: TOK_EOF, val: 0, line: curLine, col: curCol, len: 0, text: "")
     List.push(list: mut toks, value: read eof)
     return toks
 }
