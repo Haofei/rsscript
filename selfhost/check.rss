@@ -869,7 +869,7 @@ fn fn_pure_bad(toks: read List<Tok>, start: read Int, resources: read Set<String
 
 // Pre-pass filling RS0009 lookup sets: user resource type names, sum variant
 // names, pure fn (simple) names, and all fn (simple) names.
-fn collect_rs0009(toks: read List<Tok>, resources: mut Set<String>, sumVariants: mut Set<String>, pureFns: mut Set<String>, allFns: mut Set<String>, noBlockFns: mut Set<String>, noPanicFns: mut Set<String>) -> Unit {
+fn collect_rs0009(toks: read List<Tok>, resources: mut Set<String>, sumVariants: mut Set<String>, pureFns: mut Set<String>, allFns: mut Set<String>, noBlockFns: mut Set<String>, noPanicFns: mut Set<String>, asyncFns: mut Set<String>) -> Unit {
     let ntok = List.len(list: read toks)
     let mut i = 0
     let mut running = true
@@ -956,6 +956,9 @@ fn collect_rs0009(toks: read List<Tok>, resources: mut Set<String>, sumVariants:
                         }
                         if fn_has_named_effect(toks: read toks, start: read i, effName: read "no_panic") {
                             Set.insert<String>(set: mut noPanicFns, value: read fname)
+                        }
+                        if fn_is_async(toks: read toks, start: read i) {
+                            Set.insert<String>(set: mut asyncFns, value: read fname)
                         }
                     }
                     i = r
@@ -2169,6 +2172,44 @@ fn fn_has_fd_surface(toks: read List<Tok>, start: read Int) -> Bool {
     return hit
 }
 
+// ---------------------------------------------------------------------------
+// RS0022 ASYNC_CALL_NOT_CONSUMED (signature-table decidable).
+//
+// A call whose callee resolves to a same-file `async fn` must be consumed: it is
+// the direct operand of `await` or `spawn`, or the RHS of an `async let` binding.
+// A bare/`let`-bound async call is unconsumed (check_async_call_consumed). Only
+// same-file async fns register a signature; stdlib/native fns are never async, so
+// qualified/receiver calls (`Ns.method(...)`) never resolve to an async signature
+// and are skipped. Consumption threads through the AST, but the corpus only ever
+// consumes an async call as the immediate `await`/`spawn` operand or `async let`
+// RHS, so a token-adjacency probe is exact here.
+// ---------------------------------------------------------------------------
+
+fn has_unconsumed_async_call(toks: read List<Tok>, asyncFns: read Set<String>) -> Bool {
+    let n = List.len(list: read toks)
+    let mut i = 0
+    let mut hit = false
+    while i < n {
+        let isCall = is_ident_tok(toks: read toks, i: read i) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_LPAREN)
+        if isCall && Set.contains<String>(set: read asyncFns, value: read tk_text(toks: read toks, i: read i)) {
+            // A method call (`x.name(...)`) or the fn's own declaration (`fn name(`)
+            // is not a resolvable unqualified async call site.
+            let prevDot = at_symbol(toks: read toks, i: read (i - 1), code: read SYM_DOT)
+            let prevFn = at_ident(toks: read toks, i: read (i - 1), wid: read WORD_FN)
+            if prevDot == false && prevFn == false {
+                let awaited = is_kw_text(toks: read toks, i: read (i - 1), word: read "await")
+                let spawned = is_kw_text(toks: read toks, i: read (i - 1), word: read "spawn")
+                let asyncLet = at_symbol(toks: read toks, i: read (i - 1), code: read SYM_EQ) && is_kw_text(toks: read toks, i: read (i - 3), word: read "let") && at_ident(toks: read toks, i: read (i - 4), wid: read WORD_ASYNC)
+                if awaited == false && spawned == false && asyncLet == false {
+                    hit = true
+                }
+            }
+        }
+        i = i + 1
+    }
+    return hit
+}
+
 // A param segment's type region [segStart+2, segEnd) names `Fd`.
 fn seg_type_has_fd(toks: read List<Tok>, segStart: read Int, segEnd: read Int) -> Bool {
     if (segStart + 2) >= segEnd { return false }
@@ -2488,7 +2529,11 @@ fn main() -> Unit {
     let mut allFns = Set<String>.new()
     let mut noBlockFns = Set<String>.new()
     let mut noPanicFns = Set<String>.new()
-    collect_rs0009(toks: read toks, resources: mut resources, sumVariants: mut sumVariants, pureFns: mut pureFns, allFns: mut allFns, noBlockFns: mut noBlockFns, noPanicFns: mut noPanicFns)
+    // Signature table (cross-function): same-file async fn names, for RS0022.
+    let mut asyncFns = Set<String>.new()
+    collect_rs0009(toks: read toks, resources: mut resources, sumVariants: mut sumVariants, pureFns: mut pureFns, allFns: mut allFns, noBlockFns: mut noBlockFns, noPanicFns: mut noPanicFns, asyncFns: mut asyncFns)
+    // RS0022: an unconsumed call to a same-file async fn.
+    let asyncNotConsumed = has_unconsumed_async_call(toks: read toks, asyncFns: read asyncFns)
     // RS0033: any decimal integer literal in the file that overflows i64.
     let outOfRangeInt = has_out_of_range_int(toks: read toks)
     let mut i = 0
@@ -2731,6 +2776,9 @@ fn main() -> Unit {
     if badAwait {
         Log.write(message: read "RS0029")
     }
+    if asyncNotConsumed {
+        Log.write(message: read "RS0022")
+    }
     if fdSurface {
         Log.write(message: read "RS0023")
     }
@@ -2764,7 +2812,7 @@ fn main() -> Unit {
     if headerCount >= 2 {
         Log.write(message: read "RS0006")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
