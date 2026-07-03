@@ -868,6 +868,30 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   across all backends; RS0037 removed as a restriction and repurposed for arity;
   spec §20.1 amended.
 
+### SH-027 — AST-dump parity COMPLETE: streaming rss producer at 619/619 byte-exact
+
+- **Context:** completes the SH-025 AST-structure arm (step 1 of the 3-step
+  frontend-object-parity goal). The self-hosted streaming producer
+  (`selfhost/astdump.rss`) now matches the Rust oracle (`parse_source_raw` via
+  `crate::selfhost_parity`) **byte-for-byte over the ENTIRE corpus**.
+- **Reach:** **619 / 619** corpus files byte-exact (**100%**), **0 run-failures**.
+  `AST_CORPUS_PARITY_FLOOR = 619`; `ast_parity_samples` fast gate over 62 curated
+  `samples/ast/*.rss` (added coverage for every construct fixed in the final push).
+- **Final long-tail closed (592 → 619):** protocols (methods as source-order
+  functions with Self:Managed injection; `protocol`/`protocol-impl`+`mapping`
+  passes), protocol-impls, let-else (`parse_block(open+1)` off-by-one reproduced),
+  if-let (→ two-arm match), tuples (types `__TupleN`, exprs `__TupleN(item0:…)`,
+  let-destructure), scoped-view desugar (`view v = e` + rest-of-block → `with`),
+  match-arm `,`/`;` separator skipping, effect-annotated closure `read || {…}`
+  (special-cased before the binary split; general `read <expr>` stays after it so
+  `read r * read r` = `(read r)*(read r)`).
+- **Method:** ported each reference parser predicate faithfully (LENIENT/surface
+  recovery — malformed_* markers, not failures). Every batch re-ran the full
+  `--release` corpus to catch regressions (one caught + fixed: the effect/binary
+  ordering).
+- **Status:** step 1 DONE. Remaining ladder = SH-026 (step-2 deeper semantic
+  checks, step-3 AST spans).
+
 ### SH-025 — AST-dump parity: streaming rss producer at 543/587, only malformed-recovery remains
 
 - **Context:** step 2 of frontend object parity (after the AST-dump format +
