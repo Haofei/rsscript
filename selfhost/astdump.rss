@@ -277,6 +277,17 @@ fn emit_expr(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) 
         emit_explicit_fn(toks: read toks, start: read s, end: read e, d: read d)
         return Unit
     }
+    // Effect-annotated closure `read || { … }` / `mut |x| …`: handled BEFORE the
+    // binary split so the closure `|` pipes aren't read as logical-or / bit-or.
+    // (parse_expr special-cases ONLY effect+closure here; a general `read <expr>`
+    // like `read r * read r` still splits at the operator first — effect binds
+    // tighter than any binary op.)
+    let effClosure = effect_kw(toks: read toks, i: read s)
+    if String.len(value: read effClosure) > 0 && at_symbol(toks: read toks, i: read (s + 1), code: read SYM_PIPE) {
+        emit(depth: read d, s: read String.concat(left: read "effect kind=", right: read effClosure))
+        emit_closure(toks: read toks, start: read (s + 1), end: read e, d: read (d + 1))
+        return Unit
+    }
     // Binary split (lowest precedence, last top-level occurrence).
     let opIdx = find_binop(toks: read toks, start: read s, end: read e)
     if opIdx >= 0 {
@@ -315,10 +326,10 @@ fn emit_expr(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) 
             return Unit
         }
     }
-    // Effect prefix: read/mut/take <value>. The receiver-call shorthand
-    // `<effect> recv.method(args)` (lowercase receiver) parses as a ReceiverCall,
-    // NOT an Effect wrapper; an uppercase namespace (`read Cache.put()`) stays a
-    // qualified call under the effect.
+    // General effect prefix: read/mut/take <value>, handled AFTER the binary split
+    // (effect binds tighter than any operator). The receiver-call shorthand
+    // `<effect> recv.method(args)` (lowercase receiver) parses as a ReceiverCall;
+    // an uppercase namespace (`read Cache.put()`) stays a qualified call under it.
     let effWord = effect_kw(toks: read toks, i: read s)
     if String.len(value: read effWord) > 0 {
         let recvStart = s + 1
@@ -1694,13 +1705,39 @@ fn find_block_open(toks: read List<Tok>, start: read Int, limit: read Int) -> In
 // Emit a `block` node and its statements for the braces [open, close].
 fn emit_block(toks: read List<Tok>, open: read Int, close: read Int, d: read Int) -> Unit {
     emit(depth: read d, s: read "block")
-    let mut i = open + 1
+    emit_stmts(toks: read toks, from: read (open + 1), close: read close, d: read (d + 1))
+    return Unit
+}
+
+// True if a scoped-view binding `view <ident> = …` begins at i (is_view_binding).
+fn is_view_binding(toks: read List<Tok>, i: read Int, close: read Int) -> Bool {
+    return is_kw_text(toks: read toks, i: read i, word: read "view") && is_ident_tok(toks: read toks, i: read (i + 1)) && at_symbol(toks: read toks, i: read (i + 2), code: read SYM_EQ) && (i + 2) < close
+}
+
+// Emit statements in [from, close) at depth d. A `view name = expr` desugars to a
+// `with expr as name { <rest of block> }` that captures the remaining statements
+// (collect_statements' scoped-view desugar).
+fn emit_stmts(toks: read List<Tok>, from: read Int, close: read Int, d: read Int) -> Unit {
+    let mut i = from
     while i < close {
-        // Skip stray semicolons/commas that are statement trivia.
         if at_symbol(toks: read toks, i: read i, code: read SYM_SEMI) {
             i = i + 1
+        } else if is_view_binding(toks: read toks, i: read i, close: read close) {
+            let name = tk_text(toks: read toks, i: read (i + 1))
+            let stEnd = stmt_end(toks: read toks, start: read i, limit: read close)
+            let eqPos = first_eq(toks: read toks, start: read (i + 2), end: read stEnd)
+            emit(depth: read d, s: read String.concat(left: read "with binding=", right: read name))
+            emit(depth: read (d + 1), s: read "resource")
+            if eqPos >= 0 {
+                emit_expr(toks: read toks, start: read (eqPos + 1), end: read stEnd, d: read (d + 2))
+            } else {
+                emit(depth: read (d + 2), s: read "unknown-expr")
+            }
+            emit(depth: read (d + 1), s: read "block")
+            emit_stmts(toks: read toks, from: read stEnd, close: read close, d: read (d + 2))
+            i = close
         } else {
-            let next = emit_stmt(toks: read toks, start: read i, limit: read close, d: read (d + 1))
+            let next = emit_stmt(toks: read toks, start: read i, limit: read close, d: read d)
             if next > i { i = next } else { i = i + 1 }
         }
     }
@@ -2495,7 +2532,9 @@ fn emit_match_arms(toks: read List<Tok>, start: read Int, end: read Int, d: read
     let mut i = start
     let mut mal = 0
     while i < end {
-        if at_symbol(toks: read toks, i: read i, code: read SYM_SEMI) {
+        // Skip separators between arms (`,`/`;`) so a trailing comma after an arm's
+        // `{ }` block isn't misread as an arm with no `=>`.
+        if at_symbol(toks: read toks, i: read i, code: read SYM_SEMI) || at_symbol(toks: read toks, i: read i, code: read SYM_COMMA) {
             i = i + 1
         } else {
             let lineEnd = next_line_or_block_end(toks: read toks, start: read i, end: read end)

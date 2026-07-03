@@ -1,0 +1,37 @@
+features: async
+
+async fn nested_if() -> Result<Unit, TimerError> {
+    if true {
+        await Timer.sleep(ms: 1)?
+    }
+    return Ok(Unit)
+}
+
+async fn nested_loop() -> Result<Unit, TimerError> {
+    let mut count = 0
+    while count < 1 {
+        await Timer.sleep(ms: 1)?
+        count = count + 1
+    }
+    return Ok(Unit)
+}
+
+async fn nested_match(value: read Option<Int>) -> Result<Unit, TimerError> {
+    match value {
+        Some(_) => {
+            await Timer.sleep(ms: 1)?
+        },
+        None => {
+            await Timer.sleep(ms: 1)?
+        },
+    }
+    return Ok(Unit)
+}
+
+async fn main() -> Result<Unit, TimerError> {
+    await nested_if()?
+    await nested_loop()?
+    await nested_match(value: read Some(1))?
+    await nested_match(value: read None)?
+    return Ok(Unit)
+}
