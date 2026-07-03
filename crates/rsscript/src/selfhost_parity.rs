@@ -1522,7 +1522,7 @@ const AST_SAMPLE_MIN: usize = 6;
 /// Floor for `ast_parity_corpus` — the number of corpus files whose rss AST dump
 /// already matches the oracle byte-for-byte. Ratchets up as the producer's
 /// coverage grows; a drop signals a regression. (Full parity = files.len().)
-const AST_CORPUS_PARITY_FLOOR: usize = 565;
+const AST_CORPUS_PARITY_FLOOR: usize = 581;
 
 /// Step-2 measurement gate (ignored by default): how many corpus files the rss
 /// producer reproduces byte-for-byte. Not full parity yet — this ratchets a floor

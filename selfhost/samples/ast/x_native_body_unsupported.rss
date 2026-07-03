@@ -1,0 +1,8 @@
+// expect: RS0015
+features: native
+
+native fn Host.emit(message: read String) -> Unit
+    effects(native)
+{
+    return Unit
+}

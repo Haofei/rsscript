@@ -1350,6 +1350,12 @@ fn emit_with(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int
         return stmt_end(toks: read toks, start: read start, limit: read limit)
     }
     let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    // The binding after `as` must be an ident immediately before the block `{`
+    // (`as {` with no binding is malformed) — mirrors parse_with_stmt.
+    if is_ident_tok(toks: read toks, i: read (asIdx + 1)) == false || (asIdx + 2) != open {
+        emit(depth: read d, s: read "malformed-with")
+        return close + 1
+    }
     let binding = tk_text(toks: read toks, i: read (asIdx + 1))
     emit(depth: read d, s: read String.concat(left: read "with binding=", right: read binding))
     emit(depth: read (d + 1), s: read "resource")
@@ -1534,7 +1540,10 @@ fn emit_function(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
     let sigEnd = function_signature_end(toks: read toks, start: read (pclose + 1))
     let mut bodyOpen = -1
     if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) { bodyOpen = sigEnd }
-    let hasBody = bodyOpen >= 0 && (isNative == false || same_stmt_line(toks: read toks, a: read start, b: read bodyOpen))
+    // A body exists iff sigEnd lands on `{` — including native fns, whose body may
+    // sit on a line after the `effects(native)` clause (parse_function_decl treats
+    // it as a normal body; the earlier same_stmt_line guard wrongly dropped it).
+    let hasBody = bodyOpen >= 0
     let effPos = find_effects_kw(toks: read toks, start: read (pclose + 1), end: read sigEnd)
     let defaultImpl = has_default_impl(toks: read toks, start: read (pclose + 1), end: read sigEnd)
     // A `fresh` anywhere in the return-type region (e.g. `-> Result<fresh String, E>`)
@@ -2560,6 +2569,7 @@ fn main() -> Unit {
     emit_all_features(toks: read toks, ntok: read ntok)
     let mut i = 0
     let mut malDecl = 0
+    let mut unknownTop = 0
     let mut running = true
     while running {
         if i >= ntok {
@@ -2574,9 +2584,19 @@ fn main() -> Unit {
                 // Already emitted in the pre-pass; skip the header line.
                 i = declaration_line_end(toks: read toks, start: read (i + 2))
             } else if cls.isProfile {
+                // `profile …` is no longer a recognized top-level item → the oracle
+                // records it as unknown-top-level (section 5).
+                unknownTop = unknownTop + 1
                 i = declaration_line_end(toks: read toks, start: read i)
             } else if starts_type_decl(toks: read toks, i: read i, isPub: read cls.isPub) {
-                i = advance(toks: read toks, i: read i, r: read emit_type_decl(toks: read toks, start: read i, d: read 1))
+                // A struct/class/resource with no name (`struct {`) fails to parse →
+                // program-level malformed-declaration.
+                if type_decl_malformed(toks: read toks, start: read i) {
+                    malDecl = malDecl + 1
+                    i = advance(toks: read toks, i: read i, r: read next_decl_skip(toks: read toks, start: read i))
+                } else {
+                    i = advance(toks: read toks, i: read i, r: read emit_type_decl(toks: read toks, start: read i, d: read 1))
+                }
             } else if cls.isSum {
                 i = advance(toks: read toks, i: read i, r: read emit_sum(toks: read toks, start: read i, d: read 1))
             } else if cls.isTypeAlias {
@@ -2603,15 +2623,28 @@ fn main() -> Unit {
                     i = advance(toks: read toks, i: read i, r: read emit_function(toks: read toks, start: read i, d: read 1))
                 }
             } else {
+                // Unrecognized top-level token (e.g. `namespace …`) → unknown-top-level.
+                unknownTop = unknownTop + 1
                 i = advance(toks: read toks, i: read i, r: read next_decl_skip(toks: read toks, start: read i))
             }
         }
     }
-    // Section 5: feature diagnostics (unknown-feature then duplicate-feature),
-    // then malformed-declaration, emitted AFTER all items — matching ast_oracle_dump.
+    // Section 5, in ast_oracle_dump order: unknown-feature, duplicate-feature (both
+    // in emit_feature_diags), then unknown-top-level, then malformed-declaration.
     emit_feature_diags(toks: read toks, ntok: read ntok)
+    emit_repeat(marker: read "unknown-top-level", n: read unknownTop, d: read 1)
     emit_repeat(marker: read "malformed-declaration", n: read malDecl, d: read 1)
     return Unit
+}
+
+// True if a struct/class/resource declaration at `start` has no name (`struct {`),
+// which parse_type_decl rejects → program-level malformed-declaration.
+fn type_decl_malformed(toks: read List<Tok>, start: read Int) -> Bool {
+    let mut j = start
+    if is_kw_text(toks: read toks, i: read j, word: read "pub") { j = j + 1 }
+    if is_kw_text(toks: read toks, i: read j, word: read "opaque") { j = j + 1 }
+    j = j + 1
+    return is_ident_tok(toks: read toks, i: read j) == false
 }
 
 // Position of the function name (just past `fn`) after skipping #attrs and

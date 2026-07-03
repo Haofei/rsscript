@@ -1,0 +1,6 @@
+// expect: RS0010
+profile: review
+
+fn main() -> Unit {
+    return Unit
+}
