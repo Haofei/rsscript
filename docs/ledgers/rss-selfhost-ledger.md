@@ -1031,13 +1031,38 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   (RS0007) / fd688f09 (RS0024) / e559c1f2 (RS0008) / 89559315 (RS0009). MAINTENANCE
   NOTE: the RS0024 stdlib-type list is derived from the `.rssi` interfaces at
   authoring time — regenerate if those interfaces change.
-- **Diagnostics (step 2, milestone 2h — IN PROGRESS):** **RS0021** NON_EXHAUSTIVE_
-  MATCH — the last diagnostic. Needs scrutinee type inference (the analyzer reads
-  `hir_expr_type_name`), but the corpus is tractable: only `_` short-circuits (a
-  top-level bare ident is a Variant, not a catch-all); user-sum/Bool scrutinees are
-  params or `let x = ctor`/local-call (locally inferable → all-variant coverage); and
-  Option/Result-returning stdlib-call scrutinees fall through to the Some+None/Ok+Err
-  fallback (which matches the analyzer). Ported spec + sub-agent in flight.
+- **Diagnostics (step 2, milestone 2h — DONE, 2026-07-02):** **RS0021** NON_EXHAUSTIVE_
+  MATCH. Needs scrutinee type inference (the analyzer reads `hir_expr_type_name`), but
+  the corpus is tractable: only `_` short-circuits (a top-level bare ident is a Variant,
+  not a catch-all); user-sum/Bool scrutinees are params or `let x = ctor`/local-call
+  (locally inferable → all-variant coverage); Option/Result-returning stdlib-call
+  scrutinees fall through to the Some+None/Ok+Err fallback (matches the analyzer).
+  Ported the exhaustiveness engine (arm segmentation + scrutinee-root inference +
+  Option/Result/Bool/sum/List/tuple/fallback coverage) via sub-agent; 4 false-positives
+  hunted+fixed (`sum` as a var name, `match true`, List slice patterns, `?`-terminated
+  scrutinee). Commit 91c43189.
+- **Diagnostics (step 2, milestone 2i — DONE, 2026-07-03):** the remaining token-
+  decidable tail, via sub-agents (one crashed on an API error after 2 codes — its
+  uncommitted work was green and recovered; lesson: commit each code immediately).
+  Added **RS0029** (await-outside-async), **RS0023** (Fd outside internal boundary),
+  **RS0035** (lower-name-conflict — ported is_valid_rust_ident + keyword set + default
+  lowering), **RS0027** (unknown-protocol — visible = stdlib interfaces + file `protocol`
+  decls; Managed/Struct/Resource excluded), **RS0014/RS0018/RS0019** (noalloc/no_block/
+  no_panic body violations — RS0009-style call scan). `CHECKER_TARGET_CODES` = **24
+  codes**; `checker_parity_corpus` byte-exact **619 files, 0 mismatches, 0 run-failures**.
+  Commits 240ce274/9715367f/78012146/3ad62a2b/be6fa09d.
+- **THE TOKEN-DECIDABLE TIER IS ESSENTIALLY EXHAUSTED (24 codes).** SKIPPED because they
+  need type inference / callee-signature resolution / borrow analysis (measured, not
+  ducked): RS0201 (unnamed-arg — needs callee visibility+kind), RS0013 (invalid-try —
+  operand/error-type inference), RS0022 (async-not-consumed — callee is_async), RS0036
+  (payload transferability), RS0202 (missing-data-effect — callee param-effects); RS0038
+  (char-literal) has 0 corpus fixtures. THE REMAINING BULK (~260 corpus files when ALL
+  ~100 codes are targeted → 305 mismatch): RS0207/0208/0209/0210 (type/return/control-
+  flow/operator mismatch), RS0301-0313 + RS06xx + RS07xx (ownership/borrow), RS0015
+  (unsupported-syntax), RS0101 (feature-gating), RS0025/0026 (unknown-field/binding).
+  These require a self-hosted TYPE-INFERENCE + BORROW-CHECKER engine — the whole semantic
+  frontend — which is the genuine next phase (its own multi-session effort), NOT more
+  token predicates.
 - **Lexer spans (step 3):** added a `len` field to the shared `Tok`
   (= consumed source span `j-i`, matching the Rust lexer's `index-start`) and made
   `lexer.rss` emit the real `<line>:<col>:<len>` prefix. `lexer_parity_corpus` is
