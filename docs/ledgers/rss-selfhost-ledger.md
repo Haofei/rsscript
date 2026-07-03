@@ -1008,14 +1008,36 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   by-digit; float/hex literals excluded since their text isn't all digits).
   `CHECKER_TARGET_CODES` = **12 codes** (RS0002/3/4/5/6/10/11/12/16/17/28/33);
   `checker_parity_corpus` byte-exact **619 files, 0 mismatches, 0 run-failures**.
-- **STILL DEFERRED (need semantic infrastructure):** **RS0007** (retains-param) has
-  a semantic `type_ref_is_copy` sub-condition (retained Copy param → RS0007) not
-  token-decidable; **RS0008** (missing-effect) needs a Copy/sum-type table +
-  noescape/owned/surface-ref classification; **RS0009** (invalid-pure, 7 files)
-  needs body analysis (manage/native-call/with-resource) + type analysis. Next
-  genuinely semantic tier: **RS0021** exhaustiveness / **RS0024** unknown-type (need
-  a `Map<String,Def>` symbol-table pass — the first self-hosted check that isn't
-  decidable from local token structure).
+- **Diagnostics (step 2, milestone 2g — DONE, 2026-07-02):** the semantic tier —
+  added **RS0007** (retains a non-param OR a Copy scalar param: `type_ref_is_copy` =
+  17 scalar names, not fresh/noescape, no args/fn), **RS0024** (UNKNOWN_TYPE — a
+  type ref to an undeclared type; recursive TypeRef validation over field/param/
+  return types with generic-param scope), **RS0008** (MISSING_PARAMETER_EFFECT — an
+  effect-less param unless share/noescape/owned/bare-Closure/surface-`&`/contains-Fd/
+  Copy-scalar/payloadless-sum), **RS0009** (INVALID_PURE_EFFECT — a `pure` fn with a
+  resource return / mut|take param / retains item / body `with`|`manage`|non-pure
+  call). LOAD-BEARING FINDING (RS0024): the oracle's known-type set is NOT just the
+  ~45 hardcoded builtins — it also includes every struct/resource preloaded from the
+  CORE + STANDARD package `.rssi` interfaces (via `hir.type_info`); those 56 names
+  (JsonValue, SortedSet, Deque, ResourcePool, Response, StringBuilder, …) are
+  extracted into `is_stdlib_type` (58 false positives without them). RS0009's
+  non-pure-call resolution is token-based (qualified calls to known-type namespaces
+  + constructors + enum-variants + declared-pure fns are allowed; declared non-pure
+  fns flag; unresolved ignored) — verified against the clean pure files
+  (pure-string-read-call/pure-helper-call/pure-read-function) and pure-native-call.
+  Implemented via a sub-agent against a precise ported spec. `CHECKER_TARGET_CODES`
+  = **16 codes** (RS0002/3/4/5/6/7/8/9/10/11/12/16/17/24/28/33); `checker_parity_
+  corpus` byte-exact **619 files, 0 mismatches, 0 run-failures**. Commits 6dbc59f9
+  (RS0007) / fd688f09 (RS0024) / e559c1f2 (RS0008) / 89559315 (RS0009). MAINTENANCE
+  NOTE: the RS0024 stdlib-type list is derived from the `.rssi` interfaces at
+  authoring time — regenerate if those interfaces change.
+- **Diagnostics (step 2, milestone 2h — IN PROGRESS):** **RS0021** NON_EXHAUSTIVE_
+  MATCH — the last diagnostic. Needs scrutinee type inference (the analyzer reads
+  `hir_expr_type_name`), but the corpus is tractable: only `_` short-circuits (a
+  top-level bare ident is a Variant, not a catch-all); user-sum/Bool scrutinees are
+  params or `let x = ctor`/local-call (locally inferable → all-variant coverage); and
+  Option/Result-returning stdlib-call scrutinees fall through to the Some+None/Ok+Err
+  fallback (which matches the analyzer). Ported spec + sub-agent in flight.
 - **Lexer spans (step 3):** added a `len` field to the shared `Tok`
   (= consumed source span `j-i`, matching the Rust lexer's `index-start`) and made
   `lexer.rss` emit the real `<line>:<col>:<len>` prefix. `lexer_parity_corpus` is
