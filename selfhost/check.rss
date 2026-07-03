@@ -2093,6 +2093,84 @@ fn fn_has_bad_await(toks: read List<Tok>, start: read Int) -> Bool {
     return hasAwait && suppress == false
 }
 
+// ---------------------------------------------------------------------------
+// RS0023 FD_OUTSIDE_INTERNAL_BOUNDARY.
+//
+// `Fd` used in a param/return type of a non-native fn, or in a field type of a
+// non-resource type decl (check_fd_surface, type_ref_contains_name(ty, "Fd")).
+// Native fns and resource types are the trusted internal boundary and skipped.
+// ---------------------------------------------------------------------------
+
+// True if the fn decl at `start` carries the `native` modifier.
+fn fn_is_native(toks: read List<Tok>, start: read Int) -> Bool {
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let mut k = start
+    let mut hit = false
+    while k < (ns - 1) {
+        if at_ident(toks: read toks, i: read k, wid: read WORD_NATIVE) { hit = true }
+        k = k + 1
+    }
+    return hit
+}
+
+// RS0023 over a non-native fn: any param type or the return type names `Fd`.
+fn fn_has_fd_surface(toks: read List<Tok>, start: read Int) -> Bool {
+    if fn_is_native(toks: read toks, start: read start) { return false }
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+    let open = find_param_open(toks: read toks, from: read ns, end: read sigEnd)
+    if open < 0 { return false }
+    let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    if close < 0 { return false }
+    let mut k = open + 1
+    let mut depth = 0
+    let mut angle = 0
+    let mut segStart = open + 1
+    let mut hit = false
+    while k < close {
+        let opener = at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE)
+        let closer = at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE)
+        if opener {
+            depth = depth + 1
+        } else if closer {
+            if depth > 0 { depth = depth - 1 }
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE) {
+            angle = angle + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) {
+            if angle > 0 { angle = angle - 1 }
+        } else if depth == 0 && angle == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
+            if seg_type_has_fd(toks: read toks, segStart: read segStart, segEnd: read k) { hit = true }
+            segStart = k + 1
+        }
+        k = k + 1
+    }
+    if seg_type_has_fd(toks: read toks, segStart: read segStart, segEnd: read close) { hit = true }
+    // Return type region: `-> Type` before effects/`{`/`=`.
+    if at_symbol(toks: read toks, i: read (close + 1), code: read SYM_ARROW) {
+        let rs = close + 2
+        let mut re = rs
+        let mut scanning = true
+        while scanning {
+            let stop = at_ident(toks: read toks, i: read re, wid: read WORD_EFFECTS) || at_symbol(toks: read toks, i: read re, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read re, code: read SYM_EQ)
+            if re < sigEnd && stop == false {
+                re = re + 1
+            } else {
+                scanning = false
+            }
+        }
+        if region_has_text(toks: read toks, s: read rs, e: read re, word: read "Fd") { hit = true }
+    }
+    return hit
+}
+
+// A param segment's type region [segStart+2, segEnd) names `Fd`.
+fn seg_type_has_fd(toks: read List<Tok>, segStart: read Int, segEnd: read Int) -> Bool {
+    if (segStart + 2) >= segEnd { return false }
+    if is_ident_tok(toks: read toks, i: read segStart) == false { return false }
+    if at_symbol(toks: read toks, i: read (segStart + 1), code: read SYM_COLON) == false { return false }
+    return region_has_text(toks: read toks, s: read (segStart + 2), e: read segEnd, word: read "Fd")
+}
+
 fn main() -> Unit {
     let source = Args.get_or_default(index: 0, default: read "")
     let toks = tokenize(source: read source)
@@ -2121,6 +2199,8 @@ fn main() -> Unit {
     let mut pureBad = false
     // RS0029: any `await` in a non-async function.
     let mut badAwait = false
+    // RS0023: `Fd` in a non-native fn signature or a non-resource type field.
+    let mut fdSurface = false
     // RS0021: any non-exhaustive match statement or expression in the file.
     let mut nonExhaustive = false
     // RS0024: forward-reference-tolerant known-type set for the whole file.
@@ -2203,6 +2283,13 @@ fn main() -> Unit {
                         }
                     }
                     if type_decl_unknown(toks: read toks, i: read i, r: read r, declared: read declared) { unknownType = true }
+                    // RS0023: an `Fd`-typed field on a non-resource type. Resource
+                    // types are the trusted internal boundary and are skipped.
+                    if at_ident(toks: read toks, i: read (ns - 1), wid: read WORD_RESOURCE) == false {
+                        if ob >= 0 {
+                            if region_has_text(toks: read toks, s: read (ob + 1), e: read (r - 1), word: read "Fd") { fdSurface = true }
+                        }
+                    }
                     i = r
                 }
             } else if isSum {
@@ -2290,6 +2377,7 @@ fn main() -> Unit {
                     if fn_pure_bad(toks: read toks, start: read i, resources: read resources, sumVariants: read sumVariants, pureFns: read pureFns, allFns: read allFns, declared: read declared) { pureBad = true }
                     if fn_has_nonexhaustive_match(toks: read toks, start: read i, declared: read declared, allFns: read allFns) { nonExhaustive = true }
                     if fn_has_bad_await(toks: read toks, start: read i) { badAwait = true }
+                    if fn_has_fd_surface(toks: read toks, start: read i) { fdSurface = true }
                     i = r
                 }
             } else {
@@ -2340,6 +2428,9 @@ fn main() -> Unit {
     if badAwait {
         Log.write(message: read "RS0029")
     }
+    if fdSurface {
+        Log.write(message: read "RS0023")
+    }
     if unknownType {
         Log.write(message: read "RS0024")
     }
@@ -2355,7 +2446,7 @@ fn main() -> Unit {
     if headerCount >= 2 {
         Log.write(message: read "RS0006")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || fdSurface
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
