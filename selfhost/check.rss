@@ -405,6 +405,62 @@ fn fn_has_share_param(toks: read List<Tok>, start: read Int) -> Bool {
     return hit
 }
 
+// RS0033: a decimal integer literal that does not fit i64 (check_integer_literal_
+// range: all-ASCII-digit text whose value overflows). Non-decimal / float literals
+// (containing `.`, `e`, `x`, …) are left alone — their text isn't all digits.
+fn is_int_out_of_range(text: read String) -> Bool {
+    let cs = String.chars(value: read text)
+    let n = List.len(list: read cs)
+    if n == 0 { return false }
+    let mut allDigit = true
+    let mut i = 0
+    while i < n {
+        let code = Char.to_code(value: read List.get(list: read cs, index: read i))
+        if code < 48 || code > 57 { allDigit = false }
+        i = i + 1
+    }
+    if allDigit == false { return false }
+    // Strip leading zeros (Rust's i64 parse accepts them: `007` → 7).
+    let mut start = 0
+    while start < (n - 1) && Char.to_code(value: read List.get(list: read cs, index: read start)) == 48 {
+        start = start + 1
+    }
+    let digits = n - start
+    if digits > 19 { return true }
+    if digits < 19 { return false }
+    // Exactly 19 significant digits: compare against i64::MAX digit-by-digit.
+    let ms = String.chars(value: read "9223372036854775807")
+    let mut j = 0
+    let mut result = false
+    let mut decided = false
+    while j < 19 && decided == false {
+        let a = Char.to_code(value: read List.get(list: read cs, index: read (start + j)))
+        let b = Char.to_code(value: read List.get(list: read ms, index: read j))
+        if a > b {
+            result = true
+            decided = true
+        } else if a < b {
+            decided = true
+        }
+        j = j + 1
+    }
+    return result
+}
+
+// Whole-file scan: any decimal integer literal token out of i64 range → RS0033.
+fn has_out_of_range_int(toks: read List<Tok>) -> Bool {
+    let n = List.len(list: read toks)
+    let mut i = 0
+    let mut hit = false
+    while i < n {
+        if tk_kind(toks: read toks, i: read i) == TOK_NUMBER {
+            if is_int_out_of_range(text: read tk_text(toks: read toks, i: read i)) { hit = true }
+        }
+        i = i + 1
+    }
+    return hit
+}
+
 // RS0028: a parameter named `self` that is not the first parameter of a qualified
 // method (check_params: `self` && (!is_qualified_method || index != 0)). A method
 // is qualified iff its name is dotted (`Type.method`).
@@ -485,6 +541,8 @@ fn main() -> Unit {
     let mut unknownEffect = false
     let mut removedRuntime = false
     let mut invalidSelf = false
+    // RS0033: any decimal integer literal in the file that overflows i64.
+    let outOfRangeInt = has_out_of_range_int(toks: read toks)
     let mut i = 0
     let mut running = true
     while running {
@@ -668,6 +726,9 @@ fn main() -> Unit {
     if invalidSelf {
         Log.write(message: read "RS0028")
     }
+    if outOfRangeInt {
+        Log.write(message: read "RS0033")
+    }
     if hasUnknownFeat {
         Log.write(message: read "RS0016")
     }
@@ -677,7 +738,7 @@ fn main() -> Unit {
     if headerCount >= 2 {
         Log.write(message: read "RS0006")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }

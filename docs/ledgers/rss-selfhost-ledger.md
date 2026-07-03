@@ -998,13 +998,24 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   item boundary), which had hidden the effects clause of `#deprecated(...) fn …`
   (and would have mis-scanned RS0002/3/11 there too). `CHECKER_TARGET_CODES` =
   **10 codes**; `checker_parity_corpus` byte-exact **619 files, 0 mismatches, 0
-  run-failures**. STILL DEFERRED from this family: **RS0007** (retains-param) has a
-  semantic `type_ref_is_copy` sub-condition (a retained Copy param → RS0007) that
-  isn't token-decidable. Other deferred: RS0008 (missing-effect, needs Copy/sum
-  table), RS0009 (invalid-pure, needs body analysis), RS0033 (int-range, needs
-  literal-value parsing), RS0028 (invalid-self, protocol/first-param rules). Next
-  genuinely semantic tier: RS0021 exhaustiveness / RS0024 unknown-type (need a
-  `Map<String,Def>` symbol-table pass).
+  run-failures**.
+- **Diagnostics (step 2, milestones 2e/2f — DONE, 2026-07-02):** added **RS0028**
+  (INVALID_SELF_PARAMETER — a `self` param that isn't the first parameter of a
+  qualified/dotted-name method; mirrors check_params) and **RS0033**
+  (INTEGER_LITERAL_OUT_OF_RANGE — a whole-file scan for a decimal-integer literal
+  token whose value overflows i64, mirroring check_integer_literal_range: all-digit
+  text, leading zeros stripped, 19-digit boundary compared against i64::MAX digit-
+  by-digit; float/hex literals excluded since their text isn't all digits).
+  `CHECKER_TARGET_CODES` = **12 codes** (RS0002/3/4/5/6/10/11/12/16/17/28/33);
+  `checker_parity_corpus` byte-exact **619 files, 0 mismatches, 0 run-failures**.
+- **STILL DEFERRED (need semantic infrastructure):** **RS0007** (retains-param) has
+  a semantic `type_ref_is_copy` sub-condition (retained Copy param → RS0007) not
+  token-decidable; **RS0008** (missing-effect) needs a Copy/sum-type table +
+  noescape/owned/surface-ref classification; **RS0009** (invalid-pure, 7 files)
+  needs body analysis (manage/native-call/with-resource) + type analysis. Next
+  genuinely semantic tier: **RS0021** exhaustiveness / **RS0024** unknown-type (need
+  a `Map<String,Def>` symbol-table pass — the first self-hosted check that isn't
+  decidable from local token structure).
 - **Lexer spans (step 3):** added a `len` field to the shared `Tok`
   (= consumed source span `j-i`, matching the Rust lexer's `index-start`) and made
   `lexer.rss` emit the real `<line>:<col>:<len>` prefix. `lexer_parity_corpus` is
