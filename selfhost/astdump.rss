@@ -955,13 +955,25 @@ fn emit_object_or_map(toks: read List<Tok>, start: read Int, close: read Int, d:
 // emit_type_ref renders one type starting at token i and returns the next index.
 // -------------------------------------------------------------------------
 
+// True if token j is a type-level prefix keyword skipped when locating the name
+// (read/mut/take effects + fresh/handle/weak/noescape/owned), matching name_index
+// in parse_type_ref.
+fn is_type_prefix(toks: read List<Tok>, j: read Int) -> Bool {
+    return is_kw_text(toks: read toks, i: read j, word: read "read") || is_kw_text(toks: read toks, i: read j, word: read "mut") || is_kw_text(toks: read toks, i: read j, word: read "take") || is_kw_text(toks: read toks, i: read j, word: read "fresh") || is_kw_text(toks: read toks, i: read j, word: read "handle") || is_kw_text(toks: read toks, i: read j, word: read "weak") || is_kw_text(toks: read toks, i: read j, word: read "noescape") || is_kw_text(toks: read toks, i: read j, word: read "owned")
+}
+
 fn emit_type_ref(toks: read List<Tok>, i: read Int, tag: read String, eff: read String, d: read Int) -> Int {
-    let mut j = i
+    // Prefix flags reflect ONLY the token at `i` (matching parse_type_ref, which
+    // reads is_fresh/is_noescape/is_owned from tokens[start]).
     let mut isFresh = false
-    if at_ident(toks: read toks, i: read j, wid: read WORD_FRESH) {
-        isFresh = true
-        j = j + 1
-    }
+    let mut isNoescape = false
+    let mut isOwned = false
+    if at_ident(toks: read toks, i: read i, wid: read WORD_FRESH) { isFresh = true }
+    else if is_kw_text(toks: read toks, i: read i, word: read "noescape") { isNoescape = true }
+    else if is_kw_text(toks: read toks, i: read i, word: read "owned") { isOwned = true }
+    // Name is the first non-prefix token.
+    let mut j = i
+    while is_type_prefix(toks: read toks, j: read j) { j = j + 1 }
     let name = tk_text(toks: read toks, i: read j)
     j = j + 1
     local sb = StringBuilder.new()
@@ -974,9 +986,12 @@ fn emit_type_ref(toks: read List<Tok>, i: read Int, tag: read String, eff: read 
     StringBuilder.push(builder: mut sb, value: read name)
     StringBuilder.push(builder: mut sb, value: read " fresh=")
     StringBuilder.push(builder: mut sb, value: read boolstr(b: read isFresh))
-    StringBuilder.push(builder: mut sb, value: read " noescape=false owned=false")
+    StringBuilder.push(builder: mut sb, value: read " noescape=")
+    StringBuilder.push(builder: mut sb, value: read boolstr(b: read isNoescape))
+    StringBuilder.push(builder: mut sb, value: read " owned=")
+    StringBuilder.push(builder: mut sb, value: read boolstr(b: read isOwned))
     emit(depth: read d, s: read StringBuilder.finish(builder: take sb))
-    // Generic args.
+    // Generic args `<...>`.
     if at_symbol(toks: read toks, i: read j, code: read SYM_LANGLE) {
         let close = find_matching(toks: read toks, open: read j, openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
         if close > j {
@@ -986,6 +1001,23 @@ fn emit_type_ref(toks: read List<Tok>, i: read Int, tag: read String, eff: read 
                 if at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) { k = k + 1 }
             }
             j = close + 1
+        }
+    }
+    // Fn types: `Fn(<params>) -> <ret>` → fn-param (with optional effect) + fn-return.
+    if name == "Fn" && at_symbol(toks: read toks, i: read j, code: read SYM_LPAREN) {
+        let pclose = find_matching(toks: read toks, open: read j, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+        let mut k = j + 1
+        while k < pclose {
+            let comma = split_comma(toks: read toks, start: read k, end: read pclose)
+            let pEff = effect_kw(toks: read toks, i: read k)
+            let mut pStart = k
+            if String.len(value: read pEff) > 0 { pStart = k + 1 }
+            emit_type_ref(toks: read toks, i: read pStart, tag: read "fn-param", eff: read pEff, d: read (d + 1))
+            if comma < 0 { k = pclose } else { k = comma + 1 }
+        }
+        j = pclose + 1
+        if at_symbol(toks: read toks, i: read j, code: read SYM_ARROW) {
+            j = emit_type_ref(toks: read toks, i: read (j + 1), tag: read "fn-return", eff: read "", d: read (d + 1))
         }
     }
     return j
@@ -1429,7 +1461,12 @@ fn emit_function(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
     if at_symbol(toks: read toks, i: read j, code: read SYM_ARROW) {
         hasRet = true
         retStart = j + 1
-        if at_ident(toks: read toks, i: read (j + 1), wid: read WORD_FRESH) { retFresh = true }
+        // `-> fresh T` sets the fn's returns-fresh and the type ref begins AT T
+        // (the return TypeRef itself is fresh=false — matches parse_function_decl).
+        if at_ident(toks: read toks, i: read (j + 1), wid: read WORD_FRESH) {
+            retFresh = true
+            retStart = j + 2
+        }
     }
     // body
     let bodyOpen = find_block_open(toks: read toks, start: read j, limit: read List.len(list: read toks))
