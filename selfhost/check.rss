@@ -265,6 +265,48 @@ fn fn_has_untyped_param(toks: read List<Tok>, start: read Int) -> Bool {
     return untyped
 }
 
+// RS0011: a parameter written `name: share …` (no data effect, type name `share`).
+fn fn_has_share_param(toks: read List<Tok>, start: read Int) -> Bool {
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let sigEnd = function_signature_end(toks: read toks, start: read start)
+    let open = find_param_open(toks: read toks, from: read ns, end: read sigEnd)
+    if open < 0 { return false }
+    let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    if close < 0 { return false }
+    let mut k = open + 1
+    let mut depth = 0
+    let mut angle = 0
+    let mut segStart = open + 1
+    let mut hit = false
+    while k < close {
+        let opener = at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE)
+        let closer = at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE)
+        if opener {
+            depth = depth + 1
+        } else if closer {
+            if depth > 0 { depth = depth - 1 }
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE) {
+            angle = angle + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) {
+            if angle > 0 { angle = angle - 1 }
+        } else if depth == 0 && angle == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
+            if seg_is_share(toks: read toks, segStart: read segStart, segEnd: read k) { hit = true }
+            segStart = k + 1
+        }
+        k = k + 1
+    }
+    if seg_is_share(toks: read toks, segStart: read segStart, segEnd: read close) { hit = true }
+    return hit
+}
+
+// `name : share` — ident, `:`, then `share` as the type's first token.
+fn seg_is_share(toks: read List<Tok>, segStart: read Int, segEnd: read Int) -> Bool {
+    if (segStart + 2) >= segEnd { return false }
+    if is_ident_tok(toks: read toks, i: read segStart) == false { return false }
+    if at_symbol(toks: read toks, i: read (segStart + 1), code: read SYM_COLON) == false { return false }
+    return tk_text(toks: read toks, i: read (segStart + 2)) == "share"
+}
+
 fn main() -> Unit {
     let source = Args.get_or_default(index: 0, default: read "")
     let toks = tokenize(source: read source)
@@ -280,6 +322,10 @@ fn main() -> Unit {
     // RS0002 (any fn missing an explicit return type) / RS0003 (any untyped param).
     let mut missingReturn = false
     let mut untypedParam = false
+    // Signature-family diagnostics: RS0010 (removed profile), RS0011 (removed
+    // share data effect on a parameter).
+    let mut hasProfile = false
+    let mut shareParam = false
     let mut i = 0
     let mut running = true
     while running {
@@ -325,6 +371,7 @@ fn main() -> Unit {
                 }
                 i = lineEnd
             } else if isProfile {
+                hasProfile = true
                 i = declaration_line_end(toks: read toks, start: read i)
             } else if starts_type_decl(toks: read toks, i: read i, isPub: read isPub) {
                 let r = parse_type_decl(toks: read toks, i: read i)
@@ -423,6 +470,7 @@ fn main() -> Unit {
                     Set.insert<String>(set: mut callable, value: read name)
                     if fn_missing_return(toks: read toks, start: read i) { missingReturn = true }
                     if fn_has_untyped_param(toks: read toks, start: read i) { untypedParam = true }
+                    if fn_has_share_param(toks: read toks, start: read i) { shareParam = true }
                     i = r
                 }
             } else {
@@ -443,6 +491,12 @@ fn main() -> Unit {
     if found {
         Log.write(message: read "RS0005")
     }
+    if hasProfile {
+        Log.write(message: read "RS0010")
+    }
+    if shareParam {
+        Log.write(message: read "RS0011")
+    }
     if hasUnknownFeat {
         Log.write(message: read "RS0016")
     }
@@ -452,7 +506,8 @@ fn main() -> Unit {
     if headerCount >= 2 {
         Log.write(message: read "RS0006")
     }
-    if found == false && hasUnknownFeat == false && hasDupFeat == false && headerCount < 2 && missingReturn == false && untypedParam == false {
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam
+    if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
     return Unit

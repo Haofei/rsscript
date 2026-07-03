@@ -979,9 +979,21 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   sole corpus trigger is `fail/missing-signature-pieces.rss` (expects both). SCOPE:
   covers top-level `fn` decls (the only corpus source of these codes); protocol/
   native-block methods are in skipped decl branches — sound for the corpus, a noted
-  extension point. Next increments (scoped, not done): RS0021 exhaustiveness /
-  RS0024 unknown-type (need a `Map<String,Def>` symbol-table pass — the first
-  genuinely semantic self-hosted check).
+  extension point.
+- **Diagnostics (step 2, milestone 2c — DONE, 2026-07-02):** added **RS0010**
+  (REMOVED_PROFILE_DECLARATION — any `profile:` decl) and **RS0011**
+  (REMOVED_SHARE_EFFECT — a parameter written `name: share …`, no data effect,
+  type name `share`). Both purely structural. `CHECKER_TARGET_CODES` = **8 codes**;
+  `checker_parity_corpus` byte-exact **619 files, 0 mismatches, 0 run-failures**.
+  MEASURED-BUT-DEFERRED (footprint known, 19 corpus files): the effects-clause
+  family RS0004/RS0007/RS0012 needs a `parse_effects` port — malformed clauses
+  (`effects(a,,b)`, `effects(retains())`, `effects(custom(x))`) must recover to
+  RS0015, NOT the effect-name checks, and RS0007 has a semantic `type_ref_is_copy`
+  sub-condition; RS0008 (missing-effect) needs a Copy/sum-type table; RS0009
+  (invalid-pure) needs body analysis; RS0033 (int-range) needs literal-value
+  parsing; RS0028 (invalid-self) needs the protocol-method + first-param rules.
+  Next genuinely semantic tier: RS0021 exhaustiveness / RS0024 unknown-type (need a
+  `Map<String,Def>` symbol-table pass).
 - **Lexer spans (step 3):** added a `len` field to the shared `Tok`
   (= consumed source span `j-i`, matching the Rust lexer's `index-start`) and made
   `lexer.rss` emit the real `<line>:<col>:<len>` prefix. `lexer_parity_corpus` is
