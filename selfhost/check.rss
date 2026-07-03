@@ -632,6 +632,309 @@ fn fn_retains_bad(toks: read List<Tok>, start: read Int) -> Bool {
     return hit
 }
 
+// ---------------------------------------------------------------------------
+// RS0024 UNKNOWN_TYPE.
+// ---------------------------------------------------------------------------
+
+// The hardcoded builtin nominal type set (mirror check_unknown_types).
+fn is_builtin_type(name: read String) -> Bool {
+    return name == "Unit" || name == "Bool" || name == "Byte" || name == "Char" || name == "Int" || name == "Int8" || name == "Int16" || name == "Int32" || name == "Int64" || name == "UInt" || name == "UInt8" || name == "UInt16" || name == "UInt32" || name == "UInt64" || name == "Float" || name == "Float32" || name == "Float64" || name == "String" || name == "StringView" || name == "Url" || name == "Fd" || name == "Bytes" || name == "BytesView" || name == "Buffer" || name == "BufferView" || name == "Path" || name == "Result" || name == "Option" || name == "List" || name == "Map" || name == "Set" || name == "Capability" || name == "Fn" || name == "Closure" || name == "Cache" || name == "FileError" || name == "IOError" || name == "HttpError" || name == "ConfigError" || name == "DbError" || name == "ImageError" || name == "JsonError" || name == "CsvError" || name == "NetworkError"
+}
+
+// Nominal types the analyzer preloads from the stdlib/package `.rssi` interfaces
+// (every `struct`/`resource` Item::Type across CORE + STANDARD package interfaces).
+// These live in hir.type_info and so count as known types for RS0024.
+fn is_stdlib_type(name: read String) -> Bool {
+    return name == "CancellationSource" || name == "CancellationToken" || name == "Channel" || name == "ChannelError" || name == "Config" || name == "ConfigStore" || name == "ConfigValue" || name == "Counter" || name == "DbConnection" || name == "Deadline" || name == "DecodeError" || name == "Deque" || name == "Duration" || name == "Environment" || name == "FalliblePipeline" || name == "File" || name == "FileMetadata" || name == "FunctionObject" || name == "GlobalConfig" || name == "HttpRequest" || name == "HttpResponse" || name == "Image" || name == "Instant" || name == "JsonLiteral" || name == "JsonValue" || name == "Metal" || name == "PersistentMap" || name == "Pipeline" || name == "PoolError" || name == "PoolStats" || name == "ProcessEnv" || name == "ProcessEvent" || name == "ProcessOutput" || name == "ProcessRequest" || name == "Receiver" || name == "Regex" || name == "RegexError" || name == "Request" || name == "ResourcePool" || name == "Response" || name == "Row" || name == "RowBuffer" || name == "Rule" || name == "Sender" || name == "SortedMap" || name == "SortedSet" || name == "Stream" || name == "StringBuilder" || name == "TcpError" || name == "TcpStream" || name == "TempDir" || name == "Tensor" || name == "TensorError" || name == "TimerError" || name == "WebSocket" || name == "WebSocketError"
+}
+
+// Index just past a dotted ident sequence starting at i (i must be an ident).
+fn dotted_end(toks: read List<Tok>, i: read Int) -> Int {
+    if is_ident_tok(toks: read toks, i: read i) == false { return i }
+    let mut j = i + 1
+    let mut going = true
+    while going {
+        if at_symbol(toks: read toks, i: read j, code: read SYM_DOT) && is_ident_tok(toks: read toks, i: read (j + 1)) {
+            j = j + 2
+        } else {
+            going = false
+        }
+    }
+    return j
+}
+
+// Generic-param names in scope for an item whose `<...>` clause opens at nameEnd
+// (or an empty set if none). First ident of each top-level comma segment.
+fn collect_generics(toks: read List<Tok>, nameEnd: read Int) -> Set<String> {
+    let mut g = Set<String>.new()
+    if at_symbol(toks: read toks, i: read nameEnd, code: read SYM_LANGLE) == false { return g }
+    let close = find_matching(toks: read toks, open: read nameEnd, openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
+    if close < 0 { return g }
+    let mut k = nameEnd + 1
+    let mut depth = 0
+    let mut segStart = nameEnd + 1
+    while k < close {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE) || at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) || at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) {
+            if depth > 0 { depth = depth - 1 }
+        } else if depth == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
+            if is_ident_tok(toks: read toks, i: read segStart) {
+                Set.insert<String>(set: mut g, value: read tk_text(toks: read toks, i: read segStart))
+            }
+            segStart = k + 1
+        }
+        k = k + 1
+    }
+    if is_ident_tok(toks: read toks, i: read segStart) {
+        Set.insert<String>(set: mut g, value: read tk_text(toks: read toks, i: read segStart))
+    }
+    return g
+}
+
+// True if any TypeRef in the comma-separated argument region [s,e) is unknown.
+fn args_have_unknown(toks: read List<Tok>, s: read Int, e: read Int, generics: read Set<String>, declared: read Set<String>) -> Bool {
+    let mut k = s
+    let mut depth = 0
+    let mut segStart = s
+    let mut unknown = false
+    while k < e {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE) || at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) || at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) {
+            if depth > 0 { depth = depth - 1 }
+        } else if depth == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
+            if type_ref_has_unknown(toks: read toks, s: read segStart, e: read k, generics: read generics, declared: read declared) { unknown = true }
+            segStart = k + 1
+        }
+        k = k + 1
+    }
+    if type_ref_has_unknown(toks: read toks, s: read segStart, e: read e, generics: read generics, declared: read declared) { unknown = true }
+    return unknown
+}
+
+// Validate one TypeRef region [s,e): unknown base, or unknown nested arg / Fn part.
+fn type_ref_has_unknown(toks: read List<Tok>, s: read Int, e: read Int, generics: read Set<String>, declared: read Set<String>) -> Bool {
+    let mut p = s
+    let mut going = true
+    while going {
+        let t = tk_text(toks: read toks, i: read p)
+        if p < e && (t == "fresh" || t == "noescape" || t == "owned" || t == "handle" || t == "weak" || t == "&" || t == "read" || t == "mut" || t == "take") {
+            p = p + 1
+        } else {
+            going = false
+        }
+    }
+    if p >= e { return false }
+    if is_ident_tok(toks: read toks, i: read p) == false { return false }
+    let base = dotted_name_text(toks: read toks, i: read p)
+    let after = dotted_end(toks: read toks, i: read p)
+    let mut unknown = false
+    // Capability is treated as always-known and its protocol arg is not recursed.
+    if base == "Capability" {
+        return false
+    }
+    let known = Set.contains<String>(set: read generics, value: read base) || is_builtin_type(name: read base) || is_stdlib_type(name: read base) || Set.contains<String>(set: read declared, value: read base)
+    if known == false { unknown = true }
+    if at_symbol(toks: read toks, i: read after, code: read SYM_LANGLE) {
+        let close = find_matching(toks: read toks, open: read after, openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
+        if close >= 0 {
+            if args_have_unknown(toks: read toks, s: read (after + 1), e: read close, generics: read generics, declared: read declared) { unknown = true }
+        }
+    } else if base == "Fn" && at_symbol(toks: read toks, i: read after, code: read SYM_LPAREN) {
+        let close = find_matching(toks: read toks, open: read after, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+        if close >= 0 {
+            if args_have_unknown(toks: read toks, s: read (after + 1), e: read close, generics: read generics, declared: read declared) { unknown = true }
+            if at_symbol(toks: read toks, i: read (close + 1), code: read SYM_ARROW) {
+                if type_ref_has_unknown(toks: read toks, s: read (close + 2), e: read e, generics: read generics, declared: read declared) { unknown = true }
+            }
+        }
+    }
+    return unknown
+}
+
+// RS0024 over a type decl [i,r): every FIELD type. generics = the type's params.
+fn type_decl_unknown(toks: read List<Tok>, i: read Int, r: read Int, declared: read Set<String>) -> Bool {
+    let ns = type_name_start(toks: read toks, i: read i)
+    let nameEnd = dotted_end(toks: read toks, i: read ns)
+    let generics = collect_generics(toks: read toks, nameEnd: read nameEnd)
+    let ob = find_body_open(toks: read toks, i: read i, end: read r)
+    if ob < 0 { return false }
+    let close = r - 1
+    let mut k = ob + 1
+    let mut paren = 0
+    let mut br = 0
+    let mut ang = 0
+    let mut brace = 0
+    let mut unknown = false
+    while k < close {
+        let isColon = at_symbol(toks: read toks, i: read k, code: read SYM_COLON)
+        let atTop = paren == 0 && br == 0 && ang == 0 && brace == 0
+        if isColon && atTop && is_ident_tok(toks: read toks, i: read (k - 1)) {
+            if type_ref_has_unknown(toks: read toks, s: read (k + 1), e: read close, generics: read generics, declared: read declared) { unknown = true }
+        }
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) {
+            paren = paren + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) {
+            if paren > 0 { paren = paren - 1 }
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) {
+            br = br + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) {
+            if br > 0 { br = br - 1 }
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE) {
+            ang = ang + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) {
+            if ang > 0 { ang = ang - 1 }
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE) {
+            brace = brace + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE) {
+            if brace > 0 { brace = brace - 1 }
+        }
+        k = k + 1
+    }
+    return unknown
+}
+
+// RS0024 over a fn: every PARAM type and the RETURN type. generics = fn's params.
+fn fn_types_unknown(toks: read List<Tok>, start: read Int, declared: read Set<String>) -> Bool {
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let nameEnd = dotted_end(toks: read toks, i: read ns)
+    let generics = collect_generics(toks: read toks, nameEnd: read nameEnd)
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+    let open = find_param_open(toks: read toks, from: read ns, end: read sigEnd)
+    if open < 0 { return false }
+    let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    if close < 0 { return false }
+    let mut k = open + 1
+    let mut depth = 0
+    let mut angle = 0
+    let mut segStart = open + 1
+    let mut unknown = false
+    while k < close {
+        let opener = at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE)
+        let closer = at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE)
+        if opener {
+            depth = depth + 1
+        } else if closer {
+            if depth > 0 { depth = depth - 1 }
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE) {
+            angle = angle + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) {
+            if angle > 0 { angle = angle - 1 }
+        } else if depth == 0 && angle == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
+            if param_seg_type_unknown(toks: read toks, segStart: read segStart, segEnd: read k, generics: read generics, declared: read declared) { unknown = true }
+            segStart = k + 1
+        }
+        k = k + 1
+    }
+    if param_seg_type_unknown(toks: read toks, segStart: read segStart, segEnd: read close, generics: read generics, declared: read declared) { unknown = true }
+    // Return type: after the param-list close, an optional `-> Type` before
+    // `effects`/`{`/`=` (mirror parse_function_decl's return-type scan).
+    if at_symbol(toks: read toks, i: read (close + 1), code: read SYM_ARROW) {
+        let rs = close + 2
+        let mut re = rs
+        let mut scanning = true
+        while scanning {
+            let stop = at_ident(toks: read toks, i: read re, wid: read WORD_EFFECTS) || at_symbol(toks: read toks, i: read re, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read re, code: read SYM_EQ)
+            if re < sigEnd && stop == false {
+                re = re + 1
+            } else {
+                scanning = false
+            }
+        }
+        if type_ref_has_unknown(toks: read toks, s: read rs, e: read re, generics: read generics, declared: read declared) { unknown = true }
+    }
+    return unknown
+}
+
+// One param segment's type region → unknown? Type starts after `name :` and an
+// optional data-effect; runs to the segment end.
+fn param_seg_type_unknown(toks: read List<Tok>, segStart: read Int, segEnd: read Int, generics: read Set<String>, declared: read Set<String>) -> Bool {
+    if segStart >= segEnd { return false }
+    if is_ident_tok(toks: read toks, i: read segStart) == false { return false }
+    if at_symbol(toks: read toks, i: read (segStart + 1), code: read SYM_COLON) == false { return false }
+    let mut ts = segStart + 2
+    if is_effect_kw(toks: read toks, i: read ts) { ts = ts + 1 }
+    return type_ref_has_unknown(toks: read toks, s: read ts, e: read segEnd, generics: read generics, declared: read declared)
+}
+
+// Pre-pass: names of all declared nominal types (struct/class/resource/opaque/
+// sum/type-alias LHS). Protocols are NOT included. Mirrors the main dispatch.
+fn collect_declared_types(toks: read List<Tok>) -> Set<String> {
+    let ntok = List.len(list: read toks)
+    let mut declared = Set<String>.new()
+    let mut i = 0
+    let mut running = true
+    while running {
+        if i >= ntok {
+            running = false
+        } else if tk_kind(toks: read toks, i: read i) == TOK_EOF {
+            running = false
+        } else {
+            let cls = classify_top(toks: read toks, i: read i)
+            let isPub = cls.isPub
+            if cls.isFeatures {
+                i = declaration_line_end(toks: read toks, start: read i)
+            } else if cls.isProfile {
+                i = declaration_line_end(toks: read toks, start: read i)
+            } else if starts_type_decl(toks: read toks, i: read i, isPub: read isPub) {
+                let r = parse_type_decl(toks: read toks, i: read i)
+                if r < 0 {
+                    running = false
+                } else {
+                    let ns = type_name_start(toks: read toks, i: read i)
+                    Set.insert<String>(set: mut declared, value: read dotted_name_text(toks: read toks, i: read ns))
+                    i = r
+                }
+            } else if cls.isSum {
+                let r = parse_sum_decl(toks: read toks, i: read i)
+                if r < 0 {
+                    running = false
+                } else {
+                    let ns = sum_name_start(toks: read toks, i: read i)
+                    Set.insert<String>(set: mut declared, value: read dotted_name_text(toks: read toks, i: read ns))
+                    i = r
+                }
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_PROTOCOL) {
+                let r = parse_protocol_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_IMPL) {
+                let r = parse_impl_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else if cls.isNativeMod {
+                let r = parse_native_module_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else if cls.isTypeAlias {
+                let r = parse_type_alias_decl(toks: read toks, i: read i)
+                if r < 0 {
+                    running = false
+                } else {
+                    let mut ns = i
+                    if isPub { ns = ns + 1 }
+                    ns = ns + 1
+                    Set.insert<String>(set: mut declared, value: read dotted_name_text(toks: read toks, i: read ns))
+                    i = r
+                }
+            } else if cls.isConst {
+                let r = parse_const_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_MODULE) {
+                let r = parse_module_decl(toks: read toks, i: read i)
+                if r < 0 { i = i + 1 } else { i = r }
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_USE) {
+                let r = parse_use_decl(toks: read toks, i: read i)
+                if r < 0 { i = i + 1 } else { i = r }
+            } else if starts_fn_like(toks: read toks, i: read i, isPub: read isPub) {
+                let r = parse_function_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else {
+                i = i + 1
+            }
+        }
+    }
+    return declared
+}
+
 fn main() -> Unit {
     let source = Args.get_or_default(index: 0, default: read "")
     let toks = tokenize(source: read source)
@@ -655,6 +958,9 @@ fn main() -> Unit {
     let mut removedRuntime = false
     let mut invalidSelf = false
     let mut retainsBad = false
+    let mut unknownType = false
+    // RS0024: forward-reference-tolerant known-type set for the whole file.
+    let declared = collect_declared_types(toks: read toks)
     // RS0033: any decimal integer literal in the file that overflows i64.
     let outOfRangeInt = has_out_of_range_int(toks: read toks)
     let mut i = 0
@@ -724,6 +1030,7 @@ fn main() -> Unit {
                             found = true
                         }
                     }
+                    if type_decl_unknown(toks: read toks, i: read i, r: read r, declared: read declared) { unknownType = true }
                     i = r
                 }
             } else if isSum {
@@ -806,6 +1113,7 @@ fn main() -> Unit {
                     if effects_name_probe(toks: read toks, start: read i, mode: read 1) { removedRuntime = true }
                     if fn_has_invalid_self(toks: read toks, start: read i) { invalidSelf = true }
                     if fn_retains_bad(toks: read toks, start: read i) { retainsBad = true }
+                    if fn_types_unknown(toks: read toks, start: read i, declared: read declared) { unknownType = true }
                     i = r
                 }
             } else {
@@ -844,6 +1152,9 @@ fn main() -> Unit {
     if retainsBad {
         Log.write(message: read "RS0007")
     }
+    if unknownType {
+        Log.write(message: read "RS0024")
+    }
     if outOfRangeInt {
         Log.write(message: read "RS0033")
     }
@@ -856,7 +1167,7 @@ fn main() -> Unit {
     if headerCount >= 2 {
         Log.write(message: read "RS0006")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
