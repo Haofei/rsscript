@@ -1069,11 +1069,46 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   now byte-exact at **all three tiers** (0 kind+payload, 1 +line/col, 2 +length) —
   576 files, token-mismatches 0 each. The lexer span ladder is fully closed; the
   additive `Tok.len` left parser/checker/astdump parity untouched.
-- **AST spans (step 3, remaining "last phase"):** NOT done. Would need each
-  `astdump.rss` `emit` to carry the correct token's span and the oracle serializer
-  to append ` @L:C:N` per node (plus a tier-strip so tier-0 stays green). Feasible
-  but large + precise: node spans are mostly `tokens[start]` but not uniformly
-  (`Try` uses the `?` token, some binary the operator, ReceiverCall the receiver),
-  so it is an invasive per-node-type effort across ~150 emit sites — its own phase.
-- **Status:** open. Step-2 milestone 2a and step-3 lexer spans are done and gated;
-  step-2 deeper checks and step-3 AST spans are the scoped remainder.
+- **AST spans (step 3) — DONE, 2026-07-03:** `ast_parity_corpus` is byte-exact
+  **619/619 at all three tiers** (0 structure+payload, 1 `@line:col`, 2
+  `@line:col:len`), 0 run-failures each.
+  - **Discovered span rule (load-bearing):** every AST node's `Span` is ONE
+    representative token's `line:col:len` — never a multi-token range. So the
+    producer reproduces a node's span by emitting that ONE token's position and
+    length (`tk_len`), NOT by measuring the node's extent. Representative token
+    per node: *first (paren-trimmed) token* for the vast majority; **Binary → the
+    operator token**; **Try → the trailing `?`**; **ReceiverCall → the receiver
+    token** (`tokens[receiver_start]`, i.e. after the effect kw); **TypeRef → the
+    NAME token** (`name_index`, after prefix keywords read/mut/take/fresh/handle/
+    weak/noescape/owned); **tuple type/expr → the `(`**; decls (fn/type/sum/const/
+    alias/module/use) → the decl's FIRST token *including* `#`-attributes and
+    `pub` (parse_*'s `current()` at entry); **MatchArm → the arm's first token**;
+    **if-let's two synthetic arms + the synthetic protocol `Self: Managed` generic
+    → the `if`/`fn` token** (`method.span`); interpolated-string desugar nodes
+    (call/effect/string/array) → the interp-string token, and its EMBEDDED exprs
+    self-reproduce because BOTH oracle and producer re-tokenize the fragment from
+    1:1; an empty named call-arg (`print(value:)`) → the arg's NAME token
+    (parse_call_args' `tokens[start]` Unknown fallback). Patterns (`pat-*`) and
+    pure structural labels (value/body/block/cond/then/else/callee-*/arg/
+    object-field/map-entry/key/derive/bound/effect-name/malformed-generic|param|
+    field|effect|arm/…) are NOT spanned on EITHER side.
+  - **Mechanism (mirrors the lexer ladder, no new invention):** the producer
+    ALWAYS emits the richest ` @line:col:len` via `emit_at`/`spanof`; the harness
+    (`run_astdump`) PROJECTS each line down to the active `RSS_SELFHOST_AST_TIER`
+    before the byte-exact compare (tier 0 drops the suffix, tier 1 keeps
+    `line:col`). No tier flag threads through the producer. The oracle side uses
+    the pre-added `sp`/`push_node` scaffolding, tier-gated by the same env var.
+    `expr_rep_tok` mirrors `emit_expr`'s dispatch to recover an expression's span
+    token without descending (used for expr-statement heads + single-expression
+    closure bodies — the latter was the dominant tier-1 failure, since
+    `noescape-callback-*` fixtures all pass `|| …`/`|x| …` callbacks whose
+    `Stmt::Expr` body head is spanned).
+  - **Commits:** 1d86a430 (oracle heads → push_node, tier 0 unchanged 619/619) /
+    629253d2 (producer spans + harness projection; tier 1 619/619; tier 2 619/619
+    verified on the same code — `:len` is just the rep token's own length, which
+    lexer parity already proved matches). No node types left blocked.
+  - **Gate:** default (env unset) stays tier 0, byte-exact 619/619 — the committed
+    gate. Tiers 1 and 2 are run via `RSS_SELFHOST_AST_TIER=1|2`.
+- **Status:** the frontend-object AST parity ladder (structure → line:col →
+  line:col:len) is CLOSED. Remaining self-host frontier is the semantic tier
+  (type-inference + borrow-checker codes; see the SH-026 step-2 tail).

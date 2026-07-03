@@ -77,6 +77,22 @@ fn tk_text(toks: read List<Tok>, i: read Int) -> String {
     return t.text
 }
 
+// Span-field accessors for a token (defined here, not in the shared scan.rss
+// prelude, because parser.rss already declares its own `tk_col`).
+fn tk_col(toks: read List<Tok>, i: read Int) -> Int {
+    if i < 0 { return 0 }
+    if i >= List.len(list: read toks) { return 0 }
+    let t = List.get(list: read toks, index: read i)
+    return t.col
+}
+
+fn tk_len(toks: read List<Tok>, i: read Int) -> Int {
+    if i < 0 { return 0 }
+    if i >= List.len(list: read toks) { return 0 }
+    let t = List.get(list: read toks, index: read i)
+    return t.len
+}
+
 // bool -> "true"/"false" for attribute values.
 fn boolstr(b: read Bool) -> String {
     if b { return "true" }
