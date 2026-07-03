@@ -1,0 +1,7 @@
+fn edition_of(package: read JsonValue) -> Result<fresh String, JsonError> {
+    return Ok(value: read "x")
+}
+
+fn path_array(m: read JsonValue) -> Result<fresh List<String>, JsonError> {
+    return Ok(value: read m)
+}

@@ -1170,6 +1170,18 @@ fn emit_stmt(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int
         emit(depth: read d, s: read "continue")
         return stmt_end(toks: read toks, start: read start, limit: read limit)
     }
+    // async let name = value  (managed, no annotation, async=true)
+    if is_kw_text(toks: read toks, i: read start, word: read "async") && is_kw_text(toks: read toks, i: read (start + 1), word: read "let") {
+        let e = stmt_end(toks: read toks, start: read start, limit: read limit)
+        let name = tk_text(toks: read toks, i: read (start + 2))
+        emit(depth: read d, s: read String.concat(left: read String.concat(left: read "let kind=managed name=", right: read name), right: read " mut=false async=true"))
+        let asg = first_eq(toks: read toks, start: read (start + 3), end: read e)
+        if asg >= 0 {
+            emit(depth: read (d + 1), s: read "value")
+            emit_expr(toks: read toks, start: read (asg + 1), end: read e, d: read (d + 2))
+        }
+        return e
+    }
     // let / local [mut] name [: type] = value
     if is_kw_text(toks: read toks, i: read start, word: read "let") || is_kw_text(toks: read toks, i: read start, word: read "local") {
         return emit_let(toks: read toks, start: read start, limit: read limit, d: read d)
@@ -1476,6 +1488,11 @@ fn emit_function(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
     let sigEnd = function_signature_end(toks: read toks, start: read (pclose + 1))
     let effPos = find_effects_kw(toks: read toks, start: read (pclose + 1), end: read sigEnd)
     let defaultImpl = has_default_impl(toks: read toks, start: read (pclose + 1), end: read sigEnd)
+    // A `fresh` anywhere in the return-type region (e.g. `-> Result<fresh String, E>`)
+    // also sets returns-fresh, matching parse_function_decl's region scan.
+    if hasRet && fresh_in_return(toks: read toks, start: read retStart, sigEnd: read sigEnd) {
+        retFresh = true
+    }
     // Emit fn line.
     local sb = StringBuilder.new()
     StringBuilder.push(builder: mut sb, value: read "fn name=")
@@ -1530,6 +1547,20 @@ fn emit_function(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
 
 fn same_stmt_line(toks: read List<Tok>, a: read Int, b: read Int) -> Bool {
     return tk_line(toks: read toks, i: read a) == tk_line(toks: read toks, i: read b)
+}
+
+// True if `fresh` appears in the return-type region [start, sigEnd) before the
+// effects clause / body `{` / default-impl `=` (mirrors parse_function_decl).
+fn fresh_in_return(toks: read List<Tok>, start: read Int, sigEnd: read Int) -> Bool {
+    let mut k = start
+    while k < sigEnd {
+        if is_kw_text(toks: read toks, i: read k, word: read "effects") || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read k, code: read SYM_EQ) {
+            return false
+        }
+        if at_ident(toks: read toks, i: read k, wid: read WORD_FRESH) { return true }
+        k = k + 1
+    }
+    return false
 }
 
 // Index of a top-level `effects(` keyword in [start, end), or -1.
