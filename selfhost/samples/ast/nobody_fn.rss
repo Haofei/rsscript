@@ -1,0 +1,18 @@
+// expect: RS0305
+features: local
+
+struct Workspace {
+    id: Int
+}
+
+struct Config {
+    workspace: Workspace
+}
+
+fn use_config(config: read Config, workspace: read Workspace) -> Unit
+fn make_config() -> fresh Config
+
+fn run() -> Unit {
+    local config = make_config()
+    use_config(config: read (manage config), workspace: read config.workspace)
+}

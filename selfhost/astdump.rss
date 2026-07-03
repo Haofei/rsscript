@@ -1480,12 +1480,14 @@ fn emit_function(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
             retStart = j + 2
         }
     }
-    // body
-    let bodyOpen = find_block_open(toks: read toks, start: read j, limit: read List.len(list: read toks))
-    let hasBody = bodyOpen >= 0 && (isNative == false || same_stmt_line(toks: read toks, a: read start, b: read bodyOpen))
     // Signature region [pclose+1, sigEnd): return type, effects(...), and the
-    // default-impl marker `= _`.
+    // default-impl marker `= _`. function_signature_end stops at the body `{` or
+    // the next top-level item — so a body exists iff sigEnd lands on a `{`. (A raw
+    // find_block_open would wrongly borrow a LATER fn's `{` for a body-less decl.)
     let sigEnd = function_signature_end(toks: read toks, start: read (pclose + 1))
+    let mut bodyOpen = -1
+    if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) { bodyOpen = sigEnd }
+    let hasBody = bodyOpen >= 0 && (isNative == false || same_stmt_line(toks: read toks, a: read start, b: read bodyOpen))
     let effPos = find_effects_kw(toks: read toks, start: read (pclose + 1), end: read sigEnd)
     let defaultImpl = has_default_impl(toks: read toks, start: read (pclose + 1), end: read sigEnd)
     // A `fresh` anywhere in the return-type region (e.g. `-> Result<fresh String, E>`)
@@ -1541,8 +1543,9 @@ fn emit_function(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
         return bclose + 1
     }
     emit(depth: read (d + 2), s: read "block")
-    // native no-body: consume to end of declaration line.
-    return declaration_line_end(toks: read toks, start: read start)
+    // No body: the declaration ends exactly at sigEnd (next top-level item / EOF),
+    // which is correct even for a signature spanning multiple lines.
+    return sigEnd
 }
 
 fn same_stmt_line(toks: read List<Tok>, a: read Int, b: read Int) -> Bool {
@@ -2355,6 +2358,10 @@ fn main() -> Unit {
     let toks = tokenize(source: read source)
     let ntok = List.len(list: read toks)
     emit(depth: read 0, s: read "program")
+    // Section 1: features are dumped FIRST regardless of source position (the
+    // oracle emits by struct-field order, not source order), so a pre-pass emits
+    // every `feature <name>` before any item; the item pass then skips headers.
+    emit_all_features(toks: read toks, ntok: read ntok)
     let mut i = 0
     let mut running = true
     while running {
@@ -2367,16 +2374,8 @@ fn main() -> Unit {
         } else {
             let cls = classify_top(toks: read toks, i: read i)
             if cls.isFeatures {
-                // features line: emit `feature <name>` per known feature word.
-                let fend = declaration_line_end(toks: read toks, start: read (i + 2))
-                let mut k = i + 2
-                while k < fend {
-                    if is_feature_word(toks: read toks, i: read k) {
-                        emit(depth: read 1, s: read String.concat(left: read "feature ", right: read tk_text(toks: read toks, i: read k)))
-                    }
-                    k = k + 1
-                }
-                i = fend
+                // Already emitted in the pre-pass; skip the header line.
+                i = declaration_line_end(toks: read toks, start: read (i + 2))
             } else if cls.isProfile {
                 i = declaration_line_end(toks: read toks, start: read i)
             } else if starts_type_decl(toks: read toks, i: read i, isPub: read cls.isPub) {
@@ -2401,6 +2400,97 @@ fn main() -> Unit {
                 i = advance(toks: read toks, i: read i, r: read next_decl_skip(toks: read toks, start: read i))
             }
         }
+    }
+    // Section 5: feature diagnostics, emitted AFTER all items (unknown-feature
+    // then duplicate-feature), matching ast_oracle_dump's ordering.
+    emit_feature_diags(toks: read toks, ntok: read ntok)
+    return Unit
+}
+
+// True if token i begins a top-level `features:` header (depth checked by caller).
+fn is_features_header(toks: read List<Tok>, i: read Int) -> Bool {
+    return is_kw_text(toks: read toks, i: read i, word: read "features") && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_COLON)
+}
+
+// Section 1 pre-pass: emit `feature <name>` for every known feature across all
+// top-level `features:` headers, in source order.
+fn emit_all_features(toks: read List<Tok>, ntok: read Int) -> Unit {
+    let mut depth = 0
+    let mut i = 0
+    while i < ntok {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) {
+            if depth > 0 { depth = depth - 1 }
+        } else if depth == 0 && is_features_header(toks: read toks, i: read i) {
+            let fend = declaration_line_end(toks: read toks, start: read (i + 2))
+            let mut k = i + 2
+            while k < fend {
+                if is_feature_word(toks: read toks, i: read k) {
+                    emit(depth: read 1, s: read String.concat(left: read "feature ", right: read tk_text(toks: read toks, i: read k)))
+                }
+                k = k + 1
+            }
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+// True if a known-feature token with the same text as token k appears earlier in
+// the same header [hStart, k) (per-header duplicate, mirroring parse_features).
+fn feat_dup_before(toks: read List<Tok>, hStart: read Int, k: read Int) -> Bool {
+    let target = tk_text(toks: read toks, i: read k)
+    let mut m = hStart
+    while m < k {
+        if is_feature_word(toks: read toks, i: read m) && tk_text(toks: read toks, i: read m) == target {
+            return true
+        }
+        m = m + 1
+    }
+    return false
+}
+
+// Section 5 post-pass: unknown-feature markers (all headers) then duplicate-feature
+// markers (all headers), matching ast_oracle_dump.
+fn emit_feature_diags(toks: read List<Tok>, ntok: read Int) -> Unit {
+    let mut depth = 0
+    let mut i = 0
+    while i < ntok {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) {
+            if depth > 0 { depth = depth - 1 }
+        } else if depth == 0 && is_features_header(toks: read toks, i: read i) {
+            let fend = declaration_line_end(toks: read toks, start: read (i + 2))
+            let mut k = i + 2
+            while k < fend {
+                if at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) == false && tk_kind(toks: read toks, i: read k) != TOK_EOF && is_feature_word(toks: read toks, i: read k) == false {
+                    emit(depth: read 1, s: read String.concat(left: read "unknown-feature ", right: read escape(s: read tk_text(toks: read toks, i: read k))))
+                }
+                k = k + 1
+            }
+        }
+        i = i + 1
+    }
+    depth = 0
+    i = 0
+    while i < ntok {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) {
+            if depth > 0 { depth = depth - 1 }
+        } else if depth == 0 && is_features_header(toks: read toks, i: read i) {
+            let fend = declaration_line_end(toks: read toks, start: read (i + 2))
+            let mut k = i + 2
+            while k < fend {
+                if is_feature_word(toks: read toks, i: read k) && feat_dup_before(toks: read toks, hStart: read (i + 2), k: read k) {
+                    emit(depth: read 1, s: read String.concat(left: read "duplicate-feature ", right: read tk_text(toks: read toks, i: read k)))
+                }
+                k = k + 1
+            }
+        }
+        i = i + 1
     }
     return Unit
 }

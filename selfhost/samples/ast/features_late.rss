@@ -1,0 +1,5 @@
+fn helper(x: read Int) -> Int {
+    return x
+}
+
+features: local
