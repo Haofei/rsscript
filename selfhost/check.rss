@@ -633,6 +633,329 @@ fn fn_retains_bad(toks: read List<Tok>, start: read Int) -> Bool {
 }
 
 // ---------------------------------------------------------------------------
+// RS0009 INVALID_PURE_EFFECT.
+// ---------------------------------------------------------------------------
+
+// Index of the base type token after skipping data effects, `&`, and the
+// fresh/noescape/owned/handle/weak prefixes, bounded by e.
+fn skip_type_prefixes(toks: read List<Tok>, s: read Int, e: read Int) -> Int {
+    let mut p = s
+    let mut going = true
+    while going {
+        let t = tk_text(toks: read toks, i: read p)
+        if p < e && (t == "fresh" || t == "noescape" || t == "owned" || t == "handle" || t == "weak" || t == "&" || t == "read" || t == "mut" || t == "take") {
+            p = p + 1
+        } else {
+            going = false
+        }
+    }
+    return p
+}
+
+// One effects-clause item is the bare `pure` effect.
+fn item_is_pure(toks: read List<Tok>, segStart: read Int, segEnd: read Int) -> Bool {
+    if effect_item_kind(toks: read toks, segStart: read segStart, segEnd: read segEnd) != 1 { return false }
+    return tk_text(toks: read toks, i: read segStart) == "pure"
+}
+
+// True if the fn declares `effects(pure)` (a bare `pure` item).
+fn fn_is_pure(toks: read List<Tok>, start: read Int) -> Bool {
+    let effOpen = find_effects_open(toks: read toks, start: read start)
+    if effOpen < 0 { return false }
+    let effClose = find_matching(toks: read toks, open: read effOpen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    if effClose < 0 { return false }
+    let mut k = effOpen + 1
+    let mut segStart = effOpen + 1
+    let mut depth = 0
+    let mut pure = false
+    while k < effClose {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) {
+            if depth > 0 { depth = depth - 1 }
+        } else if depth == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
+            if item_is_pure(toks: read toks, segStart: read segStart, segEnd: read k) { pure = true }
+            segStart = k + 1
+        }
+        k = k + 1
+    }
+    if item_is_pure(toks: read toks, segStart: read segStart, segEnd: read effClose) { pure = true }
+    return pure
+}
+
+// True if the fn has a `retains(...)` effect item.
+fn fn_has_retains(toks: read List<Tok>, start: read Int) -> Bool {
+    let effOpen = find_effects_open(toks: read toks, start: read start)
+    if effOpen < 0 { return false }
+    let effClose = find_matching(toks: read toks, open: read effOpen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    if effClose < 0 { return false }
+    let mut k = effOpen + 1
+    let mut segStart = effOpen + 1
+    let mut depth = 0
+    let mut hit = false
+    while k < effClose {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) {
+            if depth > 0 { depth = depth - 1 }
+        } else if depth == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
+            if effect_item_kind(toks: read toks, segStart: read segStart, segEnd: read k) == 2 { hit = true }
+            segStart = k + 1
+        }
+        k = k + 1
+    }
+    if effect_item_kind(toks: read toks, segStart: read segStart, segEnd: read effClose) == 2 { hit = true }
+    return hit
+}
+
+// True if any param uses the `mut` or `take` data effect.
+fn fn_has_mut_take_param(toks: read List<Tok>, start: read Int) -> Bool {
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+    let open = find_param_open(toks: read toks, from: read ns, end: read sigEnd)
+    if open < 0 { return false }
+    let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    if close < 0 { return false }
+    let mut k = open + 1
+    let mut depth = 0
+    let mut angle = 0
+    let mut segStart = open + 1
+    let mut hit = false
+    while k < close {
+        let opener = at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE)
+        let closer = at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE)
+        if opener {
+            depth = depth + 1
+        } else if closer {
+            if depth > 0 { depth = depth - 1 }
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE) {
+            angle = angle + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) {
+            if angle > 0 { angle = angle - 1 }
+        } else if depth == 0 && angle == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
+            if seg_is_mut_take(toks: read toks, segStart: read segStart, segEnd: read k) { hit = true }
+            segStart = k + 1
+        }
+        k = k + 1
+    }
+    if seg_is_mut_take(toks: read toks, segStart: read segStart, segEnd: read close) { hit = true }
+    return hit
+}
+
+// `name : mut|take …`
+fn seg_is_mut_take(toks: read List<Tok>, segStart: read Int, segEnd: read Int) -> Bool {
+    if segStart >= segEnd { return false }
+    if is_ident_tok(toks: read toks, i: read segStart) == false { return false }
+    if at_symbol(toks: read toks, i: read (segStart + 1), code: read SYM_COLON) == false { return false }
+    let e = tk_text(toks: read toks, i: read (segStart + 2))
+    return e == "mut" || e == "take"
+}
+
+// True if a resource-typed value is returned. Mirrors resource_return_type_name:
+// for Result/Option the first type arg is the target, else the return itself.
+fn fn_pure_resource_return(toks: read List<Tok>, start: read Int, resources: read Set<String>) -> Bool {
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+    let open = find_param_open(toks: read toks, from: read ns, end: read sigEnd)
+    if open < 0 { return false }
+    let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    if close < 0 { return false }
+    if at_symbol(toks: read toks, i: read (close + 1), code: read SYM_ARROW) == false { return false }
+    let rs = close + 2
+    let mut re = rs
+    let mut scanning = true
+    while scanning {
+        let stop = at_ident(toks: read toks, i: read re, wid: read WORD_EFFECTS) || at_symbol(toks: read toks, i: read re, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read re, code: read SYM_EQ)
+        if re < sigEnd && stop == false {
+            re = re + 1
+        } else {
+            scanning = false
+        }
+    }
+    let p = skip_type_prefixes(toks: read toks, s: read rs, e: read re)
+    let base = dotted_name_text(toks: read toks, i: read p)
+    let after = dotted_end(toks: read toks, i: read p)
+    let mut target = base
+    if (base == "Result" || base == "Option") && at_symbol(toks: read toks, i: read after, code: read SYM_LANGLE) {
+        let ac = find_matching(toks: read toks, open: read after, openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
+        if ac >= 0 {
+            let q = skip_type_prefixes(toks: read toks, s: read (after + 1), e: read ac)
+            target = dotted_name_text(toks: read toks, i: read q)
+        }
+    }
+    return is_stdlib_resource(name: read target) || Set.contains<String>(set: read resources, value: read target)
+}
+
+// Stdlib resource types (the `resource` Item::Type decls in the .rssi interfaces).
+fn is_stdlib_resource(name: read String) -> Bool {
+    return name == "File" || name == "DbConnection" || name == "TempDir"
+}
+
+// A qualified call `Ns.method(...)` is pure-allowed iff Ns is a known type.
+fn qualified_call_allowed(name: read String, declared: read Set<String>) -> Bool {
+    return is_builtin_type(name: read name) || is_stdlib_type(name: read name) || Set.contains<String>(set: read declared, value: read name)
+}
+
+// An unqualified call `name(...)` in a pure fn: FLAG iff it resolves to a declared
+// non-pure function; constructors / enum variants / pure fns are allowed; an
+// unresolved name is ignored.
+fn unqual_call_bad(name: read String, sumVariants: read Set<String>, pureFns: read Set<String>, allFns: read Set<String>, declared: read Set<String>) -> Bool {
+    if name == "Some" || name == "Ok" || name == "Err" || name == "None" { return false }
+    if is_builtin_type(name: read name) || is_stdlib_type(name: read name) || Set.contains<String>(set: read declared, value: read name) { return false }
+    if Set.contains<String>(set: read sumVariants, value: read name) { return false }
+    if Set.contains<String>(set: read pureFns, value: read name) { return false }
+    if Set.contains<String>(set: read allFns, value: read name) { return true }
+    return false
+}
+
+// Scan a pure fn body [bodyOpen,bodyClose) for a `with`/`manage` or a non-pure call.
+fn pure_body_bad(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, sumVariants: read Set<String>, pureFns: read Set<String>, allFns: read Set<String>, declared: read Set<String>) -> Bool {
+    let mut k = bodyOpen + 1
+    let mut hit = false
+    while k < bodyClose {
+        let t = tk_text(toks: read toks, i: read k)
+        if t == "with" {
+            hit = true
+        } else if t == "manage" {
+            hit = true
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) && tk_kind(toks: read toks, i: read (k - 1)) == TOK_IDENT {
+            let name = tk_text(toks: read toks, i: read (k - 1))
+            let qualified = at_symbol(toks: read toks, i: read (k - 2), code: read SYM_DOT) && is_ident_tok(toks: read toks, i: read (k - 3))
+            if qualified {
+                let mut root = k - 3
+                let mut walking = true
+                while walking {
+                    if at_symbol(toks: read toks, i: read (root - 1), code: read SYM_DOT) && is_ident_tok(toks: read toks, i: read (root - 2)) {
+                        root = root - 2
+                    } else {
+                        walking = false
+                    }
+                }
+                if qualified_call_allowed(name: read tk_text(toks: read toks, i: read root), declared: read declared) == false { hit = true }
+            } else {
+                if unqual_call_bad(name: read name, sumVariants: read sumVariants, pureFns: read pureFns, allFns: read allFns, declared: read declared) { hit = true }
+            }
+        }
+        k = k + 1
+    }
+    return hit
+}
+
+// RS0009: a `pure` fn that returns a resource, has a mut/take param, retains a
+// param, or whose body uses `with`/`manage`/a non-pure call.
+fn fn_pure_bad(toks: read List<Tok>, start: read Int, resources: read Set<String>, sumVariants: read Set<String>, pureFns: read Set<String>, allFns: read Set<String>, declared: read Set<String>) -> Bool {
+    if fn_is_pure(toks: read toks, start: read start) == false { return false }
+    let mut bad = false
+    if fn_pure_resource_return(toks: read toks, start: read start, resources: read resources) { bad = true }
+    if fn_has_mut_take_param(toks: read toks, start: read start) { bad = true }
+    if fn_has_retains(toks: read toks, start: read start) { bad = true }
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+    if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) {
+        let bodyClose = find_matching(toks: read toks, open: read sigEnd, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+        if bodyClose >= 0 {
+            if pure_body_bad(toks: read toks, bodyOpen: read sigEnd, bodyClose: read bodyClose, sumVariants: read sumVariants, pureFns: read pureFns, allFns: read allFns, declared: read declared) { bad = true }
+        }
+    }
+    return bad
+}
+
+// Pre-pass filling RS0009 lookup sets: user resource type names, sum variant
+// names, pure fn (simple) names, and all fn (simple) names.
+fn collect_rs0009(toks: read List<Tok>, resources: mut Set<String>, sumVariants: mut Set<String>, pureFns: mut Set<String>, allFns: mut Set<String>) -> Unit {
+    let ntok = List.len(list: read toks)
+    let mut i = 0
+    let mut running = true
+    while running {
+        if i >= ntok {
+            running = false
+        } else if tk_kind(toks: read toks, i: read i) == TOK_EOF {
+            running = false
+        } else {
+            let cls = classify_top(toks: read toks, i: read i)
+            let isPub = cls.isPub
+            if cls.isFeatures {
+                i = declaration_line_end(toks: read toks, start: read i)
+            } else if cls.isProfile {
+                i = declaration_line_end(toks: read toks, start: read i)
+            } else if starts_type_decl(toks: read toks, i: read i, isPub: read isPub) {
+                let r = parse_type_decl(toks: read toks, i: read i)
+                if r < 0 {
+                    running = false
+                } else {
+                    let nameIdx = type_name_start(toks: read toks, i: read i)
+                    if at_ident(toks: read toks, i: read (nameIdx - 1), wid: read WORD_RESOURCE) {
+                        Set.insert<String>(set: mut resources, value: read dotted_name_text(toks: read toks, i: read nameIdx))
+                    }
+                    i = r
+                }
+            } else if cls.isSum {
+                let r = parse_sum_decl(toks: read toks, i: read i)
+                if r < 0 {
+                    running = false
+                } else {
+                    let ob = find_body_open(toks: read toks, i: read i, end: read r)
+                    if ob >= 0 {
+                        let mut k = ob + 1
+                        let mut depth = 0
+                        while k < (r - 1) {
+                            if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE) {
+                                depth = depth + 1
+                            } else if at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) {
+                                if depth > 0 { depth = depth - 1 }
+                            } else if depth == 0 && is_ident_tok(toks: read toks, i: read k) {
+                                Set.insert<String>(set: mut sumVariants, value: read tk_text(toks: read toks, i: read k))
+                            }
+                            k = k + 1
+                        }
+                    }
+                    i = r
+                }
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_PROTOCOL) {
+                let r = parse_protocol_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_IMPL) {
+                let r = parse_impl_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else if cls.isNativeMod {
+                let r = parse_native_module_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else if cls.isTypeAlias {
+                let r = parse_type_alias_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else if cls.isConst {
+                let r = parse_const_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_MODULE) {
+                let r = parse_module_decl(toks: read toks, i: read i)
+                if r < 0 { i = i + 1 } else { i = r }
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_USE) {
+                let r = parse_use_decl(toks: read toks, i: read i)
+                if r < 0 { i = i + 1 } else { i = r }
+            } else if starts_fn_like(toks: read toks, i: read i, isPub: read isPub) {
+                let r = parse_function_decl(toks: read toks, i: read i)
+                if r < 0 {
+                    running = false
+                } else {
+                    let nameIdx = fn_name_start(toks: read toks, i: read i)
+                    if at_symbol(toks: read toks, i: read (nameIdx + 1), code: read SYM_DOT) == false {
+                        let fname = tk_text(toks: read toks, i: read nameIdx)
+                        Set.insert<String>(set: mut allFns, value: read fname)
+                        if fn_is_pure(toks: read toks, start: read i) {
+                            Set.insert<String>(set: mut pureFns, value: read fname)
+                        }
+                    }
+                    i = r
+                }
+            } else {
+                i = i + 1
+            }
+        }
+    }
+    return Unit
+}
+
+// ---------------------------------------------------------------------------
 // RS0008 MISSING_PARAMETER_EFFECT.
 // ---------------------------------------------------------------------------
 
@@ -1150,10 +1473,17 @@ fn main() -> Unit {
     let mut retainsBad = false
     let mut unknownType = false
     let mut missingEffect = false
+    let mut pureBad = false
     // RS0024: forward-reference-tolerant known-type set for the whole file.
     let declared = collect_declared_types(toks: read toks)
     // RS0008: user sum names whose every variant is payloadless.
     let payloadlessSums = collect_payloadless_sums(toks: read toks)
+    // RS0009: resource types, sum variants, and pure/all fn names.
+    let mut resources = Set<String>.new()
+    let mut sumVariants = Set<String>.new()
+    let mut pureFns = Set<String>.new()
+    let mut allFns = Set<String>.new()
+    collect_rs0009(toks: read toks, resources: mut resources, sumVariants: mut sumVariants, pureFns: mut pureFns, allFns: mut allFns)
     // RS0033: any decimal integer literal in the file that overflows i64.
     let outOfRangeInt = has_out_of_range_int(toks: read toks)
     let mut i = 0
@@ -1308,6 +1638,7 @@ fn main() -> Unit {
                     if fn_retains_bad(toks: read toks, start: read i) { retainsBad = true }
                     if fn_types_unknown(toks: read toks, start: read i, declared: read declared) { unknownType = true }
                     if fn_missing_param_effect(toks: read toks, start: read i, sums: read payloadlessSums) { missingEffect = true }
+                    if fn_pure_bad(toks: read toks, start: read i, resources: read resources, sumVariants: read sumVariants, pureFns: read pureFns, allFns: read allFns, declared: read declared) { pureBad = true }
                     i = r
                 }
             } else {
@@ -1349,6 +1680,9 @@ fn main() -> Unit {
     if missingEffect {
         Log.write(message: read "RS0008")
     }
+    if pureBad {
+        Log.write(message: read "RS0009")
+    }
     if unknownType {
         Log.write(message: read "RS0024")
     }
@@ -1364,7 +1698,7 @@ fn main() -> Unit {
     if headerCount >= 2 {
         Log.write(message: read "RS0006")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
