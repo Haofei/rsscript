@@ -869,7 +869,7 @@ fn fn_pure_bad(toks: read List<Tok>, start: read Int, resources: read Set<String
 
 // Pre-pass filling RS0009 lookup sets: user resource type names, sum variant
 // names, pure fn (simple) names, and all fn (simple) names.
-fn collect_rs0009(toks: read List<Tok>, resources: mut Set<String>, sumVariants: mut Set<String>, pureFns: mut Set<String>, allFns: mut Set<String>) -> Unit {
+fn collect_rs0009(toks: read List<Tok>, resources: mut Set<String>, sumVariants: mut Set<String>, pureFns: mut Set<String>, allFns: mut Set<String>, noBlockFns: mut Set<String>, noPanicFns: mut Set<String>) -> Unit {
     let ntok = List.len(list: read toks)
     let mut i = 0
     let mut running = true
@@ -950,6 +950,12 @@ fn collect_rs0009(toks: read List<Tok>, resources: mut Set<String>, sumVariants:
                         Set.insert<String>(set: mut allFns, value: read fname)
                         if fn_is_pure(toks: read toks, start: read i) {
                             Set.insert<String>(set: mut pureFns, value: read fname)
+                        }
+                        if fn_has_named_effect(toks: read toks, start: read i, effName: read "no_block") {
+                            Set.insert<String>(set: mut noBlockFns, value: read fname)
+                        }
+                        if fn_has_named_effect(toks: read toks, start: read i, effName: read "no_panic") {
+                            Set.insert<String>(set: mut noPanicFns, value: read fname)
                         }
                     }
                     i = r
@@ -2171,6 +2177,263 @@ fn seg_type_has_fd(toks: read List<Tok>, segStart: read Int, segEnd: read Int) -
     return region_has_text(toks: read toks, s: read (segStart + 2), e: read segEnd, word: read "Fd")
 }
 
+// ---------------------------------------------------------------------------
+// RS0035 LOWER_NAME_CONFLICT.
+//
+// A `#lower_name("x")` pin that is not a valid Rust identifier, or two functions
+// whose lowered backend names collide with at least one pinned. The default
+// lowered name flattens dotted names (`.`->`_`) and raw-escapes Rust keywords
+// (`gen`->`r#gen`); a pin overrides it. Mirrors check_lowered_name_conflicts.
+// ---------------------------------------------------------------------------
+
+// The Rust (strict + reserved) keyword set (rust_lower::is_rust_keyword).
+fn is_rust_keyword(name: read String) -> Bool {
+    return name == "abstract" || name == "as" || name == "async" || name == "await" || name == "become" || name == "box" || name == "break" || name == "const" || name == "continue" || name == "crate" || name == "do" || name == "dyn" || name == "else" || name == "enum" || name == "extern" || name == "false" || name == "final" || name == "fn" || name == "for" || name == "gen" || name == "if" || name == "impl" || name == "in" || name == "let" || name == "loop" || name == "macro" || name == "match" || name == "mod" || name == "move" || name == "mut" || name == "override" || name == "priv" || name == "pub" || name == "ref" || name == "return" || name == "self" || name == "Self" || name == "static" || name == "struct" || name == "super" || name == "trait" || name == "true" || name == "try" || name == "type" || name == "typeof" || name == "unsafe" || name == "unsized" || name == "use" || name == "virtual" || name == "where" || name == "while" || name == "yield"
+}
+
+// A valid Rust identifier: ASCII alpha/`_` first, ASCII alnum/`_` rest, and not a
+// Rust keyword. Empty strings and any other character make a pin invalid.
+fn is_valid_rust_ident(name: read String) -> Bool {
+    let cs = String.chars(value: read name)
+    let n = List.len(list: read cs)
+    if n == 0 { return false }
+    let f = Char.to_code(value: read List.get(list: read cs, index: read 0))
+    let firstOk = (f >= 65 && f <= 90) || (f >= 97 && f <= 122) || f == 95
+    if firstOk == false { return false }
+    let mut i = 1
+    let mut ok = true
+    while i < n {
+        let c = Char.to_code(value: read List.get(list: read cs, index: read i))
+        let alnum = (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c == 95
+        if alnum == false { ok = false }
+        i = i + 1
+    }
+    if ok == false { return false }
+    return is_rust_keyword(name: read name) == false
+}
+
+// The default backend symbol name for a source fn name: dotted names flatten to
+// `_`, then a Rust keyword is raw-escaped (`gen` -> `r#gen`).
+fn default_lowered_name(name: read String) -> String {
+    let cs = String.chars(value: read name)
+    let n = List.len(list: read cs)
+    let mut out = ""
+    let mut i = 0
+    while i < n {
+        let ch = List.get(list: read cs, index: read i)
+        if Char.to_code(value: read ch) == 46 {
+            out = String.concat(left: read out, right: read "_")
+        } else {
+            out = String.concat(left: read out, right: read Char.to_string(value: read ch))
+        }
+        i = i + 1
+    }
+    if is_rust_keyword(name: read out) {
+        return String.concat(left: read "r#", right: read out)
+    }
+    return out
+}
+
+// True if the fn decl at `start` carries a `#lower_name(...)` attribute (each
+// attribute is `#name(arg)`, five tokens).
+fn fn_has_lower_name(toks: read List<Tok>, start: read Int) -> Bool {
+    let mut j = start
+    let mut going = true
+    let mut has = false
+    while going {
+        if at_symbol(toks: read toks, i: read j, code: read SYM_HASH) {
+            if tk_text(toks: read toks, i: read (j + 1)) == "lower_name" {
+                has = true
+            }
+            j = j + 5
+        } else {
+            going = false
+        }
+    }
+    return has
+}
+
+// The `#lower_name("...")` pin string of a fn decl at `start`, or "" if none.
+fn fn_lower_name_pin(toks: read List<Tok>, start: read Int) -> String {
+    let mut j = start
+    let mut going = true
+    let mut pin = ""
+    while going {
+        if at_symbol(toks: read toks, i: read j, code: read SYM_HASH) {
+            if tk_text(toks: read toks, i: read (j + 1)) == "lower_name" && at_symbol(toks: read toks, i: read (j + 2), code: read SYM_LPAREN) && tk_kind(toks: read toks, i: read (j + 3)) == TOK_STRING {
+                pin = tk_text(toks: read toks, i: read (j + 3))
+            }
+            j = j + 5
+        } else {
+            going = false
+        }
+    }
+    return pin
+}
+
+// ---------------------------------------------------------------------------
+// RS0027 UNKNOWN_PROTOCOL.
+//
+// A generic protocol bound `<T: P>` naming a protocol P that is neither a special
+// bound (`Managed`/`Struct`/`Resource`) nor visible. Visible protocols are the
+// stdlib-interface protocols plus the file's own `protocol` decls. Mirrors
+// check_protocol_bound over the exact 3-token `Ident : Ident` param form the
+// parser accepts. (The Capability<P> and `impl P for T` paths have no fixtures.)
+// ---------------------------------------------------------------------------
+
+// Stdlib-interface protocols visible to every file (the `protocol` decls in the
+// CORE/STANDARD `.rssi` interfaces).
+fn is_stdlib_protocol(name: read String) -> Bool {
+    return name == "Clone" || name == "Eq" || name == "Hashable" || name == "Ord"
+}
+
+// Pre-pass: names of all top-level `protocol` decls in the file.
+fn collect_protocols(toks: read List<Tok>) -> Set<String> {
+    let n = List.len(list: read toks)
+    let mut out = Set<String>.new()
+    let mut i = 0
+    while i < n {
+        if at_ident(toks: read toks, i: read i, wid: read WORD_PROTOCOL) && is_ident_tok(toks: read toks, i: read (i + 1)) {
+            let atStart = i == 0 || tk_line(toks: read toks, i: read (i - 1)) < tk_line(toks: read toks, i: read i) || at_ident(toks: read toks, i: read (i - 1), wid: read WORD_PUB)
+            if atStart {
+                Set.insert<String>(set: mut out, value: read dotted_name_text(toks: read toks, i: read (i + 1)))
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// A generic-param segment [s,e) is `Ident : Ident` (exactly three tokens) whose
+// bound is a protocol that is neither special nor visible. Any other shape is
+// unbounded or malformed (parse_generic_params) and carries no protocol bound.
+fn bound_unknown_protocol(toks: read List<Tok>, s: read Int, e: read Int, protocols: read Set<String>) -> Bool {
+    if (s + 3) != e { return false }
+    if is_ident_tok(toks: read toks, i: read s) == false { return false }
+    if at_symbol(toks: read toks, i: read (s + 1), code: read SYM_COLON) == false { return false }
+    if is_ident_tok(toks: read toks, i: read (s + 2)) == false { return false }
+    let bound = tk_text(toks: read toks, i: read (s + 2))
+    if bound == "Managed" || bound == "Struct" || bound == "Resource" { return false }
+    if is_stdlib_protocol(name: read bound) { return false }
+    return Set.contains<String>(set: read protocols, value: read bound) == false
+}
+
+// True if the generic clause opening at `nameEnd` (`<...>`) has a protocol bound
+// naming a protocol that is not visible.
+fn generics_unknown_protocol(toks: read List<Tok>, nameEnd: read Int, protocols: read Set<String>) -> Bool {
+    if at_symbol(toks: read toks, i: read nameEnd, code: read SYM_LANGLE) == false { return false }
+    let close = find_matching(toks: read toks, open: read nameEnd, openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
+    if close < 0 { return false }
+    let mut k = nameEnd + 1
+    let mut depth = 0
+    let mut segStart = nameEnd + 1
+    let mut hit = false
+    while k < close {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE) || at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) || at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) {
+            if depth > 0 { depth = depth - 1 }
+        } else if depth == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
+            if bound_unknown_protocol(toks: read toks, s: read segStart, e: read k, protocols: read protocols) { hit = true }
+            segStart = k + 1
+        }
+        k = k + 1
+    }
+    if bound_unknown_protocol(toks: read toks, s: read segStart, e: read close, protocols: read protocols) { hit = true }
+    return hit
+}
+
+// ---------------------------------------------------------------------------
+// RS0014 / RS0018 / RS0019 runtime-guarantee bodies.
+//
+// A fn declaring effects(no_block)/effects(no_panic) may only call constructors,
+// enum variants, or functions carrying the same guarantee — an unqualified call
+// to a user function lacking it is RS0018 / RS0019. A fn declaring
+// effects(noalloc) must not construct a value or `manage` — RS0014. Mirrors
+// check_runtime_guarantee_* (the qualified-stdlib-call cases have no fixtures).
+// ---------------------------------------------------------------------------
+
+// One effects item [segStart,segEnd) is the valid bare effect `effName`.
+fn effect_seg_named(toks: read List<Tok>, segStart: read Int, segEnd: read Int, effName: read String) -> Bool {
+    if effect_item_kind(toks: read toks, segStart: read segStart, segEnd: read segEnd) != 1 { return false }
+    return tk_text(toks: read toks, i: read segStart) == effName
+}
+
+// True if the fn's effects(...) clause lists the bare effect `effName`.
+fn fn_has_named_effect(toks: read List<Tok>, start: read Int, effName: read String) -> Bool {
+    let effOpen = find_effects_open(toks: read toks, start: read start)
+    if effOpen < 0 { return false }
+    let effClose = find_matching(toks: read toks, open: read effOpen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    if effClose < 0 { return false }
+    let mut k = effOpen + 1
+    let mut segStart = effOpen + 1
+    let mut depth = 0
+    let mut hit = false
+    while k < effClose {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) {
+            if depth > 0 { depth = depth - 1 }
+        } else if depth == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
+            if effect_seg_named(toks: read toks, segStart: read segStart, segEnd: read k, effName: read effName) { hit = true }
+            segStart = k + 1
+        }
+        k = k + 1
+    }
+    if effect_seg_named(toks: read toks, segStart: read segStart, segEnd: read effClose, effName: read effName) { hit = true }
+    return hit
+}
+
+// RS0018/RS0019: a guarantee-carrying fn whose body makes an unqualified call to
+// a user function that does not carry the same guarantee.
+fn fn_guarantee_call_bad(toks: read List<Tok>, start: read Int, effName: read String, allFns: read Set<String>, guaranteeFns: read Set<String>) -> Bool {
+    if fn_has_named_effect(toks: read toks, start: read start, effName: read effName) == false { return false }
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+    if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
+    let bodyClose = find_matching(toks: read toks, open: read sigEnd, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    if bodyClose < 0 { return false }
+    let mut k = sigEnd + 1
+    let mut hit = false
+    while k < bodyClose {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) && tk_kind(toks: read toks, i: read (k - 1)) == TOK_IDENT {
+            let name = tk_text(toks: read toks, i: read (k - 1))
+            let qualified = at_symbol(toks: read toks, i: read (k - 2), code: read SYM_DOT) && is_ident_tok(toks: read toks, i: read (k - 3))
+            if qualified == false {
+                if Set.contains<String>(set: read allFns, value: read name) && Set.contains<String>(set: read guaranteeFns, value: read name) == false { hit = true }
+            }
+        }
+        k = k + 1
+    }
+    return hit
+}
+
+// RS0014: a fn declaring effects(noalloc) whose body constructs a value (an
+// unqualified call to a declared type) or uses `manage`.
+fn fn_noalloc_alloc(toks: read List<Tok>, start: read Int, declared: read Set<String>) -> Bool {
+    if fn_has_named_effect(toks: read toks, start: read start, effName: read "noalloc") == false { return false }
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+    if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
+    let bodyClose = find_matching(toks: read toks, open: read sigEnd, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    if bodyClose < 0 { return false }
+    let mut k = sigEnd + 1
+    let mut hit = false
+    while k < bodyClose {
+        if tk_text(toks: read toks, i: read k) == "manage" {
+            hit = true
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) && tk_kind(toks: read toks, i: read (k - 1)) == TOK_IDENT {
+            let name = tk_text(toks: read toks, i: read (k - 1))
+            let qualified = at_symbol(toks: read toks, i: read (k - 2), code: read SYM_DOT) && is_ident_tok(toks: read toks, i: read (k - 3))
+            if qualified == false {
+                if Set.contains<String>(set: read declared, value: read name) { hit = true }
+            }
+        }
+        k = k + 1
+    }
+    return hit
+}
+
 fn main() -> Unit {
     let source = Args.get_or_default(index: 0, default: read "")
     let toks = tokenize(source: read source)
@@ -2203,6 +2466,17 @@ fn main() -> Unit {
     let mut fdSurface = false
     // RS0021: any non-exhaustive match statement or expression in the file.
     let mut nonExhaustive = false
+    // RS0035: an invalid `#lower_name` pin or a lowered-name collision.
+    let mut lowerConflict = false
+    let mut seenLowered = Set<String>.new()
+    let mut firstPinnedLowered = Set<String>.new()
+    // RS0027: an unknown protocol named by a generic bound.
+    let mut unknownProtocol = false
+    let protocols = collect_protocols(toks: read toks)
+    // RS0014/0018/0019: runtime-guarantee body violations.
+    let mut noallocAlloc = false
+    let mut noBlockCall = false
+    let mut noPanicCall = false
     // RS0024: forward-reference-tolerant known-type set for the whole file.
     let declared = collect_declared_types(toks: read toks)
     // RS0008: user sum names whose every variant is payloadless.
@@ -2212,7 +2486,9 @@ fn main() -> Unit {
     let mut sumVariants = Set<String>.new()
     let mut pureFns = Set<String>.new()
     let mut allFns = Set<String>.new()
-    collect_rs0009(toks: read toks, resources: mut resources, sumVariants: mut sumVariants, pureFns: mut pureFns, allFns: mut allFns)
+    let mut noBlockFns = Set<String>.new()
+    let mut noPanicFns = Set<String>.new()
+    collect_rs0009(toks: read toks, resources: mut resources, sumVariants: mut sumVariants, pureFns: mut pureFns, allFns: mut allFns, noBlockFns: mut noBlockFns, noPanicFns: mut noPanicFns)
     // RS0033: any decimal integer literal in the file that overflows i64.
     let outOfRangeInt = has_out_of_range_int(toks: read toks)
     let mut i = 0
@@ -2283,6 +2559,8 @@ fn main() -> Unit {
                         }
                     }
                     if type_decl_unknown(toks: read toks, i: read i, r: read r, declared: read declared) { unknownType = true }
+                    // RS0027: an unknown protocol in this type's generic bounds.
+                    if generics_unknown_protocol(toks: read toks, nameEnd: read dotted_end(toks: read toks, i: read ns), protocols: read protocols) { unknownProtocol = true }
                     // RS0023: an `Fd`-typed field on a non-resource type. Resource
                     // types are the trusted internal boundary and are skipped.
                     if at_ident(toks: read toks, i: read (ns - 1), wid: read WORD_RESOURCE) == false {
@@ -2378,6 +2656,31 @@ fn main() -> Unit {
                     if fn_has_nonexhaustive_match(toks: read toks, start: read i, declared: read declared, allFns: read allFns) { nonExhaustive = true }
                     if fn_has_bad_await(toks: read toks, start: read i) { badAwait = true }
                     if fn_has_fd_surface(toks: read toks, start: read i) { fdSurface = true }
+                    // RS0027: an unknown protocol in this fn's generic bounds.
+                    if generics_unknown_protocol(toks: read toks, nameEnd: read dotted_end(toks: read toks, i: read ns), protocols: read protocols) { unknownProtocol = true }
+                    // RS0014/0018/0019: runtime-guarantee body violations.
+                    if fn_noalloc_alloc(toks: read toks, start: read i, declared: read declared) { noallocAlloc = true }
+                    if fn_guarantee_call_bad(toks: read toks, start: read i, effName: read "no_block", allFns: read allFns, guaranteeFns: read noBlockFns) { noBlockCall = true }
+                    if fn_guarantee_call_bad(toks: read toks, start: read i, effName: read "no_panic", allFns: read allFns, guaranteeFns: read noPanicFns) { noPanicCall = true }
+                    // RS0035: an invalid `#lower_name` pin or a lowered-name collision.
+                    if fn_has_lower_name(toks: read toks, start: read i) {
+                        let pin = fn_lower_name_pin(toks: read toks, start: read i)
+                        if is_valid_rust_ident(name: read pin) == false {
+                            lowerConflict = true
+                        } else if Set.contains<String>(set: read seenLowered, value: read pin) {
+                            lowerConflict = true
+                        } else {
+                            Set.insert<String>(set: mut seenLowered, value: read pin)
+                            Set.insert<String>(set: mut firstPinnedLowered, value: read pin)
+                        }
+                    } else {
+                        let lowered = default_lowered_name(name: read name)
+                        if Set.contains<String>(set: read seenLowered, value: read lowered) {
+                            if Set.contains<String>(set: read firstPinnedLowered, value: read lowered) { lowerConflict = true }
+                        } else {
+                            Set.insert<String>(set: mut seenLowered, value: read lowered)
+                        }
+                    }
                     i = r
                 }
             } else {
@@ -2431,6 +2734,21 @@ fn main() -> Unit {
     if fdSurface {
         Log.write(message: read "RS0023")
     }
+    if lowerConflict {
+        Log.write(message: read "RS0035")
+    }
+    if unknownProtocol {
+        Log.write(message: read "RS0027")
+    }
+    if noallocAlloc {
+        Log.write(message: read "RS0014")
+    }
+    if noBlockCall {
+        Log.write(message: read "RS0018")
+    }
+    if noPanicCall {
+        Log.write(message: read "RS0019")
+    }
     if unknownType {
         Log.write(message: read "RS0024")
     }
@@ -2446,7 +2764,7 @@ fn main() -> Unit {
     if headerCount >= 2 {
         Log.write(message: read "RS0006")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || fdSurface
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
