@@ -22,6 +22,13 @@
 // `||` chains wrapped via operator continuation (both in the shared scan.rss
 // prelude), cursors threaded positionally.
 
+// ';' — the semicolon symbol code (not in the shared scan.rss prelude; used by
+// the RS0021 arm scanner, mirroring astdump).
+const SYM_SEMI: Int = 59
+
+// '?' — the try-operator symbol code (single-char symbol, val = code point).
+const SYM_QUESTION: Int = 63
+
 fn tk_text(toks: read List<Tok>, i: read Int) -> String {
     if i < 0 { return "" }
     if i >= List.len(list: read toks) { return "" }
@@ -1448,6 +1455,597 @@ fn collect_declared_types(toks: read List<Tok>) -> Set<String> {
     return declared
 }
 
+// ---------------------------------------------------------------------------
+// RS0021 NON_EXHAUSTIVE_MATCH.
+//
+// A `match SCRUT { arm... }` (statement or expression form) is non-exhaustive
+// unless it covers its scrutinee type: Some/None (Option), Ok/Err (Result),
+// true/false (Bool), every variant of a declared sum, or an irrefutable pattern
+// for a single-constructor tuple/struct — or it contains a `_` wildcard. Only
+// GUARDLESS arms contribute coverage; malformed arms (no `=>`) contribute none.
+// Ported from crate::analyzer::exhaustiveness (simplified for the corpus).
+// ---------------------------------------------------------------------------
+
+// True if token i is the keyword/ident with the given text (copied from astdump).
+fn is_kw_text(toks: read List<Tok>, i: read Int, word: read String) -> Bool {
+    if is_ident_tok(toks: read toks, i: read i) == false { return false }
+    return tk_text(toks: read toks, i: read i) == word
+}
+
+// First top-level symbol `code` in [start,end) (depth over ()[]{}) — from astdump.
+fn find_top_sym(toks: read List<Tok>, start: read Int, end: read Int, code: read Int) -> Int {
+    let mut depth = 0
+    let mut i = start
+    while i < end {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) {
+            depth = depth - 1
+        } else if depth == 0 && at_symbol(toks: read toks, i: read i, code: read code) {
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+// First top-level `if` keyword in [start,end) — from astdump.
+fn find_top_if(toks: read List<Tok>, start: read Int, end: read Int) -> Int {
+    let mut depth = 0
+    let mut i = start
+    while i < end {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) {
+            depth = depth - 1
+        } else if depth == 0 && is_kw_text(toks: read toks, i: read i, word: read "if") {
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+// First top-level `{` after the scrutinee (paren/bracket depth 0), or -1. Mirrors
+// find_match_expr_arms_open (angle brackets are not tracked).
+fn find_match_arms_open(toks: read List<Tok>, start: read Int, end: read Int) -> Int {
+    let mut paren = 0
+    let mut br = 0
+    let mut i = start
+    while i < end {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) {
+            paren = paren + 1
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) {
+            if paren > 0 { paren = paren - 1 }
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) {
+            br = br + 1
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) {
+            if br > 0 { br = br - 1 }
+        } else if paren == 0 && br == 0 && at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) {
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+// Collect the head ident of each variant in a sum body [ob+1, close) into `out`.
+// Variant heads are the idents at paren/angle/brace depth 0 (payload fields sit
+// inside `(...)`/`{...}` so they are excluded).
+fn collect_variant_heads(toks: read List<Tok>, ob: read Int, close: read Int, out: mut Set<String>) -> Unit {
+    let mut k = ob + 1
+    let mut paren = 0
+    let mut ang = 0
+    let mut brace = 0
+    while k < close {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) {
+            paren = paren + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) {
+            if paren > 0 { paren = paren - 1 }
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE) {
+            ang = ang + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) {
+            if ang > 0 { ang = ang - 1 }
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE) {
+            brace = brace + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE) {
+            if brace > 0 { brace = brace - 1 }
+        } else if paren == 0 && ang == 0 && brace == 0 && is_ident_tok(toks: read toks, i: read k) {
+            Set.insert<String>(set: mut out, value: read tk_text(toks: read toks, i: read k))
+        }
+        k = k + 1
+    }
+    return Unit
+}
+
+// True if the `sum` keyword at i heads a real top-level sum DECL (not a variable
+// named `sum`): a name ident follows on the same line, and the `sum` starts a
+// line or is preceded by `pub`. The tokenizer tags every `sum` text with
+// WORD_SUM, so this guard is what separates `sum Color { … }` from `sum = …`.
+fn real_sum_at(toks: read List<Tok>, i: read Int) -> Bool {
+    if at_ident(toks: read toks, i: read i, wid: read WORD_SUM) == false { return false }
+    if is_ident_tok(toks: read toks, i: read (i + 1)) == false { return false }
+    if tk_line(toks: read toks, i: read (i + 1)) != tk_line(toks: read toks, i: read i) { return false }
+    if i == 0 { return true }
+    if tk_line(toks: read toks, i: read (i - 1)) < tk_line(toks: read toks, i: read i) { return true }
+    return at_ident(toks: read toks, i: read (i - 1), wid: read WORD_PUB)
+}
+
+// The variant-name set of the declared `sum sumName` (empty if there is no such
+// sum). A non-sum root therefore yields an empty set.
+fn sum_variants_of(toks: read List<Tok>, sumName: read String) -> Set<String> {
+    let n = List.len(list: read toks)
+    let mut out = Set<String>.new()
+    if String.len(value: read sumName) == 0 { return out }
+    let mut i = 0
+    let mut done = false
+    while i < n && done == false {
+        if real_sum_at(toks: read toks, i: read i) {
+            let name = dotted_name_text(toks: read toks, i: read (i + 1))
+            if name == sumName {
+                let ob = find_body_open(toks: read toks, i: read (i + 1), end: read n)
+                if ob >= 0 {
+                    let close = find_matching(toks: read toks, open: read ob, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+                    if close >= 0 {
+                        collect_variant_heads(toks: read toks, ob: read ob, close: read close, out: mut out)
+                    }
+                }
+                done = true
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// The declared sum that owns variant `vname`, or "" if none.
+fn variant_owner(toks: read List<Tok>, vname: read String) -> String {
+    let n = List.len(list: read toks)
+    let mut i = 0
+    let mut result = ""
+    let mut done = false
+    while i < n && done == false {
+        if real_sum_at(toks: read toks, i: read i) {
+            let sname = dotted_name_text(toks: read toks, i: read (i + 1))
+            let ob = find_body_open(toks: read toks, i: read (i + 1), end: read n)
+            if ob >= 0 {
+                let close = find_matching(toks: read toks, open: read ob, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+                if close >= 0 {
+                    let mut heads = Set<String>.new()
+                    collect_variant_heads(toks: read toks, ob: read ob, close: read close, out: mut heads)
+                    if Set.contains<String>(set: read heads, value: read vname) {
+                        result = sname
+                        done = true
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return result
+}
+
+// Root of a TypeRef region [s,e): tuple `(...)` → "__Tuple", else the base
+// (possibly dotted) name after skipping data-effects/reference prefixes; "" if
+// the region has no nominal head.
+fn type_region_root(toks: read List<Tok>, s: read Int, e: read Int) -> String {
+    let p = skip_type_prefixes(toks: read toks, s: read s, e: read e)
+    if p >= e { return "" }
+    if at_symbol(toks: read toks, i: read p, code: read SYM_LPAREN) { return "__Tuple" }
+    if is_ident_tok(toks: read toks, i: read p) == false { return "" }
+    return dotted_name_text(toks: read toks, i: read p)
+}
+
+// Return-type root of the fn whose keyword sits at `fnkw` (the `-> RET` head).
+fn return_type_root_at(toks: read List<Tok>, fnkw: read Int) -> String {
+    let sigEnd = function_signature_end(toks: read toks, start: read fnkw)
+    let open = find_param_open(toks: read toks, from: read fnkw, end: read sigEnd)
+    if open < 0 { return "" }
+    let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    if close < 0 { return "" }
+    if at_symbol(toks: read toks, i: read (close + 1), code: read SYM_ARROW) == false { return "" }
+    let rs = close + 2
+    let mut re = rs
+    let mut scanning = true
+    while scanning {
+        let stop = at_ident(toks: read toks, i: read re, wid: read WORD_EFFECTS) || at_symbol(toks: read toks, i: read re, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read re, code: read SYM_EQ)
+        if re < sigEnd && stop == false {
+            re = re + 1
+        } else {
+            scanning = false
+        }
+    }
+    return type_region_root(toks: read toks, s: read rs, e: read re)
+}
+
+// Return-type root of the first unqualified `fn fnName(...)` in the file, or "".
+fn fn_return_root(toks: read List<Tok>, fnName: read String) -> String {
+    let n = List.len(list: read toks)
+    let mut i = 0
+    let mut result = ""
+    let mut done = false
+    while i < n && done == false {
+        if at_ident(toks: read toks, i: read i, wid: read WORD_FN) {
+            let nameIdx = i + 1
+            let named = is_ident_tok(toks: read toks, i: read nameIdx) && tk_text(toks: read toks, i: read nameIdx) == fnName
+            if named && at_symbol(toks: read toks, i: read (nameIdx + 1), code: read SYM_DOT) == false {
+                result = return_type_root_at(toks: read toks, fnkw: read i)
+                done = true
+            }
+        }
+        i = i + 1
+    }
+    return result
+}
+
+// Type root of param `name` in the param list [open,close], or "" if absent.
+fn param_type_root(toks: read List<Tok>, open: read Int, close: read Int, name: read String) -> String {
+    let mut k = open + 1
+    let mut depth = 0
+    let mut angle = 0
+    let mut segStart = open + 1
+    let mut result = ""
+    while k < close {
+        let opener = at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE)
+        let closer = at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE)
+        if opener {
+            depth = depth + 1
+        } else if closer {
+            if depth > 0 { depth = depth - 1 }
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE) {
+            angle = angle + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) {
+            if angle > 0 { angle = angle - 1 }
+        } else if depth == 0 && angle == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
+            if seg_name_matches(toks: read toks, segStart: read segStart, name: read name) {
+                result = type_region_root(toks: read toks, s: read (segStart + 2), e: read k)
+            }
+            segStart = k + 1
+        }
+        k = k + 1
+    }
+    if seg_name_matches(toks: read toks, segStart: read segStart, name: read name) {
+        result = type_region_root(toks: read toks, s: read (segStart + 2), e: read close)
+    }
+    return result
+}
+
+// A param segment starts with `name :`.
+fn seg_name_matches(toks: read List<Tok>, segStart: read Int, name: read String) -> Bool {
+    if is_ident_tok(toks: read toks, i: read segStart) == false { return false }
+    if tk_text(toks: read toks, i: read segStart) != name { return false }
+    return at_symbol(toks: read toks, i: read (segStart + 1), code: read SYM_COLON)
+}
+
+// Root of the scrutinee expression region [s,e) (expr_root in the spec).
+fn expr_root(toks: read List<Tok>, s0: read Int, e: read Int, declared: read Set<String>, allFns: read Set<String>) -> String {
+    let mut s = s0
+    if is_effect_kw(toks: read toks, i: read s) { s = s + 1 }
+    if s >= e { return "" }
+    if is_ident_tok(toks: read toks, i: read s) == false {
+        let k = tk_kind(toks: read toks, i: read s)
+        if k == TOK_STRING { return "String" }
+        if k == TOK_NUMBER { return "Int" }
+        if k == TOK_CHAR { return "Char" }
+        return ""
+    }
+    let t = tk_text(toks: read toks, i: read s)
+    if t == "Some" || t == "None" { return "Option" }
+    if t == "Ok" || t == "Err" { return "Result" }
+    if t == "true" || t == "false" { return "Bool" }
+    let after = dotted_end(toks: read toks, i: read s)
+    if after > (s + 1) { return "" }
+    let owner = variant_owner(toks: read toks, vname: read t)
+    if String.len(value: read owner) > 0 { return owner }
+    if at_symbol(toks: read toks, i: read after, code: read SYM_LPAREN) {
+        if Set.contains<String>(set: read allFns, value: read t) {
+            return fn_return_root(toks: read toks, fnName: read t)
+        }
+        if Set.contains<String>(set: read declared, value: read t) { return t }
+        return ""
+    }
+    return ""
+}
+
+// RHS start index (`=`+1) of the nearest preceding `let/local [mut] name = …`
+// before matchPos in the body, or -1.
+fn find_let_rhs_start(toks: read List<Tok>, bodyOpen: read Int, matchPos: read Int, name: read String) -> Int {
+    let mut k = bodyOpen + 1
+    let mut best = -1
+    while k < matchPos {
+        let isLet = is_kw_text(toks: read toks, i: read k, word: read "let") || is_kw_text(toks: read toks, i: read k, word: read "local")
+        if isLet {
+            let mut j = k + 1
+            if is_kw_text(toks: read toks, i: read j, word: read "mut") { j = j + 1 }
+            if is_ident_tok(toks: read toks, i: read j) && tk_text(toks: read toks, i: read j) == name {
+                let stmtEnd = next_line_or_block_end(toks: read toks, start: read k, end: read matchPos)
+                let eq = find_top_sym(toks: read toks, start: read j, end: read stmtEnd, code: read SYM_EQ)
+                if eq >= 0 { best = eq + 1 }
+            }
+        }
+        k = k + 1
+    }
+    return best
+}
+
+// Scrutinee type root (spec's scrutinee inference).
+fn scrutinee_root(toks: read List<Tok>, s0: read Int, e: read Int, bodyOpen: read Int, matchPos: read Int, popen: read Int, pclose: read Int, declared: read Set<String>, allFns: read Set<String>) -> String {
+    // A `?`-terminated scrutinee (`maybe()?`) matches the UNWRAPPED payload type,
+    // which we do not track — treat as unknown so the arms drive the fallback.
+    if e > 0 && at_symbol(toks: read toks, i: read (e - 1), code: read SYM_QUESTION) {
+        return ""
+    }
+    let mut s = s0
+    if is_effect_kw(toks: read toks, i: read s) { s = s + 1 }
+    if (s + 1) == e && is_ident_tok(toks: read toks, i: read s) {
+        let name = tk_text(toks: read toks, i: read s)
+        let lr = find_let_rhs_start(toks: read toks, bodyOpen: read bodyOpen, matchPos: read matchPos, name: read name)
+        if lr >= 0 {
+            let re = next_line_or_block_end(toks: read toks, start: read lr, end: read matchPos)
+            return expr_root(toks: read toks, s0: read lr, e: read re, declared: read declared, allFns: read allFns)
+        }
+        if popen >= 0 && pclose >= 0 {
+            let pr = param_type_root(toks: read toks, open: read popen, close: read pclose, name: read name)
+            if String.len(value: read pr) > 0 { return pr }
+        }
+        // Not a let-bound local or a typed param: fall through so a bare value
+        // literal scrutinee (`true`, `None`, …) still resolves via expr_root.
+        return expr_root(toks: read toks, s0: read s0, e: read e, declared: read declared, allFns: read allFns)
+    }
+    return expr_root(toks: read toks, s0: read s0, e: read e, declared: read declared, allFns: read allFns)
+}
+
+// A single-token payload/tuple element that is a binding (`name`) or `_`.
+fn elem_is_binding(toks: read List<Tok>, s: read Int, e: read Int) -> Bool {
+    if (s + 1) != e { return false }
+    return is_ident_tok(toks: read toks, i: read s)
+}
+
+// Every top-level comma-separated element of [s,e) is a bare binding / `_`.
+fn elems_all_bindings(toks: read List<Tok>, s: read Int, e: read Int) -> Bool {
+    if s >= e { return true }
+    let mut k = s
+    let mut depth = 0
+    let mut segStart = s
+    let mut ok = true
+    while k < e {
+        let opener = at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE)
+        let closer = at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE)
+        if opener {
+            depth = depth + 1
+        } else if closer {
+            if depth > 0 { depth = depth - 1 }
+        } else if depth == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
+            if elem_is_binding(toks: read toks, s: read segStart, e: read k) == false { ok = false }
+            segStart = k + 1
+        }
+        k = k + 1
+    }
+    if elem_is_binding(toks: read toks, s: read segStart, e: read e) == false { ok = false }
+    return ok
+}
+
+// True if the pattern [ps,pe) is irrefutable (a `_`, an all-binding tuple, a
+// bare/empty-payload constructor, or a constructor whose every field binds).
+fn pattern_irref(toks: read List<Tok>, ps: read Int, pe: read Int) -> Bool {
+    if (ps + 1) == pe && tk_text(toks: read toks, i: read ps) == "_" { return true }
+    if at_symbol(toks: read toks, i: read ps, code: read SYM_LPAREN) && at_symbol(toks: read toks, i: read (pe - 1), code: read SYM_RPAREN) {
+        let close = find_matching(toks: read toks, open: read ps, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+        if close == (pe - 1) {
+            return elems_all_bindings(toks: read toks, s: read (ps + 1), e: read close)
+        }
+    }
+    if is_ident_tok(toks: read toks, i: read ps) {
+        let after = dotted_end(toks: read toks, i: read ps)
+        if after == pe { return true }
+        if at_symbol(toks: read toks, i: read after, code: read SYM_LPAREN) {
+            let close = find_matching(toks: read toks, open: read after, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+            if close == (pe - 1) {
+                return elems_all_bindings(toks: read toks, s: read (after + 1), e: read close)
+            }
+            return false
+        }
+        if at_symbol(toks: read toks, i: read after, code: read SYM_LBRACE) {
+            let close = find_matching(toks: read toks, open: read after, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+            if close == (pe - 1) {
+                return elems_all_bindings(toks: read toks, s: read (after + 1), e: read close)
+            }
+            return false
+        }
+    }
+    return false
+}
+
+// Classify one guardless pattern [ps,pe) into the running coverage sets.
+fn classify_pattern(toks: read List<Tok>, ps: read Int, pe: read Int, variants: mut Set<String>, flags: mut Set<String>) -> Unit {
+    let single = (ps + 1) == pe
+    if single && tk_text(toks: read toks, i: read ps) == "_" {
+        Set.insert<String>(set: mut flags, value: read "wild")
+        return Unit
+    }
+    let k0 = tk_kind(toks: read toks, i: read ps)
+    if single && (k0 == TOK_STRING || k0 == TOK_NUMBER || k0 == TOK_CHAR) {
+        return Unit
+    }
+    if single && is_ident_tok(toks: read toks, i: read ps) && tk_text(toks: read toks, i: read ps) == "true" {
+        Set.insert<String>(set: mut flags, value: read "true")
+        return Unit
+    }
+    if single && is_ident_tok(toks: read toks, i: read ps) && tk_text(toks: read toks, i: read ps) == "false" {
+        Set.insert<String>(set: mut flags, value: read "false")
+        return Unit
+    }
+    if at_symbol(toks: read toks, i: read ps, code: read SYM_LBRACKET) && at_symbol(toks: read toks, i: read (pe - 1), code: read SYM_RBRACKET) {
+        let close = find_matching(toks: read toks, open: read ps, openSym: read SYM_LBRACKET, closeSym: read SYM_RBRACKET)
+        if close == (pe - 1) {
+            classify_list_pattern(toks: read toks, s: read (ps + 1), e: read close, flags: mut flags)
+            return Unit
+        }
+    }
+    if is_ident_tok(toks: read toks, i: read ps) {
+        let after = dotted_end(toks: read toks, i: read ps)
+        Set.insert<String>(set: mut variants, value: read tk_text(toks: read toks, i: read (after - 1)))
+    }
+    if pattern_irref(toks: read toks, ps: read ps, pe: read pe) {
+        Set.insert<String>(set: mut flags, value: read "irref")
+    }
+    return Unit
+}
+
+// A top-level list element [a,e) that is a rest binding (`..` or `..name`).
+fn elem_is_rest(toks: read List<Tok>, a: read Int, e: read Int) -> Bool {
+    if (a + 1) >= e { return false }
+    return at_symbol(toks: read toks, i: read a, code: read SYM_DOT) && at_symbol(toks: read toks, i: read (a + 1), code: read SYM_DOT)
+}
+
+// Record a list slice pattern's shape into `flags`: "F<n>" for a fixed-length
+// pattern of `n` elements, or "R<n>" for a rest pattern with `n` fixed elements.
+fn classify_list_pattern(toks: read List<Tok>, s: read Int, e: read Int, flags: mut Set<String>) -> Unit {
+    let mut k = s
+    let mut depth = 0
+    let mut segStart = s
+    let mut count = 0
+    let mut hasRest = false
+    while k < e {
+        let opener = at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE)
+        let closer = at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE)
+        if opener {
+            depth = depth + 1
+        } else if closer {
+            if depth > 0 { depth = depth - 1 }
+        } else if depth == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
+            if elem_is_rest(toks: read toks, a: read segStart, e: read k) {
+                hasRest = true
+            } else {
+                count = count + 1
+            }
+            segStart = k + 1
+        }
+        k = k + 1
+    }
+    if segStart < e {
+        if elem_is_rest(toks: read toks, a: read segStart, e: read e) {
+            hasRest = true
+        } else {
+            count = count + 1
+        }
+    }
+    let mut marker = "F"
+    if hasRest { marker = "R" }
+    Set.insert<String>(set: mut flags, value: read String.concat(left: read marker, right: read String.from_int(value: count)))
+    return Unit
+}
+
+// True if the match with arms [braceOpen+1, braceClose) over scrutinee root `root`
+// is NON-exhaustive.
+fn match_is_non_exhaustive(toks: read List<Tok>, braceOpen: read Int, braceClose: read Int, root: read String, declared: read Set<String>, allFns: read Set<String>) -> Bool {
+    let mut variants = Set<String>.new()
+    let mut flags = Set<String>.new()
+    let mut i = braceOpen + 1
+    while i < braceClose {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_SEMI) || at_symbol(toks: read toks, i: read i, code: read SYM_COMMA) {
+            i = i + 1
+        } else {
+            let lineEnd = next_line_or_block_end(toks: read toks, start: read i, end: read braceClose)
+            let arrow = find_top_sym(toks: read toks, start: read i, end: read lineEnd, code: read SYM_FATARROW)
+            if arrow < 0 {
+                if lineEnd > i { i = lineEnd } else { i = i + 1 }
+            } else {
+                let ifPos = find_top_if(toks: read toks, start: read i, end: read arrow)
+                if ifPos < 0 {
+                    classify_pattern(toks: read toks, ps: read i, pe: read arrow, variants: mut variants, flags: mut flags)
+                }
+                let bodyStart = arrow + 1
+                if at_symbol(toks: read toks, i: read bodyStart, code: read SYM_LBRACE) {
+                    let bclose = find_matching(toks: read toks, open: read bodyStart, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+                    if bclose < 0 { i = braceClose } else { i = bclose + 1 }
+                } else {
+                    let bEnd = next_line_or_block_end(toks: read toks, start: read bodyStart, end: read braceClose)
+                    if bEnd > i { i = bEnd } else { i = i + 1 }
+                }
+            }
+        }
+    }
+    if Set.contains<String>(set: read flags, value: read "wild") { return false }
+    if root == "Option" {
+        let ok = Set.contains<String>(set: read variants, value: read "Some") && Set.contains<String>(set: read variants, value: read "None")
+        return ok == false
+    }
+    if root == "Result" {
+        let ok = Set.contains<String>(set: read variants, value: read "Ok") && Set.contains<String>(set: read variants, value: read "Err")
+        return ok == false
+    }
+    if root == "Bool" {
+        let ok = Set.contains<String>(set: read flags, value: read "true") && Set.contains<String>(set: read flags, value: read "false")
+        return ok == false
+    }
+    if root == "__Tuple" {
+        return Set.contains<String>(set: read flags, value: read "irref") == false
+    }
+    if root == "List" {
+        // Exhaustive iff some rest pattern caps the open tail (min fixed count
+        // `minRest`) AND every shorter length 0..minRest has a fixed-length arm.
+        let mut minRest = -1
+        let mut q = 0
+        while q <= 32 {
+            if minRest < 0 && Set.contains<String>(set: read flags, value: read String.concat(left: read "R", right: read String.from_int(value: q))) {
+                minRest = q
+            }
+            q = q + 1
+        }
+        if minRest < 0 { return true }
+        let mut covered = true
+        let mut len = 0
+        while len < minRest {
+            if Set.contains<String>(set: read flags, value: read String.concat(left: read "F", right: read String.from_int(value: len))) == false {
+                covered = false
+            }
+            len = len + 1
+        }
+        return covered == false
+    }
+    let sv = sum_variants_of(toks: read toks, sumName: read root)
+    if Set.is_empty<String>(set: read sv) == false {
+        return Set.is_subset<String>(left: read sv, right: read variants) == false
+    }
+    if String.len(value: read root) > 0 && Set.contains<String>(set: read declared, value: read root) {
+        return Set.contains<String>(set: read flags, value: read "irref") == false
+    }
+    let fb = (Set.contains<String>(set: read variants, value: read "Some") && Set.contains<String>(set: read variants, value: read "None")) || (Set.contains<String>(set: read variants, value: read "Ok") && Set.contains<String>(set: read variants, value: read "Err"))
+    return fb == false
+}
+
+// RS0021: any `match` inside the fn body [i,r) whose arms are non-exhaustive.
+fn fn_has_nonexhaustive_match(toks: read List<Tok>, start: read Int, declared: read Set<String>, allFns: read Set<String>) -> Bool {
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+    if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
+    let bodyClose = find_matching(toks: read toks, open: read sigEnd, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    if bodyClose < 0 { return false }
+    let popen = find_param_open(toks: read toks, from: read ns, end: read sigEnd)
+    let mut pclose = -1
+    if popen >= 0 {
+        pclose = find_matching(toks: read toks, open: read popen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    }
+    let mut k = sigEnd + 1
+    let mut hit = false
+    while k < bodyClose {
+        let isMatch = is_kw_text(toks: read toks, i: read k, word: read "match") && at_symbol(toks: read toks, i: read (k - 1), code: read SYM_DOT) == false
+        if isMatch {
+            let braceOpen = find_match_arms_open(toks: read toks, start: read (k + 1), end: read bodyClose)
+            if braceOpen >= 0 {
+                let braceClose = find_matching(toks: read toks, open: read braceOpen, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+                if braceClose >= 0 {
+                    let root = scrutinee_root(toks: read toks, s0: read (k + 1), e: read braceOpen, bodyOpen: read sigEnd, matchPos: read k, popen: read popen, pclose: read pclose, declared: read declared, allFns: read allFns)
+                    if match_is_non_exhaustive(toks: read toks, braceOpen: read braceOpen, braceClose: read braceClose, root: read root, declared: read declared, allFns: read allFns) { hit = true }
+                }
+            }
+        }
+        k = k + 1
+    }
+    return hit
+}
+
 fn main() -> Unit {
     let source = Args.get_or_default(index: 0, default: read "")
     let toks = tokenize(source: read source)
@@ -1474,6 +2072,8 @@ fn main() -> Unit {
     let mut unknownType = false
     let mut missingEffect = false
     let mut pureBad = false
+    // RS0021: any non-exhaustive match statement or expression in the file.
+    let mut nonExhaustive = false
     // RS0024: forward-reference-tolerant known-type set for the whole file.
     let declared = collect_declared_types(toks: read toks)
     // RS0008: user sum names whose every variant is payloadless.
@@ -1639,6 +2239,7 @@ fn main() -> Unit {
                     if fn_types_unknown(toks: read toks, start: read i, declared: read declared) { unknownType = true }
                     if fn_missing_param_effect(toks: read toks, start: read i, sums: read payloadlessSums) { missingEffect = true }
                     if fn_pure_bad(toks: read toks, start: read i, resources: read resources, sumVariants: read sumVariants, pureFns: read pureFns, allFns: read allFns, declared: read declared) { pureBad = true }
+                    if fn_has_nonexhaustive_match(toks: read toks, start: read i, declared: read declared, allFns: read allFns) { nonExhaustive = true }
                     i = r
                 }
             } else {
@@ -1683,6 +2284,9 @@ fn main() -> Unit {
     if pureBad {
         Log.write(message: read "RS0009")
     }
+    if nonExhaustive {
+        Log.write(message: read "RS0021")
+    }
     if unknownType {
         Log.write(message: read "RS0024")
     }
@@ -1698,7 +2302,7 @@ fn main() -> Unit {
     if headerCount >= 2 {
         Log.write(message: read "RS0006")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
