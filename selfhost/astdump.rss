@@ -969,6 +969,11 @@ fn is_type_prefix(toks: read List<Tok>, j: read Int) -> Bool {
     return is_kw_text(toks: read toks, i: read j, word: read "read") || is_kw_text(toks: read toks, i: read j, word: read "mut") || is_kw_text(toks: read toks, i: read j, word: read "take") || is_kw_text(toks: read toks, i: read j, word: read "fresh") || is_kw_text(toks: read toks, i: read j, word: read "handle") || is_kw_text(toks: read toks, i: read j, word: read "weak") || is_kw_text(toks: read toks, i: read j, word: read "noescape") || is_kw_text(toks: read toks, i: read j, word: read "owned")
 }
 
+// Tokens that end a type ref (used to bound the name search).
+fn is_type_terminator(toks: read List<Tok>, j: read Int) -> Bool {
+    return tk_kind(toks: read toks, i: read j) == TOK_EOF || at_symbol(toks: read toks, i: read j, code: read SYM_COMMA) || at_symbol(toks: read toks, i: read j, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read j, code: read SYM_RANGLE) || at_symbol(toks: read toks, i: read j, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read j, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read j, code: read SYM_SEMI) || at_symbol(toks: read toks, i: read j, code: read SYM_EQ)
+}
+
 fn emit_type_ref(toks: read List<Tok>, i: read Int, tag: read String, eff: read String, d: read Int) -> Int {
     // Prefix flags reflect ONLY the token at `i` (matching parse_type_ref, which
     // reads is_fresh/is_noescape/is_owned from tokens[start]).
@@ -978,9 +983,20 @@ fn emit_type_ref(toks: read List<Tok>, i: read Int, tag: read String, eff: read 
     if at_ident(toks: read toks, i: read i, wid: read WORD_FRESH) { isFresh = true }
     else if is_kw_text(toks: read toks, i: read i, word: read "noescape") { isNoescape = true }
     else if is_kw_text(toks: read toks, i: read i, word: read "owned") { isOwned = true }
-    // Name is the first non-prefix token.
+    // Name is the first non-prefix IDENT (parse_type_ref's name_index skips both
+    // prefix keywords AND non-ident tokens like a leading `&`), bounded by a type
+    // terminator so a malformed type never scans away.
     let mut j = i
-    while is_type_prefix(toks: read toks, j: read j) { j = j + 1 }
+    let mut scanning = true
+    while scanning {
+        if is_ident_tok(toks: read toks, i: read j) && is_type_prefix(toks: read toks, j: read j) == false {
+            scanning = false
+        } else if is_type_terminator(toks: read toks, j: read j) {
+            scanning = false
+        } else {
+            j = j + 1
+        }
+    }
     let name = tk_text(toks: read toks, i: read j)
     j = j + 1
     local sb = StringBuilder.new()
@@ -1825,7 +1841,12 @@ fn emit_params(toks: read List<Tok>, open: read Int, close: read Int, d: read In
                     line = String.concat(left: read l2, right: read effStr)
                 }
                 emit(depth: read d, s: read line)
-                emit_type_ref(toks: read toks, i: read k, tag: read "type", eff: read "", d: read (d + 1))
+                let afterType = emit_type_ref(toks: read toks, i: read k, tag: read "type", eff: read "", d: read (d + 1))
+                // Default value: `name: Type = <expr>` (dump_param emits it after type).
+                if at_symbol(toks: read toks, i: read afterType, code: read SYM_EQ) {
+                    emit(depth: read (d + 1), s: read "default")
+                    emit_expr(toks: read toks, start: read (afterType + 1), end: read segEnd, d: read (d + 2))
+                }
             }
         }
         if comma < 0 { i = close } else { i = comma + 1 }
@@ -2615,8 +2636,7 @@ fn main() -> Unit {
                 // A fn whose name won't parse (`fn (…)`) is a program-level malformed
                 // declaration (parse_function_decl returns None) — counted for the
                 // section-5 marker, not emitted as a fn.
-                let ns = fn_name_start(toks: read toks, start: read i)
-                if ns >= 0 && take_function_name(toks: read toks, i: read ns) < 0 {
+                if fn_malformed(toks: read toks, start: read i) {
                     malDecl = malDecl + 1
                     i = advance(toks: read toks, i: read i, r: read next_decl_skip(toks: read toks, start: read i))
                 } else {
@@ -2657,6 +2677,29 @@ fn fn_name_start(toks: read List<Tok>, start: read Int) -> Int {
     if is_kw_text(toks: read toks, i: read j, word: read "native") { j = j + 1 }
     if is_kw_text(toks: read toks, i: read j, word: read "fn") == false { return -1 }
     return j + 1
+}
+
+// True if a fn head at `start` fails to parse (parse_function_decl returns None):
+// no name, unclosed params `(`, or a body `{` with no matching `}`.
+fn fn_malformed(toks: read List<Tok>, start: read Int) -> Bool {
+    let ns = fn_name_start(toks: read toks, start: read start)
+    if ns < 0 { return false }
+    let nameEnd = take_function_name(toks: read toks, i: read ns)
+    if nameEnd < 0 { return true }
+    let popen = parse_generic_params(toks: read toks, i: read nameEnd)
+    let mut sigStart = popen
+    if at_symbol(toks: read toks, i: read popen, code: read SYM_LPAREN) {
+        let pclose = find_matching(toks: read toks, open: read popen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+        if pclose < 0 { return true }
+        sigStart = pclose + 1
+    }
+    let sigEnd = function_signature_end(toks: read toks, start: read sigStart)
+    if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) {
+        if find_matching(toks: read toks, open: read sigEnd, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE) < 0 {
+            return true
+        }
+    }
+    return false
 }
 
 // True if token i begins a top-level `features:` header (depth checked by caller).
@@ -2760,12 +2803,18 @@ fn is_feature_word(toks: read List<Tok>, i: read Int) -> Bool {
 }
 
 // Skip an unsupported top-level item: to its block end if it has one, else its line end.
+// Skip an unknown/malformed top-level declaration (mirrors skip_unknown_top_level):
+// if the declaration line opens a `{`, skip to its matching `}` (or to EOF when it
+// never closes); otherwise skip to the declaration line end.
 fn next_decl_skip(toks: read List<Tok>, start: read Int) -> Int {
     let n = List.len(list: read toks)
-    let openb = find_block_open(toks: read toks, start: read start, limit: read n)
-    if openb >= 0 && tk_line(toks: read toks, i: read openb) == tk_line(toks: read toks, i: read start) {
+    let lineEnd = declaration_line_end(toks: read toks, start: read start)
+    let openb = find_block_open(toks: read toks, start: read start, limit: read lineEnd)
+    let mut r = lineEnd
+    if openb >= 0 {
         let close = find_matching(toks: read toks, open: read openb, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
-        if close > openb { return close + 1 }
+        if close < 0 { r = n } else { r = close + 1 }
     }
-    return declaration_line_end(toks: read toks, start: read start)
+    if r > start { return r }
+    return start + 1
 }
