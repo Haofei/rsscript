@@ -503,7 +503,7 @@ fn parser_parity_corpus() {
 // ---------------------------------------------------------------------------
 
 /// Diagnostic codes the rss checker is expected to reproduce.
-const CHECKER_TARGET_CODES: &[&str] = &["RS0002","RS0003","RS0004","RS0005","RS0006","RS0010","RS0011","RS0012","RS0016","RS0017"];
+const CHECKER_TARGET_CODES: &[&str] = &["RS0002","RS0003","RS0004","RS0005","RS0006","RS0010","RS0011","RS0012","RS0016","RS0017","RS0028"];
 
 fn is_target_code(code: &str) -> bool {
     CHECKER_TARGET_CODES.contains(&code)
