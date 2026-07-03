@@ -651,6 +651,37 @@ fn push_line(out: &mut String, depth: usize, content: &str) {
     out.push('\n');
 }
 
+/// AST-dump span tier from `RSS_SELFHOST_AST_TIER` (default 0). 0 = structure +
+/// payload only (spans omitted); 1 = append ` @line:col` to every spanned node
+/// head line; 2 = append ` @line:col:len`. Mirrors the lexer/parser tier ladders.
+/// Cached once per process (a corpus run is single-tier).
+fn ast_tier() -> u8 {
+    static T: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *T.get_or_init(
+        || match std::env::var("RSS_SELFHOST_AST_TIER").ok().as_deref() {
+            Some("1") => 1,
+            Some("2") => 2,
+            _ => 0,
+        },
+    )
+}
+
+/// Span suffix for a node head line at the active AST tier (empty at tier 0).
+fn sp(span: &crate::diagnostic::Span) -> String {
+    match ast_tier() {
+        1 => format!(" @{}:{}", span.line, span.column),
+        2 => format!(" @{}:{}:{}", span.line, span.column, span.length),
+        _ => String::new(),
+    }
+}
+
+/// Push a spanned node head line: `content` plus the tier's span suffix.
+fn push_node(out: &mut String, depth: usize, content: &str, span: &crate::diagnostic::Span) {
+    let mut c = String::from(content);
+    c.push_str(&sp(span));
+    push_line(out, depth, &c);
+}
+
 fn feature_name(f: ast::FileFeature) -> &'static str {
     match f {
         ast::FileFeature::Local => "local",
@@ -747,17 +778,17 @@ fn ast_oracle_dump(file: &str, source: &str) -> String {
 fn dump_item(out: &mut String, depth: usize, item: &ast::Item) {
     match item {
         ast::Item::Module(m) => {
-            push_line(out, depth, &format!("module path={}", m.path.join(".")));
+            push_node(out, depth, &format!("module path={}", m.path.join(".")), &m.span);
         }
         ast::Item::Use(u) => {
             let mut line = format!("use path={} glob={}", u.path.join("."), u.glob);
             if let Some(a) = &u.alias {
                 line.push_str(&format!(" alias={a}"));
             }
-            push_line(out, depth, &line);
+            push_node(out, depth, &line, &u.span);
         }
         ast::Item::Type(t) => {
-            push_line(
+            push_node(
                 out,
                 depth,
                 &format!(
@@ -767,6 +798,7 @@ fn dump_item(out: &mut String, depth: usize, item: &ast::Item) {
                     t.is_public,
                     t.is_opaque
                 ),
+                &t.span,
             );
             for g in &t.type_params {
                 dump_generic(out, depth + 1, g);
@@ -789,10 +821,11 @@ fn dump_item(out: &mut String, depth: usize, item: &ast::Item) {
             }
         }
         ast::Item::SumType(s) => {
-            push_line(
+            push_node(
                 out,
                 depth,
                 &format!("sum name={} public={}", s.name, s.is_public),
+                &s.span,
             );
             for g in &s.type_params {
                 dump_generic(out, depth + 1, g);
@@ -801,17 +834,18 @@ fn dump_item(out: &mut String, depth: usize, item: &ast::Item) {
                 push_line(out, depth + 1, &format!("derive {d}"));
             }
             for v in &s.variants {
-                push_line(out, depth + 1, &format!("variant name={}", v.name));
+                push_node(out, depth + 1, &format!("variant name={}", v.name), &v.span);
                 for f in &v.fields {
                     dump_field(out, depth + 2, f);
                 }
             }
         }
         ast::Item::TypeAlias(a) => {
-            push_line(
+            push_node(
                 out,
                 depth,
                 &format!("type-alias name={} public={}", a.name, a.is_public),
+                &a.span,
             );
             for g in &a.type_params {
                 dump_generic(out, depth + 1, g);
@@ -819,10 +853,11 @@ fn dump_item(out: &mut String, depth: usize, item: &ast::Item) {
             dump_type_ref(out, depth + 1, &a.target, "target", None);
         }
         ast::Item::Const(c) => {
-            push_line(
+            push_node(
                 out,
                 depth,
                 &format!("const name={} public={}", c.name, c.is_public),
+                &c.span,
             );
             if let Some(t) = &c.type_annotation {
                 dump_type_ref(out, depth + 1, t, "type", None);
@@ -845,7 +880,7 @@ fn dump_function(out: &mut String, depth: usize, f: &ast::FunctionDecl) {
     if f.returns_fresh {
         line.push_str(" returns-fresh=true");
     }
-    push_line(out, depth, &line);
+    push_node(out, depth, &line, &f.span);
     if let Some(r) = &f.deprecated_reason {
         push_line(out, depth + 1, &format!("deprecated {}", escape(r)));
     }
@@ -883,7 +918,7 @@ fn dump_function(out: &mut String, depth: usize, f: &ast::FunctionDecl) {
 }
 
 fn dump_generic(out: &mut String, depth: usize, g: &ast::GenericParam) {
-    push_line(out, depth, &format!("generic name={}", g.name));
+    push_node(out, depth, &format!("generic name={}", g.name), &g.span);
     if let Some(b) = &g.bound {
         let s = match b {
             ast::GenericBound::Managed => "bound managed".to_string(),
@@ -896,13 +931,14 @@ fn dump_generic(out: &mut String, depth: usize, g: &ast::GenericParam) {
 }
 
 fn dump_field(out: &mut String, depth: usize, f: &ast::FieldDecl) {
-    push_line(
+    push_node(
         out,
         depth,
         &format!(
             "field name={} handle={} weak={}",
             f.name, f.is_handle, f.is_weak
         ),
+        &f.span,
     );
     dump_type_ref(out, depth + 1, &f.ty, "type", None);
     if let Some(d) = &f.default {
@@ -916,7 +952,7 @@ fn dump_param(out: &mut String, depth: usize, p: &ast::Param) {
     if let Some(e) = p.effect {
         line.push_str(&format!(" effect={}", e.as_str()));
     }
-    push_line(out, depth, &line);
+    push_node(out, depth, &line, &p.span);
     dump_type_ref(out, depth + 1, &p.ty, "type", None);
     if let Some(d) = &p.default {
         push_line(out, depth + 1, "default");
@@ -939,7 +975,7 @@ fn dump_type_ref(
         " name={} fresh={} noescape={} owned={}",
         tr.name, tr.is_fresh, tr.is_noescape, tr.is_owned
     ));
-    push_line(out, depth, &line);
+    push_node(out, depth, &line, &tr.span);
     for a in &tr.args {
         dump_type_ref(out, depth + 1, a, "arg", None);
     }
@@ -967,16 +1003,17 @@ fn dump_match(
     arms: &[ast::MatchArm],
     malformed_arms: usize,
     tag: &str,
+    head_span: &crate::diagnostic::Span,
 ) {
     let mut line = String::from(tag);
     if let Some(e) = eff {
         line.push_str(&format!(" effect={}", e.as_str()));
     }
-    push_line(out, depth, &line);
+    push_node(out, depth, &line, head_span);
     push_line(out, depth + 1, "value");
     dump_expr(out, depth + 2, value);
     for arm in arms {
-        push_line(out, depth + 1, "arm");
+        push_node(out, depth + 1, "arm", &arm.span);
         push_line(out, depth + 2, "pattern");
         dump_pattern(out, depth + 3, &arm.pattern);
         if let Some(g) = &arm.guard {
@@ -1006,7 +1043,7 @@ fn dump_stmt(out: &mut String, depth: usize, s: &ast::Stmt) {
             if let Some(names) = &l.destructure {
                 line.push_str(&format!(" destructure={}", names.join(",")));
             }
-            push_line(out, depth, &line);
+            push_node(out, depth, &line, &l.span);
             if let Some(t) = &l.type_annotation {
                 dump_type_ref(out, depth + 1, t, "type", None);
             }
@@ -1016,21 +1053,21 @@ fn dump_stmt(out: &mut String, depth: usize, s: &ast::Stmt) {
             }
         }
         ast::Stmt::Return(r) => {
-            push_line(out, depth, "return");
+            push_node(out, depth, "return", &r.span);
             if let Some(v) = &r.value {
                 push_line(out, depth + 1, "value");
                 dump_expr(out, depth + 2, v);
             }
         }
         ast::Stmt::With(w) => {
-            push_line(out, depth, &format!("with binding={}", w.binding));
+            push_node(out, depth, &format!("with binding={}", w.binding), &w.span);
             push_line(out, depth + 1, "resource");
             dump_expr(out, depth + 2, &w.resource);
             dump_block(out, depth + 1, &w.body);
         }
-        ast::Stmt::MalformedWith(_) => push_line(out, depth, "malformed-with"),
+        ast::Stmt::MalformedWith(s) => push_node(out, depth, "malformed-with", s),
         ast::Stmt::If(i) => {
-            push_line(out, depth, "if");
+            push_node(out, depth, "if", &i.span);
             push_line(out, depth + 1, "cond");
             dump_expr(out, depth + 2, &i.condition);
             push_line(out, depth + 1, "then");
@@ -1040,27 +1077,28 @@ fn dump_stmt(out: &mut String, depth: usize, s: &ast::Stmt) {
                 dump_block(out, depth + 2, e);
             }
         }
-        ast::Stmt::MalformedIf(_) => push_line(out, depth, "malformed-if"),
+        ast::Stmt::MalformedIf(s) => push_node(out, depth, "malformed-if", s),
         ast::Stmt::Loop(l) => {
-            push_line(out, depth, "loop");
+            push_node(out, depth, "loop", &l.span);
             if let Some(c) = &l.condition {
                 push_line(out, depth + 1, "cond");
                 dump_expr(out, depth + 2, c);
             }
             dump_block(out, depth + 1, &l.body);
         }
-        ast::Stmt::MalformedLoop(_) => push_line(out, depth, "malformed-loop"),
+        ast::Stmt::MalformedLoop(s) => push_node(out, depth, "malformed-loop", s),
         ast::Stmt::For(f) => {
-            push_line(
+            push_node(
                 out,
                 depth,
                 &format!("for binding={} async={}", f.binding, f.is_async),
+                &f.span,
             );
             push_line(out, depth + 1, "iter");
             dump_expr(out, depth + 2, &f.iterable);
             dump_block(out, depth + 1, &f.body);
         }
-        ast::Stmt::MalformedFor(_) => push_line(out, depth, "malformed-for"),
+        ast::Stmt::MalformedFor(s) => push_node(out, depth, "malformed-for", s),
         ast::Stmt::Match(m) => dump_match(
             out,
             depth,
@@ -1069,14 +1107,15 @@ fn dump_stmt(out: &mut String, depth: usize, s: &ast::Stmt) {
             &m.arms,
             m.malformed_arm_spans.len(),
             "match",
+            &m.span,
         ),
-        ast::Stmt::MalformedMatch(_) => push_line(out, depth, "malformed-match"),
+        ast::Stmt::MalformedMatch(s) => push_node(out, depth, "malformed-match", s),
         ast::Stmt::TaskGroup(t) => {
-            push_line(out, depth, "task-group");
+            push_node(out, depth, "task-group", &t.span);
             dump_block(out, depth + 1, &t.body);
         }
         ast::Stmt::Select(s) => {
-            push_line(out, depth, "select");
+            push_node(out, depth, "select", &s.span);
             for arm in &s.arms {
                 push_line(out, depth + 1, &format!("select-arm binding={}", arm.binding));
                 push_line(out, depth + 2, "operation");
@@ -1084,10 +1123,10 @@ fn dump_stmt(out: &mut String, depth: usize, s: &ast::Stmt) {
                 dump_block(out, depth + 2, &arm.body);
             }
         }
-        ast::Stmt::Break(_) => push_line(out, depth, "break"),
-        ast::Stmt::Continue(_) => push_line(out, depth, "continue"),
+        ast::Stmt::Break(s) => push_node(out, depth, "break", s),
+        ast::Stmt::Continue(s) => push_node(out, depth, "continue", s),
         ast::Stmt::LetElse(l) => {
-            push_line(out, depth, &format!("let-else binding={}", l.binding_name));
+            push_node(out, depth, &format!("let-else binding={}", l.binding_name), &l.span);
             push_line(out, depth + 1, "pattern");
             dump_pattern(out, depth + 2, &l.pattern);
             push_line(out, depth + 1, "value");
@@ -1096,17 +1135,17 @@ fn dump_stmt(out: &mut String, depth: usize, s: &ast::Stmt) {
             dump_block(out, depth + 2, &l.else_body);
         }
         ast::Stmt::Assign(a) => {
-            push_line(out, depth, "assign");
+            push_node(out, depth, "assign", &a.span);
             push_line(out, depth + 1, "target");
             dump_expr(out, depth + 2, &a.target);
             push_line(out, depth + 1, "value");
             dump_expr(out, depth + 2, &a.value);
         }
         ast::Stmt::Expr(e) => {
-            push_line(out, depth, "expr-stmt");
+            push_node(out, depth, "expr-stmt", e.span());
             dump_expr(out, depth + 1, e);
         }
-        ast::Stmt::Unknown(_) => push_line(out, depth, "unknown-stmt"),
+        ast::Stmt::Unknown(s) => push_node(out, depth, "unknown-stmt", s),
     }
 }
 
@@ -1208,23 +1247,24 @@ fn dump_callee(out: &mut String, depth: usize, c: &ast::Callee) {
 }
 
 fn dump_expr(out: &mut String, depth: usize, e: &ast::Expr) {
+    let es = e.span();
     match e {
-        ast::Expr::Ident(s, _) => push_line(out, depth, &format!("ident {}", escape(s))),
-        ast::Expr::Number(s, _) => push_line(out, depth, &format!("number {}", escape(s))),
-        ast::Expr::String(s, _) => push_line(out, depth, &format!("string {}", escape(s))),
-        ast::Expr::CharLiteral(s, _) => push_line(out, depth, &format!("char {}", escape(s))),
+        ast::Expr::Ident(s, _) => push_node(out, depth, &format!("ident {}", escape(s)), es),
+        ast::Expr::Number(s, _) => push_node(out, depth, &format!("number {}", escape(s)), es),
+        ast::Expr::String(s, _) => push_node(out, depth, &format!("string {}", escape(s)), es),
+        ast::Expr::CharLiteral(s, _) => push_node(out, depth, &format!("char {}", escape(s)), es),
         ast::Expr::MultilineString(s, _) => {
-            push_line(out, depth, &format!("multiline {}", escape(s)))
+            push_node(out, depth, &format!("multiline {}", escape(s)), es)
         }
         ast::Expr::ObjectLiteral { fields, .. } => {
-            push_line(out, depth, "object");
+            push_node(out, depth, "object", es);
             for f in fields {
                 push_line(out, depth + 1, &format!("object-field name={}", f.name));
                 dump_expr(out, depth + 2, &f.value);
             }
         }
         ast::Expr::MapLiteral { entries, .. } => {
-            push_line(out, depth, "map");
+            push_node(out, depth, "map", es);
             for en in entries {
                 push_line(out, depth + 1, "map-entry");
                 push_line(out, depth + 2, "key");
@@ -1234,7 +1274,7 @@ fn dump_expr(out: &mut String, depth: usize, e: &ast::Expr) {
             }
         }
         ast::Expr::ArrayLiteral { items, .. } => {
-            push_line(out, depth, "array");
+            push_node(out, depth, "array", es);
             for it in items {
                 dump_expr(out, depth + 1, it);
             }
@@ -1242,21 +1282,21 @@ fn dump_expr(out: &mut String, depth: usize, e: &ast::Expr) {
         ast::Expr::Binary {
             op, left, right, ..
         } => {
-            push_line(out, depth, &format!("binary op={}", binop_name(*op)));
+            push_node(out, depth, &format!("binary op={}", binop_name(*op)), es);
             dump_expr(out, depth + 1, left);
             dump_expr(out, depth + 1, right);
         }
         ast::Expr::Field { base, name, .. } => {
-            push_line(out, depth, &format!("field-access name={name}"));
+            push_node(out, depth, &format!("field-access name={name}"), es);
             dump_expr(out, depth + 1, base);
         }
         ast::Expr::Index { base, index, .. } => {
-            push_line(out, depth, "index");
+            push_node(out, depth, "index", es);
             dump_expr(out, depth + 1, base);
             dump_expr(out, depth + 1, index);
         }
         ast::Expr::Call { callee, args, .. } => {
-            push_line(out, depth, "call");
+            push_node(out, depth, "call", es);
             dump_callee(out, depth + 1, callee);
             for a in args {
                 let mut line = String::from("arg");
@@ -1271,23 +1311,23 @@ fn dump_expr(out: &mut String, depth: usize, e: &ast::Expr) {
             }
         }
         ast::Expr::Effect { effect, value, .. } => {
-            push_line(out, depth, &format!("effect kind={}", effect.as_str()));
+            push_node(out, depth, &format!("effect kind={}", effect.as_str()), es);
             dump_expr(out, depth + 1, value);
         }
         ast::Expr::Manage { value, .. } => {
-            push_line(out, depth, "manage");
+            push_node(out, depth, "manage", es);
             dump_expr(out, depth + 1, value);
         }
         ast::Expr::Spawn { value, .. } => {
-            push_line(out, depth, "spawn");
+            push_node(out, depth, "spawn", es);
             dump_expr(out, depth + 1, value);
         }
         ast::Expr::Await { value, .. } => {
-            push_line(out, depth, "await");
+            push_node(out, depth, "await", es);
             dump_expr(out, depth + 1, value);
         }
         ast::Expr::Try { value, .. } => {
-            push_line(out, depth, "try");
+            push_node(out, depth, "try", es);
             dump_expr(out, depth + 1, value);
         }
         ast::Expr::Closure {
@@ -1298,7 +1338,7 @@ fn dump_expr(out: &mut String, depth: usize, e: &ast::Expr) {
             body,
             ..
         } => {
-            push_line(out, depth, &format!("closure explicit={explicit}"));
+            push_node(out, depth, &format!("closure explicit={explicit}"), es);
             for p in params {
                 push_line(out, depth + 1, &format!("closure-param {p}"));
             }
@@ -1320,7 +1360,7 @@ fn dump_expr(out: &mut String, depth: usize, e: &ast::Expr) {
             scrutinee_effect,
             arms,
             malformed_arm_spans,
-            ..
+            span,
         } => dump_match(
             out,
             depth,
@@ -1329,8 +1369,9 @@ fn dump_expr(out: &mut String, depth: usize, e: &ast::Expr) {
             arms,
             malformed_arm_spans.len(),
             "match-expr",
+            span,
         ),
-        ast::Expr::Unknown(_) => push_line(out, depth, "unknown-expr"),
+        ast::Expr::Unknown(_) => push_node(out, depth, "unknown-expr", es),
     }
 }
 
