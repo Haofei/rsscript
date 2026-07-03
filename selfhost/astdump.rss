@@ -53,6 +53,23 @@ fn emit(depth: read Int, s: read String) -> Unit {
     return Unit
 }
 
+// Span suffix ` @line:col:len` for the representative token i (always the richest
+// form; the harness projects it down to the active AST tier). Mirrors the Rust
+// oracle's `sp`, whose node span is a SINGLE token's line:col:len (never a
+// multi-token range) — so reproducing a node's span is just emitting its
+// representative token's position + length.
+fn spanof(toks: read List<Tok>, i: read Int) -> String {
+    let lc = String.concat(left: read String.concat(left: read String.from_int(value: tk_line(toks: read toks, i: read i)), right: read ":"), right: read String.from_int(value: tk_col(toks: read toks, i: read i)))
+    let full = String.concat(left: read String.concat(left: read lc, right: read ":"), right: read String.from_int(value: tk_len(toks: read toks, i: read i)))
+    return String.concat(left: read " @", right: read full)
+}
+
+// emit a spanned node HEAD: content + the representative token's span suffix.
+fn emit_at(depth: read Int, s: read String, toks: read List<Tok>, i: read Int) -> Unit {
+    emit(depth: read depth, s: read String.concat(left: read s, right: read spanof(toks: read toks, i: read i)))
+    return Unit
+}
+
 fn tk_text(toks: read List<Tok>, i: read Int) -> String {
     if i < 0 { return "" }
     if i >= List.len(list: read toks) { return "" }
@@ -212,6 +229,69 @@ fn find_binop(toks: read List<Tok>, start: read Int, end: read Int) -> Int {
     return -1
 }
 
+// Representative token index whose (line:col:len) IS this expression's span —
+// mirrors emit_expr's dispatch order exactly (the parser sets each Expr.span from
+// ONE token: the operator for Binary, the trailing `?` for Try, the receiver for
+// a ReceiverCall, otherwise the node's first trimmed token). Used where a caller
+// needs the span WITHOUT descending into the expr (e.g. an expr-statement head,
+// whose span equals its inner expression's span).
+fn expr_rep_tok(toks: read List<Tok>, start: read Int, end: read Int) -> Int {
+    // Tuple `(a, b, …)` — before paren-trim; span = the `(`.
+    if at_symbol(toks: read toks, i: read start, code: read SYM_LPAREN) {
+        let tclose = find_matching(toks: read toks, open: read start, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+        if tclose == (end - 1) && count_type_args(toks: read toks, start: read (start + 1), end: read tclose) >= 2 {
+            return start
+        }
+    }
+    // Trim wrapping parens.
+    let mut s = start
+    let mut e = end
+    let mut trimming = true
+    while trimming {
+        if s < e && at_symbol(toks: read toks, i: read s, code: read SYM_LPAREN) {
+            let close = find_matching(toks: read toks, open: read s, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+            if close == e - 1 { s = s + 1; e = close } else { trimming = false }
+        } else { trimming = false }
+    }
+    if s >= e { return s }
+    // Closures / effect-closures / fn-closures: span = first token.
+    if at_symbol(toks: read toks, i: read s, code: read SYM_PIPE) { return s }
+    if is_kw_text(toks: read toks, i: read s, word: read "fn") && at_symbol(toks: read toks, i: read (s + 1), code: read SYM_LPAREN) { return s }
+    let effClosure = effect_kw(toks: read toks, i: read s)
+    if String.len(value: read effClosure) > 0 && at_symbol(toks: read toks, i: read (s + 1), code: read SYM_PIPE) { return s }
+    // Binary: span = the operator token.
+    let opIdx = find_binop(toks: read toks, start: read s, end: read e)
+    if opIdx >= 0 { return opIdx }
+    // Prefix `!`/`~`: span = the operator (first) token.
+    if at_symbol(toks: read toks, i: read s, code: read SYM_BANG) { return s }
+    if at_symbol(toks: read toks, i: read s, code: read SYM_TILDE) { return s }
+    // Trailing `?` => try; span = the `?` token.
+    if at_symbol(toks: read toks, i: read (e - 1), code: read SYM_QUESTION) { return e - 1 }
+    // Match expression: span = the `match` keyword.
+    if is_kw_text(toks: read toks, i: read s, word: read "match") && at_symbol(toks: read toks, i: read (e - 1), code: read SYM_RBRACE) {
+        let braceOpen = matching_open_brace(toks: read toks, close: read (e - 1), start: read s)
+        if braceOpen > s { return s }
+    }
+    // Effect prefix: a receiver-call shorthand's span is the RECEIVER token; a
+    // plain effect prefix's span is the effect keyword.
+    let effWord = effect_kw(toks: read toks, i: read s)
+    if String.len(value: read effWord) > 0 {
+        let recvStart = s + 1
+        if at_symbol(toks: read toks, i: read recvStart, code: read SYM_BANG) == false {
+            let dot = find_receiver_call_dot(toks: read toks, recvStart: read recvStart, end: read e)
+            if dot > recvStart && is_qualified_ns_receiver(toks: read toks, start: read recvStart, dot: read dot) == false {
+                let open = find_call_open(toks: read toks, start: read (dot + 1), end: read e)
+                let method = named_segment_str(toks: read toks, start: read (dot + 1), end: read open)
+                if open > 0 && String.len(value: read method) > 0 { return recvStart }
+            }
+        }
+        return s
+    }
+    // manage / spawn / await: span = the keyword.
+    // Postfix (call / index / field / primary): span = the first trimmed token.
+    return s
+}
+
 fn emit_expr(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) -> Unit {
     // Tuple literal `(a, b, …)` (≥2 elements filling the whole range) desugars to a
     // `__TupleN(item0: a, …)` call — detected before paren-trimming (parse_tuple_expr).
@@ -220,7 +300,7 @@ fn emit_expr(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) 
         if tclose == (end - 1) {
             let cnt = count_type_args(toks: read toks, start: read (start + 1), end: read tclose)
             if cnt >= 2 {
-                emit(depth: read d, s: read "call")
+                emit_at(depth: read d, s: read "call", toks: read toks, i: read start)
                 emit(depth: read (d + 1), s: read String.concat(left: read "callee-name name=__Tuple", right: read String.from_int(value: cnt)))
                 let mut idx = 0
                 let mut k = start + 1
@@ -257,13 +337,13 @@ fn emit_expr(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) 
         }
     }
     if s >= e {
-        emit(depth: read d, s: read "unknown-expr")
+        emit_at(depth: read d, s: read "unknown-expr", toks: read toks, i: read s)
         return Unit
     }
     // Negative number literal: `-` <number> exactly (before binary/closure, as in
     // parse_expr) so it doesn't split as subtraction.
     if e - s == 2 && at_symbol(toks: read toks, i: read s, code: read SYM_MINUS) && tk_kind(toks: read toks, i: read (s + 1)) == TOK_NUMBER {
-        emit(depth: read d, s: read String.concat(left: read "number -", right: read escape(s: read tk_text(toks: read toks, i: read (s + 1)))))
+        emit_at(depth: read d, s: read String.concat(left: read "number -", right: read escape(s: read tk_text(toks: read toks, i: read (s + 1)))), toks: read toks, i: read s)
         return Unit
     }
     // Closure `|params| body` — checked before binary split so its `|` pipes are
@@ -284,7 +364,7 @@ fn emit_expr(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) 
     // tighter than any binary op.)
     let effClosure = effect_kw(toks: read toks, i: read s)
     if String.len(value: read effClosure) > 0 && at_symbol(toks: read toks, i: read (s + 1), code: read SYM_PIPE) {
-        emit(depth: read d, s: read String.concat(left: read "effect kind=", right: read effClosure))
+        emit_at(depth: read d, s: read String.concat(left: read "effect kind=", right: read effClosure), toks: read toks, i: read s)
         emit_closure(toks: read toks, start: read (s + 1), end: read e, d: read (d + 1))
         return Unit
     }
@@ -293,20 +373,20 @@ fn emit_expr(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) 
     if opIdx >= 0 {
         let name = binop_name_at(toks: read toks, i: read opIdx, end: read e)
         let w = binop_width_at(toks: read toks, i: read opIdx, end: read e)
-        emit(depth: read d, s: read String.concat(left: read "binary op=", right: read name))
+        emit_at(depth: read d, s: read String.concat(left: read "binary op=", right: read name), toks: read toks, i: read opIdx)
         emit_expr(toks: read toks, start: read s, end: read opIdx, d: read (d + 1))
         emit_expr(toks: read toks, start: read (opIdx + w), end: read e, d: read (d + 1))
         return Unit
     }
     // Prefix `!x` desugars to `x == false`; `~x` to `Int.bit_not(value: x)`.
     if at_symbol(toks: read toks, i: read s, code: read SYM_BANG) {
-        emit(depth: read d, s: read "binary op=equal")
+        emit_at(depth: read d, s: read "binary op=equal", toks: read toks, i: read s)
         emit_unary_operand(toks: read toks, start: read (s + 1), end: read e, d: read (d + 1))
-        emit(depth: read (d + 1), s: read "ident false")
+        emit_at(depth: read (d + 1), s: read "ident false", toks: read toks, i: read s)
         return Unit
     }
     if at_symbol(toks: read toks, i: read s, code: read SYM_TILDE) {
-        emit(depth: read d, s: read "call")
+        emit_at(depth: read d, s: read "call", toks: read toks, i: read s)
         emit(depth: read (d + 1), s: read "callee-qualified namespace=Int name=bit_not")
         emit(depth: read (d + 1), s: read "arg name=value")
         emit_unary_operand(toks: read toks, start: read (s + 1), end: read e, d: read (d + 2))
@@ -314,7 +394,7 @@ fn emit_expr(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) 
     }
     // Trailing top-level `?` => try.
     if at_symbol(toks: read toks, i: read (e - 1), code: read SYM_QUESTION) {
-        emit(depth: read d, s: read "try")
+        emit_at(depth: read d, s: read "try", toks: read toks, i: read (e - 1))
         emit_expr(toks: read toks, start: read s, end: read (e - 1), d: read (d + 1))
         return Unit
     }
@@ -341,7 +421,7 @@ fn emit_expr(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) 
                 let method = named_segment_str(toks: read toks, start: read mpos, end: read open)
                 if open > 0 && String.len(value: read method) > 0 {
                     let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
-                    emit(depth: read d, s: read "call")
+                    emit_at(depth: read d, s: read "call", toks: read toks, i: read recvStart)
                     let cl = String.concat(left: read "callee-receiver method=", right: read method)
                     emit(depth: read (d + 1), s: read String.concat(left: read String.concat(left: read cl, right: read " effect="), right: read effWord))
                     emit_expr(toks: read toks, start: read recvStart, end: read dot, d: read (d + 2))
@@ -350,23 +430,23 @@ fn emit_expr(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) 
                 }
             }
         }
-        emit(depth: read d, s: read String.concat(left: read "effect kind=", right: read effWord))
+        emit_at(depth: read d, s: read String.concat(left: read "effect kind=", right: read effWord), toks: read toks, i: read s)
         emit_expr(toks: read toks, start: read (s + 1), end: read e, d: read (d + 1))
         return Unit
     }
     // Prefix expression forms `manage X` / `spawn X` / `await X` (value child).
     if is_kw_text(toks: read toks, i: read s, word: read "manage") {
-        emit(depth: read d, s: read "manage")
+        emit_at(depth: read d, s: read "manage", toks: read toks, i: read s)
         emit_expr(toks: read toks, start: read (s + 1), end: read e, d: read (d + 1))
         return Unit
     }
     if is_kw_text(toks: read toks, i: read s, word: read "spawn") {
-        emit(depth: read d, s: read "spawn")
+        emit_at(depth: read d, s: read "spawn", toks: read toks, i: read s)
         emit_expr(toks: read toks, start: read (s + 1), end: read e, d: read (d + 1))
         return Unit
     }
     if is_kw_text(toks: read toks, i: read s, word: read "await") {
-        emit(depth: read d, s: read "await")
+        emit_at(depth: read d, s: read "await", toks: read toks, i: read s)
         emit_expr(toks: read toks, start: read (s + 1), end: read e, d: read (d + 1))
         return Unit
     }
@@ -385,8 +465,8 @@ fn emit_closure(toks: read List<Tok>, start: read Int, end: read Int, d: read In
         if at_symbol(toks: read toks, i: read i, code: read SYM_PIPE) { closePipe = i }
         i = i + 1
     }
-    if closePipe < 0 { emit(depth: read d, s: read "unknown-expr"); return Unit }
-    emit(depth: read d, s: read "closure explicit=false")
+    if closePipe < 0 { emit_at(depth: read d, s: read "unknown-expr", toks: read toks, i: read start); return Unit }
+    emit_at(depth: read d, s: read "closure explicit=false", toks: read toks, i: read start)
     // Params: comma-separated single idents.
     let mut k = start + 1
     while k < closePipe {
@@ -406,9 +486,10 @@ fn emit_closure(toks: read List<Tok>, start: read Int, end: read Int, d: read In
             return Unit
         }
     }
-    // Single-expression body → a block with one expr-stmt.
+    // Single-expression body → a block with one expr-stmt (the Stmt::Expr head is
+    // spanned at the body expression's representative token).
     emit(depth: read (d + 2), s: read "block")
-    emit(depth: read (d + 3), s: read "expr-stmt")
+    emit_at(depth: read (d + 3), s: read "expr-stmt", toks: read toks, i: read expr_rep_tok(toks: read toks, start: read bodyStart, end: read end))
     emit_expr(toks: read toks, start: read bodyStart, end: read end, d: read (d + 4))
     return Unit
 }
@@ -418,8 +499,8 @@ fn emit_closure(toks: read List<Tok>, start: read Int, end: read Int, d: read In
 fn emit_explicit_fn(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) -> Unit {
     let pOpen = start + 1
     let pClose = find_matching(toks: read toks, open: read pOpen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
-    if pClose < 0 { emit(depth: read d, s: read "unknown-expr"); return Unit }
-    emit(depth: read d, s: read "closure explicit=true")
+    if pClose < 0 { emit_at(depth: read d, s: read "unknown-expr", toks: read toks, i: read start); return Unit }
+    emit_at(depth: read d, s: read "closure explicit=true", toks: read toks, i: read start)
     // params: comma-separated single idents.
     let mut k = pOpen + 1
     while k < pClose {
@@ -507,7 +588,7 @@ fn emit_postfix(toks: read List<Tok>, start: read Int, end: read Int, d: read In
             if dot > start && is_qualified_ns_receiver(toks: read toks, start: read start, dot: read dot) == false {
                 let method = named_segment_str(toks: read toks, start: read (dot + 1), end: read openp)
                 if String.len(value: read method) > 0 {
-                    emit(depth: read d, s: read "call")
+                    emit_at(depth: read d, s: read "call", toks: read toks, i: read start)
                     emit(depth: read (d + 1), s: read String.concat(left: read "callee-receiver method=", right: read method))
                     emit_expr(toks: read toks, start: read start, end: read dot, d: read (d + 2))
                     emit_args(toks: read toks, start: read (openp + 1), end: read (end - 1), d: read (d + 1))
@@ -515,7 +596,7 @@ fn emit_postfix(toks: read List<Tok>, start: read Int, end: read Int, d: read In
                 }
             }
             // callee is [start, openp); args in (openp, end-1)
-            emit(depth: read d, s: read "call")
+            emit_at(depth: read d, s: read "call", toks: read toks, i: read start)
             emit_callee(toks: read toks, start: read start, end: read openp, d: read (d + 1))
             emit_args(toks: read toks, start: read (openp + 1), end: read (end - 1), d: read (d + 1))
             return Unit
@@ -525,7 +606,7 @@ fn emit_postfix(toks: read List<Tok>, start: read Int, end: read Int, d: read In
     if end - start >= 2 && at_symbol(toks: read toks, i: read (end - 1), code: read SYM_RBRACKET) {
         let openb = matching_open_bracket(toks: read toks, close: read (end - 1), start: read start)
         if openb > start {
-            emit(depth: read d, s: read "index")
+            emit_at(depth: read d, s: read "index", toks: read toks, i: read start)
             emit_expr(toks: read toks, start: read start, end: read openb, d: read (d + 1))
             emit_expr(toks: read toks, start: read (openb + 1), end: read (end - 1), d: read (d + 1))
             return Unit
@@ -534,7 +615,7 @@ fn emit_postfix(toks: read List<Tok>, start: read Int, end: read Int, d: read In
     // Trailing field access: <base>.name  (name is the last token, preceded by `.`).
     if end - start >= 3 && is_ident_tok(toks: read toks, i: read (end - 1)) && at_symbol(toks: read toks, i: read (end - 2), code: read SYM_DOT) {
         let nm = tk_text(toks: read toks, i: read (end - 1))
-        emit(depth: read d, s: read String.concat(left: read "field-access name=", right: read nm))
+        emit_at(depth: read d, s: read String.concat(left: read "field-access name=", right: read nm), toks: read toks, i: read start)
         emit_expr(toks: read toks, start: read start, end: read (end - 2), d: read (d + 1))
         return Unit
     }
@@ -737,9 +818,10 @@ fn emit_args(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) 
         let argEnd = pick_end(comma: read comma, end: read end)
         if i >= argEnd {
             // Empty segment (leading/trailing/double comma) → malformed arg with an
-            // Unknown value (mirrors parse_call_args' empty_span branch).
+            // Unknown value (mirrors parse_call_args' empty_span branch: the Unknown's
+            // span is the comma token at `i`).
             emit(depth: read d, s: read "arg malformed=true")
-            emit(depth: read (d + 1), s: read "unknown-expr")
+            emit_at(depth: read (d + 1), s: read "unknown-expr", toks: read toks, i: read i)
         } else {
             // Named arg: `name: value` when a top-level `:` follows an ident at i.
             let mut vstart = i
@@ -749,7 +831,14 @@ fn emit_args(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) 
                 vstart = i + 2
             }
             emit(depth: read d, s: read line)
-            emit_expr(toks: read toks, start: read vstart, end: read argEnd, d: read (d + 1))
+            // An empty value (`print(value:)`) parses to Expr::Unknown spanned at the
+            // arg's FIRST token (parse_call_args' tokens[start] fallback), not the
+            // post-colon position emit_expr would use.
+            if vstart >= argEnd {
+                emit_at(depth: read (d + 1), s: read "unknown-expr", toks: read toks, i: read i)
+            } else {
+                emit_expr(toks: read toks, start: read vstart, end: read argEnd, d: read (d + 1))
+            }
         }
         if comma < 0 { i = end } else { i = comma + 1 }
     }
@@ -790,34 +879,34 @@ fn emit_primary(toks: read List<Tok>, start: read Int, end: read Int, d: read In
         let k = tk_kind(toks: read toks, i: read start)
         let t = tk_text(toks: read toks, i: read start)
         if k == TOK_NUMBER {
-            emit(depth: read d, s: read String.concat(left: read "number ", right: read escape(s: read t)))
+            emit_at(depth: read d, s: read String.concat(left: read "number ", right: read escape(s: read t)), toks: read toks, i: read start)
             return Unit
         }
         if k == TOK_STRING {
-            emit(depth: read d, s: read String.concat(left: read "string ", right: read escape(s: read t)))
+            emit_at(depth: read d, s: read String.concat(left: read "string ", right: read escape(s: read t)), toks: read toks, i: read start)
             return Unit
         }
         if k == TOK_CHAR {
-            emit(depth: read d, s: read String.concat(left: read "char ", right: read escape(s: read t)))
+            emit_at(depth: read d, s: read String.concat(left: read "char ", right: read escape(s: read t)), toks: read toks, i: read start)
             return Unit
         }
         if k == TOK_MULTILINE {
-            emit(depth: read d, s: read String.concat(left: read "multiline ", right: read escape(s: read t)))
+            emit_at(depth: read d, s: read String.concat(left: read "multiline ", right: read escape(s: read t)), toks: read toks, i: read start)
             return Unit
         }
         if k == TOK_INTERP {
-            emit_interp(text: read t, d: read d)
+            emit_interp(text: read t, d: read d, toks: read toks, tokIdx: read start)
             return Unit
         }
         // Ident or keyword-as-ident (true/false/etc lex as ident).
-        emit(depth: read d, s: read String.concat(left: read "ident ", right: read escape(s: read t)))
+        emit_at(depth: read d, s: read String.concat(left: read "ident ", right: read escape(s: read t)), toks: read toks, i: read start)
         return Unit
     }
     // Array literal: [ items ].
     if at_symbol(toks: read toks, i: read start, code: read SYM_LBRACKET) && at_symbol(toks: read toks, i: read (end - 1), code: read SYM_RBRACKET) {
         let close = find_matching(toks: read toks, open: read start, openSym: read SYM_LBRACKET, closeSym: read SYM_RBRACKET)
         if close == end - 1 {
-            emit(depth: read d, s: read "array")
+            emit_at(depth: read d, s: read "array", toks: read toks, i: read start)
             let mut i = start + 1
             while i < end - 1 {
                 let comma = split_comma(toks: read toks, start: read i, end: read (end - 1))
@@ -836,7 +925,7 @@ fn emit_primary(toks: read List<Tok>, start: read Int, end: read Int, d: read In
             return Unit
         }
     }
-    emit(depth: read d, s: read "unknown-expr")
+    emit_at(depth: read d, s: read "unknown-expr", toks: read toks, i: read start)
     return Unit
 }
 
@@ -845,7 +934,7 @@ fn emit_primary(toks: read List<Tok>, start: read Int, end: read Int, d: read In
 // Mirrors parse_interpolated_string_parts. The only unreproducible case is a
 // syntactically-invalid embedded expr (emit_expr can't signal parse failure), so
 // `malformed` is set only for an unterminated `{` — a documented residual.
-fn emit_interp(text: read String, d: read Int) -> Unit {
+fn emit_interp(text: read String, d: read Int, toks: read List<Tok>, tokIdx: read Int) -> Unit {
     local tmpl = StringBuilder.new()
     local items = List.new()
     let mut malformed = false
@@ -887,14 +976,14 @@ fn emit_interp(text: read String, d: read Int) -> Unit {
     let template = StringBuilder.finish(builder: take tmpl)
     let mut suffix = ""
     if malformed { suffix = " malformed=true" }
-    emit(depth: read d, s: read "call")
+    emit_at(depth: read d, s: read "call", toks: read toks, i: read tokIdx)
     emit(depth: read (d + 1), s: read "callee-qualified namespace=String name=format")
     emit(depth: read (d + 1), s: read String.concat(left: read "arg name=template", right: read suffix))
-    emit(depth: read (d + 2), s: read "effect kind=read")
-    emit(depth: read (d + 3), s: read String.concat(left: read "string ", right: read escape(s: read template)))
+    emit_at(depth: read (d + 2), s: read "effect kind=read", toks: read toks, i: read tokIdx)
+    emit_at(depth: read (d + 3), s: read String.concat(left: read "string ", right: read escape(s: read template)), toks: read toks, i: read tokIdx)
     emit(depth: read (d + 1), s: read String.concat(left: read "arg name=args", right: read suffix))
-    emit(depth: read (d + 2), s: read "effect kind=read")
-    emit(depth: read (d + 3), s: read "array")
+    emit_at(depth: read (d + 2), s: read "effect kind=read", toks: read toks, i: read tokIdx)
+    emit_at(depth: read (d + 3), s: read "array", toks: read toks, i: read tokIdx)
     let m = List.len(list: read items)
     let mut j = 0
     while j < m {
@@ -963,7 +1052,7 @@ fn emit_object_or_map(toks: read List<Tok>, start: read Int, close: read Int, d:
         if comma < 0 { i = close } else { i = comma + 1 }
     }
     if isMap {
-        emit(depth: read d, s: read "map")
+        emit_at(depth: read d, s: read "map", toks: read toks, i: read start)
         let mut k = start + 1
         while k < close {
             let comma = split_comma(toks: read toks, start: read k, end: read close)
@@ -978,7 +1067,7 @@ fn emit_object_or_map(toks: read List<Tok>, start: read Int, close: read Int, d:
         }
         return Unit
     }
-    emit(depth: read d, s: read "object")
+    emit_at(depth: read d, s: read "object", toks: read toks, i: read start)
     let mut k = start + 1
     while k < close {
         let comma = split_comma(toks: read toks, start: read k, end: read close)
@@ -1050,7 +1139,7 @@ fn emit_type_ref(toks: read List<Tok>, i: read Int, tag: read String, eff: read 
             StringBuilder.push(builder: mut tb, value: read " name=__Tuple")
             StringBuilder.push(builder: mut tb, value: read String.from_int(value: count_type_args(toks: read toks, start: read (ps + 1), end: read tclose)))
             StringBuilder.push(builder: mut tb, value: read " fresh=false noescape=false owned=false")
-            emit(depth: read d, s: read StringBuilder.finish(builder: take tb))
+            emit_at(depth: read d, s: read StringBuilder.finish(builder: take tb), toks: read toks, i: read i)
             let mut tk = ps + 1
             while tk < tclose {
                 let comma = split_comma(toks: read toks, start: read tk, end: read tclose)
@@ -1078,6 +1167,7 @@ fn emit_type_ref(toks: read List<Tok>, i: read Int, tag: read String, eff: read 
             j = j + 1
         }
     }
+    let nameIdx = j
     let name = tk_text(toks: read toks, i: read j)
     j = j + 1
     local sb = StringBuilder.new()
@@ -1094,7 +1184,7 @@ fn emit_type_ref(toks: read List<Tok>, i: read Int, tag: read String, eff: read 
     StringBuilder.push(builder: mut sb, value: read boolstr(b: read isNoescape))
     StringBuilder.push(builder: mut sb, value: read " owned=")
     StringBuilder.push(builder: mut sb, value: read boolstr(b: read isOwned))
-    emit(depth: read d, s: read StringBuilder.finish(builder: take sb))
+    emit_at(depth: read d, s: read StringBuilder.finish(builder: take sb), toks: read toks, i: read nameIdx)
     // Generic args `<...>`.
     if at_symbol(toks: read toks, i: read j, code: read SYM_LANGLE) {
         let close = find_matching(toks: read toks, open: read j, openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
@@ -1227,7 +1317,7 @@ fn emit_stmt(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int
     // return [value]
     if is_kw_text(toks: read toks, i: read start, word: read "return") {
         let e = stmt_end(toks: read toks, start: read start, limit: read limit)
-        emit(depth: read d, s: read "return")
+        emit_at(depth: read d, s: read "return", toks: read toks, i: read start)
         if start + 1 < e {
             emit(depth: read (d + 1), s: read "value")
             emit_expr(toks: read toks, start: read (start + 1), end: read e, d: read (d + 2))
@@ -1246,7 +1336,7 @@ fn emit_stmt(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int
     if is_kw_text(toks: read toks, i: read start, word: read "match") {
         let openb = find_block_open(toks: read toks, start: read (start + 1), limit: read limit)
         if openb < 0 {
-            emit(depth: read d, s: read "malformed-match")
+            emit_at(depth: read d, s: read "malformed-match", toks: read toks, i: read start)
             return stmt_end(toks: read toks, start: read start, limit: read limit)
         }
         let close = find_matching(toks: read toks, open: read openb, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
@@ -1256,7 +1346,7 @@ fn emit_stmt(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int
         let mut vstart = start + 1
         if String.len(value: read meff) > 0 { vstart = start + 2 }
         if vstart >= openb {
-            emit(depth: read d, s: read "malformed-match")
+            emit_at(depth: read d, s: read "malformed-match", toks: read toks, i: read start)
             return close + 1
         }
         emit_match(toks: read toks, matchPos: read start, braceOpen: read openb, braceClose: read close, tag: read "match", d: read d)
@@ -1283,18 +1373,18 @@ fn emit_stmt(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int
     }
     // break / continue
     if is_kw_text(toks: read toks, i: read start, word: read "break") {
-        emit(depth: read d, s: read "break")
+        emit_at(depth: read d, s: read "break", toks: read toks, i: read start)
         return stmt_end(toks: read toks, start: read start, limit: read limit)
     }
     if is_kw_text(toks: read toks, i: read start, word: read "continue") {
-        emit(depth: read d, s: read "continue")
+        emit_at(depth: read d, s: read "continue", toks: read toks, i: read start)
         return stmt_end(toks: read toks, start: read start, limit: read limit)
     }
     // async let name = value  (managed, no annotation, async=true)
     if is_kw_text(toks: read toks, i: read start, word: read "async") && is_kw_text(toks: read toks, i: read (start + 1), word: read "let") {
         let e = stmt_end(toks: read toks, start: read start, limit: read limit)
         let name = tk_text(toks: read toks, i: read (start + 2))
-        emit(depth: read d, s: read String.concat(left: read String.concat(left: read "let kind=managed name=", right: read name), right: read " mut=false async=true"))
+        emit_at(depth: read d, s: read String.concat(left: read String.concat(left: read "let kind=managed name=", right: read name), right: read " mut=false async=true"), toks: read toks, i: read start)
         let asg = first_eq(toks: read toks, start: read (start + 3), end: read e)
         if asg >= 0 {
             emit(depth: read (d + 1), s: read "value")
@@ -1313,14 +1403,14 @@ fn emit_stmt(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int
     let e = stmt_end(toks: read toks, start: read start, limit: read limit)
     let asg = top_assign(toks: read toks, start: read start, end: read e)
     if asg >= 0 {
-        emit(depth: read d, s: read "assign")
+        emit_at(depth: read d, s: read "assign", toks: read toks, i: read start)
         emit(depth: read (d + 1), s: read "target")
         emit_expr(toks: read toks, start: read start, end: read asg, d: read (d + 2))
         emit(depth: read (d + 1), s: read "value")
         emit_expr(toks: read toks, start: read (asg + 1), end: read e, d: read (d + 2))
         return e
     }
-    emit(depth: read d, s: read "expr-stmt")
+    emit_at(depth: read d, s: read "expr-stmt", toks: read toks, i: read expr_rep_tok(toks: read toks, start: read start, end: read e))
     emit_expr(toks: read toks, start: read start, end: read e, d: read (d + 1))
     return e
 }
@@ -1371,7 +1461,7 @@ fn emit_let_tuple(toks: read List<Tok>, start: read Int, nameIdx: read Int, kind
     StringBuilder.push(builder: mut sb, value: read " name= mut=false async=false")
     if malformed { StringBuilder.push(builder: mut sb, value: read " malformed=true") }
     if namesOk { StringBuilder.push(builder: mut sb, value: read String.concat(left: read " destructure=", right: read names)) }
-    emit(depth: read d, s: read StringBuilder.finish(builder: take sb))
+    emit_at(depth: read d, s: read StringBuilder.finish(builder: take sb), toks: read toks, i: read start)
     if hasValue {
         emit(depth: read (d + 1), s: read "value")
         emit_expr(toks: read toks, start: read (eqPos + 1), end: read e, d: read (d + 2))
@@ -1406,7 +1496,7 @@ fn try_emit_let_else(toks: read List<Tok>, start: read Int, limit: read Int, d: 
     let open = find_block_open(toks: read toks, start: read (elsePos + 1), limit: read limit)
     if open < 0 { return -1 }
     let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
-    emit(depth: read d, s: read String.concat(left: read "let-else binding=", right: read binding))
+    emit_at(depth: read d, s: read String.concat(left: read "let-else binding=", right: read binding), toks: read toks, i: read start)
     emit(depth: read (d + 1), s: read "pattern")
     emit(depth: read (d + 2), s: read String.concat(left: read "pat-variant name=", right: read tk_text(toks: read toks, i: read ps)))
     if String.len(value: read binding) > 0 {
@@ -1458,7 +1548,7 @@ fn emit_let(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int)
     let g = String.concat(left: read f, right: read boolstr(b: read isMut))
     let mut h = String.concat(left: read g, right: read " async=false")
     if malformed { h = String.concat(left: read h, right: read " malformed=true") }
-    emit(depth: read d, s: read h)
+    emit_at(depth: read d, s: read h, toks: read toks, i: read start)
     if hasColon && emptyType == false {
         emit_type_ref(toks: read toks, i: read (j + 1), tag: read "type", eff: read "", d: read (d + 1))
     }
@@ -1474,19 +1564,20 @@ fn emit_let(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int)
 fn emit_if_let(toks: read List<Tok>, start: read Int, openb: read Int, close: read Int, limit: read Int, d: read Int) -> Int {
     let equals = find_top_sym(toks: read toks, start: read (start + 2), end: read openb, code: read SYM_EQ)
     if equals < 0 {
-        emit(depth: read d, s: read "malformed-if")
+        emit_at(depth: read d, s: read "malformed-if", toks: read toks, i: read start)
         return close + 1
     }
-    emit(depth: read d, s: read "match")
+    emit_at(depth: read d, s: read "match", toks: read toks, i: read start)
     emit(depth: read (d + 1), s: read "value")
     emit_expr(toks: read toks, start: read (equals + 1), end: read openb, d: read (d + 2))
-    // Arm 1: the pattern with the then-block.
-    emit(depth: read (d + 1), s: read "arm")
+    // Arm 1: the pattern with the then-block. (parse_if_let_stmt spans both arms at
+    // the `if` token.)
+    emit_at(depth: read (d + 1), s: read "arm", toks: read toks, i: read start)
     emit(depth: read (d + 2), s: read "pattern")
     emit_pattern(toks: read toks, start: read (start + 2), end: read equals, d: read (d + 3))
     emit_block(toks: read toks, open: read openb, close: read close, d: read (d + 2))
     // Arm 2: wildcard with the else-block (empty when there is no else).
-    emit(depth: read (d + 1), s: read "arm")
+    emit_at(depth: read (d + 1), s: read "arm", toks: read toks, i: read start)
     emit(depth: read (d + 2), s: read "pattern")
     emit(depth: read (d + 3), s: read "pat-wildcard")
     let nx = close + 1
@@ -1509,7 +1600,7 @@ fn emit_if_let(toks: read List<Tok>, start: read Int, openb: read Int, close: re
 fn emit_if(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int) -> Int {
     // Find the `{` opening the then-block at top level.
     let openb = find_block_open(toks: read toks, start: read (start + 1), limit: read limit)
-    if openb < 0 { emit(depth: read d, s: read "malformed-if"); return stmt_end(toks: read toks, start: read start, limit: read limit) }
+    if openb < 0 { emit_at(depth: read d, s: read "malformed-if", toks: read toks, i: read start); return stmt_end(toks: read toks, start: read start, limit: read limit) }
     let close = find_matching(toks: read toks, open: read openb, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
     // `if let PATTERN = value { … } else { … }` desugars to a two-arm match
     // (pattern arm + wildcard else arm), mirroring parse_if_let_stmt.
@@ -1521,10 +1612,10 @@ fn emit_if(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int) 
     // (parse_if_stmt returns MalformedIf before building the If).
     let nx = close + 1
     if is_kw_text(toks: read toks, i: read nx, word: read "else") && is_kw_text(toks: read toks, i: read (nx + 1), word: read "if") == false && at_symbol(toks: read toks, i: read (nx + 1), code: read SYM_LBRACE) == false {
-        emit(depth: read d, s: read "malformed-if")
+        emit_at(depth: read d, s: read "malformed-if", toks: read toks, i: read start)
         return stmt_end(toks: read toks, start: read nx, limit: read limit)
     }
-    emit(depth: read d, s: read "if")
+    emit_at(depth: read d, s: read "if", toks: read toks, i: read start)
     emit(depth: read (d + 1), s: read "cond")
     emit_expr(toks: read toks, start: read (start + 1), end: read openb, d: read (d + 2))
     emit(depth: read (d + 1), s: read "then")
@@ -1552,14 +1643,14 @@ fn emit_if(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int) 
 fn emit_for(toks: read List<Tok>, forPos: read Int, limit: read Int, d: read Int, isAsync: read Bool) -> Int {
     let openb = find_block_open(toks: read toks, start: read forPos, limit: read limit)
     if openb < 0 {
-        emit(depth: read d, s: read "malformed-for")
+        emit_at(depth: read d, s: read "malformed-for", toks: read toks, i: read forPos)
         return stmt_end(toks: read toks, start: read forPos, limit: read limit)
     }
     let close = find_matching(toks: read toks, open: read openb, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
     let binding = tk_text(toks: read toks, i: read (forPos + 1))
     let a = String.concat(left: read "for binding=", right: read binding)
     let b = String.concat(left: read a, right: read " async=")
-    emit(depth: read d, s: read String.concat(left: read b, right: read boolstr(b: read isAsync)))
+    emit_at(depth: read d, s: read String.concat(left: read b, right: read boolstr(b: read isAsync)), toks: read toks, i: read forPos)
     emit(depth: read (d + 1), s: read "iter")
     emit_expr(toks: read toks, start: read (forPos + 3), end: read openb, d: read (d + 2))
     emit_block(toks: read toks, open: read openb, close: read close, d: read (d + 1))
@@ -1577,23 +1668,23 @@ fn emit_with(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int
         i = i + 1
     }
     if asIdx < 0 {
-        emit(depth: read d, s: read "malformed-with")
+        emit_at(depth: read d, s: read "malformed-with", toks: read toks, i: read start)
         return stmt_end(toks: read toks, start: read start, limit: read limit)
     }
     let open = find_block_open(toks: read toks, start: read (asIdx + 1), limit: read limit)
     if open < 0 {
-        emit(depth: read d, s: read "malformed-with")
+        emit_at(depth: read d, s: read "malformed-with", toks: read toks, i: read start)
         return stmt_end(toks: read toks, start: read start, limit: read limit)
     }
     let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
     // The binding after `as` must be an ident immediately before the block `{`
     // (`as {` with no binding is malformed) — mirrors parse_with_stmt.
     if is_ident_tok(toks: read toks, i: read (asIdx + 1)) == false || (asIdx + 2) != open {
-        emit(depth: read d, s: read "malformed-with")
+        emit_at(depth: read d, s: read "malformed-with", toks: read toks, i: read start)
         return close + 1
     }
     let binding = tk_text(toks: read toks, i: read (asIdx + 1))
-    emit(depth: read d, s: read String.concat(left: read "with binding=", right: read binding))
+    emit_at(depth: read d, s: read String.concat(left: read "with binding=", right: read binding), toks: read toks, i: read start)
     emit(depth: read (d + 1), s: read "resource")
     emit_expr(toks: read toks, start: read (start + 1), end: read asIdx, d: read (d + 2))
     emit_block(toks: read toks, open: read open, close: read close, d: read (d + 1))
@@ -1604,11 +1695,11 @@ fn emit_with(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int
 fn emit_task_group(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int) -> Int {
     let open = start + 1
     if at_symbol(toks: read toks, i: read open, code: read SYM_LBRACE) == false {
-        emit(depth: read d, s: read "unknown-stmt")
+        emit_at(depth: read d, s: read "unknown-stmt", toks: read toks, i: read start)
         return stmt_end(toks: read toks, start: read start, limit: read limit)
     }
     let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
-    emit(depth: read d, s: read "task-group")
+    emit_at(depth: read d, s: read "task-group", toks: read toks, i: read start)
     emit_block(toks: read toks, open: read open, close: read close, d: read (d + 1))
     return close + 1
 }
@@ -1617,11 +1708,11 @@ fn emit_task_group(toks: read List<Tok>, start: read Int, limit: read Int, d: re
 fn emit_select(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int) -> Int {
     let open = start + 1
     if at_symbol(toks: read toks, i: read open, code: read SYM_LBRACE) == false {
-        emit(depth: read d, s: read "unknown-stmt")
+        emit_at(depth: read d, s: read "unknown-stmt", toks: read toks, i: read start)
         return stmt_end(toks: read toks, start: read start, limit: read limit)
     }
     let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
-    emit(depth: read d, s: read "select")
+    emit_at(depth: read d, s: read "select", toks: read toks, i: read start)
     emit_select_arms(toks: read toks, start: read (open + 1), end: read close, d: read (d + 1))
     return close + 1
 }
@@ -1667,16 +1758,16 @@ fn emit_select_arms(toks: read List<Tok>, start: read Int, end: read Int, d: rea
 fn emit_loop(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int) -> Int {
     let isWhile = is_kw_text(toks: read toks, i: read start, word: read "while")
     let openb = find_block_open(toks: read toks, start: read (start + 1), limit: read limit)
-    if openb < 0 { emit(depth: read d, s: read "malformed-loop"); return stmt_end(toks: read toks, start: read start, limit: read limit) }
+    if openb < 0 { emit_at(depth: read d, s: read "malformed-loop", toks: read toks, i: read start); return stmt_end(toks: read toks, start: read start, limit: read limit) }
     let close = find_matching(toks: read toks, open: read openb, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
     // Malformed (mirror parse_loop_stmt): `while` with no condition (`while {`), or
     // `loop` WITH tokens before `{` (`loop true {` — loop takes no condition).
     if isWhile {
-        if (start + 1) >= openb { emit(depth: read d, s: read "malformed-loop"); return close + 1 }
+        if (start + 1) >= openb { emit_at(depth: read d, s: read "malformed-loop", toks: read toks, i: read start); return close + 1 }
     } else {
-        if openb != (start + 1) { emit(depth: read d, s: read "malformed-loop"); return close + 1 }
+        if openb != (start + 1) { emit_at(depth: read d, s: read "malformed-loop", toks: read toks, i: read start); return close + 1 }
     }
-    emit(depth: read d, s: read "loop")
+    emit_at(depth: read d, s: read "loop", toks: read toks, i: read start)
     if isWhile && start + 1 < openb {
         emit(depth: read (d + 1), s: read "cond")
         emit_expr(toks: read toks, start: read (start + 1), end: read openb, d: read (d + 2))
@@ -1726,12 +1817,12 @@ fn emit_stmts(toks: read List<Tok>, from: read Int, close: read Int, d: read Int
             let name = tk_text(toks: read toks, i: read (i + 1))
             let stEnd = stmt_end(toks: read toks, start: read i, limit: read close)
             let eqPos = first_eq(toks: read toks, start: read (i + 2), end: read stEnd)
-            emit(depth: read d, s: read String.concat(left: read "with binding=", right: read name))
+            emit_at(depth: read d, s: read String.concat(left: read "with binding=", right: read name), toks: read toks, i: read i)
             emit(depth: read (d + 1), s: read "resource")
             if eqPos >= 0 {
                 emit_expr(toks: read toks, start: read (eqPos + 1), end: read stEnd, d: read (d + 2))
             } else {
-                emit(depth: read (d + 2), s: read "unknown-expr")
+                emit_at(depth: read (d + 2), s: read "unknown-expr", toks: read toks, i: read i)
             }
             emit(depth: read (d + 1), s: read "block")
             emit_stmts(toks: read toks, from: read stEnd, close: read close, d: read (d + 2))
@@ -1861,7 +1952,7 @@ fn emit_function(toks: read List<Tok>, start: read Int, d: read Int, protoName: 
     if hasRet && retFresh {
         StringBuilder.push(builder: mut sb, value: read " returns-fresh=true")
     }
-    emit(depth: read d, s: read StringBuilder.finish(builder: take sb))
+    emit_at(depth: read d, s: read StringBuilder.finish(builder: take sb), toks: read toks, i: read start)
     // deprecated / lower-name attribute child lines (before generics).
     if haveDep {
         emit(depth: read (d + 1), s: read String.concat(left: read "deprecated ", right: read escape(s: read depReason)))
@@ -1871,7 +1962,9 @@ fn emit_function(toks: read List<Tok>, start: read Int, d: read Int, protoName: 
     }
     // generics — protocol methods get a synthetic leading `Self: Managed` param.
     if String.len(value: read protoName) > 0 && has_self_generic(toks: read toks, i: read genStart) == false {
-        emit(depth: read (d + 1), s: read "generic name=Self")
+        // The synthetic `Self: Managed` param is spanned at the method's span (the
+        // `fn`/decl start), matching parse_protocol_decl's `method.span.clone()`.
+        emit_at(depth: read (d + 1), s: read "generic name=Self", toks: read toks, i: read start)
         emit(depth: read (d + 2), s: read "bound managed")
     }
     let malGen = count_malformed_generics(toks: read toks, i: read genStart)
@@ -2106,9 +2199,10 @@ fn emit_params(toks: read List<Tok>, open: read Int, close: read Int, d: read In
         } else {
             let pname = tk_text(toks: read toks, i: read i)
             if at_symbol(toks: read toks, i: read (i + 1), code: read SYM_COLON) == false {
-                // Name-only param: valid, with an empty type ref.
-                emit(depth: read d, s: read String.concat(left: read "param name=", right: read pname))
-                emit(depth: read (d + 1), s: read "type name= fresh=false noescape=false owned=false")
+                // Name-only param: valid, with an empty type ref (both spanned at the
+                // param's name token, matching parse_params).
+                emit_at(depth: read d, s: read String.concat(left: read "param name=", right: read pname), toks: read toks, i: read i)
+                emit_at(depth: read (d + 1), s: read "type name= fresh=false noescape=false owned=false", toks: read toks, i: read i)
             } else {
                 let mut k = i + 2
                 let mut effStr = ""
@@ -2120,7 +2214,7 @@ fn emit_params(toks: read List<Tok>, open: read Int, close: read Int, d: read In
                     let l2 = String.concat(left: read line, right: read " effect=")
                     line = String.concat(left: read l2, right: read effStr)
                 }
-                emit(depth: read d, s: read line)
+                emit_at(depth: read d, s: read line, toks: read toks, i: read i)
                 let afterType = emit_type_ref(toks: read toks, i: read k, tag: read "type", eff: read "", d: read (d + 1))
                 // Default value: `name: Type = <expr>` (dump_param emits it after type).
                 if at_symbol(toks: read toks, i: read afterType, code: read SYM_EQ) {
@@ -2152,7 +2246,7 @@ fn emit_generics(toks: read List<Tok>, i: read Int, d: read Int) -> Int {
         // markers counted separately (count_malformed_generics).
         if gen_valid(toks: read toks, start: read k, end: read segEnd) {
             let name = tk_text(toks: read toks, i: read k)
-            emit(depth: read d, s: read String.concat(left: read "generic name=", right: read name))
+            emit_at(depth: read d, s: read String.concat(left: read "generic name=", right: read name), toks: read toks, i: read k)
             if at_symbol(toks: read toks, i: read (k + 1), code: read SYM_COLON) {
                 let bw = tk_text(toks: read toks, i: read (k + 2))
                 emit(depth: read (d + 1), s: read bound_line(word: read bw))
@@ -2216,7 +2310,7 @@ fn emit_field(toks: read List<Tok>, start: read Int, lineEnd: read Int, d: read 
     let c = String.concat(left: read b, right: read boolstr(b: read isHandle))
     let e2 = String.concat(left: read c, right: read " weak=")
     let f = String.concat(left: read e2, right: read boolstr(b: read isWeak))
-    emit(depth: read d, s: read f)
+    emit_at(depth: read d, s: read f, toks: read toks, i: read start)
     let afterType = emit_type_ref(toks: read toks, i: read k, tag: read "type", eff: read "", d: read (d + 1))
     if at_symbol(toks: read toks, i: read afterType, code: read SYM_EQ) {
         emit(depth: read (d + 1), s: read "default")
@@ -2262,7 +2356,7 @@ fn emit_type_decl(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
     let f = String.concat(left: read e2, right: read boolstr(b: read isPub))
     let g = String.concat(left: read f, right: read " opaque=")
     let h = String.concat(left: read g, right: read boolstr(b: read isOpaque))
-    emit(depth: read d, s: read h)
+    emit_at(depth: read d, s: read h, toks: read toks, i: read start)
     let malGen = count_malformed_generics(toks: read toks, i: read j)
     j = emit_generics(toks: read toks, i: read j, d: read (d + 1))
     j = emit_derives(toks: read toks, i: read j, d: read (d + 1))
@@ -2304,7 +2398,7 @@ fn emit_sum(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
     let a = String.concat(left: read "sum name=", right: read name)
     let b = String.concat(left: read a, right: read " public=")
     let c = String.concat(left: read b, right: read boolstr(b: read isPub))
-    emit(depth: read d, s: read c)
+    emit_at(depth: read d, s: read c, toks: read toks, i: read start)
     j = emit_generics(toks: read toks, i: read j, d: read (d + 1))
     j = emit_derives(toks: read toks, i: read j, d: read (d + 1))
     // After the name (and any generics/derives) the very next token is either the
@@ -2320,7 +2414,7 @@ fn emit_sum(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
     while i < close {
         if is_ident_tok(toks: read toks, i: read i) {
             let vname = tk_text(toks: read toks, i: read i)
-            emit(depth: read (d + 1), s: read String.concat(left: read "variant name=", right: read vname))
+            emit_at(depth: read (d + 1), s: read String.concat(left: read "variant name=", right: read vname), toks: read toks, i: read i)
             if at_symbol(toks: read toks, i: read (i + 1), code: read SYM_LPAREN) {
                 let vclose = find_matching(toks: read toks, open: read (i + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
                 emit_variant_fields(toks: read toks, open: read (i + 1), close: read vclose, d: read (d + 2))
@@ -2361,7 +2455,7 @@ fn emit_const(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
     let a = String.concat(left: read "const name=", right: read name)
     let b = String.concat(left: read a, right: read " public=")
     let c = String.concat(left: read b, right: read boolstr(b: read isPub))
-    emit(depth: read d, s: read c)
+    emit_at(depth: read d, s: read c, toks: read toks, i: read start)
     let mut k = nameEnd
     if at_symbol(toks: read toks, i: read k, code: read SYM_COLON) {
         k = emit_type_ref(toks: read toks, i: read (k + 1), tag: read "type", eff: read "", d: read (d + 1))
@@ -2386,7 +2480,7 @@ fn emit_type_alias(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
     let a = String.concat(left: read "type-alias name=", right: read name)
     let b = String.concat(left: read a, right: read " public=")
     let c = String.concat(left: read b, right: read boolstr(b: read isPub))
-    emit(depth: read d, s: read c)
+    emit_at(depth: read d, s: read c, toks: read toks, i: read start)
     j = emit_generics(toks: read toks, i: read j, d: read (d + 1))
     let asg = top_assign(toks: read toks, start: read j, end: read e)
     if asg >= 0 {
@@ -2399,7 +2493,7 @@ fn emit_type_alias(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
 fn emit_module(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
     let e = stmt_end(toks: read toks, start: read start, limit: read List.len(list: read toks))
     let path = dotted_text(toks: read toks, start: read (start + 1), end: read e)
-    emit(depth: read d, s: read String.concat(left: read "module path=", right: read path))
+    emit_at(depth: read d, s: read String.concat(left: read "module path=", right: read path), toks: read toks, i: read start)
     return e
 }
 
@@ -2432,7 +2526,7 @@ fn emit_use(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
         let l2 = String.concat(left: read line, right: read " alias=")
         line = String.concat(left: read l2, right: read aliasName)
     }
-    emit(depth: read d, s: read line)
+    emit_at(depth: read d, s: read line, toks: read toks, i: read start)
     return e
 }
 
@@ -2521,7 +2615,7 @@ fn emit_match(toks: read List<Tok>, matchPos: read Int, braceOpen: read Int, bra
         line = String.concat(left: read l2, right: read eff)
         vstart = vstart + 1
     }
-    emit(depth: read d, s: read line)
+    emit_at(depth: read d, s: read line, toks: read toks, i: read matchPos)
     emit(depth: read (d + 1), s: read "value")
     emit_expr(toks: read toks, start: read vstart, end: read braceOpen, d: read (d + 2))
     emit_match_arms(toks: read toks, start: read (braceOpen + 1), end: read braceClose, d: read (d + 1))
@@ -2548,7 +2642,7 @@ fn emit_match_arms(toks: read List<Tok>, start: read Int, end: read Int, d: read
                 let ifPos = find_top_if(toks: read toks, start: read i, end: read arrow)
                 let mut patEnd = arrow
                 if ifPos >= 0 { patEnd = ifPos }
-                emit(depth: read d, s: read "arm")
+                emit_at(depth: read d, s: read "arm", toks: read toks, i: read i)
                 emit(depth: read (d + 1), s: read "pattern")
                 emit_pattern(toks: read toks, start: read i, end: read patEnd, d: read (d + 2))
                 if ifPos >= 0 {

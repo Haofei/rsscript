@@ -609,6 +609,20 @@ fn tk_line(toks: read List<Tok>, i: read Int) -> Int {
     return t.line
 }
 
+fn tk_col(toks: read List<Tok>, i: read Int) -> Int {
+    if i < 0 { return 0 }
+    if i >= List.len(list: read toks) { return 0 }
+    let t = List.get(list: read toks, index: read i)
+    return t.col
+}
+
+fn tk_len(toks: read List<Tok>, i: read Int) -> Int {
+    if i < 0 { return 0 }
+    if i >= List.len(list: read toks) { return 0 }
+    let t = List.get(list: read toks, index: read i)
+    return t.len
+}
+
 fn is_ident_tok(toks: read List<Tok>, i: read Int) -> Bool {
     let k = tk_kind(toks: read toks, i: read i)
     return k == TOK_IDENT || k == TOK_KEYWORD

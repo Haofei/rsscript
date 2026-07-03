@@ -1473,11 +1473,53 @@ fn compile_astdump() -> Result<RegVmExecutable, String> {
 }
 
 /// Run the precompiled rss AST-dump producer; its stdout IS the dump.
+///
+/// The producer always emits the RICHEST span suffix (` @line:col:len`) on every
+/// node head (mirroring the lexer producer, which always emits `line:col:len`).
+/// Here we project each line down to the active AST tier so the byte-exact
+/// comparison against the (tier-gated) oracle holds: tier 0 drops the suffix
+/// entirely, tier 1 keeps ` @line:col`, tier 2 keeps ` @line:col:len`. Lines
+/// without a numeric ` @L:C:N` suffix (synthetic labels) are passed through.
 fn run_astdump(exe: &RegVmExecutable, source: &str) -> Result<String, String> {
     let output = exe
         .eval_main_with_args([source.to_string()])
         .map_err(|e| format!("rss astdump failed to run: {e:?}"))?;
-    Ok(output.stdout)
+    let t = ast_tier();
+    if t == 2 {
+        return Ok(output.stdout);
+    }
+    let mut out = String::with_capacity(output.stdout.len());
+    for line in output.stdout.split_inclusive('\n') {
+        let (body, nl) = match line.strip_suffix('\n') {
+            Some(b) => (b, "\n"),
+            None => (line, ""),
+        };
+        out.push_str(&project_ast_line(body, t));
+        out.push_str(nl);
+    }
+    Ok(out)
+}
+
+/// Project a producer line's ` @line:col:len` suffix down to `tier` (1 → keep
+/// `line:col`, 0 → drop the suffix). Only a trailing, strictly-numeric
+/// ` @d+:d+:d+` is treated as a span (so a payload containing `@` is untouched).
+fn project_ast_line(line: &str, tier: u8) -> String {
+    if let Some(at) = line.rfind(" @") {
+        let suffix = &line[at + 2..];
+        let parts: Vec<&str> = suffix.split(':').collect();
+        if parts.len() == 3
+            && parts
+                .iter()
+                .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+        {
+            let head = &line[..at];
+            return match tier {
+                0 => head.to_string(),
+                _ => format!("{head} @{}:{}", parts[0], parts[1]),
+            };
+        }
+    }
+    line.to_string()
 }
 
 /// Curated AST-parity samples under `selfhost/samples/ast/`, sorted for stable order.
@@ -1596,7 +1638,19 @@ fn ast_parity_corpus() {
                 if actual == oracle {
                     ok += 1;
                 } else if sample_mismatches.len() < 10 {
-                    sample_mismatches.push(rel);
+                    let first_diff = oracle
+                        .lines()
+                        .zip(actual.lines())
+                        .find(|(o, a)| o != a)
+                        .map(|(o, a)| format!("\n    oracle: {o:?}\n    rss:    {a:?}"))
+                        .unwrap_or_else(|| {
+                            format!(
+                                "\n    (line count: oracle {} vs rss {})",
+                                oracle.lines().count(),
+                                actual.lines().count()
+                            )
+                        });
+                    sample_mismatches.push(format!("{rel}{first_diff}"));
                 }
             }
         }
