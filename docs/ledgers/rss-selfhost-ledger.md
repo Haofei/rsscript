@@ -1196,3 +1196,55 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
 - **Status:** the frontend-object AST parity ladder (structure → line:col →
   line:col:len) is CLOSED. Remaining self-host frontier is the semantic tier
   (type-inference + borrow-checker codes; see the SH-026 step-2 tail).
+
+### Milestone 2l — type-inference engine slice 1: conservative `expr_type_root` + RS0013 (FALLBACK: foundation committed, RS0013 left OUT of the gate)
+
+- **Goal:** begin the semantic type tier — a CONSERVATIVE expression type-of pass
+  (`selfhost/check.rss::expr_type_root`) and use it to land RS0013 (invalid-try),
+  the most FP-safe type code. Foundation reused by later slices (RS0210 operator,
+  RS0207 argument, RS0208 return).
+- **Built (committed):** `expr_type_root(toks, s, e, bodyOpen, exprPos, popen,
+  pclose, declared, allFns)` — types ONLY the forms the oracle computes with
+  certainty, else "" (unknown => no fire => no false positive):
+  * String / number (`number_literal_root` = Float iff text has `.`, else Int) /
+    Char literal · `true|false`→Bool · `null`→JsonLiteral · `Unit`→Unit ·
+    `None`→Option · `Some(..)`→Option · `Ok|Err(..)`→Result · a sum-variant head →
+    its owning sum (`variant_owner`) · an unqualified call `name(..)` → same-file
+    `fn_return_root` or a declared-type constructor · a bare ident → a let-typed
+    local (recursively) or a declared-type param (`param_type_root`).
+  * Everything else — Binary / Index / Field / qualified & receiver calls
+    (`Ns.m(..)` / `x.m(..)`) / object / array / closure — returns "" by design
+    (those need the full stdlib signature DB the token-level checker lacks; keeping
+    them unknown is the FP-safety mechanism). Helpers `try_operand_root` +
+    `fn_invalid_try` reproduce two of the three RS0013 sub-rules token-level.
+- **RS0013 sub-rules (oracle has THREE, not two):**
+  * **A — result-returns** (`analyzer/runtime_guarantee.rs::
+    check_try_operator_result_returns`): any `?` in a fn whose return base ∉
+    {Result, Option}. Token-level, exact. Reproduced. (10 corpus files, incl.
+    fixture `try-operator-non-result.rss`.)
+  * **B — value-is-result** (`checks/body/try_checks.rs::check_try_value_is_result`):
+    a `?` operand of a confidently-known concrete non-Result/Option type.
+    Reproduced via `expr_type_root`. (1 file: fixture
+    `try-operator-non-result-value.rss` — operand `load(..)`→`Image`.)
+  * **C — error-type mismatch** (`checks/body/try_checks.rs::check_try_error_types`):
+    a `?` whose operand `Result<T, E_op>` has `E_op` ≠ the fn's declared error
+    type. Reproduced for unqualified operands only.
+- **BLOCKER (why RS0013 is NOT in CHECKER_TARGET_CODES):**
+  `tests/fixtures/fail/ast-call-missing-effect-nested.rss` (fn returns
+  `Result<Unit, IOError>`) fires sub-rule C on TWO **qualified stdlib** operands —
+  `File.open_write(..)?` and `File.write(..)?`, whose error type the oracle knows
+  is `FileError` (≠ `IOError`). Reproducing that needs per-method stdlib
+  error-type inference on qualified/receiver calls, which the spec deliberately
+  keeps UNKNOWN (typing them risks corpus-wide false positives on the many clean
+  `File.*?`/`Json.*?` calls whose error type matches). So RS0013 cannot reach
+  0-mismatch at the spec's conservatism level — FALLBACK taken.
+- **Outcome:** `expr_type_root` + the RS0013 sub-rule A/B wiring are committed and
+  exercised across all 619 corpus files (0 run-failures). RS0013 is EMITTED by the
+  checker but stays OUT of `CHECKER_TARGET_CODES` (filtered from parity), so the
+  gate is unchanged. It fires correctly on 11 of the 13 oracle-RS0013 files (all
+  sub-rule A + B); the 2 sub-rule-C files stay unflagged (the documented blocker),
+  and every clean `?` file stays unflagged (0 false positives, verified).
+- **Gate:** `checker_parity_corpus` 619/619 ok, 0 mismatches, 0 run-failures at
+  the SAME 26 codes (RS0013 absent). Green.
+- **Next slice:** RS0013 becomes gateable once qualified-call error-type inference
+  exists; meanwhile `expr_type_root` is ready for RS0210/RS0207/RS0208.
