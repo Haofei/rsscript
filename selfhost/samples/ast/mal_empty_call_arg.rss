@@ -1,0 +1,7 @@
+// expect: RS0015
+
+fn main() -> Unit {
+    Log.write(, message: read "hello")
+    Log.write(message: read "hello",, tag: read "demo")
+    return Unit
+}

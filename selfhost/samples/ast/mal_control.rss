@@ -1,0 +1,25 @@
+// expect: RS0015
+
+fn bad_if(value: read Bool) -> Unit {
+    if value {
+        return Unit
+    } else return Unit
+}
+
+fn bad_loop() -> Unit {
+    loop true {
+        return Unit
+    }
+}
+
+fn bad_while() -> Unit {
+    while {
+        return Unit
+    }
+}
+
+fn bad_match() -> Unit {
+    match {
+        _ => return Unit
+    }
+}

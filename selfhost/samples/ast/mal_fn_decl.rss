@@ -1,0 +1,8 @@
+// expect: RS0015
+fn (value: read String) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    return Unit
+}

@@ -698,15 +698,22 @@ fn emit_args(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) 
     while i < end {
         let comma = split_comma(toks: read toks, start: read i, end: read end)
         let argEnd = pick_end(comma: read comma, end: read end)
-        // Named arg: `name: value` when a top-level `:` follows an ident at i.
-        let mut vstart = i
-        let mut line = "arg"
-        if is_ident_tok(toks: read toks, i: read i) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_COLON) {
-            line = String.concat(left: read "arg name=", right: read tk_text(toks: read toks, i: read i))
-            vstart = i + 2
+        if i >= argEnd {
+            // Empty segment (leading/trailing/double comma) → malformed arg with an
+            // Unknown value (mirrors parse_call_args' empty_span branch).
+            emit(depth: read d, s: read "arg malformed=true")
+            emit(depth: read (d + 1), s: read "unknown-expr")
+        } else {
+            // Named arg: `name: value` when a top-level `:` follows an ident at i.
+            let mut vstart = i
+            let mut line = "arg"
+            if is_ident_tok(toks: read toks, i: read i) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_COLON) {
+                line = String.concat(left: read "arg name=", right: read tk_text(toks: read toks, i: read i))
+                vstart = i + 2
+            }
+            emit(depth: read d, s: read line)
+            emit_expr(toks: read toks, start: read vstart, end: read argEnd, d: read (d + 1))
         }
-        emit(depth: read d, s: read line)
-        emit_expr(toks: read toks, start: read vstart, end: read argEnd, d: read (d + 1))
         if comma < 0 { i = end } else { i = comma + 1 }
     }
     return Unit
@@ -997,8 +1004,15 @@ fn emit_type_ref(toks: read List<Tok>, i: read Int, tag: read String, eff: read 
         if close > j {
             let mut k = j + 1
             while k < close {
-                k = emit_type_ref(toks: read toks, i: read k, tag: read "arg", eff: read "", d: read (d + 1))
-                if at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) { k = k + 1 }
+                let comma = split_comma(toks: read toks, start: read k, end: read close)
+                let mut segEnd = close
+                if comma >= 0 { segEnd = comma }
+                // Empty arg segments (`Map<, String>`, `Result<String,, E>`) are
+                // malformed_arg_spans in the reference — dropped, not dumped.
+                if k < segEnd {
+                    emit_type_ref(toks: read toks, i: read k, tag: read "arg", eff: read "", d: read (d + 1))
+                }
+                if comma < 0 { k = close } else { k = comma + 1 }
             }
             j = close + 1
         }
@@ -1139,6 +1153,15 @@ fn emit_stmt(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int
             return stmt_end(toks: read toks, start: read start, limit: read limit)
         }
         let close = find_matching(toks: read toks, open: read openb, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+        // Empty scrutinee (`match {`) → malformed-match (parse_match_stmt's
+        // parse_expr over the value region fails).
+        let meff = effect_kw(toks: read toks, i: read (start + 1))
+        let mut vstart = start + 1
+        if String.len(value: read meff) > 0 { vstart = start + 2 }
+        if vstart >= openb {
+            emit(depth: read d, s: read "malformed-match")
+            return close + 1
+        }
         emit_match(toks: read toks, matchPos: read start, braceOpen: read openb, braceClose: read close, tag: read "match", d: read d)
         return close + 1
     }
@@ -1257,6 +1280,14 @@ fn emit_if(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int) 
     let openb = find_block_open(toks: read toks, start: read (start + 1), limit: read limit)
     if openb < 0 { emit(depth: read d, s: read "malformed-if"); return stmt_end(toks: read toks, start: read start, limit: read limit) }
     let close = find_matching(toks: read toks, open: read openb, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    // Pre-check the else clause: `else` must be followed by `{` or `if`; anything
+    // else (`else return …`) makes the whole statement malformed-if
+    // (parse_if_stmt returns MalformedIf before building the If).
+    let nx = close + 1
+    if is_kw_text(toks: read toks, i: read nx, word: read "else") && is_kw_text(toks: read toks, i: read (nx + 1), word: read "if") == false && at_symbol(toks: read toks, i: read (nx + 1), code: read SYM_LBRACE) == false {
+        emit(depth: read d, s: read "malformed-if")
+        return stmt_end(toks: read toks, start: read nx, limit: read limit)
+    }
     emit(depth: read d, s: read "if")
     emit(depth: read (d + 1), s: read "cond")
     emit_expr(toks: read toks, start: read (start + 1), end: read openb, d: read (d + 2))
@@ -1396,6 +1427,13 @@ fn emit_loop(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int
     let openb = find_block_open(toks: read toks, start: read (start + 1), limit: read limit)
     if openb < 0 { emit(depth: read d, s: read "malformed-loop"); return stmt_end(toks: read toks, start: read start, limit: read limit) }
     let close = find_matching(toks: read toks, open: read openb, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    // Malformed (mirror parse_loop_stmt): `while` with no condition (`while {`), or
+    // `loop` WITH tokens before `{` (`loop true {` — loop takes no condition).
+    if isWhile {
+        if (start + 1) >= openb { emit(depth: read d, s: read "malformed-loop"); return close + 1 }
+    } else {
+        if openb != (start + 1) { emit(depth: read d, s: read "malformed-loop"); return close + 1 }
+    }
     emit(depth: read d, s: read "loop")
     if isWhile && start + 1 < openb {
         emit(depth: read (d + 1), s: read "cond")
@@ -1531,19 +1569,26 @@ fn emit_function(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
         emit(depth: read (d + 1), s: read String.concat(left: read "lower-name ", right: read lowerName))
     }
     // generics
+    let malGen = count_malformed_generics(toks: read toks, i: read genStart)
     emit_generics(toks: read toks, i: read genStart, d: read (d + 1))
     // params
-    emit_params(toks: read toks, open: read popen, close: read pclose, d: read (d + 1))
+    let malParam = emit_params(toks: read toks, open: read popen, close: read pclose, d: read (d + 1))
     // return type
     if hasRet {
         emit_type_ref(toks: read toks, i: read retStart, tag: read "return-type", eff: read "", d: read (d + 1))
     }
     // effect-name / effect-retains clauses.
+    let mut malEff = 0
     if effPos >= 0 {
         let eopen = effPos + 1
         let eclose = find_matching(toks: read toks, open: read eopen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
-        emit_effects(toks: read toks, open: read eopen, close: read eclose, d: read (d + 1))
+        malEff = emit_effects(toks: read toks, open: read eopen, close: read eclose, d: read (d + 1))
     }
+    // Dump order (ast_oracle_dump): generics, params, return-type, effects, then
+    // malformed-generic / malformed-param / malformed-effect, then body.
+    emit_repeat(marker: read "malformed-generic", n: read malGen, d: read (d + 1))
+    emit_repeat(marker: read "malformed-param", n: read malParam, d: read (d + 1))
+    emit_repeat(marker: read "malformed-effect", n: read malEff, d: read (d + 1))
     // body — the oracle always emits `body`/`block`, empty when there is no body.
     emit(depth: read (d + 1), s: read "body")
     if hasBody {
@@ -1608,19 +1653,117 @@ fn has_default_impl(toks: read List<Tok>, start: read Int, end: read Int) -> Boo
 }
 
 // `effects(a, retains(self), ...)` → one `effect-name`/`effect-retains` per entry.
-fn emit_effects(toks: read List<Tok>, open: read Int, close: read Int, d: read Int) -> Unit {
+// -------------------------------------------------------------------------
+// Malformed-recovery predicates + markers (mirror the reference parsers, which
+// record malformed_*_spans; the oracle dumps one `malformed-<kind>` line each,
+// AFTER the valid nodes of that construct).
+// -------------------------------------------------------------------------
+
+// parse_type_ref finds a name_index (first non-prefix ident) over [s, e), else
+// returns None. So a type "parses" iff such a token exists.
+fn type_parses(toks: read List<Tok>, s: read Int, e: read Int) -> Bool {
+    let mut m = s
+    while m < e {
+        if is_ident_tok(toks: read toks, i: read m) && is_type_prefix(toks: read toks, j: read m) == false {
+            return true
+        }
+        m = m + 1
+    }
+    return false
+}
+
+fn is_data_effect_kw(toks: read List<Tok>, i: read Int) -> Bool {
+    return is_kw_text(toks: read toks, i: read i, word: read "read") || is_kw_text(toks: read toks, i: read i, word: read "mut") || is_kw_text(toks: read toks, i: read i, word: read "take")
+}
+
+// Emit `marker` n times at depth d.
+fn emit_repeat(marker: read String, n: read Int, d: read Int) -> Unit {
+    let mut c = 0
+    while c < n {
+        emit(depth: read d, s: read marker)
+        c = c + 1
+    }
+    return Unit
+}
+
+// Field-line validity (mirrors parse_fields): ident name, `:`, and a type that
+// parses over [ty_start, ty_end) where ty_start skips handle/weak and ty_end is
+// the default `=` or the line/region limit.
+fn field_valid(toks: read List<Tok>, nameIdx: read Int, end: read Int) -> Bool {
+    if is_ident_tok(toks: read toks, i: read nameIdx) == false { return false }
+    if at_symbol(toks: read toks, i: read (nameIdx + 1), code: read SYM_COLON) == false { return false }
+    let mut tyStart = nameIdx + 2
+    let mut pref = true
+    while pref {
+        if is_kw_text(toks: read toks, i: read tyStart, word: read "handle") || is_kw_text(toks: read toks, i: read tyStart, word: read "weak") {
+            tyStart = tyStart + 1
+        } else {
+            pref = false
+        }
+    }
+    let lineLimit = next_line_or_block_end(toks: read toks, start: read tyStart, end: read end)
+    let deq = first_eq(toks: read toks, start: read tyStart, end: read lineLimit)
+    let mut tyEnd = lineLimit
+    if deq >= 0 { tyEnd = deq }
+    return type_parses(toks: read toks, s: read tyStart, e: read tyEnd)
+}
+
+// Generic-param validity (mirrors parse_generic_params): ident name, then either
+// no bound (start+1==end) or `: Bound` with start+3==end and a bound token.
+fn gen_valid(toks: read List<Tok>, start: read Int, end: read Int) -> Bool {
+    if is_ident_tok(toks: read toks, i: read start) == false { return false }
+    if (start + 1) == end { return true }
+    if at_symbol(toks: read toks, i: read (start + 1), code: read SYM_COLON) && (start + 3) == end && is_ident_tok(toks: read toks, i: read (start + 2)) {
+        return true
+    }
+    return false
+}
+
+// Count malformed generic params in the `<...>` beginning at i (0 if not `<`).
+fn count_malformed_generics(toks: read List<Tok>, i: read Int) -> Int {
+    if at_symbol(toks: read toks, i: read i, code: read SYM_LANGLE) == false { return 0 }
+    let close = find_matching(toks: read toks, open: read i, openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
+    if close < 0 { return 0 }
+    let mut k = i + 1
+    let mut mal = 0
+    while k < close {
+        let comma = split_comma(toks: read toks, start: read k, end: read close)
+        let mut segEnd = close
+        if comma >= 0 { segEnd = comma }
+        if gen_valid(toks: read toks, start: read k, end: read segEnd) == false { mal = mal + 1 }
+        if comma < 0 { k = close } else { k = comma + 1 }
+    }
+    return mal
+}
+
+// Emits valid effect-name/effect-retains lines and returns the malformed count
+// (mirrors parse_effects: empty seg / non-ident / bad-`retains(x)` / trailing junk).
+fn emit_effects(toks: read List<Tok>, open: read Int, close: read Int, d: read Int) -> Int {
     let mut i = open + 1
+    let mut mal = 0
     while i < close {
         let comma = split_comma(toks: read toks, start: read i, end: read close)
         let segEnd = pick_end(comma: read comma, end: read close)
-        if is_kw_text(toks: read toks, i: read i, word: read "retains") && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_LPAREN) {
-            emit(depth: read d, s: read String.concat(left: read "effect-retains ", right: read tk_text(toks: read toks, i: read (i + 2))))
-        } else if is_ident_tok(toks: read toks, i: read i) && (i + 1) == segEnd {
+        if i >= segEnd {
+            mal = mal + 1
+        } else if is_ident_tok(toks: read toks, i: read i) == false {
+            mal = mal + 1
+        } else if is_kw_text(toks: read toks, i: read i, word: read "retains") {
+            // Valid shape: `retains ( ident )` filling the whole segment.
+            let rclose = find_matching(toks: read toks, open: read (i + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+            if at_symbol(toks: read toks, i: read (i + 1), code: read SYM_LPAREN) && rclose >= 0 && (rclose + 1) == segEnd && (i + 3) == rclose && is_ident_tok(toks: read toks, i: read (i + 2)) {
+                emit(depth: read d, s: read String.concat(left: read "effect-retains ", right: read tk_text(toks: read toks, i: read (i + 2))))
+            } else {
+                mal = mal + 1
+            }
+        } else if (i + 1) == segEnd {
             emit(depth: read d, s: read String.concat(left: read "effect-name ", right: read tk_text(toks: read toks, i: read i)))
+        } else {
+            mal = mal + 1
         }
         if comma < 0 { i = close } else { i = comma + 1 }
     }
-    return Unit
+    return mal
 }
 
 // Join a dotted name's identifier tokens [start,end) with '.'.
@@ -1639,28 +1782,46 @@ fn dotted_text(toks: read List<Tok>, start: read Int, end: read Int) -> String {
 }
 
 // Params in the parens [open, close]: each `name: [effect] Type [= default]`.
-fn emit_params(toks: read List<Tok>, open: read Int, close: read Int, d: read Int) -> Unit {
+// Emits valid params and returns the malformed count (mirrors parse_params: an
+// empty segment, a non-ident name, or a leading data-effect keyword are malformed;
+// a `name` with no `:` is a VALID param with an empty type).
+fn emit_params(toks: read List<Tok>, open: read Int, close: read Int, d: read Int) -> Int {
     let mut i = open + 1
+    let mut mal = 0
     while i < close {
         let comma = split_comma(toks: read toks, start: read i, end: read close)
-        // name
-        let pname = tk_text(toks: read toks, i: read i)
-        // after `name :`
-        let mut k = i + 2
-        let mut effStr = ""
-        if is_kw_text(toks: read toks, i: read k, word: read "read") { effStr = "read"; k = k + 1 }
-        else if is_kw_text(toks: read toks, i: read k, word: read "mut") { effStr = "mut"; k = k + 1 }
-        else if is_kw_text(toks: read toks, i: read k, word: read "take") { effStr = "take"; k = k + 1 }
-        let mut line = String.concat(left: read "param name=", right: read pname)
-        if String.len(value: read effStr) > 0 {
-            let l2 = String.concat(left: read line, right: read " effect=")
-            line = String.concat(left: read l2, right: read effStr)
+        let mut segEnd = close
+        if comma >= 0 { segEnd = comma }
+        if i >= segEnd {
+            mal = mal + 1
+        } else if is_ident_tok(toks: read toks, i: read i) == false {
+            mal = mal + 1
+        } else if is_data_effect_kw(toks: read toks, i: read i) {
+            mal = mal + 1
+        } else {
+            let pname = tk_text(toks: read toks, i: read i)
+            if at_symbol(toks: read toks, i: read (i + 1), code: read SYM_COLON) == false {
+                // Name-only param: valid, with an empty type ref.
+                emit(depth: read d, s: read String.concat(left: read "param name=", right: read pname))
+                emit(depth: read (d + 1), s: read "type name= fresh=false noescape=false owned=false")
+            } else {
+                let mut k = i + 2
+                let mut effStr = ""
+                if is_kw_text(toks: read toks, i: read k, word: read "read") { effStr = "read"; k = k + 1 }
+                else if is_kw_text(toks: read toks, i: read k, word: read "mut") { effStr = "mut"; k = k + 1 }
+                else if is_kw_text(toks: read toks, i: read k, word: read "take") { effStr = "take"; k = k + 1 }
+                let mut line = String.concat(left: read "param name=", right: read pname)
+                if String.len(value: read effStr) > 0 {
+                    let l2 = String.concat(left: read line, right: read " effect=")
+                    line = String.concat(left: read l2, right: read effStr)
+                }
+                emit(depth: read d, s: read line)
+                emit_type_ref(toks: read toks, i: read k, tag: read "type", eff: read "", d: read (d + 1))
+            }
         }
-        emit(depth: read d, s: read line)
-        emit_type_ref(toks: read toks, i: read k, tag: read "type", eff: read "", d: read (d + 1))
         if comma < 0 { i = close } else { i = comma + 1 }
     }
-    return Unit
+    return mal
 }
 
 // -------------------------------------------------------------------------
@@ -1675,12 +1836,17 @@ fn emit_generics(toks: read List<Tok>, i: read Int, d: read Int) -> Int {
     let mut k = i + 1
     while k < close {
         let comma = split_comma(toks: read toks, start: read k, end: read close)
-        let name = tk_text(toks: read toks, i: read k)
-        emit(depth: read d, s: read String.concat(left: read "generic name=", right: read name))
-        // Optional bound: `Name: Bound`.
-        if at_symbol(toks: read toks, i: read (k + 1), code: read SYM_COLON) {
-            let bw = tk_text(toks: read toks, i: read (k + 2))
-            emit(depth: read (d + 1), s: read bound_line(word: read bw))
+        let mut segEnd = close
+        if comma >= 0 { segEnd = comma }
+        // Emit only VALID generic params; malformed ones become malformed-generic
+        // markers counted separately (count_malformed_generics).
+        if gen_valid(toks: read toks, start: read k, end: read segEnd) {
+            let name = tk_text(toks: read toks, i: read k)
+            emit(depth: read d, s: read String.concat(left: read "generic name=", right: read name))
+            if at_symbol(toks: read toks, i: read (k + 1), code: read SYM_COLON) {
+                let bw = tk_text(toks: read toks, i: read (k + 2))
+                emit(depth: read (d + 1), s: read bound_line(word: read bw))
+            }
         }
         if comma < 0 { k = close } else { k = comma + 1 }
     }
@@ -1749,19 +1915,21 @@ fn emit_field(toks: read List<Tok>, start: read Int, lineEnd: read Int, d: read 
     return Unit
 }
 
-// Emit `field` children for a type/variant body region [start, end).
-fn emit_fields(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) -> Unit {
+// Emit `field` children for a struct/class/resource body region [start, end),
+// one field per line (mirrors parse_fields). Returns the malformed-field count.
+fn emit_fields(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) -> Int {
     let mut i = start
+    let mut mal = 0
     while i < end {
-        if is_ident_tok(toks: read toks, i: read i) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_COLON) {
-            let le = stmt_end(toks: read toks, start: read i, limit: read end)
+        let le = stmt_end(toks: read toks, start: read i, limit: read end)
+        if field_valid(toks: read toks, nameIdx: read i, end: read end) {
             emit_field(toks: read toks, start: read i, lineEnd: read le, d: read d)
-            i = le
         } else {
-            i = i + 1
+            mal = mal + 1
         }
+        if le > i { i = le } else { i = i + 1 }
     }
-    return Unit
+    return mal
 }
 
 // class/struct/resource declaration. Returns the next token index.
@@ -1785,6 +1953,7 @@ fn emit_type_decl(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
     let g = String.concat(left: read f, right: read " opaque=")
     let h = String.concat(left: read g, right: read boolstr(b: read isOpaque))
     emit(depth: read d, s: read h)
+    let malGen = count_malformed_generics(toks: read toks, i: read j)
     j = emit_generics(toks: read toks, i: read j, d: read (d + 1))
     j = emit_derives(toks: read toks, i: read j, d: read (d + 1))
     // After the name (and any generics/derives) the very next token is either the
@@ -1798,7 +1967,11 @@ fn emit_type_decl(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
     let dropPos = find_drop(toks: read toks, open: read openb, close: read close)
     let mut fieldsEnd = close
     if dropPos >= 0 { fieldsEnd = dropPos }
-    emit_fields(toks: read toks, start: read (openb + 1), end: read fieldsEnd, d: read (d + 1))
+    let malField = emit_fields(toks: read toks, start: read (openb + 1), end: read fieldsEnd, d: read (d + 1))
+    // Dump order (ast_oracle_dump): valid fields, then malformed-generic, then
+    // malformed-field, then drop.
+    emit_repeat(marker: read "malformed-generic", n: read malGen, d: read (d + 1))
+    emit_repeat(marker: read "malformed-field", n: read malField, d: read (d + 1))
     if dropPos >= 0 {
         let dopen = find_block_open(toks: read toks, start: read dropPos, limit: read close)
         if dopen >= 0 {
@@ -2047,6 +2220,7 @@ fn emit_match(toks: read List<Tok>, matchPos: read Int, braceOpen: read Int, bra
 
 fn emit_match_arms(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) -> Unit {
     let mut i = start
+    let mut mal = 0
     while i < end {
         if at_symbol(toks: read toks, i: read i, code: read SYM_SEMI) {
             i = i + 1
@@ -2054,7 +2228,9 @@ fn emit_match_arms(toks: read List<Tok>, start: read Int, end: read Int, d: read
             let lineEnd = next_line_or_block_end(toks: read toks, start: read i, end: read end)
             let arrow = find_top_sym(toks: read toks, start: read i, end: read lineEnd, code: read SYM_FATARROW)
             if arrow < 0 {
-                emit(depth: read d, s: read "malformed-arm")
+                // Malformed arm (no `=>`) — counted; the oracle dumps malformed-arm
+                // markers AFTER all valid arms.
+                mal = mal + 1
                 if lineEnd > i { i = lineEnd } else { i = i + 1 }
             } else {
                 let ifPos = find_top_if(toks: read toks, start: read i, end: read arrow)
@@ -2081,6 +2257,7 @@ fn emit_match_arms(toks: read List<Tok>, start: read Int, end: read Int, d: read
             }
         }
     }
+    emit_repeat(marker: read "malformed-arm", n: read mal, d: read d)
     return Unit
 }
 
@@ -2382,6 +2559,7 @@ fn main() -> Unit {
     // every `feature <name>` before any item; the item pass then skips headers.
     emit_all_features(toks: read toks, ntok: read ntok)
     let mut i = 0
+    let mut malDecl = 0
     let mut running = true
     while running {
         if i >= ntok {
@@ -2414,16 +2592,38 @@ fn main() -> Unit {
                 // (not source order) — skip to keep the stream valid (SH-025).
                 i = advance(toks: read toks, i: read i, r: read next_decl_skip(toks: read toks, start: read i))
             } else if starts_fn_like(toks: read toks, i: read i, isPub: read cls.isPub) {
-                i = advance(toks: read toks, i: read i, r: read emit_function(toks: read toks, start: read i, d: read 1))
+                // A fn whose name won't parse (`fn (…)`) is a program-level malformed
+                // declaration (parse_function_decl returns None) — counted for the
+                // section-5 marker, not emitted as a fn.
+                let ns = fn_name_start(toks: read toks, start: read i)
+                if ns >= 0 && take_function_name(toks: read toks, i: read ns) < 0 {
+                    malDecl = malDecl + 1
+                    i = advance(toks: read toks, i: read i, r: read next_decl_skip(toks: read toks, start: read i))
+                } else {
+                    i = advance(toks: read toks, i: read i, r: read emit_function(toks: read toks, start: read i, d: read 1))
+                }
             } else {
                 i = advance(toks: read toks, i: read i, r: read next_decl_skip(toks: read toks, start: read i))
             }
         }
     }
-    // Section 5: feature diagnostics, emitted AFTER all items (unknown-feature
-    // then duplicate-feature), matching ast_oracle_dump's ordering.
+    // Section 5: feature diagnostics (unknown-feature then duplicate-feature),
+    // then malformed-declaration, emitted AFTER all items — matching ast_oracle_dump.
     emit_feature_diags(toks: read toks, ntok: read ntok)
+    emit_repeat(marker: read "malformed-declaration", n: read malDecl, d: read 1)
     return Unit
+}
+
+// Position of the function name (just past `fn`) after skipping #attrs and
+// pub/async/native, or -1 if this isn't a fn-like head.
+fn fn_name_start(toks: read List<Tok>, start: read Int) -> Int {
+    let mut j = start
+    while at_symbol(toks: read toks, i: read j, code: read SYM_HASH) { j = j + 5 }
+    if is_kw_text(toks: read toks, i: read j, word: read "pub") { j = j + 1 }
+    if is_kw_text(toks: read toks, i: read j, word: read "async") { j = j + 1 }
+    if is_kw_text(toks: read toks, i: read j, word: read "native") { j = j + 1 }
+    if is_kw_text(toks: read toks, i: read j, word: read "fn") == false { return -1 }
+    return j + 1
 }
 
 // True if token i begins a top-level `features:` header (depth checked by caller).
