@@ -1248,3 +1248,47 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   the SAME 26 codes (RS0013 absent). Green.
 - **Next slice:** RS0013 becomes gateable once qualified-call error-type inference
   exists; meanwhile `expr_type_root` is ready for RS0210/RS0207/RS0208.
+
+### Milestone 2m — type-inference engine slice 2: stdlib namespace→error-type map + RS0013 sub-rule C → RS0013 GATED (27 codes)
+
+- **Goal:** complete RS0013 by adding sub-rule C (error-type mismatch) — the
+  blocker from slice 2l — and add RS0013 to `CHECKER_TARGET_CODES`.
+- **Measure-first:** added RS0013 to the target with only sub-rules A+B and ran the
+  corpus once. Exactly TWO `[mismatch]` files (the real sub-rule-C set) — no guess:
+  * `fail/ast-call-missing-effect-nested.rss`: fn returns `Result<Unit, IOError>`;
+    `File.open_write(..)?` / `File.write(..)?` → `FileError` ≠ `IOError`.
+  * `fail/try-operator-error-type-mismatch.rss`: fn returns `Result<_, AppError>`;
+    `load_config()?` (same-file fn) → `ConfigError` ≠ `AppError`.
+- **Built (committed):**
+  * `stdlib_error_type(ns, method)` — the namespace→error-type map read from the
+    `.rssi` interfaces. Filesystem (`File`/`Directory`/`Env`/`Path`) → `FileError`;
+    JSON-shaped codecs (`Json`/`Toml`/`Yaml`) → `JsonError`. Per-method exceptions
+    keyed and EXCLUDED (yield "") because they break module uniformity:
+    `File.bytes_stream` → `ChannelError` (async streaming), and
+    `Path.{from_string,resolve_relative,safe_relative}` → `String` error. Every
+    other namespace → "" (unknown ⇒ no fire ⇒ FP-safe).
+  * `return_error_type_at` / `result_error_root` — parse the second (error) type
+    arg of a `Result<T, E>` return (mirrors `return_type_root_at`).
+  * `fn_error_type_by_name` — the declared error type of an unqualified same-file
+    `fn` (mirrors `fn_return_root`).
+  * `try_operand_error_type` — the `?`-operand's Result error type: a qualified
+    `Ns.method(..)?` via the map, or an unqualified `name(..)?` via that fn's
+    error type; anything else (bare ident, index, field, `Ok`/`Err`/`Some`) → "".
+  * `fn_invalid_try` extended: inside a fn whose return root is exactly `Result`
+    with a known 2-arg error type E, a `?` whose operand error type is known and
+    ≠ E fires RS0013 (sub-rule C).
+- **FP discipline:** the first full run at the mapped families surfaced ONE false
+  positive — `examples/scripts/async/common_io.rss`: `File.bytes_stream(..)?` in a
+  `Result<_, ChannelError>` fn. `File` is NOT uniform (bytes_stream → ChannelError),
+  so the blanket File→FileError mis-fired. Fixed by excluding `File.bytes_stream`
+  (and the String-error `Path` methods). Re-verified whole-corpus uniformity of the
+  mapped families before re-running.
+- **Gate:** `checker_parity_corpus` **619/619 ok, 0 mismatches, 0 run-failures** at
+  **27 codes** (RS0013 added). Green. The two sub-rule-C fixtures now match the
+  oracle exactly; every clean `File.*?`/`Json.*?`/etc. operand stays unflagged.
+- **CHECKER_TARGET_CODES (27):** RS0002, RS0003, RS0004, RS0005, RS0006, RS0007,
+  RS0008, RS0009, RS0010, RS0011, RS0012, RS0016, RS0017, RS0021, RS0024, RS0028,
+  RS0033, RS0029, RS0023, RS0035, RS0027, RS0014, RS0018, RS0019, RS0022, RS0101,
+  RS0013.
+- **Next slice:** `expr_type_root` + the error-type map are ready for RS0210
+  (operator), RS0207 (argument), RS0208 (return).

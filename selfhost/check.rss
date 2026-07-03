@@ -2614,14 +2614,15 @@ fn file_unsafe_use(toks: read List<Tok>) -> Bool {
 // RS0207 argument, RS0208 return). See crate::checks::shared::builtin_value_type_name,
 // crate::hir::number_literal_type_name, and checks/body/try_checks.rs.
 //
-// NOTE: RS0013 is emitted below but is intentionally NOT in CHECKER_TARGET_CODES
-// (so it is filtered from the parity comparison and the gate stays green). Two of
-// its three oracle sub-rules are reproduced faithfully — (A) `?` in a function
-// whose return type is not Result/Option, and (B) a `?` whose operand has a
-// confidently-known concrete non-Result/Option type. The third sub-rule
-// (error-type mismatch) fires on qualified stdlib calls whose error type needs
-// the full stdlib signature DB, which is deliberately kept UNKNOWN here; see the
-// ledger milestone for the precise blocker (ast-call-missing-effect-nested.rss).
+// RS0013 is in CHECKER_TARGET_CODES: all three oracle sub-rules are reproduced —
+// (A) `?` in a function whose return type is not Result/Option, (B) a `?` whose
+// operand has a confidently-known concrete non-Result/Option type, and (C) inside
+// a fn returning `Result<T, E>`, a `?` whose operand Result error type is known
+// and differs from E. Sub-rule C reads the operand error type from a small stdlib
+// namespace->error-type map (filesystem->FileError, json/toml/yaml->JsonError) or,
+// for an unqualified same-file call, from that fn's declared error type; anything
+// else stays UNKNOWN (no fire) — the FP-safety mechanism. See stdlib_error_type,
+// return_error_type_at, try_operand_error_type, and checks/body/try_checks.rs.
 // ---------------------------------------------------------------------------
 
 // crate::hir::number_literal_type_name reproduced: a numeric literal is Float iff
@@ -2733,10 +2734,151 @@ fn try_operand_root(toks: read List<Tok>, qPos: read Int, bodyOpen: read Int, po
     return ""
 }
 
-// RS0013 INVALID_TRY_OPERATOR (sub-rules A + B): true iff the fn at `start` uses
-// `?` in a way that is invalid. (A) any `?` in a fn whose return root is not
+// Stdlib namespace -> Result error type. Built from the `.rssi` interfaces: each
+// `pub native fn Ns.method(...) -> Result<T, ErrType>` declares a per-module error
+// type, uniform across the module for these two families. Filesystem (File /
+// Directory / Env / Path) -> FileError; the JSON-shaped codecs (Json / Toml /
+// Yaml) -> JsonError. Two families have per-method exceptions that must be keyed
+// by `Ns.method`: `File.bytes_stream` returns ChannelError (async streaming), and
+// `Path.{from_string,resolve_relative,safe_relative}` return a `String` error —
+// all excluded (yield "") rather than mis-asserting an error type. A namespace not
+// in the map also yields "" (unknown => no diagnostic => FP-safe). See
+// stdlib/{fs,env,path,json,toml,yaml}/*.rssi, packages/async/interface/file.rssi,
+// and crate::checks::body::try_checks::result_error_type_name.
+fn stdlib_error_type(ns: read String, method: read String) -> String {
+    if ns == "File" {
+        if method == "bytes_stream" { return "" }
+        return "FileError"
+    }
+    if ns == "Directory" || ns == "Env" { return "FileError" }
+    if ns == "Path" {
+        if method == "from_string" || method == "resolve_relative" || method == "safe_relative" { return "" }
+        return "FileError"
+    }
+    if ns == "Json" || ns == "Toml" || ns == "Yaml" { return "JsonError" }
+    return ""
+}
+
+// Second (error) type-arg root of a `Result<T, E>` return type for the fn whose
+// keyword-anchor sits at `fnkw`, or "" when the return is not a 2-arg Result.
+// Mirrors return_type_root_at but yields E instead of the head root.
+fn return_error_type_at(toks: read List<Tok>, fnkw: read Int) -> String {
+    let sigEnd = function_signature_end(toks: read toks, start: read fnkw)
+    let open = find_param_open(toks: read toks, from: read fnkw, end: read sigEnd)
+    if open < 0 { return "" }
+    let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    if close < 0 { return "" }
+    if at_symbol(toks: read toks, i: read (close + 1), code: read SYM_ARROW) == false { return "" }
+    let rs = close + 2
+    let mut re = rs
+    let mut scanning = true
+    while scanning {
+        let stop = at_ident(toks: read toks, i: read re, wid: read WORD_EFFECTS) || at_symbol(toks: read toks, i: read re, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read re, code: read SYM_EQ)
+        if re < sigEnd && stop == false {
+            re = re + 1
+        } else {
+            scanning = false
+        }
+    }
+    return result_error_root(toks: read toks, s: read rs, e: read re)
+}
+
+// Error root of a `Result< T , E >` type region [s,e): the root of its second
+// top-level type argument, or "" when the region is not a 2-arg Result.
+fn result_error_root(toks: read List<Tok>, s: read Int, e: read Int) -> String {
+    let p = skip_type_prefixes(toks: read toks, s: read s, e: read e)
+    if p >= e { return "" }
+    if is_ident_tok(toks: read toks, i: read p) == false { return "" }
+    if tk_text(toks: read toks, i: read p) != "Result" { return "" }
+    let lt = p + 1
+    if at_symbol(toks: read toks, i: read lt, code: read SYM_LANGLE) == false { return "" }
+    let mut k = lt + 1
+    let mut angle = 0
+    let mut depth = 0
+    let mut commaPos = -1
+    let mut rangle = -1
+    while k < e && rangle < 0 {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE) {
+            angle = angle + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) {
+            if angle == 0 { rangle = k } else { angle = angle - 1 }
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) {
+            if depth > 0 { depth = depth - 1 }
+        } else if angle == 0 && depth == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
+            if commaPos < 0 { commaPos = k }
+        }
+        k = k + 1
+    }
+    if commaPos < 0 || rangle < 0 { return "" }
+    return type_region_root(toks: read toks, s: read (commaPos + 1), e: read rangle)
+}
+
+// Error root of the `Result<T, E>` return of the first unqualified same-file
+// `fn fnName(...)`, or "". Mirrors fn_return_root but yields E.
+fn fn_error_type_by_name(toks: read List<Tok>, fnName: read String) -> String {
+    let n = List.len(list: read toks)
+    let mut i = 0
+    let mut result = ""
+    let mut done = false
+    while i < n && done == false {
+        if at_ident(toks: read toks, i: read i, wid: read WORD_FN) {
+            let nameIdx = i + 1
+            let named = is_ident_tok(toks: read toks, i: read nameIdx) && tk_text(toks: read toks, i: read nameIdx) == fnName
+            if named && at_symbol(toks: read toks, i: read (nameIdx + 1), code: read SYM_DOT) == false {
+                result = return_error_type_at(toks: read toks, fnkw: read i)
+                done = true
+            }
+        }
+        i = i + 1
+    }
+    return result
+}
+
+// Result error type of the `?`-operand ending just before the `?` at `qPos`, or
+// "" when it is not confidently known. Only two operand shapes yield an error
+// type: a qualified stdlib call `Ns.method(...)?` (via the namespace map) and an
+// unqualified same-file call `name(...)?` (via that fn's declared error type).
+// Anything else (bare ident, index, field, Ok/Err/Some literal) -> "" (FP-safe).
+fn try_operand_error_type(toks: read List<Tok>, qPos: read Int, bodyOpen: read Int, allFns: read Set<String>) -> String {
+    let prev = qPos - 1
+    if prev <= bodyOpen { return "" }
+    if at_symbol(toks: read toks, i: read prev, code: read SYM_RPAREN) == false { return "" }
+    let mut d = 0
+    let mut j = prev
+    let mut op = -1
+    while j > bodyOpen && op < 0 {
+        if at_symbol(toks: read toks, i: read j, code: read SYM_RPAREN) {
+            d = d + 1
+        } else if at_symbol(toks: read toks, i: read j, code: read SYM_LPAREN) {
+            d = d - 1
+            if d == 0 { op = j }
+        }
+        j = j - 1
+    }
+    if op <= bodyOpen { return "" }
+    let callee = op - 1
+    if is_ident_tok(toks: read toks, i: read callee) == false { return "" }
+    let method = tk_text(toks: read toks, i: read callee)
+    if at_symbol(toks: read toks, i: read (callee - 1), code: read SYM_DOT) {
+        let nsPos = callee - 2
+        if is_ident_tok(toks: read toks, i: read nsPos) == false { return "" }
+        if at_symbol(toks: read toks, i: read (nsPos - 1), code: read SYM_DOT) { return "" }
+        return stdlib_error_type(ns: read tk_text(toks: read toks, i: read nsPos), method: read method)
+    }
+    if Set.contains<String>(set: read allFns, value: read method) {
+        return fn_error_type_by_name(toks: read toks, fnName: read method)
+    }
+    return ""
+}
+
+// RS0013 INVALID_TRY_OPERATOR (sub-rules A + B + C): true iff the fn at `start`
+// uses `?` in a way that is invalid. (A) any `?` in a fn whose return root is not
 // Result/Option (check_try_operator_result_returns). (B) a `?` whose operand has
 // a confidently-known concrete non-Result/Option type (check_try_value_is_result).
+// (C) inside a fn returning `Result<T, E>`, a `?` whose operand's Result error
+// type is confidently known and differs from E (check_try_error_types).
 fn fn_invalid_try(toks: read List<Tok>, start: read Int, declared: read Set<String>, allFns: read Set<String>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
@@ -2750,6 +2892,7 @@ fn fn_invalid_try(toks: read List<Tok>, start: read Int, declared: read Set<Stri
     }
     let retRoot = return_type_root_at(toks: read toks, fnkw: read (ns - 1))
     let returnsResult = retRoot == "Result" || retRoot == "Option"
+    let fnErr = return_error_type_at(toks: read toks, fnkw: read (ns - 1))
     let mut k = sigEnd + 1
     let mut hit = false
     while k < bodyClose {
@@ -2759,6 +2902,10 @@ fn fn_invalid_try(toks: read List<Tok>, start: read Int, declared: read Set<Stri
             } else {
                 let root = try_operand_root(toks: read toks, qPos: read k, bodyOpen: read sigEnd, popen: read popen, pclose: read pclose, declared: read declared, allFns: read allFns)
                 if String.len(value: read root) > 0 && root != "Result" && root != "Option" { hit = true }
+                if retRoot == "Result" && String.len(value: read fnErr) > 0 {
+                    let opErr = try_operand_error_type(toks: read toks, qPos: read k, bodyOpen: read sigEnd, allFns: read allFns)
+                    if String.len(value: read opErr) > 0 && opErr != fnErr { hit = true }
+                }
             }
         }
         k = k + 1
