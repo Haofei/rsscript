@@ -1223,20 +1223,29 @@ fn emit_let(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int)
     let a = String.concat(left: read "let kind=", right: read kind)
     let b = String.concat(left: read a, right: read " name=")
     let c = String.concat(left: read b, right: read name)
-    let f = String.concat(left: read c, right: read " mut=")
-    let g = String.concat(left: read f, right: read boolstr(b: read isMut))
-    let h = String.concat(left: read g, right: read " async=false")
-    emit(depth: read d, s: read h)
     // Value split is the FIRST `=` after the name (matching parse_let_stmt): a
     // let's name/annotation never contains `=`, so no `>=`/`==` guard is needed —
     // and top_assign's guard would wrongly skip the `=` after a generic `>`
     // (`let x: Option<Int> = …`).
     let asg = first_eq(toks: read toks, start: read j, end: read e)
-    if at_symbol(toks: read toks, i: read j, code: read SYM_COLON) {
+    let hasColon = at_symbol(toks: read toks, i: read j, code: read SYM_COLON)
+    let mut typeEnd = e
+    if asg >= 0 { typeEnd = asg }
+    // malformed=true when `=` is present with no value expression, or `:` with no
+    // type (parse_let_stmt: equals.is_some && value.is_none, or the colon analog).
+    let emptyVal = asg >= 0 && (asg + 1) >= e
+    let emptyType = hasColon && (j + 1) >= typeEnd
+    let malformed = emptyVal || emptyType
+    let f = String.concat(left: read c, right: read " mut=")
+    let g = String.concat(left: read f, right: read boolstr(b: read isMut))
+    let mut h = String.concat(left: read g, right: read " async=false")
+    if malformed { h = String.concat(left: read h, right: read " malformed=true") }
+    emit(depth: read d, s: read h)
+    if hasColon && emptyType == false {
         emit_type_ref(toks: read toks, i: read (j + 1), tag: read "type", eff: read "", d: read (d + 1))
     }
     // Value.
-    if asg >= 0 {
+    if asg >= 0 && emptyVal == false {
         emit(depth: read (d + 1), s: read "value")
         emit_expr(toks: read toks, start: read (asg + 1), end: read e, d: read (d + 2))
     }
@@ -1778,8 +1787,13 @@ fn emit_type_decl(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
     emit(depth: read d, s: read h)
     j = emit_generics(toks: read toks, i: read j, d: read (d + 1))
     j = emit_derives(toks: read toks, i: read j, d: read (d + 1))
-    let openb = find_block_open(toks: read toks, start: read j, limit: read List.len(list: read toks))
-    if openb < 0 { return declaration_line_end(toks: read toks, start: read start) }
+    // After the name (and any generics/derives) the very next token is either the
+    // body `{` or the start of the NEXT declaration — so a body exists iff that
+    // token is `{`. (A raw find_block_open would borrow a LATER decl's brace for a
+    // body-less declaration like `struct Image`, swallowing everything up to it.)
+    let mut openb = -1
+    if at_symbol(toks: read toks, i: read j, code: read SYM_LBRACE) { openb = j }
+    if openb < 0 { return j }
     let close = find_matching(toks: read toks, open: read openb, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
     let dropPos = find_drop(toks: read toks, open: read openb, close: read close)
     let mut fieldsEnd = close
@@ -1810,8 +1824,13 @@ fn emit_sum(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
     emit(depth: read d, s: read c)
     j = emit_generics(toks: read toks, i: read j, d: read (d + 1))
     j = emit_derives(toks: read toks, i: read j, d: read (d + 1))
-    let openb = find_block_open(toks: read toks, start: read j, limit: read List.len(list: read toks))
-    if openb < 0 { return declaration_line_end(toks: read toks, start: read start) }
+    // After the name (and any generics/derives) the very next token is either the
+    // body `{` or the start of the NEXT declaration — so a body exists iff that
+    // token is `{`. (A raw find_block_open would borrow a LATER decl's brace for a
+    // body-less declaration like `struct Image`, swallowing everything up to it.)
+    let mut openb = -1
+    if at_symbol(toks: read toks, i: read j, code: read SYM_LBRACE) { openb = j }
+    if openb < 0 { return j }
     let close = find_matching(toks: read toks, open: read openb, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
     // Variants: newline-separated `Name` or `Name(fields)`.
     let mut i = openb + 1
