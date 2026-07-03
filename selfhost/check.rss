@@ -370,6 +370,9 @@ fn effect_name_hits(toks: read List<Tok>, segStart: read Int, segEnd: read Int, 
     if effect_item_kind(toks: read toks, segStart: read segStart, segEnd: read segEnd) != 1 { return false }
     let name = tk_text(toks: read toks, i: read segStart)
     if mode == 1 { return is_removed_runtime_effect(name: read name) }
+    // mode 2: RS0101 — the `native` effect (a `native fn` boundary, or any fn with
+    // `effects(native)`). Used to gate the `native` file feature.
+    if mode == 2 { return name == "native" }
     if name == "fresh" { return true }
     if is_removed_runtime_effect(name: read name) { return false }
     return is_valid_effect_name(name: read name) == false
@@ -2475,6 +2478,130 @@ fn fn_noalloc_alloc(toks: read List<Tok>, start: read Int, declared: read Set<St
     return hit
 }
 
+// ---------------------------------------------------------------------------
+// RS0101 FEATURE_VIOLATION (feature-gating).
+//
+// A feature-requiring construct is used but the file header does not declare the
+// required `features:`. FILE-LEVEL: emit "RS0101" once if ANY unfeatured use
+// exists (the checker compares a code SET, so only presence matters). Three
+// oracle sources are reproduced:
+//   * checks/features.rs feature_uses — construct -> required feature:
+//       local  : `local` let/closure, `manage` expr, `take` data-effect,
+//                `ResourcePool<T>` type/callee
+//       native : a fn with `effects(native)`
+//       unsafe : a fn with `effects(unsafe)`
+//       async  : `async fn`/`async let`/`async for`, `spawn`, `await`,
+//                `task_group`, `select`
+//   * analyzer/signatures.rs check_native_effect — a `native fn` that does NOT
+//     surface `effects(native)` is RS0101 REGARDLESS of the declared features.
+//   * checks/body/semantics.rs check_match_pattern_effects — `match take`
+//     without `features: local` (subsumed by the `take` keyword probe).
+//
+// A reserved feature keyword (`local`/`async`/`unsafe`) only appears in a
+// `features:` header when that feature is DECLARED, so a header token always
+// self-gates; the only other occurrences are real uses. `native` is the sole
+// exception (the missing-effect source fires even when declared), so it is
+// tracked separately in the fn walk.
+// ---------------------------------------------------------------------------
+
+// The `local`/`native`/`unsafe`/`async` features this file declares, collected
+// from every top-level `features:` header (order-independent pre-pass).
+fn collect_declared_features(toks: read List<Tok>) -> Set<String> {
+    let mut declared = Set<String>.new()
+    let n = List.len(list: read toks)
+    let mut i = 0
+    while i < n {
+        if at_ident(toks: read toks, i: read i, wid: read WORD_FEATURES) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_COLON) {
+            let lineEnd = declaration_line_end(toks: read toks, start: read i)
+            let mut j = i + 2
+            while j < lineEnd {
+                if is_ident_tok(toks: read toks, i: read j) {
+                    let fname = tk_text(toks: read toks, i: read j)
+                    if is_known_feature(name: read fname) {
+                        Set.insert<String>(set: mut declared, value: read fname)
+                    }
+                }
+                j = j + 1
+            }
+            i = lineEnd
+        } else {
+            i = i + 1
+        }
+    }
+    return declared
+}
+
+// True if the ident/keyword token at i is `word` and is not a method name (not
+// preceded by `.`).
+fn kw_not_dotted(toks: read List<Tok>, i: read Int, word: read String) -> Bool {
+    if is_kw_text(toks: read toks, i: read i, word: read word) == false { return false }
+    return at_symbol(toks: read toks, i: read (i - 1), code: read SYM_DOT) == false
+}
+
+// A `local`-feature construct anywhere in the file: a `local` let/closure, a
+// `manage` expr, a `take` data-effect, or a `ResourcePool<T>` type/callee. The
+// `take` effect is distinguished from a `.take(` method (preceded by `.`) and a
+// binding/field named `take` (followed by `:`).
+fn file_local_use(toks: read List<Tok>) -> Bool {
+    let n = List.len(list: read toks)
+    let mut i = 0
+    let mut hit = false
+    while i < n {
+        if at_ident(toks: read toks, i: read i, wid: read WORD_LOCAL) {
+            hit = true
+        } else if kw_not_dotted(toks: read toks, i: read i, word: read "manage") {
+            hit = true
+        } else if kw_not_dotted(toks: read toks, i: read i, word: read "take") && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_COLON) == false {
+            hit = true
+        } else if is_ident_tok(toks: read toks, i: read i) && tk_text(toks: read toks, i: read i) == "ResourcePool" {
+            hit = true
+        }
+        i = i + 1
+    }
+    return hit
+}
+
+// An `async`-feature construct anywhere: `async` (fn/let/for) modifier keyword,
+// or a `spawn`/`await`/`task_group`/`select` prefix/statement keyword.
+fn file_async_use(toks: read List<Tok>) -> Bool {
+    let n = List.len(list: read toks)
+    let mut i = 0
+    let mut hit = false
+    while i < n {
+        // The `async` MODIFIER (`async fn`/`async let`/`async for`) is a feature
+        // use; the `async` EFFECT NAME in `effects(..., async, ...)` is a removed
+        // runtime effect (RS0012), NOT an async construct, so gate on the next kw.
+        if at_ident(toks: read toks, i: read i, wid: read WORD_ASYNC) && (at_ident(toks: read toks, i: read (i + 1), wid: read WORD_FN) || at_ident(toks: read toks, i: read (i + 1), wid: read WORD_FOR) || is_kw_text(toks: read toks, i: read (i + 1), word: read "let")) {
+            hit = true
+        } else if kw_not_dotted(toks: read toks, i: read i, word: read "spawn") {
+            hit = true
+        } else if kw_not_dotted(toks: read toks, i: read i, word: read "await") {
+            hit = true
+        } else if kw_not_dotted(toks: read toks, i: read i, word: read "task_group") {
+            hit = true
+        } else if kw_not_dotted(toks: read toks, i: read i, word: read "select") {
+            hit = true
+        }
+        i = i + 1
+    }
+    return hit
+}
+
+// An `unsafe`-feature construct anywhere: an `effects(unsafe)` clause. `unsafe`
+// is only ever an effect name or a `features: unsafe` header token (the latter
+// implies the feature is declared, so it self-gates), so a bare WORD_UNSAFE
+// token is a faithful proxy.
+fn file_unsafe_use(toks: read List<Tok>) -> Bool {
+    let n = List.len(list: read toks)
+    let mut i = 0
+    let mut hit = false
+    while i < n {
+        if at_ident(toks: read toks, i: read i, wid: read WORD_UNSAFE) { hit = true }
+        i = i + 1
+    }
+    return hit
+}
+
 fn main() -> Unit {
     let source = Args.get_or_default(index: 0, default: read "")
     let toks = tokenize(source: read source)
@@ -2536,6 +2663,15 @@ fn main() -> Unit {
     let asyncNotConsumed = has_unconsumed_async_call(toks: read toks, asyncFns: read asyncFns)
     // RS0033: any decimal integer literal in the file that overflows i64.
     let outOfRangeInt = has_out_of_range_int(toks: read toks)
+    // RS0101: feature-gating. Declared features (pre-pass, order-independent) and
+    // whole-file construct probes for local/async/unsafe; native is tracked in the
+    // fn walk below (the missing-effect source fires even when native is declared).
+    let declaredFeatures = collect_declared_features(toks: read toks)
+    let localViol = file_local_use(toks: read toks) && Set.contains<String>(set: read declaredFeatures, value: read "local") == false
+    let asyncViol = file_async_use(toks: read toks) && Set.contains<String>(set: read declaredFeatures, value: read "async") == false
+    let unsafeViol = file_unsafe_use(toks: read toks) && Set.contains<String>(set: read declaredFeatures, value: read "unsafe") == false
+    let mut nativeEffect = false
+    let mut nativeMissing = false
     let mut i = 0
     let mut running = true
     while running {
@@ -2707,6 +2843,11 @@ fn main() -> Unit {
                     if fn_noalloc_alloc(toks: read toks, start: read i, declared: read declared) { noallocAlloc = true }
                     if fn_guarantee_call_bad(toks: read toks, start: read i, effName: read "no_block", allFns: read allFns, guaranteeFns: read noBlockFns) { noBlockCall = true }
                     if fn_guarantee_call_bad(toks: read toks, start: read i, effName: read "no_panic", allFns: read allFns, guaranteeFns: read noPanicFns) { noPanicCall = true }
+                    // RS0101: a fn with `effects(native)` (gated by the `native`
+                    // feature), and a `native fn` missing that effect (ungated).
+                    let hasNativeEff = effects_name_probe(toks: read toks, start: read i, mode: read 2)
+                    if hasNativeEff { nativeEffect = true }
+                    if fn_is_native(toks: read toks, start: read i) && hasNativeEff == false { nativeMissing = true }
                     // RS0035: an invalid `#lower_name` pin or a lowered-name collision.
                     if fn_has_lower_name(toks: read toks, start: read i) {
                         let pin = fn_lower_name_pin(toks: read toks, start: read i)
@@ -2812,7 +2953,14 @@ fn main() -> Unit {
     if headerCount >= 2 {
         Log.write(message: read "RS0006")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed
+    // RS0101: any unfeatured feature-requiring construct. Native fires if a fn has
+    // `effects(native)` without the feature, OR a `native fn` omits that effect.
+    let nativeViol = nativeMissing || (nativeEffect && Set.contains<String>(set: read declaredFeatures, value: read "native") == false)
+    let featureViol = localViol || asyncViol || unsafeViol || nativeViol
+    if featureViol {
+        Log.write(message: read "RS0101")
+    }
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
