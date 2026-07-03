@@ -1051,12 +1051,52 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   no_panic body violations — RS0009-style call scan). `CHECKER_TARGET_CODES` = **24
   codes**; `checker_parity_corpus` byte-exact **619 files, 0 mismatches, 0 run-failures**.
   Commits 240ce274/9715367f/78012146/3ad62a2b/be6fa09d.
-- **THE TOKEN-DECIDABLE TIER IS ESSENTIALLY EXHAUSTED (24 codes).** SKIPPED because they
-  need type inference / callee-signature resolution / borrow analysis (measured, not
-  ducked): RS0201 (unnamed-arg — needs callee visibility+kind), RS0013 (invalid-try —
-  operand/error-type inference), RS0022 (async-not-consumed — callee is_async), RS0036
-  (payload transferability), RS0202 (missing-data-effect — callee param-effects); RS0038
-  (char-literal) has 0 corpus fixtures. THE REMAINING BULK (~260 corpus files when ALL
+- **Diagnostics (step 2, milestone 2j — signature table — DONE, 2026-07-03):** built the
+  cross-function **signature table** as the batch's infrastructure: a pre-pass over the
+  token stream that records, per top-level `fn`, its cross-call attributes (started with
+  same-file `async fn` names, collected by extending `collect_rs0009`'s fn walk; the
+  call-resolution helper is a membership probe against these name sets, since same-file
+  fns register only under their unqualified simple name). Landed the one candidate that is
+  purely signature-table-decidable: **RS0022** (ASYNC_CALL_NOT_CONSUMED) —
+  `has_unconsumed_async_call` flags a call resolving to a same-file async fn that is not
+  the immediate `await`/`spawn` operand nor an `async let` RHS (mirrors
+  `check_async_call_consumed`); there are **no async builtins**, so qualified/receiver and
+  stdlib calls never resolve to an async signature and a token-adjacency probe is exact
+  over the corpus (verified against all ~30 async-fn corpus files: every same-file async
+  call is consumed via `await`/`async let`, only the RS0022 fixture is unconsumed).
+  `CHECKER_TARGET_CODES` = **25 codes**; `checker_parity_corpus` byte-exact **619/619,
+  0 mismatches, 0 run-failures**. Commit c0e7894b.
+  - **The other four batch-3 candidates were MEASURED and SKIPPED (blocked on the batch-4
+    engine, not ducked):**
+    - **RS0013** (invalid-try) — the return-root sub-rule (`?` in a fn whose return root is
+      not Result/Option) IS signature-decidable and was implemented, but it is **not
+      corpus-green on its own**: two fixtures flag RS0013 *inside* Result-returning fns —
+      `try-operator-non-result-value.rss` (operand `load()` returns a struct → `#1`
+      `check_try_value_is_result`) and `try-operator-error-type-mismatch.rss` (operand's
+      Result error type ≠ the fn's → `#2`). Both need **operand/error-type inference**, so
+      the return-root rule alone produces false negatives. Reverted. → **needs type
+      inference**.
+    - **RS0201** (unnamed-arg) — an unnamed arg is allowed only for receiver-call shorthand,
+      private same-file unqualified fns, and constructor field-shorthand; everything else
+      (public fn, core/builtin qualified call, variant, constructor) requires named args.
+      The corpus fixtures fire on qualified core calls (`String.concat("prefix", …)`,
+      `Image.save(read image, …)`), which need the **full builtin/core signature table** to
+      know the callee resolves-and-requires-named, plus qualified-vs-receiver
+      disambiguation and constructor field names. → **needs type/callee resolution**.
+    - **RS0202** (missing-data-effect) — needs each callee param's declared effect AND a
+      **Copy/non-Copy type model** (scalars don't require effects) AND receiver type
+      inference (`mut cache.put(key: "x")` must resolve `cache: Cache`). The fixtures are
+      core/receiver/generic calls (`Image.resize`, `Db.close`, `ResourcePool<…>.borrow`).
+      → **needs type inference**.
+    - **RS0036** (payload-not-transferable) — needs message-payload Send/transferability
+      analysis. → **needs type inference**. RS0038 (char-literal) still has 0 corpus
+      fixtures.
+- **THE TOKEN-DECIDABLE TIER IS EXHAUSTED; the cross-function signature table adds exactly
+  RS0022 (25 codes total).** The remaining candidates SKIPPED because they need type
+  inference / callee-signature resolution (measured, not ducked): RS0201, RS0013, RS0202,
+  RS0036 (all above). None is blocked on *borrow* analysis specifically — they are all
+  type-inference / callee-resolution gaps (the #3 borrow/ownership engine is a separate
+  need, seen in RS0301-0313/RS06xx/RS07xx below). THE REMAINING BULK (~260 corpus files when ALL
   ~100 codes are targeted → 305 mismatch): RS0207/0208/0209/0210 (type/return/control-
   flow/operator mismatch), RS0301-0313 + RS06xx + RS07xx (ownership/borrow), RS0015
   (unsupported-syntax), RS0101 (feature-gating), RS0025/0026 (unknown-field/binding).
