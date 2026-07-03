@@ -983,16 +983,27 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
 - **Diagnostics (step 2, milestone 2c — DONE, 2026-07-02):** added **RS0010**
   (REMOVED_PROFILE_DECLARATION — any `profile:` decl) and **RS0011**
   (REMOVED_SHARE_EFFECT — a parameter written `name: share …`, no data effect,
-  type name `share`). Both purely structural. `CHECKER_TARGET_CODES` = **8 codes**;
-  `checker_parity_corpus` byte-exact **619 files, 0 mismatches, 0 run-failures**.
-  MEASURED-BUT-DEFERRED (footprint known, 19 corpus files): the effects-clause
-  family RS0004/RS0007/RS0012 needs a `parse_effects` port — malformed clauses
-  (`effects(a,,b)`, `effects(retains())`, `effects(custom(x))`) must recover to
-  RS0015, NOT the effect-name checks, and RS0007 has a semantic `type_ref_is_copy`
-  sub-condition; RS0008 (missing-effect) needs a Copy/sum-type table; RS0009
-  (invalid-pure) needs body analysis; RS0033 (int-range) needs literal-value
-  parsing; RS0028 (invalid-self) needs the protocol-method + first-param rules.
-  Next genuinely semantic tier: RS0021 exhaustiveness / RS0024 unknown-type (need a
+  type name `share`). Both purely structural.
+- **Diagnostics (step 2, milestone 2d — DONE, 2026-07-02):** ported `parse_effects`
+  and added **RS0004** (UNKNOWN_EFFECT — `fresh`/unrecognized effect name) and
+  **RS0012** (REMOVED_RUNTIME_EFFECT — io/allocates/may_panic/may_fail/async/
+  suspends). KEY: parse_effects is PER-ITEM — a malformed item (`,,` empty slot,
+  `retains()`, `custom(x)`) recovers to RS0015 and is SKIPPED, while valid items in
+  the SAME clause still get checked (`effects(no_panic,, native)` → both names
+  checked, empty slot → RS0015 only). `effect_item_kind` mirrors the exact
+  validity: bare single-token Name, or `retains(ident)` (close+1==end, start+3==
+  close, inner ident); everything else malformed. Also fixed a latent bug: the
+  signature scan must start at the `fn` keyword (`ns-1`), not the attribute-led decl
+  start — otherwise `function_signature_end` stops at the later `fn` (a top-level-
+  item boundary), which had hidden the effects clause of `#deprecated(...) fn …`
+  (and would have mis-scanned RS0002/3/11 there too). `CHECKER_TARGET_CODES` =
+  **10 codes**; `checker_parity_corpus` byte-exact **619 files, 0 mismatches, 0
+  run-failures**. STILL DEFERRED from this family: **RS0007** (retains-param) has a
+  semantic `type_ref_is_copy` sub-condition (a retained Copy param → RS0007) that
+  isn't token-decidable. Other deferred: RS0008 (missing-effect, needs Copy/sum
+  table), RS0009 (invalid-pure, needs body analysis), RS0033 (int-range, needs
+  literal-value parsing), RS0028 (invalid-self, protocol/first-param rules). Next
+  genuinely semantic tier: RS0021 exhaustiveness / RS0024 unknown-type (need a
   `Map<String,Def>` symbol-table pass).
 - **Lexer spans (step 3):** added a `len` field to the shared `Tok`
   (= consumed source span `j-i`, matching the Rust lexer's `index-start`) and made

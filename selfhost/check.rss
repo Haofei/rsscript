@@ -204,7 +204,10 @@ fn find_param_open(toks: read List<Tok>, from: read Int, end: read Int) -> Int {
 // function.return_ty.is_none()). True iff no top-level `->` follows the param list.
 fn fn_missing_return(toks: read List<Tok>, start: read Int) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
-    let sigEnd = function_signature_end(toks: read toks, start: read start)
+    // Signature scan must begin at the `fn` keyword (ns - 1), not the decl start:
+    // when the decl is attribute-led (`#deprecated(...) fn …`), starting at `#`
+    // makes function_signature_end stop at the later `fn` (a top-level-item start).
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
     let open = find_param_open(toks: read toks, from: read ns, end: read sigEnd)
     if open < 0 { return false }
     let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
@@ -234,7 +237,10 @@ fn seg_is_untyped(toks: read List<Tok>, segStart: read Int, segEnd: read Int) ->
 // ()[]{}<>) and tests each segment with seg_is_untyped.
 fn fn_has_untyped_param(toks: read List<Tok>, start: read Int) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
-    let sigEnd = function_signature_end(toks: read toks, start: read start)
+    // Signature scan must begin at the `fn` keyword (ns - 1), not the decl start:
+    // when the decl is attribute-led (`#deprecated(...) fn …`), starting at `#`
+    // makes function_signature_end stop at the later `fn` (a top-level-item start).
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
     let open = find_param_open(toks: read toks, from: read ns, end: read sigEnd)
     if open < 0 { return false }
     let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
@@ -265,10 +271,110 @@ fn fn_has_untyped_param(toks: read List<Tok>, start: read Int) -> Bool {
     return untyped
 }
 
+// Valid v0.6 effect names for an `effects(...)` clause (check_function_effects).
+fn is_valid_effect_name(name: read String) -> Bool {
+    return name == "no_panic" || name == "noalloc" || name == "no_block" || name == "pure" || name == "unsafe" || name == "native" || name == "parallel"
+}
+
+// Removed runtime effects → RS0012 (removed_runtime_effect_replacement set).
+fn is_removed_runtime_effect(name: read String) -> Bool {
+    return name == "io" || name == "allocates" || name == "may_panic" || name == "may_fail" || name == "async" || name == "suspends"
+}
+
+// Index of the `(` of a top-level `effects(...)` clause in a function signature,
+// or -1. The clause sits after the param list, before the body.
+fn find_effects_open(toks: read List<Tok>, start: read Int) -> Int {
+    let ns = fn_name_start(toks: read toks, i: read start)
+    // Signature scan must begin at the `fn` keyword (ns - 1), not the decl start:
+    // when the decl is attribute-led (`#deprecated(...) fn …`), starting at `#`
+    // makes function_signature_end stop at the later `fn` (a top-level-item start).
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+    let open = find_param_open(toks: read toks, from: read ns, end: read sigEnd)
+    if open < 0 { return -1 }
+    let pclose = find_matching(toks: read toks, open: read open, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    if pclose < 0 { return -1 }
+    let mut k = pclose + 1
+    let mut depth = 0
+    let mut r = -1
+    while k < sigEnd && r < 0 {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) {
+            if depth > 0 { depth = depth - 1 }
+        } else if depth == 0 && tk_text(toks: read toks, i: read k) == "effects" && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_LPAREN) {
+            r = k + 1
+        }
+        k = k + 1
+    }
+    return r
+}
+
+// Classify one effects-clause item [segStart,segEnd) exactly like parse_effects:
+//   1 = a valid bare `Name` (single-token effect name)
+//   2 = a valid `retains(ident)` item
+//   0 = malformed (empty, non-ident, `name(args)`, bad retains) → skipped, no check
+fn effect_item_kind(toks: read List<Tok>, segStart: read Int, segEnd: read Int) -> Int {
+    if segStart >= segEnd { return 0 }
+    if is_ident_tok(toks: read toks, i: read segStart) == false { return 0 }
+    let name = tk_text(toks: read toks, i: read segStart)
+    if name == "retains" {
+        if at_symbol(toks: read toks, i: read (segStart + 1), code: read SYM_LPAREN) {
+            let close = find_matching(toks: read toks, open: read (segStart + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+            if close >= 0 && (close + 1) == segEnd && (segStart + 3) == close && is_ident_tok(toks: read toks, i: read (segStart + 2)) {
+                return 2
+            }
+        }
+        return 0
+    }
+    if (segStart + 1) == segEnd { return 1 }
+    return 0
+}
+
+// Walk a function's `effects(...)` items (only the VALID ones — malformed items
+// recover to RS0015 and are skipped). `mode`: 0 = RS0004 (unknown effect: `fresh`
+// or an unrecognized name), 1 = RS0012 (removed runtime effect).
+fn effects_name_probe(toks: read List<Tok>, start: read Int, mode: read Int) -> Bool {
+    let effOpen = find_effects_open(toks: read toks, start: read start)
+    if effOpen < 0 { return false }
+    let effClose = find_matching(toks: read toks, open: read effOpen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    if effClose < 0 { return false }
+    let mut k = effOpen + 1
+    let mut segStart = effOpen + 1
+    let mut depth = 0
+    let mut hit = false
+    while k < effClose {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) {
+            if depth > 0 { depth = depth - 1 }
+        } else if depth == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
+            if effect_name_hits(toks: read toks, segStart: read segStart, segEnd: read k, mode: read mode) { hit = true }
+            segStart = k + 1
+        }
+        k = k + 1
+    }
+    if effect_name_hits(toks: read toks, segStart: read segStart, segEnd: read effClose, mode: read mode) { hit = true }
+    return hit
+}
+
+// Does a single VALID bare-name item trigger `mode`? (retains/malformed items
+// never trigger RS0004/RS0012.)
+fn effect_name_hits(toks: read List<Tok>, segStart: read Int, segEnd: read Int, mode: read Int) -> Bool {
+    if effect_item_kind(toks: read toks, segStart: read segStart, segEnd: read segEnd) != 1 { return false }
+    let name = tk_text(toks: read toks, i: read segStart)
+    if mode == 1 { return is_removed_runtime_effect(name: read name) }
+    if name == "fresh" { return true }
+    if is_removed_runtime_effect(name: read name) { return false }
+    return is_valid_effect_name(name: read name) == false
+}
+
 // RS0011: a parameter written `name: share …` (no data effect, type name `share`).
 fn fn_has_share_param(toks: read List<Tok>, start: read Int) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
-    let sigEnd = function_signature_end(toks: read toks, start: read start)
+    // Signature scan must begin at the `fn` keyword (ns - 1), not the decl start:
+    // when the decl is attribute-led (`#deprecated(...) fn …`), starting at `#`
+    // makes function_signature_end stop at the later `fn` (a top-level-item start).
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
     let open = find_param_open(toks: read toks, from: read ns, end: read sigEnd)
     if open < 0 { return false }
     let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
@@ -322,10 +428,12 @@ fn main() -> Unit {
     // RS0002 (any fn missing an explicit return type) / RS0003 (any untyped param).
     let mut missingReturn = false
     let mut untypedParam = false
-    // Signature-family diagnostics: RS0010 (removed profile), RS0011 (removed
-    // share data effect on a parameter).
+    // Signature-family diagnostics: RS0004 (unknown effect), RS0010 (removed
+    // profile), RS0011 (removed share data effect), RS0012 (removed runtime effect).
     let mut hasProfile = false
     let mut shareParam = false
+    let mut unknownEffect = false
+    let mut removedRuntime = false
     let mut i = 0
     let mut running = true
     while running {
@@ -471,6 +579,8 @@ fn main() -> Unit {
                     if fn_missing_return(toks: read toks, start: read i) { missingReturn = true }
                     if fn_has_untyped_param(toks: read toks, start: read i) { untypedParam = true }
                     if fn_has_share_param(toks: read toks, start: read i) { shareParam = true }
+                    if effects_name_probe(toks: read toks, start: read i, mode: read 0) { unknownEffect = true }
+                    if effects_name_probe(toks: read toks, start: read i, mode: read 1) { removedRuntime = true }
                     i = r
                 }
             } else {
@@ -488,6 +598,9 @@ fn main() -> Unit {
     if untypedParam {
         Log.write(message: read "RS0003")
     }
+    if unknownEffect {
+        Log.write(message: read "RS0004")
+    }
     if found {
         Log.write(message: read "RS0005")
     }
@@ -496,6 +609,9 @@ fn main() -> Unit {
     }
     if shareParam {
         Log.write(message: read "RS0011")
+    }
+    if removedRuntime {
+        Log.write(message: read "RS0012")
     }
     if hasUnknownFeat {
         Log.write(message: read "RS0016")
@@ -506,7 +622,7 @@ fn main() -> Unit {
     if headerCount >= 2 {
         Log.write(message: read "RS0006")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
