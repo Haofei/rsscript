@@ -633,6 +633,196 @@ fn fn_retains_bad(toks: read List<Tok>, start: read Int) -> Bool {
 }
 
 // ---------------------------------------------------------------------------
+// RS0008 MISSING_PARAMETER_EFFECT.
+// ---------------------------------------------------------------------------
+
+// Does any token in [s,e) have the given identifier text?
+fn region_has_text(toks: read List<Tok>, s: read Int, e: read Int, word: read String) -> Bool {
+    let mut k = s
+    let mut hit = false
+    while k < e {
+        if tk_text(toks: read toks, i: read k) == word { hit = true }
+        k = k + 1
+    }
+    return hit
+}
+
+// Pre-pass: user `sum` names whose EVERY variant is payloadless (no `(...)`).
+fn collect_payloadless_sums(toks: read List<Tok>) -> Set<String> {
+    let ntok = List.len(list: read toks)
+    let mut sums = Set<String>.new()
+    let mut i = 0
+    let mut running = true
+    while running {
+        if i >= ntok {
+            running = false
+        } else if tk_kind(toks: read toks, i: read i) == TOK_EOF {
+            running = false
+        } else {
+            let cls = classify_top(toks: read toks, i: read i)
+            let isPub = cls.isPub
+            if cls.isFeatures {
+                i = declaration_line_end(toks: read toks, start: read i)
+            } else if cls.isProfile {
+                i = declaration_line_end(toks: read toks, start: read i)
+            } else if cls.isSum {
+                let r = parse_sum_decl(toks: read toks, i: read i)
+                if r < 0 {
+                    running = false
+                } else {
+                    let ns = sum_name_start(toks: read toks, i: read i)
+                    let name = dotted_name_text(toks: read toks, i: read ns)
+                    let ob = find_body_open(toks: read toks, i: read i, end: read r)
+                    if ob >= 0 {
+                        if region_has_paren(toks: read toks, s: read (ob + 1), e: read (r - 1)) == false {
+                            Set.insert<String>(set: mut sums, value: read name)
+                        }
+                    }
+                    i = r
+                }
+            } else if starts_type_decl(toks: read toks, i: read i, isPub: read isPub) {
+                let r = parse_type_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_PROTOCOL) {
+                let r = parse_protocol_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_IMPL) {
+                let r = parse_impl_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else if cls.isNativeMod {
+                let r = parse_native_module_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else if cls.isTypeAlias {
+                let r = parse_type_alias_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else if cls.isConst {
+                let r = parse_const_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_MODULE) {
+                let r = parse_module_decl(toks: read toks, i: read i)
+                if r < 0 { i = i + 1 } else { i = r }
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_USE) {
+                let r = parse_use_decl(toks: read toks, i: read i)
+                if r < 0 { i = i + 1 } else { i = r }
+            } else if starts_fn_like(toks: read toks, i: read i, isPub: read isPub) {
+                let r = parse_function_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else {
+                i = i + 1
+            }
+        }
+    }
+    return sums
+}
+
+// Any `(` token in [s,e)?
+fn region_has_paren(toks: read List<Tok>, s: read Int, e: read Int) -> Bool {
+    let mut k = s
+    let mut hit = false
+    while k < e {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) { hit = true }
+        k = k + 1
+    }
+    return hit
+}
+
+// One param segment: RS0008 iff no data-effect and the type demands one.
+fn param_seg_missing_effect(toks: read List<Tok>, segStart: read Int, segEnd: read Int, sums: read Set<String>) -> Bool {
+    if segStart >= segEnd { return false }
+    if is_ident_tok(toks: read toks, i: read segStart) == false { return false }
+    if at_symbol(toks: read toks, i: read (segStart + 1), code: read SYM_COLON) == false { return false }
+    let typeStart = segStart + 2
+    if is_effect_kw(toks: read toks, i: read typeStart) { return false }
+    // Type region ends at the first top-level `=` (default), else the segment end.
+    let mut typeEnd = segEnd
+    let mut k = typeStart
+    let mut depth = 0
+    let mut found = false
+    while k < segEnd && found == false {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) {
+            if depth > 0 { depth = depth - 1 }
+        } else if depth == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_EQ) {
+            typeEnd = k
+            found = true
+        }
+        k = k + 1
+    }
+    // Base name: skip surface-ref `&`, prefixes and (defensive) data effects.
+    let mut p = typeStart
+    let mut sawFresh = false
+    let mut sawNoOwn = false
+    let mut going = true
+    while going {
+        let t = tk_text(toks: read toks, i: read p)
+        if p < typeEnd && t == "fresh" {
+            sawFresh = true
+            p = p + 1
+        } else if p < typeEnd && (t == "noescape" || t == "owned") {
+            sawNoOwn = true
+            p = p + 1
+        } else if p < typeEnd && (t == "handle" || t == "weak" || t == "&" || t == "read" || t == "mut" || t == "take") {
+            p = p + 1
+        } else {
+            going = false
+        }
+    }
+    if p >= typeEnd { return false }
+    let base = tk_text(toks: read toks, i: read p)
+    if base == "share" { return false }
+    let hasArgs = at_symbol(toks: read toks, i: read dotted_end(toks: read toks, i: read p), code: read SYM_LANGLE)
+    // NOT noescape / owned anywhere in the type region.
+    if region_has_text(toks: read toks, s: read typeStart, e: read typeEnd, word: read "noescape") { return false }
+    if region_has_text(toks: read toks, s: read typeStart, e: read typeEnd, word: read "owned") { return false }
+    // NOT bare `Closure` (no args).
+    if base == "Closure" && hasArgs == false { return false }
+    // NOT a surface reference (`&` anywhere in the segment).
+    if region_has_text(toks: read toks, s: read segStart, e: read segEnd, word: read "&") { return false }
+    // NOT containing type name `Fd` anywhere in the type region.
+    if region_has_text(toks: read toks, s: read typeStart, e: read typeEnd, word: read "Fd") { return false }
+    // NOT a Copy scalar (base ∈ scalars, no generic args).
+    if is_scalar_name(name: read base) && hasArgs == false { return false }
+    // NOT a bare payload-less sum.
+    if hasArgs == false && sawFresh == false && sawNoOwn == false && Set.contains<String>(set: read sums, value: read base) { return false }
+    return true
+}
+
+// RS0008: any parameter of the fn that must declare an effect but doesn't.
+fn fn_missing_param_effect(toks: read List<Tok>, start: read Int, sums: read Set<String>) -> Bool {
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+    let open = find_param_open(toks: read toks, from: read ns, end: read sigEnd)
+    if open < 0 { return false }
+    let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    if close < 0 { return false }
+    let mut k = open + 1
+    let mut depth = 0
+    let mut angle = 0
+    let mut segStart = open + 1
+    let mut hit = false
+    while k < close {
+        let opener = at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE)
+        let closer = at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE)
+        if opener {
+            depth = depth + 1
+        } else if closer {
+            if depth > 0 { depth = depth - 1 }
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE) {
+            angle = angle + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) {
+            if angle > 0 { angle = angle - 1 }
+        } else if depth == 0 && angle == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
+            if param_seg_missing_effect(toks: read toks, segStart: read segStart, segEnd: read k, sums: read sums) { hit = true }
+            segStart = k + 1
+        }
+        k = k + 1
+    }
+    if param_seg_missing_effect(toks: read toks, segStart: read segStart, segEnd: read close, sums: read sums) { hit = true }
+    return hit
+}
+
+// ---------------------------------------------------------------------------
 // RS0024 UNKNOWN_TYPE.
 // ---------------------------------------------------------------------------
 
@@ -959,8 +1149,11 @@ fn main() -> Unit {
     let mut invalidSelf = false
     let mut retainsBad = false
     let mut unknownType = false
+    let mut missingEffect = false
     // RS0024: forward-reference-tolerant known-type set for the whole file.
     let declared = collect_declared_types(toks: read toks)
+    // RS0008: user sum names whose every variant is payloadless.
+    let payloadlessSums = collect_payloadless_sums(toks: read toks)
     // RS0033: any decimal integer literal in the file that overflows i64.
     let outOfRangeInt = has_out_of_range_int(toks: read toks)
     let mut i = 0
@@ -1114,6 +1307,7 @@ fn main() -> Unit {
                     if fn_has_invalid_self(toks: read toks, start: read i) { invalidSelf = true }
                     if fn_retains_bad(toks: read toks, start: read i) { retainsBad = true }
                     if fn_types_unknown(toks: read toks, start: read i, declared: read declared) { unknownType = true }
+                    if fn_missing_param_effect(toks: read toks, start: read i, sums: read payloadlessSums) { missingEffect = true }
                     i = r
                 }
             } else {
@@ -1152,6 +1346,9 @@ fn main() -> Unit {
     if retainsBad {
         Log.write(message: read "RS0007")
     }
+    if missingEffect {
+        Log.write(message: read "RS0008")
+    }
     if unknownType {
         Log.write(message: read "RS0024")
     }
@@ -1167,7 +1364,7 @@ fn main() -> Unit {
     if headerCount >= 2 {
         Log.write(message: read "RS0006")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
