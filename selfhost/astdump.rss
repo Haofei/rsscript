@@ -213,6 +213,32 @@ fn find_binop(toks: read List<Tok>, start: read Int, end: read Int) -> Int {
 }
 
 fn emit_expr(toks: read List<Tok>, start: read Int, end: read Int, d: read Int) -> Unit {
+    // Tuple literal `(a, b, …)` (≥2 elements filling the whole range) desugars to a
+    // `__TupleN(item0: a, …)` call — detected before paren-trimming (parse_tuple_expr).
+    if at_symbol(toks: read toks, i: read start, code: read SYM_LPAREN) {
+        let tclose = find_matching(toks: read toks, open: read start, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+        if tclose == (end - 1) {
+            let cnt = count_type_args(toks: read toks, start: read (start + 1), end: read tclose)
+            if cnt >= 2 {
+                emit(depth: read d, s: read "call")
+                emit(depth: read (d + 1), s: read String.concat(left: read "callee-name name=__Tuple", right: read String.from_int(value: cnt)))
+                let mut idx = 0
+                let mut k = start + 1
+                while k < tclose {
+                    let comma = split_comma(toks: read toks, start: read k, end: read tclose)
+                    let mut segEnd = tclose
+                    if comma >= 0 { segEnd = comma }
+                    if k < segEnd {
+                        emit(depth: read (d + 1), s: read String.concat(left: read "arg name=item", right: read String.from_int(value: idx)))
+                        emit_expr(toks: read toks, start: read k, end: read segEnd, d: read (d + 2))
+                        idx = idx + 1
+                    }
+                    if comma < 0 { k = tclose } else { k = comma + 1 }
+                }
+                return Unit
+            }
+        }
+    }
     // Trim parens wrapping the whole range: (expr) -> expr.
     let mut s = start
     let mut e = end
@@ -969,6 +995,20 @@ fn is_type_prefix(toks: read List<Tok>, j: read Int) -> Bool {
     return is_kw_text(toks: read toks, i: read j, word: read "read") || is_kw_text(toks: read toks, i: read j, word: read "mut") || is_kw_text(toks: read toks, i: read j, word: read "take") || is_kw_text(toks: read toks, i: read j, word: read "fresh") || is_kw_text(toks: read toks, i: read j, word: read "handle") || is_kw_text(toks: read toks, i: read j, word: read "weak") || is_kw_text(toks: read toks, i: read j, word: read "noescape") || is_kw_text(toks: read toks, i: read j, word: read "owned")
 }
 
+// Count non-empty comma-separated segments in [start, end) (tuple/generic arity).
+fn count_type_args(toks: read List<Tok>, start: read Int, end: read Int) -> Int {
+    let mut cnt = 0
+    let mut k = start
+    while k < end {
+        let comma = split_comma(toks: read toks, start: read k, end: read end)
+        let mut segEnd = end
+        if comma >= 0 { segEnd = comma }
+        if k < segEnd { cnt = cnt + 1 }
+        if comma < 0 { k = end } else { k = comma + 1 }
+    }
+    return cnt
+}
+
 // Tokens that end a type ref (used to bound the name search).
 fn is_type_terminator(toks: read List<Tok>, j: read Int) -> Bool {
     return tk_kind(toks: read toks, i: read j) == TOK_EOF || at_symbol(toks: read toks, i: read j, code: read SYM_COMMA) || at_symbol(toks: read toks, i: read j, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read j, code: read SYM_RANGLE) || at_symbol(toks: read toks, i: read j, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read j, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read j, code: read SYM_SEMI) || at_symbol(toks: read toks, i: read j, code: read SYM_EQ)
@@ -983,6 +1023,36 @@ fn emit_type_ref(toks: read List<Tok>, i: read Int, tag: read String, eff: read 
     if at_ident(toks: read toks, i: read i, wid: read WORD_FRESH) { isFresh = true }
     else if is_kw_text(toks: read toks, i: read i, word: read "noescape") { isNoescape = true }
     else if is_kw_text(toks: read toks, i: read i, word: read "owned") { isOwned = true }
+    // Tuple type `(A, B, …)` (≥2 elements) → __TupleN with the elements as args
+    // (parse_tuple_type_ref, tried before the named path; fresh/noescape/owned=false).
+    let mut ps = i
+    while is_type_prefix(toks: read toks, j: read ps) { ps = ps + 1 }
+    if at_symbol(toks: read toks, i: read ps, code: read SYM_LPAREN) {
+        let tclose = find_matching(toks: read toks, open: read ps, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+        if tclose > ps && count_type_args(toks: read toks, start: read (ps + 1), end: read tclose) >= 2 {
+            local tb = StringBuilder.new()
+            StringBuilder.push(builder: mut tb, value: read tag)
+            if String.len(value: read eff) > 0 {
+                StringBuilder.push(builder: mut tb, value: read " effect=")
+                StringBuilder.push(builder: mut tb, value: read eff)
+            }
+            StringBuilder.push(builder: mut tb, value: read " name=__Tuple")
+            StringBuilder.push(builder: mut tb, value: read String.from_int(value: count_type_args(toks: read toks, start: read (ps + 1), end: read tclose)))
+            StringBuilder.push(builder: mut tb, value: read " fresh=false noescape=false owned=false")
+            emit(depth: read d, s: read StringBuilder.finish(builder: take tb))
+            let mut tk = ps + 1
+            while tk < tclose {
+                let comma = split_comma(toks: read toks, start: read tk, end: read tclose)
+                let mut segEnd = tclose
+                if comma >= 0 { segEnd = comma }
+                if tk < segEnd {
+                    emit_type_ref(toks: read toks, i: read tk, tag: read "arg", eff: read "", d: read (d + 1))
+                }
+                if comma < 0 { tk = tclose } else { tk = comma + 1 }
+            }
+            return tclose + 1
+        }
+    }
     // Name is the first non-prefix IDENT (parse_type_ref's name_index skips both
     // prefix keywords AND non-ident tokens like a leading `&`), bounded by a type
     // terminator so a malformed type never scans away.
@@ -1223,6 +1293,9 @@ fn emit_stmt(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int
     }
     // let / local [mut] name [: type] = value
     if is_kw_text(toks: read toks, i: read start, word: read "let") || is_kw_text(toks: read toks, i: read start, word: read "local") {
+        // `let Some(x) = expr else { … }` is a distinct let-else statement.
+        let leEnd = try_emit_let_else(toks: read toks, start: read start, limit: read limit, d: read d)
+        if leEnd >= 0 { return leEnd }
         return emit_let(toks: read toks, start: read start, limit: read limit, d: read d)
     }
     // Assignment or expression statement.
@@ -1247,6 +1320,96 @@ fn is_kw_text(toks: read List<Tok>, i: read Int, word: read String) -> Bool {
     return tk_text(toks: read toks, i: read i) == word
 }
 
+// True if token i is a let-else variant head (Some/Ok/None/Err).
+fn is_let_else_variant(toks: read List<Tok>, i: read Int) -> Bool {
+    if is_ident_tok(toks: read toks, i: read i) == false { return false }
+    let t = tk_text(toks: read toks, i: read i)
+    return t == "Some" || t == "Ok" || t == "None" || t == "Err"
+}
+
+// `let (a, _, c) = expr` tuple destructure (mirrors parse_let_tuple_stmt).
+fn emit_let_tuple(toks: read List<Tok>, start: read Int, nameIdx: read Int, kind: read String, limit: read Int, d: read Int) -> Int {
+    let e = stmt_end(toks: read toks, start: read start, limit: read limit)
+    let close = find_matching(toks: read toks, open: read nameIdx, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    // Collect element names; each element must be a single token (ident/`_`), ≥2.
+    local nb = StringBuilder.new()
+    let mut count = 0
+    let mut namesOk = true
+    let mut k = nameIdx + 1
+    if close < 0 { namesOk = false }
+    while close >= 0 && k < close {
+        let comma = split_comma(toks: read toks, start: read k, end: read close)
+        let mut segEnd = close
+        if comma >= 0 { segEnd = comma }
+        if k < segEnd {
+            if (k + 1) != segEnd { namesOk = false }
+            if count > 0 { StringBuilder.push(builder: mut nb, value: read ",") }
+            StringBuilder.push(builder: mut nb, value: read tk_text(toks: read toks, i: read k))
+            count = count + 1
+        }
+        if comma < 0 { k = close } else { k = comma + 1 }
+    }
+    if count < 2 { namesOk = false }
+    let names = StringBuilder.finish(builder: take nb)
+    let mut eqPos = -1
+    if close >= 0 { eqPos = first_eq(toks: read toks, start: read (close + 1), end: read e) }
+    let hasValue = eqPos >= 0 && (eqPos + 1) < e
+    let malformed = namesOk == false || hasValue == false
+    local sb = StringBuilder.new()
+    StringBuilder.push(builder: mut sb, value: read String.concat(left: read "let kind=", right: read kind))
+    StringBuilder.push(builder: mut sb, value: read " name= mut=false async=false")
+    if malformed { StringBuilder.push(builder: mut sb, value: read " malformed=true") }
+    if namesOk { StringBuilder.push(builder: mut sb, value: read String.concat(left: read " destructure=", right: read names)) }
+    emit(depth: read d, s: read StringBuilder.finish(builder: take sb))
+    if hasValue {
+        emit(depth: read (d + 1), s: read "value")
+        emit_expr(toks: read toks, start: read (eqPos + 1), end: read e, d: read (d + 2))
+    }
+    return e
+}
+
+// `let Some(x) = expr else { … }` (mirrors try_parse_let_else). Emits the let-else
+// node and returns the next index, or -1 if this isn't a let-else.
+fn try_emit_let_else(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int) -> Int {
+    let ps = start + 1
+    if is_let_else_variant(toks: read toks, i: read ps) == false { return -1 }
+    let mut binding = ""
+    let mut afterPat = ps + 1
+    if at_symbol(toks: read toks, i: read (ps + 1), code: read SYM_LPAREN) {
+        let pclose = find_matching(toks: read toks, open: read (ps + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+        if pclose < 0 { return -1 }
+        if is_ident_tok(toks: read toks, i: read (ps + 2)) { binding = tk_text(toks: read toks, i: read (ps + 2)) }
+        afterPat = pclose + 1
+    }
+    if at_symbol(toks: read toks, i: read afterPat, code: read SYM_EQ) == false { return -1 }
+    // Find `else` before a `{`.
+    let mut elsePos = -1
+    let mut i = afterPat + 1
+    let mut scanning = true
+    while scanning && i < limit {
+        if is_kw_text(toks: read toks, i: read i, word: read "else") { elsePos = i; scanning = false }
+        else if at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) { scanning = false }
+        else { i = i + 1 }
+    }
+    if elsePos < 0 { return -1 }
+    let open = find_block_open(toks: read toks, start: read (elsePos + 1), limit: read limit)
+    if open < 0 { return -1 }
+    let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    emit(depth: read d, s: read String.concat(left: read "let-else binding=", right: read binding))
+    emit(depth: read (d + 1), s: read "pattern")
+    emit(depth: read (d + 2), s: read String.concat(left: read "pat-variant name=", right: read tk_text(toks: read toks, i: read ps)))
+    if String.len(value: read binding) > 0 {
+        emit(depth: read (d + 3), s: read String.concat(left: read "pat-binding name=", right: read binding))
+    }
+    emit(depth: read (d + 1), s: read "value")
+    emit_expr(toks: read toks, start: read (afterPat + 1), end: read elsePos, d: read (d + 2))
+    emit(depth: read (d + 1), s: read "else")
+    // try_parse_let_else calls parse_block(open + 1, close) — an off-by-one that
+    // treats the first body token as the brace; replicate it for byte-parity.
+    emit_block(toks: read toks, open: read (open + 1), close: read close, d: read (d + 2))
+    return close + 1
+}
+
 fn emit_let(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int) -> Int {
     let e = stmt_end(toks: read toks, start: read start, limit: read limit)
     let mut kind = "managed"
@@ -1256,6 +1419,11 @@ fn emit_let(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int)
     if kind == "managed" && is_kw_text(toks: read toks, i: read j, word: read "mut") {
         isMut = true
         j = j + 1
+    }
+    // `let (a, _, c) = expr` destructures a tuple (parse_let_tuple_stmt): name is
+    // empty, mut/async false, and a destructure=<names> attribute.
+    if at_symbol(toks: read toks, i: read j, code: read SYM_LPAREN) {
+        return emit_let_tuple(toks: read toks, start: read start, nameIdx: read j, kind: read kind, limit: read limit, d: read d)
     }
     let name = tk_text(toks: read toks, i: read j)
     j = j + 1
@@ -1291,11 +1459,52 @@ fn emit_let(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int)
     return e
 }
 
+// `if let PATTERN = value { then } [else …]` → two-arm match (parse_if_let_stmt).
+fn emit_if_let(toks: read List<Tok>, start: read Int, openb: read Int, close: read Int, limit: read Int, d: read Int) -> Int {
+    let equals = find_top_sym(toks: read toks, start: read (start + 2), end: read openb, code: read SYM_EQ)
+    if equals < 0 {
+        emit(depth: read d, s: read "malformed-if")
+        return close + 1
+    }
+    emit(depth: read d, s: read "match")
+    emit(depth: read (d + 1), s: read "value")
+    emit_expr(toks: read toks, start: read (equals + 1), end: read openb, d: read (d + 2))
+    // Arm 1: the pattern with the then-block.
+    emit(depth: read (d + 1), s: read "arm")
+    emit(depth: read (d + 2), s: read "pattern")
+    emit_pattern(toks: read toks, start: read (start + 2), end: read equals, d: read (d + 3))
+    emit_block(toks: read toks, open: read openb, close: read close, d: read (d + 2))
+    // Arm 2: wildcard with the else-block (empty when there is no else).
+    emit(depth: read (d + 1), s: read "arm")
+    emit(depth: read (d + 2), s: read "pattern")
+    emit(depth: read (d + 3), s: read "pat-wildcard")
+    let nx = close + 1
+    if is_kw_text(toks: read toks, i: read nx, word: read "else") && at_symbol(toks: read toks, i: read (nx + 1), code: read SYM_LBRACE) {
+        let eopen = nx + 1
+        let eclose = find_matching(toks: read toks, open: read eopen, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+        emit_block(toks: read toks, open: read eopen, close: read eclose, d: read (d + 2))
+        return eclose + 1
+    }
+    if is_kw_text(toks: read toks, i: read nx, word: read "else") && is_kw_text(toks: read toks, i: read (nx + 1), word: read "if") {
+        // else-if: the else body is a block wrapping the nested if statement.
+        emit(depth: read (d + 2), s: read "block")
+        return emit_stmt(toks: read toks, start: read (nx + 1), limit: read limit, d: read (d + 3))
+    }
+    // No else → empty else block.
+    emit(depth: read (d + 2), s: read "block")
+    return nx
+}
+
 fn emit_if(toks: read List<Tok>, start: read Int, limit: read Int, d: read Int) -> Int {
     // Find the `{` opening the then-block at top level.
     let openb = find_block_open(toks: read toks, start: read (start + 1), limit: read limit)
     if openb < 0 { emit(depth: read d, s: read "malformed-if"); return stmt_end(toks: read toks, start: read start, limit: read limit) }
     let close = find_matching(toks: read toks, open: read openb, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    // `if let PATTERN = value { … } else { … }` desugars to a two-arm match
+    // (pattern arm + wildcard else arm), mirroring parse_if_let_stmt.
+    if is_kw_text(toks: read toks, i: read (start + 1), word: read "let") {
+        return emit_if_let(toks: read toks, start: read start, openb: read openb, close: read close, limit: read limit, d: read d)
+    }
     // Pre-check the else clause: `else` must be followed by `{` or `if`; anything
     // else (`else return …`) makes the whole statement malformed-if
     // (parse_if_stmt returns MalformedIf before building the If).
@@ -1502,7 +1711,30 @@ fn emit_block(toks: read List<Tok>, open: read Int, close: read Int, d: read Int
 // Items: functions (core), plus struct/sum/const shells.
 // -------------------------------------------------------------------------
 
-fn emit_function(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
+// True if tokens [start, end) contain a `.` (a dotted method name like Type.m).
+fn name_has_dot(toks: read List<Tok>, start: read Int, end: read Int) -> Bool {
+    let mut i = start
+    while i < end {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_DOT) { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// True if the `<...>` generic list at i already declares a `Self` param.
+fn has_self_generic(toks: read List<Tok>, i: read Int) -> Bool {
+    if at_symbol(toks: read toks, i: read i, code: read SYM_LANGLE) == false { return false }
+    let close = find_matching(toks: read toks, open: read i, openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
+    if close < 0 { return false }
+    let mut k = i + 1
+    while k < close {
+        if is_ident_tok(toks: read toks, i: read k) && tk_text(toks: read toks, i: read k) == "Self" { return true }
+        k = k + 1
+    }
+    return false
+}
+
+fn emit_function(toks: read List<Tok>, start: read Int, d: read Int, protoName: read String) -> Int {
     let mut j = start
     // Attributes: #deprecated("...") / #lower_name("...")  (before pub/async/native).
     let mut depReason = ""
@@ -1529,7 +1761,14 @@ fn emit_function(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
     // `fn`
     j = j + 1
     let nameEnd = take_function_name(toks: read toks, i: read j)
-    let name = dotted_text(toks: read toks, start: read j, end: read nameEnd)
+    let rawName = dotted_text(toks: read toks, start: read j, end: read nameEnd)
+    // Protocol methods: prefix the name with the protocol (unless already dotted),
+    // force public, and inject a leading `Self: Managed` generic (parse_protocol_decl).
+    let mut name = rawName
+    if String.len(value: read protoName) > 0 && name_has_dot(toks: read toks, start: read j, end: read nameEnd) == false {
+        name = String.concat(left: read String.concat(left: read protoName, right: read "."), right: read rawName)
+    }
+    if String.len(value: read protoName) > 0 { isPub = true }
     let genStart = nameEnd
     // params
     let popen = parse_generic_params(toks: read toks, i: read genStart)
@@ -1593,7 +1832,11 @@ fn emit_function(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
     if haveLower {
         emit(depth: read (d + 1), s: read String.concat(left: read "lower-name ", right: read lowerName))
     }
-    // generics
+    // generics — protocol methods get a synthetic leading `Self: Managed` param.
+    if String.len(value: read protoName) > 0 && has_self_generic(toks: read toks, i: read genStart) == false {
+        emit(depth: read (d + 1), s: read "generic name=Self")
+        emit(depth: read (d + 2), s: read "bound managed")
+    }
     let malGen = count_malformed_generics(toks: read toks, i: read genStart)
     emit_generics(toks: read toks, i: read genStart, d: read (d + 1))
     // params
@@ -2628,9 +2871,13 @@ fn main() -> Unit {
                 i = advance(toks: read toks, i: read i, r: read emit_module(toks: read toks, start: read i, d: read 1))
             } else if at_ident(toks: read toks, i: read i, wid: read WORD_USE) {
                 i = advance(toks: read toks, i: read i, r: read emit_use(toks: read toks, start: read i, d: read 1))
-            } else if at_ident(toks: read toks, i: read i, wid: read WORD_PROTOCOL) || at_ident(toks: read toks, i: read i, wid: read WORD_IMPL) || cls.isNativeMod {
-                // protocols/impls/native-modules emit in a separate program section
-                // (not source order) — skip to keep the stream valid (SH-025).
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_PROTOCOL) {
+                // Protocol methods become top-level functions emitted in source order;
+                // the `protocol <name>` line is emitted later (protocols section).
+                i = advance(toks: read toks, i: read i, r: read emit_protocol(toks: read toks, start: read i, d: read 1))
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_IMPL) || cls.isNativeMod {
+                // impls emit in the protocol-impls section (later pass); native-modules
+                // remain deferred — skip in source order to keep the stream valid.
                 i = advance(toks: read toks, i: read i, r: read next_decl_skip(toks: read toks, start: read i))
             } else if starts_fn_like(toks: read toks, i: read i, isPub: read cls.isPub) {
                 // A fn whose name won't parse (`fn (…)`) is a program-level malformed
@@ -2640,7 +2887,7 @@ fn main() -> Unit {
                     malDecl = malDecl + 1
                     i = advance(toks: read toks, i: read i, r: read next_decl_skip(toks: read toks, start: read i))
                 } else {
-                    i = advance(toks: read toks, i: read i, r: read emit_function(toks: read toks, start: read i, d: read 1))
+                    i = advance(toks: read toks, i: read i, r: read emit_function(toks: read toks, start: read i, d: read 1, protoName: read ""))
                 }
             } else {
                 // Unrecognized top-level token (e.g. `namespace …`) → unknown-top-level.
@@ -2649,11 +2896,101 @@ fn main() -> Unit {
             }
         }
     }
+    // Sections 3 & 4: protocol names, then protocol-impls (after all items).
+    emit_protocols_pass(toks: read toks, ntok: read ntok)
+    emit_impls_pass(toks: read toks, ntok: read ntok)
     // Section 5, in ast_oracle_dump order: unknown-feature, duplicate-feature (both
     // in emit_feature_diags), then unknown-top-level, then malformed-declaration.
     emit_feature_diags(toks: read toks, ntok: read ntok)
     emit_repeat(marker: read "unknown-top-level", n: read unknownTop, d: read 1)
     emit_repeat(marker: read "malformed-declaration", n: read malDecl, d: read 1)
+    return Unit
+}
+
+// Emit a protocol's methods in place as top-level functions (Protocol.method,
+// public, Self:Managed injected); the `protocol <name>` line is a later pass.
+fn emit_protocol(toks: read List<Tok>, start: read Int, d: read Int) -> Int {
+    let pname = tk_text(toks: read toks, i: read (start + 1))
+    let n = List.len(list: read toks)
+    let open = find_block_open(toks: read toks, start: read (start + 1), limit: read n)
+    if open < 0 { return next_decl_skip(toks: read toks, start: read start) }
+    let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    let mut i = open + 1
+    while i < close {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_SEMI) {
+            i = i + 1
+        } else if fn_malformed(toks: read toks, start: read i) {
+            let r = next_decl_skip(toks: read toks, start: read i)
+            if r > close { i = close } else if r <= i { i = i + 1 } else { i = r }
+        } else {
+            let r = emit_function(toks: read toks, start: read i, d: read d, protoName: read pname)
+            if r > close { i = close } else if r <= i { i = i + 1 } else { i = r }
+        }
+    }
+    return close + 1
+}
+
+// Protocols section: emit `protocol <name>` for each top-level protocol.
+fn emit_protocols_pass(toks: read List<Tok>, ntok: read Int) -> Unit {
+    let mut depth = 0
+    let mut i = 0
+    while i < ntok {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) {
+            if depth > 0 { depth = depth - 1 }
+        } else if depth == 0 && at_ident(toks: read toks, i: read i, wid: read WORD_PROTOCOL) {
+            emit(depth: read 1, s: read String.concat(left: read "protocol ", right: read tk_text(toks: read toks, i: read (i + 1))))
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+// Protocol-impls section: `protocol-impl protocol=P type=T` + `mapping method=m target=t`.
+fn emit_impls_pass(toks: read List<Tok>, ntok: read Int) -> Unit {
+    let mut depth = 0
+    let mut i = 0
+    while i < ntok {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) {
+            if depth > 0 { depth = depth - 1 }
+        } else if depth == 0 && at_ident(toks: read toks, i: read i, wid: read WORD_IMPL) {
+            emit_one_impl(toks: read toks, start: read i, ntok: read ntok)
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+// Emit one `impl Protocol for Type { method = target … }` (parse_protocol_impl_decl).
+fn emit_one_impl(toks: read List<Tok>, start: read Int, ntok: read Int) -> Unit {
+    let proto = tk_text(toks: read toks, i: read (start + 1))
+    if is_kw_text(toks: read toks, i: read (start + 2), word: read "for") == false { return Unit }
+    let typeEnd = take_function_name(toks: read toks, i: read (start + 3))
+    if typeEnd < 0 { return Unit }
+    let typeName = dotted_text(toks: read toks, start: read (start + 3), end: read typeEnd)
+    let open = find_block_open(toks: read toks, start: read typeEnd, limit: read ntok)
+    if open < 0 { return Unit }
+    let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    emit(depth: read 1, s: read String.concat(left: read String.concat(left: read String.concat(left: read "protocol-impl protocol=", right: read proto), right: read " type="), right: read typeName))
+    let mut k = open + 1
+    while k < close {
+        if is_ident_tok(toks: read toks, i: read k) && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_EQ) {
+            let method = tk_text(toks: read toks, i: read k)
+            let tEnd = take_function_name(toks: read toks, i: read (k + 2))
+            if tEnd < 0 {
+                k = k + 1
+            } else {
+                let target = dotted_text(toks: read toks, start: read (k + 2), end: read tEnd)
+                emit(depth: read 2, s: read String.concat(left: read String.concat(left: read String.concat(left: read "mapping method=", right: read method), right: read " target="), right: read target))
+                k = tEnd
+            }
+        } else {
+            k = k + 1
+        }
+    }
     return Unit
 }
 

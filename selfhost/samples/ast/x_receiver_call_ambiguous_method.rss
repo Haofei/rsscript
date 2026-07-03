@@ -1,0 +1,22 @@
+// expect: RS0206
+features: local
+
+protocol Formatter {
+    fn format(self: read Self) -> fresh String
+}
+
+struct Report {
+    title: String
+}
+
+fn Report.format(self: read Report) -> fresh String {
+    return String.concat(left: read "report:", right: read self.title)
+}
+
+impl Formatter for Report {
+    format = Report.format
+}
+
+fn display(report: read Report) -> fresh String {
+    return read report.format()
+}

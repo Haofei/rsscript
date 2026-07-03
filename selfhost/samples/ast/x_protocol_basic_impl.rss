@@ -1,0 +1,23 @@
+features: local
+
+protocol Formatter {
+    fn format(self: read Self) -> fresh String
+}
+
+struct Point {
+    x: Int
+    y: Int
+}
+
+fn Point.format(self: read Point) -> fresh String {
+    return String.concat(left: read "point", right: read "!")
+}
+
+impl Formatter for Point {
+    format = Point.format
+}
+
+fn print_item<F: Formatter>(item: read F) -> Unit {
+    let msg = Formatter.format(self: read item)
+    Log.write(message: read msg)
+}
