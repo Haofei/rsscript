@@ -967,11 +967,21 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   top-level token scan (per-header seen-set matches `parse_features`).
   `CHECKER_TARGET_CODES` extended to the 4 codes; `checker_parity_corpus` is
   byte-exact over **576 files, code-mismatches 0**; each code + CLEAN verified
-  firing on crafted inputs and the `unknown-file-feature` fixture. Next increments
-  (scoped, not done): RS0002/RS0003 (signature explicitness — needs all-function
-  traversal incl. protocol/native blocks); RS0021 exhaustiveness / RS0024
-  unknown-type (needs a `Map<String,Def>` symbol-table pass — the first genuinely
-  semantic self-hosted check).
+  firing on crafted inputs and the `unknown-file-feature` fixture.
+- **Diagnostics (step 2, milestone 2b — DONE, 2026-07-02):** added **RS0002**
+  (MISSING_RETURN_TYPE) and **RS0003** (MISSING_PARAMETER_TYPE) — signature
+  explicitness. Faithful token predicates mirror `check_return_type_explicit`
+  (no top-level `->` after the param list) and `check_params` (a param whose first
+  token is a non-effect ident NOT followed by `:` → empty `ty.name`; effect-first /
+  non-ident segments are malformed and produce no Param, so no RS0003). Comparison
+  is a sorted+deduped SET, so only presence matters. `CHECKER_TARGET_CODES` = 6
+  codes; `checker_parity_corpus` byte-exact **619 files, code-mismatches 0**; the
+  sole corpus trigger is `fail/missing-signature-pieces.rss` (expects both). SCOPE:
+  covers top-level `fn` decls (the only corpus source of these codes); protocol/
+  native-block methods are in skipped decl branches — sound for the corpus, a noted
+  extension point. Next increments (scoped, not done): RS0021 exhaustiveness /
+  RS0024 unknown-type (need a `Map<String,Def>` symbol-table pass — the first
+  genuinely semantic self-hosted check).
 - **Lexer spans (step 3):** added a `len` field to the shared `Tok`
   (= consumed source span `j-i`, matching the Rust lexer's `index-start`) and made
   `lexer.rss` emit the real `<line>:<col>:<len>` prefix. `lexer_parity_corpus` is

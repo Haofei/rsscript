@@ -23,6 +23,7 @@ tests.
 |-----|------------|
 | [`spec-todo.md`](spec-todo.md) | Current v0.7 implementation backlog and explicitly removed non-goals. |
 | [`vm-optimizing-jit-plan.md`](vm-optimizing-jit-plan.md) | Current VM/JIT optimization state, shipped slices, and remaining perf work. |
+| [`jit-production-readiness-plan.md`](jit-production-readiness-plan.md) | Phased plan to promote the native JIT to the production execution tier (findings register F1–F11, phases P0–P4). |
 | [`dev-build-test-speed-plan.md`](dev-build-test-speed-plan.md) | Proposed developer-loop speed work. |
 | [`refactor-plan.md`](refactor-plan.md) | Proposed behavior-preserving module decomposition. |
 | [`declarative-rewrite-roadmap.md`](declarative-rewrite-roadmap.md) | Design path for graph rewrite / tinygrad-style scheduler work. |
