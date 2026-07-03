@@ -868,18 +868,19 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   across all backends; RS0037 removed as a restriction and repurposed for arity;
   spec §20.1 amended.
 
-### SH-025 — AST-dump parity: streaming rss producer at 339/579, residual grammar is the growing tail
+### SH-025 — AST-dump parity: streaming rss producer at 543/587, only malformed-recovery remains
 
 - **Context:** step 2 of frontend object parity (after the AST-dump format +
   oracle keystone, SH-adjacent). `selfhost/astdump.rss` is a recursive-descent
   rss parser that STREAMS the canonical dump (`selfhost/AST_FORMAT.md`); the
   harness (`crate::selfhost_parity`) diffs it byte-for-byte against the Rust
   oracle over `parse_source_raw`.
-- **Reach:** 245 / 569 corpus files byte-exact, **0 run-failures** — the producer
-  never crashes; unsupported constructs mismatch (partial/`unknown-*` markers)
-  rather than panic. 13 curated `samples/ast/*.rss` are byte-exact and gate
-  non-ignored; `ast_parity_corpus` (`#[ignore]`) ratchets the floor (currently 245;
-  run in `--release`, ~100s).
+- **Reach:** **543 / 587** corpus files byte-exact (~92.5%), **0 run-failures** — the
+  producer never crashes; unsupported constructs mismatch (partial/`unknown-*`
+  markers) rather than panic. **32** curated `samples/ast/*.rss` are byte-exact and
+  gate non-ignored; `ast_parity_corpus` (`#[ignore]`) ratchets the floor (currently
+  543; run in `--release`, ~150s). **Every remaining mismatch (10 files) is a
+  `malformed-*` parser-error-recovery fixture** — all well-formed grammar is covered.
 - **Covered:** top-level fns (pub/async/native, generic params + bounds, params
   with read/mut/take effects, generic-arg types, return type, body); struct/class/
   resource (opaque, generics, derives, handle/weak fields, defaults, drop); sum
@@ -908,19 +909,29 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   match 178 → generic calls 225 → closures 239 → for+literals 242 → unary/negative
   245 → effect-receiver 248 → no-effect-receiver+attrs+effects+body 273 →
   explicit-fn+tuple/list-patterns 279 → interpolation 280 → line-continuation 286 →
-  **manage/spawn/await+with/task-group/select 331 → typed-let fix 339**.
-- **Residual (the tail):** **protocols/impls/native-modules** — DEFERRED: needs a
-  two-pass driver (items in source order, then protocol/impl decl sections) plus an
-  `emit_function` refactor to reproduce the synthetic method transforms (inject
-  `Self: Managed` generic, append `native` effect, `protocol.method`/`module.fn`
-  name mangling) for only ~11 corpus files — lowest ROI/complexity ratio. Plus the
-  interpolation malformed-inner-expr case (emit_expr can't signal parse failure)
-  and any remaining stacked constructs. Each is additive; the floor ratchets.
+  manage/spawn/await+with/task-group/select 331 → typed-let 339 →
+  **Fn-types+type-prefixes(owned/noescape)+fresh-return 405 → async-let+nested-fresh
+  459 → feature-section-order+feature-diagnostics+body-less-fns 521 → body-less
+  structs/sums+malformed-lets 543**.
+- **Residual (the tail):** the ONLY remaining mismatches (10 files, all
+  `crates/rsscript/tests/fixtures/fail/malformed-*.rss`) are **parser error-recovery
+  markers** — `malformed-field`/`malformed-param`/`malformed-arm`/`malformed-effect`/
+  `unknown-top-level`/`malformed-declaration` and the generic/type-arg/call-arg span
+  markers. Each needs the reference parser's per-construct validity predicate
+  replicated (when parse_field/parse_param/parse_match_arm/… returns None or a
+  malformed span) so the producer emits the marker instead of a garbage node. These
+  are span-only, fail-fixture-only, and the deepest/lowest-ROI tail. DEFERRED.
+- **Also deferred (separate axes):** **protocols/impls/native-modules** (two-pass
+  driver + `emit_function` method-transform refactor for ~11 files) and **AST
+  `@L:C:N` spans** (Step 3's last phase — invasive: oracle span emission + AST
+  tier-strip mechanism + ~150 producer emit sites, node spans non-uniform).
 - **rss limitation found:** `if/else` is not valid as an *expression*
   (`let x = if c {..} else {..}` → RS0015) — worked around with helper functions.
-- **Status:** open (growing tail). The producer + parity gate + risk mitigations
-  (curated fast gate; module-story decision in AST_FORMAT.md) are in place; full
-  byte parity is incremental, tracked by the ratcheting floor.
+- **Status:** open, but well-formed grammar is COMPLETE — 92.5% byte-exact with
+  every remaining mismatch a malformed-recovery fixture. The producer + parity gate
+  + risk mitigations (curated fast gate; module-story decision in AST_FORMAT.md) are
+  in place; the deferred residuals (malformed recovery, protocols, `@L:C:N` spans)
+  are additive and tracked by the ratcheting floor.
 
 ### SH-026 — Frontend object parity: diagnostics-codes (step 2) + lexer spans (step 3)
 
