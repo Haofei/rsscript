@@ -1103,6 +1103,50 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   These require a self-hosted TYPE-INFERENCE + BORROW-CHECKER engine — the whole semantic
   frontend — which is the genuine next phase (its own multi-session effort), NOT more
   token predicates.
+- **Diagnostics (step 2, milestone 2k — DONE, 2026-07-03):** **RS0101** FEATURE_VIOLATION.
+  The 2j summary mis-filed RS0101 with the type-inference bulk; it is in fact
+  **token-decidable** (feature-keyword-vs-header), so it landed cleanly. Reproduces all
+  three oracle sources: (1) `checks/features.rs` feature_uses — a construct whose required
+  feature is absent from the header: `local` (WORD_LOCAL let/closure, `manage`, `take`
+  data-effect, `ResourcePool<T>`), `unsafe` (`effects(unsafe)`), `async` (`async`
+  modifier + `spawn`/`await`/`task_group`/`select`); (2) `signatures.rs::check_native_effect`
+  — a `native fn` missing `effects(native)` fires **regardless** of the declared features
+  (so native is tracked in the fn walk, not gated); (3) `body/semantics.rs::check_match_pattern_effects`
+  — `match take` w/o local (subsumed by the `take` probe). KEY false-positive hunts (the
+  dangerous direction): the `async` EFFECT name in `effects(io,…,async)` is a REMOVED
+  runtime effect (RS0012), NOT an async construct — the `async` modifier is gated on the
+  next kw being fn/let/for; `take` is distinguished from `.take(` (method) and a `take:`
+  binding; reserved feature keywords (`local`/`async`/`unsafe`) only appear in a `features:`
+  header when DECLARED, so a header token self-gates. `declaredFeatures` is an
+  order-independent pre-pass; reuses `effects_name_probe` (new mode 2 = native effect) and
+  `fn_is_native`. Self-hosting corner correctly handled: `astdump.rss` (10 `local` stmts, no
+  header) is a corpus file the oracle flags RS0101 standalone, and the checker matches.
+  `CHECKER_TARGET_CODES` = **26 codes**; `checker_parity_corpus` byte-exact **619/619, 0
+  mismatches, 0 run-failures**. Commit 7fd0ce16.
+- **RS0015 UNSUPPORTED_SYNTAX — SCOPED, left OUT (2026-07-03).** RS0015 is a SINGLE code
+  fired if ANY malformation is present, so the SET is all-or-nothing: a partial port turns
+  every un-handled trigger into a false negative on its fixture, so it cannot reach
+  0-mismatch without covering ALL 33 fixtures. **~24 of 33 are token-decidable** (structural
+  token scan): unclosed-call/function-body (unbalanced), malformed-{type,function,field,
+  parameter,empty-parameter,call-argument,empty-call-argument,type-argument,generic-parameter,
+  match-arm,effect,with}-declaration (the effects ones are ALREADY detected via the ported
+  `effect_item_kind`==0), unsupported-with-syntax, malformed-binding (`let x =` empty RHS),
+  duplicate-import-name, unknown-top-level-item (`enum`), namespace-declaration,
+  reserved-double-underscore-name (`__` prefix), opaque-type-with-fields (opaque + body),
+  protocol-default-method-body (protocol method w/ body), native-body-unsupported (native fn
+  w/ body), spawn-not-executable (`spawn` kw), unsupported-derive (known-derive set).
+  **~9 need real parsing / name resolution** (NOT token-decidable): none-call-form (`None()`),
+  none-with-payload (`None(1)`), option-type-called-as-variant (`Option(1)`),
+  result-type-called-as-variant (`Result(1)`), variant-named-payload (`Ok(value: 1)`) — all
+  need constructor/variant name+arity resolution; trailing-expression-token (needs
+  expression-extent parsing to know where an expr ends); const-non-literal-initializer
+  (literal-vs-expression classification of the const RHS); malformed-generic-parameter (the
+  `T: Unknown` bound is semantic; only the `<read T>` half is decidable); malformed-control-
+  statement (else-without-block / `while {` / `match {` need statement-grammar parsing). Since
+  the 9 require the same semantic/expression engine as the deferred SH-025 malformed-recovery
+  tail, RS0015 stays **OUT of CHECKER_TARGET_CODES**; it is planned for the semantic-frontier
+  phase alongside RS0207-0210 / RS0301-0313 / RS0025-0026. RS0025/RS0026 have 0 corpus
+  fixtures (skip, as noted in 2j).
 - **Lexer spans (step 3):** added a `len` field to the shared `Tok`
   (= consumed source span `j-i`, matching the Rust lexer's `index-start`) and made
   `lexer.rss` emit the real `<line>:<col>:<len>` prefix. `lexer_parity_corpus` is
