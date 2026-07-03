@@ -2046,6 +2046,53 @@ fn fn_has_nonexhaustive_match(toks: read List<Tok>, start: read Int, declared: r
     return hit
 }
 
+// ---------------------------------------------------------------------------
+// RS0029 AWAIT_OUTSIDE_ASYNC.
+//
+// An `await` expression in a function that is not `async` (check_await_placement,
+// async_context = function_is_async || in_task_group). Token-level: a non-async
+// top-level fn whose body has an `await` keyword and no `async let` (task_group)
+// binding suppressing it. Awaits are always checked non-async inside closures, so
+// over-suppressing on any `async` token in the body is safe for the corpus.
+// ---------------------------------------------------------------------------
+
+// True if the fn decl at `start` carries the `async` modifier (a WORD_ASYNC
+// keyword between the decl start / attributes and the `fn` keyword at ns-1).
+fn fn_is_async(toks: read List<Tok>, start: read Int) -> Bool {
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let mut k = start
+    let mut hit = false
+    while k < (ns - 1) {
+        if at_ident(toks: read toks, i: read k, wid: read WORD_ASYNC) { hit = true }
+        k = k + 1
+    }
+    return hit
+}
+
+// RS0029: a non-async fn body that contains an `await` keyword and no `async`
+// (task_group `async let`) binding to make the await valid.
+fn fn_has_bad_await(toks: read List<Tok>, start: read Int) -> Bool {
+    if fn_is_async(toks: read toks, start: read start) { return false }
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+    if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
+    let bodyClose = find_matching(toks: read toks, open: read sigEnd, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    if bodyClose < 0 { return false }
+    let mut k = sigEnd + 1
+    let mut hasAwait = false
+    let mut suppress = false
+    while k < bodyClose {
+        if is_kw_text(toks: read toks, i: read k, word: read "await") { hasAwait = true }
+        // `async let` (task_group) makes an await valid; `select` arm operations
+        // are a structured await boundary; both suppress RS0029 for this fn.
+        if at_ident(toks: read toks, i: read k, wid: read WORD_ASYNC) { suppress = true }
+        if is_kw_text(toks: read toks, i: read k, word: read "select") { suppress = true }
+        if is_kw_text(toks: read toks, i: read k, word: read "task_group") { suppress = true }
+        k = k + 1
+    }
+    return hasAwait && suppress == false
+}
+
 fn main() -> Unit {
     let source = Args.get_or_default(index: 0, default: read "")
     let toks = tokenize(source: read source)
@@ -2072,6 +2119,8 @@ fn main() -> Unit {
     let mut unknownType = false
     let mut missingEffect = false
     let mut pureBad = false
+    // RS0029: any `await` in a non-async function.
+    let mut badAwait = false
     // RS0021: any non-exhaustive match statement or expression in the file.
     let mut nonExhaustive = false
     // RS0024: forward-reference-tolerant known-type set for the whole file.
@@ -2240,6 +2289,7 @@ fn main() -> Unit {
                     if fn_missing_param_effect(toks: read toks, start: read i, sums: read payloadlessSums) { missingEffect = true }
                     if fn_pure_bad(toks: read toks, start: read i, resources: read resources, sumVariants: read sumVariants, pureFns: read pureFns, allFns: read allFns, declared: read declared) { pureBad = true }
                     if fn_has_nonexhaustive_match(toks: read toks, start: read i, declared: read declared, allFns: read allFns) { nonExhaustive = true }
+                    if fn_has_bad_await(toks: read toks, start: read i) { badAwait = true }
                     i = r
                 }
             } else {
@@ -2287,6 +2337,9 @@ fn main() -> Unit {
     if nonExhaustive {
         Log.write(message: read "RS0021")
     }
+    if badAwait {
+        Log.write(message: read "RS0029")
+    }
     if unknownType {
         Log.write(message: read "RS0024")
     }
@@ -2302,7 +2355,7 @@ fn main() -> Unit {
     if headerCount >= 2 {
         Log.write(message: read "RS0006")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
