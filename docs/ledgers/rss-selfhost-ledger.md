@@ -1664,7 +1664,16 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   complete (3 files, giant-clean). 615/615.
 - **CHECKER_TARGET_CODES (44):** the 43 above + RS0603.
 
-**Milestone: 44 diagnostic codes byte-exact over the 619-file corpus.** The
+### Milestone 2ad — RS0705 resource-pool-not-local (45 codes)
+
+- **RS0705 RESOURCE_POOL_NOT_LOCAL (2026-07-04):** a ResourcePool binding that is not
+  `local` (oracle checks/body/resource_pool.rs) — a binding is local iff it is a `local`
+  binding OR a `mut`/`take` param. check.rss `fn_pool_param_bad` flags `read`/no-effect
+  `ResourcePool<...>` params; the `let` scan flags `let NAME = ResourcePool<...>.new`.
+  Fast-gate complete (3 files, giant-clean). 615/615.
+- **CHECKER_TARGET_CODES (45):** the 44 above + RS0705.
+
+**Milestone: 45 diagnostic codes byte-exact over the 619-file corpus.** The
 token/structure-decidable tier now covers scanner + parser + signature-table +
 resource/ownership-syntax codes. Remaining ~52 need the type engine (RS0206-0210
 expression typing), the borrow/liveness engine (RS0301-0313, RS04xx/05xx/08xx), or
