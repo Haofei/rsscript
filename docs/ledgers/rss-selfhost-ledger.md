@@ -1292,3 +1292,72 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   RS0013.
 - **Next slice:** `expr_type_root` + the error-type map are ready for RS0210
   (operator), RS0207 (argument), RS0208 (return).
+
+### Milestone 2n — call-signature cluster slice: RS0201 UNNAMED_ARGUMENT GATED (28 codes); RS0202 blocked (constructor-inline sub-case)
+
+- **Goal:** add the call-resolution/param-signature cluster — RS0201 (unnamed
+  argument) and RS0202 (missing data effect). Both need callee param signatures
+  and light receiver-type inference.
+- **Measure-first (one run, both codes in target, rss emitting neither):** the
+  whole-corpus oracle set is small and bounded — **5 RS0201 files, 9 RS0202
+  files**:
+  * RS0201: `fail/ast-call-unnamed-nested.rss` (`String.concat("prefix", ..)`),
+    `fail/call-unnamed-and-missing-argument.rss` (`combine(read "a", ..)`, a
+    `pub fn`), `fail/features-and-call-style.rss` (`Image.save(read image, ..)`),
+    `fail/malformed-empty-call-argument.rss` + `samples/ast/mal_empty_call_arg.rss`
+    (`Log.write(, message: ..)` empty slot).
+  * RS0202 (4 distinct oracle sub-cases): argument-effect (`File.write`/
+    `Image.resize`/`ResourcePool.borrow`/`Log.write`/same-file `Cache.put`),
+    receiver-call self-effect (`read cache.put(..)` vs `self: mut`), constructor
+    inline managed field (`Boxed(image: read image)`), and match-scrutinee effect
+    (`match xs { [a,b] => .. }` with no `read`/`mut`/`take`).
+- **RS0201 built (committed):**
+  * `collect_call_fn_sigs` — `pubFns` (public unqualified fn names) + `dottedFns`
+    (dotted method fn names, e.g. `Cache.put`), the same-file call-resolution
+    table.
+  * `call_requires_named` / `is_core_named_namespace` — call-kind classifier
+    mirroring the parser's `is_qualified_namespace_receiver` (uppercase dotted
+    head ⇒ qualified). Fires only for public same-file unqualified fns and a
+    **measure-first-curated** core namespace allowlist `{String, Image, Log}`;
+    receiver calls, private helpers, variant/type constructors, same-file methods,
+    and unknown/imported namespaces are skipped (FP-safe).
+  * `args_have_unnamed` / `seg_is_unnamed` — arg splitter respecting `()[]<>{}`
+    nesting **and closure param pipes `|a, b|`**, with the malformed empty-slot
+    and lone-trailing-comma rules.
+- **FP discipline:** first run at a broad rule surfaced 14 false positives — all
+  from (a) closure multi-param commas `|acc, val|` splitting a named arg, and
+  (b) qualified calls to user/imported sum-variant or unknown namespaces
+  (`ChatMessage.system(..)`, which the oracle leaves UNKNOWN_CALLEE with no naming
+  diagnostic). Fixed by pipe-toggling the splitter and by curating the qualified
+  fire-set to `{String, Image, Log}` (the only namespaces the oracle actually
+  flags). A `)`-guard that mis-read a previous statement's close-paren as a
+  complex receiver was removed (it FN'd `Image.save`).
+- **RS0202 — NOT landed (blocked):** it is a file-level OR flag over FOUR oracle
+  sub-cases; greening requires all nine oracle files AND zero FP over 619
+  constructor/call-heavy files. The **constructor-inline-managed-field** sub-case
+  (`fail/constructor-inline-managed-field.rss`) is the blocker: the oracle rule
+  (`checks/body/fresh.rs::constructor_arg_uses_managed_inline_value`) fires only
+  when the field is a non-Copy, non-`handle` INLINE struct/class field AND the
+  value is a *managed* binding (`let`-bound, or crossing a handle, or a
+  non-`fresh` managed-returning call) — a classification needing per-field
+  `handle`/`weak` parsing, Copy/type-kind resolution, and `let`-vs-`local`-vs-
+  param-vs-`fresh` binding tracking. No token-level approximation is FP-safe
+  across the many legitimate `T(field: read x)` constructor calls in the corpus,
+  and missing this one file leaves RS0202 red. Deferred; the arg-effect stdlib
+  map (`File.write`→file:mut, `Image.resize`→image:mut, `ResourcePool.borrow`→
+  pool:mut, `Log.write`→message:read) + same-file receiver-method self/param
+  effects + the match-scrutinee scan (the other 8 files) are straightforward once
+  a safe constructor-inline rule exists.
+- **Gate:** `checker_parity_corpus` **619/619 ok, 0 mismatches, 0 run-failures**
+  at **28 codes** (RS0201 added). Green.
+- **Env note:** the Docker dev stack was factory-reset mid-slice (0 images/
+  containers/volumes); verified on the host toolchain (`cargo 1.95.0`,
+  `aarch64-apple-darwin`) instead — same `checker_parity_corpus` test, 1730s.
+- **CHECKER_TARGET_CODES (28):** RS0002, RS0003, RS0004, RS0005, RS0006, RS0007,
+  RS0008, RS0009, RS0010, RS0011, RS0012, RS0016, RS0017, RS0021, RS0024, RS0028,
+  RS0033, RS0029, RS0023, RS0035, RS0027, RS0014, RS0018, RS0019, RS0022, RS0101,
+  RS0013, RS0201.
+- **Next slice:** RS0202 once a FP-safe constructor-inline-managed-field rule is
+  found (parse field `handle`/`weak` + Copy/type-kind + `let`/`local` binding);
+  the arg-effect + receiver-self + match-scrutinee sub-cases reuse
+  `collect_call_fn_sigs` and the arg splitter directly.
