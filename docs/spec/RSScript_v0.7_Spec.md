@@ -619,15 +619,21 @@ one canonical form             a single spelling per operation (§2.3) shrinks
 ### 2B.3 RSScript already satisfies this; the rule is to keep it
 
 These are not new requirements; they describe what RSScript already is, and the
-article exists to keep future features from eroding it. Methods are already
-top-level qualified functions — there is no `impl` block in which a method body
-sits far from its type. Public signatures are already mandatory and complete
-(Article III, §2.5). There is already exactly one canonical spelling per
-operation (§2.3). The work of Article IX is conservative: a candidate feature
-that reintroduces nonlocality — a method form whose meaning depends on a distant
-block, a construct that must be resolved by scanning the file, a second spelling
-that widens the option space — is failed for the same reason ceremony is failed,
-because it taxes a consumer of the surface.
+article exists to keep future features from eroding it. Methods are canonically
+top-level qualified functions (`fn Type.method(...)`). An **inherent `impl Type
+{ … }` block** is permitted as *pure parse-time sugar* over exactly that form:
+each `fn m(<effect> self, …)` inside it desugars to the top-level
+`fn Type.m(self: <effect> Type, …)` before any later stage runs, so a method's
+meaning never depends on the block — the block is erased at parse time and adds
+no capability, no dispatch rule, and no second semantic form (the qualified
+function remains the one canonical spelling; §14.6). Public signatures are
+already mandatory and complete (Article III, §2.5). The work of Article IX
+remains conservative: a candidate feature that reintroduces *genuine*
+nonlocality — a method form whose *meaning* depends on a distant block, a
+construct that must be resolved by scanning the file, a second *semantic*
+spelling that widens the option space — is failed for the same reason ceremony
+is failed, because it taxes a consumer of the surface. Sugar that desugars away
+before meaning is assigned does not.
 
 ### 2B.4 Interaction with the explicitness budget
 
@@ -5911,12 +5917,13 @@ use-or-module = ( [ "native" ] "module" dotted [ block ] )   (* native module Fi
 dotted      = ident { "." ident } ;
 
 item        = [ "pub" ] ( fn-decl | type-decl | alias-decl | sum-decl | const-decl
-                        | protocol-decl | impl-decl ) ;
+                        | protocol-decl | impl-decl | inherent-impl-decl ) ;
 fn-decl     = [ attr ] [ "async" ] [ "native" ] "fn" name [ generics ] "(" [ params ] ")"
               [ "->" type ] [ "effects" "(" effect-list ")" ] ( block | ) ;
 attr        = "#" ident "(" string ")" ;            (* e.g. #lower_name("...") *)
 params      = param { "," param } ;
-param       = ident ":" [ data-effect ] type [ "=" expr ] ;   (* §10.5, §14.1 *)
+param       = ( ident ":" [ data-effect ] type [ "=" expr ] )   (* §10.5, §14.1 *)
+            | ( [ data-effect ] "self" ) ;                       (* `self` shorthand, inherent-impl only; §14.6 *)
 data-effect = "read" | "mut" | "take" ;
 generics    = "<" ident { "," ident } ">" ;
 type-decl   = ( "class" | "struct" | "resource" ) name [ generics ] [ derives ]
@@ -5929,7 +5936,8 @@ const-decl  = "const" [ type-ns "." ] NAME [ ":" type ] "=" literal ;  (* type o
 protocol-decl = "protocol" name [ generics ] "{" { fn-sig } "}" ;      (* §14.6 *)
 fn-sig      = "fn" name [ generics ] "(" [ params ] ")" [ "->" type ]
               [ "effects" "(" effect-list ")" ] ;             (* bodyless contract *)
-impl-decl   = "impl" name [ generics ] "for" type "{" { fn-decl } "}" ;  (* §14.6 *)
+impl-decl   = "impl" name [ generics ] "for" type "{" { fn-decl } "}" ;  (* protocol impl, §14.6 *)
+inherent-impl-decl = "impl" name "{" { fn-decl } "}" ;  (* §14.6; parse-time sugar: each `fn m(<effect> self, …)` desugars to top-level `fn Name.m(self: <effect> Name, …)`. No `for`. *)
 
 block       = "{" { stmt } "}" ;
 stmt        = let | view | assign | return | if | match | for | loop | while

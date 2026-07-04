@@ -117,7 +117,31 @@ pub(super) fn parse_params(tokens: &[Token], start: usize, end: usize) -> Parsed
             }
             continue;
         };
-        if parse_data_effect(tokens.get(start)).is_some() {
+        if let Some(effect) = parse_data_effect(tokens.get(start)) {
+            // `<effect> self` shorthand, used inside an `impl Type { }` block: the
+            // receiver's type is filled in from the impl header (parse_inherent_impl_decl).
+            // Any other effect-first param is malformed (params are `name: <effect> Type`).
+            if start + 2 == end && tokens.get(start + 1).and_then(ident_name) == Some("self") {
+                params.push(Param {
+                    name: "self".to_string(),
+                    effect: Some(effect),
+                    ty: TypeRef {
+                        name: String::new(),
+                        args: Vec::new(),
+                        malformed_arg_spans: Vec::new(),
+                        is_fresh: false,
+                        is_noescape: false,
+                        is_owned: false,
+                        fn_params: Vec::new(),
+                        fn_param_effects: Vec::new(),
+                        fn_return: None,
+                        span: tokens[start].span.clone(),
+                    },
+                    default: None,
+                    span: tokens[start].span.clone(),
+                });
+                continue;
+            }
             malformed_spans.push(tokens[start].span.clone());
             continue;
         }

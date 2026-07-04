@@ -137,6 +137,58 @@ fn pass_fixtures_have_no_diagnostics() {
 }
 
 #[test]
+fn inherent_impl_block_desugars_to_qualified_methods() {
+    // `impl Type { fn m(<effect> self, ...) }` is parse-time sugar for flat
+    // `fn Type.m(self: <effect> Type, ...)`. Shorthand `mut self`/`read self`
+    // fills the receiver type from the block header; the explicit
+    // `self: read Type` form is also accepted. Receiver calls resolve to the
+    // desugared methods and `mut self` reassigns fields with caller write-back,
+    // so a program that builds, mutates, and reads through the block checks clean.
+    //
+    // NOTE: this is an inline test, not a `tests/fixtures/pass/*.rss` file, on
+    // purpose — that directory is part of the self-hosting parity corpus
+    // (`selfhost_parity`), and the self-hosted parser/checker do not yet
+    // recognize `impl` blocks. A corpus fixture can be added once they do.
+    let source = concat!(
+        "features: local\n\n",
+        "struct Tally {\n    n: Int\n}\n\n",
+        "impl Tally {\n",
+        "    fn bump(mut self) -> Unit {\n        self.n = self.n + 1\n    }\n\n",
+        "    fn add(mut self, delta: read Int) -> Unit {\n        self.n = self.n + delta\n    }\n\n",
+        "    fn get(read self) -> Int {\n        return self.n\n    }\n\n",
+        "    fn get_explicit(self: read Tally) -> Int {\n        return self.n\n    }\n",
+        "}\n\n",
+        "fn main() -> Unit {\n",
+        "    let mut t = Tally(n: 0)\n",
+        "    mut t.bump()\n",
+        "    mut t.add(delta: read 10)\n",
+        "    let total = t.get()\n",
+        "    let same = t.get_explicit()\n",
+        "    Log.write(message: read Int.to_string(value: read total))\n",
+        "    Log.write(message: read Int.to_string(value: read same))\n",
+        "}\n",
+    );
+    let diagnostics = analyze_source("inherent-impl-block.rss", source);
+    assert_eq!(diagnostics, Vec::new(), "{diagnostics:?}");
+}
+
+#[test]
+fn protocol_impl_block_still_parses_after_inherent_impl() {
+    // The inherent-vs-protocol split keys on the `for` keyword, so
+    // `impl Protocol for Type { ... }` must still route to protocol-impl parsing.
+    let source = concat!(
+        "features: local\n\n",
+        "protocol Named {\n    fn name(self: read Self) -> fresh String\n}\n\n",
+        "struct Point {\n    x: Int\n}\n\n",
+        "fn Point.name(self: read Point) -> fresh String {\n",
+        "    return String.concat(left: read \"p\", right: read \"!\")\n}\n\n",
+        "impl Named for Point {\n    name = Point.name\n}\n",
+    );
+    let diagnostics = analyze_source("protocol-after-inherent.rss", source);
+    assert_eq!(diagnostics, Vec::new(), "{diagnostics:?}");
+}
+
+#[test]
 fn fail_fixtures_report_expected_diagnostic_codes() {
     for path in common::fixture_paths("tests/fixtures/fail") {
         let source = common::read_fixture(&path);

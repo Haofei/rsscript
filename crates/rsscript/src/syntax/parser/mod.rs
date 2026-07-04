@@ -120,7 +120,14 @@ impl Parser<'_> {
                 }
             } else if self.at_ident("impl") {
                 let start = self.index;
-                if let Some(protocol_impl) = self.parse_protocol_impl_decl() {
+                if self.impl_is_inherent() {
+                    if let Some(functions) = self.parse_inherent_impl_decl() {
+                        items.extend(functions.into_iter().map(Item::Function));
+                    } else {
+                        malformed_declaration_spans.push(self.tokens[start].span.clone());
+                        self.index = skip_unknown_top_level(self.tokens, start);
+                    }
+                } else if let Some(protocol_impl) = self.parse_protocol_impl_decl() {
                     protocol_impls.push(protocol_impl);
                 } else {
                     malformed_declaration_spans.push(self.tokens[start].span.clone());
@@ -717,6 +724,70 @@ impl Parser<'_> {
             mappings,
             span,
         })
+    }
+
+    /// Distinguish an inherent-method block `impl Type { ... }` from a protocol
+    /// implementation `impl Protocol for Type { ... }`: the former reaches its
+    /// opening brace with no `for` keyword in between.
+    fn impl_is_inherent(&self) -> bool {
+        let mut i = self.index + 1;
+        while let Some(token) = self.tokens.get(i) {
+            if token.is_ident_text("for") {
+                return false;
+            }
+            if token.symbol("{") {
+                return true;
+            }
+            i += 1;
+        }
+        false
+    }
+
+    // impl Type {
+    //     fn method(mut self, ...) -> R { ... }   // `<effect> self` or `self`
+    //     fn other(self: read Type, ...) { ... }  // explicit form also allowed
+    // }
+    //
+    // An inherent-method block: pure parse-time sugar for a set of top-level
+    // qualified functions `fn Type.method(self: <effect> Type, ...)`. The block
+    // only supplies the `Type.` qualifier and the `self` receiver type, so every
+    // downstream stage (checker, HIR, receiver-call resolution, lowering) sees
+    // exactly what the flat spelling produces — no new capability, grouping only.
+    fn parse_inherent_impl_decl(&mut self) -> Option<Vec<FunctionDecl>> {
+        self.index += 1;
+        let type_name = self.take_ident_name()?;
+        if !self.at_symbol("{") {
+            return None;
+        }
+        let open = self.index;
+        let close = find_matching(self.tokens, open, "{", "}")?;
+        self.index = open + 1;
+        let mut functions = Vec::new();
+        while self.index < close {
+            if is_trivia_boundary(self.current()?) {
+                self.index += 1;
+                continue;
+            }
+            let start = self.index;
+            let Some(mut function) = self.parse_function_decl() else {
+                self.index = skip_unknown_top_level(self.tokens, start).min(close);
+                continue;
+            };
+            if !function.name.contains('.') {
+                function.name = format!("{type_name}.{}", function.name);
+            }
+            for param in &mut function.params {
+                if param.name == "self" && param.ty.name.is_empty() {
+                    param.ty.name = type_name.clone();
+                    if param.effect.is_none() {
+                        param.effect = Some(DataEffect::Read);
+                    }
+                }
+            }
+            functions.push(function);
+        }
+        self.index = close + 1;
+        Some(functions)
     }
 
     fn parse_native_module_decl(&mut self) -> Option<Vec<FunctionDecl>> {

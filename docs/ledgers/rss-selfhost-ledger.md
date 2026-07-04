@@ -501,13 +501,33 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   Verified: `fn Lexer.bump(self: mut Lexer) { self.pos = self.pos + 1 }` +
   `mut lexer.bump()` mutates and writes back. So a self-hosted lexer CAN
   encapsulate its cursor as `fn Lexer.bump(self: mut Lexer)` — the pain was using
-  free helpers, not a language gap. The ONLY thing rss lacks is the
-  `impl Type { fn m() }` BLOCK grouping, which the spec DELIBERATELY rejects
-  (§2B.2/§2B.3: methods are flat qualified functions "not bodies buried in an impl
-  block"; §2.3 single-canonical-form). Decision (user, 2026-07-01): adopt the
-  existing `fn Type.method(self:…)` form; do NOT add the `impl` block (it adds no
-  capability and would reverse a considered spec position). Method syntax is
-  therefore RESOLVED, not a follow-up.
+  free helpers, not a language gap. The ONLY thing rss lacked was the
+  `impl Type { fn m() }` BLOCK grouping.
+- **UPDATE (2026-07-04): inherent `impl Type { }` blocks are now SUPPORTED.**
+  Decision reversed (user, 2026-07-04: "we should support it. this is not a big
+  change"). Landed as *pure parse-time sugar* over the flat form, so it reverses
+  no considered position: `impl Type { fn m(<effect> self, …) … }` desugars to
+  top-level `fn Type.m(self: <effect> Type, …)` at parse time — the qualified
+  function stays the one canonical semantic spelling (§2.3 intact); the block adds
+  no capability, dispatch rule, or second *semantic* form. `mut self` / `read self`
+  / `take self` fill the receiver type from the block header; the explicit
+  `self: <effect> Type` form is also accepted. Implementation (reference compiler,
+  additive — no existing corpus file uses the constructs, verified): parser
+  `impl_is_inherent` (splits inherent vs `impl … for …` protocol impls on the
+  `for` keyword) + `parse_inherent_impl_decl` (`syntax/parser/mod.rs`) emitting
+  desugared `Item::Function`s; `parse_params` (`syntax/parser/items.rs`) accepts
+  `<effect> self`. Nothing downstream changed (checker/HIR/receiver-resolution/
+  lowering see exactly the flat form). Spec grammar updated (`inherent-impl-decl`,
+  `param` self-shorthand) + §2B.3 caveat. Verified: full `static` target 629/629,
+  plus inline tests `checker_frontend::misc::inherent_impl_block_desugars_to_
+  qualified_methods` / `protocol_impl_block_still_parses_after_inherent_impl`; a
+  standalone program runs `11`/`11` on BOTH reg-VM and AOT tiers with `mut self`
+  write-back. NOT added as a `tests/fixtures/pass/*.rss` fixture on purpose: that
+  dir is in the `selfhost_parity` corpus (all-files-must-match, no floor) and the
+  self-hosted parser/checker (`selfhost/*.rss`) do not yet recognize `impl` blocks
+  — a corpus fixture waits on teaching them (a separate, larger task). Method
+  syntax now offers TWO spellings: flat `fn Type.method(self:…)` and the `impl`
+  block that desugars to it.
 - **Fix:** the reg-VM already wrote a `mut` param's final register back to the
   caller for every `mut` param (scalar included), so no reg-VM/native change was
   needed. Only two frontend touch-points were added: (1) the assignment gate
