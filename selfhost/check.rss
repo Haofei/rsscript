@@ -3090,6 +3090,497 @@ fn fn_has_unnamed_arg(toks: read List<Tok>, start: read Int, pubFns: read Set<St
     return hit
 }
 
+// ---------------------------------------------------------------------------
+// RS0202 MISSING_DATA_EFFECT — a FILE-LEVEL OR over four oracle sub-cases:
+//   (1) argument-effect      — a resolved call arg whose callee param declares a
+//                              data effect, supplied with the wrong (or no) effect
+//                              (checks/calls.rs check_argument_effects);
+//   (2) receiver self-effect — `recv.method(...)` whose visible receiver effect
+//                              disagrees with the method's `self` effect
+//                              (checks/calls.rs check_receiver_call_self_effect);
+//   (3) constructor inline managed field — a non-Copy, non-`handle`, non-`weak`
+//                              INLINE struct/class field initialized from a managed
+//                              binding (checks/body/fresh.rs, managed-inline branch);
+//   (4) match scrutinee      — a structured (`[...]`/tuple/`Name {...}`) match arm
+//                              pattern with no `read`/`mut`/`take` scrutinee effect
+//                              (checks/body/semantics.rs check_match_pattern_effects).
+// Callee param effects come from same-file signatures (parsed on demand) plus a
+// curated (measure-first) stdlib method→param-effect map. Managed bindings are the
+// plain-`let` names of the enclosing body (a `let` is always a managed binding;
+// `local` is not). Value-model pieces reused by later type codes (RS0207-0210).
+// ---------------------------------------------------------------------------
+
+// The namespaces the curated stdlib param-effect map knows about. Cheap gate so a
+// qualified call to any other namespace (`List.get`, `Set.insert`, …) short-circuits
+// before the arg list is split — the hot path over a large file.
+fn is_effect_stdlib_ns(ns: read String) -> Bool {
+    return ns == "Log" || ns == "File" || ns == "Image" || ns == "ResourcePool"
+}
+
+// The last-segment method names of same-file `fn <Type>.method(...)` decls. A cheap
+// membership gate so a receiver call only pays the full method-resolution scan when a
+// same-file method of that name actually exists.
+fn collect_method_names(toks: read List<Tok>) -> Set<String> {
+    let n = List.len(list: read toks)
+    let mut names = Set<String>.new()
+    let mut i = 0
+    while i < n {
+        if at_ident(toks: read toks, i: read i, wid: read WORD_FN) {
+            let nameIdx = i + 1
+            if is_ident_tok(toks: read toks, i: read nameIdx) && at_symbol(toks: read toks, i: read (nameIdx + 1), code: read SYM_DOT) {
+                let de = dotted_end(toks: read toks, i: read nameIdx)
+                Set.insert<String>(set: mut names, value: read tk_text(toks: read toks, i: read (de - 1)))
+            }
+        }
+        i = i + 1
+    }
+    return names
+}
+
+// Curated stdlib method→param-effect map (measure-first: only the methods the
+// corpus oracle actually flags; see stdlib/*.rssi for the real declared effects).
+// Returns the required call-site effect for `ns.method(pname:)`, or "" (no rule).
+fn stdlib_param_effect(ns: read String, method: read String, pname: read String) -> String {
+    if ns == "Log" && method == "write" && pname == "message" { return "read" }
+    if ns == "File" && method == "write" && pname == "file" { return "mut" }
+    if ns == "File" && method == "write" && pname == "data" { return "read" }
+    if ns == "Image" && method == "resize" && pname == "image" { return "mut" }
+    if ns == "ResourcePool" && method == "borrow" && pname == "pool" { return "mut" }
+    return ""
+}
+
+// True iff `name` begins with an uppercase ASCII letter — the rss convention for a
+// type or function-namespace (`Log`, `File`, `ResourcePool`). Lowercase heads are
+// value bindings, so `head.method(...)` is a receiver call rather than a qualified one.
+fn is_upper_head(name: read String) -> Bool {
+    let cs = String.chars(value: read name)
+    if List.len(list: read cs) == 0 { return false }
+    let f = Char.to_code(value: read List.get(list: read cs, index: read 0))
+    return f >= 65 && f <= 90
+}
+
+// The supplied call-site data effect at value-start `vs` ("read"/"mut"/"take"), or
+// "" if the value has no leading effect keyword.
+fn value_effect(toks: read List<Tok>, vs: read Int) -> String {
+    if is_effect_kw(toks: read toks, i: read vs) { return tk_text(toks: read toks, i: read vs) }
+    return ""
+}
+
+// The declared data effect of param `pname` in a same-file signature param list
+// [open,close] ("read"/"mut"/"take"), or "" if the param is absent / unannotated.
+fn sig_param_effect(toks: read List<Tok>, open: read Int, close: read Int, pname: read String) -> String {
+    let mut k = open + 1
+    let mut depth = 0
+    let mut angle = 0
+    let mut segStart = open + 1
+    let mut result = ""
+    while k < close {
+        let opener = at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE)
+        let closer = at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE)
+        if opener {
+            depth = depth + 1
+        } else if closer {
+            if depth > 0 { depth = depth - 1 }
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE) {
+            angle = angle + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) {
+            if angle > 0 { angle = angle - 1 }
+        } else if depth == 0 && angle == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
+            if seg_name_matches(toks: read toks, segStart: read segStart, name: read pname) {
+                result = value_effect(toks: read toks, vs: read (segStart + 2))
+            }
+            segStart = k + 1
+        }
+        k = k + 1
+    }
+    if seg_name_matches(toks: read toks, segStart: read segStart, name: read pname) {
+        result = value_effect(toks: read toks, vs: read (segStart + 2))
+    }
+    return result
+}
+
+// The index of the last token of the callee name whose arg-list `(` is at `op`
+// (skipping a trailing generic `<...>` clause), or -1 for a shape we do not handle.
+fn callee_name_last(toks: read List<Tok>, op: read Int) -> Int {
+    let mut nameLast = op - 1
+    if at_symbol(toks: read toks, i: read nameLast, code: read SYM_RANGLE) {
+        let openAngle = back_match_angle(toks: read toks, closePos: read nameLast)
+        if openAngle < 0 { return -1 }
+        nameLast = openAngle - 1
+    }
+    if is_ident_tok(toks: read toks, i: read nameLast) == false { return -1 }
+    return nameLast
+}
+
+// The param-list open `(` of the first same-file `fn <Type>.method(...)` decl whose
+// last dotted name segment is `method`, or -1 if none. Used to resolve a receiver
+// call to its method signature (self effect + per-param effects).
+fn method_decl_param_open(toks: read List<Tok>, method: read String) -> Int {
+    let n = List.len(list: read toks)
+    let mut i = 0
+    let mut result = -1
+    while i < n && result < 0 {
+        if at_ident(toks: read toks, i: read i, wid: read WORD_FN) {
+            let nameIdx = i + 1
+            if is_ident_tok(toks: read toks, i: read nameIdx) && at_symbol(toks: read toks, i: read (nameIdx + 1), code: read SYM_DOT) {
+                let de = dotted_end(toks: read toks, i: read nameIdx)
+                if tk_text(toks: read toks, i: read (de - 1)) == method {
+                    let sigEnd = function_signature_end(toks: read toks, start: read i)
+                    result = find_param_open(toks: read toks, from: read nameIdx, end: read sigEnd)
+                }
+            }
+        }
+        i = i + 1
+    }
+    return result
+}
+
+// True iff any NAMED argument in the arg list [op+1,close) supplies an effect that
+// differs from its callee param's expected effect. `mode` selects the expected
+// source: 0 = stdlib map (ns/method), 1 = same-file signature params [sopen,sclose].
+fn arg_effect_bad(toks: read List<Tok>, op: read Int, close: read Int, mode: read Int, ns: read String, method: read String, sopen: read Int, sclose: read Int) -> Bool {
+    let mut k = op + 1
+    let mut depth = 0
+    let mut angle = 0
+    let mut inPipe = false
+    let mut segStart = op + 1
+    let mut hit = false
+    while k < close {
+        let opener = at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE)
+        let closer = at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE)
+        if opener {
+            depth = depth + 1
+        } else if closer {
+            if depth > 0 { depth = depth - 1 }
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE) {
+            angle = angle + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) {
+            if angle > 0 { angle = angle - 1 }
+        } else if depth == 0 && angle == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_PIPE) {
+            inPipe = inPipe == false
+        } else if depth == 0 && angle == 0 && inPipe == false && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
+            if arg_seg_effect_bad(toks: read toks, s: read segStart, e: read k, mode: read mode, ns: read ns, method: read method, sopen: read sopen, sclose: read sclose) { hit = true }
+            segStart = k + 1
+        }
+        k = k + 1
+    }
+    if arg_seg_effect_bad(toks: read toks, s: read segStart, e: read close, mode: read mode, ns: read ns, method: read method, sopen: read sopen, sclose: read sclose) { hit = true }
+    return hit
+}
+
+// One arg segment [s,e): RS0202 iff it is a named arg `pname: value` whose callee
+// param demands an effect and whose supplied effect differs. Positional args and
+// params with no declared effect are skipped (conservative — no false positive).
+fn arg_seg_effect_bad(toks: read List<Tok>, s: read Int, e: read Int, mode: read Int, ns: read String, method: read String, sopen: read Int, sclose: read Int) -> Bool {
+    if s >= e { return false }
+    if is_ident_tok(toks: read toks, i: read s) == false { return false }
+    if at_symbol(toks: read toks, i: read (s + 1), code: read SYM_COLON) == false { return false }
+    let pname = tk_text(toks: read toks, i: read s)
+    let mut expected = ""
+    if mode == 0 {
+        expected = stdlib_param_effect(ns: read ns, method: read method, pname: read pname)
+    } else {
+        expected = sig_param_effect(toks: read toks, open: read sopen, close: read sclose, pname: read pname)
+    }
+    if String.len(value: read expected) == 0 { return false }
+    let supplied = value_effect(toks: read toks, vs: read (s + 2))
+    return supplied != expected
+}
+
+// The first `{` of a same-file `struct`/`class`/`resource` decl named `typeName`,
+// or -1. The name always immediately follows the type keyword.
+fn type_body_open(toks: read List<Tok>, typeName: read String) -> Int {
+    let n = List.len(list: read toks)
+    let mut i = 0
+    let mut result = -1
+    while i < n && result < 0 {
+        let isType = at_ident(toks: read toks, i: read i, wid: read WORD_STRUCT) || at_ident(toks: read toks, i: read i, wid: read WORD_CLASS) || at_ident(toks: read toks, i: read i, wid: read WORD_RESOURCE)
+        if isType && is_ident_tok(toks: read toks, i: read (i + 1)) && tk_text(toks: read toks, i: read (i + 1)) == typeName {
+            result = find_body_open(toks: read toks, i: read i, end: read n)
+        }
+        i = i + 1
+    }
+    return result
+}
+
+// The inline type-root of field `field` in the type body [ob,close), or "" when the
+// field is absent OR declared `handle`/`weak` (handle/weak fields are non-owning, so
+// they are NOT inline-managed and never drive sub-case 3).
+fn struct_field_inline_root(toks: read List<Tok>, ob: read Int, close: read Int, field: read String) -> String {
+    let mut k = ob + 1
+    let mut paren = 0
+    let mut br = 0
+    let mut ang = 0
+    let mut brace = 0
+    let mut result = ""
+    let mut done = false
+    while k < close && done == false {
+        let atTop = paren == 0 && br == 0 && ang == 0 && brace == 0
+        if atTop && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_COLON) && is_ident_tok(toks: read toks, i: read k) && tk_text(toks: read toks, i: read k) == field {
+            let ts = k + 2
+            if tk_text(toks: read toks, i: read ts) == "handle" || tk_text(toks: read toks, i: read ts) == "weak" {
+                result = ""
+            } else {
+                result = type_region_root(toks: read toks, s: read ts, e: read close)
+            }
+            done = true
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) {
+            paren = paren + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) {
+            if paren > 0 { paren = paren - 1 }
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) {
+            br = br + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) {
+            if br > 0 { br = br - 1 }
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE) {
+            ang = ang + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) {
+            if ang > 0 { ang = ang - 1 }
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE) {
+            brace = brace + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE) {
+            if brace > 0 { brace = brace - 1 }
+        }
+        k = k + 1
+    }
+    return result
+}
+
+// True iff `fieldType` is a known-type-kind (declared struct/class/resource/sum or
+// stdlib) non-Copy type — i.e. `type_kind(fieldType).is_some() && !is_copy(...)`.
+fn is_managed_field_type(fieldType: read String, declared: read Set<String>) -> Bool {
+    if is_scalar_name(name: read fieldType) { return false }
+    return Set.contains<String>(set: read declared, value: read fieldType) || is_stdlib_type(name: read fieldType)
+}
+
+// The plain-`let` binding names of the body [bodyOpen,bodyClose) — the managed
+// bindings (a plain `let` is always a managed binding; `local` is excluded).
+fn collect_managed_names(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int) -> Set<String> {
+    let mut managed = Set<String>.new()
+    let mut k = bodyOpen + 1
+    while k < bodyClose {
+        if is_kw_text(toks: read toks, i: read k, word: read "let") {
+            let mut nameIdx = k + 1
+            if is_kw_text(toks: read toks, i: read nameIdx, word: read "mut") { nameIdx = nameIdx + 1 }
+            if is_ident_tok(toks: read toks, i: read nameIdx) {
+                Set.insert<String>(set: mut managed, value: read tk_text(toks: read toks, i: read nameIdx))
+            }
+        }
+        k = k + 1
+    }
+    return managed
+}
+
+// True iff the value at [vs,ve) is a managed place: a plain ident/field path whose
+// base binding is managed (after stripping a leading data effect). Call/literal
+// values are not places and are conservatively treated as non-managed.
+fn value_is_managed(toks: read List<Tok>, vs: read Int, managed: read Set<String>) -> Bool {
+    let mut s = vs
+    if is_effect_kw(toks: read toks, i: read s) { s = s + 1 }
+    if is_ident_tok(toks: read toks, i: read s) == false { return false }
+    return Set.contains<String>(set: read managed, value: read tk_text(toks: read toks, i: read s))
+}
+
+// Sub-case 3 over a constructor arg list [op+1,close) for `typeName`: RS0202 iff any
+// named field arg names an inline, non-Copy, known-type-kind field initialized from a
+// managed binding.
+fn ctor_managed_bad(toks: read List<Tok>, op: read Int, close: read Int, ob: read Int, obClose: read Int, declared: read Set<String>, managed: read Set<String>) -> Bool {
+    let mut k = op + 1
+    let mut depth = 0
+    let mut angle = 0
+    let mut inPipe = false
+    let mut segStart = op + 1
+    let mut hit = false
+    while k < close {
+        let opener = at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE)
+        let closer = at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE)
+        if opener {
+            depth = depth + 1
+        } else if closer {
+            if depth > 0 { depth = depth - 1 }
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE) {
+            angle = angle + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) {
+            if angle > 0 { angle = angle - 1 }
+        } else if depth == 0 && angle == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_PIPE) {
+            inPipe = inPipe == false
+        } else if depth == 0 && angle == 0 && inPipe == false && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
+            if ctor_field_seg_bad(toks: read toks, s: read segStart, e: read k, ob: read ob, obClose: read obClose, declared: read declared, managed: read managed) { hit = true }
+            segStart = k + 1
+        }
+        k = k + 1
+    }
+    if ctor_field_seg_bad(toks: read toks, s: read segStart, e: read close, ob: read ob, obClose: read obClose, declared: read declared, managed: read managed) { hit = true }
+    return hit
+}
+
+// One constructor field arg [s,e): RS0202 iff it is `field: value` where `field` is an
+// inline non-Copy known-type-kind field (looked up in the type body [ob,obClose)) and
+// `value` is a managed place.
+fn ctor_field_seg_bad(toks: read List<Tok>, s: read Int, e: read Int, ob: read Int, obClose: read Int, declared: read Set<String>, managed: read Set<String>) -> Bool {
+    if s >= e { return false }
+    if is_ident_tok(toks: read toks, i: read s) == false { return false }
+    if at_symbol(toks: read toks, i: read (s + 1), code: read SYM_COLON) == false { return false }
+    let field = tk_text(toks: read toks, i: read s)
+    let fieldType = struct_field_inline_root(toks: read toks, ob: read ob, close: read obClose, field: read field)
+    if String.len(value: read fieldType) == 0 { return false }
+    if is_managed_field_type(fieldType: read fieldType, declared: read declared) == false { return false }
+    return value_is_managed(toks: read toks, vs: read (s + 2), managed: read managed)
+}
+
+// True iff any arm pattern in [braceOpen+1,braceClose) is structured (`[...]` list,
+// `(...)` tuple, or `Name {...}` struct) — the shapes that project fields and so
+// require a scrutinee effect (MatchPattern::List | MatchPattern::Struct).
+fn match_has_structured_arm(toks: read List<Tok>, braceOpen: read Int, braceClose: read Int) -> Bool {
+    let mut i = braceOpen + 1
+    let mut hit = false
+    while i < braceClose {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_SEMI) || at_symbol(toks: read toks, i: read i, code: read SYM_COMMA) {
+            i = i + 1
+        } else {
+            let lineEnd = next_line_or_block_end(toks: read toks, start: read i, end: read braceClose)
+            let arrow = find_top_sym(toks: read toks, start: read i, end: read lineEnd, code: read SYM_FATARROW)
+            if arrow < 0 {
+                if lineEnd > i { i = lineEnd } else { i = i + 1 }
+            } else {
+                let ifPos = find_top_if(toks: read toks, start: read i, end: read arrow)
+                let pe = arrow
+                if pattern_is_structured(toks: read toks, ps: read i, pe: read pe) { hit = true }
+                let bodyStart = arrow + 1
+                if at_symbol(toks: read toks, i: read bodyStart, code: read SYM_LBRACE) {
+                    let bclose = find_matching(toks: read toks, open: read bodyStart, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+                    if bclose < 0 { i = braceClose } else { i = bclose + 1 }
+                } else {
+                    let bEnd = next_line_or_block_end(toks: read toks, start: read bodyStart, end: read braceClose)
+                    if bEnd > i { i = bEnd } else { i = i + 1 }
+                }
+            }
+        }
+    }
+    return hit
+}
+
+// True iff the guardless pattern [ps,pe) is a List (`[...]`), tuple (`(...)`), or
+// struct (`Name {...}`) pattern. Variant patterns (`Some(x)`, `Ok(e)`), bare idents,
+// literals and `_` are NOT structured.
+fn pattern_is_structured(toks: read List<Tok>, ps: read Int, pe: read Int) -> Bool {
+    if ps >= pe { return false }
+    if at_symbol(toks: read toks, i: read ps, code: read SYM_LBRACKET) { return true }
+    if at_symbol(toks: read toks, i: read ps, code: read SYM_LPAREN) { return true }
+    if is_ident_tok(toks: read toks, i: read ps) {
+        let after = dotted_end(toks: read toks, i: read ps)
+        if at_symbol(toks: read toks, i: read after, code: read SYM_LBRACE) { return true }
+    }
+    return false
+}
+
+// RS0202 over a single fn body: any of the four sub-cases fires. Walks each call
+// `(` for arg-effect + receiver self-effect + constructor-managed, and each `match`
+// for the structured-pattern-without-scrutinee-effect rule.
+fn fn_data_effect_bad(toks: read List<Tok>, start: read Int, declared: read Set<String>, methodNames: read Set<String>) -> Bool {
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+    if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
+    let bodyClose = find_matching(toks: read toks, open: read sigEnd, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    if bodyClose < 0 { return false }
+    let managed = collect_managed_names(toks: read toks, bodyOpen: read sigEnd, bodyClose: read bodyClose)
+    let mut k = sigEnd + 1
+    let mut hit = false
+    while k < bodyClose {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) {
+            if call_site_effect_bad(toks: read toks, op: read k, bodyClose: read bodyClose, declared: read declared, managed: read managed, methodNames: read methodNames) { hit = true }
+        } else if is_kw_text(toks: read toks, i: read k, word: read "match") && at_symbol(toks: read toks, i: read (k - 1), code: read SYM_DOT) == false {
+            if is_effect_kw(toks: read toks, i: read (k + 1)) == false {
+                let braceOpen = find_match_arms_open(toks: read toks, start: read (k + 1), end: read bodyClose)
+                if braceOpen >= 0 {
+                    let braceClose = find_matching(toks: read toks, open: read braceOpen, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+                    if braceClose >= 0 {
+                        if match_has_structured_arm(toks: read toks, braceOpen: read braceOpen, braceClose: read braceClose) { hit = true }
+                    }
+                }
+            }
+        }
+        k = k + 1
+    }
+    return hit
+}
+
+// One call site whose arg-list `(` is at `op`: dispatch by callee shape and check
+// arg-effects (sub-case 1), receiver self-effect (sub-case 2), and constructor
+// managed-inline fields (sub-case 3).
+fn call_site_effect_bad(toks: read List<Tok>, op: read Int, bodyClose: read Int, declared: read Set<String>, managed: read Set<String>, methodNames: read Set<String>) -> Bool {
+    let nameLast = callee_name_last(toks: read toks, op: read op)
+    if nameLast < 0 { return false }
+    let method = tk_text(toks: read toks, i: read nameLast)
+    // Classify the callee shape from cheap token checks BEFORE the (costly)
+    // matching-paren scan, so the common bare/qualified calls short-circuit.
+    if at_symbol(toks: read toks, i: read (nameLast - 1), code: read SYM_DOT) == false {
+        // Bare `Name(...)`: only a same-file struct/class constructor is relevant.
+        if Set.contains<String>(set: read declared, value: read method) == false { return false }
+        let ob = type_body_open(toks: read toks, typeName: read method)
+        if ob < 0 { return false }
+        let obClose = find_matching(toks: read toks, open: read ob, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+        if obClose < 0 { return false }
+        let close = find_matching(toks: read toks, open: read op, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+        if close < 0 || close > bodyClose { return false }
+        return ctor_managed_bad(toks: read toks, op: read op, close: read close, ob: read ob, obClose: read obClose, declared: read declared, managed: read managed)
+    }
+    // The receiver/namespace ends just before the `.`; skip a `Type<...>` generic
+    // clause (e.g. `ResourcePool<DbConnection>.borrow`) back to the head ident.
+    let mut head = nameLast - 2
+    if at_symbol(toks: read toks, i: read head, code: read SYM_RANGLE) {
+        let openAngle = back_match_angle(toks: read toks, closePos: read head)
+        if openAngle < 0 { return false }
+        head = openAngle - 1
+    }
+    if is_ident_tok(toks: read toks, i: read head) == false { return false }
+    let headText = tk_text(toks: read toks, i: read head)
+    let headChained = at_symbol(toks: read toks, i: read (head - 1), code: read SYM_DOT)
+    if headChained == false && is_upper_head(name: read headText) {
+        // Qualified call `Namespace.method(...)` — only curated stdlib namespaces.
+        if is_effect_stdlib_ns(ns: read headText) == false { return false }
+        let close = find_matching(toks: read toks, open: read op, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+        if close < 0 || close > bodyClose { return false }
+        return arg_effect_bad(toks: read toks, op: read op, close: read close, mode: read 0, ns: read headText, method: read method, sopen: read 0, sclose: read 0)
+    }
+    // Receiver call `recv.method(...)` — resolve to a same-file method signature.
+    if Set.contains<String>(set: read methodNames, value: read method) == false { return false }
+    let popen = method_decl_param_open(toks: read toks, method: read method)
+    if popen < 0 { return false }
+    let pclose = find_matching(toks: read toks, open: read popen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    if pclose < 0 { return false }
+    let close = find_matching(toks: read toks, open: read op, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    if close < 0 || close > bodyClose { return false }
+    let mut hit = false
+    if arg_effect_bad(toks: read toks, op: read op, close: read close, mode: read 1, ns: read "", method: read method, sopen: read popen, sclose: read pclose) { hit = true }
+    if receiver_self_effect_bad(toks: read toks, head: read head, popen: read popen, pclose: read pclose) { hit = true }
+    return hit
+}
+
+// Sub-case 2: the receiver whose head ident is at `head`, resolving to a method whose
+// self param list is [popen,pclose]. RS0202 iff the method's `self` effect exists and
+// differs from the visible receiver effect (the leading `read`/`mut`/`take`, default
+// `read`).
+fn receiver_self_effect_bad(toks: read List<Tok>, head: read Int, popen: read Int, pclose: read Int) -> Bool {
+    let selfEffect = value_effect(toks: read toks, vs: read (popen + 3))
+    if is_ident_tok(toks: read toks, i: read (popen + 1)) == false { return false }
+    if tk_text(toks: read toks, i: read (popen + 1)) != "self" { return false }
+    if String.len(value: read selfEffect) == 0 { return false }
+    // Walk back over a dotted receiver path `a.b.c` to its base ident.
+    let mut rstart = head
+    let mut going = true
+    while going {
+        if at_symbol(toks: read toks, i: read (rstart - 1), code: read SYM_DOT) && is_ident_tok(toks: read toks, i: read (rstart - 2)) {
+            rstart = rstart - 2
+        } else {
+            going = false
+        }
+    }
+    let mut visible = "read"
+    if is_effect_kw(toks: read toks, i: read (rstart - 1)) { visible = tk_text(toks: read toks, i: read (rstart - 1)) }
+    return selfEffect != visible
+}
+
 fn main() -> Unit {
     let source = Args.get_or_default(index: 0, default: read "")
     let toks = tokenize(source: read source)
@@ -3170,6 +3661,10 @@ fn main() -> Unit {
     let unsafeViol = file_unsafe_use(toks: read toks) && Set.contains<String>(set: read declaredFeatures, value: read "unsafe") == false
     let mut nativeEffect = false
     let mut nativeMissing = false
+    // RS0202: a missing/mismatched call-site data effect (any of four sub-cases).
+    // Precompute the same-file method-name set (receiver-call resolution gate).
+    let mut missingDataEffect = false
+    let methodNames = collect_method_names(toks: read toks)
     let mut i = 0
     let mut running = true
     while running {
@@ -3336,6 +3831,7 @@ fn main() -> Unit {
                     if fn_has_bad_await(toks: read toks, start: read i) { badAwait = true }
                     if fn_invalid_try(toks: read toks, start: read i, declared: read declared, allFns: read allFns) { invalidTry = true }
                     if fn_has_unnamed_arg(toks: read toks, start: read i, pubFns: read pubFns, dottedFns: read dottedFns) { unnamedArg = true }
+                    if fn_data_effect_bad(toks: read toks, start: read i, declared: read declared, methodNames: read methodNames) { missingDataEffect = true }
                     if fn_has_fd_surface(toks: read toks, start: read i) { fdSurface = true }
                     // RS0027: an unknown protocol in this fn's generic bounds.
                     if generics_unknown_protocol(toks: read toks, nameEnd: read dotted_end(toks: read toks, i: read ns), protocols: read protocols) { unknownProtocol = true }
@@ -3423,6 +3919,9 @@ fn main() -> Unit {
     if unnamedArg {
         Log.write(message: read "RS0201")
     }
+    if missingDataEffect {
+        Log.write(message: read "RS0202")
+    }
     if asyncNotConsumed {
         Log.write(message: read "RS0022")
     }
@@ -3466,7 +3965,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }

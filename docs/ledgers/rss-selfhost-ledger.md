@@ -1397,3 +1397,35 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   found (parse field `handle`/`weak` + Copy/type-kind + `let`/`local` binding);
   the arg-effect + receiver-self + match-scrutinee sub-cases reuse
   `collect_call_fn_sigs` and the arg splitter directly.
+
+### Milestone 2o — RS0202 MISSING_DATA_EFFECT LANDED (29 codes)
+
+- **Goal:** land RS0202, the previously-blocked call/param-effect flag — a
+  file-level OR over four oracle sub-cases (`checks/calls.rs` arg-effect +
+  receiver self-effect, `checks/body/fresh.rs` constructor-inline-managed-field,
+  match-scrutinee). This completes the value-model foundation (type-kind +
+  Copy predicate + managed-binding tracking + per-param effect signatures) that
+  the type-mismatch codes RS0207-0210 build on.
+- **Landed (2026-07-04):** `selfhost/check.rss` +500 lines. New value-model infra:
+  `stdlib_param_effect(ns, method, pname)` (curated `.rssi` param-effect map, built
+  measure-first — only the methods the corpus needs), `value_effect` (visible
+  effect of a call-site value), `sig_param_effect` (per-param effect from a
+  same-file signature), `arg_effect_bad`/`arg_seg_effect_bad` (closure-pipe-aware
+  arg splitter → sub-case 1), `receiver_self_effect_bad` (sub-case 2), a
+  constructor-arg managed-field walk (sub-case 3), and `fn_data_effect_bad` /
+  `call_site_effect_bad` threading them per fn body.
+- **Verdict:** `checker_parity_corpus` byte-exact **619 files, 619 ok, 0
+  run-failures, 0 code-mismatches** (host toolchain, 1720s — the +500 lines slow
+  per-file reg-VM checking, hence the longer run). RS0202 added to
+  `CHECKER_TARGET_CODES` → **29 codes**. Green.
+- **Process note:** the implementing sub-agent stalled (stream watchdog, no
+  progress 600s) AFTER the ~40-file subset dev test passed but BEFORE the full
+  corpus run — leaving RS0202 in the target UNVERIFIED. Picked up in the main
+  loop: ran the full corpus (green), removed the agent's leftover temp dev tests
+  (`rs0202_dev`, `rs0202_oracle_scan`, `RS0202_SUBSET`) from `selfhost_parity.rs`,
+  then committed. Lesson reinforced: the subset dev test is necessary but NOT
+  sufficient — the full 619 corpus is the gate.
+- **CHECKER_TARGET_CODES (29):** the 28 above + RS0202.
+- **Next slice:** RS0207-0210 (argument/return/control-flow/operator type
+  mismatch) — the pervasive-expression-typing cluster; reuses this slice's
+  type-kind/Copy/effect-signature infra.
