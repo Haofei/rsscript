@@ -1457,3 +1457,31 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   RS0211 (unsupported derive), RS0034 (uninferable binding), RS0205 (dup arg —
   needs callee param resolution, higher FP). The type/borrow clusters remain the
   bulk of the 55.
+
+### Milestone 2q — RS0037 variant-pattern arity (31 codes) + corpus-gate speedup (~30min → ~90s)
+
+- **RS0037 VARIANT_PATTERN_ARITY_MISMATCH (2026-07-04):** a positional variant
+  pattern `V(b1,…,bn)` whose head is a known sum variant, is not named (`field:`),
+  binds n>0 sub-patterns, and n != the variant's declared field count (oracle
+  `checks/body/semantics.rs`). check.rss gains: `count_top_segments` /
+  `region_has_top_colon` (depth-aware), `collect_variant_arities` (a ONE-PASS
+  variant→arity table encoded as `Name:arity` Set<String> keys — `variant_arity_of`
+  probes 0..11), and a `match`/arm/pattern walk (`has_variant_arity_mismatch` →
+  `match_arm_arity_bad` → `arm_pattern_arity_bad`). Fires only on known variants
+  with a positional non-named payload → tiny FP surface. → **31 codes.**
+- **PERF LESSON (important):** the first RS0037 cut recomputed variant arity by
+  re-walking ALL declarations per pattern — O(patterns × tokens), which on the
+  4k-line self-hosted tool files (check.rss ~220KB) blew a single file up to
+  minutes on the reg-VM. Fix = precompute the arity table once per file. Always
+  precompute file-level tables; never re-scan per occurrence.
+- **corpus-gate speedup (`selfhost_parity.rs`):** the `checker_parity_corpus` gate
+  was ~30min because it ran the reg-VM checker over 619 files SEQUENTIALLY on one
+  thread. Two fixes: (1) **work-stealing parallelism** — each worker compiles its
+  own exe (`RegVmExecutable` holds an `Rc`, not `Sync`) and pulls file indices off
+  a shared `AtomicUsize`, saturating ~6-7 cores; (2) **slow-test gate** — the 4
+  giant files (check.rss/astdump.rss/scan.rss/package-manager, each minutes-long
+  and un-splittable) are skipped by default (logged, no silent truncation) for a
+  **~90s** fast gate (build incl.; ~35s run, 615 files); `RSS_SELFHOST_FULL=1`
+  runs all 619. RS0037 is sound on the skipped giants (they have 0 positional
+  variant patterns). Fast gate: 615/615, 0 mismatch.
+- **CHECKER_TARGET_CODES (31):** the 30 above + RS0037.

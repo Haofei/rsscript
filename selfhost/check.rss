@@ -3545,6 +3545,241 @@ fn pattern_is_structured(toks: read List<Tok>, ps: read Int, pe: read Int) -> Bo
     return false
 }
 
+// --- RS0037: positional variant-pattern arity mismatch ----------------------
+
+// Comma-separated top-level segment count of the paren group (open,close). Empty => 0.
+fn count_top_segments(toks: read List<Tok>, open: read Int, close: read Int) -> Int {
+    if (open + 1) >= close { return 0 }
+    let mut k = open + 1
+    let mut depth = 0
+    let mut angle = 0
+    let mut segs = 1
+    while k < close {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE) {
+            depth = depth - 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE) {
+            angle = angle + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) {
+            if angle > 0 { angle = angle - 1 }
+        } else if depth == 0 && angle == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
+            segs = segs + 1
+        }
+        k = k + 1
+    }
+    return segs
+}
+
+// True iff the paren group (open,close) has a top-level `:` — a named/struct-style
+// pattern (`V(field: p)`), which the oracle does NOT positional-arity-check.
+fn region_has_top_colon(toks: read List<Tok>, open: read Int, close: read Int) -> Bool {
+    let mut k = open + 1
+    let mut depth = 0
+    let mut angle = 0
+    let mut hit = false
+    while k < close {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE) {
+            depth = depth - 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE) {
+            angle = angle + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) {
+            if angle > 0 { angle = angle - 1 }
+        } else if depth == 0 && angle == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COLON) {
+            hit = true
+        }
+        k = k + 1
+    }
+    return hit
+}
+
+// The Set key encoding a variant's declared arity: `Name:arity`.
+fn arity_key(name: read String, arity: read Int) -> String {
+    return String.concat(left: read String.concat(left: read name, right: read ":"), right: read String.from_int(value: arity))
+}
+
+// Look up variant `name`'s declared arity in the precomputed set, or -1 if absent.
+// Arities are small, so a bounded probe (0..11) beats storing/reading a map value.
+fn variant_arity_of(arities: read Set<String>, name: read String) -> Int {
+    let mut a = 0
+    let mut result = -1
+    while a < 12 {
+        if Set.contains<String>(set: read arities, value: read arity_key(name: read name, arity: read a)) {
+            result = a
+            a = 12
+        } else {
+            a = a + 1
+        }
+    }
+    return result
+}
+
+// Insert `Name:arity` for every variant in one sum body `{...}` (bodyOpen is the `{`).
+fn collect_variant_arities_in_body(toks: read List<Tok>, bodyOpen: read Int, arities: mut Set<String>) -> Unit {
+    let close = find_matching(toks: read toks, open: read bodyOpen, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    if close < 0 { return Unit }
+    let mut k = bodyOpen + 1
+    while k < close {
+        if is_ident_tok(toks: read toks, i: read k) {
+            let vname = tk_text(toks: read toks, i: read k)
+            if at_symbol(toks: read toks, i: read (k + 1), code: read SYM_LPAREN) {
+                let pclose = find_matching(toks: read toks, open: read (k + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+                if pclose < 0 {
+                    k = close
+                } else {
+                    let a = count_top_segments(toks: read toks, open: read (k + 1), close: read pclose)
+                    Set.insert<String>(set: mut arities, value: read arity_key(name: read vname, arity: read a))
+                    k = pclose + 1
+                }
+            } else {
+                Set.insert<String>(set: mut arities, value: read arity_key(name: read vname, arity: read 0))
+                k = k + 1
+            }
+        } else {
+            k = k + 1
+        }
+    }
+    return Unit
+}
+
+// Precompute the whole file's variant->arity table ONCE (as `Name:arity` keys), so
+// per-pattern arity lookup is O(1) instead of re-walking every declaration (which is
+// O(patterns * tokens) — pathological on the 4k-line self-hosted tools).
+fn collect_variant_arities(toks: read List<Tok>) -> Set<String> {
+    let ntok = List.len(list: read toks)
+    let mut arities = Set<String>.new()
+    let mut i = 0
+    let mut running = true
+    while running {
+        if i >= ntok {
+            running = false
+        } else if tk_kind(toks: read toks, i: read i) == TOK_EOF {
+            running = false
+        } else {
+            let cls = classify_top(toks: read toks, i: read i)
+            let isPub = cls.isPub
+            if cls.isFeatures {
+                i = declaration_line_end(toks: read toks, start: read i)
+            } else if cls.isProfile {
+                i = declaration_line_end(toks: read toks, start: read i)
+            } else if cls.isSum {
+                let r = parse_sum_decl(toks: read toks, i: read i)
+                if r < 0 {
+                    running = false
+                } else {
+                    let ob = find_body_open(toks: read toks, i: read i, end: read r)
+                    if ob >= 0 {
+                        collect_variant_arities_in_body(toks: read toks, bodyOpen: read ob, arities: mut arities)
+                    }
+                    i = r
+                }
+            } else if starts_type_decl(toks: read toks, i: read i, isPub: read isPub) {
+                let r = parse_type_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_PROTOCOL) {
+                let r = parse_protocol_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_IMPL) {
+                let r = parse_impl_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else if cls.isNativeMod {
+                let r = parse_native_module_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else if cls.isTypeAlias {
+                let r = parse_type_alias_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else if cls.isConst {
+                let r = parse_const_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_MODULE) {
+                let r = parse_module_decl(toks: read toks, i: read i)
+                if r < 0 { i = i + 1 } else { i = r }
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_USE) {
+                let r = parse_use_decl(toks: read toks, i: read i)
+                if r < 0 { i = i + 1 } else { i = r }
+            } else if starts_fn_like(toks: read toks, i: read i, isPub: read isPub) {
+                let r = parse_function_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else {
+                i = i + 1
+            }
+        }
+    }
+    return arities
+}
+
+// One arm pattern [ps,pe): RS0037 iff it is a positional `Variant(b1,…,bn)` whose
+// head is a known sum variant, is not named (`field:`), binds n>0 sub-patterns, and
+// n != the variant's declared field count.
+fn arm_pattern_arity_bad(toks: read List<Tok>, ps: read Int, pe: read Int, arities: read Set<String>) -> Bool {
+    if ps >= pe { return false }
+    if is_ident_tok(toks: read toks, i: read ps) == false { return false }
+    if at_symbol(toks: read toks, i: read (ps + 1), code: read SYM_LPAREN) == false { return false }
+    let close = find_matching(toks: read toks, open: read (ps + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    if close < 0 || close > pe { return false }
+    if region_has_top_colon(toks: read toks, open: read (ps + 1), close: read close) { return false }
+    let arity = variant_arity_of(arities: read arities, name: read tk_text(toks: read toks, i: read ps))
+    if arity < 0 { return false }
+    let found = count_top_segments(toks: read toks, open: read (ps + 1), close: read close)
+    if found == 0 { return false }
+    return found != arity
+}
+
+// One match's arm brace [braceOpen,braceClose]: any positional-arity-bad arm.
+fn match_arm_arity_bad(toks: read List<Tok>, braceOpen: read Int, braceClose: read Int, arities: read Set<String>) -> Bool {
+    let mut i = braceOpen + 1
+    let mut hit = false
+    while i < braceClose {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_SEMI) || at_symbol(toks: read toks, i: read i, code: read SYM_COMMA) {
+            i = i + 1
+        } else {
+            let lineEnd = next_line_or_block_end(toks: read toks, start: read i, end: read braceClose)
+            let arrow = find_top_sym(toks: read toks, start: read i, end: read lineEnd, code: read SYM_FATARROW)
+            if arrow < 0 {
+                if lineEnd > i { i = lineEnd } else { i = i + 1 }
+            } else {
+                if arm_pattern_arity_bad(toks: read toks, ps: read i, pe: read arrow, arities: read arities) { hit = true }
+                let bodyStart = arrow + 1
+                if at_symbol(toks: read toks, i: read bodyStart, code: read SYM_LBRACE) {
+                    let bclose = find_matching(toks: read toks, open: read bodyStart, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+                    if bclose < 0 { i = braceClose } else { i = bclose + 1 }
+                } else {
+                    let bEnd = next_line_or_block_end(toks: read toks, start: read bodyStart, end: read braceClose)
+                    if bEnd > i { i = bEnd } else { i = i + 1 }
+                }
+            }
+        }
+    }
+    return hit
+}
+
+// RS0037 over the whole file: any `match` with a positional-arity-bad variant arm.
+fn has_variant_arity_mismatch(toks: read List<Tok>) -> Bool {
+    let arities = collect_variant_arities(toks: read toks)
+    let ntok = List.len(list: read toks)
+    let mut k = 0
+    let mut hit = false
+    while k < ntok {
+        if tk_kind(toks: read toks, i: read k) == TOK_EOF {
+            k = ntok
+        } else if is_kw_text(toks: read toks, i: read k, word: read "match") && (k == 0 || at_symbol(toks: read toks, i: read (k - 1), code: read SYM_DOT) == false) {
+            let braceOpen = find_match_arms_open(toks: read toks, start: read (k + 1), end: read ntok)
+            if braceOpen >= 0 {
+                let braceClose = find_matching(toks: read toks, open: read braceOpen, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+                if braceClose >= 0 {
+                    if match_arm_arity_bad(toks: read toks, braceOpen: read braceOpen, braceClose: read braceClose, arities: read arities) { hit = true }
+                }
+            }
+            k = k + 1
+        } else {
+            k = k + 1
+        }
+    }
+    return hit
+}
+
 // RS0202 over a single fn body: any of the four sub-cases fires. Walks each call
 // `(` for arg-effect + receiver self-effect + constructor-managed, and each `match`
 // for the structured-pattern-without-scrutinee-effect rule.
@@ -3725,6 +3960,8 @@ fn main() -> Unit {
     let outOfRangeInt = has_out_of_range_int(toks: read toks)
     // RS0212: a value derive (Clone/Eq/Ord/Hash/JsonEncode/JsonDecode) on a resource.
     let resourceDerive = has_bad_resource_derive(toks: read toks)
+    // RS0037: a positional variant pattern binding != the variant's declared arity.
+    let variantArity = has_variant_arity_mismatch(toks: read toks)
     // RS0101: feature-gating. Declared features (pre-pass, order-independent) and
     // whole-file construct probes for local/async/unsafe; native is tracked in the
     // fn walk below (the missing-effect source fires even when native is declared).
@@ -4034,6 +4271,9 @@ fn main() -> Unit {
     if resourceDerive {
         Log.write(message: read "RS0212")
     }
+    if variantArity {
+        Log.write(message: read "RS0037")
+    }
     // RS0101: any unfeatured feature-requiring construct. Native fires if a fn has
     // `effects(native)` without the feature, OR a `native fn` omits that effect.
     let nativeViol = nativeMissing || (nativeEffect && Set.contains<String>(set: read declaredFeatures, value: read "native") == false)
@@ -4041,7 +4281,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }

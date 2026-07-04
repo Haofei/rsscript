@@ -503,7 +503,7 @@ fn parser_parity_corpus() {
 // ---------------------------------------------------------------------------
 
 /// Diagnostic codes the rss checker is expected to reproduce.
-const CHECKER_TARGET_CODES: &[&str] = &["RS0002","RS0003","RS0004","RS0005","RS0006","RS0007","RS0008","RS0009","RS0010","RS0011","RS0012","RS0016","RS0017","RS0021","RS0024","RS0028","RS0033","RS0029","RS0023","RS0035","RS0027","RS0014","RS0018","RS0019","RS0022","RS0101","RS0013","RS0201","RS0202","RS0212"];
+const CHECKER_TARGET_CODES: &[&str] = &["RS0002","RS0003","RS0004","RS0005","RS0006","RS0007","RS0008","RS0009","RS0010","RS0011","RS0012","RS0016","RS0017","RS0021","RS0024","RS0028","RS0033","RS0029","RS0023","RS0035","RS0027","RS0014","RS0018","RS0019","RS0022","RS0101","RS0013","RS0201","RS0202","RS0212","RS0037"];
 
 fn is_target_code(code: &str) -> bool {
     CHECKER_TARGET_CODES.contains(&code)
@@ -584,30 +584,97 @@ fn checker_reports_rs0005_for_duplicate_declaration_smoke() {
 #[ignore]
 fn checker_parity_corpus() {
     let root = workspace_root();
-    let files = collect_rss_files(&root);
-    let exe = compile_checker().expect("rss checker should compile");
-    let mut run_failures: Vec<String> = Vec::new();
-    let mut mismatches: Vec<String> = Vec::new();
-    let mut ok = 0usize;
-    for file in &files {
-        let rel = file.strip_prefix(&root).unwrap_or(file).display().to_string();
-        let Ok(source) = std::fs::read_to_string(file) else {
-            run_failures.push(format!("{rel}: unreadable"));
-            continue;
-        };
-        let oracle = checker_oracle_codes(&rel, &source);
-        match run_checker(&exe, &source) {
-            Err(e) => run_failures.push(format!("{rel}: {e}")),
-            Ok(actual) => {
-                if actual == oracle {
-                    ok += 1;
-                } else {
-                    mismatches.push(format!("{rel}: oracle={oracle:?} rss={actual:?}"));
-                }
-            }
+    let all_files = collect_rss_files(&root);
+    // Slow-test gate. A handful of ~4k-line self-hosted tools (check.rss ~220KB,
+    // astdump.rss ~180KB, …) dominate the wall time: the checker's per-file cost is
+    // super-linear and the reg-VM is an interpreter, so those few files take minutes
+    // EACH and no fan-out can split a single file. By default we skip files above a
+    // byte threshold for a ~1-min iteration gate; set RSS_SELFHOST_FULL=1 for the
+    // exhaustive run. The skipped files are logged (no silent truncation).
+    let full = std::env::var("RSS_SELFHOST_FULL").is_ok();
+    const FAST_MAX_BYTES: u64 = 40_000;
+    let (files, skipped): (Vec<_>, Vec<_>) = if full {
+        (all_files, Vec::new())
+    } else {
+        all_files.into_iter().partition(|f| {
+            std::fs::metadata(f)
+                .map(|m| m.len() <= FAST_MAX_BYTES)
+                .unwrap_or(true)
+        })
+    };
+    if !full {
+        eprintln!(
+            "[gate] FAST mode ({} files; {} large skipped — RSS_SELFHOST_FULL=1 for all)",
+            files.len(),
+            skipped.len()
+        );
+        for f in &skipped {
+            eprintln!(
+                "[gate] skipped (large): {}",
+                f.strip_prefix(&root).unwrap_or(f).display()
+            );
         }
     }
     let total = files.len();
+    // Each file is independent, so fan the corpus out across cores. `RegVmExecutable`
+    // holds an `Rc` (not `Sync`), so we can't share one exe across threads — instead
+    // each worker compiles its own checker (cheap vs. hundreds of file runs) and
+    // processes one chunk. Cuts the wall time from ~30 min to a few minutes.
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .clamp(1, total.max(1));
+    // Work-stealing over a shared atomic cursor rather than static chunks: a few
+    // files (the ~4k-line selfhost tools) are far slower than the rest, so static
+    // chunking would leave one worker straggling while the others idle. Each worker
+    // owns its own exe and pulls the next file index when free.
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let (mut ok, mut run_failures, mut mismatches) = (0usize, Vec::new(), Vec::new());
+    let partials: Vec<(usize, Vec<String>, Vec<String>)> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..workers)
+            .map(|_| {
+                let (root, files, next) = (&root, &files, &next);
+                scope.spawn(move || {
+                    let exe = compile_checker().expect("rss checker should compile");
+                    let mut ok = 0usize;
+                    let mut run_failures: Vec<String> = Vec::new();
+                    let mut mismatches: Vec<String> = Vec::new();
+                    loop {
+                        let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if i >= files.len() {
+                            break;
+                        }
+                        let file = &files[i];
+                        let rel =
+                            file.strip_prefix(root).unwrap_or(file).display().to_string();
+                        let Ok(source) = std::fs::read_to_string(file) else {
+                            run_failures.push(format!("{rel}: unreadable"));
+                            continue;
+                        };
+                        let oracle = checker_oracle_codes(&rel, &source);
+                        match run_checker(&exe, &source) {
+                            Err(e) => run_failures.push(format!("{rel}: {e}")),
+                            Ok(actual) => {
+                                if actual == oracle {
+                                    ok += 1;
+                                } else {
+                                    mismatches
+                                        .push(format!("{rel}: oracle={oracle:?} rss={actual:?}"));
+                                }
+                            }
+                        }
+                    }
+                    (ok, run_failures, mismatches)
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    for (o, rf, mm) in partials {
+        ok += o;
+        run_failures.extend(rf);
+        mismatches.extend(mm);
+    }
     eprintln!(
         "\n=== checker_parity_corpus (codes {CHECKER_TARGET_CODES:?}) ===\n  files: {total}\n  \
          ok: {ok}\n  run-failures: {}\n  code-mismatches: {}\n",
