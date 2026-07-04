@@ -1558,3 +1558,20 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   why only 2 files fire despite many noalloc-construct fixtures), so the unqualified
   ctor case is excluded.
 - **CHECKER_TARGET_CODES (35):** the 34 above + RS0020.
+
+### Milestone 2v — RS0902 weak-field + RS1003 own-struct (37 codes)
+
+- **RS0902 INVALID_WEAK_FIELD (2026-07-04):** a `weak` struct/resource field whose
+  type is not a class (oracle `analyzer/resource_types.rs`). check.rss:
+  `collect_nonclass_types` + `type_body_has_invalid_weak` (`name: weak [handle] T`
+  where T is a scalar or a declared non-class). FP-safe: unknown T (possibly a
+  foreign class) never fires. Fast-gate complete (1 oracle file, giants weak-free).
+- **RS1003 OWN_STRUCT_ATTEMPT (2026-07-04):** `own struct` is removed from the
+  language; the oracle (`checks/forbidden.rs`) literally scans for adjacent
+  `own`+`struct` tokens, so `has_own_struct` does byte-identical adjacency detection.
+  Fast-gate complete (1 oracle file, giant-clean).
+- **DEV-LOOP WIN proven here:** RS1003 was verified with `RSS_CHECKER_EXTRA_CODES=RS1003`
+  and ZERO rebuild (`Finished in 0.10s`) — the target-code override lets a new code be
+  iterated purely against the disk-read check.rss. Per-code loop is now ~25-47s (reg-VM
+  only), no ~55s test rebuild until the final const bake.
+- **CHECKER_TARGET_CODES (37):** the 35 above + RS0902 + RS1003.

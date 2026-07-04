@@ -2843,6 +2843,22 @@ fn fn_has_noalloc_call(toks: read List<Tok>, start: read Int, declared: read Set
     return noalloc_body_bad(toks: read toks, bodyOpen: read sigEnd, bodyClose: read bodyClose, declared: read declared, sumVariants: read sumVariants, noallocFns: read noallocFns)
 }
 
+// RS1003 OWN_STRUCT_ATTEMPT: `own struct` is not part of the language (oracle
+// checks/forbidden.rs scans for the adjacent `own` `struct` tokens). Byte-for-byte
+// the same check: any `own` immediately followed by `struct`.
+fn has_own_struct(toks: read List<Tok>) -> Bool {
+    let ntok = List.len(list: read toks)
+    let mut i = 0
+    let mut hit = false
+    while i < (ntok - 1) {
+        if is_kw_text(toks: read toks, i: read i, word: read "own") && is_kw_text(toks: read toks, i: read (i + 1), word: read "struct") {
+            hit = true
+        }
+        i = i + 1
+    }
+    return hit
+}
+
 // RS0902 INVALID_WEAK_FIELD: a `weak` struct/resource field whose type is not a class
 // (oracle analyzer/resource_types.rs). FP-safe: fire only when the field type is a
 // KNOWN non-class — a scalar, or a type declared `struct`/`resource` in this file. An
@@ -4420,6 +4436,8 @@ fn main() -> Unit {
     let variantArity = has_variant_arity_mismatch(toks: read toks)
     // RS0902: a `weak` field whose type is a known non-class.
     let invalidWeak = has_invalid_weak_field(toks: read toks)
+    // RS1003: an `own struct` declaration (removed from the language).
+    let ownStruct = has_own_struct(toks: read toks)
     // RS0101: feature-gating. Declared features (pre-pass, order-independent) and
     // whole-file construct probes for local/async/unsafe; native is tracked in the
     // fn walk below (the missing-effect source fires even when native is declared).
@@ -4757,6 +4775,9 @@ fn main() -> Unit {
     if invalidWeak {
         Log.write(message: read "RS0902")
     }
+    if ownStruct {
+        Log.write(message: read "RS1003")
+    }
     // RS0101: any unfeatured feature-requiring construct. Native fires if a fn has
     // `effects(native)` without the feature, OR a `native fn` omits that effect.
     let nativeViol = nativeMissing || (nativeEffect && Set.contains<String>(set: read declaredFeatures, value: read "native") == false)
@@ -4764,7 +4785,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
