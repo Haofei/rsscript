@@ -1689,3 +1689,46 @@ token/structure-decidable tier now covers scanner + parser + signature-table +
 resource/ownership-syntax codes. Remaining ~52 need the type engine (RS0206-0210
 expression typing), the borrow/liveness engine (RS0301-0313, RS04xx/05xx/08xx), or
 callee/stdlib resolution (RS0203/0204/0030/0032/0036) — the genuine engine phase.
+
+### Milestone 2af — RS0208 return-type mismatch (47 codes); FIRST type-inference code
+
+- **RS0208 RETURN_TYPE_MISMATCH (2026-07-04):** a `return <expr>` (or a non-Unit
+  fallthrough tail) whose *inferred* type is incompatible with the fn's declared
+  return type (oracle `checks/calls.rs` check_return_type family). This is the FIRST
+  code requiring real expression type inference — the checker reproduces the analyzer's
+  inferred `hir_expr_type_name`, not just syntax. The engine (all in `check.rss`):
+  - `return_actual_type` — an UNKNOWN-biased typer (any un-typeable expr → `""` → no
+    fire): effect/`manage`/`await`/`spawn` unwrap; literals; param typing
+    (`param_type_string`); `let`/`local` resolution (`find_let_rhs_start`); with-binding
+    + `?`-unwrap; select-arm binding (`find_select_binding`); `.ok()` Result→Option;
+    variant calls; qualified calls (`declared_qualified_return` → curated
+    `stdlib_return_type`); unqualified calls (`declared_fn_return`); generic constructors
+    `Ns<Args>.new()`; `List.fold<_, Acc>` → Acc.
+  - `return_expr_mismatch` — Result/Option-aware: explicit `Ok`/`Err`/`Some`/`None`
+    payload match, else a bare value vs the `Ok`/`Some` payload (implicit-wrap).
+    Alias-safety: a `Result<?>`/`Option<?>` wildcard vs a non-Result/Option expected →
+    no fire (unexpanded type alias).
+  - `stmt_expr_end` — depth-aware return-expr terminator: stops at a same-line `}` so a
+    match/select arm `_ => { return x }` types correctly, but stops at any line change
+    so a multi-line value stays untyped (FP-safe).
+  - **Module qualification** — `qualified_type_string` canonicalizes the return
+    annotation's module-local type names to `module.Name` (`module_prefix` +
+    `collect_declared_types`), while value typing stays syntactic/unqualified. This
+    reproduces the analyzer's exact asymmetry: a generic-arg-derived
+    `List<InterfaceSnapshot>.new()` (unqualified) mismatches the qualified
+    `List<rss.package.review.InterfaceSnapshot>` annotation. That asymmetry is the
+    entire RS0208 population of the `package-manager` giant (3 fires).
+  - `has_return_type_mismatch` — file walker skipping type decls / closure bodies;
+    per-fn fallthrough via `body_falls_through`.
+- **Giant verification (whole-corpus byte-exact):** oracle RS0208 census =
+  `package-manager`:1 (matched exactly), `scan`/`astdump`/`check`:0 (no module header
+  → qualification is a no-op → base-engine behavior; my checker fires 0 on each). The
+  big giants are pathologically slow through the interpreted reg-VM (astdump 180KB =
+  27min, check.rss 333KB = 78min) — the `RSS_SELFHOST_FULL=1` "~22min" note is stale.
+- **CHECKER_TARGET_CODES (47):** the 46 above + RS0208.
+
+**Milestone: 47 diagnostic codes byte-exact over the 619-file corpus — the type
+engine has begun.** RS0208 is the first code driven by reproduced expression-type
+inference. The `type_token_string` / `arg_type_matches` / `return_actual_type`
+infrastructure built here is the foundation for the sibling RS0206/0207/0209/0210
+bucket (~120 file-fires, the dominant remaining mass).
