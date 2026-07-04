@@ -3998,6 +3998,443 @@ fn try_operand_root(toks: read List<Tok>, qPos: read Int, bodyOpen: read Int, po
     return ""
 }
 
+// ===================================================================
+// RS0208 RETURN_TYPE_MISMATCH — type-inference engine (in progress).
+// Ports crates/rsscript/src/checks/calls.rs check_return_type/expr/payload +
+// argument_type_matches. Wired behind is_target_code so it is invisible to the
+// parity gate until byte-exact (iterate with RSS_CHECKER_EXTRA_CODES=RS0208).
+// ===================================================================
+
+// The token range [ts, te) of a fn's declared return type (after `->`, up to the
+// body `{` / `effects`). ok=false when the fn declares no return type.
+struct RetRange {
+    ts: Int
+    te: Int
+    ok: Bool
+}
+
+// Canonical string of a type token range, mirroring text_util type_ref_name:
+// `Root<A, B>` (args joined ", "), `fresh X` / `owned X` / `noescape X` prefixes.
+fn type_token_string(toks: read List<Tok>, ts: read Int, te: read Int) -> String {
+    let mut sb = ""
+    let mut i = ts
+    while i < te {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_COMMA) {
+            sb = String.concat(left: read sb, right: read ", ")
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_LANGLE) {
+            sb = String.concat(left: read sb, right: read "<")
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RANGLE) {
+            sb = String.concat(left: read sb, right: read ">")
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) {
+            sb = String.concat(left: read sb, right: read "(")
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) {
+            sb = String.concat(left: read sb, right: read ")")
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_ARROW) {
+            sb = String.concat(left: read sb, right: read " -> ")
+        } else if is_ident_tok(toks: read toks, i: read i) {
+            let t = tk_text(toks: read toks, i: read i)
+            if t == "fresh" || t == "owned" || t == "noescape" {
+                sb = String.concat(left: read String.concat(left: read sb, right: read t), right: read " ")
+            } else {
+                sb = String.concat(left: read sb, right: read t)
+            }
+        }
+        i = i + 1
+    }
+    return sb
+}
+
+// index of `needle` in `s`, or -1 (String.index_of returns Option<Int>).
+fn str_find(s: read String, needle: read String) -> Int {
+    match String.index_of(value: read s, needle: read needle) {
+        Some(i) => {
+            return i
+        }
+        None => {
+            return 0 - 1
+        }
+    }
+}
+
+// strip a leading "fresh " marker (text_util strip_fresh_type).
+fn str_strip_fresh(s: read String) -> String {
+    if String.starts_with(value: read s, prefix: read "fresh ") {
+        let n = String.len(value: read s)
+        return String.slice(value: read s, start: read 6, len: read (n - 6))
+    }
+    return s
+}
+
+// root name before the first `<` (after stripping `fresh `). text_util type_root_name.
+fn str_type_root(s: read String) -> String {
+    let b = str_strip_fresh(s: read s)
+    let lt = str_find(s: read b, needle: read "<")
+    if lt < 0 { return b }
+    return String.slice(value: read b, start: read 0, len: read lt)
+}
+
+// trim ASCII spaces from both ends.
+fn str_trim(s: read String) -> String {
+    let cs = String.chars(value: read s)
+    let n = List.len(list: read cs)
+    let mut a = 0
+    let mut sc = true
+    while sc {
+        if a >= n { sc = false } else if List.get(list: read cs, index: read a) == ' ' { a = a + 1 } else { sc = false }
+    }
+    let mut b = n
+    let mut sc2 = true
+    while sc2 {
+        if b <= a { sc2 = false } else if List.get(list: read cs, index: read (b - 1)) == ' ' { b = b - 1 } else { sc2 = false }
+    }
+    return String.slice(value: read s, start: read a, len: read (b - a))
+}
+
+// The `which`-th top-level generic argument of a canonical type string, or ""
+// (text_util type_arg_names + split_top_level_type_args). Commas nested in <>/()
+// are not separators.
+fn str_top_arg(s: read String, which: read Int) -> String {
+    let b = str_strip_fresh(s: read s)
+    let lt = str_find(s: read b, needle: read "<")
+    if lt < 0 { return "" }
+    let n = String.len(value: read b)
+    let inner = String.slice(value: read b, start: read (lt + 1), len: read ((n - 1) - (lt + 1)))
+    let cs = String.chars(value: read inner)
+    let m = List.len(list: read cs)
+    let mut depth = 0
+    let mut start = 0
+    let mut argno = 0
+    let mut idx = 0
+    let mut result = ""
+    let mut found = false
+    while idx < m {
+        let c = List.get(list: read cs, index: read idx)
+        if c == '<' || c == '(' {
+            depth = depth + 1
+        } else if c == '>' || c == ')' {
+            depth = depth - 1
+        } else if c == ',' && depth == 0 {
+            if argno == which && found == false {
+                result = String.slice(value: read inner, start: read start, len: read (idx - start))
+                found = true
+            }
+            argno = argno + 1
+            start = idx + 1
+        }
+        idx = idx + 1
+    }
+    if found == false && argno == which {
+        result = String.slice(value: read inner, start: read start, len: read (m - start))
+        found = true
+    }
+    if found == false { return "" }
+    return str_trim(s: read result)
+}
+
+// argument_type_matches (calls.rs): equality, Self, fresh-stripped equality, and the
+// Option<?>/Result<?> wildcards produced by variant constructors.
+fn arg_type_matches(expected: read String, actual: read String) -> Bool {
+    if expected == actual { return true }
+    if expected == "Self" { return true }
+    if str_strip_fresh(s: read expected) == str_strip_fresh(s: read actual) { return true }
+    if actual == "Option<?>" { return str_type_root(s: read expected) == "Option" }
+    if actual == "Result<?>" { return str_type_root(s: read expected) == "Result" }
+    return false
+}
+
+// unresolved_generic_type (calls.rs): a single uppercase-letter root, or any generic
+// arg that is itself unresolved. (noescape/fresh nesting handled via strip + root.)
+fn str_is_unresolved_generic(s: read String) -> Bool {
+    let root = str_type_root(s: read s)
+    if String.len(value: read root) == 1 {
+        let rc = String.chars(value: read root)
+        let ch = List.get(list: read rc, index: read 0)
+        if Char.is_upper(value: read ch) { return true }
+    }
+    let a0 = str_top_arg(s: read s, which: read 0)
+    if String.len(value: read a0) > 0 && str_is_unresolved_generic(s: read a0) { return true }
+    let a1 = str_top_arg(s: read s, which: read 1)
+    if String.len(value: read a1) > 0 && str_is_unresolved_generic(s: read a1) { return true }
+    return false
+}
+
+// The declared-return-type token range of a fn (handles fn generics `<...>`).
+fn fn_return_range(toks: read List<Tok>, start: read Int) -> RetRange {
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let mut p = dotted_end(toks: read toks, i: read ns)
+    if at_symbol(toks: read toks, i: read p, code: read SYM_LANGLE) {
+        let gc = find_matching(toks: read toks, open: read p, openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
+        if gc < 0 { return RetRange(ts: 0, te: 0, ok: false) }
+        p = gc + 1
+    }
+    if at_symbol(toks: read toks, i: read p, code: read SYM_LPAREN) == false { return RetRange(ts: 0, te: 0, ok: false) }
+    let close = find_matching(toks: read toks, open: read p, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    if close < 0 { return RetRange(ts: 0, te: 0, ok: false) }
+    if at_symbol(toks: read toks, i: read (close + 1), code: read SYM_ARROW) == false { return RetRange(ts: 0, te: 0, ok: false) }
+    let rts = close + 2
+    let n = List.len(list: read toks)
+    let mut e = rts
+    let mut depth = 0
+    let mut scanning = true
+    while scanning {
+        if e >= n {
+            scanning = false
+        } else if depth == 0 && at_symbol(toks: read toks, i: read e, code: read SYM_LBRACE) {
+            scanning = false
+        } else if depth == 0 && is_kw_text(toks: read toks, i: read e, word: read "effects") {
+            scanning = false
+        } else {
+            if at_symbol(toks: read toks, i: read e, code: read SYM_LANGLE) || at_symbol(toks: read toks, i: read e, code: read SYM_LPAREN) {
+                depth = depth + 1
+            } else if at_symbol(toks: read toks, i: read e, code: read SYM_RANGLE) || at_symbol(toks: read toks, i: read e, code: read SYM_RPAREN) {
+                depth = depth - 1
+            }
+            e = e + 1
+        }
+    }
+    return RetRange(ts: rts, te: e, ok: true)
+}
+
+// hir_expr_type_name for the FP-safe subset (literals, builtins, variant-call
+// wildcards). Everything else -> "" (unknown); we never over-claim a type, so we
+// never false-positive — at worst a false-negative that keeps the code unbaked.
+fn return_actual_type(toks: read List<Tok>, s0: read Int, e: read Int) -> String {
+    let mut s = s0
+    if is_effect_kw(toks: read toks, i: read s) { s = s + 1 }
+    if s >= e { return "" }
+    let k0 = tk_kind(toks: read toks, i: read s)
+    if (s + 1) == e {
+        if k0 == TOK_STRING { return "String" }
+        if k0 == TOK_NUMBER { return number_literal_root(text: read tk_text(toks: read toks, i: read s)) }
+        if k0 == TOK_CHAR { return "Char" }
+    }
+    if is_ident_tok(toks: read toks, i: read s) == false { return "" }
+    let head = tk_text(toks: read toks, i: read s)
+    if (s + 1) == e {
+        if head == "true" || head == "false" { return "Bool" }
+        if head == "null" { return "JsonLiteral" }
+        if head == "Unit" { return "Unit" }
+        if head == "None" { return "Option<?>" }
+    }
+    let after = dotted_end(toks: read toks, i: read s)
+    if after == (s + 1) && at_symbol(toks: read toks, i: read (s + 1), code: read SYM_LPAREN) {
+        let close = find_matching(toks: read toks, open: read (s + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+        if close == (e - 1) {
+            if head == "Some" { return "Option<?>" }
+            if head == "Ok" || head == "Err" { return "Result<?>" }
+        }
+    }
+    return ""
+}
+
+// enum_variant_payload (calls.rs): a bare `None`, or a single-unnamed-arg
+// `Ok(x)`/`Err(x)`/`Some(x)` call (leading effect unwrapped). Result fields:
+// name = variant or "", hasPayload, and payload range [ps, pe).
+struct VarPay {
+    name: String
+    hasPayload: Bool
+    ps: Int
+    pe: Int
+}
+
+fn variant_payload(toks: read List<Tok>, s0: read Int, e: read Int) -> VarPay {
+    let mut s = s0
+    if is_effect_kw(toks: read toks, i: read s) { s = s + 1 }
+    if s >= e { return VarPay(name: "", hasPayload: false, ps: 0, pe: 0) }
+    if is_ident_tok(toks: read toks, i: read s) == false { return VarPay(name: "", hasPayload: false, ps: 0, pe: 0) }
+    let head = tk_text(toks: read toks, i: read s)
+    if (s + 1) == e && head == "None" { return VarPay(name: "None", hasPayload: false, ps: 0, pe: 0) }
+    let isVar = head == "Ok" || head == "Err" || head == "Some"
+    if isVar == false { return VarPay(name: "", hasPayload: false, ps: 0, pe: 0) }
+    if at_symbol(toks: read toks, i: read (s + 1), code: read SYM_LPAREN) == false { return VarPay(name: "", hasPayload: false, ps: 0, pe: 0) }
+    let close = find_matching(toks: read toks, open: read (s + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    if close != (e - 1) { return VarPay(name: "", hasPayload: false, ps: 0, pe: 0) }
+    // single unnamed arg: no top-level comma, and no leading `label :`
+    let ps = s + 2
+    let pe = close
+    if ps >= pe { return VarPay(name: "", hasPayload: false, ps: 0, pe: 0) }
+    if find_top_sym(toks: read toks, start: read ps, end: read pe, code: read SYM_COMMA) >= 0 {
+        return VarPay(name: "", hasPayload: false, ps: 0, pe: 0)
+    }
+    if is_ident_tok(toks: read toks, i: read ps) && at_symbol(toks: read toks, i: read (ps + 1), code: read SYM_COLON) {
+        return VarPay(name: "", hasPayload: false, ps: 0, pe: 0)
+    }
+    return VarPay(name: head, hasPayload: true, ps: ps, pe: pe)
+}
+
+// expected_variant_payload_type (calls.rs): the payload type a variant expects,
+// given the enclosing Option/Result type string. "" when not applicable.
+fn expected_variant_payload(expected: read String, variant: read String) -> String {
+    let root = str_type_root(s: read expected)
+    if root == "Option" && variant == "None" { return "Unit" }
+    if root == "Option" && variant == "Some" { return str_top_arg(s: read expected, which: read 0) }
+    if root == "Result" && variant == "Ok" { return str_top_arg(s: read expected, which: read 0) }
+    if root == "Result" && variant == "Err" { return str_top_arg(s: read expected, which: read 1) }
+    return ""
+}
+
+// check_return_payload_type (calls.rs): recursively validate a variant payload
+// against its expected type. Returns true if a mismatch is found.
+fn payload_mismatch(toks: read List<Tok>, ps: read Int, pe: read Int, expected: read String) -> Bool {
+    let vp = variant_payload(toks: read toks, s0: read ps, e: read pe)
+    let ep = expected_variant_payload(expected: read expected, variant: read vp.name)
+    if String.len(value: read vp.name) > 0 && String.len(value: read ep) > 0 {
+        if vp.hasPayload {
+            return payload_mismatch(toks: read toks, ps: read vp.ps, pe: read vp.pe, expected: read ep)
+        }
+        if ep != "Unit" { return true }
+        return false
+    }
+    let actual = return_actual_type(toks: read toks, s0: read ps, e: read pe)
+    if String.len(value: read actual) == 0 { return false }
+    if str_is_unresolved_generic(s: read actual) { return false }
+    if arg_type_matches(expected: read expected, actual: read actual) == false { return true }
+    return false
+}
+
+// check_return_expr_type (calls.rs) for one `return <expr>` at [s, e).
+fn return_expr_mismatch(toks: read List<Tok>, s: read Int, e: read Int, expected: read String) -> Bool {
+    let root = str_type_root(s: read expected)
+    let a0 = str_top_arg(s: read expected, which: read 0)
+    let a1 = str_top_arg(s: read expected, which: read 1)
+    if root == "Result" && String.len(value: read a1) > 0 {
+        let vp = variant_payload(toks: read toks, s0: read s, e: read e)
+        if vp.name == "Ok" {
+            if vp.hasPayload { return payload_mismatch(toks: read toks, ps: read vp.ps, pe: read vp.pe, expected: read a0) }
+            if a0 != "Unit" { return true }
+            return false
+        }
+        if vp.name == "Err" {
+            if vp.hasPayload { return payload_mismatch(toks: read toks, ps: read vp.ps, pe: read vp.pe, expected: read a1) }
+            if a1 != "Unit" { return true }
+            return false
+        }
+        let actual = return_actual_type(toks: read toks, s0: read s, e: read e)
+        if String.len(value: read actual) == 0 { return false }
+        if str_is_unresolved_generic(s: read actual) { return false }
+        if str_type_root(s: read actual) == "Result" {
+            if arg_type_matches(expected: read expected, actual: read actual) == false { return true }
+            return false
+        }
+        if arg_type_matches(expected: read a0, actual: read actual) == false { return true }
+        return false
+    }
+    if root == "Option" && String.len(value: read a0) > 0 {
+        let vp = variant_payload(toks: read toks, s0: read s, e: read e)
+        if vp.name == "Some" {
+            if vp.hasPayload { return payload_mismatch(toks: read toks, ps: read vp.ps, pe: read vp.pe, expected: read a0) }
+            if a0 != "Unit" { return true }
+            return false
+        }
+        if vp.name == "None" { return false }
+        let actual = return_actual_type(toks: read toks, s0: read s, e: read e)
+        if String.len(value: read actual) == 0 { return false }
+        if str_is_unresolved_generic(s: read actual) { return false }
+        return arg_type_matches(expected: read expected, actual: read actual) == false
+    }
+    let actual = return_actual_type(toks: read toks, s0: read s, e: read e)
+    if String.len(value: read actual) == 0 { return false }
+    if str_is_unresolved_generic(s: read actual) { return false }
+    // A variant wildcard (`Result<?>`/`Option<?>`) against a non-Result/Option
+    // expected type may be a type alias that expands to Result/Option; we do not
+    // expand aliases, so treat it as unknown (FP-safe) rather than a mismatch.
+    if actual == "Result<?>" || actual == "Option<?>" { return false }
+    if arg_type_matches(expected: read expected, actual: read actual) == false { return true }
+    return false
+}
+
+// Walk one fn body's top-level `return <expr>` statements and check each.
+fn fn_has_return_type_mismatch(toks: read List<Tok>, start: read Int) -> Bool {
+    let rr = fn_return_range(toks: read toks, start: read start)
+    if rr.ok == false { return false }
+    let expected = type_token_string(toks: read toks, ts: read rr.ts, te: read rr.te)
+    let root = str_type_root(s: read expected)
+    if root == "Unit" { return false }
+    if str_is_unresolved_generic(s: read expected) { return false }
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let bo = function_signature_end(toks: read toks, start: read (ns - 1))
+    if at_symbol(toks: read toks, i: read bo, code: read SYM_LBRACE) == false { return false }
+    let bc = find_matching(toks: read toks, open: read bo, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    if bc < 0 { return false }
+    let mut i = bo + 1
+    let mut hit = false
+    while i < bc {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) && is_closure_brace(toks: read toks, b: read i) {
+            let cc = find_matching(toks: read toks, open: read i, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+            if cc < 0 { i = bc } else { i = cc + 1 }
+        } else if is_kw_text(toks: read toks, i: read i, word: read "return") {
+            let re = next_line_or_block_end(toks: read toks, start: read (i + 1), end: read bc)
+            if (i + 1) < re {
+                if return_expr_mismatch(toks: read toks, s: read (i + 1), e: read re, expected: read expected) { hit = true }
+            }
+            i = i + 1
+        } else {
+            i = i + 1
+        }
+    }
+    return hit
+}
+
+// A `{` that opens a closure body: preceded by `|` (param-list close), or by an
+// explicit `|...| -> Type {` return annotation. Returns inside a closure belong to
+// the closure, not the enclosing fn, so they must be skipped.
+fn is_closure_brace(toks: read List<Tok>, b: read Int) -> Bool {
+    let p = b - 1
+    if p < 0 { return false }
+    if at_symbol(toks: read toks, i: read p, code: read SYM_PIPE) { return true }
+    let mut q = p
+    let mut guard = 0
+    let mut scanning = true
+    while scanning {
+        if q < 0 || guard >= 30 {
+            scanning = false
+        } else if at_symbol(toks: read toks, i: read q, code: read SYM_ARROW) {
+            if q >= 1 && at_symbol(toks: read toks, i: read (q - 1), code: read SYM_PIPE) { return true }
+            return false
+        } else if is_ident_tok(toks: read toks, i: read q) || at_symbol(toks: read toks, i: read q, code: read SYM_DOT) || at_symbol(toks: read toks, i: read q, code: read SYM_LANGLE) || at_symbol(toks: read toks, i: read q, code: read SYM_RANGLE) || at_symbol(toks: read toks, i: read q, code: read SYM_COMMA) {
+            q = q - 1
+            guard = guard + 1
+        } else {
+            scanning = false
+        }
+    }
+    return false
+}
+
+// Walk all top-level fns and report any RS0208 return-type mismatch.
+fn has_return_type_mismatch(toks: read List<Tok>) -> Bool {
+    let ntok = List.len(list: read toks)
+    let mut i = 0
+    let mut running = true
+    let mut hit = false
+    while running {
+        if i >= ntok {
+            running = false
+        } else if tk_kind(toks: read toks, i: read i) == TOK_EOF {
+            running = false
+        } else {
+            let cls = classify_top(toks: read toks, i: read i)
+            let isPub = cls.isPub
+            if cls.isFeatures {
+                i = declaration_line_end(toks: read toks, start: read i)
+            } else if cls.isProfile {
+                i = declaration_line_end(toks: read toks, start: read i)
+            } else if starts_fn_like(toks: read toks, i: read i, isPub: read isPub) {
+                let r = parse_function_decl(toks: read toks, i: read i)
+                if r < 0 {
+                    running = false
+                } else {
+                    if fn_has_return_type_mismatch(toks: read toks, start: read i) { hit = true }
+                    i = r
+                }
+            } else {
+                i = i + 1
+            }
+        }
+    }
+    return hit
+}
+
 // Stdlib namespace -> Result error type. Built from the `.rssi` interfaces: each
 // `pub native fn Ns.method(...) -> Result<T, ErrType>` declares a per-module error
 // type, uniform across the module for these two families. Filesystem (File /
@@ -5171,6 +5608,8 @@ fn main() -> Unit {
     let poolNotLocal = has_resourcepool_not_local(toks: read toks)
     // RS1002: a cast-style `as` conversion (not a with/use binding).
     let implicitConv = has_implicit_conversion(toks: read toks)
+    // RS0208: return-type mismatch (type-inference engine, WIP, env-gated).
+    let retTypeMismatch = has_return_type_mismatch(toks: read toks)
     // RS0901: `take` of a `handle` field.
     let takeHandle = has_take_handle_field(toks: read toks)
     // RS0904: a weak field initialized without Weak.from/downgrade.
@@ -5535,6 +5974,9 @@ fn main() -> Unit {
     if implicitConv {
         Log.write(message: read "RS1002")
     }
+    if retTypeMismatch {
+        Log.write(message: read "RS0208")
+    }
     if takeHandle {
         Log.write(message: read "RS0901")
     }
@@ -5551,7 +5993,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || takeHandle || weakInit || weakRead
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || takeHandle || weakInit || weakRead
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
