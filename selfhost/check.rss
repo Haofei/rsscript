@@ -3393,6 +3393,49 @@ fn has_resourcepool_not_local(toks: read List<Tok>) -> Bool {
     return hit
 }
 
+// RS1002 IMPLICIT_CONVERSION_ATTEMPT: an `as` token that is not part of a `with ... as`
+// binding or a `use ... as` alias — a cast-style conversion (oracle checks/forbidden.rs).
+// Purely token-decidable, mirrors as_belongs_to_with / as_belongs_to_use exactly.
+fn is_stmt_boundary_kw(toks: read List<Tok>, k: read Int) -> Bool {
+    return is_kw_text(toks: read toks, i: read k, word: read "let") || is_kw_text(toks: read toks, i: read k, word: read "local") || is_kw_text(toks: read toks, i: read k, word: read "return") || is_kw_text(toks: read toks, i: read k, word: read "fn") || is_kw_text(toks: read toks, i: read k, word: read "class") || is_kw_text(toks: read toks, i: read k, word: read "struct") || is_kw_text(toks: read toks, i: read k, word: read "resource") || is_kw_text(toks: read toks, i: read k, word: read "if") || is_kw_text(toks: read toks, i: read k, word: read "else") || is_kw_text(toks: read toks, i: read k, word: read "loop") || is_kw_text(toks: read toks, i: read k, word: read "while") || is_kw_text(toks: read toks, i: read k, word: read "break") || is_kw_text(toks: read toks, i: read k, word: read "continue")
+}
+
+fn as_belongs_to_with(toks: read List<Tok>, asIdx: read Int) -> Bool {
+    let mut k = asIdx - 1
+    while k >= 0 {
+        if is_kw_text(toks: read toks, i: read k, word: read "with") { return true }
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE) || is_stmt_boundary_kw(toks: read toks, k: read k) { return false }
+        k = k - 1
+    }
+    return false
+}
+
+fn as_belongs_to_use(toks: read List<Tok>, asIdx: read Int) -> Bool {
+    let mut k = asIdx - 1
+    while k >= 0 {
+        if is_kw_text(toks: read toks, i: read k, word: read "use") { return true }
+        let pathTok = is_ident_tok(toks: read toks, i: read k) || at_symbol(toks: read toks, i: read k, code: read SYM_DOT)
+        if pathTok == false { return false }
+        k = k - 1
+    }
+    return false
+}
+
+fn has_implicit_conversion(toks: read List<Tok>) -> Bool {
+    let ntok = List.len(list: read toks)
+    let mut i = 0
+    let mut hit = false
+    while i < ntok {
+        if is_kw_text(toks: read toks, i: read i, word: read "as") {
+            if as_belongs_to_with(toks: read toks, asIdx: read i) == false && as_belongs_to_use(toks: read toks, asIdx: read i) == false {
+                hit = true
+            }
+        }
+        i = i + 1
+    }
+    return hit
+}
+
 // RS0901 TAKE_HANDLE_FIELD: `take receiver.field` where `field` is a `handle` field of
 // the RECEIVER'S type (oracle checks/body/effects.rs) — handle fields are non-owning.
 // FP-safe: handle fields are keyed by `Struct.field` and the receiver's type is resolved
@@ -5126,6 +5169,8 @@ fn main() -> Unit {
     let invalidFreshRet = has_invalid_fresh_return(toks: read toks)
     // RS0705: a ResourcePool value bound with let instead of local.
     let poolNotLocal = has_resourcepool_not_local(toks: read toks)
+    // RS1002: a cast-style `as` conversion (not a with/use binding).
+    let implicitConv = has_implicit_conversion(toks: read toks)
     // RS0901: `take` of a `handle` field.
     let takeHandle = has_take_handle_field(toks: read toks)
     // RS0904: a weak field initialized without Weak.from/downgrade.
@@ -5487,6 +5532,9 @@ fn main() -> Unit {
     if poolNotLocal {
         Log.write(message: read "RS0705")
     }
+    if implicitConv {
+        Log.write(message: read "RS1002")
+    }
     if takeHandle {
         Log.write(message: read "RS0901")
     }
@@ -5503,7 +5551,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || takeHandle || weakInit || weakRead
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || takeHandle || weakInit || weakRead
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }

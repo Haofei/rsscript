@@ -1673,7 +1673,18 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   Fast-gate complete (3 files, giant-clean). 615/615.
 - **CHECKER_TARGET_CODES (45):** the 44 above + RS0705.
 
-**Milestone: 45 diagnostic codes byte-exact over the 619-file corpus.** The
+### Milestone 2ae — RS1002 implicit-conversion-attempt (46 codes)
+
+- **RS1002 IMPLICIT_CONVERSION_ATTEMPT (2026-07-04):** an `as` token that is not part of
+  a `with ... as` binding or a `use ... as` alias — a cast-style conversion (oracle
+  checks/forbidden.rs). Purely token-decidable: check.rss `has_implicit_conversion`
+  ports `as_belongs_to_with` (backward scan to `with`, stop at `{`/`}`/stmt-boundary kw)
+  and `as_belongs_to_use` (backward scan to `use` over path tokens only) line-for-line.
+  Giant-clean: census=1 (fixture only) and all `as` in the selfhost giants are in
+  comments/strings, never code tokens. 615/615.
+- **CHECKER_TARGET_CODES (46):** the 45 above + RS1002.
+
+**Milestone: 46 diagnostic codes byte-exact over the 619-file corpus.** The
 token/structure-decidable tier now covers scanner + parser + signature-table +
 resource/ownership-syntax codes. Remaining ~52 need the type engine (RS0206-0210
 expression typing), the borrow/liveness engine (RS0301-0313, RS04xx/05xx/08xx), or
