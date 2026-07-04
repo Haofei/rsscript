@@ -4241,6 +4241,26 @@ fn is_decl_start_kw(toks: read List<Tok>, i: read Int) -> Bool {
     return is_kw_text(toks: read toks, i: read i, word: read "fn") || is_kw_text(toks: read toks, i: read i, word: read "pub") || is_kw_text(toks: read toks, i: read i, word: read "struct") || is_kw_text(toks: read toks, i: read i, word: read "class") || is_kw_text(toks: read toks, i: read i, word: read "resource") || is_kw_text(toks: read toks, i: read i, word: read "const") || is_kw_text(toks: read toks, i: read i, word: read "module") || is_kw_text(toks: read toks, i: read i, word: read "use") || is_kw_text(toks: read toks, i: read i, word: read "protocol") || is_kw_text(toks: read toks, i: read i, word: read "impl") || is_kw_text(toks: read toks, i: read i, word: read "native") || is_kw_text(toks: read toks, i: read i, word: read "opaque") || is_kw_text(toks: read toks, i: read i, word: read "async") || is_kw_text(toks: read toks, i: read i, word: read "features")
 }
 
+// The full canonical return type of a file-declared unqualified `fn name(...)`, or "".
+fn declared_fn_return(toks: read List<Tok>, name: read String) -> String {
+    let n = List.len(list: read toks)
+    let mut i = 0
+    let mut result = ""
+    let mut done = false
+    while i < n && done == false {
+        if at_ident(toks: read toks, i: read i, wid: read WORD_FN) {
+            let a = i + 1
+            if is_ident_tok(toks: read toks, i: read a) && tk_text(toks: read toks, i: read a) == name && at_symbol(toks: read toks, i: read (a + 1), code: read SYM_DOT) == false && (at_symbol(toks: read toks, i: read (a + 1), code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read (a + 1), code: read SYM_LANGLE)) {
+                let rr = fn_return_range(toks: read toks, start: read i)
+                if rr.ok { result = type_token_string(toks: read toks, ts: read rr.ts, te: read rr.te) }
+                done = true
+            }
+        }
+        i = i + 1
+    }
+    return result
+}
+
 // The full canonical return type of a file-declared `fn ns.method(...)`, or "" if the
 // file does not declare it. Takes precedence over the curated stdlib table, since a
 // file may shadow a stdlib signature (e.g. its own `fn Image.load(...) -> fresh Image`).
@@ -4344,12 +4364,22 @@ fn return_actual_type(toks: read List<Tok>, s0: read Int, e: read Int, popen: re
             }
         }
     }
+    // Method chain `EXPR.ok()`: Result<T, E> -> Option<T>.
+    if (e - s) >= 4 && at_symbol(toks: read toks, i: read (e - 1), code: read SYM_RPAREN) && at_symbol(toks: read toks, i: read (e - 2), code: read SYM_LPAREN) && is_ident_tok(toks: read toks, i: read (e - 3)) && tk_text(toks: read toks, i: read (e - 3)) == "ok" && at_symbol(toks: read toks, i: read (e - 4), code: read SYM_DOT) {
+        let inner = return_actual_type(toks: read toks, s0: read s, e: read (e - 4), popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen)
+        if str_type_root(s: read inner) == "Result" {
+            let t = str_top_arg(s: read inner, which: read 0)
+            if String.len(value: read t) > 0 { return String.concat(left: read String.concat(left: read "Option<", right: read t), right: read ">") }
+        }
+    }
     let after = dotted_end(toks: read toks, i: read s)
     if after == (s + 1) && at_symbol(toks: read toks, i: read (s + 1), code: read SYM_LPAREN) {
         let close = find_matching(toks: read toks, open: read (s + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
         if close == (e - 1) {
             if head == "Some" { return "Option<?>" }
             if head == "Ok" || head == "Err" { return "Result<?>" }
+            let dr = declared_fn_return(toks: read toks, name: read head)
+            if String.len(value: read dr) > 0 { return dr }
         }
     }
     // Qualified stdlib call `Ns.method(...)` spanning the whole region.
@@ -4615,6 +4645,9 @@ fn has_return_type_mismatch(toks: read List<Tok>) -> Bool {
                 i = declaration_line_end(toks: read toks, start: read i)
             } else if cls.isProfile {
                 i = declaration_line_end(toks: read toks, start: read i)
+            } else if starts_type_decl(toks: read toks, i: read i, isPub: read isPub) {
+                let r = parse_type_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
             } else if starts_fn_like(toks: read toks, i: read i, isPub: read isPub) {
                 let r = parse_function_decl(toks: read toks, i: read i)
                 if r < 0 {
