@@ -4283,6 +4283,39 @@ fn declared_qualified_return(toks: read List<Tok>, ns: read String, method: read
     return result
 }
 
+// The OPERATION range of a select-arm binding `name = OP => { ... }` before matchPos,
+// or ok=false. Reuses RetRange as (opStart, fatArrowPos, ok).
+fn find_select_binding(toks: read List<Tok>, bodyOpen: read Int, matchPos: read Int, name: read String) -> RetRange {
+    let mut k = bodyOpen + 1
+    let mut result = RetRange(ts: 0, te: 0, ok: false)
+    while k < matchPos {
+        if is_ident_tok(toks: read toks, i: read k) && tk_text(toks: read toks, i: read k) == name && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_EQ) {
+            let mut j = k + 2
+            let mut depth = 0
+            let mut fat = 0 - 1
+            let mut scanning = true
+            while scanning {
+                if j >= matchPos {
+                    scanning = false
+                } else if depth == 0 && at_symbol(toks: read toks, i: read j, code: read SYM_FATARROW) {
+                    fat = j
+                    scanning = false
+                } else {
+                    if at_symbol(toks: read toks, i: read j, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read j, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read j, code: read SYM_LBRACE) {
+                        depth = depth + 1
+                    } else if at_symbol(toks: read toks, i: read j, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read j, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read j, code: read SYM_RBRACE) {
+                        depth = depth - 1
+                    }
+                    j = j + 1
+                }
+            }
+            if fat > (k + 2) { result = RetRange(ts: k + 2, te: fat, ok: true) }
+        }
+        k = k + 1
+    }
+    return result
+}
+
 // The EXPR range of a `with EXPR as name { ... }` binding before matchPos, or ok=false.
 // Reuses RetRange as (exprStart, asPos, ok).
 fn with_binding_expr(toks: read List<Tok>, bodyOpen: read Int, matchPos: read Int, name: read String) -> RetRange {
@@ -4328,6 +4361,7 @@ fn return_actual_type(toks: read List<Tok>, s0: read Int, e: read Int, popen: re
     let mut s = s0
     if is_effect_kw(toks: read toks, i: read s) { s = s + 1 }
     if is_kw_text(toks: read toks, i: read s, word: read "manage") { s = s + 1 }
+    if is_kw_text(toks: read toks, i: read s, word: read "await") || is_kw_text(toks: read toks, i: read s, word: read "spawn") { s = s + 1 }
     if s >= e { return "" }
     let k0 = tk_kind(toks: read toks, i: read s)
     if (s + 1) == e {
@@ -4349,7 +4383,7 @@ fn return_actual_type(toks: read List<Tok>, s0: read Int, e: read Int, popen: re
         if bodyOpen >= 0 {
             let lr = find_let_rhs_start(toks: read toks, bodyOpen: read bodyOpen, matchPos: read s0, name: read head)
             if lr >= 0 {
-                let re2 = next_line_or_block_end(toks: read toks, start: read lr, end: read s0)
+                let re2 = stmt_expr_end(toks: read toks, start: read lr, end: read s0)
                 return return_actual_type(toks: read toks, s0: read lr, e: read re2, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen)
             }
             let wb = with_binding_expr(toks: read toks, bodyOpen: read bodyOpen, matchPos: read s0, name: read head)
@@ -4361,6 +4395,10 @@ fn return_actual_type(toks: read List<Tok>, s0: read Int, e: read Int, popen: re
                     let payload = str_top_arg(s: read inner, which: read 0)
                     if String.len(value: read payload) > 0 { return str_strip_fresh(s: read payload) }
                 }
+            }
+            let sb = find_select_binding(toks: read toks, bodyOpen: read bodyOpen, matchPos: read s0, name: read head)
+            if sb.ok {
+                return return_actual_type(toks: read toks, s0: read sb.ts, e: read sb.te, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen)
             }
         }
     }
@@ -4556,7 +4594,7 @@ fn fn_has_return_type_mismatch(toks: read List<Tok>, start: read Int) -> Bool {
             let cc = find_matching(toks: read toks, open: read i, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
             if cc < 0 { i = bc } else { i = cc + 1 }
         } else if is_kw_text(toks: read toks, i: read i, word: read "return") {
-            let re = next_line_or_block_end(toks: read toks, start: read (i + 1), end: read bc)
+            let re = stmt_expr_end(toks: read toks, start: read (i + 1), end: read bc)
             if (i + 1) < re {
                 if return_expr_mismatch(toks: read toks, s: read (i + 1), e: read re, expected: read expected, popen: read popen, pclose: read pclose, bodyOpen: read bo) { hit = true }
             }
@@ -4574,6 +4612,28 @@ fn fn_has_return_type_mismatch(toks: read List<Tok>, start: read Int) -> Bool {
         if body_falls_through(toks: read toks, bodyOpen: read bo, bodyClose: read bc) { hit = true }
     }
     return hit
+}
+
+// End of a return-expr statement at `start`: the first token on a later line at
+// bracket-depth 0, or a closing brace/paren/bracket that ends the enclosing block —
+// unlike next_line_or_block_end, this stops at a same-line `}` (e.g. a match/select
+// arm `_ => { return x }`), so the expression range does not swallow the arm's `}`.
+fn stmt_expr_end(toks: read List<Tok>, start: read Int, end: read Int) -> Int {
+    if start >= end { return end }
+    let line = tk_line(toks: read toks, i: read start)
+    let mut depth = 0
+    let mut idx = start
+    while idx < end {
+        if tk_line(toks: read toks, i: read idx) > line { return idx }
+        if at_symbol(toks: read toks, i: read idx, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read idx, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read idx, code: read SYM_RBRACKET) {
+            if depth == 0 { return idx }
+            depth = depth - 1
+        } else if at_symbol(toks: read toks, i: read idx, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read idx, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read idx, code: read SYM_LBRACKET) {
+            depth = depth + 1
+        }
+        idx = idx + 1
+    }
+    return end
 }
 
 // Conservative fallthrough test — see fn_has_return_type_mismatch.
