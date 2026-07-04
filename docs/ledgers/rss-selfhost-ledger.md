@@ -1500,3 +1500,24 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   giants: they contain ZERO `let = None/Ok(/Err(` bindings, so RS0034 cannot fire
   there (grep-confirmed) — the fast gate is a complete verification for this code.
 - **CHECKER_TARGET_CODES (32):** the 31 above + RS0034.
+
+### Milestone 2s — RS0311 invalid-assignment (33 codes)
+
+- **RS0311 INVALID_ASSIGNMENT (2026-07-04):** reassigning an immutable `let` local
+  (oracle `analyzer/assign.rs::validate_assignment`). Key enabler: the self-hosted
+  scanner fuses only `->`/`=>`, so `==` is two `SYM_EQ` and a lone `=` appears ONLY
+  in let-bindings and assignments — a `SYM_EQ` whose next token isn't `=` and whose
+  previous token is an ident not preceded by `let`/`mut`/`local` is exactly an
+  assignment. check.rss: `collect_let_kinds` (immutable `let` vs `let mut`),
+  `collect_param_names` (params → exclusion set), `fn_has_immutable_assign` fires
+  when the assignee is a plain `let` local and not in the mutable/param set. We
+  cover only the FP-safe core (bare-name simple assign); compound (`x.f = e`) and
+  param-reassignment cases are also RS0311 but left as safe false-negatives (no
+  corpus file needs them). → **33 codes.**
+- **FP caught + fixed on the fast gate:** `local image = …` (the `local` binding
+  keyword) was first read as an assignment to `image` (an outer `let image` had it
+  in the immutable set) → 1 FP on `retaining-managed-shadowed-local.rss`. Fix:
+  exclude `local` (a binding form) like `let`/`mut`. Second FP class (a mut Copy
+  param reassigned in a fn that also `let`s the same name) closed by excluding all
+  param names. Verified on the FULL 619-file corpus (giants are assignment-heavy).
+- **CHECKER_TARGET_CODES (33):** the 32 above + RS0311.

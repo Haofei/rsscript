@@ -607,6 +607,93 @@ fn fn_has_uninferable_binding(toks: read List<Tok>, start: read Int) -> Bool {
     return hit
 }
 
+// RS0311: reassigning an immutable `let` local (oracle analyzer/assign.rs). We fire
+// only the FP-safe core — a bare-name simple assignment `NAME = e` where NAME is a
+// plain `let` local (not `let mut`, not a param). Compound (`x.f = e`) and param
+// cases are also RS0311 but are left as safe false-negatives (no corpus file needs
+// them). The scanner emits `==` as two SYM_EQ and never fuses `=`, so a SYM_EQ whose
+// next token isn't `=` and whose previous token is an ident (not after `let`/`mut`)
+// is exactly an assignment.
+fn collect_let_kinds(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, immut: mut Set<String>, mutable: mut Set<String>) -> Unit {
+    let mut k = bodyOpen + 1
+    while k < bodyClose {
+        if is_kw_text(toks: read toks, i: read k, word: read "let") {
+            let mut q = k + 1
+            let isMut = is_kw_text(toks: read toks, i: read q, word: read "mut")
+            if isMut { q = q + 1 }
+            if is_ident_tok(toks: read toks, i: read q) {
+                let name = tk_text(toks: read toks, i: read q)
+                if isMut {
+                    Set.insert<String>(set: mut mutable, value: read name)
+                } else {
+                    Set.insert<String>(set: mut immut, value: read name)
+                }
+            }
+        }
+        k = k + 1
+    }
+    return Unit
+}
+
+// Add every param name (`name:` at the top level of the param parens) to `out`. Used
+// as an assignment-exclusion set: a `mut` Copy-scalar param IS legally reassignable,
+// so we never fire RS0311 on a param-named binding (safe over-approximation — the
+// rare `let` that shadows a param stays a false-negative rather than a false-positive).
+fn collect_param_names(toks: read List<Tok>, ns: read Int, sigEnd: read Int, out: mut Set<String>) -> Unit {
+    let popen = find_top_sym(toks: read toks, start: read ns, end: read sigEnd, code: read SYM_LPAREN)
+    if popen < 0 { return Unit }
+    let pclose = find_matching(toks: read toks, open: read popen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    if pclose < 0 { return Unit }
+    let mut depth = 0
+    let mut k = popen + 1
+    while k < pclose {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) {
+            depth = depth - 1
+        } else if depth == 0 && is_ident_tok(toks: read toks, i: read k) && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_COLON) {
+            Set.insert<String>(set: mut out, value: read tk_text(toks: read toks, i: read k))
+        }
+        k = k + 1
+    }
+    return Unit
+}
+
+fn fn_has_immutable_assign(toks: read List<Tok>, start: read Int) -> Bool {
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+    if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
+    let bodyClose = find_matching(toks: read toks, open: read sigEnd, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    if bodyClose < 0 { return false }
+    let mut immut = Set<String>.new()
+    let mut mutable = Set<String>.new()
+    collect_param_names(toks: read toks, ns: read ns, sigEnd: read sigEnd, out: mut mutable)
+    collect_let_kinds(toks: read toks, bodyOpen: read sigEnd, bodyClose: read bodyClose, immut: mut immut, mutable: mut mutable)
+    let mut k = sigEnd + 1
+    let mut hit = false
+    while k < bodyClose {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_EQ) {
+            if at_symbol(toks: read toks, i: read (k + 1), code: read SYM_EQ) == false {
+                if is_ident_tok(toks: read toks, i: read (k - 1)) {
+                    let assignee = tk_text(toks: read toks, i: read (k - 1))
+                    let notLet = is_kw_text(toks: read toks, i: read (k - 2), word: read "let") == false
+                    let notMut = is_kw_text(toks: read toks, i: read (k - 2), word: read "mut") == false
+                    let notLocal = is_kw_text(toks: read toks, i: read (k - 2), word: read "local") == false
+                    if notLet && notMut && notLocal {
+                        if Set.contains<String>(set: read immut, value: read assignee) {
+                            if Set.contains<String>(set: read mutable, value: read assignee) == false {
+                                hit = true
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        k = k + 1
+    }
+    return hit
+}
+
 // RS0028: a parameter named `self` that is not the first parameter of a qualified
 // method (check_params: `self` && (!is_qualified_method || index != 0)). A method
 // is qualified iff its name is dotted (`Type.method`).
@@ -4037,6 +4124,8 @@ fn main() -> Unit {
     let mut missingDataEffect = false
     // RS0034: a bare Ok/Err/None bound to an unused, unannotated name.
     let mut uninferable = false
+    // RS0311: reassigning an immutable `let` local.
+    let mut immutableAssign = false
     let methodNames = collect_method_names(toks: read toks)
     let mut i = 0
     let mut running = true
@@ -4206,6 +4295,7 @@ fn main() -> Unit {
                     if fn_has_unnamed_arg(toks: read toks, start: read i, pubFns: read pubFns, dottedFns: read dottedFns) { unnamedArg = true }
                     if fn_data_effect_bad(toks: read toks, start: read i, declared: read declared, methodNames: read methodNames) { missingDataEffect = true }
                     if fn_has_uninferable_binding(toks: read toks, start: read i) { uninferable = true }
+                    if fn_has_immutable_assign(toks: read toks, start: read i) { immutableAssign = true }
                     if fn_has_fd_surface(toks: read toks, start: read i) { fdSurface = true }
                     // RS0027: an unknown protocol in this fn's generic bounds.
                     if generics_unknown_protocol(toks: read toks, nameEnd: read dotted_end(toks: read toks, i: read ns), protocols: read protocols) { unknownProtocol = true }
@@ -4341,6 +4431,9 @@ fn main() -> Unit {
     if uninferable {
         Log.write(message: read "RS0034")
     }
+    if immutableAssign {
+        Log.write(message: read "RS0311")
+    }
     // RS0101: any unfeatured feature-requiring construct. Native fires if a fn has
     // `effects(native)` without the feature, OR a `native fn` omits that effect.
     let nativeViol = nativeMissing || (nativeEffect && Set.contains<String>(set: read declaredFeatures, value: read "native") == false)
@@ -4348,7 +4441,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
