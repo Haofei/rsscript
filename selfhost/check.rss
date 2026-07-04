@@ -4263,6 +4263,44 @@ fn declared_qualified_return(toks: read List<Tok>, ns: read String, method: read
     return result
 }
 
+// The EXPR range of a `with EXPR as name { ... }` binding before matchPos, or ok=false.
+// Reuses RetRange as (exprStart, asPos, ok).
+fn with_binding_expr(toks: read List<Tok>, bodyOpen: read Int, matchPos: read Int, name: read String) -> RetRange {
+    let mut k = bodyOpen + 1
+    let mut result = RetRange(ts: 0, te: 0, ok: false)
+    while k < matchPos {
+        if is_kw_text(toks: read toks, i: read k, word: read "with") {
+            let exprStart = k + 1
+            let mut j = k + 1
+            let mut depth = 0
+            let mut asPos = 0 - 1
+            let mut scanning = true
+            while scanning {
+                if j >= matchPos {
+                    scanning = false
+                } else if depth == 0 && at_symbol(toks: read toks, i: read j, code: read SYM_LBRACE) {
+                    scanning = false
+                } else if depth == 0 && is_kw_text(toks: read toks, i: read j, word: read "as") {
+                    asPos = j
+                    scanning = false
+                } else {
+                    if at_symbol(toks: read toks, i: read j, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read j, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read j, code: read SYM_LBRACE) {
+                        depth = depth + 1
+                    } else if at_symbol(toks: read toks, i: read j, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read j, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read j, code: read SYM_RBRACE) {
+                        depth = depth - 1
+                    }
+                    j = j + 1
+                }
+            }
+            if asPos >= 0 && is_ident_tok(toks: read toks, i: read (asPos + 1)) && tk_text(toks: read toks, i: read (asPos + 1)) == name {
+                result = RetRange(ts: exprStart, te: asPos, ok: true)
+            }
+        }
+        k = k + 1
+    }
+    return result
+}
+
 // hir_expr_type_name for the FP-safe subset (literals, builtins, variant-call
 // wildcards). Everything else -> "" (unknown); we never over-claim a type, so we
 // never false-positive — at worst a false-negative that keeps the code unbaked.
@@ -4293,6 +4331,16 @@ fn return_actual_type(toks: read List<Tok>, s0: read Int, e: read Int, popen: re
             if lr >= 0 {
                 let re2 = next_line_or_block_end(toks: read toks, start: read lr, end: read s0)
                 return return_actual_type(toks: read toks, s0: read lr, e: read re2, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen)
+            }
+            let wb = with_binding_expr(toks: read toks, bodyOpen: read bodyOpen, matchPos: read s0, name: read head)
+            if wb.ok {
+                // `with EXPR? as name`: name binds the Ok payload of EXPR, fresh-stripped.
+                let te2 = wb.te
+                if te2 > wb.ts && at_symbol(toks: read toks, i: read (te2 - 1), code: read SYM_QUESTION) {
+                    let inner = return_actual_type(toks: read toks, s0: read wb.ts, e: read (te2 - 1), popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen)
+                    let payload = str_top_arg(s: read inner, which: read 0)
+                    if String.len(value: read payload) > 0 { return str_strip_fresh(s: read payload) }
+                }
             }
         }
     }
