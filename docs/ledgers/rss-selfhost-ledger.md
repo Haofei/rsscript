@@ -1638,7 +1638,22 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   giant-clean). 615/615.
 - **CHECKER_TARGET_CODES (42):** the 41 above + RS0904.
 
-**Milestone: 42 diagnostic codes byte-exact over the 619-file corpus.** The
+### Milestone 2ab — RS0903 weak-field-requires-upgrade (43 codes); weak/handle cluster complete
+
+- **RS0903 WEAK_FIELD_REQUIRES_UPGRADE (2026-07-04):** reading a `weak` field as a
+  value (`read`/`mut` RECEIVER.weakfield) without `Weak.upgrade` first (oracle
+  checks/body/async_checks.rs). check.rss: `fn_has_weak_field_read` (same receiver-type
+  resolution as RS0901, but for `read`/`mut` and the weak-key set) + `enclosing_is_weak_upgrade`
+  (walks out to the innermost enclosing `(` and checks the callee is `Weak.upgrade` —
+  the one context where reading a weak field is allowed). Fast-gate complete (1 file,
+  giant-clean). 615/615.
+- The **weak/handle field cluster is now complete**: RS0701 (resource field), RS0901
+  (take handle), RS0902 (weak non-class), RS0903 (weak read), RS0904 (weak init) — all
+  via the shared `collect_modifier_field_keys` + `Struct.field` keying + param-based
+  receiver typing.
+- **CHECKER_TARGET_CODES (43):** the 42 above + RS0903.
+
+**Milestone: 43 diagnostic codes byte-exact over the 619-file corpus.** The
 token/structure-decidable tier now covers scanner + parser + signature-table +
 resource/ownership-syntax codes. Remaining ~52 need the type engine (RS0206-0210
 expression typing), the borrow/liveness engine (RS0301-0313, RS04xx/05xx/08xx), or
