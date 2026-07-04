@@ -177,7 +177,23 @@ Status:         open | decided | done
   keep mutable scalar state in a 1-element `List<Int>` (reference type) and/or
   compute it by scanning (the Mailbox holds `next_seq` as a 1-elem list and
   computes `count`). Not changing the language now; recorded so it's expected.
-- **Status:** decided.
+- **CORRECTION (2026-07-04): NO LONGER A LIMITATION — the entry is stale.** The
+  original rejection was lifted (as a side effect of the SH-018-era assignment-gate
+  work) but this entry was never updated. Scalar field reassignment through a `mut`
+  struct param now checks clean and works on both backends. There is no semantic
+  reason for a scalar field to differ from a `List` field once the `mut` param
+  lowers to `&mut T`: `b.n = b.n + 1` is just `(*b).n = (*b).n + 1`. The gate
+  `analyzer/assign.rs::validate_compound_assignment` accepts a `MutParam` root
+  (`Some(AssignBinding::MutParam) => {}`, ~L464); RS0311 fires only for a plain
+  non-`mut` `Param`. **Verified 2026-07-04:** `struct Box { n: Int }` +
+  `fn bump(b: mut Box) -> Unit { b.n = b.n + 1; b.n = b.n + 10 }` +
+  `let mut b = Box(n: 0); bump(b: mut b)` → `rss check: ok`, and `b.n == 11` on
+  BOTH the reg-VM (`rss run`) and AOT (`rss run --release`) tiers, with the
+  write-back correctly reaching the caller. The 1-element-`List` workaround is no
+  longer needed. Same class of stale over-claim as SH-020 / the "no method syntax"
+  correction.
+- **Status:** RESOLVED (not a limitation — scalar struct fields are reassignable
+  through a `mut` param, with caller write-back, on all backends).
 
 ### SH-008 — generic function call mis-lowered as a struct construction (BUG, fixed)
 
