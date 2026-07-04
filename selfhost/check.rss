@@ -4082,6 +4082,65 @@ fn type_token_string(toks: read List<Tok>, ts: read Int, te: read Int) -> String
     return sb
 }
 
+// The enclosing module path (`module rss.package.review` -> "rss.package.review"),
+// or "" if the file declares no module. The analyzer canonicalizes a return-type
+// annotation's module-local type names to this prefix (see qualified_type_string).
+fn module_prefix(toks: read List<Tok>) -> String {
+    let n = List.len(list: read toks)
+    let mut i = 0
+    while i < n {
+        if is_kw_text(toks: read toks, i: read i, word: read "module") {
+            if i == 0 || tk_line(toks: read toks, i: read (i - 1)) < tk_line(toks: read toks, i: read i) {
+                return dotted_name_text(toks: read toks, i: read (i + 1))
+            }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Like type_token_string, but a bare identifier naming a module-local declared type
+// is canonicalized to `prefix.Name` — mirroring how the analyzer resolves a return
+// annotation's type names to their module-qualified form. A name already preceded by
+// a `.` (already qualified / a member) is left alone. Value typing does NOT qualify,
+// so a generic-arg-derived value (`List<InterfaceSnapshot>.new()`) stays unqualified
+// and correctly mismatches the qualified annotation.
+fn qualified_type_string(toks: read List<Tok>, ts: read Int, te: read Int, prefix: read String, declared: read Set<String>) -> String {
+    let mut sb = ""
+    let mut i = ts
+    while i < te {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_COMMA) {
+            sb = String.concat(left: read sb, right: read ", ")
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_LANGLE) {
+            sb = String.concat(left: read sb, right: read "<")
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RANGLE) {
+            sb = String.concat(left: read sb, right: read ">")
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) {
+            sb = String.concat(left: read sb, right: read "(")
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) {
+            sb = String.concat(left: read sb, right: read ")")
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_DOT) {
+            sb = String.concat(left: read sb, right: read ".")
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_ARROW) {
+            sb = String.concat(left: read sb, right: read " -> ")
+        } else if is_ident_tok(toks: read toks, i: read i) {
+            let t = tk_text(toks: read toks, i: read i)
+            if t == "fresh" || t == "owned" || t == "noescape" {
+                sb = String.concat(left: read String.concat(left: read sb, right: read t), right: read " ")
+            } else {
+                let prevDot = i > ts && at_symbol(toks: read toks, i: read (i - 1), code: read SYM_DOT)
+                if String.len(value: read prefix) > 0 && prevDot == false && Set.contains<String>(set: read declared, value: read t) {
+                    sb = String.concat(left: read sb, right: read String.concat(left: read String.concat(left: read prefix, right: read "."), right: read t))
+                } else {
+                    sb = String.concat(left: read sb, right: read t)
+                }
+            }
+        }
+        i = i + 1
+    }
+    return sb
+}
+
 // index of `needle` in `s`, or -1 (String.index_of returns Option<Int>).
 fn str_find(s: read String, needle: read String) -> Int {
     match String.index_of(value: read s, needle: read needle) {
@@ -4431,6 +4490,21 @@ fn return_actual_type(toks: read List<Tok>, s0: read Int, e: read Int, popen: re
             if String.len(value: read rt) > 0 { return rt }
         }
     }
+    // Generic stdlib call `List.fold<A, Acc>(...)` -> Acc: the accumulator type is
+    // the last explicit generic argument, typed from its syntactic (unqualified) form.
+    if after > (s + 1) && at_symbol(toks: read toks, i: read after, code: read SYM_LANGLE) {
+        let gcf = find_matching(toks: read toks, open: read after, openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
+        if gcf >= 0 && at_symbol(toks: read toks, i: read (gcf + 1), code: read SYM_LPAREN) {
+            let closef = find_matching(toks: read toks, open: read (gcf + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+            if closef == (e - 1) {
+                let methodf = tk_text(toks: read toks, i: read (after - 1))
+                if head == "List" && methodf == "fold" {
+                    let cpos = find_top_sym(toks: read toks, start: read (after + 1), end: read gcf, code: read SYM_COMMA)
+                    if cpos >= 0 { return type_token_string(toks: read toks, ts: read (cpos + 1), te: read gcf) }
+                }
+            }
+        }
+    }
     // Generic constructor `Ns<Args>.new(...)` -> `Ns<Args>` (collection constructors
     // return their own generic type).
     if at_symbol(toks: read toks, i: read (s + 1), code: read SYM_LANGLE) {
@@ -4562,10 +4636,10 @@ fn return_expr_mismatch(toks: read List<Tok>, s: read Int, e: read Int, expected
 }
 
 // Walk one fn body's top-level `return <expr>` statements and check each.
-fn fn_has_return_type_mismatch(toks: read List<Tok>, start: read Int) -> Bool {
+fn fn_has_return_type_mismatch(toks: read List<Tok>, start: read Int, prefix: read String, declared: read Set<String>) -> Bool {
     let rr = fn_return_range(toks: read toks, start: read start)
     if rr.ok == false { return false }
-    let expected = type_token_string(toks: read toks, ts: read rr.ts, te: read rr.te)
+    let expected = qualified_type_string(toks: read toks, ts: read rr.ts, te: read rr.te, prefix: read prefix, declared: read declared)
     if str_is_unresolved_generic(s: read expected) { return false }
     let ns = fn_name_start(toks: read toks, i: read start)
     let bo = function_signature_end(toks: read toks, start: read (ns - 1))
@@ -4690,6 +4764,8 @@ fn is_closure_brace(toks: read List<Tok>, b: read Int) -> Bool {
 // Walk all top-level fns and report any RS0208 return-type mismatch.
 fn has_return_type_mismatch(toks: read List<Tok>) -> Bool {
     let ntok = List.len(list: read toks)
+    let prefix = module_prefix(toks: read toks)
+    let declared = collect_declared_types(toks: read toks)
     let mut i = 0
     let mut running = true
     let mut hit = false
@@ -4713,7 +4789,7 @@ fn has_return_type_mismatch(toks: read List<Tok>) -> Bool {
                 if r < 0 {
                     running = false
                 } else {
-                    if fn_has_return_type_mismatch(toks: read toks, start: read i) { hit = true }
+                    if fn_has_return_type_mismatch(toks: read toks, start: read i, prefix: read prefix, declared: read declared) { hit = true }
                     i = r
                 }
             } else {
