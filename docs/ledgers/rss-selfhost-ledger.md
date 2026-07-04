@@ -1625,7 +1625,20 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   resolve a receiver's type — a small step toward the type engine.
 - **CHECKER_TARGET_CODES (41):** the 40 above + RS0901.
 
-**Milestone: 41 diagnostic codes byte-exact over the 619-file corpus.** The
+### Milestone 2aa — RS0904 weak-field-requires-weak-handle (42 codes)
+
+- **RS0904 WEAK_FIELD_REQUIRES_WEAK_HANDLE (2026-07-04):** a constructor initializing a
+  `weak` field with anything other than a syntactic `Weak.from(...)`/`Weak.downgrade(...)`
+  (oracle `checks/body/fresh.rs::is_weak_handle_producing_expr`). check.rss: generalized
+  the field-key collector to any modifier (`collect_modifier_field_keys`, now used for
+  both handle and weak), `value_is_weak_producing` (the value literally starts `Weak.from`
+  or `Weak.downgrade`), `call_weak_field_bad` checks each named arg of a simple-name
+  (constructor) call against the `Type.field` weak-key set. FP-safe: gated by the weak
+  key, so only real weak-field initializers are examined. Fast-gate complete (1 file,
+  giant-clean). 615/615.
+- **CHECKER_TARGET_CODES (42):** the 41 above + RS0904.
+
+**Milestone: 42 diagnostic codes byte-exact over the 619-file corpus.** The
 token/structure-decidable tier now covers scanner + parser + signature-table +
 resource/ownership-syntax codes. Remaining ~52 need the type engine (RS0206-0210
 expression typing), the borrow/liveness engine (RS0301-0313, RS04xx/05xx/08xx), or
