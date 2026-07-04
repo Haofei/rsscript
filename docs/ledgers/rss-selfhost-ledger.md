@@ -1429,3 +1429,31 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
 - **Next slice:** RS0207-0210 (argument/return/control-flow/operator type
   mismatch) — the pervasive-expression-typing cluster; reuses this slice's
   type-kind/Copy/effect-signature infra.
+
+### Milestone 2p — RS0212 RESOURCE_DERIVE_UNSUPPORTED LANDED (30 codes)
+
+- **Planning census (2026-07-04):** measured the full remaining backlog =
+  **55 distinct codes** across the fail corpus (temp `remaining_code_census` test,
+  pure Rust). Per-code oracle-set sizes recorded; ~22 codes fire on a single corpus
+  file. Strategy: land the token-DECIDABLE codes first (no type/borrow engine),
+  batching where possible; the type-inference cluster (RS0207-0210) and borrow
+  cluster (RS0301+) come after.
+- **RS0212 (2026-07-04):** a value derive (`Clone`/`Eq`/`Ord`/`Hash`/`JsonEncode`/
+  `JsonDecode`) on a `resource` type — resources allow only `Debug`/`Schema`/
+  `ReviewSchema` (oracle `analyzer/derives.rs::check_resource_derives`). Purely
+  structural: `has_bad_resource_derive` walks type decls, and for each `resource`
+  (via `type_name_start` + `at_ident(ns-1, WORD_RESOURCE)`) scans its `derives(...)`
+  header clause for a banned name. Zero type inference. FP surface is near-nil: the
+  ENTIRE 619-file corpus has exactly ONE `resource … derives(…)` decl (the fixture).
+- **Verdict:** `checker_parity_corpus` **619 files, 619 ok, 0 run-failures, 0
+  code-mismatches** (1778s). CHECKER_TARGET_CODES → **30 codes**.
+- **Process:** implemented + verified entirely in the MAIN LOOP (three sub-agents
+  stalled this session on the watchdog — RS0202 and two on RS0208/RS0210). The
+  reliable pattern now: main-loop implements, a pure-Rust oracle scan + a fast
+  reg-VM subset spot-check gate the logic, then the orchestrator runs the full
+  corpus in the background (monitored, ~30min) as the true gate. Temp tests removed.
+- **CHECKER_TARGET_CODES (30):** the 29 above + RS0212.
+- **Next decidable candidates (from census):** RS0037 (variant-pattern arity),
+  RS0211 (unsupported derive), RS0034 (uninferable binding), RS0205 (dup arg —
+  needs callee param resolution, higher FP). The type/borrow clusters remain the
+  bulk of the 55.

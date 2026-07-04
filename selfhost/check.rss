@@ -475,6 +475,77 @@ fn has_out_of_range_int(toks: read List<Tok>) -> Bool {
     return hit
 }
 
+// RS0212: a value derive on a `resource` type. Resources are move-only RAII values
+// that support only `Debug`/`Schema`/`ReviewSchema`; `Clone`/`Eq`/`Ord`/`Hash`/
+// `JsonEncode`/`JsonDecode` would copy or compare the resource (analyzer/derives.rs
+// check_resource_derives). Decidable from declaration structure alone.
+fn is_banned_resource_derive(name: read String) -> Bool {
+    return name == "Clone" || name == "Eq" || name == "Ord" || name == "Hash" || name == "JsonEncode" || name == "JsonDecode"
+}
+
+// Scan a resource decl's header [nameIdx, declEnd) for a `derives(...)` clause and
+// report a banned value derive. The body `{` terminates the header.
+fn resource_derives_bad(toks: read List<Tok>, nameIdx: read Int, declEnd: read Int) -> Bool {
+    let mut k = nameIdx + 1
+    let mut hit = false
+    let mut going = true
+    while going {
+        if k >= declEnd {
+            going = false
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE) {
+            going = false
+        } else if tk_text(toks: read toks, i: read k) == "derives" && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_LPAREN) {
+            let close = find_matching(toks: read toks, open: read (k + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+            if close < 0 {
+                going = false
+            } else {
+                let mut m = k + 2
+                while m < close {
+                    if is_ident_tok(toks: read toks, i: read m) && is_banned_resource_derive(name: read tk_text(toks: read toks, i: read m)) {
+                        hit = true
+                    }
+                    m = m + 1
+                }
+                k = close + 1
+            }
+        } else {
+            k = k + 1
+        }
+    }
+    return hit
+}
+
+fn has_bad_resource_derive(toks: read List<Tok>) -> Bool {
+    let ntok = List.len(list: read toks)
+    let mut i = 0
+    let mut hit = false
+    let mut running = true
+    while running {
+        if i >= ntok {
+            running = false
+        } else if tk_kind(toks: read toks, i: read i) == TOK_EOF {
+            running = false
+        } else {
+            let cls = classify_top(toks: read toks, i: read i)
+            if starts_type_decl(toks: read toks, i: read i, isPub: read cls.isPub) {
+                let ns = type_name_start(toks: read toks, i: read i)
+                let r = parse_type_decl(toks: read toks, i: read i)
+                if r < 0 {
+                    running = false
+                } else {
+                    if at_ident(toks: read toks, i: read (ns - 1), wid: read WORD_RESOURCE) {
+                        if resource_derives_bad(toks: read toks, nameIdx: read ns, declEnd: read r) { hit = true }
+                    }
+                    i = r
+                }
+            } else {
+                i = i + 1
+            }
+        }
+    }
+    return hit
+}
+
 // RS0028: a parameter named `self` that is not the first parameter of a qualified
 // method (check_params: `self` && (!is_qualified_method || index != 0)). A method
 // is qualified iff its name is dotted (`Type.method`).
@@ -3652,6 +3723,8 @@ fn main() -> Unit {
     let asyncNotConsumed = has_unconsumed_async_call(toks: read toks, asyncFns: read asyncFns)
     // RS0033: any decimal integer literal in the file that overflows i64.
     let outOfRangeInt = has_out_of_range_int(toks: read toks)
+    // RS0212: a value derive (Clone/Eq/Ord/Hash/JsonEncode/JsonDecode) on a resource.
+    let resourceDerive = has_bad_resource_derive(toks: read toks)
     // RS0101: feature-gating. Declared features (pre-pass, order-independent) and
     // whole-file construct probes for local/async/unsafe; native is tracked in the
     // fn walk below (the missing-effect source fires even when native is declared).
@@ -3958,6 +4031,9 @@ fn main() -> Unit {
     if headerCount >= 2 {
         Log.write(message: read "RS0006")
     }
+    if resourceDerive {
+        Log.write(message: read "RS0212")
+    }
     // RS0101: any unfeatured feature-requiring construct. Native fires if a fn has
     // `effects(native)` without the feature, OR a `native fn` omits that effect.
     let nativeViol = nativeMissing || (nativeEffect && Set.contains<String>(set: read declaredFeatures, value: read "native") == false)
@@ -3965,7 +4041,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
