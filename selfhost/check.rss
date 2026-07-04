@@ -4315,6 +4315,17 @@ fn return_actual_type(toks: read List<Tok>, s0: read Int, e: read Int, popen: re
             if String.len(value: read rt) > 0 { return rt }
         }
     }
+    // Generic constructor `Ns<Args>.new(...)` -> `Ns<Args>` (collection constructors
+    // return their own generic type).
+    if at_symbol(toks: read toks, i: read (s + 1), code: read SYM_LANGLE) {
+        let gc = find_matching(toks: read toks, open: read (s + 1), openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
+        if gc >= 0 && at_symbol(toks: read toks, i: read (gc + 1), code: read SYM_DOT) && is_ident_tok(toks: read toks, i: read (gc + 2)) && tk_text(toks: read toks, i: read (gc + 2)) == "new" && at_symbol(toks: read toks, i: read (gc + 3), code: read SYM_LPAREN) {
+            let close2 = find_matching(toks: read toks, open: read (gc + 3), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+            if close2 == (e - 1) {
+                return type_token_string(toks: read toks, ts: read s, te: read (gc + 1))
+            }
+        }
+    }
     return ""
 }
 
