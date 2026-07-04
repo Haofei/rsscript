@@ -1485,3 +1485,18 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   runs all 619. RS0037 is sound on the skipped giants (they have 0 positional
   variant patterns). Fast gate: 615/615, 0 mismatch.
 - **CHECKER_TARGET_CODES (31):** the 30 above + RS0037.
+
+### Milestone 2r — RS0034 uninferable binding (32 codes)
+
+- **RS0034 UNINFERABLE_BINDING_TYPE (2026-07-04):** a bare `Ok(...)`/`Err(...)`/
+  `None` bound to an UNUSED name with no type annotation leaves an open type
+  parameter with nothing to pin it (oracle `checks/body/binding.rs`:
+  `open_variant_constructor` + unused-name analysis). check.rss:
+  `fn_has_uninferable_binding` walks each fn body for `let [mut] NAME = <rhs>`
+  where the RHS is EXACTLY `None`/`Ok(..)`/`Err(..)` (no `: Type`, nothing trailing
+  — a `?` or `.`/operator disqualifies), then `name_used_in_body` confirms NAME
+  never recurs. `Some(x)` is fully determined → excluded. → **32 codes.**
+- **Verified on the fast gate:** 615/615, 0 mismatch (95s). Sound on the 4 skipped
+  giants: they contain ZERO `let = None/Ok(/Err(` bindings, so RS0034 cannot fire
+  there (grep-confirmed) — the fast gate is a complete verification for this code.
+- **CHECKER_TARGET_CODES (32):** the 31 above + RS0034.

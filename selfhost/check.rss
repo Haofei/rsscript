@@ -546,6 +546,67 @@ fn has_bad_resource_derive(toks: read List<Tok>) -> Bool {
     return hit
 }
 
+// RS0034: a bare `Ok(...)`/`Err(...)`/`None` bound to an UNUSED name with no type
+// annotation leaves a type parameter open with nothing to pin it (oracle
+// checks/body/binding.rs::open_variant_constructor + unused-name analysis).
+
+// Any other ident-token occurrence of `name` in the body besides the binding at `skip`.
+fn name_used_in_body(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, name: read String, skip: read Int) -> Bool {
+    let mut k = bodyOpen + 1
+    let mut used = false
+    while k < bodyClose {
+        if k != skip && is_ident_tok(toks: read toks, i: read k) && tk_text(toks: read toks, i: read k) == name {
+            used = true
+        }
+        k = k + 1
+    }
+    return used
+}
+
+// One `let` at `letPos`: RS0034 iff `let [mut] NAME = <open-ctor>` (no `: Type`),
+// the RHS is EXACTLY `None`/`Ok(...)`/`Err(...)` (nothing trailing), and NAME is unused.
+fn let_is_uninferable(toks: read List<Tok>, letPos: read Int, bodyOpen: read Int, bodyClose: read Int) -> Bool {
+    let mut q = letPos + 1
+    if is_kw_text(toks: read toks, i: read q, word: read "mut") { q = q + 1 }
+    if is_ident_tok(toks: read toks, i: read q) == false { return false }
+    let name = tk_text(toks: read toks, i: read q)
+    if at_symbol(toks: read toks, i: read (q + 1), code: read SYM_EQ) == false { return false }
+    let rhs = q + 2
+    if is_ident_tok(toks: read toks, i: read rhs) == false { return false }
+    if at_symbol(toks: read toks, i: read (rhs - 1), code: read SYM_DOT) { return false }
+    let lineEnd = next_line_or_block_end(toks: read toks, start: read rhs, end: read bodyClose)
+    let head = tk_text(toks: read toks, i: read rhs)
+    let mut isOpen = false
+    if head == "None" {
+        if (rhs + 1) >= lineEnd { isOpen = true }
+    } else if head == "Ok" || head == "Err" {
+        if at_symbol(toks: read toks, i: read (rhs + 1), code: read SYM_LPAREN) {
+            let rc = find_matching(toks: read toks, open: read (rhs + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+            if rc >= 0 && (rc + 1) >= lineEnd { isOpen = true }
+        }
+    }
+    if isOpen == false { return false }
+    return name_used_in_body(toks: read toks, bodyOpen: read bodyOpen, bodyClose: read bodyClose, name: read name, skip: read q) == false
+}
+
+// RS0034 over one fn body: any uninferable `let` binding.
+fn fn_has_uninferable_binding(toks: read List<Tok>, start: read Int) -> Bool {
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+    if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
+    let bodyClose = find_matching(toks: read toks, open: read sigEnd, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    if bodyClose < 0 { return false }
+    let mut k = sigEnd + 1
+    let mut hit = false
+    while k < bodyClose {
+        if is_kw_text(toks: read toks, i: read k, word: read "let") {
+            if let_is_uninferable(toks: read toks, letPos: read k, bodyOpen: read sigEnd, bodyClose: read bodyClose) { hit = true }
+        }
+        k = k + 1
+    }
+    return hit
+}
+
 // RS0028: a parameter named `self` that is not the first parameter of a qualified
 // method (check_params: `self` && (!is_qualified_method || index != 0)). A method
 // is qualified iff its name is dotted (`Type.method`).
@@ -3974,6 +4035,8 @@ fn main() -> Unit {
     // RS0202: a missing/mismatched call-site data effect (any of four sub-cases).
     // Precompute the same-file method-name set (receiver-call resolution gate).
     let mut missingDataEffect = false
+    // RS0034: a bare Ok/Err/None bound to an unused, unannotated name.
+    let mut uninferable = false
     let methodNames = collect_method_names(toks: read toks)
     let mut i = 0
     let mut running = true
@@ -4142,6 +4205,7 @@ fn main() -> Unit {
                     if fn_invalid_try(toks: read toks, start: read i, declared: read declared, allFns: read allFns) { invalidTry = true }
                     if fn_has_unnamed_arg(toks: read toks, start: read i, pubFns: read pubFns, dottedFns: read dottedFns) { unnamedArg = true }
                     if fn_data_effect_bad(toks: read toks, start: read i, declared: read declared, methodNames: read methodNames) { missingDataEffect = true }
+                    if fn_has_uninferable_binding(toks: read toks, start: read i) { uninferable = true }
                     if fn_has_fd_surface(toks: read toks, start: read i) { fdSurface = true }
                     // RS0027: an unknown protocol in this fn's generic bounds.
                     if generics_unknown_protocol(toks: read toks, nameEnd: read dotted_end(toks: read toks, i: read ns), protocols: read protocols) { unknownProtocol = true }
@@ -4274,6 +4338,9 @@ fn main() -> Unit {
     if variantArity {
         Log.write(message: read "RS0037")
     }
+    if uninferable {
+        Log.write(message: read "RS0034")
+    }
     // RS0101: any unfeatured feature-requiring construct. Native fires if a fn has
     // `effects(native)` without the feature, OR a `native fn` omits that effect.
     let nativeViol = nativeMissing || (nativeEffect && Set.contains<String>(set: read declaredFeatures, value: read "native") == false)
@@ -4281,7 +4348,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
