@@ -2003,6 +2003,44 @@ fn param_type_root(toks: read List<Tok>, open: read Int, close: read Int, name: 
     return result
 }
 
+// Full canonical type string of the param named `name` (effect read/mut/take
+// stripped; noescape/owned/fresh kept), or "" if not found. Used by the RS0208
+// engine to type a bare-ident return whose value is a parameter.
+fn param_type_string(toks: read List<Tok>, open: read Int, close: read Int, name: read String) -> String {
+    let mut k = open + 1
+    let mut depth = 0
+    let mut angle = 0
+    let mut segStart = open + 1
+    let mut result = ""
+    while k < close {
+        let opener = at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE)
+        let closer = at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE)
+        if opener {
+            depth = depth + 1
+        } else if closer {
+            if depth > 0 { depth = depth - 1 }
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE) {
+            angle = angle + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) {
+            if angle > 0 { angle = angle - 1 }
+        } else if depth == 0 && angle == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
+            if seg_name_matches(toks: read toks, segStart: read segStart, name: read name) {
+                let mut t = segStart + 2
+                if is_effect_kw(toks: read toks, i: read t) { t = t + 1 }
+                result = type_token_string(toks: read toks, ts: read t, te: read k)
+            }
+            segStart = k + 1
+        }
+        k = k + 1
+    }
+    if seg_name_matches(toks: read toks, segStart: read segStart, name: read name) {
+        let mut t2 = segStart + 2
+        if is_effect_kw(toks: read toks, i: read t2) { t2 = t2 + 1 }
+        result = type_token_string(toks: read toks, ts: read t2, te: read close)
+    }
+    return result
+}
+
 // A param segment starts with `name :`.
 fn seg_name_matches(toks: read List<Tok>, segStart: read Int, name: read String) -> Bool {
     if is_ident_tok(toks: read toks, i: read segStart) == false { return false }
@@ -4198,7 +4236,7 @@ fn fn_return_range(toks: read List<Tok>, start: read Int) -> RetRange {
 // hir_expr_type_name for the FP-safe subset (literals, builtins, variant-call
 // wildcards). Everything else -> "" (unknown); we never over-claim a type, so we
 // never false-positive — at worst a false-negative that keeps the code unbaked.
-fn return_actual_type(toks: read List<Tok>, s0: read Int, e: read Int) -> String {
+fn return_actual_type(toks: read List<Tok>, s0: read Int, e: read Int, popen: read Int, pclose: read Int) -> String {
     let mut s = s0
     if is_effect_kw(toks: read toks, i: read s) { s = s + 1 }
     if s >= e { return "" }
@@ -4215,6 +4253,10 @@ fn return_actual_type(toks: read List<Tok>, s0: read Int, e: read Int) -> String
         if head == "null" { return "JsonLiteral" }
         if head == "Unit" { return "Unit" }
         if head == "None" { return "Option<?>" }
+        if popen >= 0 && pclose >= 0 {
+            let pt = param_type_string(toks: read toks, open: read popen, close: read pclose, name: read head)
+            if String.len(value: read pt) > 0 { return pt }
+        }
     }
     let after = dotted_end(toks: read toks, i: read s)
     if after == (s + 1) && at_symbol(toks: read toks, i: read (s + 1), code: read SYM_LPAREN) {
@@ -4275,17 +4317,17 @@ fn expected_variant_payload(expected: read String, variant: read String) -> Stri
 
 // check_return_payload_type (calls.rs): recursively validate a variant payload
 // against its expected type. Returns true if a mismatch is found.
-fn payload_mismatch(toks: read List<Tok>, ps: read Int, pe: read Int, expected: read String) -> Bool {
+fn payload_mismatch(toks: read List<Tok>, ps: read Int, pe: read Int, expected: read String, popen: read Int, pclose: read Int) -> Bool {
     let vp = variant_payload(toks: read toks, s0: read ps, e: read pe)
     let ep = expected_variant_payload(expected: read expected, variant: read vp.name)
     if String.len(value: read vp.name) > 0 && String.len(value: read ep) > 0 {
         if vp.hasPayload {
-            return payload_mismatch(toks: read toks, ps: read vp.ps, pe: read vp.pe, expected: read ep)
+            return payload_mismatch(toks: read toks, ps: read vp.ps, pe: read vp.pe, expected: read ep, popen: read popen, pclose: read pclose)
         }
         if ep != "Unit" { return true }
         return false
     }
-    let actual = return_actual_type(toks: read toks, s0: read ps, e: read pe)
+    let actual = return_actual_type(toks: read toks, s0: read ps, e: read pe, popen: read popen, pclose: read pclose)
     if String.len(value: read actual) == 0 { return false }
     if str_is_unresolved_generic(s: read actual) { return false }
     if arg_type_matches(expected: read expected, actual: read actual) == false { return true }
@@ -4293,23 +4335,23 @@ fn payload_mismatch(toks: read List<Tok>, ps: read Int, pe: read Int, expected: 
 }
 
 // check_return_expr_type (calls.rs) for one `return <expr>` at [s, e).
-fn return_expr_mismatch(toks: read List<Tok>, s: read Int, e: read Int, expected: read String) -> Bool {
+fn return_expr_mismatch(toks: read List<Tok>, s: read Int, e: read Int, expected: read String, popen: read Int, pclose: read Int) -> Bool {
     let root = str_type_root(s: read expected)
     let a0 = str_top_arg(s: read expected, which: read 0)
     let a1 = str_top_arg(s: read expected, which: read 1)
     if root == "Result" && String.len(value: read a1) > 0 {
         let vp = variant_payload(toks: read toks, s0: read s, e: read e)
         if vp.name == "Ok" {
-            if vp.hasPayload { return payload_mismatch(toks: read toks, ps: read vp.ps, pe: read vp.pe, expected: read a0) }
+            if vp.hasPayload { return payload_mismatch(toks: read toks, ps: read vp.ps, pe: read vp.pe, expected: read a0, popen: read popen, pclose: read pclose) }
             if a0 != "Unit" { return true }
             return false
         }
         if vp.name == "Err" {
-            if vp.hasPayload { return payload_mismatch(toks: read toks, ps: read vp.ps, pe: read vp.pe, expected: read a1) }
+            if vp.hasPayload { return payload_mismatch(toks: read toks, ps: read vp.ps, pe: read vp.pe, expected: read a1, popen: read popen, pclose: read pclose) }
             if a1 != "Unit" { return true }
             return false
         }
-        let actual = return_actual_type(toks: read toks, s0: read s, e: read e)
+        let actual = return_actual_type(toks: read toks, s0: read s, e: read e, popen: read popen, pclose: read pclose)
         if String.len(value: read actual) == 0 { return false }
         if str_is_unresolved_generic(s: read actual) { return false }
         if str_type_root(s: read actual) == "Result" {
@@ -4322,17 +4364,17 @@ fn return_expr_mismatch(toks: read List<Tok>, s: read Int, e: read Int, expected
     if root == "Option" && String.len(value: read a0) > 0 {
         let vp = variant_payload(toks: read toks, s0: read s, e: read e)
         if vp.name == "Some" {
-            if vp.hasPayload { return payload_mismatch(toks: read toks, ps: read vp.ps, pe: read vp.pe, expected: read a0) }
+            if vp.hasPayload { return payload_mismatch(toks: read toks, ps: read vp.ps, pe: read vp.pe, expected: read a0, popen: read popen, pclose: read pclose) }
             if a0 != "Unit" { return true }
             return false
         }
         if vp.name == "None" { return false }
-        let actual = return_actual_type(toks: read toks, s0: read s, e: read e)
+        let actual = return_actual_type(toks: read toks, s0: read s, e: read e, popen: read popen, pclose: read pclose)
         if String.len(value: read actual) == 0 { return false }
         if str_is_unresolved_generic(s: read actual) { return false }
         return arg_type_matches(expected: read expected, actual: read actual) == false
     }
-    let actual = return_actual_type(toks: read toks, s0: read s, e: read e)
+    let actual = return_actual_type(toks: read toks, s0: read s, e: read e, popen: read popen, pclose: read pclose)
     if String.len(value: read actual) == 0 { return false }
     if str_is_unresolved_generic(s: read actual) { return false }
     // A variant wildcard (`Result<?>`/`Option<?>`) against a non-Result/Option
@@ -4356,6 +4398,21 @@ fn fn_has_return_type_mismatch(toks: read List<Tok>, start: read Int) -> Bool {
     if at_symbol(toks: read toks, i: read bo, code: read SYM_LBRACE) == false { return false }
     let bc = find_matching(toks: read toks, open: read bo, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
     if bc < 0 { return false }
+    // Param-list range, for typing bare-ident returns that are parameters.
+    let mut pp = dotted_end(toks: read toks, i: read ns)
+    if at_symbol(toks: read toks, i: read pp, code: read SYM_LANGLE) {
+        let gc = find_matching(toks: read toks, open: read pp, openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
+        if gc >= 0 { pp = gc + 1 }
+    }
+    let mut popen = 0 - 1
+    let mut pclose = 0 - 1
+    if at_symbol(toks: read toks, i: read pp, code: read SYM_LPAREN) {
+        let pc = find_matching(toks: read toks, open: read pp, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+        if pc >= 0 {
+            popen = pp
+            pclose = pc
+        }
+    }
     let mut i = bo + 1
     let mut hit = false
     while i < bc {
@@ -4365,7 +4422,7 @@ fn fn_has_return_type_mismatch(toks: read List<Tok>, start: read Int) -> Bool {
         } else if is_kw_text(toks: read toks, i: read i, word: read "return") {
             let re = next_line_or_block_end(toks: read toks, start: read (i + 1), end: read bc)
             if (i + 1) < re {
-                if return_expr_mismatch(toks: read toks, s: read (i + 1), e: read re, expected: read expected) { hit = true }
+                if return_expr_mismatch(toks: read toks, s: read (i + 1), e: read re, expected: read expected, popen: read popen, pclose: read pclose) { hit = true }
             }
             i = i + 1
         } else {
