@@ -4535,7 +4535,40 @@ fn fn_has_return_type_mismatch(toks: read List<Tok>, start: read Int) -> Bool {
             i = i + 1
         }
     }
+    // Fallthrough: a non-Unit fn whose body can reach its end without returning
+    // (oracle check_function_fallthrough). FP-safe subset: fire only when no depth-0
+    // return/break/continue and no depth-0 if/match/select/with (any of which could
+    // terminate all paths); an rss fn has no implicit tail-return, so a straight-line
+    // body with no return is a definite fallthrough.
+    if hit == false && str_type_root(s: read expected) != "Unit" {
+        if body_falls_through(toks: read toks, bodyOpen: read bo, bodyClose: read bc) { hit = true }
+    }
     return hit
+}
+
+// Conservative fallthrough test — see fn_has_return_type_mismatch.
+fn body_falls_through(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int) -> Bool {
+    let mut i = bodyOpen + 1
+    let mut depth = 0
+    let mut result = true
+    let mut scanning = true
+    while scanning {
+        if i >= bodyClose {
+            scanning = false
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) {
+            depth = depth + 1
+            i = i + 1
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACE) {
+            depth = depth - 1
+            i = i + 1
+        } else if depth == 0 && (is_kw_text(toks: read toks, i: read i, word: read "return") || is_kw_text(toks: read toks, i: read i, word: read "break") || is_kw_text(toks: read toks, i: read i, word: read "continue") || is_kw_text(toks: read toks, i: read i, word: read "if") || is_kw_text(toks: read toks, i: read i, word: read "match") || is_kw_text(toks: read toks, i: read i, word: read "select") || is_kw_text(toks: read toks, i: read i, word: read "with")) {
+            result = false
+            scanning = false
+        } else {
+            i = i + 1
+        }
+    }
+    return result
 }
 
 // A `{` that opens a closure body: preceded by `|` (param-list close), or by an
