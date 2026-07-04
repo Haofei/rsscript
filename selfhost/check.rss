@@ -29,6 +29,10 @@ const SYM_SEMI: Int = 59
 // '?' — the try-operator symbol code (single-char symbol, val = code point).
 const SYM_QUESTION: Int = 63
 
+// '|' — the closure-parameter delimiter (single-char symbol). Used by the RS0201
+// arg-splitter to skip commas inside a closure param list `|a, b|`.
+const SYM_PIPE: Int = 124
+
 fn tk_text(toks: read List<Tok>, i: read Int) -> String {
     if i < 0 { return "" }
     if i >= List.len(list: read toks) { return "" }
@@ -2913,6 +2917,179 @@ fn fn_invalid_try(toks: read List<Tok>, start: read Int, declared: read Set<Stri
     return hit
 }
 
+// ---------------------------------------------------------------------------
+// RS0201 UNNAMED_ARGUMENT (check_argument_naming, checks/calls.rs).
+//
+// A call argument passed WITHOUT a `name:` label where the callee requires named
+// arguments. Named args are REQUIRED for public same-file functions, and for
+// core/native/stdlib qualified calls (`Ns.method(...)`); they are NOT required
+// for receiver-call shorthand (`value.method(...)`), private same-file helpers,
+// enum-variant constructors (`Ok`/`Some`/user variants), or type constructors
+// (which also permit field shorthand). The parser (syntax/parser/expr.rs
+// is_qualified_namespace_receiver) treats an UPPERCASE dotted head as a qualified
+// namespace call and a lowercase head as a receiver call — replicated here by the
+// first-character-uppercase test. FILE-LEVEL: emit once if ANY resolved call site
+// carries an unnamed argument. Conservative on anything not confidently a
+// named-required call (skip => no false positive).
+// ---------------------------------------------------------------------------
+
+// Index of the `<` that matches the `>` at `closePos`, scanning backwards, or -1.
+fn back_match_angle(toks: read List<Tok>, closePos: read Int) -> Int {
+    let mut depth = 0
+    let mut k = closePos
+    let mut res = -1
+    while k >= 0 && res < 0 {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE) {
+            depth = depth - 1
+            if depth == 0 { res = k }
+        }
+        k = k - 1
+    }
+    return res
+}
+
+// Collect same-file fn name sets: `pubFns` = unqualified fn names declared `pub`;
+// `dottedFns` = full dotted names of same-file dotted fns (e.g. `Cache.put`), used
+// to treat a qualified call to a same-file method as positional-allowed.
+fn collect_call_fn_sigs(toks: read List<Tok>, pubFns: mut Set<String>, dottedFns: mut Set<String>) -> Unit {
+    let n = List.len(list: read toks)
+    let mut i = 0
+    while i < n {
+        if at_ident(toks: read toks, i: read i, wid: read WORD_FN) {
+            let nameIdx = i + 1
+            if is_ident_tok(toks: read toks, i: read nameIdx) {
+                let full = dotted_name_text(toks: read toks, i: read nameIdx)
+                let isDotted = at_symbol(toks: read toks, i: read (nameIdx + 1), code: read SYM_DOT)
+                let mut isPub = false
+                let mut b = i - 1
+                let mut scanning = true
+                while scanning {
+                    if at_ident(toks: read toks, i: read b, wid: read WORD_PUB) {
+                        isPub = true
+                        b = b - 1
+                    } else if at_ident(toks: read toks, i: read b, wid: read WORD_ASYNC) || at_ident(toks: read toks, i: read b, wid: read WORD_NATIVE) {
+                        b = b - 1
+                    } else {
+                        scanning = false
+                    }
+                }
+                if isDotted {
+                    Set.insert<String>(set: mut dottedFns, value: read full)
+                } else if isPub {
+                    Set.insert<String>(set: mut pubFns, value: read full)
+                }
+            }
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+// Core function-namespaces whose qualified calls (`Ns.method(...)`) require named
+// arguments. Curated (measure-first) to the namespaces the corpus oracle actually
+// flags: broadening to every stdlib/builtin type would risk false positives on
+// stdlib sum-variant construction (`JsonValue.String(...)`) and on unknown/imported
+// namespaces (`ChatMessage.system(...)`, which the oracle leaves as UNKNOWN_CALLEE
+// with no naming diagnostic). See checks/calls.rs check_argument_naming.
+fn is_core_named_namespace(head: read String) -> Bool {
+    return head == "String" || head == "Image" || head == "Log"
+}
+
+// True iff the call whose arg-list `(` is at `op` requires named arguments: a
+// public same-file unqualified fn, or a core qualified call to a curated
+// function-namespace. Bails (false) on receiver calls, private same-file helpers,
+// variant/type constructors, and any callee shape it cannot resolve confidently.
+fn call_requires_named(toks: read List<Tok>, op: read Int, pubFns: read Set<String>, dottedFns: read Set<String>) -> Bool {
+    let mut nameLast = op - 1
+    if at_symbol(toks: read toks, i: read nameLast, code: read SYM_RANGLE) {
+        let openAngle = back_match_angle(toks: read toks, closePos: read nameLast)
+        if openAngle < 0 { return false }
+        nameLast = openAngle - 1
+    }
+    if is_ident_tok(toks: read toks, i: read nameLast) == false { return false }
+    if at_symbol(toks: read toks, i: read (nameLast - 1), code: read SYM_DOT) {
+        if is_ident_tok(toks: read toks, i: read (nameLast - 2)) == false { return false }
+        let dotHead = nameLast - 2
+        if at_symbol(toks: read toks, i: read (dotHead - 1), code: read SYM_DOT) { return false }
+        let head = tk_text(toks: read toks, i: read dotHead)
+        let full = String.concat(left: read String.concat(left: read head, right: read "."), right: read tk_text(toks: read toks, i: read nameLast))
+        if Set.contains<String>(set: read dottedFns, value: read full) { return false }
+        return is_core_named_namespace(head: read head)
+    }
+    let name = tk_text(toks: read toks, i: read nameLast)
+    return Set.contains<String>(set: read pubFns, value: read name)
+}
+
+// True iff a call-arg segment [s,e) is an unnamed argument: empty (a malformed
+// slot from a leading/double comma), or a value not prefixed by a `name:` label.
+fn seg_is_unnamed(toks: read List<Tok>, s: read Int, e: read Int) -> Bool {
+    if s >= e { return true }
+    if is_ident_tok(toks: read toks, i: read s) && at_symbol(toks: read toks, i: read (s + 1), code: read SYM_COLON) {
+        return false
+    }
+    return true
+}
+
+// True iff the arg list [op+1, close) has any unnamed argument. A single trailing
+// empty segment (trailing comma) does NOT count; empty leading/middle segments do.
+fn args_have_unnamed(toks: read List<Tok>, op: read Int, close: read Int) -> Bool {
+    let mut k = op + 1
+    let mut depth = 0
+    let mut angle = 0
+    let mut inPipe = false
+    let mut segStart = op + 1
+    let mut hit = false
+    while k < close {
+        let opener = at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE)
+        let closer = at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE)
+        if opener {
+            depth = depth + 1
+        } else if closer {
+            if depth > 0 { depth = depth - 1 }
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE) {
+            angle = angle + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) {
+            if angle > 0 { angle = angle - 1 }
+        } else if depth == 0 && angle == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_PIPE) {
+            inPipe = inPipe == false
+        } else if depth == 0 && angle == 0 && inPipe == false && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
+            if seg_is_unnamed(toks: read toks, s: read segStart, e: read k) { hit = true }
+            segStart = k + 1
+        }
+        k = k + 1
+    }
+    if segStart < close {
+        if seg_is_unnamed(toks: read toks, s: read segStart, e: read close) { hit = true }
+    }
+    return hit
+}
+
+// RS0201 over a fn body [sigEnd+1, bodyClose): any resolved named-required call
+// site with an unnamed argument.
+fn fn_has_unnamed_arg(toks: read List<Tok>, start: read Int, pubFns: read Set<String>, dottedFns: read Set<String>) -> Bool {
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+    if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
+    let bodyClose = find_matching(toks: read toks, open: read sigEnd, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    if bodyClose < 0 { return false }
+    let mut op = sigEnd + 1
+    let mut hit = false
+    while op < bodyClose {
+        if at_symbol(toks: read toks, i: read op, code: read SYM_LPAREN) {
+            if call_requires_named(toks: read toks, op: read op, pubFns: read pubFns, dottedFns: read dottedFns) {
+                let close = find_matching(toks: read toks, open: read op, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+                if close >= 0 && close <= bodyClose {
+                    if args_have_unnamed(toks: read toks, op: read op, close: read close) { hit = true }
+                }
+            }
+        }
+        op = op + 1
+    }
+    return hit
+}
+
 fn main() -> Unit {
     let source = Args.get_or_default(index: 0, default: read "")
     let toks = tokenize(source: read source)
@@ -2971,6 +3148,12 @@ fn main() -> Unit {
     let mut allFns = Set<String>.new()
     let mut noBlockFns = Set<String>.new()
     let mut noPanicFns = Set<String>.new()
+    // RS0201: public unqualified fn names + dotted (method) fn names, for the
+    // named-argument requirement.
+    let mut pubFns = Set<String>.new()
+    let mut dottedFns = Set<String>.new()
+    collect_call_fn_sigs(toks: read toks, pubFns: mut pubFns, dottedFns: mut dottedFns)
+    let mut unnamedArg = false
     // Signature table (cross-function): same-file async fn names, for RS0022.
     let mut asyncFns = Set<String>.new()
     collect_rs0009(toks: read toks, resources: mut resources, sumVariants: mut sumVariants, pureFns: mut pureFns, allFns: mut allFns, noBlockFns: mut noBlockFns, noPanicFns: mut noPanicFns, asyncFns: mut asyncFns)
@@ -3152,6 +3335,7 @@ fn main() -> Unit {
                     if fn_has_nonexhaustive_match(toks: read toks, start: read i, declared: read declared, allFns: read allFns) { nonExhaustive = true }
                     if fn_has_bad_await(toks: read toks, start: read i) { badAwait = true }
                     if fn_invalid_try(toks: read toks, start: read i, declared: read declared, allFns: read allFns) { invalidTry = true }
+                    if fn_has_unnamed_arg(toks: read toks, start: read i, pubFns: read pubFns, dottedFns: read dottedFns) { unnamedArg = true }
                     if fn_has_fd_surface(toks: read toks, start: read i) { fdSurface = true }
                     // RS0027: an unknown protocol in this fn's generic bounds.
                     if generics_unknown_protocol(toks: read toks, nameEnd: read dotted_end(toks: read toks, i: read ns), protocols: read protocols) { unknownProtocol = true }
@@ -3236,6 +3420,9 @@ fn main() -> Unit {
     if invalidTry {
         Log.write(message: read "RS0013")
     }
+    if unnamedArg {
+        Log.write(message: read "RS0201")
+    }
     if asyncNotConsumed {
         Log.write(message: read "RS0022")
     }
@@ -3279,7 +3466,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
