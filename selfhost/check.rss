@@ -4390,8 +4390,6 @@ fn fn_has_return_type_mismatch(toks: read List<Tok>, start: read Int) -> Bool {
     let rr = fn_return_range(toks: read toks, start: read start)
     if rr.ok == false { return false }
     let expected = type_token_string(toks: read toks, ts: read rr.ts, te: read rr.te)
-    let root = str_type_root(s: read expected)
-    if root == "Unit" { return false }
     if str_is_unresolved_generic(s: read expected) { return false }
     let ns = fn_name_start(toks: read toks, i: read start)
     let bo = function_signature_end(toks: read toks, start: read (ns - 1))
