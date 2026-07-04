@@ -505,8 +505,28 @@ fn parser_parity_corpus() {
 /// Diagnostic codes the rss checker is expected to reproduce.
 const CHECKER_TARGET_CODES: &[&str] = &["RS0002","RS0003","RS0004","RS0005","RS0006","RS0007","RS0008","RS0009","RS0010","RS0011","RS0012","RS0016","RS0017","RS0021","RS0024","RS0028","RS0033","RS0029","RS0023","RS0035","RS0027","RS0014","RS0018","RS0019","RS0022","RS0101","RS0013","RS0201","RS0202","RS0212","RS0037","RS0034","RS0311","RS0205","RS0020","RS0902"];
 
+/// Dev-loop optimization: extra target codes from `RSS_CHECKER_EXTRA_CODES`
+/// (comma-separated) are unioned into the target set at runtime. `CHECKER_TARGET_CODES`
+/// is a compiled constant, so adding a code to it forces a ~1min lib rebuild — but
+/// `check.rss` is read from disk at runtime. So while developing a NEW code, wire it
+/// into `check.rss` and run `RSS_CHECKER_EXTRA_CODES=RS0XXX cargo test … checker_parity_corpus`
+/// to iterate with ZERO rebuilds; only bake it into the constant (one rebuild) at commit.
+fn extra_target_codes() -> &'static Vec<String> {
+    static EXTRA: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    EXTRA.get_or_init(|| {
+        std::env::var("RSS_CHECKER_EXTRA_CODES")
+            .map(|s| {
+                s.split(',')
+                    .map(|c| c.trim().to_string())
+                    .filter(|c| !c.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default()
+    })
+}
+
 fn is_target_code(code: &str) -> bool {
-    CHECKER_TARGET_CODES.contains(&code)
+    CHECKER_TARGET_CODES.contains(&code) || extra_target_codes().iter().any(|c| c == code)
 }
 
 /// Oracle: the set of target diagnostic codes the real analyzer reports.
@@ -592,9 +612,17 @@ fn checker_parity_corpus() {
     // byte threshold for a ~1-min iteration gate; set RSS_SELFHOST_FULL=1 for the
     // exhaustive run. The skipped files are logged (no silent truncation).
     let full = std::env::var("RSS_SELFHOST_FULL").is_ok();
+    // Tightest inner loop: RSS_SELFHOST_DEV=1 runs only tests/fixtures/ (all small,
+    // where nearly every oracle-positive lives) in ~10s. Use it while iterating a code;
+    // fall back to the full FAST gate (615 files) before commit.
+    let dev = std::env::var("RSS_SELFHOST_DEV").is_ok();
     const FAST_MAX_BYTES: u64 = 40_000;
     let (files, skipped): (Vec<_>, Vec<_>) = if full {
         (all_files, Vec::new())
+    } else if dev {
+        all_files
+            .into_iter()
+            .partition(|f| f.to_string_lossy().contains("/tests/fixtures/"))
     } else {
         all_files.into_iter().partition(|f| {
             std::fs::metadata(f)
@@ -603,16 +631,19 @@ fn checker_parity_corpus() {
         })
     };
     if !full {
+        let mode = if dev { "DEV (fixtures only)" } else { "FAST" };
         eprintln!(
-            "[gate] FAST mode ({} files; {} large skipped — RSS_SELFHOST_FULL=1 for all)",
+            "[gate] {mode} mode ({} files; {} skipped — RSS_SELFHOST_FULL=1 for all)",
             files.len(),
             skipped.len()
         );
-        for f in &skipped {
-            eprintln!(
-                "[gate] skipped (large): {}",
-                f.strip_prefix(&root).unwrap_or(f).display()
-            );
+        if !dev {
+            for f in &skipped {
+                eprintln!(
+                    "[gate] skipped (large): {}",
+                    f.strip_prefix(&root).unwrap_or(f).display()
+                );
+            }
         }
     }
     let total = files.len();
