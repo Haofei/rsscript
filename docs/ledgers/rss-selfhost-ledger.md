@@ -1599,3 +1599,21 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   (`Map<K, Resource>`) doesn't (outer type is Map). Fast-gate complete (1 file,
   giant-clean). 615/615.
 - **CHECKER_TARGET_CODES (39):** the 38 above + RS0701.
+
+### Milestone 2y — RS0604 fresh-requires-local-binding (40 codes)
+
+- **RS0604 FRESH_REQUIRES_LOCAL_BINDING (2026-07-04):** a `fresh`-returning call used
+  directly with a `mut`/`take` data-effect (oracle `checks/body/fresh.rs`) — a fresh
+  value must be bound to a local first. check.rss: `fn_returns_fresh` (param-close +1
+  is `->`, +2 is `fresh`), `collect_fresh_fns` (dotted names of `-> fresh` fns),
+  `has_fresh_requires_local` fires on `mut`/`take` immediately followed by a dotted
+  call whose callee is a known fresh fn (the trailing `(` rules out `mut Type` param
+  modifiers). FP-safe: only a known fresh-returning callee fires. Fast-gate complete
+  (1 file, giant-clean). 615/615.
+- **CHECKER_TARGET_CODES (40):** the 39 above + RS0604.
+
+**Milestone: 40 diagnostic codes byte-exact over the 619-file corpus.** The
+token/structure-decidable tier now covers scanner + parser + signature-table +
+resource/ownership-syntax codes. Remaining ~52 need the type engine (RS0206-0210
+expression typing), the borrow/liveness engine (RS0301-0313, RS04xx/05xx/08xx), or
+callee/stdlib resolution (RS0203/0204/0030/0032/0036) — the genuine engine phase.

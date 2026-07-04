@@ -3152,6 +3152,77 @@ fn has_resource_field(toks: read List<Tok>, resources: read Set<String>) -> Bool
     return hit
 }
 
+// RS0604 FRESH_REQUIRES_LOCAL_BINDING: a `fresh`-returning call used directly with a
+// `mut`/`take` data-effect (oracle checks/body/fresh.rs) — a fresh value must be bound
+// to a local before `mut`/`take` use. FP-safe: fire only when the callee is a KNOWN
+// fresh-returning fn declared in this file.
+fn fn_returns_fresh(toks: read List<Tok>, start: read Int) -> Bool {
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let de = dotted_end(toks: read toks, i: read ns)
+    if at_symbol(toks: read toks, i: read de, code: read SYM_LPAREN) == false { return false }
+    let close = find_matching(toks: read toks, open: read de, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    if close < 0 { return false }
+    if at_symbol(toks: read toks, i: read (close + 1), code: read SYM_ARROW) == false { return false }
+    return is_kw_text(toks: read toks, i: read (close + 2), word: read "fresh")
+}
+
+// Dotted names of every fn declared `-> fresh T`.
+fn collect_fresh_fns(toks: read List<Tok>) -> Set<String> {
+    let ntok = List.len(list: read toks)
+    let mut out = Set<String>.new()
+    let mut i = 0
+    let mut running = true
+    while running {
+        if i >= ntok {
+            running = false
+        } else if tk_kind(toks: read toks, i: read i) == TOK_EOF {
+            running = false
+        } else {
+            let cls = classify_top(toks: read toks, i: read i)
+            let isPub = cls.isPub
+            if cls.isFeatures {
+                i = declaration_line_end(toks: read toks, start: read i)
+            } else if cls.isProfile {
+                i = declaration_line_end(toks: read toks, start: read i)
+            } else if starts_fn_like(toks: read toks, i: read i, isPub: read isPub) {
+                let r = parse_function_decl(toks: read toks, i: read i)
+                if r < 0 {
+                    running = false
+                } else {
+                    if fn_returns_fresh(toks: read toks, start: read i) {
+                        let ns = fn_name_start(toks: read toks, i: read i)
+                        Set.insert<String>(set: mut out, value: read dotted_name_text(toks: read toks, i: read ns))
+                    }
+                    i = r
+                }
+            } else {
+                i = i + 1
+            }
+        }
+    }
+    return out
+}
+
+// RS0604 over the file: a `mut`/`take` immediately applied to a fresh-returning call.
+fn has_fresh_requires_local(toks: read List<Tok>) -> Bool {
+    let freshFns = collect_fresh_fns(toks: read toks)
+    let ntok = List.len(list: read toks)
+    let mut k = 0
+    let mut hit = false
+    while k < ntok {
+        if is_kw_text(toks: read toks, i: read k, word: read "mut") || is_kw_text(toks: read toks, i: read k, word: read "take") {
+            if is_ident_tok(toks: read toks, i: read (k + 1)) {
+                let ce = dotted_end(toks: read toks, i: read (k + 1))
+                if at_symbol(toks: read toks, i: read ce, code: read SYM_LPAREN) {
+                    if Set.contains<String>(set: read freshFns, value: read dotted_name_text(toks: read toks, i: read (k + 1))) { hit = true }
+                }
+            }
+        }
+        k = k + 1
+    }
+    return hit
+}
+
 // ---------------------------------------------------------------------------
 // RS0101 FEATURE_VIOLATION (feature-gating).
 //
@@ -4573,6 +4644,8 @@ fn main() -> Unit {
     let localClass = has_local_class_binding(toks: read toks)
     // RS0701: a non-resource type with a resource-typed field.
     let resourceField = has_resource_field(toks: read toks, resources: read resources)
+    // RS0604: a fresh-returning call used directly with mut/take.
+    let freshMut = has_fresh_requires_local(toks: read toks)
     // RS0101: feature-gating. Declared features (pre-pass, order-independent) and
     // whole-file construct probes for local/async/unsafe; native is tracked in the
     // fn walk below (the missing-effect source fires even when native is declared).
@@ -4919,6 +4992,9 @@ fn main() -> Unit {
     if resourceField {
         Log.write(message: read "RS0701")
     }
+    if freshMut {
+        Log.write(message: read "RS0604")
+    }
     // RS0101: any unfeatured feature-requiring construct. Native fires if a fn has
     // `effects(native)` without the feature, OR a `native fn` omits that effect.
     let nativeViol = nativeMissing || (nativeEffect && Set.contains<String>(set: read declaredFeatures, value: read "native") == false)
@@ -4926,7 +5002,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
