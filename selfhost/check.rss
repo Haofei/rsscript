@@ -694,6 +694,64 @@ fn fn_has_immutable_assign(toks: read List<Tok>, start: read Int) -> Bool {
     return hit
 }
 
+// RS0205: a call that repeats a named argument, e.g. `f(x: 1, x: 2)` (oracle
+// checks/calls.rs). We detect the syntactic case — the same explicit `name:` label
+// twice in one call's arg list. An arg label is an `IDENT:` that sits at an argument
+// START: right after the call's `(` or after a depth-0 `,`. That anchoring excludes
+// struct-field colons (`{x: 1}` — inside `{}`, depth>0), nested-call labels, and
+// typed closure params. Positional duplicates (same param filled twice without a
+// label) need callee resolution and are left as a safe false-negative.
+fn call_has_dup_arg(toks: read List<Tok>, open: read Int, close: read Int) -> Bool {
+    let mut seen = Set<String>.new()
+    let mut dup = false
+    let mut depth = 0
+    let mut atArgStart = true
+    let mut k = open + 1
+    while k < close {
+        if depth == 0 && atArgStart && is_ident_tok(toks: read toks, i: read k) && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_COLON) {
+            let label = tk_text(toks: read toks, i: read k)
+            if Set.contains<String>(set: read seen, value: read label) {
+                dup = true
+            } else {
+                Set.insert<String>(set: mut seen, value: read label)
+            }
+        }
+        atArgStart = false
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) {
+            depth = depth - 1
+        } else if depth == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
+            atArgStart = true
+        }
+        k = k + 1
+    }
+    return dup
+}
+
+// RS0205 over one fn body: any `(...)` whose arg list repeats a label. Runs on every
+// paren (grouping parens carry no labels, so this is safe); cost is O(tokens * depth),
+// fine for the shallow call nesting in real code.
+fn fn_has_dup_arg(toks: read List<Tok>, start: read Int) -> Bool {
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+    if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
+    let bodyClose = find_matching(toks: read toks, open: read sigEnd, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    if bodyClose < 0 { return false }
+    let mut k = sigEnd + 1
+    let mut hit = false
+    while k < bodyClose {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) {
+            let close = find_matching(toks: read toks, open: read k, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+            if close >= 0 {
+                if call_has_dup_arg(toks: read toks, open: read k, close: read close) { hit = true }
+            }
+        }
+        k = k + 1
+    }
+    return hit
+}
+
 // RS0028: a parameter named `self` that is not the first parameter of a qualified
 // method (check_params: `self` && (!is_qualified_method || index != 0)). A method
 // is qualified iff its name is dotted (`Type.method`).
@@ -4126,6 +4184,8 @@ fn main() -> Unit {
     let mut uninferable = false
     // RS0311: reassigning an immutable `let` local.
     let mut immutableAssign = false
+    // RS0205: a call that repeats a named argument.
+    let mut dupArg = false
     let methodNames = collect_method_names(toks: read toks)
     let mut i = 0
     let mut running = true
@@ -4296,6 +4356,7 @@ fn main() -> Unit {
                     if fn_data_effect_bad(toks: read toks, start: read i, declared: read declared, methodNames: read methodNames) { missingDataEffect = true }
                     if fn_has_uninferable_binding(toks: read toks, start: read i) { uninferable = true }
                     if fn_has_immutable_assign(toks: read toks, start: read i) { immutableAssign = true }
+                    if fn_has_dup_arg(toks: read toks, start: read i) { dupArg = true }
                     if fn_has_fd_surface(toks: read toks, start: read i) { fdSurface = true }
                     // RS0027: an unknown protocol in this fn's generic bounds.
                     if generics_unknown_protocol(toks: read toks, nameEnd: read dotted_end(toks: read toks, i: read ns), protocols: read protocols) { unknownProtocol = true }
@@ -4434,6 +4495,9 @@ fn main() -> Unit {
     if immutableAssign {
         Log.write(message: read "RS0311")
     }
+    if dupArg {
+        Log.write(message: read "RS0205")
+    }
     // RS0101: any unfeatured feature-requiring construct. Native fires if a fn has
     // `effects(native)` without the feature, OR a `native fn` omits that effect.
     let nativeViol = nativeMissing || (nativeEffect && Set.contains<String>(set: read declaredFeatures, value: read "native") == false)
@@ -4441,7 +4505,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }

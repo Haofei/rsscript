@@ -1521,3 +1521,20 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   param reassigned in a fn that also `let`s the same name) closed by excluding all
   param names. Verified on the FULL 619-file corpus (giants are assignment-heavy).
 - **CHECKER_TARGET_CODES (33):** the 32 above + RS0311.
+
+### Milestone 2t — RS0205 duplicate-argument (34 codes)
+
+- **RS0205 DUPLICATE_ARGUMENT (2026-07-04):** a call that repeats a named argument,
+  `f(x: 1, x: 2)` (oracle `checks/calls.rs`). check.rss: `call_has_dup_arg` collects
+  each explicit `name:` label at an argument START (right after the call `(` or a
+  depth-0 `,`) — that anchoring excludes struct-field colons (`{x: 1}` is depth>0),
+  nested-call labels, and typed closure params — and flags a repeat;
+  `fn_has_dup_arg` runs it on every `(` in the body (grouping parens carry no labels,
+  so it's safe; cost O(tokens·depth), fine for shallow real nesting). Positional
+  duplicates (same param filled twice unlabeled) need callee resolution and are a
+  safe false-negative. → **34 codes.**
+- **Fully verified by the fast gate:** a pure-Rust oracle scan shows RS0205 fires on
+  EXACTLY ONE corpus file (the fixture, in the fast subset) — no positional-dup
+  cases exist, and the 4 skipped giants have zero dup-label calls, so the checker
+  can't fire there either. Fast gate: 615/615, 0 mismatch.
+- **CHECKER_TARGET_CODES (34):** the 33 above + RS0205.
