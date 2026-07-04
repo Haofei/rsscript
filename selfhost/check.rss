@@ -3223,6 +3223,84 @@ fn has_fresh_requires_local(toks: read List<Tok>) -> Bool {
     return hit
 }
 
+// RS0603 INVALID_FRESH_RETURN_TYPE: a fn declaring `-> fresh X` where X is a generic
+// type parameter, not a struct (oracle checks/body/resource_pool.rs). FP-safe: fire
+// only when the fresh return type name is one of the fn's own `<...>` generic params —
+// a concrete non-struct fresh return (class/resource) is a safe false-negative.
+fn fn_fresh_return_generic_bad(toks: read List<Tok>, start: read Int, classes: read Set<String>) -> Bool {
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let mut p = dotted_end(toks: read toks, i: read ns)
+    let mut genOpen = 0 - 1
+    let mut genClose = 0 - 1
+    if at_symbol(toks: read toks, i: read p, code: read SYM_LANGLE) {
+        genOpen = p
+        genClose = find_matching(toks: read toks, open: read p, openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
+        if genClose < 0 { return false }
+        p = genClose + 1
+    }
+    if at_symbol(toks: read toks, i: read p, code: read SYM_LPAREN) == false { return false }
+    let close = find_matching(toks: read toks, open: read p, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    if close < 0 { return false }
+    if at_symbol(toks: read toks, i: read (close + 1), code: read SYM_ARROW) == false { return false }
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+    if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
+    // Scan the whole return-type region for a `fresh X` (possibly nested, e.g.
+    // `Result<fresh User, E>`) whose X is a KNOWN non-struct: a scalar, a declared
+    // class, or one of the fn's own generic params.
+    let mut k = close + 2
+    let mut hit = false
+    while k < sigEnd {
+        if is_kw_text(toks: read toks, i: read k, word: read "fresh") && is_ident_tok(toks: read toks, i: read (k + 1)) {
+            let xname = tk_text(toks: read toks, i: read (k + 1))
+            if is_scalar_name(name: read xname) {
+                hit = true
+            } else if Set.contains<String>(set: read classes, value: read xname) {
+                hit = true
+            } else if genOpen >= 0 && region_has_text(toks: read toks, s: read (genOpen + 1), e: read genClose, word: read xname) {
+                hit = true
+            }
+        }
+        k = k + 1
+    }
+    return hit
+}
+
+fn has_invalid_fresh_return(toks: read List<Tok>) -> Bool {
+    let mut classes = Set<String>.new()
+    let mut nonClasses = Set<String>.new()
+    collect_type_kinds(toks: read toks, classes: mut classes, nonClasses: mut nonClasses)
+    let ntok = List.len(list: read toks)
+    let mut i = 0
+    let mut running = true
+    let mut hit = false
+    while running {
+        if i >= ntok {
+            running = false
+        } else if tk_kind(toks: read toks, i: read i) == TOK_EOF {
+            running = false
+        } else {
+            let cls = classify_top(toks: read toks, i: read i)
+            let isPub = cls.isPub
+            if cls.isFeatures {
+                i = declaration_line_end(toks: read toks, start: read i)
+            } else if cls.isProfile {
+                i = declaration_line_end(toks: read toks, start: read i)
+            } else if starts_fn_like(toks: read toks, i: read i, isPub: read isPub) {
+                let r = parse_function_decl(toks: read toks, i: read i)
+                if r < 0 {
+                    running = false
+                } else {
+                    if fn_fresh_return_generic_bad(toks: read toks, start: read i, classes: read classes) { hit = true }
+                    i = r
+                }
+            } else {
+                i = i + 1
+            }
+        }
+    }
+    return hit
+}
+
 // RS0901 TAKE_HANDLE_FIELD: `take receiver.field` where `field` is a `handle` field of
 // the RECEIVER'S type (oracle checks/body/effects.rs) — handle fields are non-owning.
 // FP-safe: handle fields are keyed by `Struct.field` and the receiver's type is resolved
@@ -4952,6 +5030,8 @@ fn main() -> Unit {
     let resourceField = has_resource_field(toks: read toks, resources: read resources)
     // RS0604: a fresh-returning call used directly with mut/take.
     let freshMut = has_fresh_requires_local(toks: read toks)
+    // RS0603: a fresh return type that is a generic param, not a struct.
+    let invalidFreshRet = has_invalid_fresh_return(toks: read toks)
     // RS0901: `take` of a `handle` field.
     let takeHandle = has_take_handle_field(toks: read toks)
     // RS0904: a weak field initialized without Weak.from/downgrade.
@@ -5307,6 +5387,9 @@ fn main() -> Unit {
     if freshMut {
         Log.write(message: read "RS0604")
     }
+    if invalidFreshRet {
+        Log.write(message: read "RS0603")
+    }
     if takeHandle {
         Log.write(message: read "RS0901")
     }
@@ -5323,7 +5406,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || takeHandle || weakInit || weakRead
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || takeHandle || weakInit || weakRead
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }

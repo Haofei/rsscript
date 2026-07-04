@@ -1653,7 +1653,18 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   receiver typing.
 - **CHECKER_TARGET_CODES (43):** the 42 above + RS0903.
 
-**Milestone: 43 diagnostic codes byte-exact over the 619-file corpus.** The
+### Milestone 2ac — RS0603 invalid-fresh-return-type (44 codes)
+
+- **RS0603 INVALID_FRESH_RETURN_TYPE (2026-07-04):** a fn whose return type contains
+  `fresh X` where X is not a struct (oracle checks/body/resource_pool.rs). check.rss
+  `fn_fresh_return_generic_bad` scans the whole return-type region (after `->` to the
+  body `{`) for any `fresh X` (possibly nested, e.g. `Result<fresh User, E>`) and fires
+  when X is a scalar, a declared class, or one of the fn's own `<...>` generic params.
+  FP-safe: `fresh Struct` (the valid case) and unknown externals never fire. Fast-gate
+  complete (3 files, giant-clean). 615/615.
+- **CHECKER_TARGET_CODES (44):** the 43 above + RS0603.
+
+**Milestone: 44 diagnostic codes byte-exact over the 619-file corpus.** The
 token/structure-decidable tier now covers scanner + parser + signature-table +
 resource/ownership-syntax codes. Remaining ~52 need the type engine (RS0206-0210
 expression typing), the borrow/liveness engine (RS0301-0313, RS04xx/05xx/08xx), or
