@@ -1538,3 +1538,23 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   cases exist, and the 4 skipped giants have zero dup-label calls, so the checker
   can't fire there either. Fast gate: 615/615, 0 mismatch.
 - **CHECKER_TARGET_CODES (34):** the 33 above + RS0205.
+
+### Milestone 2u — RS0020 invalid-noalloc-call (35 codes)
+
+- **RS0020 INVALID_NOALLOC_CALL (2026-07-04):** a `noalloc` fn may call ONLY enum
+  variants or other `noalloc` fns (oracle `analyzer/diagnostics.rs`). The noalloc
+  analog of the existing `fn_pure_bad` machinery. check.rss: `collect_noalloc_fns`
+  (simple+dotted names of `effects(noalloc)` fns), `noalloc_body_bad` scans a noalloc
+  body's calls — unqualified calls allowed iff the name is a declared-type ctor
+  (that's RS0014, not RS0020), an enum variant, or a noalloc fn; qualified calls
+  allowed iff the dotted name is a noalloc fn; else RS0020 — and `fn_has_noalloc_call`
+  gates on the fn actually being noalloc. → **35 codes.**
+- **Measured then built (rs0020_probe, since removed):** RS0020 fires on EXACTLY 2
+  corpus files — `noalloc-plain-call.rss` {RS0020} (an unqualified plain call) and
+  `noalloc-manage-allocation.rss` {RS0014, RS0020, RS0208} (a qualified `Image.load`
+  call). Both in the fast subset; giants have no noalloc fns, so `fn_has_noalloc_call`
+  short-circuits there → fast gate is a complete verification. Fast gate: 615/615.
+  Key insight from the probe: constructor calls allocate → RS0014, NOT RS0020 (that's
+  why only 2 files fire despite many noalloc-construct fixtures), so the unqualified
+  ctor case is excluded.
+- **CHECKER_TARGET_CODES (35):** the 34 above + RS0020.

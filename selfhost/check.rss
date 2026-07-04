@@ -2759,6 +2759,90 @@ fn fn_noalloc_alloc(toks: read List<Tok>, start: read Int, declared: read Set<St
     return hit
 }
 
+// RS0020 INVALID_NOALLOC_CALL: a `noalloc` fn may call ONLY enum variants or other
+// `noalloc` fns (oracle analyzer/diagnostics.rs). Unqualified constructor calls
+// (a declared type) allocate and are RS0014, not RS0020, so they are excluded here.
+
+// Simple + dotted names of every `effects(noalloc)` fn (one top-level pre-pass).
+fn collect_noalloc_fns(toks: read List<Tok>) -> Set<String> {
+    let ntok = List.len(list: read toks)
+    let mut out = Set<String>.new()
+    let mut i = 0
+    let mut running = true
+    while running {
+        if i >= ntok {
+            running = false
+        } else if tk_kind(toks: read toks, i: read i) == TOK_EOF {
+            running = false
+        } else {
+            let cls = classify_top(toks: read toks, i: read i)
+            let isPub = cls.isPub
+            if cls.isFeatures {
+                i = declaration_line_end(toks: read toks, start: read i)
+            } else if cls.isProfile {
+                i = declaration_line_end(toks: read toks, start: read i)
+            } else if starts_fn_like(toks: read toks, i: read i, isPub: read isPub) {
+                let r = parse_function_decl(toks: read toks, i: read i)
+                if r < 0 {
+                    running = false
+                } else {
+                    if fn_has_named_effect(toks: read toks, start: read i, effName: read "noalloc") {
+                        let ns = fn_name_start(toks: read toks, i: read i)
+                        Set.insert<String>(set: mut out, value: read dotted_name_text(toks: read toks, i: read ns))
+                    }
+                    i = r
+                }
+            } else {
+                i = i + 1
+            }
+        }
+    }
+    return out
+}
+
+// A noalloc fn body containing a call to something that is neither an enum variant
+// nor a noalloc fn (constructors of declared types are RS0014, excluded).
+fn noalloc_body_bad(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, declared: read Set<String>, sumVariants: read Set<String>, noallocFns: read Set<String>) -> Bool {
+    let mut k = bodyOpen + 1
+    let mut hit = false
+    while k < bodyClose {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) && tk_kind(toks: read toks, i: read (k - 1)) == TOK_IDENT {
+            let name = tk_text(toks: read toks, i: read (k - 1))
+            let qualified = at_symbol(toks: read toks, i: read (k - 2), code: read SYM_DOT) && is_ident_tok(toks: read toks, i: read (k - 3))
+            if qualified {
+                let mut root = k - 3
+                let mut walking = true
+                while walking {
+                    if at_symbol(toks: read toks, i: read (root - 1), code: read SYM_DOT) && is_ident_tok(toks: read toks, i: read (root - 2)) {
+                        root = root - 2
+                    } else {
+                        walking = false
+                    }
+                }
+                if Set.contains<String>(set: read noallocFns, value: read dotted_name_text(toks: read toks, i: read root)) == false { hit = true }
+            } else {
+                let isCtor = Set.contains<String>(set: read declared, value: read name)
+                let isVariant = Set.contains<String>(set: read sumVariants, value: read name)
+                let isNoalloc = Set.contains<String>(set: read noallocFns, value: read name)
+                if isCtor == false && isVariant == false && isNoalloc == false { hit = true }
+            }
+        }
+        k = k + 1
+    }
+    return hit
+}
+
+// RS0020 over one fn: a noalloc fn whose body makes a disallowed call.
+fn fn_has_noalloc_call(toks: read List<Tok>, start: read Int, declared: read Set<String>, sumVariants: read Set<String>, noallocFns: read Set<String>) -> Bool {
+    if fn_has_named_effect(toks: read toks, start: read start, effName: read "noalloc") == false { return false }
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+    if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
+    let bodyClose = find_matching(toks: read toks, open: read sigEnd, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    if bodyClose < 0 { return false }
+    return noalloc_body_bad(toks: read toks, bodyOpen: read sigEnd, bodyClose: read bodyClose, declared: read declared, sumVariants: read sumVariants, noallocFns: read noallocFns)
+}
+
 // ---------------------------------------------------------------------------
 // RS0101 FEATURE_VIOLATION (feature-gating).
 //
@@ -4119,6 +4203,8 @@ fn main() -> Unit {
     let mut unknownType = false
     let mut missingEffect = false
     let mut pureBad = false
+    // RS0020: a noalloc fn that calls a non-variant, non-noalloc function.
+    let mut noallocCall = false
     // RS0029: any `await` in a non-async function.
     let mut badAwait = false
     // RS0013: an invalid `?` (non-Result return, or a concrete non-Result operand).
@@ -4160,6 +4246,8 @@ fn main() -> Unit {
     // Signature table (cross-function): same-file async fn names, for RS0022.
     let mut asyncFns = Set<String>.new()
     collect_rs0009(toks: read toks, resources: mut resources, sumVariants: mut sumVariants, pureFns: mut pureFns, allFns: mut allFns, noBlockFns: mut noBlockFns, noPanicFns: mut noPanicFns, asyncFns: mut asyncFns)
+    // RS0020: names of `effects(noalloc)` fns (allowed callees inside noalloc fns).
+    let noallocFns = collect_noalloc_fns(toks: read toks)
     // RS0022: an unconsumed call to a same-file async fn.
     let asyncNotConsumed = has_unconsumed_async_call(toks: read toks, asyncFns: read asyncFns)
     // RS0033: any decimal integer literal in the file that overflows i64.
@@ -4349,6 +4437,7 @@ fn main() -> Unit {
                     if fn_types_unknown(toks: read toks, start: read i, declared: read declared) { unknownType = true }
                     if fn_missing_param_effect(toks: read toks, start: read i, sums: read payloadlessSums) { missingEffect = true }
                     if fn_pure_bad(toks: read toks, start: read i, resources: read resources, sumVariants: read sumVariants, pureFns: read pureFns, allFns: read allFns, declared: read declared) { pureBad = true }
+                    if fn_has_noalloc_call(toks: read toks, start: read i, declared: read declared, sumVariants: read sumVariants, noallocFns: read noallocFns) { noallocCall = true }
                     if fn_has_nonexhaustive_match(toks: read toks, start: read i, declared: read declared, allFns: read allFns) { nonExhaustive = true }
                     if fn_has_bad_await(toks: read toks, start: read i) { badAwait = true }
                     if fn_invalid_try(toks: read toks, start: read i, declared: read declared, allFns: read allFns) { invalidTry = true }
@@ -4498,6 +4587,9 @@ fn main() -> Unit {
     if dupArg {
         Log.write(message: read "RS0205")
     }
+    if noallocCall {
+        Log.write(message: read "RS0020")
+    }
     // RS0101: any unfeatured feature-requiring construct. Native fires if a fn has
     // `effects(native)` without the feature, OR a `native fn` omits that effect.
     let nativeViol = nativeMissing || (nativeEffect && Set.contains<String>(set: read declaredFeatures, value: read "native") == false)
@@ -4505,7 +4597,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
