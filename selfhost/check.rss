@@ -4221,6 +4221,8 @@ fn fn_return_range(toks: read List<Tok>, start: read Int) -> RetRange {
             scanning = false
         } else if depth == 0 && is_kw_text(toks: read toks, i: read e, word: read "effects") {
             scanning = false
+        } else if depth == 0 && is_decl_start_kw(toks: read toks, i: read e) {
+            scanning = false
         } else {
             if at_symbol(toks: read toks, i: read e, code: read SYM_LANGLE) || at_symbol(toks: read toks, i: read e, code: read SYM_LPAREN) {
                 depth = depth + 1
@@ -4233,12 +4235,41 @@ fn fn_return_range(toks: read List<Tok>, start: read Int) -> RetRange {
     return RetRange(ts: rts, te: e, ok: true)
 }
 
+// A token that begins a top-level declaration — used to bound a body-less fn
+// signature's return type (which ends at the next decl, not a `{`).
+fn is_decl_start_kw(toks: read List<Tok>, i: read Int) -> Bool {
+    return is_kw_text(toks: read toks, i: read i, word: read "fn") || is_kw_text(toks: read toks, i: read i, word: read "pub") || is_kw_text(toks: read toks, i: read i, word: read "struct") || is_kw_text(toks: read toks, i: read i, word: read "class") || is_kw_text(toks: read toks, i: read i, word: read "resource") || is_kw_text(toks: read toks, i: read i, word: read "const") || is_kw_text(toks: read toks, i: read i, word: read "module") || is_kw_text(toks: read toks, i: read i, word: read "use") || is_kw_text(toks: read toks, i: read i, word: read "protocol") || is_kw_text(toks: read toks, i: read i, word: read "impl") || is_kw_text(toks: read toks, i: read i, word: read "native") || is_kw_text(toks: read toks, i: read i, word: read "opaque") || is_kw_text(toks: read toks, i: read i, word: read "async") || is_kw_text(toks: read toks, i: read i, word: read "features")
+}
+
+// The full canonical return type of a file-declared `fn ns.method(...)`, or "" if the
+// file does not declare it. Takes precedence over the curated stdlib table, since a
+// file may shadow a stdlib signature (e.g. its own `fn Image.load(...) -> fresh Image`).
+fn declared_qualified_return(toks: read List<Tok>, ns: read String, method: read String) -> String {
+    let n = List.len(list: read toks)
+    let mut i = 0
+    let mut result = ""
+    let mut done = false
+    while i < n && done == false {
+        if at_ident(toks: read toks, i: read i, wid: read WORD_FN) {
+            let a = i + 1
+            if is_ident_tok(toks: read toks, i: read a) && tk_text(toks: read toks, i: read a) == ns && at_symbol(toks: read toks, i: read (a + 1), code: read SYM_DOT) && is_ident_tok(toks: read toks, i: read (a + 2)) && tk_text(toks: read toks, i: read (a + 2)) == method {
+                let rr = fn_return_range(toks: read toks, start: read i)
+                if rr.ok { result = type_token_string(toks: read toks, ts: read rr.ts, te: read rr.te) }
+                done = true
+            }
+        }
+        i = i + 1
+    }
+    return result
+}
+
 // hir_expr_type_name for the FP-safe subset (literals, builtins, variant-call
 // wildcards). Everything else -> "" (unknown); we never over-claim a type, so we
 // never false-positive — at worst a false-negative that keeps the code unbaked.
-fn return_actual_type(toks: read List<Tok>, s0: read Int, e: read Int, popen: read Int, pclose: read Int) -> String {
+fn return_actual_type(toks: read List<Tok>, s0: read Int, e: read Int, popen: read Int, pclose: read Int, bodyOpen: read Int) -> String {
     let mut s = s0
     if is_effect_kw(toks: read toks, i: read s) { s = s + 1 }
+    if is_kw_text(toks: read toks, i: read s, word: read "manage") { s = s + 1 }
     if s >= e { return "" }
     let k0 = tk_kind(toks: read toks, i: read s)
     if (s + 1) == e {
@@ -4257,6 +4288,13 @@ fn return_actual_type(toks: read List<Tok>, s0: read Int, e: read Int, popen: re
             let pt = param_type_string(toks: read toks, open: read popen, close: read pclose, name: read head)
             if String.len(value: read pt) > 0 { return pt }
         }
+        if bodyOpen >= 0 {
+            let lr = find_let_rhs_start(toks: read toks, bodyOpen: read bodyOpen, matchPos: read s0, name: read head)
+            if lr >= 0 {
+                let re2 = next_line_or_block_end(toks: read toks, start: read lr, end: read s0)
+                return return_actual_type(toks: read toks, s0: read lr, e: read re2, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen)
+            }
+        }
     }
     let after = dotted_end(toks: read toks, i: read s)
     if after == (s + 1) && at_symbol(toks: read toks, i: read (s + 1), code: read SYM_LPAREN) {
@@ -4264,6 +4302,17 @@ fn return_actual_type(toks: read List<Tok>, s0: read Int, e: read Int, popen: re
         if close == (e - 1) {
             if head == "Some" { return "Option<?>" }
             if head == "Ok" || head == "Err" { return "Result<?>" }
+        }
+    }
+    // Qualified stdlib call `Ns.method(...)` spanning the whole region.
+    if after > (s + 1) && at_symbol(toks: read toks, i: read after, code: read SYM_LPAREN) {
+        let close = find_matching(toks: read toks, open: read after, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+        if close == (e - 1) {
+            let method = tk_text(toks: read toks, i: read (after - 1))
+            let declared = declared_qualified_return(toks: read toks, ns: read head, method: read method)
+            if String.len(value: read declared) > 0 { return declared }
+            let rt = stdlib_return_type(ns: read head, method: read method)
+            if String.len(value: read rt) > 0 { return rt }
         }
     }
     return ""
@@ -4317,17 +4366,17 @@ fn expected_variant_payload(expected: read String, variant: read String) -> Stri
 
 // check_return_payload_type (calls.rs): recursively validate a variant payload
 // against its expected type. Returns true if a mismatch is found.
-fn payload_mismatch(toks: read List<Tok>, ps: read Int, pe: read Int, expected: read String, popen: read Int, pclose: read Int) -> Bool {
+fn payload_mismatch(toks: read List<Tok>, ps: read Int, pe: read Int, expected: read String, popen: read Int, pclose: read Int, bodyOpen: read Int) -> Bool {
     let vp = variant_payload(toks: read toks, s0: read ps, e: read pe)
     let ep = expected_variant_payload(expected: read expected, variant: read vp.name)
     if String.len(value: read vp.name) > 0 && String.len(value: read ep) > 0 {
         if vp.hasPayload {
-            return payload_mismatch(toks: read toks, ps: read vp.ps, pe: read vp.pe, expected: read ep, popen: read popen, pclose: read pclose)
+            return payload_mismatch(toks: read toks, ps: read vp.ps, pe: read vp.pe, expected: read ep, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen)
         }
         if ep != "Unit" { return true }
         return false
     }
-    let actual = return_actual_type(toks: read toks, s0: read ps, e: read pe, popen: read popen, pclose: read pclose)
+    let actual = return_actual_type(toks: read toks, s0: read ps, e: read pe, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen)
     if String.len(value: read actual) == 0 { return false }
     if str_is_unresolved_generic(s: read actual) { return false }
     if arg_type_matches(expected: read expected, actual: read actual) == false { return true }
@@ -4335,23 +4384,23 @@ fn payload_mismatch(toks: read List<Tok>, ps: read Int, pe: read Int, expected: 
 }
 
 // check_return_expr_type (calls.rs) for one `return <expr>` at [s, e).
-fn return_expr_mismatch(toks: read List<Tok>, s: read Int, e: read Int, expected: read String, popen: read Int, pclose: read Int) -> Bool {
+fn return_expr_mismatch(toks: read List<Tok>, s: read Int, e: read Int, expected: read String, popen: read Int, pclose: read Int, bodyOpen: read Int) -> Bool {
     let root = str_type_root(s: read expected)
     let a0 = str_top_arg(s: read expected, which: read 0)
     let a1 = str_top_arg(s: read expected, which: read 1)
     if root == "Result" && String.len(value: read a1) > 0 {
         let vp = variant_payload(toks: read toks, s0: read s, e: read e)
         if vp.name == "Ok" {
-            if vp.hasPayload { return payload_mismatch(toks: read toks, ps: read vp.ps, pe: read vp.pe, expected: read a0, popen: read popen, pclose: read pclose) }
+            if vp.hasPayload { return payload_mismatch(toks: read toks, ps: read vp.ps, pe: read vp.pe, expected: read a0, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen) }
             if a0 != "Unit" { return true }
             return false
         }
         if vp.name == "Err" {
-            if vp.hasPayload { return payload_mismatch(toks: read toks, ps: read vp.ps, pe: read vp.pe, expected: read a1, popen: read popen, pclose: read pclose) }
+            if vp.hasPayload { return payload_mismatch(toks: read toks, ps: read vp.ps, pe: read vp.pe, expected: read a1, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen) }
             if a1 != "Unit" { return true }
             return false
         }
-        let actual = return_actual_type(toks: read toks, s0: read s, e: read e, popen: read popen, pclose: read pclose)
+        let actual = return_actual_type(toks: read toks, s0: read s, e: read e, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen)
         if String.len(value: read actual) == 0 { return false }
         if str_is_unresolved_generic(s: read actual) { return false }
         if str_type_root(s: read actual) == "Result" {
@@ -4364,17 +4413,17 @@ fn return_expr_mismatch(toks: read List<Tok>, s: read Int, e: read Int, expected
     if root == "Option" && String.len(value: read a0) > 0 {
         let vp = variant_payload(toks: read toks, s0: read s, e: read e)
         if vp.name == "Some" {
-            if vp.hasPayload { return payload_mismatch(toks: read toks, ps: read vp.ps, pe: read vp.pe, expected: read a0, popen: read popen, pclose: read pclose) }
+            if vp.hasPayload { return payload_mismatch(toks: read toks, ps: read vp.ps, pe: read vp.pe, expected: read a0, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen) }
             if a0 != "Unit" { return true }
             return false
         }
         if vp.name == "None" { return false }
-        let actual = return_actual_type(toks: read toks, s0: read s, e: read e, popen: read popen, pclose: read pclose)
+        let actual = return_actual_type(toks: read toks, s0: read s, e: read e, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen)
         if String.len(value: read actual) == 0 { return false }
         if str_is_unresolved_generic(s: read actual) { return false }
         return arg_type_matches(expected: read expected, actual: read actual) == false
     }
-    let actual = return_actual_type(toks: read toks, s0: read s, e: read e, popen: read popen, pclose: read pclose)
+    let actual = return_actual_type(toks: read toks, s0: read s, e: read e, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen)
     if String.len(value: read actual) == 0 { return false }
     if str_is_unresolved_generic(s: read actual) { return false }
     // A variant wildcard (`Result<?>`/`Option<?>`) against a non-Result/Option
@@ -4420,7 +4469,7 @@ fn fn_has_return_type_mismatch(toks: read List<Tok>, start: read Int) -> Bool {
         } else if is_kw_text(toks: read toks, i: read i, word: read "return") {
             let re = next_line_or_block_end(toks: read toks, start: read (i + 1), end: read bc)
             if (i + 1) < re {
-                if return_expr_mismatch(toks: read toks, s: read (i + 1), e: read re, expected: read expected, popen: read popen, pclose: read pclose) { hit = true }
+                if return_expr_mismatch(toks: read toks, s: read (i + 1), e: read re, expected: read expected, popen: read popen, pclose: read pclose, bodyOpen: read bo) { hit = true }
             }
             i = i + 1
         } else {
@@ -4501,6 +4550,17 @@ fn has_return_type_mismatch(toks: read List<Tok>) -> Bool {
 // in the map also yields "" (unknown => no diagnostic => FP-safe). See
 // stdlib/{fs,env,path,json,toml,yaml}/*.rssi, packages/async/interface/file.rssi,
 // and crate::checks::body::try_checks::result_error_type_name.
+// Curated stdlib return-type table (the checker has no file IO, so signatures the
+// analyzer reads from stdlib/*.rssi are embedded here — same pattern as
+// stdlib_error_type). Only the entries needed to type RS0208 returns are present;
+// an absent Ns.method yields "" (unknown => no diagnostic => FP-safe). Values are
+// the exact canonical return-type strings the analyzer produces.
+fn stdlib_return_type(ns: read String, method: read String) -> String {
+    if ns == "Image" && method == "load" { return "Result<fresh Image, ImageError>" }
+    if ns == "File" && method == "open" { return "Result<fresh File, FileError>" }
+    return ""
+}
+
 fn stdlib_error_type(ns: read String, method: read String) -> String {
     if ns == "File" {
         if method == "bytes_stream" { return "" }
