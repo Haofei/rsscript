@@ -1586,3 +1586,16 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   ClassName is a file-declared class. Indirect (fn-returned) class values are a safe
   false-negative. Fast-gate complete (1 oracle file, giant-clean). 615/615.
 - **CHECKER_TARGET_CODES (38):** the 37 above + RS0306.
+
+### Milestone 2x — RS0701 resource-field (39 codes)
+
+- **RS0701 RESOURCE_FIELD (2026-07-04):** a non-resource type with a field whose
+  (outer) type is a declared resource (oracle `analyzer/resource_types.rs`) —
+  resources must live behind `with`/`ResourcePool`. check.rss:
+  `type_body_has_resource_field` (per field, skip `handle`/`weak` modifiers, check the
+  outer type root against the `resources` set) + `has_resource_field` (walk type
+  decls, skip resource containers). Reuses the `resources` set from collect_rs0009.
+  FP-safe: only a known-resource field type fires; a resource nested in generics
+  (`Map<K, Resource>`) doesn't (outer type is Map). Fast-gate complete (1 file,
+  giant-clean). 615/615.
+- **CHECKER_TARGET_CODES (39):** the 38 above + RS0701.

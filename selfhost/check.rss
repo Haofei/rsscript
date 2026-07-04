@@ -3051,6 +3051,107 @@ fn has_local_class_binding(toks: read List<Tok>) -> Bool {
     return hit
 }
 
+// RS0701 RESOURCE_FIELD: a non-resource type with a field whose (outer) type is a
+// declared resource (oracle analyzer/resource_types.rs) — resources must live behind
+// `with`/`ResourcePool`, not as plain fields. FP-safe: fire only when the field type
+// root is a KNOWN resource; the containing type must not itself be a resource.
+fn type_body_has_resource_field(toks: read List<Tok>, bodyOpen: read Int, resources: read Set<String>) -> Bool {
+    let close = find_matching(toks: read toks, open: read bodyOpen, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    if close < 0 { return false }
+    let mut k = bodyOpen + 1
+    let mut depth = 0
+    let mut hit = false
+    while k < close {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) {
+            depth = depth - 1
+        } else if depth == 0 && is_ident_tok(toks: read toks, i: read k) && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_COLON) {
+            let mut u = k + 2
+            let mut skipping = true
+            while skipping {
+                if is_kw_text(toks: read toks, i: read u, word: read "handle") || is_kw_text(toks: read toks, i: read u, word: read "weak") {
+                    u = u + 1
+                } else {
+                    skipping = false
+                }
+            }
+            if is_ident_tok(toks: read toks, i: read u) {
+                if Set.contains<String>(set: read resources, value: read tk_text(toks: read toks, i: read u)) { hit = true }
+            }
+        }
+        k = k + 1
+    }
+    return hit
+}
+
+fn has_resource_field(toks: read List<Tok>, resources: read Set<String>) -> Bool {
+    let ntok = List.len(list: read toks)
+    let mut i = 0
+    let mut running = true
+    let mut hit = false
+    while running {
+        if i >= ntok {
+            running = false
+        } else if tk_kind(toks: read toks, i: read i) == TOK_EOF {
+            running = false
+        } else {
+            let cls = classify_top(toks: read toks, i: read i)
+            let isPub = cls.isPub
+            if cls.isFeatures {
+                i = declaration_line_end(toks: read toks, start: read i)
+            } else if cls.isProfile {
+                i = declaration_line_end(toks: read toks, start: read i)
+            } else if cls.isSum {
+                let r = parse_sum_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else if starts_type_decl(toks: read toks, i: read i, isPub: read isPub) {
+                let r = parse_type_decl(toks: read toks, i: read i)
+                if r < 0 {
+                    running = false
+                } else {
+                    let nameIdx = type_name_start(toks: read toks, i: read i)
+                    let isResource = at_ident(toks: read toks, i: read (nameIdx - 1), wid: read WORD_RESOURCE)
+                    if isResource == false {
+                        let ob = find_body_open(toks: read toks, i: read i, end: read r)
+                        if ob >= 0 {
+                            if type_body_has_resource_field(toks: read toks, bodyOpen: read ob, resources: read resources) { hit = true }
+                        }
+                    }
+                    i = r
+                }
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_PROTOCOL) {
+                let r = parse_protocol_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_IMPL) {
+                let r = parse_impl_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else if cls.isNativeMod {
+                let r = parse_native_module_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else if cls.isTypeAlias {
+                let r = parse_type_alias_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else if cls.isConst {
+                let r = parse_const_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_MODULE) {
+                let r = parse_module_decl(toks: read toks, i: read i)
+                if r < 0 { i = i + 1 } else { i = r }
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_USE) {
+                let r = parse_use_decl(toks: read toks, i: read i)
+                if r < 0 { i = i + 1 } else { i = r }
+            } else if starts_fn_like(toks: read toks, i: read i, isPub: read isPub) {
+                let r = parse_function_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else {
+                i = i + 1
+            }
+        }
+    }
+    return hit
+}
+
 // ---------------------------------------------------------------------------
 // RS0101 FEATURE_VIOLATION (feature-gating).
 //
@@ -4470,6 +4571,8 @@ fn main() -> Unit {
     let ownStruct = has_own_struct(toks: read toks)
     // RS0306: a `local` binding of a class instance.
     let localClass = has_local_class_binding(toks: read toks)
+    // RS0701: a non-resource type with a resource-typed field.
+    let resourceField = has_resource_field(toks: read toks, resources: read resources)
     // RS0101: feature-gating. Declared features (pre-pass, order-independent) and
     // whole-file construct probes for local/async/unsafe; native is tracked in the
     // fn walk below (the missing-effect source fires even when native is declared).
@@ -4813,6 +4916,9 @@ fn main() -> Unit {
     if localClass {
         Log.write(message: read "RS0306")
     }
+    if resourceField {
+        Log.write(message: read "RS0701")
+    }
     // RS0101: any unfeatured feature-requiring construct. Native fires if a fn has
     // `effects(native)` without the feature, OR a `native fn` omits that effect.
     let nativeViol = nativeMissing || (nativeEffect && Set.contains<String>(set: read declaredFeatures, value: read "native") == false)
@@ -4820,7 +4926,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
