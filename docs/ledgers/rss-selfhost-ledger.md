@@ -1612,7 +1612,20 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   (1 file, giant-clean). 615/615.
 - **CHECKER_TARGET_CODES (40):** the 39 above + RS0604.
 
-**Milestone: 40 diagnostic codes byte-exact over the 619-file corpus.** The
+### Milestone 2z — RS0901 take-handle-field (41 codes)
+
+- **RS0901 TAKE_HANDLE_FIELD (2026-07-04):** `take receiver.field` where `field` is a
+  `handle` field of the receiver's type (oracle `checks/body/effects.rs`). check.rss:
+  handle fields keyed by `Struct.field` (`collect_handle_field_keys`), and
+  `fn_has_take_handle` types the receiver from its PARAM declaration
+  (`param_type_root`) so a same-named non-handle field on a different struct doesn't
+  fire. First cut used bare field names → 1 FP on `take-inline-field-same-name.rss`
+  (Config.rules is handle, InlineConfig.rules is not); fixed by receiver-type keying.
+  Fast-gate complete (1 file, giant-clean). 615/615. This is the first check to
+  resolve a receiver's type — a small step toward the type engine.
+- **CHECKER_TARGET_CODES (41):** the 40 above + RS0901.
+
+**Milestone: 41 diagnostic codes byte-exact over the 619-file corpus.** The
 token/structure-decidable tier now covers scanner + parser + signature-table +
 resource/ownership-syntax codes. Remaining ~52 need the type engine (RS0206-0210
 expression typing), the borrow/liveness engine (RS0301-0313, RS04xx/05xx/08xx), or
