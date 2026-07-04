@@ -1575,3 +1575,14 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   iterated purely against the disk-read check.rss. Per-code loop is now ~25-47s (reg-VM
   only), no ~55s test rebuild until the final const bake.
 - **CHECKER_TARGET_CODES (37):** the 35 above + RS0902 + RS1003.
+
+### Milestone 2w — RS0306 local-class-binding (38 codes)
+
+- **RS0306 LOCAL_CLASS_BINDING (2026-07-04):** a `local` binding of a class instance
+  (oracle `checks/body/resource_pool.rs`) — classes are managed handles, not locals.
+  check.rss: refactored `collect_nonclass_types` → `collect_type_kinds` (partitions
+  declared types into class/non-class in one pass), and `has_local_class_binding`
+  fires on the direct-constructor form `local [mut] NAME = ClassName(...)` where
+  ClassName is a file-declared class. Indirect (fn-returned) class values are a safe
+  false-negative. Fast-gate complete (1 oracle file, giant-clean). 615/615.
+- **CHECKER_TARGET_CODES (38):** the 37 above + RS0306.

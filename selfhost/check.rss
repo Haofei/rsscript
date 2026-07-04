@@ -2864,10 +2864,10 @@ fn has_own_struct(toks: read List<Tok>) -> Bool {
 // KNOWN non-class — a scalar, or a type declared `struct`/`resource` in this file. An
 // unknown type name (possibly a builtin/foreign class) never fires.
 
-// Names of every non-`class` `struct`/`resource` type declared in the file.
-fn collect_nonclass_types(toks: read List<Tok>) -> Set<String> {
+// Partition every declared type into class names and non-class (struct/resource)
+// names in one pass.
+fn collect_type_kinds(toks: read List<Tok>, classes: mut Set<String>, nonClasses: mut Set<String>) -> Unit {
     let ntok = List.len(list: read toks)
-    let mut out = Set<String>.new()
     let mut i = 0
     let mut running = true
     while running {
@@ -2891,8 +2891,11 @@ fn collect_nonclass_types(toks: read List<Tok>) -> Set<String> {
                     running = false
                 } else {
                     let nameIdx = type_name_start(toks: read toks, i: read i)
-                    if at_ident(toks: read toks, i: read (nameIdx - 1), wid: read WORD_CLASS) == false {
-                        Set.insert<String>(set: mut out, value: read dotted_name_text(toks: read toks, i: read nameIdx))
+                    let nm = dotted_name_text(toks: read toks, i: read nameIdx)
+                    if at_ident(toks: read toks, i: read (nameIdx - 1), wid: read WORD_CLASS) {
+                        Set.insert<String>(set: mut classes, value: read nm)
+                    } else {
+                        Set.insert<String>(set: mut nonClasses, value: read nm)
                     }
                     i = r
                 }
@@ -2925,7 +2928,7 @@ fn collect_nonclass_types(toks: read List<Tok>) -> Set<String> {
             }
         }
     }
-    return out
+    return Unit
 }
 
 // A type body [bodyOpen..} with a field `name: weak T` (optional `handle`) whose T is
@@ -2958,7 +2961,9 @@ fn type_body_has_invalid_weak(toks: read List<Tok>, bodyOpen: read Int, nonClass
 
 // RS0902 over the file: any type with an invalid `weak` field.
 fn has_invalid_weak_field(toks: read List<Tok>) -> Bool {
-    let nonClass = collect_nonclass_types(toks: read toks)
+    let mut classes = Set<String>.new()
+    let mut nonClass = Set<String>.new()
+    collect_type_kinds(toks: read toks, classes: mut classes, nonClasses: mut nonClass)
     let ntok = List.len(list: read toks)
     let mut i = 0
     let mut running = true
@@ -3017,6 +3022,31 @@ fn has_invalid_weak_field(toks: read List<Tok>) -> Bool {
                 i = i + 1
             }
         }
+    }
+    return hit
+}
+
+// RS0306 LOCAL_CLASS_BINDING: a `local` binding whose value is a class instance
+// (oracle checks/body/resource_pool.rs) — classes are managed handles, not locals.
+// FP-safe subset: the direct-constructor form `local [mut] NAME = ClassName(...)`
+// where ClassName is a class declared in this file; indirect (fn-returned) class
+// values are a safe false-negative (no corpus file needs them).
+fn has_local_class_binding(toks: read List<Tok>) -> Bool {
+    let mut classes = Set<String>.new()
+    let mut nonClass = Set<String>.new()
+    collect_type_kinds(toks: read toks, classes: mut classes, nonClasses: mut nonClass)
+    let ntok = List.len(list: read toks)
+    let mut i = 0
+    let mut hit = false
+    while i < ntok {
+        if is_kw_text(toks: read toks, i: read i, word: read "local") {
+            let mut q = i + 1
+            if is_kw_text(toks: read toks, i: read q, word: read "mut") { q = q + 1 }
+            if is_ident_tok(toks: read toks, i: read q) && at_symbol(toks: read toks, i: read (q + 1), code: read SYM_EQ) && is_ident_tok(toks: read toks, i: read (q + 2)) && at_symbol(toks: read toks, i: read (q + 3), code: read SYM_LPAREN) {
+                if Set.contains<String>(set: read classes, value: read tk_text(toks: read toks, i: read (q + 2))) { hit = true }
+            }
+        }
+        i = i + 1
     }
     return hit
 }
@@ -4438,6 +4468,8 @@ fn main() -> Unit {
     let invalidWeak = has_invalid_weak_field(toks: read toks)
     // RS1003: an `own struct` declaration (removed from the language).
     let ownStruct = has_own_struct(toks: read toks)
+    // RS0306: a `local` binding of a class instance.
+    let localClass = has_local_class_binding(toks: read toks)
     // RS0101: feature-gating. Declared features (pre-pass, order-independent) and
     // whole-file construct probes for local/async/unsafe; native is tracked in the
     // fn walk below (the missing-effect source fires even when native is declared).
@@ -4778,6 +4810,9 @@ fn main() -> Unit {
     if ownStruct {
         Log.write(message: read "RS1003")
     }
+    if localClass {
+        Log.write(message: read "RS0306")
+    }
     // RS0101: any unfeatured feature-requiring construct. Native fires if a fn has
     // `effects(native)` without the feature, OR a `native fn` omits that effect.
     let nativeViol = nativeMissing || (nativeEffect && Set.contains<String>(set: read declaredFeatures, value: read "native") == false)
@@ -4785,7 +4820,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
