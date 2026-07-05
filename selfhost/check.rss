@@ -5283,6 +5283,21 @@ fn closure_body_arg_bad(toks: read List<Tok>, cptypes: read Map<String, String>,
     return bad
 }
 
+// True iff [s, e) is a single (optionally effect-prefixed) identifier that is NOT one of
+// the closure's own parameters — i.e. a value CAPTURED from the enclosing scope. A closure
+// that returns such a value cannot produce a `fresh` result (captured values are borrowed,
+// not fresh), so returning one where a `fresh T` is required is RS0207. FP-safe: valid code
+// never returns a captured value as fresh (a fresh result must be produced inside).
+fn is_bare_captured(toks: read List<Tok>, s: read Int, e: read Int, cptypes: read Map<String, String>) -> Bool {
+    let mut vs = s
+    if is_effect_kw(toks: read toks, i: read vs) { vs = vs + 1 }
+    if (vs + 1) != e { return false }
+    if is_ident_tok(toks: read toks, i: read vs) == false { return false }
+    let ct = Map.get_or_default<String, String>(map: read cptypes, key: read tk_text(toks: read toks, i: read vs), default: read "")
+    if String.len(value: read ct) > 0 { return false }
+    return true
+}
+
 fn callback_arg_bad(toks: read List<Tok>, as0: read Int, ae: read Int, pt: read String, popen: read Int, pclose: read Int, bodyOpen: read Int, fnIdx: read Map<String, Int>, locals: read Map<String, List<Int>>) -> Bool {
     let body = strip_type_prefixes(s: read pt)
     let fnArity = fn_type_arity(body: read body)
@@ -5315,11 +5330,13 @@ fn callback_arg_bad(toks: read List<Tok>, as0: read Int, ae: read Int, pt: read 
         let bc = find_matching(toks: read toks, open: read bs, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
         if bc < 0 { return false }
         if closure_body_arg_bad(toks: read toks, cptypes: read cptypes, bodyStart: read (bs + 1), bodyEnd: read bc, fnIdx: read fnIdx) { return true }
+        let freshRet = String.starts_with(value: read ret, prefix: read "fresh ")
         let mut i = bs + 1
         while i < bc {
             if is_kw_text(toks: read toks, i: read i, word: read "return") {
                 let re = stmt_expr_end(toks: read toks, start: read (i + 1), end: read bc)
                 if (i + 1) < re {
+                    if freshRet && is_bare_captured(toks: read toks, s: read (i + 1), e: read re, cptypes: read cptypes) { return true }
                     if return_expr_mismatch(toks: read toks, s: read (i + 1), e: read re, expected: read ret, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals) { return true }
                 }
             }
@@ -5328,6 +5345,7 @@ fn callback_arg_bad(toks: read List<Tok>, as0: read Int, ae: read Int, pt: read 
         return false
     }
     if closure_body_arg_bad(toks: read toks, cptypes: read cptypes, bodyStart: read bs, bodyEnd: read ae, fnIdx: read fnIdx) { return true }
+    if String.starts_with(value: read ret, prefix: read "fresh ") && is_bare_captured(toks: read toks, s: read bs, e: read ae, cptypes: read cptypes) { return true }
     return return_expr_mismatch(toks: read toks, s: read bs, e: read ae, expected: read ret, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
 }
 
