@@ -557,6 +557,244 @@ fn has_bad_resource_derive(toks: read List<Tok>) -> Bool {
     return hit
 }
 
+// RS0211: DERIVE_FIELD_UNSUPPORTED. A value-derive trait whose field types don't satisfy
+// the trait constraint. Float is not Eq/Ord/Hash (but IS Clone); a `handle` field is not
+// Eq/Ord/Hash; a Map keyed by Float or List is not Eq/Ord/Hash, and a Float Map key is not
+// JsonDecode-able. A field type that transitively contains Float (e.g. `GenericKeyHolder
+// <Float>`) fails the same way (the inner Float is not Eq). Message: "`<Trait>` derive is
+// not supported by field `<name>`." (analyzer/derives.rs). Scans type-decl headers for a
+// `derives(...)` clause, then each `name: Type` field in the body.
+
+// Whether the derives(...) clause in [nameIdx, bodyOpen) contains the given trait name.
+fn derive_has_trait(toks: read List<Tok>, nameIdx: read Int, bodyOpen: read Int, traitName: read String) -> Bool {
+    let mut k = nameIdx + 1
+    let mut found = false
+    while k < bodyOpen {
+        if tk_text(toks: read toks, i: read k) == "derives" && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_LPAREN) {
+            let close = find_matching(toks: read toks, open: read (k + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+            if close < 0 {
+                k = bodyOpen
+            } else {
+                let mut m = k + 2
+                while m < close {
+                    if is_ident_tok(toks: read toks, i: read m) && tk_text(toks: read toks, i: read m) == traitName { found = true }
+                    m = m + 1
+                }
+                k = close + 1
+            }
+        } else {
+            k = k + 1
+        }
+    }
+    return found
+}
+
+// Generic params declared in `struct Name<T, U>` — the idents inside the `<...>` right after
+// the type name. Empty if the type is non-generic.
+fn collect_struct_generics(toks: read List<Tok>, nameIdx: read Int, bodyOpen: read Int) -> Set<String> {
+    let mut params = Set.new<String>()
+    if (nameIdx + 1) < bodyOpen && at_symbol(toks: read toks, i: read (nameIdx + 1), code: read SYM_LANGLE) {
+        let close = find_matching(toks: read toks, open: read (nameIdx + 1), openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
+        if close >= 0 {
+            let mut m = nameIdx + 2
+            while m < close {
+                if is_ident_tok(toks: read toks, i: read m) {
+                    let nm = tk_text(toks: read toks, i: read m)
+                    Set.insert<String>(set: mut params, value: read nm)
+                }
+                m = m + 1
+            }
+        }
+    }
+    return params
+}
+
+// Whether the type in [ts, te) is usable as a Map key — i.e. is Hash. Int/String/Bool/Char
+// are Hash; Float is not; List<E>/Map<E,_> are Hash iff their key/element is; a generic param
+// is Hash only if the enclosing struct also derives Hash (which bounds it); any other user
+// type is assumed Hash-safe (avoids false positives — the direct Float/handle scan catches
+// the concrete non-Eq cases). Only the root token and its first generic arg are inspected.
+fn type_is_hash_safe(toks: read List<Tok>, ts: read Int, te: read Int, genParams: read Set<String>, derivesHash: read Bool) -> Bool {
+    if ts >= te { return true }
+    let root = tk_text(toks: read toks, i: read ts)
+    if root == "Int" || root == "String" || root == "Bool" || root == "Char" { return true }
+    if root == "Float" { return false }
+    if root == "List" || root == "Map" {
+        // recurse on the first generic argument (List<E> element, Map<K,_> key)
+        if (ts + 1) < te && at_symbol(toks: read toks, i: read (ts + 1), code: read SYM_LANGLE) {
+            let close = find_matching(toks: read toks, open: read (ts + 1), openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
+            let inner = arg_end(toks: read toks, start: read (ts + 2), limit: read te)
+            return type_is_hash_safe(toks: read toks, ts: read (ts + 2), te: read inner, genParams: read genParams, derivesHash: read derivesHash)
+        }
+        return true
+    }
+    if Set.contains<String>(set: read genParams, value: read root) { return derivesHash }
+    return true
+}
+
+// End of the first generic argument that starts at `start`: the top-level `,` inside the
+// enclosing `<...>`, or `limit`.
+fn arg_end(toks: read List<Tok>, start: read Int, limit: read Int) -> Int {
+    let mut m = start
+    let mut depth = 0
+    let mut result = limit
+    let mut going = true
+    while going {
+        if m >= limit {
+            result = limit
+            going = false
+        } else if at_symbol(toks: read toks, i: read m, code: read SYM_LANGLE) || at_symbol(toks: read toks, i: read m, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read m, code: read SYM_LBRACKET) {
+            depth = depth + 1
+            m = m + 1
+        } else if at_symbol(toks: read toks, i: read m, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read m, code: read SYM_RBRACKET) {
+            depth = depth - 1
+            m = m + 1
+        } else if at_symbol(toks: read toks, i: read m, code: read SYM_RANGLE) {
+            if depth == 0 {
+                result = m
+                going = false
+            } else {
+                depth = depth - 1
+                m = m + 1
+            }
+        } else if depth == 0 && at_symbol(toks: read toks, i: read m, code: read SYM_COMMA) {
+            result = m
+            going = false
+        } else {
+            m = m + 1
+        }
+    }
+    return result
+}
+
+// The first `{` in [nameIdx, declEnd) — the type body open (derives(...) uses parens, and a
+// generic `<T>` uses angles, so the first brace is always the body).
+fn derive_type_body_open(toks: read List<Tok>, nameIdx: read Int, declEnd: read Int) -> Int {
+    let mut k = nameIdx + 1
+    let mut result = -1
+    let mut going = true
+    while going {
+        if k >= declEnd {
+            going = false
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE) {
+            result = k
+            going = false
+        } else {
+            k = k + 1
+        }
+    }
+    return result
+}
+
+// End of the field type that starts at `ts`: the next top-level (nesting-depth 0) `name:`
+// field header, or bodyClose. `< ( [` open and `> ) ]` close a nesting level.
+fn field_type_end(toks: read List<Tok>, ts: read Int, bodyClose: read Int) -> Int {
+    let mut m = ts
+    let mut depth = 0
+    let mut result = bodyClose
+    let mut going = true
+    while going {
+        if m >= bodyClose {
+            result = bodyClose
+            going = false
+        } else if at_symbol(toks: read toks, i: read m, code: read SYM_LANGLE) || at_symbol(toks: read toks, i: read m, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read m, code: read SYM_LBRACKET) {
+            depth = depth + 1
+            m = m + 1
+        } else if at_symbol(toks: read toks, i: read m, code: read SYM_RANGLE) || at_symbol(toks: read toks, i: read m, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read m, code: read SYM_RBRACKET) {
+            depth = depth - 1
+            m = m + 1
+        } else if depth == 0 && m > ts && is_ident_tok(toks: read toks, i: read m) && at_symbol(toks: read toks, i: read (m + 1), code: read SYM_COLON) {
+            result = m
+            going = false
+        } else {
+            m = m + 1
+        }
+    }
+    return result
+}
+
+// Whether the field type in [ts, te) violates a derived trait: (Eq/Ord/Hash) a `Float` type
+// token or a `handle` modifier anywhere; (Eq/Ord/Hash/JsonDecode) a `Map<Float, ..>` or
+// `Map<List.., ..>` key.
+fn field_type_bad_for_derive(toks: read List<Tok>, ts: read Int, te: read Int, hasEOH: read Bool, hasJD: read Bool, genParams: read Set<String>, derivesHash: read Bool) -> Bool {
+    let mut k = ts
+    let mut bad = false
+    while k < te {
+        if hasEOH {
+            if is_ident_tok(toks: read toks, i: read k) && tk_text(toks: read toks, i: read k) == "Float" { bad = true }
+            if tk_text(toks: read toks, i: read k) == "handle" { bad = true }
+        }
+        // A Map key must be Hash. Applies to any derive (Eq/Ord/Hash need the field to be
+        // Eq/Ord/Hash, which needs the Map well-formed; JsonDecode needs string-decodable keys).
+        if (hasEOH || hasJD) && tk_text(toks: read toks, i: read k) == "Map" && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_LANGLE) {
+            let keyEnd = arg_end(toks: read toks, start: read (k + 2), limit: read te)
+            if type_is_hash_safe(toks: read toks, ts: read (k + 2), te: read keyEnd, genParams: read genParams, derivesHash: read derivesHash) == false { bad = true }
+        }
+        k = k + 1
+    }
+    return bad
+}
+
+// Iterate `name: Type` fields in the body [bodyOpen, bodyClose) and test each type.
+fn derive_body_fields_bad(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, hasEOH: read Bool, hasJD: read Bool, genParams: read Set<String>, derivesHash: read Bool) -> Bool {
+    let mut i = bodyOpen + 1
+    let mut hit = false
+    while i < bodyClose {
+        if is_ident_tok(toks: read toks, i: read i) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_COLON) {
+            let ts = i + 2
+            let te = field_type_end(toks: read toks, ts: read ts, bodyClose: read bodyClose)
+            if field_type_bad_for_derive(toks: read toks, ts: read ts, te: read te, hasEOH: read hasEOH, hasJD: read hasJD, genParams: read genParams, derivesHash: read derivesHash) { hit = true }
+            i = te
+        } else {
+            i = i + 1
+        }
+    }
+    return hit
+}
+
+fn has_bad_derive_field(toks: read List<Tok>) -> Bool {
+    let ntok = List.len(list: read toks)
+    let mut i = 0
+    let mut hit = false
+    let mut running = true
+    while running {
+        if i >= ntok {
+            running = false
+        } else if tk_kind(toks: read toks, i: read i) == TOK_EOF {
+            running = false
+        } else {
+            let cls = classify_top(toks: read toks, i: read i)
+            if starts_type_decl(toks: read toks, i: read i, isPub: read cls.isPub) {
+                let ns = type_name_start(toks: read toks, i: read i)
+                let r = parse_type_decl(toks: read toks, i: read i)
+                if r < 0 {
+                    running = false
+                } else {
+                    let bo = derive_type_body_open(toks: read toks, nameIdx: read ns, declEnd: read r)
+                    if bo >= 0 {
+                        let hasEq = derive_has_trait(toks: read toks, nameIdx: read ns, bodyOpen: read bo, traitName: read "Eq")
+                        let hasOrd = derive_has_trait(toks: read toks, nameIdx: read ns, bodyOpen: read bo, traitName: read "Ord")
+                        let hasHash = derive_has_trait(toks: read toks, nameIdx: read ns, bodyOpen: read bo, traitName: read "Hash")
+                        let hasEOH = hasEq || hasOrd || hasHash
+                        let hasJD = derive_has_trait(toks: read toks, nameIdx: read ns, bodyOpen: read bo, traitName: read "JsonDecode")
+                        if hasEOH || hasJD {
+                            let bc = find_matching(toks: read toks, open: read bo, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+                            if bc >= 0 {
+                                let genParams = collect_struct_generics(toks: read toks, nameIdx: read ns, bodyOpen: read bo)
+                                if derive_body_fields_bad(toks: read toks, bodyOpen: read bo, bodyClose: read bc, hasEOH: read hasEOH, hasJD: read hasJD, genParams: read genParams, derivesHash: read hasHash) { hit = true }
+                            }
+                        }
+                    }
+                    i = r
+                }
+            } else {
+                i = i + 1
+            }
+        }
+    }
+    return hit
+}
+
 // RS0034: a bare `Ok(...)`/`Err(...)`/`None` bound to an UNUSED name with no type
 // annotation leaves a type parameter open with nothing to pin it (oracle
 // checks/body/binding.rs::open_variant_constructor + unused-name analysis).
@@ -7594,6 +7832,8 @@ fn main() -> Unit {
     let outOfRangeInt = has_out_of_range_int(toks: read toks)
     // RS0212: a value derive (Clone/Eq/Ord/Hash/JsonEncode/JsonDecode) on a resource.
     let resourceDerive = has_bad_resource_derive(toks: read toks)
+    // RS0211: a value-derive trait unsupported by a field type (Float/handle not Eq/Ord/Hash).
+    let deriveFieldBad = has_bad_derive_field(toks: read toks)
     // RS0037: a positional variant pattern binding != the variant's declared arity.
     let variantArity = has_variant_arity_mismatch(toks: read toks)
     // RS0902: a `weak` field whose type is a known non-class.
@@ -7945,6 +8185,9 @@ fn main() -> Unit {
     if resourceDerive {
         Log.write(message: read "RS0212")
     }
+    if deriveFieldBad {
+        Log.write(message: read "RS0211")
+    }
     if variantArity {
         Log.write(message: read "RS0037")
     }
@@ -8012,7 +8255,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || takeHandle || weakInit || weakRead
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || takeHandle || weakInit || weakRead
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
