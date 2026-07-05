@@ -1884,3 +1884,25 @@ comparison sub-exprs that `return_actual_type` leaves untyped (=> skipped).
 **Dialect gotcha:** `if ce > (i + 1)` — the `> (` sequence makes the RSScript parser read
 `i < bc .. ce >(` as a generic call `i<bc>` (surfaced as RS0206 via the dogfood compile);
 hoist to `let lo = i + 1; if ce > lo`.
+
+### Milestone 2ai — RS0209 CONTROL_FLOW_TYPE_MISMATCH (slice 1, env-gated, NOT baked)
+
+Control-flow type tier. Slice 1 = non-Bool `if`/`while` condition: `cond_non_bool` types the
+whole condition and fires when it is a concrete non-Bool value (`if "yes"` → String). A
+condition with a top-level comparison/logical operator (recognised via `find_binop` +
+`op_matches_tier`, tiers 1/2/6) or a leading `!` is Bool by construction and skipped; an
+un-typeable condition yields "" and is skipped (FP-safe). New walker
+`has_control_flow_mismatch`/`fn_has_control_flow_mismatch`; emission env-gated via
+`RSS_CHECKER_EXTRA_CODES=RS0209`.
+
+**Verification:** fires `non-bool-if-condition`; full fast-subset 0 false-positives, 0
+baked-code regression, ~159s.
+
+**Remaining before RS0209 can bake — a match-typing engine** (parse `match SCRUT { PAT =>
+ARM }`, type scrutinee + each pattern + each arm):
+- `match-literal-type-mismatch` — literal pattern (`1`) vs scrutinee type (String).
+- `non-option-match-scrutinee` — `Some/None` patterns on a non-Option scrutinee.
+- `match-expression-arm-type-mismatch` — arms produce different types (Int vs String).
+- `match-variant-mismatch`, `match-expression-variant-mismatch` — variant/enum pattern checks.
+- `for-unsupported` — `for _ in String` (non-iterable loop subject).
+- plus corpus files `match.rss`, `patterns_tuplelist.rss`, `tools.rss` (all carry RS0209).
