@@ -1885,6 +1885,34 @@ comparison sub-exprs that `return_actual_type` leaves untyped (=> skipped).
 `i < bc .. ce >(` as a generic call `i<bc>` (surfaced as RS0206 via the dogfood compile);
 hoist to `let lo = i + 1; if ce > lo`.
 
+### Milestone 2aj — RS0211 DERIVE_FIELD_UNSUPPORTED (code #51, BAKED)
+
+A value-derive trait whose field types don't satisfy the trait constraint. Message shape:
+"`<Trait>` derive is not supported by field `<name>`." (one per derived-trait × offending
+field). `has_bad_derive_field` walks type decls; for each with a `derives(...)` clause it
+collects the derived traits (`derive_has_trait` for Eq/Ord/Hash/JsonDecode) and the struct's
+generic params (`collect_struct_generics`), then iterates `name: Type` fields
+(`derive_body_fields_bad` → `field_type_end`) and tests each type (`field_type_bad_for_derive`):
+
+- **Eq/Ord/Hash:** a `Float` type token or a `handle` modifier anywhere in the field type
+  fires — Float/handle are not Eq/Ord/Hash, and a field like `GenericKeyHolder<Float>` fails
+  transitively through the inner Float.
+- **Eq/Ord/Hash/JsonDecode:** a Map key that is not Hash fires. `type_is_hash_safe` recursion:
+  Int/String/Bool/Char are Hash, Float is not, `List<E>`/`Map<E,_>` are Hash iff their
+  element/key is (recurse on the first generic arg via `arg_end`), a generic param is Hash iff
+  the struct also derives Hash, any other user type is assumed Hash-safe (FP-avoidance).
+
+**The crux** — a naive "Map with a Float/List key fires" rule FP'd on the pass fixture
+`derive-generic-args-ok.rss`: `Map<List<Int>, String>` (Int is Hash → OK) vs
+`Map<List<T>, Int>` (T is only Eq-bound, not Hash → fires). A Map KEY must be **Hash**, which
+is strictly stronger than Eq — that distinction is the whole rule. Confirmed Float is not Eq
+(only Clone) via `rss check` on a scratch struct.
+
+**BAKED as code #51.** Byte-exact 615/615, 0 FP, 0 FN. GOTCHA: a pre-existing
+`type_body_open(toks, typeName)` forced the new brace-finder to be named
+`derive_type_body_open` (the dogfood compile surfaced RS0005 duplicate-declaration). Reused
+the RS0212 resource-derive scanner (`resource_derives_bad`) as the parsing template.
+
 ### Milestone 2ai — RS0209 CONTROL_FLOW_TYPE_MISMATCH (code #50, BAKED 7bffb738)
 
 Control-flow type tier. Slice 1 = non-Bool `if`/`while` condition: `cond_non_bool` types the
