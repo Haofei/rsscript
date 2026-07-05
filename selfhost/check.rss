@@ -6147,6 +6147,102 @@ fn has_operator_type_mismatch(toks: read List<Tok>) -> Bool {
     return hit
 }
 
+// RS0209 (CONTROL_FLOW_TYPE_MISMATCH), non-Bool-condition case: an `if`/`while` condition
+// [start, end) whose whole expression types to a concrete non-Bool. A condition with a
+// top-level comparison/logical operator (`==`, `&&`, …) or a leading `!` is Bool by
+// construction and skipped; only a plainly-typed non-Bool value (`if "yes"`, `if count`)
+// fires. FP-safe: an un-typeable condition yields "" and is skipped.
+fn cond_non_bool(toks: read List<Tok>, start: read Int, end: read Int, popen: read Int, pclose: read Int, bodyOpen: read Int, fnIdx: read Map<String, Int>, locals: read Map<String, List<Int>>) -> Bool {
+    if start >= end { return false }
+    if at_symbol(toks: read toks, i: read start, code: read SYM_BANG) { return false }
+    let op = find_binop(toks: read toks, start: read start, end: read end)
+    if op >= 0 {
+        if op_matches_tier(toks: read toks, i: read op, end: read end, tier: read 1) { return false }
+        if op_matches_tier(toks: read toks, i: read op, end: read end, tier: read 2) { return false }
+        if op_matches_tier(toks: read toks, i: read op, end: read end, tier: read 6) { return false }
+    }
+    let ty = return_actual_type(toks: read toks, s0: read start, e: read end, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
+    if String.len(value: read ty) == 0 { return false }
+    if str_is_unresolved_generic(s: read ty) { return false }
+    if str_strip_fresh(s: read ty) == "Bool" { return false }
+    return true
+}
+
+// RS0209 per-fn walker: `if`/`while` conditions that are non-Bool.
+fn fn_has_control_flow_mismatch(toks: read List<Tok>, start: read Int, fnIdx: read Map<String, Int>) -> Bool {
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let bo = function_signature_end(toks: read toks, start: read (ns - 1))
+    if at_symbol(toks: read toks, i: read bo, code: read SYM_LBRACE) == false { return false }
+    let bc = find_matching(toks: read toks, open: read bo, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    if bc < 0 { return false }
+    let locals = build_local_index(toks: read toks, bodyOpen: read bo, bodyClose: read bc)
+    let mut pp = dotted_end(toks: read toks, i: read ns)
+    if at_symbol(toks: read toks, i: read pp, code: read SYM_LANGLE) {
+        let gc = find_matching(toks: read toks, open: read pp, openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
+        if gc >= 0 { pp = gc + 1 }
+    }
+    let mut popen = 0 - 1
+    let mut pclose = 0 - 1
+    if at_symbol(toks: read toks, i: read pp, code: read SYM_LPAREN) {
+        let pc = find_matching(toks: read toks, open: read pp, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+        if pc >= 0 {
+            popen = pp
+            pclose = pc
+        }
+    }
+    let mut i = bo + 1
+    let mut hit = false
+    while i < bc {
+        if is_kw_text(toks: read toks, i: read i, word: read "if") || is_kw_text(toks: read toks, i: read i, word: read "while") {
+            let lo = i + 1
+            let ce = cond_expr_end(toks: read toks, start: read lo, limit: read bc)
+            if ce > lo {
+                if cond_non_bool(toks: read toks, start: read lo, end: read ce, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals) { hit = true }
+            }
+        }
+        i = i + 1
+    }
+    return hit
+}
+
+// Walk all top-level fns and report any RS0209 control-flow-type mismatch.
+fn has_control_flow_mismatch(toks: read List<Tok>) -> Bool {
+    let ntok = List.len(list: read toks)
+    let fnIdx = collect_fn_decl_index(toks: read toks)
+    let mut i = 0
+    let mut running = true
+    let mut hit = false
+    while running {
+        if i >= ntok {
+            running = false
+        } else if tk_kind(toks: read toks, i: read i) == TOK_EOF {
+            running = false
+        } else {
+            let cls = classify_top(toks: read toks, i: read i)
+            let isPub = cls.isPub
+            if cls.isFeatures {
+                i = declaration_line_end(toks: read toks, start: read i)
+            } else if cls.isProfile {
+                i = declaration_line_end(toks: read toks, start: read i)
+            } else if starts_type_decl(toks: read toks, i: read i, isPub: read isPub) {
+                let r = parse_type_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else if starts_fn_like(toks: read toks, i: read i, isPub: read isPub) {
+                let r = parse_function_decl(toks: read toks, i: read i)
+                if r < 0 {
+                    running = false
+                } else {
+                    if fn_has_control_flow_mismatch(toks: read toks, start: read i, fnIdx: read fnIdx) { hit = true }
+                    i = r
+                }
+            } else {
+                i = i + 1
+            }
+        }
+    }
+    return hit
+}
+
 // Stdlib namespace -> Result error type. Built from the `.rssi` interfaces: each
 // `pub native fn Ns.method(...) -> Result<T, ErrType>` declares a per-module error
 // type, uniform across the module for these two families. Filesystem (File /
@@ -7337,6 +7433,8 @@ fn main() -> Unit {
     let bindTypeMismatch = has_binding_type_mismatch(toks: read toks)
     // RS0210: operator-type mismatch (WIP, env-gated — if/while comparison operands).
     let opTypeMismatch = has_operator_type_mismatch(toks: read toks)
+    // RS0209: control-flow type mismatch (WIP, env-gated — non-Bool if/while condition).
+    let cfTypeMismatch = has_control_flow_mismatch(toks: read toks)
     // RS0901: `take` of a `handle` field.
     let takeHandle = has_take_handle_field(toks: read toks)
     // RS0904: a weak field initialized without Weak.from/downgrade.
@@ -7710,6 +7808,9 @@ fn main() -> Unit {
     if opTypeMismatch {
         Log.write(message: read "RS0210")
     }
+    if cfTypeMismatch {
+        Log.write(message: read "RS0209")
+    }
     if takeHandle {
         Log.write(message: read "RS0901")
     }
@@ -7726,7 +7827,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || takeHandle || weakInit || weakRead
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || takeHandle || weakInit || weakRead
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
