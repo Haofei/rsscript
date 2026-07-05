@@ -1899,6 +1899,24 @@ container whose type can't be resolved, is never flagged (a deliberate safe fals
 **BAKED as code #56.** Byte-exact 615/615, 0 FP. The fixture (`values["a"] = 1` on a `Map`)
 plus corpus.
 
+### Milestone 2aq — RS0301 MANAGED_TO_LOCAL (code #59, BAKED)
+
+Third borrow-tier code, landed 0 FP / 0 FN on the first gate by reusing the RS0202 substrate.
+`local X = RHS` fires when RHS is a **managed place**: a plain `let` binding, a `handle`-field
+access, or a `Some(…)`/`Ok(…)` wrapper around one — each after an optional leading `read`/`mut`
+effect. `fn_has_managed_to_local` finds each `local` decl (skipping an optional `: Type` to reach
+the `=`), then `rhs_managed_for_local` classifies the RHS: strip effect → unwrap `Some`/`Ok`
+(recursive) → a `_.f` access is managed iff `f` is a `handle` field name (`collect_handle_field_names`,
+global) → otherwise a bare ident is managed iff it's in `collect_managed_names` (reused from
+RS0202 — a plain `let` is ALWAYS managed, **even a scalar** `let n = 5`; confirmed via
+`rss check`, correcting an earlier speculative note that scalars shouldn't fire).
+
+Boundary confirmed via oracle before implementing: `local y = <param>`, `local b = <local>`,
+`local y = 5` (literal), and `local r = h.rules` where `rules: Int` (normal field) all **no-fire** —
+only `let`-bindings and `handle`-field accesses are managed. **BAKED as code #59**, all five fail
+fixtures (managed-to-local, -effect, -wrapper, handle-field, handle-field-wrapper) plus corpus,
+bake gate green (ok 1230, mismatches 0).
+
 ### Milestone 2ap — RS0307/RS0308 MANAGE/TAKE_REQUIRE_LOCAL (codes #57/#58, BAKED)
 
 **The first two codes of the borrow/ownership tier — and a correction.** Earlier this session
