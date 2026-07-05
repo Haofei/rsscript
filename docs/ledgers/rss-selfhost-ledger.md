@@ -1899,6 +1899,28 @@ container whose type can't be resolved, is never flagged (a deliberate safe fals
 **BAKED as code #56.** Byte-exact 615/615, 0 FP. The fixture (`values["a"] = 1` on a `Map`)
 plus corpus.
 
+### Milestone 2ar — RS0401 USE_AFTER_MANAGE (code #60, BAKED)
+
+Fourth borrow-tier code and the first **control-flow-sensitive** one. A `manage x` / `take x`
+moves `x`; any later USE of `x` is RS0401. A forward token-scan from the move position handles
+every fixture variant — straight-line, inline (`compare(read (manage image), read image)`),
+short-circuit (`manage image && image`), branch, and loop — because in each the second `x` is
+simply later in token order. Two subtleties decoded from the pass/fail boundary:
+
+- **Control flow (`enclosing_block_open` + `has_return_or_break`):** a move inside a block that
+  `return`s does NOT taint the continuation past that block (branch-return-manage-not-moved,
+  loop-return-manage-unreachable are PASS), so the forward scan is capped at the enclosing block
+  close when a `return` follows the move inside it. Crucially **only `return` suppresses** — a
+  `break` exits a loop but execution continues after it, so a move before a `break` still taints
+  the post-loop use (loop-manage-use-after, loop-break-manage-use-after are FAIL). Getting this
+  wrong cost one gate (v2 included `break` → 3 FN).
+- **Field moves (`used_field_after_move`):** `take x.f` then re-access `x.f` fires
+  (take-inline-field-use-after) — matched as the exact `base . field` path, not just the base.
+
+A "use" excludes arg/field labels (`x:`), field bases of other places (`_.x`), (re)binding
+positions (`let`/`local`/`mut x`), and assignment targets (`x =`). **BAKED as code #60**, all
+~13 RS0401 fixtures plus corpus, bake gate green. Path: 6 mismatch → 6 → 0 over three gates.
+
 ### Milestone 2aq — RS0301 MANAGED_TO_LOCAL (code #59, BAKED)
 
 Third borrow-tier code, landed 0 FP / 0 FN on the first gate by reusing the RS0202 substrate.
