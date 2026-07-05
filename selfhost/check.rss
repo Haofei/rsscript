@@ -2385,6 +2385,240 @@ fn collect_managed_match_binds(toks: read List<Tok>, bodyOpen: read Int, bodyClo
     return Unit
 }
 
+// Registry of `noescape Fn()` params as `shortFn|param` composite keys.
+fn collect_noescape_params(toks: read List<Tok>, out: mut Set<String>) -> Unit {
+    let n = List.len(list: read toks)
+    let mut k = 0
+    while k < n {
+        if is_kw_text(toks: read toks, i: read k, word: read "fn") {
+            let mut p = k + 1
+            let mut scan = true
+            while scan {
+                if p >= n {
+                    scan = false
+                } else if at_symbol(toks: read toks, i: read p, code: read SYM_LPAREN) || is_kw_text(toks: read toks, i: read p, word: read "fn") || at_symbol(toks: read toks, i: read p, code: read SYM_LBRACE) {
+                    scan = false
+                } else {
+                    p = p + 1
+                }
+            }
+            if p < n && at_symbol(toks: read toks, i: read p, code: read SYM_LPAREN) && is_ident_tok(toks: read toks, i: read (p - 1)) {
+                let shortName = tk_text(toks: read toks, i: read (p - 1))
+                let pclose = find_matching(toks: read toks, open: read p, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+                if pclose > 0 {
+                    let mut depth = 0
+                    let mut q = p + 1
+                    while q < pclose {
+                        if at_symbol(toks: read toks, i: read q, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read q, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read q, code: read SYM_LBRACKET) {
+                            depth = depth + 1
+                        } else if at_symbol(toks: read toks, i: read q, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read q, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read q, code: read SYM_RBRACKET) {
+                            depth = depth - 1
+                        } else if depth == 0 && is_ident_tok(toks: read toks, i: read q) && at_symbol(toks: read toks, i: read (q + 1), code: read SYM_COLON) && is_kw_text(toks: read toks, i: read (q + 2), word: read "noescape") {
+                            let key = String.concat(left: read String.concat(left: read shortName, right: read "|"), right: read tk_text(toks: read toks, i: read q))
+                            Set.insert<String>(set: mut out, value: read key)
+                        }
+                        q = q + 1
+                    }
+                }
+                k = p
+            } else {
+                k = k + 1
+            }
+        } else {
+            k = k + 1
+        }
+    }
+    return Unit
+}
+
+// The opening `|` of a closure whose body `{` is at `cb` (cb-1 is the closing `|`).
+fn find_closure_open_pipe(toks: read List<Tok>, cb: read Int, floor: read Int) -> Int {
+    let mut m = cb - 2
+    let mut result = 0 - 1
+    let mut going = true
+    while going {
+        if m <= floor {
+            going = false
+        } else if at_symbol(toks: read toks, i: read m, code: read SYM_PIPE) {
+            result = m
+            going = false
+        } else {
+            m = m - 1
+        }
+    }
+    return result
+}
+
+// The `(` opening the nearest call whose argument list encloses `p`, or -1.
+fn enclosing_paren_open(toks: read List<Tok>, p: read Int, floor: read Int) -> Int {
+    let mut m = p - 1
+    let mut depth = 0
+    let mut result = 0 - 1
+    let mut going = true
+    while going {
+        if m <= floor {
+            going = false
+        } else if at_symbol(toks: read toks, i: read m, code: read SYM_RPAREN) {
+            depth = depth + 1
+            m = m - 1
+        } else if at_symbol(toks: read toks, i: read m, code: read SYM_LPAREN) {
+            if depth == 0 {
+                result = m
+                going = false
+            } else {
+                depth = depth - 1
+                m = m - 1
+            }
+        } else {
+            m = m - 1
+        }
+    }
+    return result
+}
+
+// The `(` of the call whose argument directly holds the closure at `p`, seeing through variant
+// wrappers `Some(`/`Ok(`/`Err(` (whose callee is an uppercase constructor, not the real callee).
+fn closure_outer_call_open(toks: read List<Tok>, p: read Int, floor: read Int) -> Int {
+    let mut cur = p
+    let mut result = 0 - 1
+    let mut going = true
+    while going {
+        let pOpen = enclosing_paren_open(toks: read toks, p: read cur, floor: read floor)
+        if pOpen <= 0 {
+            going = false
+        } else if is_ident_tok(toks: read toks, i: read (pOpen - 1)) {
+            let nm = tk_text(toks: read toks, i: read (pOpen - 1))
+            if nm == "Some" || nm == "Ok" || nm == "Err" {
+                cur = pOpen
+            } else {
+                result = pOpen
+                going = false
+            }
+        } else {
+            going = false
+        }
+    }
+    return result
+}
+
+// The label of the top-level argument of call `callOpen` that contains `target`, or "".
+fn arg_label_at(toks: read List<Tok>, callOpen: read Int, target: read Int) -> String {
+    let callClose = find_matching(toks: read toks, open: read callOpen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    if callClose < 0 { return "" }
+    let mut depth = 0
+    let mut segStart = callOpen + 1
+    let mut q = callOpen + 1
+    let mut result = ""
+    while q < callClose {
+        if at_symbol(toks: read toks, i: read q, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read q, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read q, code: read SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read q, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read q, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read q, code: read SYM_RBRACKET) {
+            depth = depth - 1
+        } else if depth == 0 && at_symbol(toks: read toks, i: read q, code: read SYM_COMMA) {
+            if segStart <= target && target < q {
+                if is_ident_tok(toks: read toks, i: read segStart) && at_symbol(toks: read toks, i: read (segStart + 1), code: read SYM_COLON) {
+                    result = tk_text(toks: read toks, i: read segStart)
+                }
+                q = callClose
+            }
+            segStart = q + 1
+        }
+        q = q + 1
+    }
+    if result == "" && segStart <= target && target < callClose {
+        if is_ident_tok(toks: read toks, i: read segStart) && at_symbol(toks: read toks, i: read (segStart + 1), code: read SYM_COLON) {
+            result = tk_text(toks: read toks, i: read segStart)
+        }
+    }
+    return result
+}
+
+// bit0 = RS0801 (managed/retained closure captures a local), bit1 = RS0804 (noescape closure
+// consumes — take/manage — a captured local).
+fn fn_has_closure_capture_bad(toks: read List<Tok>, start: read Int, retains: read Set<String>, noescape: read Set<String>) -> Int {
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+    if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return 0 }
+    let bodyClose = find_matching(toks: read toks, open: read sigEnd, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    if bodyClose < 0 { return 0 }
+    let mut localNames = Set.new<String>()
+    collect_local_names(toks: read toks, bodyOpen: read sigEnd, bodyClose: read bodyClose, out: mut localNames)
+    let mut has0801 = false
+    let mut has0804 = false
+    let mut k = sigEnd + 1
+    while k < bodyClose {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE) && k > sigEnd && at_symbol(toks: read toks, i: read (k - 1), code: read SYM_PIPE) {
+            let cbClose = find_matching(toks: read toks, open: read k, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+            let op = find_closure_open_pipe(toks: read toks, cb: read k, floor: read sigEnd)
+            if cbClose > 0 && op > 0 {
+                let mut declInside = Set.new<String>()
+                let mut pp = op + 1
+                while pp < (k - 1) {
+                    if is_ident_tok(toks: read toks, i: read pp) { Set.insert<String>(set: mut declInside, value: read tk_text(toks: read toks, i: read pp)) }
+                    pp = pp + 1
+                }
+                collect_local_names(toks: read toks, bodyOpen: read k, bodyClose: read cbClose, out: mut declInside)
+                let mut dl = k + 1
+                while dl < cbClose {
+                    if is_kw_text(toks: read toks, i: read dl, word: read "let") {
+                        let mut nm = dl + 1
+                        if is_kw_text(toks: read toks, i: read nm, word: read "mut") { nm = nm + 1 }
+                        if is_ident_tok(toks: read toks, i: read nm) { Set.insert<String>(set: mut declInside, value: read tk_text(toks: read toks, i: read nm)) }
+                    }
+                    dl = dl + 1
+                }
+                let mut captured = Set.new<String>()
+                let mut anyCapture = false
+                let mut m = k + 1
+                while m < cbClose {
+                    // Capturing a local's handle-field (`holder.image`) yields a managed value,
+                    // not the local itself — only a bare local reference is a capture.
+                    if is_ident_tok(toks: read toks, i: read m) && at_symbol(toks: read toks, i: read (m + 1), code: read SYM_DOT) == false {
+                        let nmv = tk_text(toks: read toks, i: read m)
+                        if Set.contains<String>(set: read localNames, value: read nmv) && Set.contains<String>(set: read declInside, value: read nmv) == false {
+                            Set.insert<String>(set: mut captured, value: read nmv)
+                            anyCapture = true
+                        }
+                    }
+                    m = m + 1
+                }
+                let mut bpos = op - 1
+                if is_effect_kw(toks: read toks, i: read bpos) { bpos = bpos - 1 }
+                if at_symbol(toks: read toks, i: read bpos, code: read SYM_EQ) {
+                    // stored: `let NAME = |…| {…}` — RS0801 only for a `let` (managed) closure
+                    let mut kw = bpos - 2
+                    if is_kw_text(toks: read toks, i: read kw, word: read "mut") { kw = kw - 1 }
+                    if is_kw_text(toks: read toks, i: read kw, word: read "let") && anyCapture { has0801 = true }
+                } else {
+                    // call argument (possibly wrapped in `Some(…)`/`Ok(…)`)
+                    let callOpen = closure_outer_call_open(toks: read toks, p: read op, floor: read sigEnd)
+                    if callOpen > 0 && is_ident_tok(toks: read toks, i: read (callOpen - 1)) {
+                        let callee = tk_text(toks: read toks, i: read (callOpen - 1))
+                        let label = arg_label_at(toks: read toks, callOpen: read callOpen, target: read op)
+                        if label != "" {
+                            let key = String.concat(left: read String.concat(left: read callee, right: read "|"), right: read label)
+                            if Set.contains<String>(set: read retains, value: read key) && anyCapture { has0801 = true }
+                            if Set.contains<String>(set: read noescape, value: read key) {
+                                let mut c = k + 1
+                                while c < cbClose {
+                                    if (is_kw_text(toks: read toks, i: read c, word: read "manage") || is_kw_text(toks: read toks, i: read c, word: read "take")) && is_ident_tok(toks: read toks, i: read (c + 1)) && Set.contains<String>(set: read captured, value: read tk_text(toks: read toks, i: read (c + 1))) { has0804 = true }
+                                    c = c + 1
+                                }
+                            }
+                        }
+                    }
+                }
+                k = cbClose
+            }
+        }
+        k = k + 1
+    }
+    let mut result = 0
+    if has0801 { result = result + 1 }
+    if has0804 { result = result + 2 }
+    return result
+}
+
 fn fn_has_fresh_return_bad(toks: read List<Tok>, start: read Int, handleFields: read Set<String>, retains: read Set<String>, freshFns: read Set<String>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
@@ -9400,9 +9634,13 @@ fn main() -> Unit {
     let mut placeConflict0302 = false
     let mut placeConflict0304 = false
     let mut freshReturnBad = false
+    let mut closureCapture0801 = false
+    let mut closureCapture0804 = false
     let freshFnReg = collect_fresh_fns(toks: read toks)
     let mut retainsReg = Set.new<String>()
     collect_retains(toks: read toks, out: mut retainsReg)
+    let mut noescapeReg = Set.new<String>()
+    collect_noescape_params(toks: read toks, out: mut noescapeReg)
     let mut handleFieldNames = Set.new<String>()
     collect_handle_field_names(toks: read toks, out: mut handleFieldNames)
     let mut assignTypeMismatch = false
@@ -9595,6 +9833,9 @@ fn main() -> Unit {
                     if bit_set(mask: read pcMask, bitval: read 8) { placeConflict0302 = true }
                     if bit_set(mask: read pcMask, bitval: read 16) { placeConflict0304 = true }
                     if fn_has_fresh_return_bad(toks: read toks, start: read i, handleFields: read handleFieldNames, retains: read retainsReg, freshFns: read freshFnReg) { freshReturnBad = true }
+                    let ccMask = fn_has_closure_capture_bad(toks: read toks, start: read i, retains: read retainsReg, noescape: read noescapeReg)
+                    if bit_set(mask: read ccMask, bitval: read 1) { closureCapture0801 = true }
+                    if bit_set(mask: read ccMask, bitval: read 2) { closureCapture0804 = true }
                     if fn_has_assign_type_mismatch(toks: read toks, start: read i) { assignTypeMismatch = true }
                     if fn_has_dup_arg(toks: read toks, start: read i) { dupArg = true }
                     if fn_has_fd_surface(toks: read toks, start: read i) { fdSurface = true }
@@ -9801,6 +10042,12 @@ fn main() -> Unit {
     if freshReturnBad {
         Log.write(message: read "RS0601")
     }
+    if closureCapture0801 {
+        Log.write(message: read "RS0801")
+    }
+    if closureCapture0804 {
+        Log.write(message: read "RS0804")
+    }
     if resourceField {
         Log.write(message: read "RS0701")
     }
@@ -9844,7 +10091,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || useAfterManage || retainedLocal || placeConflict0303 || placeConflict0305 || placeConflict0309 || placeConflict0302 || placeConflict0304 || freshReturnBad || takeHandle || weakInit || weakRead
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || useAfterManage || retainedLocal || placeConflict0303 || placeConflict0305 || placeConflict0309 || placeConflict0302 || placeConflict0304 || freshReturnBad || closureCapture0801 || closureCapture0804 || takeHandle || weakInit || weakRead
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
