@@ -1898,11 +1898,24 @@ un-typeable condition yields "" and is skipped (FP-safe). New walker
 **Verification:** fires `non-bool-if-condition`; full fast-subset 0 false-positives, 0
 baked-code regression, ~159s.
 
-**Remaining before RS0209 can bake — a match-typing engine** (parse `match SCRUT { PAT =>
-ARM }`, type scrutinee + each pattern + each arm):
-- `match-literal-type-mismatch` — literal pattern (`1`) vs scrutinee type (String).
-- `non-option-match-scrutinee` — `Some/None` patterns on a non-Option scrutinee.
-- `match-expression-arm-type-mismatch` — arms produce different types (Int vs String).
-- `match-variant-mismatch`, `match-expression-variant-mismatch` — variant/enum pattern checks.
-- `for-unsupported` — `for _ in String` (non-iterable loop subject).
-- plus corpus files `match.rss`, `patterns_tuplelist.rss`, `tools.rss` (all carry RS0209).
+**match-typing engine — slices 2-4 (match_bad, arm iteration mirrors astdump emit_match_arms; DONE, 0 FP):**
+- enum-variant: `Some/None`⇒Option, `Ok/Err`⇒Result vs concrete scrutinee root (non-option-match-scrutinee, match-variant-mismatch, match-expression-variant-mismatch).
+- literal pattern vs scrutinee scalar (match-literal-type-mismatch).
+- tuple `(..)` on scalar / list `[..]` on non-List (patterns_tuplelist.rss).
+- bare-ident pattern (not `_`/`true`/`false`) on a scalar scrutinee (match.rss `other` on Int).
+- for-unsupported: `for _ in EXPR` where EXPR is a concrete scalar (is_scalar_root).
+
+**Status: 7/9 RS0209 files byte-exact, 0 false-positives corpus-wide, ~163s.**
+
+**Remaining before RS0209 can bake (2 files, each a distinct harder mechanism):**
+- `match-expression-arm-type-mismatch` — arm-result-type consistency: type each arm's
+  produced value and compare to the first; needs PATTERN-BINDING typing (`Some(result)` on
+  Option<Int> binds result:Int, so `read result` → Int vs a later `"none"` → String).
+  Reuses operand_type_cp; needs scrutinee-inner-type extraction + arm produced-value
+  extraction (block last-expr).
+- `tools.rss` (oracle msgs via `rss check`): (1) "match scrutinee has type `ToolRuntime`,
+  expected Option/Result/List/declared sum-struct-class or scalar literal match" — a
+  scrutinee whose declared kind isn't matchable; (2) "pattern `CoreToolRuntime` cannot match
+  scrutinee type `ToolRuntime`" — a bare-ident pattern that isn't a variant of the declared
+  scrutinee type. Needs a DECLARED-TYPE KIND + VARIANT index (which names are sum/struct/
+  class and their variants) — the biggest remaining RS0209 piece.
