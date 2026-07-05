@@ -1907,15 +1907,16 @@ baked-code regression, ~159s.
 
 **Status: 7/9 RS0209 files byte-exact, 0 false-positives corpus-wide, ~163s.**
 
-**Remaining before RS0209 can bake (2 files, each a distinct harder mechanism):**
-- `match-expression-arm-type-mismatch` — arm-result-type consistency: type each arm's
-  produced value and compare to the first; needs PATTERN-BINDING typing (`Some(result)` on
-  Option<Int> binds result:Int, so `read result` → Int vs a later `"none"` → String).
-  Reuses operand_type_cp; needs scrutinee-inner-type extraction + arm produced-value
-  extraction (block last-expr).
-- `tools.rss` (oracle msgs via `rss check`): (1) "match scrutinee has type `ToolRuntime`,
-  expected Option/Result/List/declared sum-struct-class or scalar literal match" — a
-  scrutinee whose declared kind isn't matchable; (2) "pattern `CoreToolRuntime` cannot match
-  scrutinee type `ToolRuntime`" — a bare-ident pattern that isn't a variant of the declared
-  scrutinee type. Needs a DECLARED-TYPE KIND + VARIANT index (which names are sum/struct/
-  class and their variants) — the biggest remaining RS0209 piece.
+**Completed to bake (slices 5-6):**
+- `match-expression-arm-type-mismatch` — arm-result-type consistency: `first_generic_arg`
+  extracts the scrutinee inner type, fed to `operand_type_cp` as a per-arm binding map
+  (`Some(result)` on Option<Int> ⇒ result:Int); produced value = a block's single non-`return`
+  statement or a bare expr arm.
+- `tools.rss` — scrutinee matchability: a concrete scrutinee that isn't Option/Result/List,
+  a tuple `(..)`, a scalar, or a type in `collect_declared_types` fires (the analyzer resolves
+  each file in isolation, so an imported `ToolRuntime` is unknown ⇒ non-matchable). Tuple
+  scrutinees are explicitly matchable (first cut FP-fired on tuples.rss / x_tuples.rss).
+
+**BAKED as code #50 (7bffb738).** Default FAST gate asserts RS0209 green (615/615, 0
+mismatch, 0 false-positive) in ~167s. `rss check <file>` (release bin `rss`, not `rsscript`)
+read the oracle's exact RS0209 messages when decoding corpus triggers.
