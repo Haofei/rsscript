@@ -6168,6 +6168,71 @@ fn cond_non_bool(toks: read List<Tok>, start: read Int, end: read Int, popen: re
     return true
 }
 
+// A concrete scalar (non-iterable) type: String/Int/Bool/Float/Char. "" / generics / a
+// collection root (List/Map/Set/user type) yield false.
+fn is_scalar_root(ty: read String) -> Bool {
+    if String.len(value: read ty) == 0 { return false }
+    if str_is_unresolved_generic(s: read ty) { return false }
+    let r = str_type_root(s: read ty)
+    return r == "String" || r == "Int" || r == "Bool" || r == "Float" || r == "Char"
+}
+
+// RS0209, match case: a `match` whose scrutinee type is incompatible with its patterns.
+// Two FP-safe checks over a concrete scrutinee type (root, `<..>` stripped):
+//   * enum-variant: `Some`/`None` patterns imply the scrutinee is `Option`, `Ok`/`Err`
+//     imply `Result` — a concrete scrutinee of a different root fires.
+//   * literal pattern: a single literal pattern (`1`, `"x"`, `'c'`) whose scalar type
+//     differs from the scrutinee root fires.
+// Arm-result-type consistency is NOT checked here (it needs pattern-binding typing).
+// Arm-iteration mirrors astdump.rss emit_match_arms.
+fn match_bad(toks: read List<Tok>, braceOpen: read Int, braceClose: read Int, scrutTy: read String) -> Bool {
+    if String.len(value: read scrutTy) == 0 { return false }
+    if str_is_unresolved_generic(s: read scrutTy) { return false }
+    let scrutRoot = str_type_root(s: read scrutTy)
+    let mut impliedOption = false
+    let mut impliedResult = false
+    let mut litBad = false
+    let mut i = braceOpen + 1
+    while i < braceClose {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_SEMI) || at_symbol(toks: read toks, i: read i, code: read SYM_COMMA) {
+            i = i + 1
+        } else {
+            let lineEnd = next_line_or_block_end(toks: read toks, start: read i, end: read braceClose)
+            let arrow = find_top_sym(toks: read toks, start: read i, end: read lineEnd, code: read SYM_FATARROW)
+            if arrow < 0 {
+                if lineEnd > i { i = lineEnd } else { i = i + 1 }
+            } else {
+                let ifPos = find_top_if(toks: read toks, start: read i, end: read arrow)
+                let mut patEnd = arrow
+                if ifPos >= 0 { patEnd = ifPos }
+                if i < patEnd {
+                    let ph = tk_text(toks: read toks, i: read i)
+                    if ph == "Some" || ph == "None" { impliedOption = true }
+                    if ph == "Ok" || ph == "Err" { impliedResult = true }
+                    if (i + 1) == patEnd {
+                        let k0 = tk_kind(toks: read toks, i: read i)
+                        if k0 == TOK_NUMBER && scrutRoot != "Int" { litBad = true }
+                        if k0 == TOK_STRING && scrutRoot != "String" { litBad = true }
+                        if k0 == TOK_CHAR && scrutRoot != "Char" { litBad = true }
+                    }
+                }
+                let bodyStart = arrow + 1
+                if at_symbol(toks: read toks, i: read bodyStart, code: read SYM_LBRACE) {
+                    let bclose = find_matching(toks: read toks, open: read bodyStart, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+                    if bclose < 0 { i = braceClose } else { i = bclose + 1 }
+                } else {
+                    let bEnd = next_line_or_block_end(toks: read toks, start: read bodyStart, end: read braceClose)
+                    if bEnd > i { i = bEnd } else { i = i + 1 }
+                }
+            }
+        }
+    }
+    if impliedOption && scrutRoot != "Option" { return true }
+    if impliedResult && scrutRoot != "Result" { return true }
+    if litBad { return true }
+    return false
+}
+
 // RS0209 per-fn walker: `if`/`while` conditions that are non-Bool.
 fn fn_has_control_flow_mismatch(toks: read List<Tok>, start: read Int, fnIdx: read Map<String, Int>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
@@ -6198,6 +6263,36 @@ fn fn_has_control_flow_mismatch(toks: read List<Tok>, start: read Int, fnIdx: re
             let ce = cond_expr_end(toks: read toks, start: read lo, limit: read bc)
             if ce > lo {
                 if cond_non_bool(toks: read toks, start: read lo, end: read ce, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals) { hit = true }
+            }
+        } else if is_kw_text(toks: read toks, i: read i, word: read "match") {
+            let mut vs = i + 1
+            if is_effect_kw(toks: read toks, i: read vs) { vs = vs + 1 }
+            let mbo = cond_expr_end(toks: read toks, start: read vs, limit: read bc)
+            if mbo > vs {
+                let scrutTy = return_actual_type(toks: read toks, s0: read vs, e: read mbo, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals)
+                let mbc = find_matching(toks: read toks, open: read mbo, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+                if mbc >= 0 {
+                    if match_bad(toks: read toks, braceOpen: read mbo, braceClose: read mbc, scrutTy: read scrutTy) { hit = true }
+                }
+            }
+        } else if is_kw_text(toks: read toks, i: read i, word: read "for") {
+            // Find the `in` keyword, then type the loop subject; a concrete scalar
+            // (String/Int/Bool/Float/Char) is not iterable => RS0209 (for-unsupported).
+            let fbo = cond_expr_end(toks: read toks, start: read (i + 1), limit: read bc)
+            if fbo > (i + 1) {
+                let mut inPos = 0 - 1
+                let mut j = i + 1
+                while j < fbo {
+                    if is_kw_text(toks: read toks, i: read j, word: read "in") { inPos = j }
+                    j = j + 1
+                }
+                if inPos >= 0 {
+                    let ss = inPos + 1
+                    if ss < fbo {
+                        let subjTy = return_actual_type(toks: read toks, s0: read ss, e: read fbo, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals)
+                        if is_scalar_root(ty: read subjTy) { hit = true }
+                    }
+                }
             }
         }
         i = i + 1
