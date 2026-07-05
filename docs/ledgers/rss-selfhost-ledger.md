@@ -1787,22 +1787,30 @@ Additional slices landed this milestone:
   mismatch; FP-safe because untyped params only occur in malformed code. Fires
   missing-signature-pieces.
 
-**Verification:** RS0207 fires on ~30/36 oracle files with **0 false-positives across all
-615 fast-subset files** (the `checker_parity_corpus` gate with `RSS_CHECKER_EXTRA_CODES=
-RS0207` unions RS0207 into the compared set, so it IS the corpus-wide FP check). RS0208
-gate unchanged (0 mismatch, ~124s).
+Two further slices landed:
+- **ResourcePool generic-receiver (b16c2c7e):** the walker now detects
+  `Ns<Args>.method(` calls (the qualified branch required an ident before `.method`, but
+  there the token is `>` — a new branch walks back over the matching `<..>` to the
+  receiver ident); `call_arg_type_bad` gains a `recvGeneric`, and `ResourcePool<T>.new`'s
+  `create` factory resolves to `Fn() -> T` (T substituted from the receiver generic) so
+  `callback_arg_bad` fires (resourcepool-new-non-resource / fallible-factory). No FP on
+  the common `List<T>.new()`/`Map<K,V>.new()`.
+- **Fn-param-call check (#4, `return callback("x")`) — BUILT, CORRECT, but REVERTED for
+  perf.** `fn_type_arg_at`/`positional_arg_bad`/`fn_param_call_bad` fired the fixture and
+  passed FP guards, but running `param_type_string` + `return_actual_type` on every
+  unqualified call corpus-wide caused a single-file pathological slowdown (1 core, 100%,
+  13min+ vs the ~122s gate). Needs a cheap per-fn "has any Fn-typed param" gate before
+  re-integrating. Code saved off-tree.
 
-**Remaining before RS0207 can bake (12 fast-subset mismatches = 6 files, all
-false-negatives — each a distinct FP-risky mechanism, oracle messages captured):**
-(1) `noescape-callback-body-call-argument-type` — type a CLOSURE PARAM from the `Fn` arg
-types and check calls inside a PARAMETERIZED closure body (current descent enters only
-parameterless closures); (2) `noescape-callback-call-argument-type` — type a `Fn`-typed
-PARAM and check positional calls to it (`return callback("x")`); (3)
-`noescape-callback-fresh-captured-managed` — a `fresh`-ness dimension ("returns non-fresh
-value `image`, expected `fresh ImageData`"; `arg_type_matches` strips `fresh`);
-(4,5) `resourcepool-new-{non-resource,fallible-factory}` — `ResourcePool<T>.new(create:)`
-is NOT DETECTED by the walker's qualified-call branch (the token before `.new` is `>`, not
-an ident), and needs generic substitution (`create: Fn() -> T`) so `callback_arg_bad` can
-fire; (6) `interp` — list-literal item-vs-element-type (a different mechanism). Plus the
-`package-manager` fold giant for a full-corpus bake. Then add `RS0207` to
-CHECKER_TARGET_CODES.
+**Verification:** RS0207 fires on 32/36 oracle files with **0 false-positives across all
+615 fast-subset files**. RS0208 gate unchanged (0 mismatch, ~122s).
+
+**Remaining before RS0207 can bake (8 fast-subset mismatches = 4 files, all
+false-negatives):** (1) `noescape-callback-body-call-argument-type` — type a CLOSURE PARAM
+from the `Fn` arg types and check calls inside a PARAMETERIZED closure body (current
+descent enters only parameterless closures); (2) `noescape-callback-call-argument-type` —
+the reverted #4 (needs the perf gate); (3) `noescape-callback-fresh-captured-managed` — a
+`fresh`-ness dimension ("returns non-fresh value `image`, expected `fresh ImageData`";
+`arg_type_matches` strips `fresh` — this is the ownership model, FP-risky); (4) `interp` —
+list-literal item-vs-element-type (a different mechanism). Plus the `package-manager` fold
+giant for a full-corpus bake. Then add `RS0207` to CHECKER_TARGET_CODES.
