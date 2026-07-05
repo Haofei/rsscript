@@ -1899,6 +1899,36 @@ container whose type can't be resolved, is never flagged (a deliberate safe fals
 **BAKED as code #56.** Byte-exact 615/615, 0 FP. The fixture (`values["a"] = 1` on a `Map`)
 plus corpus.
 
+### Milestone 2at — RS0303/RS0305/RS0309 place-pair + RS0601 fresh-return (codes #62–65, BAKED)
+
+Four codes landed in one batch (sub-agents decoded the rules in parallel; a single combined
+`RSS_CHECKER_EXTRA_CODES` gate validated all four — the batching cut ~3 throttled gates to 1).
+
+**RS0303 / RS0305 / RS0309 — place-pair conflicts (shared substrate).** All three come from the
+oracle's `check_place_pair_conflict`. `collect_call_places` gathers every effect-wrapped place arg
+of a call (`read`/`mut`/`take`/`manage <place>`), splitting on depth-0 commas and — for a closure
+argument — collecting only the vars it CAPTURES from outside (its own params/`local`/`let` are
+excluded; that exclusion was the fix for the RS0305 FP on noescape-callback-local-use-after-manage).
+Each same-base pair dispatches in order: **RS0305** if a move (`take`/`manage`) is non-disjoint
+(bare base either side / index / handle / prefix-or-equal); else **RS0303** if a mut pair is
+prefix-or-equal or crosses a `handle` field (excluding whole-vs-field = RS0302 and indexed = RS0304);
+else **RS0309** if the fields are genuinely disjoint and the base is a `mut` parameter (non-splittable).
+Path: 2 mismatch → 0 (the lone FN was the closure-capture case).
+
+**RS0601 — fresh-return-not-clean.** A `-> fresh …` fn (return type contains `fresh` anywhere,
+covering `Option<fresh>`/`Result<fresh,_>`) that returns a non-clean value. Fires on: a `mut`/`take`
+param or non-scalar `read` param (`collect_fire_params`); a `let` bound to a managed-non-fresh call
+(`collect_managed_nonfresh_lets` — a call that is neither a registered `-> fresh` fn nor a stdlib-type
+receiver like `List.new()`; an unknown `Cache.get()` counts as managed); a tainted local/let
+(`manage`/`take`/retains-arg/**stored**-closure capture — a `noescape` callback does NOT taint); a
+managed match-arm payload; or a handle-field access. Clean: constructors, fresh calls, literals,
+untainted owned locals. `Some(…)`/`Ok(…)` and a `name:` label are unwrapped to the base. Path (v3→v5):
+22 → 2 → 0, the FP wave fixed by making locals owned-by-default and recognizing stdlib/builtin fresh
+sources. Reused pre-existing `collect_fresh_fns`/`dotted_name_text`; `fn_return_type_has_fresh` is a
+broader precondition than the direct-only `fn_returns_fresh`.
+
+All four byte-exact 0 FP / 0 FN over the corpus; bake gate green. **Baked as codes #62–65.**
+
 ### Milestone 2as — RS0501 LOCAL_VALUE_RETAINED (code #61, BAKED)
 
 Fifth borrow-tier code and the first **cross-function** one — needs the callee's signature.
