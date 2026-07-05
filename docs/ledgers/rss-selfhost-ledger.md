@@ -1899,6 +1899,16 @@ container whose type can't be resolved, is never flagged (a deliberate safe fals
 **BAKED as code #56.** Byte-exact 615/615, 0 FP. The fixture (`values["a"] = 1` on a `Map`)
 plus corpus.
 
+### Milestone 2au — RS0302/RS0304 place-pair (codes #66–67, BAKED)
+
+Two more codes from the SAME `fn_place_conflicts` substrate, essentially free. The dispatch already
+identified them (and previously just skipped): **RS0302** = the whole-local-vs-field mix (exactly one
+side is the bare base — `use_state(state: read state, cache: mut state.inner.cache)`); **RS0304** =
+indexed paths that can't be proven disjoint (`use_buffers(a: mut buffers[0], b: mut buffers[1])`).
+Extended the per-fn return code to a 5-bit mask (added a `bit_set` division helper — the dialect has
+no bitwise ops) and wired both flags. 0 FP / 0 FN, first gate. **Baked #66–67.** The place-pair
+routine now covers all five of its codes (RS0302/0303/0304/0305/0309).
+
 ### Milestone 2at — RS0303/RS0305/RS0309 place-pair + RS0601 fresh-return (codes #62–65, BAKED)
 
 Four codes landed in one batch (sub-agents decoded the rules in parallel; a single combined
