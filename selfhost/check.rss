@@ -4908,6 +4908,33 @@ fn is_closure_brace(toks: read List<Tok>, b: read Int) -> Bool {
     return false
 }
 
+// True iff the closure whose body brace is `b` has an EMPTY parameter list (`|| {` or
+// `|| -> T {`). Such a closure introduces no bindings that could shadow an enclosing
+// name, so the RS0207 arg walker can safely descend into it and resolve captured
+// identifiers against the enclosing fn scope (a parameterized closure is still skipped,
+// since its params would mis-resolve). Detects adjacent param pipes (`| |`).
+fn closure_paramless(toks: read List<Tok>, b: read Int) -> Bool {
+    let mut q = b - 1
+    let mut guard = 0
+    let mut scanning = true
+    let mut pipePos = 0 - 1
+    while scanning {
+        if q < 0 || guard >= 30 {
+            scanning = false
+        } else if at_symbol(toks: read toks, i: read q, code: read SYM_PIPE) {
+            pipePos = q
+            scanning = false
+        } else if is_ident_tok(toks: read toks, i: read q) || at_symbol(toks: read toks, i: read q, code: read SYM_DOT) || at_symbol(toks: read toks, i: read q, code: read SYM_LANGLE) || at_symbol(toks: read toks, i: read q, code: read SYM_RANGLE) || at_symbol(toks: read toks, i: read q, code: read SYM_COMMA) || at_symbol(toks: read toks, i: read q, code: read SYM_ARROW) {
+            q = q - 1
+            guard = guard + 1
+        } else {
+            scanning = false
+        }
+    }
+    if pipePos < 1 { return false }
+    return at_symbol(toks: read toks, i: read (pipePos - 1), code: read SYM_PIPE)
+}
+
 // Walk all top-level fns and report any RS0208 return-type mismatch.
 fn has_return_type_mismatch(toks: read List<Tok>) -> Bool {
     let ntok = List.len(list: read toks)
@@ -5065,7 +5092,7 @@ fn fn_has_binding_type_mismatch(toks: read List<Tok>, start: read Int, prefix: r
     let mut i = bo + 1
     let mut hit = false
     while i < bc {
-        if at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) && is_closure_brace(toks: read toks, b: read i) {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) && is_closure_brace(toks: read toks, b: read i) && closure_paramless(toks: read toks, b: read i) == false {
             let cc = find_matching(toks: read toks, open: read i, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
             if cc < 0 { i = bc } else { i = cc + 1 }
         } else if is_kw_text(toks: read toks, i: read i, word: read "let") || is_kw_text(toks: read toks, i: read i, word: read "local") {
