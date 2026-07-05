@@ -1468,6 +1468,81 @@ fn fn_manage_take_bad(toks: read List<Tok>, start: read Int, keyword: read Strin
     return hit
 }
 
+// RS0301 MANAGED_TO_LOCAL: `local X = RHS` where RHS is a managed place — a plain `let`
+// binding (ALWAYS managed, even scalar — confirmed via oracle), a `handle`-field access, or a
+// `Some(…)`/`Ok(…)` wrapper around one (after an optional leading `read`/`mut`). Params,
+// `local` bindings, literals, and normal (non-handle) field accesses are NOT managed.
+
+// Field names declared with the `handle` modifier anywhere (`name: handle Type`).
+fn collect_handle_field_names(toks: read List<Tok>, out: mut Set<String>) -> Unit {
+    let n = List.len(list: read toks)
+    let mut k = 0
+    while k + 2 < n {
+        if is_ident_tok(toks: read toks, i: read k) && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_COLON) && is_kw_text(toks: read toks, i: read (k + 2), word: read "handle") {
+            Set.insert<String>(set: mut out, value: read tk_text(toks: read toks, i: read k))
+        }
+        k = k + 1
+    }
+    return Unit
+}
+
+// Whether the RHS value at `vs` is a managed place for RS0301: a `let` binding, a
+// `handle`-field access `_.f`, or `Some(…)`/`Ok(…)` wrapping one (after an optional effect).
+fn rhs_managed_for_local(toks: read List<Tok>, vs: read Int, end: read Int, managed: read Set<String>, handleFields: read Set<String>) -> Bool {
+    let mut s = vs
+    if is_effect_kw(toks: read toks, i: read s) { s = s + 1 }
+    if s >= end { return false }
+    if is_ident_tok(toks: read toks, i: read s) == false { return false }
+    let head = tk_text(toks: read toks, i: read s)
+    if (head == "Some" || head == "Ok") && at_symbol(toks: read toks, i: read (s + 1), code: read SYM_LPAREN) {
+        return rhs_managed_for_local(toks: read toks, vs: read (s + 2), end: read end, managed: read managed, handleFields: read handleFields)
+    }
+    if at_symbol(toks: read toks, i: read (s + 1), code: read SYM_DOT) && is_ident_tok(toks: read toks, i: read (s + 2)) {
+        let field = tk_text(toks: read toks, i: read (s + 2))
+        return Set.contains<String>(set: read handleFields, value: read field)
+    }
+    return Set.contains<String>(set: read managed, value: read head)
+}
+
+fn fn_has_managed_to_local(toks: read List<Tok>, start: read Int, handleFields: read Set<String>) -> Bool {
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+    if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
+    let bodyClose = find_matching(toks: read toks, open: read sigEnd, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    if bodyClose < 0 { return false }
+    let managed = collect_managed_names(toks: read toks, bodyOpen: read sigEnd, bodyClose: read bodyClose)
+    let mut k = sigEnd + 1
+    let mut hit = false
+    while k < bodyClose {
+        if is_kw_text(toks: read toks, i: read k, word: read "local") {
+            let mut nameIdx = k + 1
+            if is_kw_text(toks: read toks, i: read nameIdx, word: read "mut") { nameIdx = nameIdx + 1 }
+            if is_ident_tok(toks: read toks, i: read nameIdx) {
+                let mut eqPos = 0 - 1
+                let mut t = nameIdx + 1
+                let mut scan = true
+                while scan {
+                    if t >= bodyClose {
+                        scan = false
+                    } else if at_symbol(toks: read toks, i: read t, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read t, code: read SYM_RBRACE) {
+                        scan = false
+                    } else if at_symbol(toks: read toks, i: read t, code: read SYM_EQ) && at_symbol(toks: read toks, i: read (t + 1), code: read SYM_EQ) == false {
+                        eqPos = t
+                        scan = false
+                    } else {
+                        t = t + 1
+                    }
+                }
+                if eqPos > 0 {
+                    if rhs_managed_for_local(toks: read toks, vs: read (eqPos + 1), end: read bodyClose, managed: read managed, handleFields: read handleFields) { hit = true }
+                }
+            }
+        }
+        k = k + 1
+    }
+    return hit
+}
+
 // RS0205: a call that repeats a named argument, e.g. `f(x: 1, x: 2)` (oracle
 // checks/calls.rs). We detect the syntactic case — the same explicit `name:` label
 // twice in one call's arg list. An arg label is an `IDENT:` that sits at an argument
@@ -8415,6 +8490,9 @@ fn main() -> Unit {
     let mut immutableAssign = false
     let mut manageNonLocal = false
     let mut takeNonLocal = false
+    let mut managedToLocal = false
+    let mut handleFieldNames = Set.new<String>()
+    collect_handle_field_names(toks: read toks, out: mut handleFieldNames)
     let mut assignTypeMismatch = false
     // RS0312: index assignment on a non-List container.
     let indexAssignBad = has_index_assign_non_list(toks: read toks)
@@ -8593,6 +8671,7 @@ fn main() -> Unit {
                     if fn_has_immutable_assign(toks: read toks, start: read i) { immutableAssign = true }
                     if fn_manage_take_bad(toks: read toks, start: read i, keyword: read "manage") { manageNonLocal = true }
                     if fn_manage_take_bad(toks: read toks, start: read i, keyword: read "take") { takeNonLocal = true }
+                    if fn_has_managed_to_local(toks: read toks, start: read i, handleFields: read handleFieldNames) { managedToLocal = true }
                     if fn_has_assign_type_mismatch(toks: read toks, start: read i) { assignTypeMismatch = true }
                     if fn_has_dup_arg(toks: read toks, start: read i) { dupArg = true }
                     if fn_has_fd_surface(toks: read toks, start: read i) { fdSurface = true }
@@ -8772,6 +8851,9 @@ fn main() -> Unit {
     if takeNonLocal {
         Log.write(message: read "RS0308")
     }
+    if managedToLocal {
+        Log.write(message: read "RS0301")
+    }
     if resourceField {
         Log.write(message: read "RS0701")
     }
@@ -8815,7 +8897,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || takeHandle || weakInit || weakRead
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || takeHandle || weakInit || weakRead
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
