@@ -1116,6 +1116,89 @@ fn fn_has_immutable_assign(toks: read List<Tok>, start: read Int) -> Bool {
     return hit
 }
 
+// RS0313: a reassignment `name = <value>` whose value type doesn't match the local's declared
+// type, e.g. `count = "oops"` where `count: Int`. Message: "cannot assign `String` to `count`
+// of type `Int`." Conservative: only a literal RHS (String/number/Bool/Char) vs an explicitly
+// annotated scalar local, compared by category (String / Numeric / Bool / Char) — a category
+// mismatch is unambiguous and never a false positive (Int↔Float coercion stays in one category).
+
+// The broad scalar category of a declared type root, or "" if not a simple scalar.
+fn type_scalar_cat(t: read String) -> String {
+    if t == "String" { return "S" }
+    if t == "Bool" { return "B" }
+    if t == "Char" { return "C" }
+    if t == "Int" || t == "Float" { return "N" }
+    return ""
+}
+
+// The scalar category of a literal token at `i`, or "" if it is not a scalar literal.
+fn literal_scalar_cat(toks: read List<Tok>, i: read Int) -> String {
+    let k = tk_kind(toks: read toks, i: read i)
+    if k == TOK_STRING { return "S" }
+    if k == TOK_NUMBER { return "N" }
+    if k == TOK_CHAR { return "C" }
+    if is_ident_tok(toks: read toks, i: read i) {
+        let t = tk_text(toks: read toks, i: read i)
+        if t == "true" || t == "false" { return "B" }
+    }
+    return ""
+}
+
+// The declared type root of the first `let [mut] name : Type` in [bodyOpen, bodyClose), or "".
+fn find_local_decl_type(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, name: read String) -> String {
+    let mut k = bodyOpen + 1
+    let mut result = ""
+    let mut going = true
+    while going {
+        if k >= bodyClose {
+            going = false
+        } else if is_kw_text(toks: read toks, i: read k, word: read "let") {
+            let mut p = k + 1
+            if is_kw_text(toks: read toks, i: read p, word: read "mut") { p = p + 1 }
+            if is_ident_tok(toks: read toks, i: read p) && tk_text(toks: read toks, i: read p) == name && at_symbol(toks: read toks, i: read (p + 1), code: read SYM_COLON) {
+                result = tk_text(toks: read toks, i: read (p + 2))
+                going = false
+            } else {
+                k = k + 1
+            }
+        } else {
+            k = k + 1
+        }
+    }
+    return result
+}
+
+fn fn_has_assign_type_mismatch(toks: read List<Tok>, start: read Int) -> Bool {
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+    if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
+    let bodyClose = find_matching(toks: read toks, open: read sigEnd, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    if bodyClose < 0 { return false }
+    let mut k = sigEnd + 1
+    let mut hit = false
+    while k < bodyClose {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_EQ) && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_EQ) == false {
+            if is_ident_tok(toks: read toks, i: read (k - 1)) {
+                let notLet = is_kw_text(toks: read toks, i: read (k - 2), word: read "let") == false
+                let notMut = is_kw_text(toks: read toks, i: read (k - 2), word: read "mut") == false
+                let notLocal = is_kw_text(toks: read toks, i: read (k - 2), word: read "local") == false
+                let notField = at_symbol(toks: read toks, i: read (k - 2), code: read SYM_DOT) == false
+                if notLet && notMut && notLocal && notField {
+                    let name = tk_text(toks: read toks, i: read (k - 1))
+                    let declType = find_local_decl_type(toks: read toks, bodyOpen: read sigEnd, bodyClose: read bodyClose, name: read name)
+                    let dcat = type_scalar_cat(t: read declType)
+                    if dcat != "" {
+                        let lcat = literal_scalar_cat(toks: read toks, i: read (k + 1))
+                        if lcat != "" && lcat != dcat { hit = true }
+                    }
+                }
+            }
+        }
+        k = k + 1
+    }
+    return hit
+}
+
 // RS0205: a call that repeats a named argument, e.g. `f(x: 1, x: 2)` (oracle
 // checks/calls.rs). We detect the syntactic case — the same explicit `name:` label
 // twice in one call's arg list. An arg label is an `IDENT:` that sits at an argument
@@ -8061,6 +8144,7 @@ fn main() -> Unit {
     let mut uninferable = false
     // RS0311: reassigning an immutable `let` local.
     let mut immutableAssign = false
+    let mut assignTypeMismatch = false
     // RS0205: a call that repeats a named argument.
     let mut dupArg = false
     let methodNames = collect_method_names(toks: read toks)
@@ -8234,6 +8318,7 @@ fn main() -> Unit {
                     if fn_data_effect_bad(toks: read toks, start: read i, declared: read declared, methodNames: read methodNames) { missingDataEffect = true }
                     if fn_has_uninferable_binding(toks: read toks, start: read i) { uninferable = true }
                     if fn_has_immutable_assign(toks: read toks, start: read i) { immutableAssign = true }
+                    if fn_has_assign_type_mismatch(toks: read toks, start: read i) { assignTypeMismatch = true }
                     if fn_has_dup_arg(toks: read toks, start: read i) { dupArg = true }
                     if fn_has_fd_surface(toks: read toks, start: read i) { fdSurface = true }
                     // RS0027: an unknown protocol in this fn's generic bounds.
@@ -8400,6 +8485,9 @@ fn main() -> Unit {
     if localClass {
         Log.write(message: read "RS0306")
     }
+    if assignTypeMismatch {
+        Log.write(message: read "RS0313")
+    }
     if resourceField {
         Log.write(message: read "RS0701")
     }
@@ -8443,7 +8531,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || takeHandle || weakInit || weakRead
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || assignTypeMismatch || takeHandle || weakInit || weakRead
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
