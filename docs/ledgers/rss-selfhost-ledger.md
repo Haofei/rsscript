@@ -1885,6 +1885,29 @@ comparison sub-exprs that `return_actual_type` leaves untyped (=> skipped).
 `i < bc .. ce >(` as a generic call `i<bc>` (surfaced as RS0206 via the dogfood compile);
 hoist to `let lo = i + 1; if ce > lo`.
 
+### Milestone 2ak — RS0032 PROTOCOL_NOT_SATISFIED (code #52, BAKED)
+
+A generic method's type argument that doesn't satisfy the protocol the method requires:
+`Set.new<T>`/`Map.new<K,_>` require the element/key to be Hashable, `List.sort<T>` requires
+Ord. Message: "type `T` does not satisfy protocol `Hashable`/`Ord` required by `<call>`."
+`has_protocol_violation` scans for the explicit-type-arg call forms (`call_protocol_bad`
+matches `recv . method < arg , ..>`) — the parity check is presence-per-file, so the
+`.new`/`.sort` forms suffice; every RS0032 file carries one (the `Set.insert`/`Map.insert`
+variants the oracle also reports would be redundant). The first type arg is tested by
+`arg_root_satisfies`: Int/String/Bool/Char satisfy both protocols, Float neither, a locally-
+declared struct/class/sum satisfies iff it derives the trait, and unknown/imported types are
+left alone (FP-avoidance).
+
+**The FP that shaped it:** `local_type_derives` must resolve BOTH struct/class/resource
+(`parse_type_decl`) and `sum` (`parse_sum_decl`) declarations — `parse_type_decl` returns -1
+for a `sum`, and `starts_type_decl` excludes `sum`, so a first cut couldn't see the derive on
+`sum Token derives(Clone, Eq, Hash)` used as a Map key (pass fixture
+`hashable-enum-payload-key.rss`) and wrongly fired. It now also advances one token on a parse
+failure instead of aborting the whole scan.
+
+**BAKED as code #52.** Byte-exact 615/615, 0 FP, 0 FN. Reuses the RS0211 `derive_has_trait`
+and `arg_end` helpers.
+
 ### Milestone 2aj — RS0211 DERIVE_FIELD_UNSUPPORTED (code #51, BAKED)
 
 A value-derive trait whose field types don't satisfy the trait constraint. Message shape:
