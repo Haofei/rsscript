@@ -1543,6 +1543,116 @@ fn fn_has_managed_to_local(toks: read List<Tok>, start: read Int, handleFields: 
     return hit
 }
 
+// RS0401 USE_AFTER_MANAGE: a `manage x` / `take x` moves `x`, so any USE of `x` later in the
+// function body is an error — even when the move sits inside a branch or loop (rss treats a
+// conditionally-moved value as moved on the continuation). A "use" is an occurrence of the
+// ident `x` that is not an arg/field label (`x:`), not a field of another place (`_.x`), not a
+// (re)binding position (`let`/`local`/`mut x`), and not an assignment target (`x =`).
+fn used_after_move(toks: read List<Tok>, from: read Int, close: read Int, x: read String) -> Bool {
+    let mut m = from
+    let mut found = false
+    while m < close {
+        if is_ident_tok(toks: read toks, i: read m) && tk_text(toks: read toks, i: read m) == x {
+            let prevDot = at_symbol(toks: read toks, i: read (m - 1), code: read SYM_DOT)
+            let prevBind = is_kw_text(toks: read toks, i: read (m - 1), word: read "let") || is_kw_text(toks: read toks, i: read (m - 1), word: read "local") || is_kw_text(toks: read toks, i: read (m - 1), word: read "mut")
+            let nextColon = at_symbol(toks: read toks, i: read (m + 1), code: read SYM_COLON)
+            let nextAssign = at_symbol(toks: read toks, i: read (m + 1), code: read SYM_EQ) && at_symbol(toks: read toks, i: read (m + 2), code: read SYM_EQ) == false
+            if prevDot == false && prevBind == false && nextColon == false && nextAssign == false { found = true }
+        }
+        m = m + 1
+    }
+    return found
+}
+
+// The `{` opening the immediate block enclosing `p`, floored at `fnBody` (the fn body `{`).
+fn enclosing_block_open(toks: read List<Tok>, p: read Int, fnBody: read Int) -> Int {
+    let mut m = p - 1
+    let mut depth = 0
+    let mut result = fnBody
+    let mut going = true
+    while going {
+        if m <= fnBody {
+            going = false
+        } else if at_symbol(toks: read toks, i: read m, code: read SYM_RBRACE) {
+            depth = depth + 1
+            m = m - 1
+        } else if at_symbol(toks: read toks, i: read m, code: read SYM_LBRACE) {
+            if depth == 0 {
+                result = m
+                going = false
+            } else {
+                depth = depth - 1
+                m = m - 1
+            }
+        } else {
+            m = m - 1
+        }
+    }
+    return result
+}
+
+// Whether a `return` keyword appears in [from, to). Only `return` exits the FUNCTION, so a move
+// on that path never taints the continuation; a `break` merely exits a loop and execution
+// continues after it, so a move before a `break` still taints the post-loop continuation.
+fn has_return_or_break(toks: read List<Tok>, from: read Int, to: read Int) -> Bool {
+    let mut m = from
+    let mut found = false
+    while m < to {
+        if is_kw_text(toks: read toks, i: read m, word: read "return") { found = true }
+        m = m + 1
+    }
+    return found
+}
+
+// Whether the field path `base . field` is used in [from, close), excluding a binding position.
+fn used_field_after_move(toks: read List<Tok>, from: read Int, close: read Int, base: read String, field: read String) -> Bool {
+    let mut m = from
+    let mut found = false
+    while m < close {
+        if is_ident_tok(toks: read toks, i: read m) && tk_text(toks: read toks, i: read m) == base && at_symbol(toks: read toks, i: read (m + 1), code: read SYM_DOT) && is_ident_tok(toks: read toks, i: read (m + 2)) && tk_text(toks: read toks, i: read (m + 2)) == field {
+            let prevBind = is_kw_text(toks: read toks, i: read (m - 1), word: read "let") || is_kw_text(toks: read toks, i: read (m - 1), word: read "local")
+            let prevDot = at_symbol(toks: read toks, i: read (m - 1), code: read SYM_DOT)
+            if prevBind == false && prevDot == false { found = true }
+        }
+        m = m + 1
+    }
+    return found
+}
+
+fn fn_has_use_after_manage(toks: read List<Tok>, start: read Int) -> Bool {
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+    if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
+    let bodyClose = find_matching(toks: read toks, open: read sigEnd, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    if bodyClose < 0 { return false }
+    let mut k = sigEnd + 1
+    let mut hit = false
+    while k < bodyClose {
+        let isMove = is_kw_text(toks: read toks, i: read k, word: read "manage") || is_kw_text(toks: read toks, i: read k, word: read "take")
+        if isMove && is_ident_tok(toks: read toks, i: read (k + 1)) {
+            let x = tk_text(toks: read toks, i: read (k + 1))
+            if is_upper_head(name: read x) == false {
+                // A move in a block that returns/breaks does not taint the continuation past
+                // that block — limit the scan to the enclosing block in that case.
+                let bo = enclosing_block_open(toks: read toks, p: read k, fnBody: read sigEnd)
+                let mut bc = find_matching(toks: read toks, open: read bo, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+                if bc < 0 { bc = bodyClose }
+                let exits = has_return_or_break(toks: read toks, from: read (k + 1), to: read bc)
+                let mut scanEnd = bodyClose
+                if exits { scanEnd = bc }
+                if at_symbol(toks: read toks, i: read (k + 2), code: read SYM_DOT) && is_ident_tok(toks: read toks, i: read (k + 3)) {
+                    let field = tk_text(toks: read toks, i: read (k + 3))
+                    if used_field_after_move(toks: read toks, from: read (k + 4), close: read scanEnd, base: read x, field: read field) { hit = true }
+                } else {
+                    if used_after_move(toks: read toks, from: read (k + 2), close: read scanEnd, x: read x) { hit = true }
+                }
+            }
+        }
+        k = k + 1
+    }
+    return hit
+}
+
 // RS0205: a call that repeats a named argument, e.g. `f(x: 1, x: 2)` (oracle
 // checks/calls.rs). We detect the syntactic case — the same explicit `name:` label
 // twice in one call's arg list. An arg label is an `IDENT:` that sits at an argument
@@ -8491,6 +8601,7 @@ fn main() -> Unit {
     let mut manageNonLocal = false
     let mut takeNonLocal = false
     let mut managedToLocal = false
+    let mut useAfterManage = false
     let mut handleFieldNames = Set.new<String>()
     collect_handle_field_names(toks: read toks, out: mut handleFieldNames)
     let mut assignTypeMismatch = false
@@ -8672,6 +8783,7 @@ fn main() -> Unit {
                     if fn_manage_take_bad(toks: read toks, start: read i, keyword: read "manage") { manageNonLocal = true }
                     if fn_manage_take_bad(toks: read toks, start: read i, keyword: read "take") { takeNonLocal = true }
                     if fn_has_managed_to_local(toks: read toks, start: read i, handleFields: read handleFieldNames) { managedToLocal = true }
+                    if fn_has_use_after_manage(toks: read toks, start: read i) { useAfterManage = true }
                     if fn_has_assign_type_mismatch(toks: read toks, start: read i) { assignTypeMismatch = true }
                     if fn_has_dup_arg(toks: read toks, start: read i) { dupArg = true }
                     if fn_has_fd_surface(toks: read toks, start: read i) { fdSurface = true }
@@ -8854,6 +8966,9 @@ fn main() -> Unit {
     if managedToLocal {
         Log.write(message: read "RS0301")
     }
+    if useAfterManage {
+        Log.write(message: read "RS0401")
+    }
     if resourceField {
         Log.write(message: read "RS0701")
     }
@@ -8897,7 +9012,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || takeHandle || weakInit || weakRead
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || useAfterManage || takeHandle || weakInit || weakRead
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
