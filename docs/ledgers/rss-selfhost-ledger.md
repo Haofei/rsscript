@@ -1885,6 +1885,20 @@ comparison sub-exprs that `return_actual_type` leaves untyped (=> skipped).
 `i < bc .. ce >(` as a generic call `i<bc>` (surfaced as RS0206 via the dogfood compile);
 hoist to `let lo = i + 1; if ce > lo`.
 
+### Milestone 2al — RS1004 SURFACE_REFERENCE_SYNTAX (code #53, BAKED)
+
+`&T`/`&mut T` surface reference syntax is not part of RSScript — borrow-passing uses the
+`read`/`mut`/`take` effect keywords, and `&` only ever appears as a bitwise operator in
+expressions. Message: "surface reference syntax is not part of RSScript." `has_surface_reference`
+fires on three token adjacencies that never occur in valid rss: `& mut` (`mut` is reserved, so
+it can't be a bitwise-and operand), `: &` (a type starting with `&`), and `-> &` (a return
+type starting with `&`). A bitwise-and `a & b` tokenizes as `a`,`&`,`b` and matches none of
+them, so there is no conflict with RS0210's operator scan. The simplest bake of the session —
+a pure token-adjacency scan, no typing.
+
+**BAKED as code #53.** Byte-exact 615/615, 0 FP. Both fixtures (`&mut Buffer` param,
+`&Bytes` param) plus corpus.
+
 ### Milestone 2ak — RS0032 PROTOCOL_NOT_SATISFIED (code #52, BAKED)
 
 A generic method's type argument that doesn't satisfy the protocol the method requires:
