@@ -1802,15 +1802,29 @@ Two further slices landed:
   13min+ vs the ~122s gate). Needs a cheap per-fn "has any Fn-typed param" gate before
   re-integrating. Code saved off-tree.
 
-**Verification:** RS0207 fires on 32/36 oracle files with **0 false-positives across all
-615 fast-subset files**. RS0208 gate unchanged (0 mismatch, ~122s).
+- **Fn-param call check + local-shadows-param scoping (4533332e):** a call whose callee is
+  a `Fn`-typed PARAMETER (`return callback("x")`) types its positional args against the
+  Fn's arg types. Building it surfaced a real scoping bug — `return_actual_type` resolved a
+  bare ident to the PARAMETER before a same-named LOCAL, so a `let input = List.slice(..)`
+  (List<Int>) shadowing an `input: IntListGen` param mis-typed as IntListGen → a quickcheck
+  false-positive. Fixed by checking the local (matchPos-bounded `find_let_rhs_fast`) BEFORE
+  the parameter, matching the analyzer's scoping. RS0208 stayed byte-exact. (The earlier
+  "#4 causes a 13-min slowdown" was a contention artifact — a clean single-job gate is
+  ~133s.)
 
-**Remaining before RS0207 can bake (8 fast-subset mismatches = 4 files, all
-false-negatives):** (1) `noescape-callback-body-call-argument-type` — type a CLOSURE PARAM
-from the `Fn` arg types and check calls inside a PARAMETERIZED closure body (current
-descent enters only parameterless closures); (2) `noescape-callback-call-argument-type` —
-the reverted #4 (needs the perf gate); (3) `noescape-callback-fresh-captured-managed` — a
-`fresh`-ness dimension ("returns non-fresh value `image`, expected `fresh ImageData`";
-`arg_type_matches` strips `fresh` — this is the ownership model, FP-risky); (4) `interp` —
-list-literal item-vs-element-type (a different mechanism). Plus the `package-manager` fold
-giant for a full-corpus bake. Then add `RS0207` to CHECKER_TARGET_CODES.
+**Verification:** RS0207 fires on 33/36 oracle files with **0 false-positives across all
+615 fast-subset files**. RS0208 gate unchanged (0 mismatch, ~133s).
+
+**Remaining before RS0207 can bake (6 fast-subset mismatches = 3 files, all
+false-negatives — each a distinct invasive/FP-risky mechanism):**
+(1) `noescape-callback-body-call-argument-type` — CLOSURE-PARAM TYPING: the closure param
+must be typed from the `Fn` arg type (`|value| String.len(value: read value)` with
+`Fn(Int)->Int` → value:Int vs String.len's String), which needs injecting a closure-param
+name→type map into `return_actual_type`/`call_arg_type_bad` (invasive — ~20 call sites; the
+`|value|` token carries no annotation);
+(2) `noescape-callback-fresh-captured-managed` — a `fresh`-ness/ownership dimension
+(`arg_type_matches` strips `fresh`; FP-risky);
+(3) `interp` — string-interpolation desugars to a synthesized `List<String>` of the
+interpolated values, so typing needs re-tokenizing the single `TOK_INTERP` token's embedded
+exprs. Plus the `package-manager` fold giant for a full-corpus bake. Then add `RS0207` to
+CHECKER_TARGET_CODES.
