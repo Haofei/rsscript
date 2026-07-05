@@ -4356,6 +4356,36 @@ fn declared_fn_return(toks: read List<Tok>, name: read String) -> String {
     return result
 }
 
+// The declared type of parameter `label` of a file-declared unqualified `fn name(...)`,
+// or "" if the file declares no such fn or the fn has no such labeled parameter. Used
+// by RS0207 Slice 2 to type a call argument's target parameter. (effect prefix stripped;
+// noescape/owned/fresh kept — see param_type_string.)
+fn declared_fn_param_type(toks: read List<Tok>, name: read String, label: read String) -> String {
+    let n = List.len(list: read toks)
+    let mut i = 0
+    let mut result = ""
+    let mut done = false
+    while i < n && done == false {
+        if at_ident(toks: read toks, i: read i, wid: read WORD_FN) {
+            let a = i + 1
+            if is_ident_tok(toks: read toks, i: read a) && tk_text(toks: read toks, i: read a) == name && at_symbol(toks: read toks, i: read (a + 1), code: read SYM_DOT) == false && (at_symbol(toks: read toks, i: read (a + 1), code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read (a + 1), code: read SYM_LANGLE)) {
+                let mut pp = a + 1
+                if at_symbol(toks: read toks, i: read pp, code: read SYM_LANGLE) {
+                    let gc = find_matching(toks: read toks, open: read pp, openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
+                    if gc >= 0 { pp = gc + 1 }
+                }
+                if at_symbol(toks: read toks, i: read pp, code: read SYM_LPAREN) {
+                    let pc = find_matching(toks: read toks, open: read pp, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+                    if pc >= 0 { result = param_type_string(toks: read toks, open: read pp, close: read pc, name: read label) }
+                }
+                done = true
+            }
+        }
+        i = i + 1
+    }
+    return result
+}
+
 // The full canonical return type of a file-declared `fn ns.method(...)`, or "" if the
 // file does not declare it. Takes precedence over the curated stdlib table, since a
 // file may shadow a stdlib signature (e.g. its own `fn Image.load(...) -> fresh Image`).
@@ -4843,6 +4873,49 @@ fn has_return_type_mismatch(toks: read List<Tok>) -> Bool {
 // of the initializer. Reuses return_expr_mismatch (Result/Option payload aware).
 // UNKNOWN-biased: an un-typeable initializer yields "" => no fire, matching the
 // oracle's skip-bias.
+// RS0207 Slice 2: check each labeled argument of one call `callee(label: expr, ...)`
+// against the file-declared parameter type of `callee`. Fires when both the parameter
+// type (declared_fn_param_type, alias-expanded) and the argument type
+// (return_actual_type) are concrete and incompatible. UNKNOWN callee / param / arg →
+// no fire (matches the oracle's skip-bias; qualified & stdlib callees are handled by
+// later slices, not here).
+fn call_arg_type_bad(toks: read List<Tok>, callee: read String, open: read Int, close: read Int, popen: read Int, pclose: read Int, bodyOpen: read Int) -> Bool {
+    let mut depth = 0
+    let mut atArgStart = true
+    let mut bad = false
+    let mut k = open + 1
+    while k < close {
+        if depth == 0 && atArgStart && is_ident_tok(toks: read toks, i: read k) && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_COLON) {
+            let label = tk_text(toks: read toks, i: read k)
+            let pt0 = declared_fn_param_type(toks: read toks, name: read callee, label: read label)
+            if String.len(value: read pt0) > 0 {
+                let pt = expand_type_alias(toks: read toks, ty: read pt0)
+                if str_is_unresolved_generic(s: read pt) == false {
+                    let cm = find_top_sym(toks: read toks, start: read (k + 2), end: read close, code: read SYM_COMMA)
+                    let mut ae = close
+                    if cm >= 0 { ae = cm }
+                    if (k + 2) < ae {
+                        let at = return_actual_type(toks: read toks, s0: read (k + 2), e: read ae, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen)
+                        if String.len(value: read at) > 0 && str_is_unresolved_generic(s: read at) == false {
+                            if arg_type_matches(expected: read pt, actual: read at) == false { bad = true }
+                        }
+                    }
+                }
+            }
+        }
+        atArgStart = false
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) {
+            depth = depth - 1
+        } else if depth == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
+            atArgStart = true
+        }
+        k = k + 1
+    }
+    return bad
+}
+
 fn fn_has_binding_type_mismatch(toks: read List<Tok>, start: read Int, prefix: read String, declared: read Set<String>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
     let bo = function_signature_end(toks: read toks, start: read (ns - 1))
@@ -4885,6 +4958,13 @@ fn fn_has_binding_type_mismatch(toks: read List<Tok>, start: read Int, prefix: r
                         }
                     }
                 }
+            }
+            i = i + 1
+        } else if is_ident_tok(toks: read toks, i: read i) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_LPAREN) && at_symbol(toks: read toks, i: read (i - 1), code: read SYM_DOT) == false && is_kw_text(toks: read toks, i: read (i - 1), word: read "fn") == false {
+            let callee = tk_text(toks: read toks, i: read i)
+            let cclose = find_matching(toks: read toks, open: read (i + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+            if cclose >= 0 {
+                if call_arg_type_bad(toks: read toks, callee: read callee, open: read (i + 1), close: read cclose, popen: read popen, pclose: read pclose, bodyOpen: read bo) { hit = true }
             }
             i = i + 1
         } else {
