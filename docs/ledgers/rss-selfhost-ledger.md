@@ -1885,6 +1885,20 @@ comparison sub-exprs that `return_actual_type` leaves untyped (=> skipped).
 `i < bc .. ce >(` as a generic call `i<bc>` (surfaced as RS0206 via the dogfood compile);
 hoist to `let lo = i + 1; if ce > lo`.
 
+### Milestone 2ao — RS0312 INDEX_ASSIGN_NON_LIST (code #56, BAKED)
+
+`container[i] = v` index assignment is only supported for List values. Message: "index
+assignment is only supported for List values." `has_index_assign_non_list` finds an index
+assignment (`=` not followed by `=`, preceded by `]`), walks back to the matching `[` via
+`matching_lbracket` (a backward bracket-depth scan), and fires when the container ident is a
+KNOWN Map/Set/Deque local. `collect_nonlist_collection_locals` gathers those names from
+`let name: Map<..>` annotations and `let name = Map<..>.new()`-style initializers (root token
+Map/Set/Deque after the `:` or `=`). FP-safe by construction — a List container, or any
+container whose type can't be resolved, is never flagged (a deliberate safe false-negative).
+
+**BAKED as code #56.** Byte-exact 615/615, 0 FP. The fixture (`values["a"] = 1` on a `Map`)
+plus corpus.
+
 ### Milestone 2an — RS0313 ASSIGN_TYPE_MISMATCH (code #55, BAKED)
 
 A reassignment `name = <value>` whose value type doesn't match the local's declared type, e.g.
