@@ -6219,6 +6219,13 @@ fn match_bad(toks: read List<Tok>, braceOpen: read Int, braceClose: read Int, sc
                     // `[..]` only matches a List.
                     if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) && is_scalar_root(ty: read scrutTy) { litBad = true }
                     if at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) && scrutRoot != "List" { litBad = true }
+                    // A scalar scrutinee (Int/String/…) admits only literal patterns and `_`;
+                    // a bare-identifier pattern (`other`) cannot match it (`true`/`false` are
+                    // the Bool literals, not bindings).
+                    if is_scalar_root(ty: read scrutTy) && (i + 1) == patEnd && tk_kind(toks: read toks, i: read i) == TOK_IDENT {
+                        let pn = tk_text(toks: read toks, i: read i)
+                        if pn != "_" && pn != "true" && pn != "false" { litBad = true }
+                    }
                 }
                 let bodyStart = arrow + 1
                 if at_symbol(toks: read toks, i: read bodyStart, code: read SYM_LBRACE) {
