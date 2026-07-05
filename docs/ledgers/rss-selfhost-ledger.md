@@ -1732,3 +1732,57 @@ engine has begun.** RS0208 is the first code driven by reproduced expression-typ
 inference. The `type_token_string` / `arg_type_matches` / `return_actual_type`
 infrastructure built here is the foundation for the sibling RS0206/0207/0209/0210
 bucket (~120 file-fires, the dominant remaining mass).
+
+### Milestone 2ag — RS0207 argument-type-mismatch engine (env-gated, ~25/36 files, 0 FP)
+
+RS0207 ARGUMENT_TYPE_MISMATCH: a call argument whose inferred type is incompatible
+with the callee parameter's declared type (oracle `argument_type_matches` ==
+`arg_type_matches`; `hir_expr_type_name` == `return_actual_type`). Built on the RS0208
+type engine but **per-argument** rather than per-return, which surfaced a real
+performance question (see below). Progress this milestone (all committed to `main`,
+RS0207 kept env-gated behind `RSS_CHECKER_EXTRA_CODES=RS0207` — NOT in
+CHECKER_TARGET_CODES — until byte-exact):
+
+- **Perf foundation (c78ba754):** `return_actual_type` made O(1)-resolution — a fn-decl
+  `Map<String,Int>` index (`collect_fn_decl_index`), a per-fn local-decl index
+  (`build_local_index`: `Map<name, List<letTok>>`, replays `find_let_rhs_start`'s
+  most-recent-before-position rule byte-for-byte), and a type-alias `Map` index,
+  threaded through `return_actual_type`/`return_expr_mismatch`/`payload_mismatch`. The
+  residual O(n²) (`with_binding_expr`/`find_select_binding` scanning per non-local ident)
+  is gated behind a `" ws"` sentinel folded into the locals map (set only when the fn
+  body contains a `with`/`select`). **RS0208 stays byte-exact (615/615, 0 mismatch); the
+  earlier "4-17x perf wall" was a false alarm from a single-threaded probe — the
+  multi-threaded `checker_parity_corpus` gate is 127s vs the 72s RS0208-only baseline
+  (~1.8x).**
+- **Bindings + file-fn args + qualified builtin args:** `let/local x: T = e` annotation
+  mismatch (`return_expr_mismatch`), plus call args resolved via `resolve_param_type`
+  (file fns through the fn index → `param_type_at_fn`/`param_type_string`; builtins
+  through a curated `stdlib_param_type`).
+- **Curated builtin params + no-`?` with-binding (35ce5644):** `stdlib_param_type` for
+  Image.inspect/normalize/resize/save/load + Request.path (exact effect-stripped types
+  from the `.rssi`). Fires the manage-Result cases — a `local = Image.load(...)` types to
+  `Result<fresh Image, ImageError>` and is passed to a bare `Image` param. Also
+  `with EXPR as name` WITHOUT `?` now types `name` as EXPR's whole value type (previously
+  only the `?`-unwrap case) — fires `resource-producer-missing-try`.
+- **Parameterless-closure descent (73e0429e):** the RS0207 arg walker now descends into
+  `|| { ... }` closures (new `closure_paramless` detects adjacent param pipes), resolving
+  captured identifiers against the enclosing fn scope — FP-safe because a parameterless
+  closure introduces no bindings that can shadow. Parameterized closures are still
+  skipped (their params would mis-resolve). Fires the closure-capture cases
+  (managed/retained/fresh-return-managed closure captures, `x_closure_effect2`).
+
+**Verification:** RS0207 fires on ~25/36 oracle files with **0 false-positives across all
+615 fast-subset files** (the `checker_parity_corpus` gate with `RSS_CHECKER_EXTRA_CODES=
+RS0207` unions RS0207 into the compared set, so it IS the corpus-wide FP check). RS0208
+gate unchanged.
+
+**Remaining before RS0207 can bake (22 fast-subset mismatches = 11 files, all
+false-negatives):** the **callback subsystem** (9 files — the big chunk, ~7 distinct
+checks: closure return-type vs `Fn()->Ret` incl nested `Ok(Some(_))` payloads; closure
+arity vs `Fn(args)`; branch/`return`-stmt return typing; closure-PARAM typing for calls
+in the closure body; calling a `Fn`-typed param; `fresh`-ness; ResourcePool factory
+resource/fallible), the `interp` list-literal (list-item-vs-element-type — a different
+mechanism), the `package-manager` fold giant, and `missing-signature-pieces` (empty
+`actual` — an accepted divergence where the checker correctly won't fire). The callback
+subsystem reuses `return_actual_type`/`arg_type_matches` but needs new `Fn`-type-string
+parsing (arity + return extraction) and closure-scope handling — a focused next slice.
