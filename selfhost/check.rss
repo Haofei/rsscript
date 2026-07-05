@@ -4580,12 +4580,16 @@ fn return_actual_type(toks: read List<Tok>, s0: read Int, e: read Int, popen: re
             if Map.contains_key<String, List<Int>>(map: read locals, key: read " ws") {
                 let wb = with_binding_expr(toks: read toks, bodyOpen: read bodyOpen, matchPos: read s0, name: read head)
                 if wb.ok {
-                    // `with EXPR? as name`: name binds the Ok payload of EXPR, fresh-stripped.
                     let te2 = wb.te
                     if te2 > wb.ts && at_symbol(toks: read toks, i: read (te2 - 1), code: read SYM_QUESTION) {
+                        // `with EXPR? as name`: name binds the Ok payload of EXPR, fresh-stripped.
                         let inner = return_actual_type(toks: read toks, s0: read wb.ts, e: read (te2 - 1), popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
                         let payload = str_top_arg(s: read inner, which: read 0)
                         if String.len(value: read payload) > 0 { return str_strip_fresh(s: read payload) }
+                    } else {
+                        // `with EXPR as name` (no `?`): name binds the whole EXPR value type.
+                        let whole = return_actual_type(toks: read toks, s0: read wb.ts, e: read te2, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
+                        if String.len(value: read whole) > 0 { return whole }
                     }
                 }
                 let sb = find_select_binding(toks: read toks, bodyOpen: read bodyOpen, matchPos: read s0, name: read head)
@@ -4955,6 +4959,15 @@ fn stdlib_param_type(ns: read String, method: read String, label: read String) -
     if ns == "String" && method == "concat" && label == "left" { return "String" }
     if ns == "String" && method == "concat" && label == "right" { return "String" }
     if ns == "File" && method == "write" && label == "data" { return "Bytes" }
+    if ns == "Image" && method == "inspect" && label == "image" { return "Image" }
+    if ns == "Image" && method == "normalize" && label == "image" { return "Image" }
+    if ns == "Image" && method == "resize" && label == "image" { return "Image" }
+    if ns == "Image" && method == "resize" && label == "width" { return "Int" }
+    if ns == "Image" && method == "resize" && label == "height" { return "Int" }
+    if ns == "Image" && method == "save" && label == "image" { return "Image" }
+    if ns == "Image" && method == "save" && label == "path" { return "Path" }
+    if ns == "Image" && method == "load" && label == "path" { return "Path" }
+    if ns == "Request" && method == "path" && label == "request" { return "Request" }
     return ""
 }
 
