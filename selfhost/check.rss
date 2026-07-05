@@ -778,6 +778,24 @@ fn has_protocol_violation(toks: read List<Tok>) -> Bool {
     return hit
 }
 
+// RS1004: surface reference syntax (`&T` / `&mut T`) is not part of RSScript — it only ever
+// appears in a TYPE position (borrow-passing uses the `read`/`mut`/`take` effect keywords, not
+// `&`). Message: "surface reference syntax is not part of RSScript." Detect `& mut` (mut is a
+// reserved keyword, so this is never a bitwise-and), `: &` (a type starting with `&`), or
+// `-> &` (a return type starting with `&`). Bitwise-and `a & b` never matches these.
+fn has_surface_reference(toks: read List<Tok>) -> Bool {
+    let ntok = List.len(list: read toks)
+    let mut i = 0
+    let mut hit = false
+    while (i + 1) < ntok {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_AMP) && tk_text(toks: read toks, i: read (i + 1)) == "mut" { hit = true }
+        if at_symbol(toks: read toks, i: read i, code: read SYM_COLON) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_AMP) { hit = true }
+        if at_symbol(toks: read toks, i: read i, code: read SYM_ARROW) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_AMP) { hit = true }
+        i = i + 1
+    }
+    return hit
+}
+
 // End of the field type that starts at `ts`: the next top-level (nesting-depth 0) `name:`
 // field header, or bodyClose. `< ( [` open and `> ) ]` close a nesting level.
 fn field_type_end(toks: read List<Tok>, ts: read Int, bodyClose: read Int) -> Int {
@@ -7928,6 +7946,8 @@ fn main() -> Unit {
     let deriveFieldBad = has_bad_derive_field(toks: read toks)
     // RS0032: a generic method's type arg doesn't satisfy the required protocol (Hashable/Ord).
     let protocolBad = has_protocol_violation(toks: read toks)
+    // RS1004: surface reference syntax (`&T`/`&mut T`) is not part of RSScript.
+    let surfaceRef = has_surface_reference(toks: read toks)
     // RS0037: a positional variant pattern binding != the variant's declared arity.
     let variantArity = has_variant_arity_mismatch(toks: read toks)
     // RS0902: a `weak` field whose type is a known non-class.
@@ -8285,6 +8305,9 @@ fn main() -> Unit {
     if protocolBad {
         Log.write(message: read "RS0032")
     }
+    if surfaceRef {
+        Log.write(message: read "RS1004")
+    }
     if variantArity {
         Log.write(message: read "RS0037")
     }
@@ -8352,7 +8375,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || takeHandle || weakInit || weakRead
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || takeHandle || weakInit || weakRead
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
