@@ -1653,6 +1653,167 @@ fn fn_has_use_after_manage(toks: read List<Tok>, start: read Int) -> Bool {
     return hit
 }
 
+// RS0501 LOCAL_VALUE_RETAINED: passing a `local` value as an argument to a parameter the callee
+// declares `effects(retains(P))`. A local's lifetime is the caller's frame, so it can't be
+// retained beyond the call. (A `let`/managed value passed there is a different error — the take
+// itself is RS0308; a managed value can legitimately be retained.)
+
+// Registry of retained params as composite keys `shortFnName|paramName`, across all fn decls in
+// the file (analyze_source is per-file, so callee decls are in-scope here).
+fn collect_retains(toks: read List<Tok>, out: mut Set<String>) -> Unit {
+    let n = List.len(list: read toks)
+    let mut k = 0
+    while k < n {
+        if is_kw_text(toks: read toks, i: read k, word: read "fn") {
+            let mut p = k + 1
+            let mut scan = true
+            while scan {
+                if p >= n {
+                    scan = false
+                } else if at_symbol(toks: read toks, i: read p, code: read SYM_LPAREN) || is_kw_text(toks: read toks, i: read p, word: read "fn") || at_symbol(toks: read toks, i: read p, code: read SYM_LBRACE) {
+                    scan = false
+                } else {
+                    p = p + 1
+                }
+            }
+            if p < n && at_symbol(toks: read toks, i: read p, code: read SYM_LPAREN) && is_ident_tok(toks: read toks, i: read (p - 1)) {
+                let shortName = tk_text(toks: read toks, i: read (p - 1))
+                let pclose = find_matching(toks: read toks, open: read p, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+                if pclose > 0 {
+                    let mut e = pclose + 1
+                    let mut go = true
+                    while go {
+                        if e >= n {
+                            go = false
+                        } else if at_symbol(toks: read toks, i: read e, code: read SYM_LBRACE) || is_kw_text(toks: read toks, i: read e, word: read "fn") {
+                            go = false
+                        } else if is_ident_tok(toks: read toks, i: read e) && tk_text(toks: read toks, i: read e) == "retains" && at_symbol(toks: read toks, i: read (e + 1), code: read SYM_LPAREN) {
+                            let rclose = find_matching(toks: read toks, open: read (e + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+                            if rclose > 0 {
+                                let mut m = e + 2
+                                while m < rclose {
+                                    if is_ident_tok(toks: read toks, i: read m) {
+                                        let key = String.concat(left: read String.concat(left: read shortName, right: read "|"), right: read tk_text(toks: read toks, i: read m))
+                                        Set.insert<String>(set: mut out, value: read key)
+                                    }
+                                    m = m + 1
+                                }
+                                e = rclose
+                            } else {
+                                e = e + 1
+                            }
+                        } else {
+                            e = e + 1
+                        }
+                    }
+                }
+                k = p
+            } else {
+                k = k + 1
+            }
+        } else {
+            k = k + 1
+        }
+    }
+    return Unit
+}
+
+// Whether the binding of `name` in scope at `from` (nearest preceding `local`/`let` decl,
+// scanning back to bodyOpen) is a `local`. Proximity handles shadowing — a later `let name`
+// supersedes an earlier `local name` in a since-closed sibling block. No decl found → false.
+fn nearest_binding_is_local(toks: read List<Tok>, from: read Int, bodyOpen: read Int, name: read String) -> Bool {
+    let mut m = from - 1
+    let mut result = false
+    let mut found = false
+    while m > bodyOpen && found == false {
+        if is_ident_tok(toks: read toks, i: read m) && tk_text(toks: read toks, i: read m) == name {
+            let mut prev = m - 1
+            if is_kw_text(toks: read toks, i: read prev, word: read "mut") { prev = m - 2 }
+            if is_kw_text(toks: read toks, i: read prev, word: read "local") {
+                result = true
+                found = true
+            } else if is_kw_text(toks: read toks, i: read prev, word: read "let") {
+                result = false
+                found = true
+            }
+        }
+        m = m - 1
+    }
+    return result
+}
+
+// A builtin collection `insert` retains its `key`/`value` (the collection outlives the call).
+// `Cache.insert(cache: mut cache, key: read localKey, …)` on a managed collection retains the
+// key. Matched by receiver type + method + label, since no in-file decl carries the effect.
+fn builtin_retains_label(toks: read List<Tok>, callPos: read Int, label: read String) -> Bool {
+    if tk_text(toks: read toks, i: read (callPos - 1)) != "insert" { return false }
+    if at_symbol(toks: read toks, i: read (callPos - 2), code: read SYM_DOT) == false { return false }
+    if is_ident_tok(toks: read toks, i: read (callPos - 3)) == false { return false }
+    let recv = tk_text(toks: read toks, i: read (callPos - 3))
+    let isColl = recv == "Cache" || recv == "Map" || recv == "Set" || recv == "Deque" || recv == "HashMap"
+    if isColl == false { return false }
+    return label == "key" || label == "value"
+}
+
+fn fn_has_retained_local(toks: read List<Tok>, start: read Int, retains: read Set<String>) -> Bool {
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+    if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
+    let bodyClose = find_matching(toks: read toks, open: read sigEnd, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    if bodyClose < 0 { return false }
+    let mut k = sigEnd + 1
+    let mut hit = false
+    while k < bodyClose {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) && is_ident_tok(toks: read toks, i: read (k - 1)) {
+            let callee = tk_text(toks: read toks, i: read (k - 1))
+            let close = find_matching(toks: read toks, open: read k, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+            if close > 0 {
+                let mut q = k + 1
+                let mut depth = 0
+                let mut atStart = true
+                while q < close {
+                    let opener = at_symbol(toks: read toks, i: read q, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read q, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read q, code: read SYM_LBRACE)
+                    let closer = at_symbol(toks: read toks, i: read q, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read q, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read q, code: read SYM_RBRACE)
+                    if opener {
+                        depth = depth + 1
+                        atStart = false
+                    } else if closer {
+                        if depth > 0 { depth = depth - 1 }
+                        atStart = false
+                    } else if depth == 0 && at_symbol(toks: read toks, i: read q, code: read SYM_COMMA) {
+                        atStart = true
+                    } else if depth == 0 && atStart && is_ident_tok(toks: read toks, i: read q) && at_symbol(toks: read toks, i: read (q + 1), code: read SYM_COLON) {
+                        let label = tk_text(toks: read toks, i: read q)
+                        let key = String.concat(left: read String.concat(left: read callee, right: read "|"), right: read label)
+                        let retained = Set.contains<String>(set: read retains, value: read key) || builtin_retains_label(toks: read toks, callPos: read k, label: read label)
+                        if retained {
+                            // Base of the value: strip effect, unwrap Some(…)/Ok(…), to the base ident.
+                            let mut v = q + 2
+                            if is_effect_kw(toks: read toks, i: read v) { v = v + 1 }
+                            let mut unwrap = true
+                            while unwrap {
+                                if is_ident_tok(toks: read toks, i: read v) && (tk_text(toks: read toks, i: read v) == "Some" || tk_text(toks: read toks, i: read v) == "Ok") && at_symbol(toks: read toks, i: read (v + 1), code: read SYM_LPAREN) {
+                                    v = v + 2
+                                    if is_effect_kw(toks: read toks, i: read v) { v = v + 1 }
+                                } else {
+                                    unwrap = false
+                                }
+                            }
+                            if is_ident_tok(toks: read toks, i: read v) && nearest_binding_is_local(toks: read toks, from: read k, bodyOpen: read sigEnd, name: read tk_text(toks: read toks, i: read v)) { hit = true }
+                        }
+                        atStart = false
+                    } else {
+                        atStart = false
+                    }
+                    q = q + 1
+                }
+            }
+        }
+        k = k + 1
+    }
+    return hit
+}
+
 // RS0205: a call that repeats a named argument, e.g. `f(x: 1, x: 2)` (oracle
 // checks/calls.rs). We detect the syntactic case — the same explicit `name:` label
 // twice in one call's arg list. An arg label is an `IDENT:` that sits at an argument
@@ -8602,6 +8763,9 @@ fn main() -> Unit {
     let mut takeNonLocal = false
     let mut managedToLocal = false
     let mut useAfterManage = false
+    let mut retainedLocal = false
+    let mut retainsReg = Set.new<String>()
+    collect_retains(toks: read toks, out: mut retainsReg)
     let mut handleFieldNames = Set.new<String>()
     collect_handle_field_names(toks: read toks, out: mut handleFieldNames)
     let mut assignTypeMismatch = false
@@ -8784,6 +8948,7 @@ fn main() -> Unit {
                     if fn_manage_take_bad(toks: read toks, start: read i, keyword: read "take") { takeNonLocal = true }
                     if fn_has_managed_to_local(toks: read toks, start: read i, handleFields: read handleFieldNames) { managedToLocal = true }
                     if fn_has_use_after_manage(toks: read toks, start: read i) { useAfterManage = true }
+                    if fn_has_retained_local(toks: read toks, start: read i, retains: read retainsReg) { retainedLocal = true }
                     if fn_has_assign_type_mismatch(toks: read toks, start: read i) { assignTypeMismatch = true }
                     if fn_has_dup_arg(toks: read toks, start: read i) { dupArg = true }
                     if fn_has_fd_surface(toks: read toks, start: read i) { fdSurface = true }
@@ -8969,6 +9134,9 @@ fn main() -> Unit {
     if useAfterManage {
         Log.write(message: read "RS0401")
     }
+    if retainedLocal {
+        Log.write(message: read "RS0501")
+    }
     if resourceField {
         Log.write(message: read "RS0701")
     }
@@ -9012,7 +9180,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || useAfterManage || takeHandle || weakInit || weakRead
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || useAfterManage || retainedLocal || takeHandle || weakInit || weakRead
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
