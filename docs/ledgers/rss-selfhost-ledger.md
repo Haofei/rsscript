@@ -1899,6 +1899,31 @@ container whose type can't be resolved, is never flagged (a deliberate safe fals
 **BAKED as code #56.** Byte-exact 615/615, 0 FP. The fixture (`values["a"] = 1` on a `Map`)
 plus corpus.
 
+### Milestone 2as — RS0501 LOCAL_VALUE_RETAINED (code #61, BAKED)
+
+Fifth borrow-tier code and the first **cross-function** one — needs the callee's signature.
+Passing a `local` value to a parameter the callee declares `effects(retains(P))` fires (a local's
+lifetime is the caller frame; it can't outlive the call). `collect_retains` builds a file-wide
+registry of `shortFnName|paramName` composite keys (analyze_source is per-file, so callee decls
+are in scope). At each call, args are matched by label against the registry; the value's base is
+found by stripping the effect and unwrapping `Some(…)`/`Ok(…)`, then a `local` base fires.
+
+Four subtleties from the pass/fail boundary (v1 → v2, 8 mismatch → 0):
+- **Field retains** (`retaining-local-field`): `read holder.image` retains the base `local holder`
+  — do NOT exclude a trailing `.field`; the base ident is what matters.
+- **Wrappers** (`retaining-local-wrapper`): `read Some(holder.image)` / `read Ok(…)` retain — unwrap.
+- **Shadowing** (`retaining-managed-shadowed-local`, PASS): a `local image` in a since-closed
+  `if`-block plus a later `let image` — the call uses the managed `let`. Resolved with
+  `nearest_binding_is_local` (nearest preceding `local`/`let` decl by proximity), replacing the
+  whole-body local set which ignored scope/shadowing and false-fired.
+- **Builtin retains** (`builtin-retains-local-key`): `Cache.insert(key: read localKey)` — a builtin
+  collection `insert` (Cache/Map/Set/Deque/HashMap) retains key/value with no in-file decl;
+  `builtin_retains_label` handles it by receiver-type + method + label.
+
+A managed (`let`) value passed to a retains param is a DIFFERENT error (the take is RS0308), not
+RS0501 — confirmed via oracle. **BAKED as code #61**, all ~10 RS0501 fixtures plus corpus, bake
+gate green.
+
 ### Milestone 2ar — RS0401 USE_AFTER_MANAGE (code #60, BAKED)
 
 Fourth borrow-tier code and the first **control-flow-sensitive** one. A `manage x` / `take x`
