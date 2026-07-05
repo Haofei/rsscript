@@ -1885,6 +1885,21 @@ comparison sub-exprs that `return_actual_type` leaves untyped (=> skipped).
 `i < bc .. ce >(` as a generic call `i<bc>` (surfaced as RS0206 via the dogfood compile);
 hoist to `let lo = i + 1; if ce > lo`.
 
+### Milestone 2am — RS0708 RESOURCEPOOL_MAX_SIZE (code #54, BAKED)
+
+An eager `ResourcePool<T>.new(...)` allocates up front, so its `max_size` must be statically
+known — a positive integer literal or a `const`. (A `.lazy(...)` pool sizes on demand and is
+exempt.) Message: "`ResourcePool.new` requires a positive literal `max_size`."
+`has_resourcepool_maxsize_bad` matches the token run `ResourcePool <..> . new (`, locates the
+`max_size:` argument, and tests its value via `maxsize_value_bad`: accepted only when it is a
+single positive integer literal (`8`) or a single `const` identifier (`POOL_SIZE`, gathered by
+`collect_const_names`); `0`, a negative literal, a runtime binding (`size`), or any multi-token
+expression fires. Only `.new` is matched — `.lazy` and the non-generic `ResourcePool.borrow`/
+`.stats` calls are skipped.
+
+**BAKED as code #54.** Byte-exact 615/615, 0 FP. Both fixtures (`max_size: 0`; `max_size: size`
+runtime param) plus the passing `max_size: 8` / `max_size: POOL_SIZE` corpus cases.
+
 ### Milestone 2al — RS1004 SURFACE_REFERENCE_SYNTAX (code #53, BAKED)
 
 `&T`/`&mut T` surface reference syntax is not part of RSScript — borrow-passing uses the
