@@ -5236,7 +5236,7 @@ fn is_untyped_param(toks: read List<Tok>, popen: read Int, pclose: read Int, nam
 // index). Fires when both the parameter type (alias-expanded) and the argument type
 // (return_actual_type, now index-backed) are concrete and incompatible. UNKNOWN callee /
 // param / arg => no fire (matches the oracle's skip-bias).
-fn call_arg_type_bad(toks: read List<Tok>, ns: read String, callee: read String, open: read Int, close: read Int, popen: read Int, pclose: read Int, bodyOpen: read Int, fnIdx: read Map<String, Int>, locals: read Map<String, List<Int>>, aliasIdx: read Map<String, String>) -> Bool {
+fn call_arg_type_bad(toks: read List<Tok>, ns: read String, callee: read String, open: read Int, close: read Int, popen: read Int, pclose: read Int, bodyOpen: read Int, fnIdx: read Map<String, Int>, locals: read Map<String, List<Int>>, aliasIdx: read Map<String, String>, recvGeneric: read String) -> Bool {
     let mut depth = 0
     let mut atArgStart = true
     let mut bad = false
@@ -5244,7 +5244,13 @@ fn call_arg_type_bad(toks: read List<Tok>, ns: read String, callee: read String,
     while k < close {
         if depth == 0 && atArgStart && is_ident_tok(toks: read toks, i: read k) && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_COLON) {
             let label = tk_text(toks: read toks, i: read k)
-            let pt0 = resolve_param_type(toks: read toks, ns: read ns, name: read callee, label: read label, fnIdx: read fnIdx)
+            let mut pt0 = resolve_param_type(toks: read toks, ns: read ns, name: read callee, label: read label, fnIdx: read fnIdx)
+            if String.len(value: read pt0) == 0 && ns == "ResourcePool" && callee == "new" && label == "create" && String.len(value: read recvGeneric) > 0 {
+                // ResourcePool<T>.new's factory param is `create: Fn() -> T` (T = the pool's
+                // resource type from the receiver generic). Curated like stdlib_param_type,
+                // but generic-substituted from the call site.
+                pt0 = String.concat(left: read "Fn() -> ", right: read recvGeneric)
+            }
             if String.len(value: read pt0) > 0 {
                 let pt = expand_type_alias(aliasIdx: read aliasIdx, ty: read pt0)
                 if str_is_unresolved_generic(s: read pt) == false {
@@ -5340,14 +5346,50 @@ fn fn_has_binding_type_mismatch(toks: read List<Tok>, start: read Int, prefix: r
             let method = tk_text(toks: read toks, i: read i)
             let cclose = find_matching(toks: read toks, open: read (i + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
             if cclose >= 0 {
-                if call_arg_type_bad(toks: read toks, ns: read callNs, callee: read method, open: read (i + 1), close: read cclose, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals, aliasIdx: read aliasIdx) { hit = true }
+                if call_arg_type_bad(toks: read toks, ns: read callNs, callee: read method, open: read (i + 1), close: read cclose, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals, aliasIdx: read aliasIdx, recvGeneric: read "") { hit = true }
+            }
+            i = i + 1
+        } else if is_ident_tok(toks: read toks, i: read i) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_LPAREN) && at_symbol(toks: read toks, i: read (i - 1), code: read SYM_DOT) && at_symbol(toks: read toks, i: read (i - 2), code: read SYM_RANGLE) {
+            // Generic-receiver qualified call: `Ns<Args>.method(`. Walk back over the
+            // matching `<..>` to the receiver ident; pass the generic args to the arg
+            // checker (used to substitute the ResourcePool<T>.new factory type).
+            let method = tk_text(toks: read toks, i: read i)
+            let mut a = i - 2
+            let mut ad = 0
+            let mut ga = 0 - 1
+            let mut sc = true
+            while sc {
+                if a < 0 {
+                    sc = false
+                } else if at_symbol(toks: read toks, i: read a, code: read SYM_RANGLE) {
+                    ad = ad + 1
+                    a = a - 1
+                } else if at_symbol(toks: read toks, i: read a, code: read SYM_LANGLE) {
+                    ad = ad - 1
+                    if ad == 0 {
+                        ga = a
+                        sc = false
+                    } else {
+                        a = a - 1
+                    }
+                } else {
+                    a = a - 1
+                }
+            }
+            if ga > 0 && is_ident_tok(toks: read toks, i: read (ga - 1)) {
+                let callNs = tk_text(toks: read toks, i: read (ga - 1))
+                let gen = type_token_string(toks: read toks, ts: read (ga + 1), te: read (i - 2))
+                let cclose = find_matching(toks: read toks, open: read (i + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+                if cclose >= 0 {
+                    if call_arg_type_bad(toks: read toks, ns: read callNs, callee: read method, open: read (i + 1), close: read cclose, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals, aliasIdx: read aliasIdx, recvGeneric: read gen) { hit = true }
+                }
             }
             i = i + 1
         } else if is_ident_tok(toks: read toks, i: read i) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_LPAREN) && at_symbol(toks: read toks, i: read (i - 1), code: read SYM_DOT) == false && is_kw_text(toks: read toks, i: read (i - 1), word: read "fn") == false {
             let callee = tk_text(toks: read toks, i: read i)
             let cclose = find_matching(toks: read toks, open: read (i + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
             if cclose >= 0 {
-                if call_arg_type_bad(toks: read toks, ns: read "", callee: read callee, open: read (i + 1), close: read cclose, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals, aliasIdx: read aliasIdx) { hit = true }
+                if call_arg_type_bad(toks: read toks, ns: read "", callee: read callee, open: read (i + 1), close: read cclose, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals, aliasIdx: read aliasIdx, recvGeneric: read "") { hit = true }
             }
             i = i + 1
         } else {
