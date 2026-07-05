@@ -5652,17 +5652,40 @@ fn find_binop(toks: read List<Tok>, start: read Int, end: read Int) -> Int {
 // left and right operands of concrete, incompatible root types (`1 == "1"` => Int vs
 // String). FP-safe: fires only when both operands type to concrete, non-generic, DIFFERENT
 // roots — an un-typeable operand (nested expr, unknown ident) yields "" and is skipped.
-fn operator_type_bad(toks: read List<Tok>, start: read Int, end: read Int, popen: read Int, pclose: read Int, bodyOpen: read Int, fnIdx: read Map<String, Int>, locals: read Map<String, List<Int>>) -> Bool {
+// Type an operator operand [s, e). A single (effect-stripped) identifier that is a closure
+// parameter (present in cptypes) resolves to its Fn-derived type; everything else goes
+// through return_actual_type. cptypes is empty for ordinary (non-closure) contexts.
+fn operand_type_cp(toks: read List<Tok>, s: read Int, e: read Int, cptypes: read Map<String, String>, popen: read Int, pclose: read Int, bodyOpen: read Int, fnIdx: read Map<String, Int>, locals: read Map<String, List<Int>>) -> String {
+    let mut vs = s
+    if is_effect_kw(toks: read toks, i: read vs) { vs = vs + 1 }
+    if (vs + 1) == e && is_ident_tok(toks: read toks, i: read vs) {
+        let ct = Map.get_or_default<String, String>(map: read cptypes, key: read tk_text(toks: read toks, i: read vs), default: read "")
+        if String.len(value: read ct) > 0 { return ct }
+    }
+    return return_actual_type(toks: read toks, s0: read s, e: read e, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
+}
+
+fn operator_type_bad(toks: read List<Tok>, start: read Int, end: read Int, cptypes: read Map<String, String>, popen: read Int, pclose: read Int, bodyOpen: read Int, fnIdx: read Map<String, Int>, locals: read Map<String, List<Int>>) -> Bool {
     if start >= end { return false }
     let op = find_binop(toks: read toks, start: read start, end: read end)
     if op < 0 { return false }
-    if op_matches_tier(toks: read toks, i: read op, end: read end, tier: read 6) == false { return false }
+    let isCmp = op_matches_tier(toks: read toks, i: read op, end: read end, tier: read 6)
+    let isLogical = op_matches_tier(toks: read toks, i: read op, end: read end, tier: read 1) || op_matches_tier(toks: read toks, i: read op, end: read end, tier: read 2)
+    if isCmp == false && isLogical == false { return false }
     let width = binop_width_at(toks: read toks, i: read op, end: read end)
     if op <= start { return false }
     if (op + width) >= end { return false }
-    let lt = return_actual_type(toks: read toks, s0: read start, e: read op, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
+    let lo2 = op + width
+    let lt = operand_type_cp(toks: read toks, s: read start, e: read op, cptypes: read cptypes, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
+    let rt = operand_type_cp(toks: read toks, s: read lo2, e: read end, cptypes: read cptypes, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
+    if isLogical {
+        // `&&` / `||`: each concrete operand must be Bool.
+        if String.len(value: read lt) > 0 && str_is_unresolved_generic(s: read lt) == false && str_strip_fresh(s: read lt) != "Bool" { return true }
+        if String.len(value: read rt) > 0 && str_is_unresolved_generic(s: read rt) == false && str_strip_fresh(s: read rt) != "Bool" { return true }
+        return false
+    }
+    // comparison: both operands must share a concrete root type.
     if String.len(value: read lt) == 0 || str_is_unresolved_generic(s: read lt) { return false }
-    let rt = return_actual_type(toks: read toks, s0: read (op + width), e: read end, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
     if String.len(value: read rt) == 0 || str_is_unresolved_generic(s: read rt) { return false }
     if str_strip_fresh(s: read lt) == str_strip_fresh(s: read rt) { return false }
     return true
@@ -5969,17 +5992,43 @@ fn fn_has_operator_type_mismatch(toks: read List<Tok>, start: read Int, fnIdx: r
             pclose = pc
         }
     }
+    let noCp = Map<String, String>.new()
     let mut i = bo + 1
     let mut hit = false
     while i < bc {
-        if is_kw_text(toks: read toks, i: read i, word: read "if") || is_kw_text(toks: read toks, i: read i, word: read "while") {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) && is_closure_brace(toks: read toks, b: read i) && closure_paramless(toks: read toks, b: read i) == false {
+            // Skip a parameterized closure body — its params aren't in this fn's scope
+            // (the callback operator case is handled in callback_arg_bad instead).
+            let cc = find_matching(toks: read toks, open: read i, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+            if cc < 0 { i = bc } else { i = cc + 1 }
+        } else if is_kw_text(toks: read toks, i: read i, word: read "if") || is_kw_text(toks: read toks, i: read i, word: read "while") {
             let lo = i + 1
             let ce = cond_expr_end(toks: read toks, start: read lo, limit: read bc)
             if ce > lo {
-                if operator_type_bad(toks: read toks, start: read lo, end: read ce, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals) { hit = true }
+                if operator_type_bad(toks: read toks, start: read lo, end: read ce, cptypes: read noCp, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals) { hit = true }
             }
+            i = i + 1
+        } else if is_kw_text(toks: read toks, i: read i, word: read "let") || is_kw_text(toks: read toks, i: read i, word: read "local") {
+            let se = next_line_or_block_end(toks: read toks, start: read i, end: read bc)
+            let eq = find_top_sym(toks: read toks, start: read (i + 1), end: read se, code: read SYM_EQ)
+            if eq >= 0 {
+                let vs = eq + 1
+                let ee = stmt_expr_end(toks: read toks, start: read vs, end: read bc)
+                if ee > vs {
+                    if operator_type_bad(toks: read toks, start: read vs, end: read ee, cptypes: read noCp, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals) { hit = true }
+                }
+            }
+            i = i + 1
+        } else if is_kw_text(toks: read toks, i: read i, word: read "return") {
+            let vs = i + 1
+            let ee = stmt_expr_end(toks: read toks, start: read vs, end: read bc)
+            if ee > vs {
+                if operator_type_bad(toks: read toks, start: read vs, end: read ee, cptypes: read noCp, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals) { hit = true }
+            }
+            i = i + 1
+        } else {
+            i = i + 1
         }
-        i = i + 1
     }
     return hit
 }
