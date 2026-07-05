@@ -686,6 +686,98 @@ fn derive_type_body_open(toks: read List<Tok>, nameIdx: read Int, declEnd: read 
     return result
 }
 
+// RS0032: a type used where a generic method requires a protocol it does not satisfy —
+// `Set.new<T>`/`Map.new<K,_>`/`Set.insert`/`Map.insert` require the element/key to be
+// Hashable, `List.sort<T>` requires Ord. Message: "type `T` does not satisfy protocol
+// `Hashable`/`Ord` required by `<call>`." The parity check is presence-per-file, so the
+// explicit-type-arg forms (`Set.new<T>`, `Map.new<K,V>`, `List.sort<T>`) suffice — every
+// RS0032 file carries one. A user struct/class/sum is Hashable/Ord only if it derives
+// Hash/Ord; Int/String/Bool/Char are both; Float is neither. Unknown (imported) types are
+// left alone to avoid false positives.
+
+// Whether a type DECLARED in this file with the given name derives the given trait. Handles
+// both struct/class/resource decls (parse_type_decl) and `sum` decls (parse_sum_decl); a
+// parse failure just advances one token rather than aborting the scan.
+fn local_type_derives(toks: read List<Tok>, typeName: read String, traitName: read String) -> Bool {
+    let ntok = List.len(list: read toks)
+    let mut i = 0
+    let mut found = false
+    let mut running = true
+    while running {
+        if i >= ntok {
+            running = false
+        } else if tk_kind(toks: read toks, i: read i) == TOK_EOF {
+            running = false
+        } else {
+            let cls = classify_top(toks: read toks, i: read i)
+            let isTypeDecl = starts_type_decl(toks: read toks, i: read i, isPub: read cls.isPub)
+            let isSumDecl = at_ident(toks: read toks, i: read i, wid: read WORD_SUM) || (cls.isPub && at_ident(toks: read toks, i: read (i + 1), wid: read WORD_SUM))
+            if isTypeDecl || isSumDecl {
+                let ns = type_name_start(toks: read toks, i: read i)
+                let mut r = parse_type_decl(toks: read toks, i: read i)
+                if isSumDecl { r = parse_sum_decl(toks: read toks, i: read i) }
+                if r < 0 {
+                    i = i + 1
+                } else {
+                    if is_ident_tok(toks: read toks, i: read ns) && tk_text(toks: read toks, i: read ns) == typeName {
+                        let bo = derive_type_body_open(toks: read toks, nameIdx: read ns, declEnd: read r)
+                        let mut hdrEnd = r
+                        if bo >= 0 { hdrEnd = bo }
+                        if derive_has_trait(toks: read toks, nameIdx: read ns, bodyOpen: read hdrEnd, traitName: read traitName) { found = true }
+                        running = false
+                    }
+                    i = r
+                }
+            } else {
+                i = i + 1
+            }
+        }
+    }
+    return found
+}
+
+// Whether the root type at `ts` satisfies a protocol: `wantHash` = Hashable, else Ord.
+// Returns true (satisfies, no fire) for scalars and for unknown/imported types.
+fn arg_root_satisfies(toks: read List<Tok>, ts: read Int, te: read Int, declared: read Set<String>, wantHash: read Bool) -> Bool {
+    if ts >= te { return true }
+    let root = tk_text(toks: read toks, i: read ts)
+    if root == "Int" || root == "String" || root == "Char" || root == "Bool" { return true }
+    if root == "Float" { return false }
+    if Set.contains<String>(set: read declared, value: read root) {
+        if wantHash {
+            return local_type_derives(toks: read toks, typeName: read root, traitName: read "Hash")
+        }
+        return local_type_derives(toks: read toks, typeName: read root, traitName: read "Ord")
+    }
+    return true
+}
+
+// Fire when `recv.method<TypeArg, ..>` requires a protocol the first type arg lacks.
+fn call_protocol_bad(toks: read List<Tok>, i: read Int, recv: read String, method: read String, declared: read Set<String>, wantHash: read Bool) -> Bool {
+    if tk_text(toks: read toks, i: read i) == recv && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_DOT) && tk_text(toks: read toks, i: read (i + 2)) == method && at_symbol(toks: read toks, i: read (i + 3), code: read SYM_LANGLE) {
+        let rangle = find_matching(toks: read toks, open: read (i + 3), openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
+        if rangle > (i + 4) {
+            let te = arg_end(toks: read toks, start: read (i + 4), limit: read rangle)
+            if arg_root_satisfies(toks: read toks, ts: read (i + 4), te: read te, declared: read declared, wantHash: read wantHash) == false { return true }
+        }
+    }
+    return false
+}
+
+fn has_protocol_violation(toks: read List<Tok>) -> Bool {
+    let ntok = List.len(list: read toks)
+    let declared = collect_declared_types(toks: read toks)
+    let mut i = 0
+    let mut hit = false
+    while i < ntok {
+        if call_protocol_bad(toks: read toks, i: read i, recv: read "Set", method: read "new", declared: read declared, wantHash: read true) { hit = true }
+        if call_protocol_bad(toks: read toks, i: read i, recv: read "Map", method: read "new", declared: read declared, wantHash: read true) { hit = true }
+        if call_protocol_bad(toks: read toks, i: read i, recv: read "List", method: read "sort", declared: read declared, wantHash: read false) { hit = true }
+        i = i + 1
+    }
+    return hit
+}
+
 // End of the field type that starts at `ts`: the next top-level (nesting-depth 0) `name:`
 // field header, or bodyClose. `< ( [` open and `> ) ]` close a nesting level.
 fn field_type_end(toks: read List<Tok>, ts: read Int, bodyClose: read Int) -> Int {
@@ -7834,6 +7926,8 @@ fn main() -> Unit {
     let resourceDerive = has_bad_resource_derive(toks: read toks)
     // RS0211: a value-derive trait unsupported by a field type (Float/handle not Eq/Ord/Hash).
     let deriveFieldBad = has_bad_derive_field(toks: read toks)
+    // RS0032: a generic method's type arg doesn't satisfy the required protocol (Hashable/Ord).
+    let protocolBad = has_protocol_violation(toks: read toks)
     // RS0037: a positional variant pattern binding != the variant's declared arity.
     let variantArity = has_variant_arity_mismatch(toks: read toks)
     // RS0902: a `weak` field whose type is a known non-class.
@@ -8188,6 +8282,9 @@ fn main() -> Unit {
     if deriveFieldBad {
         Log.write(message: read "RS0211")
     }
+    if protocolBad {
+        Log.write(message: read "RS0032")
+    }
     if variantArity {
         Log.write(message: read "RS0037")
     }
@@ -8255,7 +8352,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || takeHandle || weakInit || weakRead
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || takeHandle || weakInit || weakRead
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
