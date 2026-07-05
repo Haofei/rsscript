@@ -796,6 +796,69 @@ fn has_surface_reference(toks: read List<Tok>) -> Bool {
     return hit
 }
 
+// RS0708: an eager `ResourcePool<T>.new(...)` allocates up front, so its `max_size` must be a
+// positive literal or a `const` (a `.lazy(...)` pool sizes on demand and is exempt). Message:
+// "`ResourcePool.new` requires a positive literal `max_size`." Fire when the `max_size` value
+// is `0`/negative, a runtime binding (not a `const`), or any non-literal expression.
+
+// Names declared with `const` (or `pub const`) in the file.
+fn collect_const_names(toks: read List<Tok>) -> Set<String> {
+    let mut names = Set.new<String>()
+    let ntok = List.len(list: read toks)
+    let mut i = 0
+    while i < ntok {
+        if at_ident(toks: read toks, i: read i, wid: read WORD_CONST) && is_ident_tok(toks: read toks, i: read (i + 1)) {
+            let nm = tk_text(toks: read toks, i: read (i + 1))
+            Set.insert<String>(set: mut names, value: read nm)
+        }
+        i = i + 1
+    }
+    return names
+}
+
+// Whether the `max_size` value in [vs, ve) is not an accepted eager size: OK only when it is a
+// single positive integer literal or a single `const` identifier.
+fn maxsize_value_bad(toks: read List<Tok>, vs: read Int, ve: read Int, consts: read Set<String>) -> Bool {
+    if (ve - vs) == 1 {
+        if tk_kind(toks: read toks, i: read vs) == TOK_NUMBER {
+            return tk_text(toks: read toks, i: read vs) == "0"
+        }
+        if is_ident_tok(toks: read toks, i: read vs) {
+            return Set.contains<String>(set: read consts, value: read tk_text(toks: read toks, i: read vs)) == false
+        }
+        return true
+    }
+    return true
+}
+
+fn has_resourcepool_maxsize_bad(toks: read List<Tok>) -> Bool {
+    let ntok = List.len(list: read toks)
+    let consts = collect_const_names(toks: read toks)
+    let mut i = 0
+    let mut hit = false
+    while i < ntok {
+        if tk_text(toks: read toks, i: read i) == "ResourcePool" && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_LANGLE) {
+            let rangle = find_matching(toks: read toks, open: read (i + 1), openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
+            if rangle >= 0 && at_symbol(toks: read toks, i: read (rangle + 1), code: read SYM_DOT) && tk_text(toks: read toks, i: read (rangle + 2)) == "new" && at_symbol(toks: read toks, i: read (rangle + 3), code: read SYM_LPAREN) {
+                let callClose = find_matching(toks: read toks, open: read (rangle + 3), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+                if callClose >= 0 {
+                    let mut k = rangle + 4
+                    while k < callClose {
+                        if tk_text(toks: read toks, i: read k) == "max_size" && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_COLON) {
+                            let vs = k + 2
+                            let ve = arg_end(toks: read toks, start: read vs, limit: read callClose)
+                            if maxsize_value_bad(toks: read toks, vs: read vs, ve: read ve, consts: read consts) { hit = true }
+                        }
+                        k = k + 1
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return hit
+}
+
 // End of the field type that starts at `ts`: the next top-level (nesting-depth 0) `name:`
 // field header, or bodyClose. `< ( [` open and `> ) ]` close a nesting level.
 fn field_type_end(toks: read List<Tok>, ts: read Int, bodyClose: read Int) -> Int {
@@ -7948,6 +8011,8 @@ fn main() -> Unit {
     let protocolBad = has_protocol_violation(toks: read toks)
     // RS1004: surface reference syntax (`&T`/`&mut T`) is not part of RSScript.
     let surfaceRef = has_surface_reference(toks: read toks)
+    // RS0708: eager ResourcePool<T>.new needs a positive-literal / const max_size.
+    let poolMaxSize = has_resourcepool_maxsize_bad(toks: read toks)
     // RS0037: a positional variant pattern binding != the variant's declared arity.
     let variantArity = has_variant_arity_mismatch(toks: read toks)
     // RS0902: a `weak` field whose type is a known non-class.
@@ -8308,6 +8373,9 @@ fn main() -> Unit {
     if surfaceRef {
         Log.write(message: read "RS1004")
     }
+    if poolMaxSize {
+        Log.write(message: read "RS0708")
+    }
     if variantArity {
         Log.write(message: read "RS0037")
     }
@@ -8375,7 +8443,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || takeHandle || weakInit || weakRead
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || takeHandle || weakInit || weakRead
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
