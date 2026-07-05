@@ -1885,7 +1885,7 @@ comparison sub-exprs that `return_actual_type` leaves untyped (=> skipped).
 `i < bc .. ce >(` as a generic call `i<bc>` (surfaced as RS0206 via the dogfood compile);
 hoist to `let lo = i + 1; if ce > lo`.
 
-### Milestone 2ai — RS0209 CONTROL_FLOW_TYPE_MISMATCH (slice 1, env-gated, NOT baked)
+### Milestone 2ai — RS0209 CONTROL_FLOW_TYPE_MISMATCH (code #50, BAKED 7bffb738)
 
 Control-flow type tier. Slice 1 = non-Bool `if`/`while` condition: `cond_non_bool` types the
 whole condition and fires when it is a concrete non-Bool value (`if "yes"` → String). A
