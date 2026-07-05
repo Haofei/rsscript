@@ -1812,8 +1812,26 @@ Two further slices landed:
   "#4 causes a 13-min slowdown" was a contention artifact — a clean single-job gate is
   ~133s.)
 
-**Verification:** RS0207 fires on 33/36 oracle files with **0 false-positives across all
-615 fast-subset files**. RS0208 gate unchanged (0 mismatch, ~133s).
+- **Closure-param typing (b41a0b20):** a parameterized closure passed to a `Fn` param has
+  its params typed positionally from the Fn arg types (`closure_param_types`), and any call
+  in the closure body passing a bare closure param whose type mismatches the callee param
+  fires (`closure_body_arg_bad`) — `|value| String.len(value: read value)` with `Fn(Int)->..`.
+- **Non-fresh captured return (649dbc77):** a closure passed to a `Fn() -> fresh T` param
+  that returns a bare CAPTURED identifier (not a closure param, not a fresh-producing call)
+  fires — a captured value is borrowed, not fresh (`is_bare_captured`).
+- **Non-String interpolation (ec90c25f):** `$"..{expr}.."` desugars to `String.format` over
+  a `List<String>`, so each `{expr}` must be String; embedded exprs are parsed from the
+  `TOK_INTERP` token (`interp_end` ported from astdump) and typed (bare idents resolved by
+  name against the enclosing scope) — a concrete non-String fires (`{count}` a `read Int`).
+
+**Verification:** RS0207 now fires on **all 36/36 oracle files, 615/615 fast-subset
+byte-exact, 0 false-positives, RS0208 preserved, ~125s (gate GREEN).** Before baking into
+CHECKER_TARGET_CODES (code #48), the 4 giants skipped by the FAST gate (check.rss 390KB,
+astdump 180KB, package-manager 65KB, scan 42KB) are being verified RS0207-FP-clean via the
+FULL gate — they are valid code (oracle RS0207 = ∅), so only a checker false-positive could
+block. After that: add "RS0207" to CHECKER_TARGET_CODES.
+
+**Superseded earlier note:** RS0207 fired on 33/36 oracle files with 0 false-positives.
 
 **Remaining before RS0207 can bake (6 fast-subset mismatches = 3 files, all
 false-negatives — each a distinct invasive/FP-risky mechanism):**
