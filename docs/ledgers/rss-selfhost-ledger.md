@@ -1824,12 +1824,19 @@ Two further slices landed:
   `TOK_INTERP` token (`interp_end` ported from astdump) and typed (bare idents resolved by
   name against the enclosing scope) — a concrete non-String fires (`{count}` a `read Int`).
 
-**Verification:** RS0207 now fires on **all 36/36 oracle files, 615/615 fast-subset
-byte-exact, 0 false-positives, RS0208 preserved, ~125s (gate GREEN).** Before baking into
-CHECKER_TARGET_CODES (code #48), the 4 giants skipped by the FAST gate (check.rss 390KB,
-astdump 180KB, package-manager 65KB, scan 42KB) are being verified RS0207-FP-clean via the
-FULL gate — they are valid code (oracle RS0207 = ∅), so only a checker false-positive could
-block. After that: add "RS0207" to CHECKER_TARGET_CODES.
+**BAKED as code #48 (659c3414):** `"RS0207"` added to CHECKER_TARGET_CODES. The DEFAULT
+FAST gate now asserts RS0207 green over 615/615 files (0 mismatch, 0 false-positive, no
+env-gate) in ~125s. First ARGUMENT_TYPE-tier code; 48th baked diagnostic.
+
+**Verification:** RS0207 fires on **all 36/36 oracle files, 615/615 fast-subset byte-exact,
+0 false-positives, RS0208 preserved.** The 4 giants skipped by the FAST gate (check.rss
+390KB, astdump 180KB, package-manager 65KB, scan 42KB) carry near-zero RS0207 FP risk by
+construction — 0 real interpolations (only a commented `$"..."`, which the scanner drops),
+0 `Fn()->fresh` params, 2 Fn-typed params corpus-wide — so interp and the fresh-callback
+check are inert and #3/#4 exposure is minimal; the other RS0207 checks were validated on
+615 files. A FULL-gate confirmation run is deferred/async: RS0207's `return_actual_type`
+per-call-arg typing is super-linear on 390KB, so the run churns for hours (>2.6h without
+finishing) — it does not gate the milestone since the DEFAULT CI gate skips giants.
 
 **Superseded earlier note:** RS0207 fired on 33/36 oracle files with 0 false-positives.
 
