@@ -6215,6 +6215,10 @@ fn match_bad(toks: read List<Tok>, braceOpen: read Int, braceClose: read Int, sc
                         if k0 == TOK_STRING && scrutRoot != "String" { litBad = true }
                         if k0 == TOK_CHAR && scrutRoot != "Char" { litBad = true }
                     }
+                    // A tuple pattern `(..)` can't match a scalar scrutinee; a list pattern
+                    // `[..]` only matches a List.
+                    if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) && is_scalar_root(ty: read scrutTy) { litBad = true }
+                    if at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) && scrutRoot != "List" { litBad = true }
                 }
                 let bodyStart = arrow + 1
                 if at_symbol(toks: read toks, i: read bodyStart, code: read SYM_LBRACE) {
