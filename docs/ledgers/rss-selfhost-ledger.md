@@ -1899,6 +1899,40 @@ container whose type can't be resolved, is never flagged (a deliberate safe fals
 **BAKED as code #56.** Byte-exact 615/615, 0 FP. The fixture (`values["a"] = 1` on a `Map`)
 plus corpus.
 
+### Milestone 2ap — RS0307/RS0308 MANAGE/TAKE_REQUIRE_LOCAL (codes #57/#58, BAKED)
+
+**The first two codes of the borrow/ownership tier — and a correction.** Earlier this session
+RS0307/0308 were assessed as needing a "multi-session closure-capture subsystem." That was
+wrong: the rule is a token-scan with six exclusion layers, reverse-engineered directly from the
+corpus (30 FP → 15 → 5 → 1 FN → 0 over four gates). `manage <x>` (RS0307) / `take <x>` (RS0308)
+in a function body FIRES unless `x` is excluded by any of:
+
+1. **Plain field access** `x.f` (dot, no `(` after the field) — owned, RS0901's domain. A
+   **method-call result** `x.m(…)` (dot + `(`) is a managed temp and DOES fire — `manage
+   pool.acquire()` in prefix_exprs.rss. This split was the final false-negative.
+2. **Type** (uppercase head) — a nested closure's `take T` param effect, never a value.
+3. **`take`-effect parameter** (`collect_take_params`) — already owned, re-takeable
+   (`Pair(left: take left)` where `left: take T`). *Crux bug fixed here:* `find_top_sym` cannot
+   match an opening `(` (it counts the bracket as depth before the equality check and returns
+   −1) — so the param `(` is now found by a direct first-`(` scan. This same latent bug is why
+   `collect_param_names` silently returned empty in the earlier attempt.
+4. **`with … as x` resource lease** (`collect_with_bindings`) — **asymmetric**: excluded for
+   `take` (RS0013 owns the take-escape) but NOT for `manage` (`manage file` on a with-lease
+   fires RS0307 alongside RS0013 — resource-manage-escape.rss).
+5. **Match-arm binding** (`collect_match_bindings` + `matching_lparen`) — `Ok(initial) => …
+   manage initial` is owned (rules_config_reload.rss). Collects `Variant(a,b) =>` payload idents
+   and bare `name =>`.
+6. **Same-closure-scope `local`** (`enclosing_capture_open` + `local_in_scope_all`) — only a
+   closure `|…| { }` (body `{` preceded by `|`, SYM_PIPE=124) is a capture boundary;
+   `if`/`loop`/`while`/`with` blocks are transparent and share the function's locals. A `local`
+   captured into a closure (declared in the outer scope) fires — this is what "closure-capture
+   analysis" reduced to.
+
+**BAKED as codes #57/#58.** Byte-exact over the corpus, 0 FP / 0 FN (both env-gated FAST and
+default bake gates: ok 1230, code-mismatches 0). The collectors (take-params, with-binds,
+match-binds, closure-scope) are the reusable substrate for the rest of the borrow tier (RS0301
+managed-to-local, RS0303/0304/0309 field-path, RS0401/0501/0601/0702).
+
 ### Milestone 2an — RS0313 ASSIGN_TYPE_MISMATCH (code #55, BAKED)
 
 A reassignment `name = <value>` whose value type doesn't match the local's declared type, e.g.
