@@ -1199,6 +1199,81 @@ fn fn_has_assign_type_mismatch(toks: read List<Tok>, start: read Int) -> Bool {
     return hit
 }
 
+// RS0312: index assignment `container[i] = v` is only supported for List values. Message:
+// "index assignment is only supported for List values." FP-safe: fire only when the container
+// is a KNOWN Map/Set/Deque local (from an explicit annotation or a `Map<..>.new()`-style
+// initializer) — a List or an unresolved container is left alone.
+
+// Locals whose declared/initialized type root is a non-indexable collection (Map/Set/Deque).
+fn collect_nonlist_collection_locals(toks: read List<Tok>) -> Set<String> {
+    let mut names = Set.new<String>()
+    let ntok = List.len(list: read toks)
+    let mut k = 0
+    while k < ntok {
+        if is_kw_text(toks: read toks, i: read k, word: read "let") {
+            let mut p = k + 1
+            if is_kw_text(toks: read toks, i: read p, word: read "mut") { p = p + 1 }
+            if is_ident_tok(toks: read toks, i: read p) {
+                let q = p + 1
+                if at_symbol(toks: read toks, i: read q, code: read SYM_COLON) || at_symbol(toks: read toks, i: read q, code: read SYM_EQ) {
+                    let root = tk_text(toks: read toks, i: read (q + 1))
+                    if root == "Map" || root == "Set" || root == "Deque" {
+                        let nm = tk_text(toks: read toks, i: read p)
+                        Set.insert<String>(set: mut names, value: read nm)
+                    }
+                }
+            }
+        }
+        k = k + 1
+    }
+    return names
+}
+
+// The `[` matching the `]` at `closePos`, or -1.
+fn matching_lbracket(toks: read List<Tok>, closePos: read Int) -> Int {
+    let mut m = closePos
+    let mut depth = 0
+    let mut result = 0 - 1
+    let mut going = true
+    while going {
+        if m < 0 {
+            going = false
+        } else if at_symbol(toks: read toks, i: read m, code: read SYM_RBRACKET) {
+            depth = depth + 1
+            m = m - 1
+        } else if at_symbol(toks: read toks, i: read m, code: read SYM_LBRACKET) {
+            depth = depth - 1
+            if depth == 0 {
+                result = m
+                going = false
+            } else {
+                m = m - 1
+            }
+        } else {
+            m = m - 1
+        }
+    }
+    return result
+}
+
+fn has_index_assign_non_list(toks: read List<Tok>) -> Bool {
+    let nonList = collect_nonlist_collection_locals(toks: read toks)
+    let ntok = List.len(list: read toks)
+    let mut k = 1
+    let mut hit = false
+    while k < ntok {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_EQ) && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_EQ) == false && at_symbol(toks: read toks, i: read (k - 1), code: read SYM_RBRACKET) {
+            let j = matching_lbracket(toks: read toks, closePos: read (k - 1))
+            if j > 0 && is_ident_tok(toks: read toks, i: read (j - 1)) {
+                let container = tk_text(toks: read toks, i: read (j - 1))
+                if Set.contains<String>(set: read nonList, value: read container) { hit = true }
+            }
+        }
+        k = k + 1
+    }
+    return hit
+}
+
 // RS0205: a call that repeats a named argument, e.g. `f(x: 1, x: 2)` (oracle
 // checks/calls.rs). We detect the syntactic case — the same explicit `name:` label
 // twice in one call's arg list. An arg label is an `IDENT:` that sits at an argument
@@ -8145,6 +8220,8 @@ fn main() -> Unit {
     // RS0311: reassigning an immutable `let` local.
     let mut immutableAssign = false
     let mut assignTypeMismatch = false
+    // RS0312: index assignment on a non-List container.
+    let indexAssignBad = has_index_assign_non_list(toks: read toks)
     // RS0205: a call that repeats a named argument.
     let mut dupArg = false
     let methodNames = collect_method_names(toks: read toks)
@@ -8488,6 +8565,9 @@ fn main() -> Unit {
     if assignTypeMismatch {
         Log.write(message: read "RS0313")
     }
+    if indexAssignBad {
+        Log.write(message: read "RS0312")
+    }
     if resourceField {
         Log.write(message: read "RS0701")
     }
@@ -8531,7 +8611,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || assignTypeMismatch || takeHandle || weakInit || weakRead
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || assignTypeMismatch || indexAssignBad || takeHandle || weakInit || weakRead
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
