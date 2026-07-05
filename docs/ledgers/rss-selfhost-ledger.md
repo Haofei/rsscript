@@ -1853,3 +1853,34 @@ name→type map into `return_actual_type`/`call_arg_type_bad` (invasive — ~20 
 interpolated values, so typing needs re-tokenizing the single `TOK_INTERP` token's embedded
 exprs. Plus the `package-manager` fold giant for a full-corpus bake. Then add `RS0207` to
 CHECKER_TARGET_CODES.
+
+### Milestone 2ah — RS0210 OPERATOR_TYPE_MISMATCH (code #49, baked)
+
+First code of the operator/control-flow type tier. Ported the binary-operator/precedence
+subsystem from `astdump.rss` into `check.rss` (`two_sym`, `is_generic_angle`,
+`op_matches_tier`, `scan_last_top_op`, `binop_width_at`, `find_binop`, + operator SYM
+constants) — shared foundation reused by RS0209 arm typing next. `operator_type_bad` finds
+the lowest-precedence top-level operator in an expression and types its operands via
+`operand_type_cp` (a closure-param operand resolves through a closure-param→Fn-type map;
+everything else via `return_actual_type`):
+
+- **Comparisons (tier 6, `== != < > <= >=`):** both operands must share a concrete root
+  type (`1 == "1"` → Int vs String).
+- **Logical (tiers 1-2, `&& ||`):** each concrete operand must be Bool
+  (`manage image && image` → Image operands).
+
+Walker `has_operator_type_mismatch`/`fn_has_operator_type_mismatch` scans if/while
+conditions, let/local RHS, and return expressions (skipping parameterized closure bodies),
+and scans calls for a closure `|p| body` passed to a `Fn` param — typing the closure params
+from the Fn arg types and checking the body (`call_closure_operator_bad` +
+`closure_arg_operator_bad`), which fires `noescape-callback-operator-type`
+(`|value| value == "x"` with `Fn(Int)->Bool`).
+
+**Verification:** all 3 RS0210 fixtures byte-exact; DEFAULT FAST gate green 615/615, 0
+mismatch, 0 false-positive, 0 baked-code regression, ~153s. Giants (skipped by FAST) carry
+near-zero FP risk — valid comparisons are Int==Int etc. and logical operands are
+comparison sub-exprs that `return_actual_type` leaves untyped (=> skipped).
+
+**Dialect gotcha:** `if ce > (i + 1)` — the `> (` sequence makes the RSScript parser read
+`i < bc .. ce >(` as a generic call `i<bc>` (surfaced as RS0206 via the dogfood compile);
+hoist to `let lo = i + 1; if ce > lo`.
