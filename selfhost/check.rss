@@ -4991,6 +4991,7 @@ fn stdlib_param_type(ns: read String, method: read String, label: read String) -
     if ns == "Log" && method == "write" && label == "message" { return "String" }
     if ns == "String" && method == "concat" && label == "left" { return "String" }
     if ns == "String" && method == "concat" && label == "right" { return "String" }
+    if ns == "String" && method == "len" && label == "value" { return "String" }
     if ns == "File" && method == "write" && label == "data" { return "Bytes" }
     if ns == "Image" && method == "inspect" && label == "image" { return "Image" }
     if ns == "Image" && method == "normalize" && label == "image" { return "Image" }
@@ -5188,6 +5189,100 @@ fn closure_param_count(toks: read List<Tok>, openPipe: read Int, closePipe: read
 // incompatible with the Fn return type (reusing return_expr_mismatch — Ok/Some-payload
 // aware). A non-Fn param, a non-closure arg, or an un-typeable return => no fire
 // (FP-safe). Closure PARAMS are not typed, so a return expr that uses them stays untyped.
+// Map each closure parameter name (between openPipe and closePipe, e.g. `|value|` or
+// `|a, b|`) to its type taken positionally from the Fn parameter type `fntype`
+// (`Fn(Int) -> ..` => value:Int). Closure params carry no annotation, so the Fn type is
+// the only type source. Params whose Fn arg type is unknown are omitted (=> not checked).
+fn closure_param_types(toks: read List<Tok>, openPipe: read Int, closePipe: read Int, fntype: read String) -> Map<String, String> {
+    let mut m = Map<String, String>.new()
+    if closePipe <= openPipe + 1 { return m }
+    let mut i = openPipe + 1
+    let mut depth = 0
+    let mut angle = 0
+    let mut segStart = openPipe + 1
+    let mut idx = 0
+    while i <= closePipe {
+        let atEnd = i == closePipe
+        let isComma = depth == 0 && angle == 0 && at_symbol(toks: read toks, i: read i, code: read SYM_COMMA)
+        if atEnd || isComma {
+            if is_ident_tok(toks: read toks, i: read segStart) {
+                let ty = fn_type_arg_at(body: read fntype, which: read idx)
+                if String.len(value: read ty) > 0 {
+                    Map.insert<String, String>(map: mut m, key: read tk_text(toks: read toks, i: read segStart), value: read ty)
+                }
+            }
+            idx = idx + 1
+            segStart = i + 1
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) {
+            if depth > 0 { depth = depth - 1 }
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_LANGLE) {
+            angle = angle + 1
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RANGLE) {
+            if angle > 0 { angle = angle - 1 }
+        }
+        i = i + 1
+    }
+    return m
+}
+
+// Within a closure body [bodyStart, bodyEnd), find calls whose LABELED argument is a bare
+// closure parameter (optionally `read`/`mut`/`take`-prefixed) whose Fn-derived type
+// mismatches the callee's declared parameter type. This is the narrow-but-common
+// "closure param passed straight into a call" case (RS0207 in a callback body), handled
+// without threading closure-param types through return_actual_type. FP-safe: fires only
+// when the callee param type and the closure-param type are both concrete and incompatible.
+fn closure_body_arg_bad(toks: read List<Tok>, cptypes: read Map<String, String>, bodyStart: read Int, bodyEnd: read Int, fnIdx: read Map<String, Int>) -> Bool {
+    let mut i = bodyStart
+    let mut bad = false
+    while i < bodyEnd {
+        if is_ident_tok(toks: read toks, i: read i) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_LPAREN) {
+            let mut ns = ""
+            if i >= 2 && at_symbol(toks: read toks, i: read (i - 1), code: read SYM_DOT) && is_ident_tok(toks: read toks, i: read (i - 2)) {
+                ns = tk_text(toks: read toks, i: read (i - 2))
+            }
+            let callee = tk_text(toks: read toks, i: read i)
+            let cclose = find_matching(toks: read toks, open: read (i + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+            if cclose >= 0 {
+                let mut k = i + 2
+                let mut depth = 0
+                let mut atArg = true
+                while k < cclose {
+                    if depth == 0 && atArg && is_ident_tok(toks: read toks, i: read k) && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_COLON) {
+                        let label = tk_text(toks: read toks, i: read k)
+                        let cm = find_top_sym(toks: read toks, start: read (k + 2), end: read cclose, code: read SYM_COMMA)
+                        let mut ve = cclose
+                        if cm >= 0 { ve = cm }
+                        let mut vs = k + 2
+                        if is_effect_kw(toks: read toks, i: read vs) { vs = vs + 1 }
+                        if (vs + 1) == ve && is_ident_tok(toks: read toks, i: read vs) {
+                            let actual = Map.get_or_default<String, String>(map: read cptypes, key: read tk_text(toks: read toks, i: read vs), default: read "")
+                            if String.len(value: read actual) > 0 {
+                                let expected = resolve_param_type(toks: read toks, ns: read ns, name: read callee, label: read label, fnIdx: read fnIdx)
+                                if String.len(value: read expected) > 0 && str_is_unresolved_generic(s: read expected) == false {
+                                    if arg_type_matches(expected: read expected, actual: read actual) == false { bad = true }
+                                }
+                            }
+                        }
+                    }
+                    atArg = false
+                    if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) {
+                        depth = depth + 1
+                    } else if at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) {
+                        depth = depth - 1
+                    } else if depth == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
+                        atArg = true
+                    }
+                    k = k + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    return bad
+}
+
 fn callback_arg_bad(toks: read List<Tok>, as0: read Int, ae: read Int, pt: read String, popen: read Int, pclose: read Int, bodyOpen: read Int, fnIdx: read Map<String, Int>, locals: read Map<String, List<Int>>) -> Bool {
     let body = strip_type_prefixes(s: read pt)
     let fnArity = fn_type_arity(body: read body)
@@ -5213,9 +5308,13 @@ fn callback_arg_bad(toks: read List<Tok>, as0: read Int, ae: read Int, pt: read 
     if String.len(value: read ret) == 0 { return false }
     let bs = cp + 1
     if bs >= ae { return false }
+    // A parameterized closure: type its params from the Fn arg types and check any call in
+    // the body that passes a bare closure param whose type mismatches the callee's param.
+    let cptypes = closure_param_types(toks: read toks, openPipe: read as0, closePipe: read cp, fntype: read body)
     if at_symbol(toks: read toks, i: read bs, code: read SYM_LBRACE) {
         let bc = find_matching(toks: read toks, open: read bs, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
         if bc < 0 { return false }
+        if closure_body_arg_bad(toks: read toks, cptypes: read cptypes, bodyStart: read (bs + 1), bodyEnd: read bc, fnIdx: read fnIdx) { return true }
         let mut i = bs + 1
         while i < bc {
             if is_kw_text(toks: read toks, i: read i, word: read "return") {
@@ -5228,6 +5327,7 @@ fn callback_arg_bad(toks: read List<Tok>, as0: read Int, ae: read Int, pt: read 
         }
         return false
     }
+    if closure_body_arg_bad(toks: read toks, cptypes: read cptypes, bodyStart: read bs, bodyEnd: read ae, fnIdx: read fnIdx) { return true }
     return return_expr_mismatch(toks: read toks, s: read bs, e: read ae, expected: read ret, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
 }
 
