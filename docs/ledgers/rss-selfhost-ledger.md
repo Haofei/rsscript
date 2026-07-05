@@ -1899,6 +1899,28 @@ container whose type can't be resolved, is never flagged (a deliberate safe fals
 **BAKED as code #56.** Byte-exact 615/615, 0 FP. The fixture (`values["a"] = 1` on a `Map`)
 plus corpus.
 
+### Milestone 2av — RS0801/RS0804 closure-capture (codes #68–69, BAKED)
+
+First codes needing real **closure-capture analysis** — the subsystem the borrow tier kept deferring.
+`fn_has_closure_capture_bad` walks each closure body (`{` preceded by `SYM_PIPE`), computes its
+capture set (enclosing-fn locals referenced inside, minus the closure's own params/locals, and — the
+FP fix — minus any local read through a field access `holder.image`, which yields a managed handle, not
+the local), then classifies the closure's role:
+- **stored** `let cb = |…| {…}` (managed) capturing a local → **RS0801**;
+- **retained-arg** — closure passed to a `retains(param)` callee, capturing a local → **RS0801**;
+- **noescape-arg** — closure passed to a `noescape Fn()` callee (new `collect_noescape_params`
+  registry), where a captured local is `take`/`manage`d inside → **RS0804**.
+
+New reusable substrate: `collect_noescape_params` (callee|param keys), `find_closure_open_pipe`,
+`enclosing_paren_open`, and the wrapper-aware pair `closure_outer_call_open` (sees through
+`Some(…)`/`Ok(…)`/`Err(…)` to the real callee — the FN fix for `schedule(callback: read Some(||…))`)
++ `arg_label_at` (recovers the labelled arg containing the closure). Path: 2 unique mismatch (1 FP
+handle-field, 1 FN Some-wrapper) → 0. **Baked #68–69.**
+
+NOTE: RS0705 (RESOURCE_POOL_NOT_LOCAL) was found to be **already baked** in a prior session
+(`has_resourcepool_not_local`); a decoder re-derived it before the `poolNotLocal` flag in the anyDiag
+chain revealed the dup. Lesson: grep the anyDiag OR-chain / const before decoding a "new" code.
+
 ### Milestone 2au — RS0302/RS0304 place-pair (codes #66–67, BAKED)
 
 Two more codes from the SAME `fn_place_conflicts` substrate, essentially free. The dispatch already
