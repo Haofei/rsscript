@@ -33,6 +33,17 @@ const SYM_QUESTION: Int = 63
 // arg-splitter to skip commas inside a closure param list `|a, b|`.
 const SYM_PIPE: Int = 124
 
+// Binary-operator symbol codes (single-char val = code point), mirroring astdump.rss.
+// Multi-char operators (`==`, `!=`, `<=`, `>=`, `&&`, `||`, `<<`, `>>`) are two adjacent
+// single-char symbol tokens (the scanner only fuses `->`/`=>`), matched via two_sym.
+const SYM_BANG: Int = 33         // '!'
+const SYM_PERCENT: Int = 37      // '%'
+const SYM_AMP: Int = 38          // '&'
+const SYM_PLUS: Int = 43         // '+'
+const SYM_MINUS: Int = 45        // '-'
+const SYM_SLASH: Int = 47        // '/'
+const SYM_CARET: Int = 94        // '^'
+
 fn tk_text(toks: read List<Tok>, i: read Int) -> String {
     if i < 0 { return "" }
     if i >= List.len(list: read toks) { return "" }
@@ -5520,6 +5531,143 @@ fn call_arg_type_bad(toks: read List<Tok>, ns: read String, callee: read String,
 // oracle's skip-bias. Slice 2: each labeled call argument against the callee's declared
 // parameter type (call_arg_type_bad), for qualified `ns.method(...)` and unqualified
 // `callee(...)` call sites.
+// --- Binary-operator parsing (ported from astdump.rss) — shared by the operator/
+// control-flow type checks (RS0210, and future RS0209 arm typing). ---
+
+// Two consecutive symbol tokens a,b at i (both within end).
+fn two_sym(toks: read List<Tok>, i: read Int, end: read Int, a: read Int, b: read Int) -> Bool {
+    if i + 1 >= end { return false }
+    return at_symbol(toks: read toks, i: read i, code: read a) && at_symbol(toks: read toks, i: read (i + 1), code: read b)
+}
+
+// Token `open` is `<` opening a generic argument list (ident before, matching `>` followed
+// by `.` or `(`), not a comparison — so its `<`/`>` are excluded from operator scanning.
+fn is_generic_angle(toks: read List<Tok>, start: read Int, end: read Int, open: read Int) -> Bool {
+    if open <= start { return false }
+    if is_ident_tok(toks: read toks, i: read (open - 1)) == false { return false }
+    if at_symbol(toks: read toks, i: read open, code: read SYM_LANGLE) == false { return false }
+    let mut depth = 0
+    let mut i = open
+    while i < end {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LANGLE) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RANGLE) {
+            depth = depth - 1
+            if depth == 0 {
+                return at_symbol(toks: read toks, i: read (i + 1), code: read SYM_DOT) || at_symbol(toks: read toks, i: read (i + 1), code: read SYM_LPAREN)
+            }
+        }
+        i = i + 1
+    }
+    return false
+}
+
+// Does the operator at token i belong to precedence `tier`?
+// tier: 1=|| 2=&& 3=| 4=^ 5=& 6=cmp(== != <= >= < >) 7=shift(<< >>) 8=+ - 9=* / %
+fn op_matches_tier(toks: read List<Tok>, i: read Int, end: read Int, tier: read Int) -> Bool {
+    if tier == 1 { return two_sym(toks: read toks, i: read i, end: read end, a: read SYM_PIPE, b: read SYM_PIPE) }
+    if tier == 2 { return two_sym(toks: read toks, i: read i, end: read end, a: read SYM_AMP, b: read SYM_AMP) }
+    if tier == 3 {
+        return at_symbol(toks: read toks, i: read i, code: read SYM_PIPE) && two_sym(toks: read toks, i: read i, end: read end, a: read SYM_PIPE, b: read SYM_PIPE) == false
+    }
+    if tier == 4 { return at_symbol(toks: read toks, i: read i, code: read SYM_CARET) }
+    if tier == 5 {
+        return at_symbol(toks: read toks, i: read i, code: read SYM_AMP) && two_sym(toks: read toks, i: read i, end: read end, a: read SYM_AMP, b: read SYM_AMP) == false
+    }
+    if tier == 6 {
+        if two_sym(toks: read toks, i: read i, end: read end, a: read SYM_EQ, b: read SYM_EQ) { return true }
+        if two_sym(toks: read toks, i: read i, end: read end, a: read SYM_BANG, b: read SYM_EQ) { return true }
+        if two_sym(toks: read toks, i: read i, end: read end, a: read SYM_LANGLE, b: read SYM_EQ) { return true }
+        if two_sym(toks: read toks, i: read i, end: read end, a: read SYM_RANGLE, b: read SYM_EQ) { return true }
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LANGLE) && two_sym(toks: read toks, i: read i, end: read end, a: read SYM_LANGLE, b: read SYM_LANGLE) == false { return true }
+        if at_symbol(toks: read toks, i: read i, code: read SYM_RANGLE) && two_sym(toks: read toks, i: read i, end: read end, a: read SYM_RANGLE, b: read SYM_RANGLE) == false { return true }
+        return false
+    }
+    if tier == 7 {
+        if two_sym(toks: read toks, i: read i, end: read end, a: read SYM_LANGLE, b: read SYM_LANGLE) { return true }
+        if two_sym(toks: read toks, i: read i, end: read end, a: read SYM_RANGLE, b: read SYM_RANGLE) { return true }
+        return false
+    }
+    if tier == 8 {
+        return at_symbol(toks: read toks, i: read i, code: read SYM_PLUS) || at_symbol(toks: read toks, i: read i, code: read SYM_MINUS)
+    }
+    if tier == 9 {
+        return at_symbol(toks: read toks, i: read i, code: read SYM_STAR) || at_symbol(toks: read toks, i: read i, code: read SYM_SLASH) || at_symbol(toks: read toks, i: read i, code: read SYM_PERCENT)
+    }
+    return false
+}
+
+// Last top-level operator index for precedence `tier` in [start, end), or -1. Tracks
+// (){}[] depth and generic `<...>` angles so only real depth-0 operators count.
+fn scan_last_top_op(toks: read List<Tok>, start: read Int, end: read Int, tier: read Int) -> Int {
+    let mut depth = 0
+    let mut angle = 0
+    let mut idx = start
+    let mut found = 0 - 1
+    while idx < end {
+        if at_symbol(toks: read toks, i: read idx, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read idx, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read idx, code: read SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read idx, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read idx, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read idx, code: read SYM_RBRACKET) {
+            depth = depth - 1
+        } else if depth == 0 && angle == 0 && at_symbol(toks: read toks, i: read idx, code: read SYM_LANGLE) && is_generic_angle(toks: read toks, start: read start, end: read end, open: read idx) {
+            angle = angle + 1
+        } else if depth == 0 && angle > 0 {
+            if at_symbol(toks: read toks, i: read idx, code: read SYM_LANGLE) { angle = angle + 1 }
+            else if at_symbol(toks: read toks, i: read idx, code: read SYM_RANGLE) { angle = angle - 1 }
+        } else if depth == 0 {
+            if op_matches_tier(toks: read toks, i: read idx, end: read end, tier: read tier) {
+                found = idx
+            }
+        }
+        idx = idx + 1
+    }
+    return found
+}
+
+// Token width (1 or 2) of the operator at i.
+fn binop_width_at(toks: read List<Tok>, i: read Int, end: read Int) -> Int {
+    if two_sym(toks: read toks, i: read i, end: read end, a: read SYM_EQ, b: read SYM_EQ) { return 2 }
+    if two_sym(toks: read toks, i: read i, end: read end, a: read SYM_BANG, b: read SYM_EQ) { return 2 }
+    if two_sym(toks: read toks, i: read i, end: read end, a: read SYM_LANGLE, b: read SYM_EQ) { return 2 }
+    if two_sym(toks: read toks, i: read i, end: read end, a: read SYM_RANGLE, b: read SYM_EQ) { return 2 }
+    if two_sym(toks: read toks, i: read i, end: read end, a: read SYM_LANGLE, b: read SYM_LANGLE) { return 2 }
+    if two_sym(toks: read toks, i: read i, end: read end, a: read SYM_RANGLE, b: read SYM_RANGLE) { return 2 }
+    if two_sym(toks: read toks, i: read i, end: read end, a: read SYM_PIPE, b: read SYM_PIPE) { return 2 }
+    if two_sym(toks: read toks, i: read i, end: read end, a: read SYM_AMP, b: read SYM_AMP) { return 2 }
+    return 1
+}
+
+// Lowest-precedence top-level operator split index in [start, end), or -1.
+fn find_binop(toks: read List<Tok>, start: read Int, end: read Int) -> Int {
+    let mut tier = 1
+    while tier <= 9 {
+        let hit = scan_last_top_op(toks: read toks, start: read start, end: read end, tier: read tier)
+        if hit >= 0 { return hit }
+        tier = tier + 1
+    }
+    return 0 - 1
+}
+
+// RS0210 (OPERATOR_TYPE_MISMATCH): the top-level comparison operator in [start, end) has
+// left and right operands of concrete, incompatible root types (`1 == "1"` => Int vs
+// String). FP-safe: fires only when both operands type to concrete, non-generic, DIFFERENT
+// roots — an un-typeable operand (nested expr, unknown ident) yields "" and is skipped.
+fn operator_type_bad(toks: read List<Tok>, start: read Int, end: read Int, popen: read Int, pclose: read Int, bodyOpen: read Int, fnIdx: read Map<String, Int>, locals: read Map<String, List<Int>>) -> Bool {
+    if start >= end { return false }
+    let op = find_binop(toks: read toks, start: read start, end: read end)
+    if op < 0 { return false }
+    if op_matches_tier(toks: read toks, i: read op, end: read end, tier: read 6) == false { return false }
+    let width = binop_width_at(toks: read toks, i: read op, end: read end)
+    if op <= start { return false }
+    if (op + width) >= end { return false }
+    let lt = return_actual_type(toks: read toks, s0: read start, e: read op, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
+    if String.len(value: read lt) == 0 || str_is_unresolved_generic(s: read lt) { return false }
+    let rt = return_actual_type(toks: read toks, s0: read (op + width), e: read end, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
+    if String.len(value: read rt) == 0 || str_is_unresolved_generic(s: read rt) { return false }
+    if str_strip_fresh(s: read lt) == str_strip_fresh(s: read rt) { return false }
+    return true
+}
+
 // Matching top-level `}` for an interpolation `{` opening at `start`, or -1 (ported from
 // astdump.rss interp_end / find_interpolation_end): string literals are skipped; ([{ nest.
 fn interp_end(cs: read List<Char>, n: read Int, start: read Int) -> Int {
@@ -5769,6 +5917,101 @@ fn has_binding_type_mismatch(toks: read List<Tok>) -> Bool {
                     running = false
                 } else {
                     if fn_has_binding_type_mismatch(toks: read toks, start: read i, prefix: read prefix, declared: read declared, fnIdx: read fnIdx, aliasIdx: read aliasIdx) { hit = true }
+                    i = r
+                }
+            } else {
+                i = i + 1
+            }
+        }
+    }
+    return hit
+}
+
+// End of an `if`/`while` condition: the first depth-0 `{` after `start` (the body brace),
+// tracking (){}[] paren/bracket depth so a call/index in the condition doesn't stop it.
+fn cond_expr_end(toks: read List<Tok>, start: read Int, limit: read Int) -> Int {
+    let mut i = start
+    let mut depth = 0
+    while i < limit {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) {
+            if depth > 0 { depth = depth - 1 }
+        } else if depth == 0 && at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) {
+            return i
+        }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+// RS0210: scan a fn body for `if`/`while` conditions whose top-level comparison has
+// operands of incompatible concrete types. Shares the param/local setup of the RS0207
+// walker so operands resolve against the fn's params and locals.
+fn fn_has_operator_type_mismatch(toks: read List<Tok>, start: read Int, fnIdx: read Map<String, Int>) -> Bool {
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let bo = function_signature_end(toks: read toks, start: read (ns - 1))
+    if at_symbol(toks: read toks, i: read bo, code: read SYM_LBRACE) == false { return false }
+    let bc = find_matching(toks: read toks, open: read bo, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    if bc < 0 { return false }
+    let locals = build_local_index(toks: read toks, bodyOpen: read bo, bodyClose: read bc)
+    let mut pp = dotted_end(toks: read toks, i: read ns)
+    if at_symbol(toks: read toks, i: read pp, code: read SYM_LANGLE) {
+        let gc = find_matching(toks: read toks, open: read pp, openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
+        if gc >= 0 { pp = gc + 1 }
+    }
+    let mut popen = 0 - 1
+    let mut pclose = 0 - 1
+    if at_symbol(toks: read toks, i: read pp, code: read SYM_LPAREN) {
+        let pc = find_matching(toks: read toks, open: read pp, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+        if pc >= 0 {
+            popen = pp
+            pclose = pc
+        }
+    }
+    let mut i = bo + 1
+    let mut hit = false
+    while i < bc {
+        if is_kw_text(toks: read toks, i: read i, word: read "if") || is_kw_text(toks: read toks, i: read i, word: read "while") {
+            let lo = i + 1
+            let ce = cond_expr_end(toks: read toks, start: read lo, limit: read bc)
+            if ce > lo {
+                if operator_type_bad(toks: read toks, start: read lo, end: read ce, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals) { hit = true }
+            }
+        }
+        i = i + 1
+    }
+    return hit
+}
+
+// Walk all top-level fns and report any RS0210 operator-type mismatch.
+fn has_operator_type_mismatch(toks: read List<Tok>) -> Bool {
+    let ntok = List.len(list: read toks)
+    let fnIdx = collect_fn_decl_index(toks: read toks)
+    let mut i = 0
+    let mut running = true
+    let mut hit = false
+    while running {
+        if i >= ntok {
+            running = false
+        } else if tk_kind(toks: read toks, i: read i) == TOK_EOF {
+            running = false
+        } else {
+            let cls = classify_top(toks: read toks, i: read i)
+            let isPub = cls.isPub
+            if cls.isFeatures {
+                i = declaration_line_end(toks: read toks, start: read i)
+            } else if cls.isProfile {
+                i = declaration_line_end(toks: read toks, start: read i)
+            } else if starts_type_decl(toks: read toks, i: read i, isPub: read isPub) {
+                let r = parse_type_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else if starts_fn_like(toks: read toks, i: read i, isPub: read isPub) {
+                let r = parse_function_decl(toks: read toks, i: read i)
+                if r < 0 {
+                    running = false
+                } else {
+                    if fn_has_operator_type_mismatch(toks: read toks, start: read i, fnIdx: read fnIdx) { hit = true }
                     i = r
                 }
             } else {
@@ -6967,6 +7210,8 @@ fn main() -> Unit {
     let retTypeMismatch = has_return_type_mismatch(toks: read toks)
     // RS0207: argument/binding-type mismatch (WIP, env-gated — Slice 1: bindings).
     let bindTypeMismatch = has_binding_type_mismatch(toks: read toks)
+    // RS0210: operator-type mismatch (WIP, env-gated — if/while comparison operands).
+    let opTypeMismatch = has_operator_type_mismatch(toks: read toks)
     // RS0901: `take` of a `handle` field.
     let takeHandle = has_take_handle_field(toks: read toks)
     // RS0904: a weak field initialized without Weak.from/downgrade.
@@ -7337,6 +7582,9 @@ fn main() -> Unit {
     if bindTypeMismatch {
         Log.write(message: read "RS0207")
     }
+    if opTypeMismatch {
+        Log.write(message: read "RS0210")
+    }
     if takeHandle {
         Log.write(message: read "RS0901")
     }
@@ -7353,7 +7601,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || takeHandle || weakInit || weakRead
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || takeHandle || weakInit || weakRead
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
