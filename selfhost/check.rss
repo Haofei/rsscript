@@ -1814,6 +1814,624 @@ fn fn_has_retained_local(toks: read List<Tok>, start: read Int, retains: read Se
     return hit
 }
 
+// RS0303 / RS0305 / RS0309: three place-pair conflict codes emitted by the same routine
+// (checks/body/place.rs::check_place_pair_conflict). For each call, every effect-wrapped place
+// argument (`read`/`mut`/`take`/`manage <place>`, including places inside a closure argument) is
+// collected; each unordered same-base pair dispatches, in order, to:
+//   RS0305 — a MOVE (`take`/`manage`) whose path is not provably disjoint from the other access
+//            (bare base on either side, an index, a handle crossing, or prefix-or-equal fields).
+//   RS0303 — a mut pair (≥1 `mut`, no move) whose paths are prefix-or-equal OR cross a `handle`
+//            field, excluding whole-vs-field (that is RS0302) and indexed paths (RS0304).
+//   RS0309 — genuinely DISJOINT inline fields of a non-splittable base (a `mut` parameter), ≥1
+//            `mut`/`take`, no index/handle/prefix.
+// A base that is a `local` binding or a `take` parameter (a provably-exclusive local value) is
+// splittable, so disjoint inline fields there are clean.
+
+// Parameter names declared with the `mut` effect (`name: mut Type`).
+fn collect_mut_params(toks: read List<Tok>, ns: read Int, sigEnd: read Int, out: mut Set<String>) -> Unit {
+    let mut popen = 0 - 1
+    let mut tt = ns
+    while tt < sigEnd {
+        if at_symbol(toks: read toks, i: read tt, code: read SYM_LPAREN) {
+            popen = tt
+            tt = sigEnd
+        } else {
+            tt = tt + 1
+        }
+    }
+    if popen < 0 { return Unit }
+    let pclose = find_matching(toks: read toks, open: read popen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    if pclose < 0 { return Unit }
+    let mut depth = 0
+    let mut k = popen + 1
+    while k < pclose {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) {
+            depth = depth - 1
+        } else if depth == 0 && is_ident_tok(toks: read toks, i: read k) && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_COLON) && is_kw_text(toks: read toks, i: read (k + 2), word: read "mut") {
+            Set.insert<String>(set: mut out, value: read tk_text(toks: read toks, i: read k))
+        }
+        k = k + 1
+    }
+    return Unit
+}
+
+// The base ident position of an arg value at `v`: skip leading effect kws and `(`, return the
+// first ident, or -1.
+fn arg_base_pos(toks: read List<Tok>, v: read Int, argEnd: read Int) -> Int {
+    let mut m = v
+    let mut result = 0 - 1
+    let mut going = true
+    while going {
+        if m >= argEnd {
+            going = false
+        } else {
+            let t = tk_text(toks: read toks, i: read m)
+            if t == "read" || t == "mut" || t == "take" || t == "manage" || at_symbol(toks: read toks, i: read m, code: read SYM_LPAREN) {
+                m = m + 1
+            } else if is_ident_tok(toks: read toks, i: read m) {
+                result = m
+                going = false
+            } else {
+                going = false
+            }
+        }
+    }
+    return result
+}
+
+// 2 if a `take`/`manage` precedes the base (a move), 1 if a `mut` does, 0 otherwise.
+fn arg_move_kind(toks: read List<Tok>, v: read Int, basePos: read Int) -> Int {
+    let mut m = v
+    let mut kind = 0
+    while m < basePos {
+        let t = tk_text(toks: read toks, i: read m)
+        if t == "take" || t == "manage" {
+            kind = 2
+        } else if t == "mut" && kind == 0 {
+            kind = 1
+        }
+        m = m + 1
+    }
+    return kind
+}
+
+// End of the place path starting at `basePos` (base + `.field` chain + `[index]`), bounded by end.
+fn place_end(toks: read List<Tok>, basePos: read Int, argEnd: read Int) -> Int {
+    let mut m = basePos + 1
+    let mut going = true
+    while going {
+        if m >= argEnd {
+            going = false
+        } else if at_symbol(toks: read toks, i: read m, code: read SYM_DOT) && is_ident_tok(toks: read toks, i: read (m + 1)) {
+            m = m + 2
+        } else if at_symbol(toks: read toks, i: read m, code: read SYM_LBRACKET) {
+            let cl = find_matching(toks: read toks, open: read m, openSym: read SYM_LBRACKET, closeSym: read SYM_RBRACKET)
+            if cl < 0 { going = false } else { m = cl + 1 }
+        } else {
+            going = false
+        }
+    }
+    return m
+}
+
+fn place_has_index(toks: read List<Tok>, basePos: read Int, end: read Int) -> Bool {
+    let mut m = basePos + 1
+    let mut found = false
+    while m < end {
+        if at_symbol(toks: read toks, i: read m, code: read SYM_LBRACKET) { found = true }
+        m = m + 1
+    }
+    return found
+}
+
+fn place_crosses_handle(toks: read List<Tok>, basePos: read Int, end: read Int, handleFields: read Set<String>) -> Bool {
+    let mut m = basePos + 1
+    let mut found = false
+    while m < end {
+        if at_symbol(toks: read toks, i: read m, code: read SYM_DOT) && is_ident_tok(toks: read toks, i: read (m + 1)) && Set.contains<String>(set: read handleFields, value: read tk_text(toks: read toks, i: read (m + 1))) { found = true }
+        m = m + 1
+    }
+    return found
+}
+
+// The `.field` chain as a dotted string ("" if bare, "f1.f2" otherwise), skipping indices.
+fn place_comps(toks: read List<Tok>, basePos: read Int, end: read Int) -> String {
+    let mut out = ""
+    let mut m = basePos + 1
+    while m < end {
+        if at_symbol(toks: read toks, i: read m, code: read SYM_DOT) && is_ident_tok(toks: read toks, i: read (m + 1)) {
+            if String.len(value: read out) > 0 { out = String.concat(left: read out, right: read ".") }
+            out = String.concat(left: read out, right: read tk_text(toks: read toks, i: read (m + 1)))
+            m = m + 2
+        } else {
+            m = m + 1
+        }
+    }
+    return out
+}
+
+fn comps_prefix_or_equal(a: read String, b: read String) -> Bool {
+    if a == b { return true }
+    if String.starts_with(value: read b, prefix: read String.concat(left: read a, right: read ".")) { return true }
+    if String.starts_with(value: read a, prefix: read String.concat(left: read b, right: read ".")) { return true }
+    return false
+}
+
+// Whether an effect kw (`read`/`mut`/`take`/`manage`) appears in [from, to).
+fn has_effect_prefix(toks: read List<Tok>, from: read Int, to: read Int) -> Bool {
+    let mut m = from
+    let mut found = false
+    while m < to {
+        let t = tk_text(toks: read toks, i: read m)
+        if t == "read" || t == "mut" || t == "take" || t == "manage" { found = true }
+        m = m + 1
+    }
+    return found
+}
+
+// Collect effect-places of one argument segment [sStart, sEnd). A closure argument (`|…| …`) is
+// scanned in full (its captured accesses join the call's conflict set); a plain argument
+// contributes its single leading effect-place.
+fn collect_segment_places(toks: read List<Tok>, sStart: read Int, sEnd: read Int, posOut: mut List<Int>, kindOut: mut List<Int>) -> Unit {
+    let mut vStart = sStart
+    if is_ident_tok(toks: read toks, i: read sStart) && at_symbol(toks: read toks, i: read (sStart + 1), code: read SYM_COLON) { vStart = sStart + 2 }
+    if at_symbol(toks: read toks, i: read vStart, code: read SYM_PIPE) {
+        // Only variables CAPTURED from outside the closure join the enclosing call's conflict
+        // set; the closure's own params and `local`/`let` bindings are internal, not captures.
+        let mut declInside = Set.new<String>()
+        let mut pp = vStart + 1
+        let mut inParams = true
+        while pp < sEnd && inParams {
+            if at_symbol(toks: read toks, i: read pp, code: read SYM_PIPE) {
+                inParams = false
+            } else {
+                if is_ident_tok(toks: read toks, i: read pp) { Set.insert<String>(set: mut declInside, value: read tk_text(toks: read toks, i: read pp)) }
+                pp = pp + 1
+            }
+        }
+        collect_local_names(toks: read toks, bodyOpen: read pp, bodyClose: read sEnd, out: mut declInside)
+        let mut dl = pp + 1
+        while dl < sEnd {
+            if is_kw_text(toks: read toks, i: read dl, word: read "let") {
+                let mut nm = dl + 1
+                if is_kw_text(toks: read toks, i: read nm, word: read "mut") { nm = nm + 1 }
+                if is_ident_tok(toks: read toks, i: read nm) { Set.insert<String>(set: mut declInside, value: read tk_text(toks: read toks, i: read nm)) }
+            }
+            dl = dl + 1
+        }
+        let mut m = vStart
+        while m < sEnd {
+            let t = tk_text(toks: read toks, i: read m)
+            if t == "read" || t == "mut" || t == "take" || t == "manage" {
+                let bp = arg_base_pos(toks: read toks, v: read m, argEnd: read sEnd)
+                if bp >= 0 && is_upper_head(name: read tk_text(toks: read toks, i: read bp)) == false && Set.contains<String>(set: read declInside, value: read tk_text(toks: read toks, i: read bp)) == false {
+                    List.push<Int>(list: mut posOut, value: read bp)
+                    List.push<Int>(list: mut kindOut, value: read arg_move_kind(toks: read toks, v: read m, basePos: read bp))
+                }
+            }
+            m = m + 1
+        }
+    } else {
+        let bp = arg_base_pos(toks: read toks, v: read vStart, argEnd: read sEnd)
+        if bp >= 0 && is_upper_head(name: read tk_text(toks: read toks, i: read bp)) == false && has_effect_prefix(toks: read toks, from: read vStart, to: read bp) {
+            List.push<Int>(list: mut posOut, value: read bp)
+            List.push<Int>(list: mut kindOut, value: read arg_move_kind(toks: read toks, v: read vStart, basePos: read bp))
+        }
+    }
+    return Unit
+}
+
+// Collect the effect-place args of the call `(op..close)` — split into arg segments at depth-0
+// commas, each processed by collect_segment_places.
+fn collect_call_places(toks: read List<Tok>, op: read Int, close: read Int, posOut: mut List<Int>, kindOut: mut List<Int>) -> Unit {
+    let mut q = op + 1
+    let mut depth = 0
+    let mut segStart = op + 1
+    while q < close {
+        if at_symbol(toks: read toks, i: read q, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read q, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read q, code: read SYM_LBRACE) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read q, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read q, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read q, code: read SYM_RBRACE) {
+            if depth > 0 { depth = depth - 1 }
+        } else if depth == 0 && at_symbol(toks: read toks, i: read q, code: read SYM_COMMA) {
+            collect_segment_places(toks: read toks, sStart: read segStart, sEnd: read q, posOut: mut posOut, kindOut: mut kindOut)
+            segStart = q + 1
+        }
+        q = q + 1
+    }
+    collect_segment_places(toks: read toks, sStart: read segStart, sEnd: read close, posOut: mut posOut, kindOut: mut kindOut)
+    return Unit
+}
+
+// Bitmask over one function's calls: bit0 RS0303, bit1 RS0305, bit2 RS0309.
+fn fn_place_conflicts(toks: read List<Tok>, start: read Int, handleFields: read Set<String>, mutParams: read Set<String>) -> Int {
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+    if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return 0 }
+    let bodyClose = find_matching(toks: read toks, open: read sigEnd, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    if bodyClose < 0 { return 0 }
+    let mut has0303 = false
+    let mut has0305 = false
+    let mut has0309 = false
+    let mut k = sigEnd + 1
+    while k < bodyClose {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) && is_ident_tok(toks: read toks, i: read (k - 1)) {
+            let close = find_matching(toks: read toks, open: read k, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+            if close > 0 {
+                let mut posList = List.new<Int>()
+                let mut kindList = List.new<Int>()
+                collect_call_places(toks: read toks, op: read k, close: read close, posOut: mut posList, kindOut: mut kindList)
+                let np = List.len(list: read posList)
+                let mut a = 0
+                while a < np {
+                    let mut b = a + 1
+                    while b < np {
+                        let pa = List.get<Int>(list: read posList, index: read a)
+                        let pb = List.get<Int>(list: read posList, index: read b)
+                        if tk_text(toks: read toks, i: read pa) == tk_text(toks: read toks, i: read pb) {
+                            let ka = List.get<Int>(list: read kindList, index: read a)
+                            let kb = List.get<Int>(list: read kindList, index: read b)
+                            let ea = place_end(toks: read toks, basePos: read pa, argEnd: read close)
+                            let eb = place_end(toks: read toks, basePos: read pb, argEnd: read close)
+                            let compsA = place_comps(toks: read toks, basePos: read pa, end: read ea)
+                            let compsB = place_comps(toks: read toks, basePos: read pb, end: read eb)
+                            let bareA = String.len(value: read compsA) == 0
+                            let bareB = String.len(value: read compsB) == 0
+                            let idx = place_has_index(toks: read toks, basePos: read pa, end: read ea) || place_has_index(toks: read toks, basePos: read pb, end: read eb)
+                            let hdl = place_crosses_handle(toks: read toks, basePos: read pa, end: read ea, handleFields: read handleFields) || place_crosses_handle(toks: read toks, basePos: read pb, end: read eb, handleFields: read handleFields)
+                            let prefixEq = comps_prefix_or_equal(a: read compsA, b: read compsB)
+                            let anyMove = ka == 2 || kb == 2
+                            let anyMut = ka == 1 || kb == 1
+                            let mutates = anyMove || anyMut
+                            let mut handled = false
+                            if mutates {
+                                if anyMove {
+                                    if bareA || bareB || idx || hdl || prefixEq {
+                                        has0305 = true
+                                        handled = true
+                                    }
+                                }
+                                if handled == false && idx {
+                                    handled = true
+                                }
+                                let oneBare = (bareA && bareB == false) || (bareB && bareA == false)
+                                if handled == false && oneBare {
+                                    handled = true
+                                }
+                                if handled == false && hdl {
+                                    has0303 = true
+                                    handled = true
+                                }
+                                if handled == false && prefixEq {
+                                    has0303 = true
+                                    handled = true
+                                }
+                                if handled == false && Set.contains<String>(set: read mutParams, value: read tk_text(toks: read toks, i: read pa)) {
+                                    has0309 = true
+                                }
+                            }
+                        }
+                        b = b + 1
+                    }
+                    a = a + 1
+                }
+            }
+        }
+        k = k + 1
+    }
+    let mut result = 0
+    if has0303 { result = result + 1 }
+    if has0305 { result = result + 2 }
+    if has0309 { result = result + 4 }
+    return result
+}
+
+// `local` binding names of the body [bodyOpen,bodyClose).
+fn collect_local_names(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, out: mut Set<String>) -> Unit {
+    let mut k = bodyOpen + 1
+    while k < bodyClose {
+        if is_kw_text(toks: read toks, i: read k, word: read "local") {
+            let mut q = k + 1
+            if is_kw_text(toks: read toks, i: read q, word: read "mut") { q = q + 1 }
+            if is_ident_tok(toks: read toks, i: read q) {
+                Set.insert<String>(set: mut out, value: read tk_text(toks: read toks, i: read q))
+            }
+        }
+        k = k + 1
+    }
+    return Unit
+}
+
+// RS0601 FRESH_RETURN_NOT_CLEAN: a `-> fresh …` function that `return`s a value which is not a
+// clean, freshly-owned value. Not clean: a `mut`/`take` param, a non-scalar `read` param, a
+// `let` bound to a non-fresh call, a `local`/`let` that has been tainted (retained / captured in
+// a closure / `manage`d / moved), a match-arm binding of a managed scrutinee, or a handle-field
+// access. Clean: a fresh call, a constructor, a literal, an untainted fresh-sourced local/let.
+
+// Whether this fn's return type contains `fresh` anywhere (covers `-> fresh T`,
+// `-> Option<fresh T>`, `-> Result<fresh T, E>`) — broader than the direct-only `fn_returns_fresh`.
+fn fn_return_type_has_fresh(toks: read List<Tok>, ns: read Int, sigEnd: read Int) -> Bool {
+    let mut popen = 0 - 1
+    let mut tt = ns
+    while tt < sigEnd {
+        if at_symbol(toks: read toks, i: read tt, code: read SYM_LPAREN) {
+            popen = tt
+            tt = sigEnd
+        } else {
+            tt = tt + 1
+        }
+    }
+    if popen < 0 { return false }
+    let pclose = find_matching(toks: read toks, open: read popen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    if pclose < 0 { return false }
+    let mut m = pclose + 1
+    let mut found = false
+    while m < sigEnd {
+        if is_kw_text(toks: read toks, i: read m, word: read "fresh") { found = true }
+        m = m + 1
+    }
+    return found
+}
+
+fn collect_fire_params(toks: read List<Tok>, ns: read Int, sigEnd: read Int, out: mut Set<String>) -> Unit {
+    let mut popen = 0 - 1
+    let mut tt = ns
+    while tt < sigEnd {
+        if at_symbol(toks: read toks, i: read tt, code: read SYM_LPAREN) {
+            popen = tt
+            tt = sigEnd
+        } else {
+            tt = tt + 1
+        }
+    }
+    if popen < 0 { return Unit }
+    let pclose = find_matching(toks: read toks, open: read popen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    if pclose < 0 { return Unit }
+    let mut depth = 0
+    let mut k = popen + 1
+    while k < pclose {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) {
+            depth = depth - 1
+        } else if depth == 0 && is_ident_tok(toks: read toks, i: read k) && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_COLON) {
+            let pname = tk_text(toks: read toks, i: read k)
+            let eff = tk_text(toks: read toks, i: read (k + 2))
+            if eff == "mut" || eff == "take" {
+                Set.insert<String>(set: mut out, value: read pname)
+            } else if eff == "read" && is_scalar_name(name: read tk_text(toks: read toks, i: read (k + 3))) == false {
+                Set.insert<String>(set: mut out, value: read pname)
+            }
+        }
+        k = k + 1
+    }
+    return Unit
+}
+
+// `let` names bound to a call of a file-DECLARED non-fresh function — a managed, non-fresh value
+// (returning it from a `-> fresh` fn is not clean). A builtin call (`List.new()`), a constructor,
+// or a fresh-fn call is NOT managed-non-fresh. Only `let` (a `local` is owned).
+fn collect_managed_nonfresh_lets(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, freshFns: read Set<String>, out: mut Set<String>) -> Unit {
+    let mut k = bodyOpen + 1
+    while k < bodyClose {
+        if is_kw_text(toks: read toks, i: read k, word: read "let") {
+            let mut nameIdx = k + 1
+            if is_kw_text(toks: read toks, i: read nameIdx, word: read "mut") { nameIdx = nameIdx + 1 }
+            if is_ident_tok(toks: read toks, i: read nameIdx) {
+                let mut eqPos = 0 - 1
+                let mut t = nameIdx + 1
+                let mut scan = true
+                while scan {
+                    if t >= bodyClose {
+                        scan = false
+                    } else if at_symbol(toks: read toks, i: read t, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read t, code: read SYM_RBRACE) {
+                        scan = false
+                    } else if at_symbol(toks: read toks, i: read t, code: read SYM_EQ) && at_symbol(toks: read toks, i: read (t + 1), code: read SYM_EQ) == false {
+                        eqPos = t
+                        scan = false
+                    } else {
+                        t = t + 1
+                    }
+                }
+                if eqPos > 0 {
+                    let mut s = eqPos + 1
+                    if is_effect_kw(toks: read toks, i: read s) { s = s + 1 }
+                    // A `let` bound to a CALL is managed-non-fresh unless the call is a fresh
+                    // source: a bare constructor `Foo(...)`, a registered `-> fresh` fn, or a
+                    // stdlib-type receiver (`List.new()`, whose builtin result is fresh). Any other
+                    // call — including an unknown/user `Cache.get()` — yields a managed value.
+                    let isCtor = is_ident_tok(toks: read toks, i: read s) && is_upper_head(name: read tk_text(toks: read toks, i: read s)) && at_symbol(toks: read toks, i: read (s + 1), code: read SYM_LPAREN)
+                    if is_ident_tok(toks: read toks, i: read s) && isCtor == false {
+                        let de = dotted_end(toks: read toks, i: read s)
+                        if at_symbol(toks: read toks, i: read de, code: read SYM_LPAREN) {
+                            let dn = dotted_name_text(toks: read toks, i: read s)
+                            let recvStdlib = at_symbol(toks: read toks, i: read (s + 1), code: read SYM_DOT) && is_stdlib_type(name: read tk_text(toks: read toks, i: read s))
+                            if Set.contains<String>(set: read freshFns, value: read dn) == false && recvStdlib == false {
+                                Set.insert<String>(set: mut out, value: read tk_text(toks: read toks, i: read nameIdx))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        k = k + 1
+    }
+    return Unit
+}
+
+fn collect_tainted_bindings(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, retains: read Set<String>, out: mut Set<String>) -> Unit {
+    let mut k = bodyOpen + 1
+    while k < bodyClose {
+        if (is_kw_text(toks: read toks, i: read k, word: read "manage") || is_kw_text(toks: read toks, i: read k, word: read "take")) && is_ident_tok(toks: read toks, i: read (k + 1)) {
+            Set.insert<String>(set: mut out, value: read tk_text(toks: read toks, i: read (k + 1)))
+        }
+        k = k + 1
+    }
+    k = bodyOpen + 1
+    while k < bodyClose {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE) && k > bodyOpen && at_symbol(toks: read toks, i: read (k - 1), code: read SYM_PIPE) {
+            // Only a STORED closure (`= |…| { }`) retains its captures; a `noescape` callback
+            // argument does not. Find the closure's opening `|` and require `=` before it.
+            let mut op = k - 2
+            let mut findPipe = true
+            while findPipe {
+                if op <= bodyOpen {
+                    findPipe = false
+                } else if at_symbol(toks: read toks, i: read op, code: read SYM_PIPE) {
+                    findPipe = false
+                } else {
+                    op = op - 1
+                }
+            }
+            let stored = op > bodyOpen && at_symbol(toks: read toks, i: read (op - 1), code: read SYM_EQ)
+            let cbClose = find_matching(toks: read toks, open: read k, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+            if cbClose > 0 {
+                if stored {
+                    let mut m = k + 1
+                    while m < cbClose {
+                        if is_ident_tok(toks: read toks, i: read m) {
+                            Set.insert<String>(set: mut out, value: read tk_text(toks: read toks, i: read m))
+                        }
+                        m = m + 1
+                    }
+                }
+                k = cbClose
+            }
+        }
+        k = k + 1
+    }
+    k = bodyOpen + 1
+    while k < bodyClose {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) && is_ident_tok(toks: read toks, i: read (k - 1)) {
+            let callee = tk_text(toks: read toks, i: read (k - 1))
+            let close = find_matching(toks: read toks, open: read k, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+            if close > 0 {
+                let mut q = k + 1
+                let mut depth = 0
+                let mut atStart = true
+                while q < close {
+                    let opener = at_symbol(toks: read toks, i: read q, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read q, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read q, code: read SYM_LBRACE)
+                    let closer = at_symbol(toks: read toks, i: read q, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read q, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read q, code: read SYM_RBRACE)
+                    if opener {
+                        depth = depth + 1
+                        atStart = false
+                    } else if closer {
+                        if depth > 0 { depth = depth - 1 }
+                        atStart = false
+                    } else if depth == 0 && at_symbol(toks: read toks, i: read q, code: read SYM_COMMA) {
+                        atStart = true
+                    } else if depth == 0 && atStart && is_ident_tok(toks: read toks, i: read q) && at_symbol(toks: read toks, i: read (q + 1), code: read SYM_COLON) {
+                        let label = tk_text(toks: read toks, i: read q)
+                        let key = String.concat(left: read String.concat(left: read callee, right: read "|"), right: read label)
+                        let isR = Set.contains<String>(set: read retains, value: read key) || builtin_retains_label(toks: read toks, callPos: read k, label: read label)
+                        if isR {
+                            let mut v = q + 2
+                            if is_effect_kw(toks: read toks, i: read v) { v = v + 1 }
+                            if is_ident_tok(toks: read toks, i: read v) {
+                                Set.insert<String>(set: mut out, value: read tk_text(toks: read toks, i: read v))
+                            }
+                        }
+                        atStart = false
+                    } else {
+                        atStart = false
+                    }
+                    q = q + 1
+                }
+            }
+        }
+        k = k + 1
+    }
+    return Unit
+}
+
+fn collect_managed_match_binds(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, managed: read Set<String>, out: mut Set<String>) -> Unit {
+    let mut k = bodyOpen + 1
+    while k < bodyClose {
+        if is_kw_text(toks: read toks, i: read k, word: read "match") && is_ident_tok(toks: read toks, i: read (k + 1)) && Set.contains<String>(set: read managed, value: read tk_text(toks: read toks, i: read (k + 1))) {
+            let mut b = k + 2
+            let mut go = true
+            while go {
+                if b >= bodyClose {
+                    go = false
+                } else if at_symbol(toks: read toks, i: read b, code: read SYM_LBRACE) {
+                    go = false
+                } else {
+                    b = b + 1
+                }
+            }
+            if b < bodyClose && at_symbol(toks: read toks, i: read b, code: read SYM_LBRACE) {
+                let mClose = find_matching(toks: read toks, open: read b, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+                if mClose > 0 {
+                    collect_match_bindings(toks: read toks, bodyOpen: read b, bodyClose: read mClose, out: mut out)
+                    k = mClose
+                }
+            }
+        }
+        k = k + 1
+    }
+    return Unit
+}
+
+fn fn_has_fresh_return_bad(toks: read List<Tok>, start: read Int, handleFields: read Set<String>, retains: read Set<String>, freshFns: read Set<String>) -> Bool {
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+    if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
+    if fn_return_type_has_fresh(toks: read toks, ns: read ns, sigEnd: read sigEnd) == false { return false }
+    let bodyClose = find_matching(toks: read toks, open: read sigEnd, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    if bodyClose < 0 { return false }
+    let managed = collect_managed_names(toks: read toks, bodyOpen: read sigEnd, bodyClose: read bodyClose)
+    let mut fireParams = Set.new<String>()
+    collect_fire_params(toks: read toks, ns: read ns, sigEnd: read sigEnd, out: mut fireParams)
+    let mut nonFreshLets = Set.new<String>()
+    collect_managed_nonfresh_lets(toks: read toks, bodyOpen: read sigEnd, bodyClose: read bodyClose, freshFns: read freshFns, out: mut nonFreshLets)
+    let mut tainted = Set.new<String>()
+    collect_tainted_bindings(toks: read toks, bodyOpen: read sigEnd, bodyClose: read bodyClose, retains: read retains, out: mut tainted)
+    let mut matchBinds = Set.new<String>()
+    collect_managed_match_binds(toks: read toks, bodyOpen: read sigEnd, bodyClose: read bodyClose, managed: read managed, out: mut matchBinds)
+    let mut localNames = Set.new<String>()
+    collect_local_names(toks: read toks, bodyOpen: read sigEnd, bodyClose: read bodyClose, out: mut localNames)
+    let mut k = sigEnd + 1
+    let mut hit = false
+    while k < bodyClose {
+        if is_kw_text(toks: read toks, i: read k, word: read "return") {
+            let mut v = k + 1
+            if is_effect_kw(toks: read toks, i: read v) { v = v + 1 }
+            let mut unwrap = true
+            while unwrap {
+                if is_ident_tok(toks: read toks, i: read v) && (tk_text(toks: read toks, i: read v) == "Some" || tk_text(toks: read toks, i: read v) == "Ok") && at_symbol(toks: read toks, i: read (v + 1), code: read SYM_LPAREN) {
+                    v = v + 2
+                    if is_ident_tok(toks: read toks, i: read v) && at_symbol(toks: read toks, i: read (v + 1), code: read SYM_COLON) { v = v + 2 }
+                    if is_effect_kw(toks: read toks, i: read v) { v = v + 1 }
+                } else {
+                    unwrap = false
+                }
+            }
+            if is_ident_tok(toks: read toks, i: read v) {
+                let base = tk_text(toks: read toks, i: read v)
+                let nextDot = at_symbol(toks: read toks, i: read (v + 1), code: read SYM_DOT)
+                let nextParen = at_symbol(toks: read toks, i: read (v + 1), code: read SYM_LPAREN)
+                if nextDot {
+                    // a handle-field access `x.f` (not a method call) is not clean
+                    if is_ident_tok(toks: read toks, i: read (v + 2)) && at_symbol(toks: read toks, i: read (v + 3), code: read SYM_LPAREN) == false && Set.contains<String>(set: read handleFields, value: read tk_text(toks: read toks, i: read (v + 2))) { hit = true }
+                } else if nextParen == false {
+                    if Set.contains<String>(set: read fireParams, value: read base) {
+                        hit = true
+                    } else if Set.contains<String>(set: read matchBinds, value: read base) {
+                        hit = true
+                    } else if Set.contains<String>(set: read nonFreshLets, value: read base) {
+                        hit = true
+                    } else if (Set.contains<String>(set: read localNames, value: read base) || Set.contains<String>(set: read managed, value: read base)) && Set.contains<String>(set: read tainted, value: read base) {
+                        hit = true
+                    }
+                }
+            }
+        }
+        k = k + 1
+    }
+    return hit
+}
+
 // RS0205: a call that repeats a named argument, e.g. `f(x: 1, x: 2)` (oracle
 // checks/calls.rs). We detect the syntactic case — the same explicit `name:` label
 // twice in one call's arg list. An arg label is an `IDENT:` that sits at an argument
@@ -8764,6 +9382,11 @@ fn main() -> Unit {
     let mut managedToLocal = false
     let mut useAfterManage = false
     let mut retainedLocal = false
+    let mut placeConflict0303 = false
+    let mut placeConflict0305 = false
+    let mut placeConflict0309 = false
+    let mut freshReturnBad = false
+    let freshFnReg = collect_fresh_fns(toks: read toks)
     let mut retainsReg = Set.new<String>()
     collect_retains(toks: read toks, out: mut retainsReg)
     let mut handleFieldNames = Set.new<String>()
@@ -8949,6 +9572,13 @@ fn main() -> Unit {
                     if fn_has_managed_to_local(toks: read toks, start: read i, handleFields: read handleFieldNames) { managedToLocal = true }
                     if fn_has_use_after_manage(toks: read toks, start: read i) { useAfterManage = true }
                     if fn_has_retained_local(toks: read toks, start: read i, retains: read retainsReg) { retainedLocal = true }
+                    let mut pcMutParams = Set.new<String>()
+                    collect_mut_params(toks: read toks, ns: read (fn_name_start(toks: read toks, i: read i)), sigEnd: read (function_signature_end(toks: read toks, start: read (fn_name_start(toks: read toks, i: read i) - 1))), out: mut pcMutParams)
+                    let pcMask = fn_place_conflicts(toks: read toks, start: read i, handleFields: read handleFieldNames, mutParams: read pcMutParams)
+                    if pcMask == 1 || pcMask == 3 || pcMask == 5 || pcMask == 7 { placeConflict0303 = true }
+                    if pcMask == 2 || pcMask == 3 || pcMask == 6 || pcMask == 7 { placeConflict0305 = true }
+                    if pcMask >= 4 { placeConflict0309 = true }
+                    if fn_has_fresh_return_bad(toks: read toks, start: read i, handleFields: read handleFieldNames, retains: read retainsReg, freshFns: read freshFnReg) { freshReturnBad = true }
                     if fn_has_assign_type_mismatch(toks: read toks, start: read i) { assignTypeMismatch = true }
                     if fn_has_dup_arg(toks: read toks, start: read i) { dupArg = true }
                     if fn_has_fd_surface(toks: read toks, start: read i) { fdSurface = true }
@@ -9137,6 +9767,18 @@ fn main() -> Unit {
     if retainedLocal {
         Log.write(message: read "RS0501")
     }
+    if placeConflict0303 {
+        Log.write(message: read "RS0303")
+    }
+    if placeConflict0305 {
+        Log.write(message: read "RS0305")
+    }
+    if placeConflict0309 {
+        Log.write(message: read "RS0309")
+    }
+    if freshReturnBad {
+        Log.write(message: read "RS0601")
+    }
     if resourceField {
         Log.write(message: read "RS0701")
     }
@@ -9180,7 +9822,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || useAfterManage || retainedLocal || takeHandle || weakInit || weakRead
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || useAfterManage || retainedLocal || placeConflict0303 || placeConflict0305 || placeConflict0309 || freshReturnBad || takeHandle || weakInit || weakRead
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
