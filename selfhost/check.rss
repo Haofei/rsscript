@@ -2044,7 +2044,13 @@ fn collect_call_places(toks: read List<Tok>, op: read Int, close: read Int, posO
     return Unit
 }
 
-// Bitmask over one function's calls: bit0 RS0303, bit1 RS0305, bit2 RS0309.
+// Whether `bitval` (a power of two) is set in `mask` (no bitwise ops in the dialect).
+fn bit_set(mask: read Int, bitval: read Int) -> Bool {
+    let q = mask / bitval
+    return q - (q / 2) * 2 == 1
+}
+
+// Bitmask over one function's calls: bit0 RS0303, bit1 RS0305, bit2 RS0309, bit3 RS0302, bit4 RS0304.
 fn fn_place_conflicts(toks: read List<Tok>, start: read Int, handleFields: read Set<String>, mutParams: read Set<String>) -> Int {
     let ns = fn_name_start(toks: read toks, i: read start)
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
@@ -2054,6 +2060,8 @@ fn fn_place_conflicts(toks: read List<Tok>, start: read Int, handleFields: read 
     let mut has0303 = false
     let mut has0305 = false
     let mut has0309 = false
+    let mut has0302 = false
+    let mut has0304 = false
     let mut k = sigEnd + 1
     while k < bodyClose {
         if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) && is_ident_tok(toks: read toks, i: read (k - 1)) {
@@ -2093,10 +2101,12 @@ fn fn_place_conflicts(toks: read List<Tok>, start: read Int, handleFields: read 
                                     }
                                 }
                                 if handled == false && idx {
+                                    has0304 = true
                                     handled = true
                                 }
                                 let oneBare = (bareA && bareB == false) || (bareB && bareA == false)
                                 if handled == false && oneBare {
+                                    has0302 = true
                                     handled = true
                                 }
                                 if handled == false && hdl {
@@ -2124,6 +2134,8 @@ fn fn_place_conflicts(toks: read List<Tok>, start: read Int, handleFields: read 
     if has0303 { result = result + 1 }
     if has0305 { result = result + 2 }
     if has0309 { result = result + 4 }
+    if has0302 { result = result + 8 }
+    if has0304 { result = result + 16 }
     return result
 }
 
@@ -9385,6 +9397,8 @@ fn main() -> Unit {
     let mut placeConflict0303 = false
     let mut placeConflict0305 = false
     let mut placeConflict0309 = false
+    let mut placeConflict0302 = false
+    let mut placeConflict0304 = false
     let mut freshReturnBad = false
     let freshFnReg = collect_fresh_fns(toks: read toks)
     let mut retainsReg = Set.new<String>()
@@ -9575,9 +9589,11 @@ fn main() -> Unit {
                     let mut pcMutParams = Set.new<String>()
                     collect_mut_params(toks: read toks, ns: read (fn_name_start(toks: read toks, i: read i)), sigEnd: read (function_signature_end(toks: read toks, start: read (fn_name_start(toks: read toks, i: read i) - 1))), out: mut pcMutParams)
                     let pcMask = fn_place_conflicts(toks: read toks, start: read i, handleFields: read handleFieldNames, mutParams: read pcMutParams)
-                    if pcMask == 1 || pcMask == 3 || pcMask == 5 || pcMask == 7 { placeConflict0303 = true }
-                    if pcMask == 2 || pcMask == 3 || pcMask == 6 || pcMask == 7 { placeConflict0305 = true }
-                    if pcMask >= 4 { placeConflict0309 = true }
+                    if bit_set(mask: read pcMask, bitval: read 1) { placeConflict0303 = true }
+                    if bit_set(mask: read pcMask, bitval: read 2) { placeConflict0305 = true }
+                    if bit_set(mask: read pcMask, bitval: read 4) { placeConflict0309 = true }
+                    if bit_set(mask: read pcMask, bitval: read 8) { placeConflict0302 = true }
+                    if bit_set(mask: read pcMask, bitval: read 16) { placeConflict0304 = true }
                     if fn_has_fresh_return_bad(toks: read toks, start: read i, handleFields: read handleFieldNames, retains: read retainsReg, freshFns: read freshFnReg) { freshReturnBad = true }
                     if fn_has_assign_type_mismatch(toks: read toks, start: read i) { assignTypeMismatch = true }
                     if fn_has_dup_arg(toks: read toks, start: read i) { dupArg = true }
@@ -9776,6 +9792,12 @@ fn main() -> Unit {
     if placeConflict0309 {
         Log.write(message: read "RS0309")
     }
+    if placeConflict0302 {
+        Log.write(message: read "RS0302")
+    }
+    if placeConflict0304 {
+        Log.write(message: read "RS0304")
+    }
     if freshReturnBad {
         Log.write(message: read "RS0601")
     }
@@ -9822,7 +9844,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || useAfterManage || retainedLocal || placeConflict0303 || placeConflict0305 || placeConflict0309 || freshReturnBad || takeHandle || weakInit || weakRead
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || useAfterManage || retainedLocal || placeConflict0303 || placeConflict0305 || placeConflict0309 || placeConflict0302 || placeConflict0304 || freshReturnBad || takeHandle || weakInit || weakRead
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
