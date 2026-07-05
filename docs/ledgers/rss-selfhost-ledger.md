@@ -1771,18 +1771,38 @@ CHECKER_TARGET_CODES — until byte-exact):
   skipped (their params would mis-resolve). Fires the closure-capture cases
   (managed/retained/fresh-return-managed closure captures, `x_closure_effect2`).
 
-**Verification:** RS0207 fires on ~25/36 oracle files with **0 false-positives across all
+Additional slices landed this milestone:
+- **Callback arity + return-type (3a49b469):** args passed to a `Fn(...)-> ret` param
+  (parsed from the resolved type string via `strip_type_prefixes`/`fn_type_arity`/
+  `fn_type_return`) are checked for closure arity (`closure_param_count`) and return-type
+  (each closure return expr — tail expr or every block `return` — fed to
+  `return_expr_mismatch`, reusing the RS0208 Ok/Some-payload machinery incl nested
+  `Ok(Some(_))`). Fires noescape-callback-{return-type,arity,nested-return-type,
+  branch-return-type}. Dialect trap: two statements on one line inside `{ }` is a parse
+  error in rss — one stmt per line (surfaced as a compile_checker panic since the checker
+  dogfoods).
+- **Untyped-param empty-actual (6366ee5c):** a bare (effect-prefixed) ident arg resolving
+  to an UNTYPED param of the enclosing fn fires when the callee param type is known
+  (`is_untyped_param`). The analyzer types an un-annotated param as `""` and reports the
+  mismatch; FP-safe because untyped params only occur in malformed code. Fires
+  missing-signature-pieces.
+
+**Verification:** RS0207 fires on ~30/36 oracle files with **0 false-positives across all
 615 fast-subset files** (the `checker_parity_corpus` gate with `RSS_CHECKER_EXTRA_CODES=
 RS0207` unions RS0207 into the compared set, so it IS the corpus-wide FP check). RS0208
-gate unchanged.
+gate unchanged (0 mismatch, ~124s).
 
-**Remaining before RS0207 can bake (22 fast-subset mismatches = 11 files, all
-false-negatives):** the **callback subsystem** (9 files — the big chunk, ~7 distinct
-checks: closure return-type vs `Fn()->Ret` incl nested `Ok(Some(_))` payloads; closure
-arity vs `Fn(args)`; branch/`return`-stmt return typing; closure-PARAM typing for calls
-in the closure body; calling a `Fn`-typed param; `fresh`-ness; ResourcePool factory
-resource/fallible), the `interp` list-literal (list-item-vs-element-type — a different
-mechanism), the `package-manager` fold giant, and `missing-signature-pieces` (empty
-`actual` — an accepted divergence where the checker correctly won't fire). The callback
-subsystem reuses `return_actual_type`/`arg_type_matches` but needs new `Fn`-type-string
-parsing (arity + return extraction) and closure-scope handling — a focused next slice.
+**Remaining before RS0207 can bake (12 fast-subset mismatches = 6 files, all
+false-negatives — each a distinct FP-risky mechanism, oracle messages captured):**
+(1) `noescape-callback-body-call-argument-type` — type a CLOSURE PARAM from the `Fn` arg
+types and check calls inside a PARAMETERIZED closure body (current descent enters only
+parameterless closures); (2) `noescape-callback-call-argument-type` — type a `Fn`-typed
+PARAM and check positional calls to it (`return callback("x")`); (3)
+`noescape-callback-fresh-captured-managed` — a `fresh`-ness dimension ("returns non-fresh
+value `image`, expected `fresh ImageData`"; `arg_type_matches` strips `fresh`);
+(4,5) `resourcepool-new-{non-resource,fallible-factory}` — `ResourcePool<T>.new(create:)`
+is NOT DETECTED by the walker's qualified-call branch (the token before `.new` is `>`, not
+an ident), and needs generic substitution (`create: Fn() -> T`) so `callback_arg_bad` can
+fire; (6) `interp` — list-literal item-vs-element-type (a different mechanism). Plus the
+`package-manager` fold giant for a full-corpus bake. Then add `RS0207` to
+CHECKER_TARGET_CODES.
