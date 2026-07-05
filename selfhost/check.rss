@@ -2619,6 +2619,164 @@ fn fn_has_closure_capture_bad(toks: read List<Tok>, start: read Int, retains: re
     return result
 }
 
+// The aggregate access effect of `name` across an explicit closure body: "take" > "mut" > "read",
+// or "" if `name` never appears as an external use.
+fn capture_body_effect(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, name: read String, params: read Set<String>, inner: read Set<String>) -> String {
+    let mut eff = ""
+    let mut m = bodyOpen + 1
+    while m < bodyClose {
+        if tk_kind(toks: read toks, i: read m) == TOK_IDENT && tk_text(toks: read toks, i: read m) == name && at_symbol(toks: read toks, i: read (m - 1), code: read SYM_DOT) == false && at_symbol(toks: read toks, i: read (m + 1), code: read SYM_LPAREN) == false && at_symbol(toks: read toks, i: read (m + 1), code: read SYM_COLON) == false && Set.contains<String>(set: read params, value: read name) == false && Set.contains<String>(set: read inner, value: read name) == false {
+            let mut occ = "read"
+            if is_kw_text(toks: read toks, i: read (m - 1), word: read "take") || is_kw_text(toks: read toks, i: read (m - 1), word: read "manage") {
+                occ = "take"
+            } else if at_symbol(toks: read toks, i: read (m + 1), code: read SYM_EQ) && at_symbol(toks: read toks, i: read (m + 2), code: read SYM_EQ) == false {
+                occ = "mut"
+            }
+            if occ == "take" {
+                eff = "take"
+            } else if occ == "mut" && eff != "take" {
+                eff = "mut"
+            } else if eff == "" {
+                eff = "read"
+            }
+        }
+        m = m + 1
+    }
+    return eff
+}
+
+// True if the explicit closure at `cp` (the `captures` keyword) violates its capture contract:
+// a used-but-undeclared external (Missing), a declared-but-unused capture (Unused), or a declared
+// effect that differs from the body's use (Mismatch).
+fn capture_contract_bad(toks: read List<Tok>, cp: read Int) -> Bool {
+    let pClose = cp - 1
+    if at_symbol(toks: read toks, i: read pClose, code: read SYM_RPAREN) == false { return false }
+    let mut pOpen = 0 - 1
+    let mut depth = 0
+    let mut s = pClose - 1
+    let mut findOpen = true
+    while findOpen {
+        if s <= 0 {
+            findOpen = false
+        } else if at_symbol(toks: read toks, i: read s, code: read SYM_RPAREN) {
+            depth = depth + 1
+            s = s - 1
+        } else if at_symbol(toks: read toks, i: read s, code: read SYM_LPAREN) {
+            if depth == 0 {
+                pOpen = s
+                findOpen = false
+            } else {
+                depth = depth - 1
+                s = s - 1
+            }
+        } else {
+            s = s - 1
+        }
+    }
+    if pOpen <= 0 || is_kw_text(toks: read toks, i: read (pOpen - 1), word: read "fn") == false { return false }
+    if at_symbol(toks: read toks, i: read (cp + 1), code: read SYM_LPAREN) == false { return false }
+    let capClose = find_matching(toks: read toks, open: read (cp + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    if capClose < 0 { return false }
+    let mut bOpen = 0 - 1
+    let mut b = capClose + 1
+    let mut findBody = true
+    while findBody {
+        if b >= List.len(list: read toks) {
+            findBody = false
+        } else if at_symbol(toks: read toks, i: read b, code: read SYM_LBRACE) {
+            bOpen = b
+            findBody = false
+        } else {
+            b = b + 1
+        }
+    }
+    if bOpen <= 0 { return false }
+    let bClose = find_matching(toks: read toks, open: read bOpen, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    if bClose < 0 { return false }
+    // param names: ident right after `(` or a comma
+    let mut params = Set.new<String>()
+    let mut pp = pOpen + 1
+    while pp < pClose {
+        if is_ident_tok(toks: read toks, i: read pp) && (pp == (pOpen + 1) || at_symbol(toks: read toks, i: read (pp - 1), code: read SYM_COMMA)) {
+            Set.insert<String>(set: mut params, value: read tk_text(toks: read toks, i: read pp))
+        }
+        pp = pp + 1
+    }
+    // inner-declared names (local/let inside the body)
+    let mut inner = Set.new<String>()
+    let mut di = bOpen + 1
+    while di < bClose {
+        if is_kw_text(toks: read toks, i: read di, word: read "let") || is_kw_text(toks: read toks, i: read di, word: read "local") {
+            let mut nm = di + 1
+            if is_kw_text(toks: read toks, i: read nm, word: read "mut") { nm = nm + 1 }
+            if is_ident_tok(toks: read toks, i: read nm) { Set.insert<String>(set: mut inner, value: read tk_text(toks: read toks, i: read nm)) }
+        }
+        di = di + 1
+    }
+    // declared captures: `name|eff` pairs (optional read/mut/take prefix, default read)
+    let mut declPairs = Set.new<String>()
+    let mut c = cp + 2
+    while c < capClose {
+        if is_effect_kw(toks: read toks, i: read c) && is_ident_tok(toks: read toks, i: read (c + 1)) {
+            let eff = tk_text(toks: read toks, i: read c)
+            let nm = tk_text(toks: read toks, i: read (c + 1))
+            Set.insert<String>(set: mut declPairs, value: read String.concat(left: read String.concat(left: read nm, right: read "|"), right: read eff))
+            c = c + 2
+        } else if is_ident_tok(toks: read toks, i: read c) {
+            let nm = tk_text(toks: read toks, i: read c)
+            Set.insert<String>(set: mut declPairs, value: read String.concat(left: read nm, right: read "|read"))
+            c = c + 1
+        } else {
+            c = c + 1
+        }
+    }
+    // observed external uses (distinct); Missing/Mismatch fire here. Only plain identifiers
+    // (TOK_IDENT) are captures — keywords (return/if/let/…) are is_ident_tok but not variables.
+    let mut observedNames = Set.new<String>()
+    let mut m = bOpen + 1
+    while m < bClose {
+        if tk_kind(toks: read toks, i: read m) == TOK_IDENT {
+            let nm = tk_text(toks: read toks, i: read m)
+            if is_upper_head(name: read nm) == false && Set.contains<String>(set: read params, value: read nm) == false && Set.contains<String>(set: read inner, value: read nm) == false && Set.contains<String>(set: read observedNames, value: read nm) == false && at_symbol(toks: read toks, i: read (m - 1), code: read SYM_DOT) == false && at_symbol(toks: read toks, i: read (m + 1), code: read SYM_LPAREN) == false && at_symbol(toks: read toks, i: read (m + 1), code: read SYM_COLON) == false {
+                let eff = capture_body_effect(toks: read toks, bodyOpen: read bOpen, bodyClose: read bClose, name: read nm, params: read params, inner: read inner)
+                if eff != "" {
+                    Set.insert<String>(set: mut observedNames, value: read nm)
+                    let pair = String.concat(left: read String.concat(left: read nm, right: read "|"), right: read eff)
+                    if Set.contains<String>(set: read declPairs, value: read pair) == false {
+                        return true
+                    }
+                }
+            }
+        }
+        m = m + 1
+    }
+    // Unused: a declared capture name never used in the body
+    let mut c2 = cp + 2
+    while c2 < capClose {
+        if is_ident_tok(toks: read toks, i: read c2) && is_effect_kw(toks: read toks, i: read c2) == false {
+            let dn = tk_text(toks: read toks, i: read c2)
+            if Set.contains<String>(set: read observedNames, value: read dn) == false {
+                return true
+            }
+        }
+        c2 = c2 + 1
+    }
+    return false
+}
+
+// Any explicit closure in the file whose capture contract is violated (RS0805).
+fn has_capture_contract_bad(toks: read List<Tok>) -> Bool {
+    let n = List.len(list: read toks)
+    let mut k = 0
+    while k < n {
+        if is_kw_text(toks: read toks, i: read k, word: read "captures") && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_LPAREN) {
+            if capture_contract_bad(toks: read toks, cp: read k) { return true }
+        }
+        k = k + 1
+    }
+    return false
+}
+
 fn fn_has_fresh_return_bad(toks: read List<Tok>, start: read Int, handleFields: read Set<String>, retains: read Set<String>, freshFns: read Set<String>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
@@ -9585,6 +9743,8 @@ fn main() -> Unit {
     let localClass = has_local_class_binding(toks: read toks)
     // RS0701: a non-resource type with a resource-typed field.
     let resourceField = has_resource_field(toks: read toks, resources: read resources)
+    // RS0805: an explicit closure's captures(...) contract doesn't match its body's external uses.
+    let captureContract = has_capture_contract_bad(toks: read toks)
     // RS0604: a fresh-returning call used directly with mut/take.
     let freshMut = has_fresh_requires_local(toks: read toks)
     // RS0603: a fresh return type that is a generic param, not a struct.
@@ -10048,6 +10208,9 @@ fn main() -> Unit {
     if closureCapture0804 {
         Log.write(message: read "RS0804")
     }
+    if captureContract {
+        Log.write(message: read "RS0805")
+    }
     if resourceField {
         Log.write(message: read "RS0701")
     }
@@ -10091,7 +10254,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || useAfterManage || retainedLocal || placeConflict0303 || placeConflict0305 || placeConflict0309 || placeConflict0302 || placeConflict0304 || freshReturnBad || closureCapture0801 || closureCapture0804 || takeHandle || weakInit || weakRead
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || useAfterManage || retainedLocal || placeConflict0303 || placeConflict0305 || placeConflict0309 || placeConflict0302 || placeConflict0304 || freshReturnBad || closureCapture0801 || closureCapture0804 || captureContract || takeHandle || weakInit || weakRead
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
