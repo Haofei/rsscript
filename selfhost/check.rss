@@ -4141,35 +4141,41 @@ fn qualified_type_string(toks: read List<Tok>, ts: read Int, te: read Int, prefi
     return sb
 }
 
-// The RHS type string of a non-generic file alias `type NAME = RHS`, or "" if NAME is
-// not a declared alias. Mirrors the analyzer's expand_type_alias (the oracle compares
-// EXPANDED types). Generic aliases (`type Pair<T> = ...`) are skipped (return "").
-fn type_alias_rhs(toks: read List<Tok>, name: read String) -> String {
+// Index every non-generic file alias `type NAME = RHS`: NAME -> the canonical RHS type
+// string. Built ONCE per file so expand_type_alias is O(1) map lookups instead of an O(n)
+// token scan per lookup (which is O(calls * n) when typing every call argument for RS0207 —
+// the same perf wall as the fn/local indices). Keeps the FIRST decl of a name, exactly as
+// the former type_alias_rhs first-match scan did. Generic aliases (`type Pair<T> = ...`) map
+// their RHS too, but type_token_string of a generic-param RHS is harmless (never matched).
+fn collect_type_alias_index(toks: read List<Tok>) -> Map<String, String> {
     let n = List.len(list: read toks)
+    let mut m = Map<String, String>.new()
     let mut i = 0
-    let mut result = ""
-    let mut done = false
-    while i < n && done == false {
+    while i < n {
         if is_kw_text(toks: read toks, i: read i, word: read "type") {
             let a = i + 1
-            if is_ident_tok(toks: read toks, i: read a) && tk_text(toks: read toks, i: read a) == name && at_symbol(toks: read toks, i: read (a + 1), code: read SYM_EQ) {
-                let ee = next_line_or_block_end(toks: read toks, start: read (a + 2), end: read n)
-                result = type_token_string(toks: read toks, ts: read (a + 2), te: read ee)
-                done = true
+            if is_ident_tok(toks: read toks, i: read a) && at_symbol(toks: read toks, i: read (a + 1), code: read SYM_EQ) {
+                let nm = tk_text(toks: read toks, i: read a)
+                if Map.contains_key<String, String>(map: read m, key: read nm) == false {
+                    let ee = next_line_or_block_end(toks: read toks, start: read (a + 2), end: read n)
+                    let rhs = type_token_string(toks: read toks, ts: read (a + 2), te: read ee)
+                    Map.insert<String, String>(map: mut m, key: read nm, value: read rhs)
+                }
             }
         }
         i = i + 1
     }
-    return result
+    return m
 }
 
-// Expand a bare type-alias root up to a small depth (alias-of-alias chains). A type
-// that is not a bare declared alias is returned unchanged.
-fn expand_type_alias(toks: read List<Tok>, ty: read String) -> String {
+// Expand a bare type-alias root up to a small depth (alias-of-alias chains) via the O(1)
+// alias index. A type that is not a bare declared alias is returned unchanged. Byte-for-byte
+// equal to the former O(n)-scan expand_type_alias (same first-match RHS, same guard depth).
+fn expand_type_alias(aliasIdx: read Map<String, String>, ty: read String) -> String {
     let mut cur = ty
     let mut guard = 0
     while guard < 4 {
-        let rhs = type_alias_rhs(toks: read toks, name: read cur)
+        let rhs = Map.get_or_default<String, String>(map: read aliasIdx, key: read cur, default: read "")
         if String.len(value: read rhs) == 0 { return cur }
         cur = rhs
         guard = guard + 1
@@ -4336,47 +4342,8 @@ fn is_decl_start_kw(toks: read List<Tok>, i: read Int) -> Bool {
     return is_kw_text(toks: read toks, i: read i, word: read "fn") || is_kw_text(toks: read toks, i: read i, word: read "pub") || is_kw_text(toks: read toks, i: read i, word: read "struct") || is_kw_text(toks: read toks, i: read i, word: read "class") || is_kw_text(toks: read toks, i: read i, word: read "resource") || is_kw_text(toks: read toks, i: read i, word: read "const") || is_kw_text(toks: read toks, i: read i, word: read "module") || is_kw_text(toks: read toks, i: read i, word: read "use") || is_kw_text(toks: read toks, i: read i, word: read "protocol") || is_kw_text(toks: read toks, i: read i, word: read "impl") || is_kw_text(toks: read toks, i: read i, word: read "native") || is_kw_text(toks: read toks, i: read i, word: read "opaque") || is_kw_text(toks: read toks, i: read i, word: read "async") || is_kw_text(toks: read toks, i: read i, word: read "features")
 }
 
-// The full canonical return type of a file-declared unqualified `fn name(...)`, or "".
-fn declared_fn_return(toks: read List<Tok>, name: read String) -> String {
-    let n = List.len(list: read toks)
-    let mut i = 0
-    let mut result = ""
-    let mut done = false
-    while i < n && done == false {
-        if at_ident(toks: read toks, i: read i, wid: read WORD_FN) {
-            let a = i + 1
-            if is_ident_tok(toks: read toks, i: read a) && tk_text(toks: read toks, i: read a) == name && at_symbol(toks: read toks, i: read (a + 1), code: read SYM_DOT) == false && (at_symbol(toks: read toks, i: read (a + 1), code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read (a + 1), code: read SYM_LANGLE)) {
-                let rr = fn_return_range(toks: read toks, start: read i)
-                if rr.ok { result = type_token_string(toks: read toks, ts: read rr.ts, te: read rr.te) }
-                done = true
-            }
-        }
-        i = i + 1
-    }
-    return result
-}
-
-// The full canonical return type of a file-declared `fn ns.method(...)`, or "" if the
-// file does not declare it. Takes precedence over the curated stdlib table, since a
-// file may shadow a stdlib signature (e.g. its own `fn Image.load(...) -> fresh Image`).
-fn declared_qualified_return(toks: read List<Tok>, ns: read String, method: read String) -> String {
-    let n = List.len(list: read toks)
-    let mut i = 0
-    let mut result = ""
-    let mut done = false
-    while i < n && done == false {
-        if at_ident(toks: read toks, i: read i, wid: read WORD_FN) {
-            let a = i + 1
-            if is_ident_tok(toks: read toks, i: read a) && tk_text(toks: read toks, i: read a) == ns && at_symbol(toks: read toks, i: read (a + 1), code: read SYM_DOT) && is_ident_tok(toks: read toks, i: read (a + 2)) && tk_text(toks: read toks, i: read (a + 2)) == method {
-                let rr = fn_return_range(toks: read toks, start: read i)
-                if rr.ok { result = type_token_string(toks: read toks, ts: read rr.ts, te: read rr.te) }
-                done = true
-            }
-        }
-        i = i + 1
-    }
-    return result
-}
+// (declared_fn_return / declared_qualified_return were replaced by the O(1)
+// collect_fn_decl_index + return_type_at_fn lookups used inside return_actual_type.)
 
 // The OPERATION range of a select-arm binding `name = OP => { ... }` before matchPos,
 // or ok=false. Reuses RetRange as (opStart, fatArrowPos, ok).
@@ -4449,10 +4416,139 @@ fn with_binding_expr(toks: read List<Tok>, bodyOpen: read Int, matchPos: read In
     return result
 }
 
+// Index every file `fn` declaration: key -> the `fn` token index. An unqualified
+// `fn foo` is keyed "foo"; a qualified `fn Ns.method` is keyed "Ns.method". Built ONCE
+// per file so the return/param-type lookups inside return_actual_type are O(1) instead
+// of an O(n) token scan per call/argument (which is otherwise O(calls * n) — the perf
+// wall that reverted RS0207). Mirrors the fn-matching shape of declared_fn_return /
+// declared_qualified_return; keeps the FIRST decl of a name (same as those scanners).
+fn collect_fn_decl_index(toks: read List<Tok>) -> Map<String, Int> {
+    let n = List.len(list: read toks)
+    let mut m = Map<String, Int>.new()
+    let mut i = 0
+    while i < n {
+        if at_ident(toks: read toks, i: read i, wid: read WORD_FN) {
+            let a = i + 1
+            if is_ident_tok(toks: read toks, i: read a) {
+                if at_symbol(toks: read toks, i: read (a + 1), code: read SYM_DOT) && is_ident_tok(toks: read toks, i: read (a + 2)) {
+                    let key = String.concat(left: read String.concat(left: read tk_text(toks: read toks, i: read a), right: read "."), right: read tk_text(toks: read toks, i: read (a + 2)))
+                    if Map.contains_key<String, Int>(map: read m, key: read key) == false { Map.insert<String, Int>(map: mut m, key: read key, value: read i) }
+                } else {
+                    let key2 = tk_text(toks: read toks, i: read a)
+                    if Map.contains_key<String, Int>(map: read m, key: read key2) == false { Map.insert<String, Int>(map: mut m, key: read key2, value: read i) }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return m
+}
+
+// The full canonical return type of the fn whose declaration begins at token `fnTok`
+// (a `fn` keyword), or "" if it has no explicit return annotation. Mirrors the
+// fn_return_range + type_token_string body of declared_fn_return / declared_qualified_return.
+fn return_type_at_fn(toks: read List<Tok>, fnTok: read Int) -> String {
+    let rr = fn_return_range(toks: read toks, start: read fnTok)
+    if rr.ok { return type_token_string(toks: read toks, ts: read rr.ts, te: read rr.te) }
+    return ""
+}
+
+// The type of parameter `label` of the fn whose declaration begins at token `fnTok`
+// (a `fn` keyword), or "" if it has no such labeled parameter.
+fn param_type_at_fn(toks: read List<Tok>, fnTok: read Int, label: read String) -> String {
+    let a = fnTok + 1
+    let mut pp = dotted_end(toks: read toks, i: read a)
+    if at_symbol(toks: read toks, i: read pp, code: read SYM_LANGLE) {
+        let gc = find_matching(toks: read toks, open: read pp, openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
+        if gc >= 0 { pp = gc + 1 }
+    }
+    if at_symbol(toks: read toks, i: read pp, code: read SYM_LPAREN) {
+        let pc = find_matching(toks: read toks, open: read pp, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+        if pc >= 0 { return param_type_string(toks: read toks, open: read pp, close: read pc, name: read label) }
+    }
+    return ""
+}
+
+// Per-fn local index: name -> ascending list of the `let/local` keyword token indices
+// that declare it, over [bodyOpen, bodyClose). Built ONCE per fn body so that resolving a
+// bare-ident's binding is O(occurrences-of-name) instead of find_let_rhs_start's O(body)
+// token scan per lookup. The stored positions are exactly the `k` values find_let_rhs_start
+// would visit as candidates for that name (same `mut` skip, same is_ident test), so
+// find_let_rhs_fast reproduces its result byte-for-byte — including redeclaration, since
+// the lookup replays the same stmtEnd/eq computation bounded by matchPos.
+fn build_local_index(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int) -> Map<String, List<Int>> {
+    let mut m = Map<String, List<Int>>.new()
+    let empty = List<Int>.new()
+    let mut hasWithSel = false
+    let mut k = bodyOpen + 1
+    while k < bodyClose {
+        let isLet = is_kw_text(toks: read toks, i: read k, word: read "let") || is_kw_text(toks: read toks, i: read k, word: read "local")
+        if isLet {
+            let mut j = k + 1
+            if is_kw_text(toks: read toks, i: read j, word: read "mut") { j = j + 1 }
+            if is_ident_tok(toks: read toks, i: read j) {
+                let nm = tk_text(toks: read toks, i: read j)
+                let mut cur = Map.get_or_default<String, List<Int>>(map: read m, key: read nm, default: read empty)
+                List.push<Int>(list: mut cur, value: read k)
+                Map.insert<String, List<Int>>(map: mut m, key: read nm, value: read cur)
+            }
+        }
+        if is_kw_text(toks: read toks, i: read k, word: read "with") || is_kw_text(toks: read toks, i: read k, word: read "select") { hasWithSel = true }
+        k = k + 1
+    }
+    // Sentinel (key " ws" — a space is not a valid identifier char, so it cannot
+    // collide with a real local) records whether the body uses `with`/`select`, so
+    // return_actual_type can skip the O(body) with_binding_expr / find_select_binding
+    // scans entirely for the common case (they are otherwise hit per non-local ident).
+    if hasWithSel { Map.insert<String, List<Int>>(map: mut m, key: read " ws", value: read empty) }
+    return m
+}
+
+// O(1)-amortized replacement for find_let_rhs_start using the per-fn local index: the
+// RHS-start of the MOST RECENT `let/local name` declaration before matchPos, or -1. Visits
+// only the recorded declarations of `name` (ascending), replaying find_let_rhs_start's exact
+// per-candidate rule (mut skip, next_line_or_block_end bounded by matchPos, find_top_sym for
+// the same-statement `=`), so the result is identical to the O(body) scan.
+fn find_let_rhs_fast(toks: read List<Tok>, matchPos: read Int, name: read String, locals: read Map<String, List<Int>>) -> Int {
+    let mut best = 0 - 1
+    match Map.get<String, List<Int>>(map: read locals, key: read name) {
+        Some(list) => {
+            let cnt = List.len<Int>(list: read list)
+            let mut idx = 0
+            let mut scanning = true
+            while scanning {
+                if idx >= cnt {
+                    scanning = false
+                } else {
+                    let k = List.get<Int>(list: read list, index: read idx)
+                    if k >= matchPos {
+                        scanning = false
+                    } else {
+                        let mut j = k + 1
+                        if is_kw_text(toks: read toks, i: read j, word: read "mut") { j = j + 1 }
+                        if is_ident_tok(toks: read toks, i: read j) && tk_text(toks: read toks, i: read j) == name {
+                            let stmtEnd = next_line_or_block_end(toks: read toks, start: read k, end: read matchPos)
+                            let eq = find_top_sym(toks: read toks, start: read j, end: read stmtEnd, code: read SYM_EQ)
+                            if eq >= 0 { best = eq + 1 }
+                        }
+                        idx = idx + 1
+                    }
+                }
+            }
+        }
+        None => {
+        }
+    }
+    return best
+}
+
 // hir_expr_type_name for the FP-safe subset (literals, builtins, variant-call
 // wildcards). Everything else -> "" (unknown); we never over-claim a type, so we
 // never false-positive — at worst a false-negative that keeps the code unbaked.
-fn return_actual_type(toks: read List<Tok>, s0: read Int, e: read Int, popen: read Int, pclose: read Int, bodyOpen: read Int) -> String {
+// fnIdx / locals are the precomputed O(1) indices (see collect_fn_decl_index /
+// build_local_index) that replace the former O(n)/O(body) declared_fn_return /
+// declared_qualified_return / find_let_rhs_start scans; results are unchanged.
+fn return_actual_type(toks: read List<Tok>, s0: read Int, e: read Int, popen: read Int, pclose: read Int, bodyOpen: read Int, fnIdx: read Map<String, Int>, locals: read Map<String, List<Int>>) -> String {
     let mut s = s0
     if is_effect_kw(toks: read toks, i: read s) { s = s + 1 }
     if is_kw_text(toks: read toks, i: read s, word: read "manage") { s = s + 1 }
@@ -4476,30 +4572,32 @@ fn return_actual_type(toks: read List<Tok>, s0: read Int, e: read Int, popen: re
             if String.len(value: read pt) > 0 { return pt }
         }
         if bodyOpen >= 0 {
-            let lr = find_let_rhs_start(toks: read toks, bodyOpen: read bodyOpen, matchPos: read s0, name: read head)
+            let lr = find_let_rhs_fast(toks: read toks, matchPos: read s0, name: read head, locals: read locals)
             if lr >= 0 {
                 let re2 = stmt_expr_end(toks: read toks, start: read lr, end: read s0)
-                return return_actual_type(toks: read toks, s0: read lr, e: read re2, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen)
+                return return_actual_type(toks: read toks, s0: read lr, e: read re2, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
             }
-            let wb = with_binding_expr(toks: read toks, bodyOpen: read bodyOpen, matchPos: read s0, name: read head)
-            if wb.ok {
-                // `with EXPR? as name`: name binds the Ok payload of EXPR, fresh-stripped.
-                let te2 = wb.te
-                if te2 > wb.ts && at_symbol(toks: read toks, i: read (te2 - 1), code: read SYM_QUESTION) {
-                    let inner = return_actual_type(toks: read toks, s0: read wb.ts, e: read (te2 - 1), popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen)
-                    let payload = str_top_arg(s: read inner, which: read 0)
-                    if String.len(value: read payload) > 0 { return str_strip_fresh(s: read payload) }
+            if Map.contains_key<String, List<Int>>(map: read locals, key: read " ws") {
+                let wb = with_binding_expr(toks: read toks, bodyOpen: read bodyOpen, matchPos: read s0, name: read head)
+                if wb.ok {
+                    // `with EXPR? as name`: name binds the Ok payload of EXPR, fresh-stripped.
+                    let te2 = wb.te
+                    if te2 > wb.ts && at_symbol(toks: read toks, i: read (te2 - 1), code: read SYM_QUESTION) {
+                        let inner = return_actual_type(toks: read toks, s0: read wb.ts, e: read (te2 - 1), popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
+                        let payload = str_top_arg(s: read inner, which: read 0)
+                        if String.len(value: read payload) > 0 { return str_strip_fresh(s: read payload) }
+                    }
                 }
-            }
-            let sb = find_select_binding(toks: read toks, bodyOpen: read bodyOpen, matchPos: read s0, name: read head)
-            if sb.ok {
-                return return_actual_type(toks: read toks, s0: read sb.ts, e: read sb.te, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen)
+                let sb = find_select_binding(toks: read toks, bodyOpen: read bodyOpen, matchPos: read s0, name: read head)
+                if sb.ok {
+                    return return_actual_type(toks: read toks, s0: read sb.ts, e: read sb.te, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
+                }
             }
         }
     }
     // Method chain `EXPR.ok()`: Result<T, E> -> Option<T>.
     if (e - s) >= 4 && at_symbol(toks: read toks, i: read (e - 1), code: read SYM_RPAREN) && at_symbol(toks: read toks, i: read (e - 2), code: read SYM_LPAREN) && is_ident_tok(toks: read toks, i: read (e - 3)) && tk_text(toks: read toks, i: read (e - 3)) == "ok" && at_symbol(toks: read toks, i: read (e - 4), code: read SYM_DOT) {
-        let inner = return_actual_type(toks: read toks, s0: read s, e: read (e - 4), popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen)
+        let inner = return_actual_type(toks: read toks, s0: read s, e: read (e - 4), popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
         if str_type_root(s: read inner) == "Result" {
             let t = str_top_arg(s: read inner, which: read 0)
             if String.len(value: read t) > 0 { return String.concat(left: read String.concat(left: read "Option<", right: read t), right: read ">") }
@@ -4511,8 +4609,11 @@ fn return_actual_type(toks: read List<Tok>, s0: read Int, e: read Int, popen: re
         if close == (e - 1) {
             if head == "Some" { return "Option<?>" }
             if head == "Ok" || head == "Err" { return "Result<?>" }
-            let dr = declared_fn_return(toks: read toks, name: read head)
-            if String.len(value: read dr) > 0 { return dr }
+            let ft = Map.get_or_default<String, Int>(map: read fnIdx, key: read head, default: read (0 - 1))
+            if ft >= 0 {
+                let dr = return_type_at_fn(toks: read toks, fnTok: read ft)
+                if String.len(value: read dr) > 0 { return dr }
+            }
         }
     }
     // Qualified stdlib call `Ns.method(...)` spanning the whole region.
@@ -4520,8 +4621,12 @@ fn return_actual_type(toks: read List<Tok>, s0: read Int, e: read Int, popen: re
         let close = find_matching(toks: read toks, open: read after, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
         if close == (e - 1) {
             let method = tk_text(toks: read toks, i: read (after - 1))
-            let declared = declared_qualified_return(toks: read toks, ns: read head, method: read method)
-            if String.len(value: read declared) > 0 { return declared }
+            let qkey = String.concat(left: read String.concat(left: read head, right: read "."), right: read method)
+            let qt = Map.get_or_default<String, Int>(map: read fnIdx, key: read qkey, default: read (0 - 1))
+            if qt >= 0 {
+                let declared = return_type_at_fn(toks: read toks, fnTok: read qt)
+                if String.len(value: read declared) > 0 { return declared }
+            }
             let rt = stdlib_return_type(ns: read head, method: read method)
             if String.len(value: read rt) > 0 { return rt }
         }
@@ -4603,17 +4708,17 @@ fn expected_variant_payload(expected: read String, variant: read String) -> Stri
 
 // check_return_payload_type (calls.rs): recursively validate a variant payload
 // against its expected type. Returns true if a mismatch is found.
-fn payload_mismatch(toks: read List<Tok>, ps: read Int, pe: read Int, expected: read String, popen: read Int, pclose: read Int, bodyOpen: read Int) -> Bool {
+fn payload_mismatch(toks: read List<Tok>, ps: read Int, pe: read Int, expected: read String, popen: read Int, pclose: read Int, bodyOpen: read Int, fnIdx: read Map<String, Int>, locals: read Map<String, List<Int>>) -> Bool {
     let vp = variant_payload(toks: read toks, s0: read ps, e: read pe)
     let ep = expected_variant_payload(expected: read expected, variant: read vp.name)
     if String.len(value: read vp.name) > 0 && String.len(value: read ep) > 0 {
         if vp.hasPayload {
-            return payload_mismatch(toks: read toks, ps: read vp.ps, pe: read vp.pe, expected: read ep, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen)
+            return payload_mismatch(toks: read toks, ps: read vp.ps, pe: read vp.pe, expected: read ep, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
         }
         if ep != "Unit" { return true }
         return false
     }
-    let actual = return_actual_type(toks: read toks, s0: read ps, e: read pe, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen)
+    let actual = return_actual_type(toks: read toks, s0: read ps, e: read pe, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
     if String.len(value: read actual) == 0 { return false }
     if str_is_unresolved_generic(s: read actual) { return false }
     if arg_type_matches(expected: read expected, actual: read actual) == false { return true }
@@ -4621,23 +4726,23 @@ fn payload_mismatch(toks: read List<Tok>, ps: read Int, pe: read Int, expected: 
 }
 
 // check_return_expr_type (calls.rs) for one `return <expr>` at [s, e).
-fn return_expr_mismatch(toks: read List<Tok>, s: read Int, e: read Int, expected: read String, popen: read Int, pclose: read Int, bodyOpen: read Int) -> Bool {
+fn return_expr_mismatch(toks: read List<Tok>, s: read Int, e: read Int, expected: read String, popen: read Int, pclose: read Int, bodyOpen: read Int, fnIdx: read Map<String, Int>, locals: read Map<String, List<Int>>) -> Bool {
     let root = str_type_root(s: read expected)
     let a0 = str_top_arg(s: read expected, which: read 0)
     let a1 = str_top_arg(s: read expected, which: read 1)
     if root == "Result" && String.len(value: read a1) > 0 {
         let vp = variant_payload(toks: read toks, s0: read s, e: read e)
         if vp.name == "Ok" {
-            if vp.hasPayload { return payload_mismatch(toks: read toks, ps: read vp.ps, pe: read vp.pe, expected: read a0, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen) }
+            if vp.hasPayload { return payload_mismatch(toks: read toks, ps: read vp.ps, pe: read vp.pe, expected: read a0, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals) }
             if a0 != "Unit" { return true }
             return false
         }
         if vp.name == "Err" {
-            if vp.hasPayload { return payload_mismatch(toks: read toks, ps: read vp.ps, pe: read vp.pe, expected: read a1, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen) }
+            if vp.hasPayload { return payload_mismatch(toks: read toks, ps: read vp.ps, pe: read vp.pe, expected: read a1, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals) }
             if a1 != "Unit" { return true }
             return false
         }
-        let actual = return_actual_type(toks: read toks, s0: read s, e: read e, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen)
+        let actual = return_actual_type(toks: read toks, s0: read s, e: read e, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
         if String.len(value: read actual) == 0 { return false }
         if str_is_unresolved_generic(s: read actual) { return false }
         if str_type_root(s: read actual) == "Result" {
@@ -4650,17 +4755,17 @@ fn return_expr_mismatch(toks: read List<Tok>, s: read Int, e: read Int, expected
     if root == "Option" && String.len(value: read a0) > 0 {
         let vp = variant_payload(toks: read toks, s0: read s, e: read e)
         if vp.name == "Some" {
-            if vp.hasPayload { return payload_mismatch(toks: read toks, ps: read vp.ps, pe: read vp.pe, expected: read a0, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen) }
+            if vp.hasPayload { return payload_mismatch(toks: read toks, ps: read vp.ps, pe: read vp.pe, expected: read a0, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals) }
             if a0 != "Unit" { return true }
             return false
         }
         if vp.name == "None" { return false }
-        let actual = return_actual_type(toks: read toks, s0: read s, e: read e, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen)
+        let actual = return_actual_type(toks: read toks, s0: read s, e: read e, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
         if String.len(value: read actual) == 0 { return false }
         if str_is_unresolved_generic(s: read actual) { return false }
         return arg_type_matches(expected: read expected, actual: read actual) == false
     }
-    let actual = return_actual_type(toks: read toks, s0: read s, e: read e, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen)
+    let actual = return_actual_type(toks: read toks, s0: read s, e: read e, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
     if String.len(value: read actual) == 0 { return false }
     if str_is_unresolved_generic(s: read actual) { return false }
     // A variant wildcard (`Result<?>`/`Option<?>`) against a non-Result/Option
@@ -4672,7 +4777,7 @@ fn return_expr_mismatch(toks: read List<Tok>, s: read Int, e: read Int, expected
 }
 
 // Walk one fn body's top-level `return <expr>` statements and check each.
-fn fn_has_return_type_mismatch(toks: read List<Tok>, start: read Int, prefix: read String, declared: read Set<String>) -> Bool {
+fn fn_has_return_type_mismatch(toks: read List<Tok>, start: read Int, prefix: read String, declared: read Set<String>, fnIdx: read Map<String, Int>) -> Bool {
     let rr = fn_return_range(toks: read toks, start: read start)
     if rr.ok == false { return false }
     let expected = qualified_type_string(toks: read toks, ts: read rr.ts, te: read rr.te, prefix: read prefix, declared: read declared)
@@ -4682,6 +4787,8 @@ fn fn_has_return_type_mismatch(toks: read List<Tok>, start: read Int, prefix: re
     if at_symbol(toks: read toks, i: read bo, code: read SYM_LBRACE) == false { return false }
     let bc = find_matching(toks: read toks, open: read bo, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
     if bc < 0 { return false }
+    // Per-fn local index: O(1) bare-ident binding resolution inside return_actual_type.
+    let locals = build_local_index(toks: read toks, bodyOpen: read bo, bodyClose: read bc)
     // Param-list range, for typing bare-ident returns that are parameters.
     let mut pp = dotted_end(toks: read toks, i: read ns)
     if at_symbol(toks: read toks, i: read pp, code: read SYM_LANGLE) {
@@ -4706,7 +4813,7 @@ fn fn_has_return_type_mismatch(toks: read List<Tok>, start: read Int, prefix: re
         } else if is_kw_text(toks: read toks, i: read i, word: read "return") {
             let re = stmt_expr_end(toks: read toks, start: read (i + 1), end: read bc)
             if (i + 1) < re {
-                if return_expr_mismatch(toks: read toks, s: read (i + 1), e: read re, expected: read expected, popen: read popen, pclose: read pclose, bodyOpen: read bo) { hit = true }
+                if return_expr_mismatch(toks: read toks, s: read (i + 1), e: read re, expected: read expected, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals) { hit = true }
             }
             i = i + 1
         } else {
@@ -4802,6 +4909,8 @@ fn has_return_type_mismatch(toks: read List<Tok>) -> Bool {
     let ntok = List.len(list: read toks)
     let prefix = module_prefix(toks: read toks)
     let declared = collect_declared_types(toks: read toks)
+    // File fn-decl index: built ONCE, shared across all fns for O(1) return-type lookups.
+    let fnIdx = collect_fn_decl_index(toks: read toks)
     let mut i = 0
     let mut running = true
     let mut hit = false
@@ -4825,7 +4934,7 @@ fn has_return_type_mismatch(toks: read List<Tok>) -> Bool {
                 if r < 0 {
                     running = false
                 } else {
-                    if fn_has_return_type_mismatch(toks: read toks, start: read i, prefix: read prefix, declared: read declared) { hit = true }
+                    if fn_has_return_type_mismatch(toks: read toks, start: read i, prefix: read prefix, declared: read declared, fnIdx: read fnIdx) { hit = true }
                     i = r
                 }
             } else {
@@ -4836,19 +4945,96 @@ fn has_return_type_mismatch(toks: read List<Tok>) -> Bool {
     return hit
 }
 
+// Curated stdlib parameter-type table (the checker has no file IO, so signatures the
+// analyzer reads from stdlib/*.rssi are embedded here — same pattern as
+// stdlib_return_type). Only entries needed for RS0207 are present; an absent
+// ns.method.label yields "" (unknown => no diagnostic => FP-safe). Values are the exact
+// canonical parameter-type strings the analyzer resolves.
+fn stdlib_param_type(ns: read String, method: read String, label: read String) -> String {
+    if ns == "Log" && method == "write" && label == "message" { return "String" }
+    if ns == "String" && method == "concat" && label == "left" { return "String" }
+    if ns == "String" && method == "concat" && label == "right" { return "String" }
+    if ns == "File" && method == "write" && label == "data" { return "Bytes" }
+    return ""
+}
+
+// Resolve a call parameter's declared type via the O(1) fn index: unqualified callee =>
+// file fn; qualified callee => file `fn ns.method` (shadowing) else the curated stdlib
+// table. A callee not in the index is stdlib/unknown (O(1)).
+fn resolve_param_type(toks: read List<Tok>, ns: read String, name: read String, label: read String, fnIdx: read Map<String, Int>) -> String {
+    if String.len(value: read ns) == 0 {
+        let ft = Map.get_or_default<String, Int>(map: read fnIdx, key: read name, default: read (0 - 1))
+        if ft < 0 { return "" }
+        return param_type_at_fn(toks: read toks, fnTok: read ft, label: read label)
+    }
+    let key = String.concat(left: read String.concat(left: read ns, right: read "."), right: read name)
+    let qt = Map.get_or_default<String, Int>(map: read fnIdx, key: read key, default: read (0 - 1))
+    if qt >= 0 {
+        let d = param_type_at_fn(toks: read toks, fnTok: read qt, label: read label)
+        if String.len(value: read d) > 0 { return d }
+    }
+    return stdlib_param_type(ns: read ns, method: read name, label: read label)
+}
+
+// RS0207 Slice 2: check each labeled argument of one call `callee(label: expr, ...)`
+// against the declared parameter type of `callee` (resolve_param_type via the O(1) fn
+// index). Fires when both the parameter type (alias-expanded) and the argument type
+// (return_actual_type, now index-backed) are concrete and incompatible. UNKNOWN callee /
+// param / arg => no fire (matches the oracle's skip-bias).
+fn call_arg_type_bad(toks: read List<Tok>, ns: read String, callee: read String, open: read Int, close: read Int, popen: read Int, pclose: read Int, bodyOpen: read Int, fnIdx: read Map<String, Int>, locals: read Map<String, List<Int>>, aliasIdx: read Map<String, String>) -> Bool {
+    let mut depth = 0
+    let mut atArgStart = true
+    let mut bad = false
+    let mut k = open + 1
+    while k < close {
+        if depth == 0 && atArgStart && is_ident_tok(toks: read toks, i: read k) && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_COLON) {
+            let label = tk_text(toks: read toks, i: read k)
+            let pt0 = resolve_param_type(toks: read toks, ns: read ns, name: read callee, label: read label, fnIdx: read fnIdx)
+            if String.len(value: read pt0) > 0 {
+                let pt = expand_type_alias(aliasIdx: read aliasIdx, ty: read pt0)
+                if str_is_unresolved_generic(s: read pt) == false {
+                    let cm = find_top_sym(toks: read toks, start: read (k + 2), end: read close, code: read SYM_COMMA)
+                    let mut ae = close
+                    if cm >= 0 { ae = cm }
+                    if (k + 2) < ae {
+                        let at = return_actual_type(toks: read toks, s0: read (k + 2), e: read ae, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
+                        if String.len(value: read at) > 0 && str_is_unresolved_generic(s: read at) == false {
+                            if arg_type_matches(expected: read pt, actual: read at) == false { bad = true }
+                        }
+                    }
+                }
+            }
+        }
+        atArgStart = false
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) {
+            depth = depth - 1
+        } else if depth == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
+            atArgStart = true
+        }
+        k = k + 1
+    }
+    return bad
+}
+
 // RS0207 ARGUMENT_TYPE_MISMATCH (WIP, env-gated) — Slice 1: an annotated binding
 // `let/local NAME: TYPE = EXPR` whose initializer type is incompatible with the
 // annotation (oracle check_binding_type, same argument_type_matches primitive as
 // RS0208). Expected = the annotation (module-qualified); actual = return_actual_type
 // of the initializer. Reuses return_expr_mismatch (Result/Option payload aware).
 // UNKNOWN-biased: an un-typeable initializer yields "" => no fire, matching the
-// oracle's skip-bias.
-fn fn_has_binding_type_mismatch(toks: read List<Tok>, start: read Int, prefix: read String, declared: read Set<String>) -> Bool {
+// oracle's skip-bias. Slice 2: each labeled call argument against the callee's declared
+// parameter type (call_arg_type_bad), for qualified `ns.method(...)` and unqualified
+// `callee(...)` call sites.
+fn fn_has_binding_type_mismatch(toks: read List<Tok>, start: read Int, prefix: read String, declared: read Set<String>, fnIdx: read Map<String, Int>, aliasIdx: read Map<String, String>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
     let bo = function_signature_end(toks: read toks, start: read (ns - 1))
     if at_symbol(toks: read toks, i: read bo, code: read SYM_LBRACE) == false { return false }
     let bc = find_matching(toks: read toks, open: read bo, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
     if bc < 0 { return false }
+    // Per-fn local index: O(1) bare-ident binding resolution inside return_actual_type.
+    let locals = build_local_index(toks: read toks, bodyOpen: read bo, bodyClose: read bc)
     let mut pp = dotted_end(toks: read toks, i: read ns)
     if at_symbol(toks: read toks, i: read pp, code: read SYM_LANGLE) {
         let gc = find_matching(toks: read toks, open: read pp, openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
@@ -4877,14 +5063,29 @@ fn fn_has_binding_type_mismatch(toks: read List<Tok>, start: read Int, prefix: r
                 let eq = find_top_sym(toks: read toks, start: read (j + 2), end: read stmtEnd, code: read SYM_EQ)
                 if eq >= 0 {
                     let annotated = qualified_type_string(toks: read toks, ts: read (j + 2), te: read eq, prefix: read prefix, declared: read declared)
-                    let expected = expand_type_alias(toks: read toks, ty: read annotated)
+                    let expected = expand_type_alias(aliasIdx: read aliasIdx, ty: read annotated)
                     if str_is_unresolved_generic(s: read expected) == false && String.len(value: read expected) > 0 {
                         let ee = stmt_expr_end(toks: read toks, start: read (eq + 1), end: read bc)
                         if (eq + 1) < ee {
-                            if return_expr_mismatch(toks: read toks, s: read (eq + 1), e: read ee, expected: read expected, popen: read popen, pclose: read pclose, bodyOpen: read bo) { hit = true }
+                            if return_expr_mismatch(toks: read toks, s: read (eq + 1), e: read ee, expected: read expected, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals) { hit = true }
                         }
                     }
                 }
+            }
+            i = i + 1
+        } else if is_ident_tok(toks: read toks, i: read i) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_LPAREN) && at_symbol(toks: read toks, i: read (i - 1), code: read SYM_DOT) && is_ident_tok(toks: read toks, i: read (i - 2)) {
+            let callNs = tk_text(toks: read toks, i: read (i - 2))
+            let method = tk_text(toks: read toks, i: read i)
+            let cclose = find_matching(toks: read toks, open: read (i + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+            if cclose >= 0 {
+                if call_arg_type_bad(toks: read toks, ns: read callNs, callee: read method, open: read (i + 1), close: read cclose, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals, aliasIdx: read aliasIdx) { hit = true }
+            }
+            i = i + 1
+        } else if is_ident_tok(toks: read toks, i: read i) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_LPAREN) && at_symbol(toks: read toks, i: read (i - 1), code: read SYM_DOT) == false && is_kw_text(toks: read toks, i: read (i - 1), word: read "fn") == false {
+            let callee = tk_text(toks: read toks, i: read i)
+            let cclose = find_matching(toks: read toks, open: read (i + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+            if cclose >= 0 {
+                if call_arg_type_bad(toks: read toks, ns: read "", callee: read callee, open: read (i + 1), close: read cclose, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals, aliasIdx: read aliasIdx) { hit = true }
             }
             i = i + 1
         } else {
@@ -4899,6 +5100,10 @@ fn has_binding_type_mismatch(toks: read List<Tok>) -> Bool {
     let ntok = List.len(list: read toks)
     let prefix = module_prefix(toks: read toks)
     let declared = collect_declared_types(toks: read toks)
+    // File fn-decl index: built ONCE, shared across all fns (param + return lookups).
+    let fnIdx = collect_fn_decl_index(toks: read toks)
+    // File type-alias index: built ONCE for O(1) alias expansion of arg/param types.
+    let aliasIdx = collect_type_alias_index(toks: read toks)
     let mut i = 0
     let mut running = true
     let mut hit = false
@@ -4922,7 +5127,7 @@ fn has_binding_type_mismatch(toks: read List<Tok>) -> Bool {
                 if r < 0 {
                     running = false
                 } else {
-                    if fn_has_binding_type_mismatch(toks: read toks, start: read i, prefix: read prefix, declared: read declared) { hit = true }
+                    if fn_has_binding_type_mismatch(toks: read toks, start: read i, prefix: read prefix, declared: read declared, fnIdx: read fnIdx, aliasIdx: read aliasIdx) { hit = true }
                     i = r
                 }
             } else {
