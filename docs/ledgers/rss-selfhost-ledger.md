@@ -1885,6 +1885,24 @@ comparison sub-exprs that `return_actual_type` leaves untyped (=> skipped).
 `i < bc .. ce >(` as a generic call `i<bc>` (surfaced as RS0206 via the dogfood compile);
 hoist to `let lo = i + 1; if ce > lo`.
 
+### Milestone 2an — RS0313 ASSIGN_TYPE_MISMATCH (code #55, BAKED)
+
+A reassignment `name = <value>` whose value type doesn't match the local's declared type, e.g.
+`count = "oops"` where `count: Int`. Message: "cannot assign `String` to `count` of type
+`Int`." `fn_has_assign_type_mismatch` reuses the RS0306/RS0311 assignment-detection idiom (a
+lone `=` not followed by `=`, an ident lhs, not preceded by `let`/`mut`/`local`, and — added
+here — not a `.field` assignment) and compares the literal RHS category (String / Numeric /
+Bool / Char, via `literal_scalar_cat`) to the local's declared-type category
+(`type_scalar_cat` over the type from `find_local_decl_type`). Conservative by construction:
+fires only on a literal RHS against an explicitly annotated Int/Float/String/Bool/Char local,
+and only on a cross-category mismatch — Int↔Float coercion stays inside the Numeric category,
+so it never false-fires.
+
+**BAKED as code #55.** Byte-exact 615/615, 0 FP. The single fixture (`count = "oops"` on an
+`Int`) plus corpus. First reuse of the scalar-typing helpers for the assignment (not binding)
+path. Non-literal-RHS mismatches are a deliberate safe false-negative (would need full
+`return_actual_type` context per assignment); none appear in the corpus.
+
 ### Milestone 2am — RS0708 RESOURCEPOOL_MAX_SIZE (code #54, BAKED)
 
 An eager `ResourcePool<T>.new(...)` allocates up front, so its `max_size` must be statically
