@@ -2619,6 +2619,146 @@ fn fn_has_closure_capture_bad(toks: read List<Tok>, start: read Int, retains: re
     return result
 }
 
+// RS0711: a ResourcePool<..>.lazy(…)/.try_lazy(…) factory closure captures a non-owned binding
+// (a parameter or managed `let`) instead of only owned `local` bindings.
+fn fn_has_lazy_capture_bad(toks: read List<Tok>, start: read Int) -> Bool {
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+    if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
+    let bodyClose = find_matching(toks: read toks, open: read sigEnd, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    if bodyClose < 0 { return false }
+    // parameter names (scan the first `(` directly — find_top_sym can't match an opening paren)
+    let mut nonOwned = Set.new<String>()
+    let mut popen = 0 - 1
+    let mut pf = ns
+    while pf < sigEnd {
+        if at_symbol(toks: read toks, i: read pf, code: read SYM_LPAREN) {
+            popen = pf
+            pf = sigEnd
+        } else {
+            pf = pf + 1
+        }
+    }
+    if popen > 0 {
+        let pclose = find_matching(toks: read toks, open: read popen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+        if pclose > 0 {
+            let mut depth = 0
+            let mut q = popen + 1
+            while q < pclose {
+                if at_symbol(toks: read toks, i: read q, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read q, code: read SYM_LANGLE) || at_symbol(toks: read toks, i: read q, code: read SYM_LBRACKET) {
+                    depth = depth + 1
+                } else if at_symbol(toks: read toks, i: read q, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read q, code: read SYM_RANGLE) || at_symbol(toks: read toks, i: read q, code: read SYM_RBRACKET) {
+                    if depth > 0 { depth = depth - 1 }
+                } else if depth == 0 && is_ident_tok(toks: read toks, i: read q) && at_symbol(toks: read toks, i: read (q + 1), code: read SYM_COLON) {
+                    Set.insert<String>(set: mut nonOwned, value: read tk_text(toks: read toks, i: read q))
+                }
+                q = q + 1
+            }
+        }
+    }
+    let mut letImmut = Set.new<String>()
+    let mut letMut = Set.new<String>()
+    collect_let_kinds(toks: read toks, bodyOpen: read sigEnd, bodyClose: read bodyClose, immut: mut letImmut, mutable: mut letMut)
+    let mut k = sigEnd + 1
+    while k < bodyClose {
+        if tk_text(toks: read toks, i: read k) == "ResourcePool" {
+            let mut mpos = k + 1
+            if at_symbol(toks: read toks, i: read (k + 1), code: read SYM_LANGLE) {
+                let rangle = find_matching(toks: read toks, open: read (k + 1), openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
+                if rangle >= 0 { mpos = rangle + 1 }
+            }
+            if at_symbol(toks: read toks, i: read mpos, code: read SYM_DOT) {
+                let method = tk_text(toks: read toks, i: read (mpos + 1))
+                if (method == "lazy" || method == "try_lazy") && at_symbol(toks: read toks, i: read (mpos + 2), code: read SYM_LPAREN) {
+                    let callOpen = mpos + 2
+                    let callClose = find_matching(toks: read toks, open: read callOpen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+                    if callClose > 0 {
+                        let mut op1 = 0 - 1
+                        let mut s = callOpen + 1
+                        while s < callClose {
+                            if at_symbol(toks: read toks, i: read s, code: read SYM_PIPE) {
+                                op1 = s
+                                s = callClose
+                            } else {
+                                s = s + 1
+                            }
+                        }
+                        if op1 > 0 {
+                            let mut closep = 0 - 1
+                            let mut t = op1 + 1
+                            while t < callClose {
+                                if at_symbol(toks: read toks, i: read t, code: read SYM_PIPE) {
+                                    closep = t
+                                    t = callClose
+                                } else {
+                                    t = t + 1
+                                }
+                            }
+                            if closep > 0 {
+                                let mut cparams = Set.new<String>()
+                                let mut cp = op1 + 1
+                                while cp < closep {
+                                    if is_ident_tok(toks: read toks, i: read cp) { Set.insert<String>(set: mut cparams, value: read tk_text(toks: read toks, i: read cp)) }
+                                    cp = cp + 1
+                                }
+                                let mut bodyStart = closep + 1
+                                let mut bodyEnd = callClose
+                                if at_symbol(toks: read toks, i: read (closep + 1), code: read SYM_LBRACE) {
+                                    let bclose = find_matching(toks: read toks, open: read (closep + 1), openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+                                    if bclose > 0 {
+                                        bodyStart = closep + 2
+                                        bodyEnd = bclose
+                                    }
+                                } else {
+                                    let mut d2 = 0
+                                    let mut e = closep + 1
+                                    let mut findEnd = true
+                                    while findEnd {
+                                        if e >= callClose {
+                                            bodyEnd = callClose
+                                            findEnd = false
+                                        } else if at_symbol(toks: read toks, i: read e, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read e, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read e, code: read SYM_LBRACKET) {
+                                            d2 = d2 + 1
+                                            e = e + 1
+                                        } else if at_symbol(toks: read toks, i: read e, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read e, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read e, code: read SYM_RBRACKET) {
+                                            if d2 > 0 {
+                                                d2 = d2 - 1
+                                                e = e + 1
+                                            } else {
+                                                bodyEnd = e
+                                                findEnd = false
+                                            }
+                                        } else if d2 == 0 && at_symbol(toks: read toks, i: read e, code: read SYM_COMMA) {
+                                            bodyEnd = e
+                                            findEnd = false
+                                        } else {
+                                            e = e + 1
+                                        }
+                                    }
+                                }
+                                let mut m = bodyStart
+                                while m < bodyEnd {
+                                    // a real capture is a value, not an argument label (`host:`) or a
+                                    // field/method access base (`x.f`)
+                                    if is_ident_tok(toks: read toks, i: read m) && at_symbol(toks: read toks, i: read (m + 1), code: read SYM_COLON) == false && at_symbol(toks: read toks, i: read (m - 1), code: read SYM_DOT) == false {
+                                        let nm = tk_text(toks: read toks, i: read m)
+                                        if (Set.contains<String>(set: read nonOwned, value: read nm) || Set.contains<String>(set: read letImmut, value: read nm) || Set.contains<String>(set: read letMut, value: read nm)) && Set.contains<String>(set: read cparams, value: read nm) == false {
+                                            return true
+                                        }
+                                    }
+                                    m = m + 1
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        k = k + 1
+    }
+    return false
+}
+
 // The container head immediately enclosing the type-arg at `pos` (ident before the opening `<` of
 // the innermost generic clause containing `pos`), or "".
 fn enclosing_generic_head(toks: read List<Tok>, pos: read Int) -> String {
@@ -10004,6 +10144,7 @@ fn main() -> Unit {
     let mut freshReturnBad = false
     let mut closureCapture0801 = false
     let mut closureCapture0804 = false
+    let mut lazyCaptureBad = false
     let freshFnReg = collect_fresh_fns(toks: read toks)
     let mut retainsReg = Set.new<String>()
     collect_retains(toks: read toks, out: mut retainsReg)
@@ -10201,6 +10342,7 @@ fn main() -> Unit {
                     if bit_set(mask: read pcMask, bitval: read 8) { placeConflict0302 = true }
                     if bit_set(mask: read pcMask, bitval: read 16) { placeConflict0304 = true }
                     if fn_has_fresh_return_bad(toks: read toks, start: read i, handleFields: read handleFieldNames, retains: read retainsReg, freshFns: read freshFnReg) { freshReturnBad = true }
+                    if fn_has_lazy_capture_bad(toks: read toks, start: read i) { lazyCaptureBad = true }
                     let ccMask = fn_has_closure_capture_bad(toks: read toks, start: read i, retains: read retainsReg, noescape: read noescapeReg)
                     if bit_set(mask: read ccMask, bitval: read 1) { closureCapture0801 = true }
                     if bit_set(mask: read ccMask, bitval: read 2) { closureCapture0804 = true }
@@ -10425,6 +10567,9 @@ fn main() -> Unit {
     if resourceGenericBad {
         Log.write(message: read "RS0704")
     }
+    if lazyCaptureBad {
+        Log.write(message: read "RS0711")
+    }
     if resourceField {
         Log.write(message: read "RS0701")
     }
@@ -10468,7 +10613,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || useAfterManage || retainedLocal || placeConflict0303 || placeConflict0305 || placeConflict0309 || placeConflict0302 || placeConflict0304 || freshReturnBad || closureCapture0801 || closureCapture0804 || captureContract || resourcePoolTypeBad || resourceGenericBad || takeHandle || weakInit || weakRead
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || useAfterManage || retainedLocal || placeConflict0303 || placeConflict0305 || placeConflict0309 || placeConflict0302 || placeConflict0304 || freshReturnBad || closureCapture0801 || closureCapture0804 || captureContract || resourcePoolTypeBad || resourceGenericBad || lazyCaptureBad || takeHandle || weakInit || weakRead
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
