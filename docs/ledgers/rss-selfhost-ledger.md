@@ -1899,6 +1899,22 @@ container whose type can't be resolved, is never flagged (a deliberate safe fals
 **BAKED as code #56.** Byte-exact 615/615, 0 FP. The fixture (`values["a"] = 1` on a `Map`)
 plus corpus.
 
+### Milestone 2bb — RS0706/RS0709/RS0710 resource-pool flow (codes #77–79, BAKED)
+
+**RS0706** RESOURCE_PRODUCER_MISSING_TRY: `with <fallible-producer>(…) as B` with no `?` before `as`
+(a `Result<Resource,E>` producer must be unwrapped). Uses `collect_fallible_producers` (fns whose
+return root is `Result<…>` with a resource/`fresh resource` inner, via the depth-0 arrow scan).
+**RS0709** RESOURCE_POOL_ACTIVE_LEASE_CONFLICT: a `with ResourcePool.borrow(pool: mut P)` nested inside
+another borrow of the SAME pool `P` (`borrow_pool_value` extracts `P`; `pool_receiver_root` walks back
+a `Name<…>` receiver). **RS0710** RESOURCE_POOL_DISCARD_NOT_LEASE: `ResourcePool.discard(lease: mut X)`
+where `X` is not bound by any `with …borrow… as X`. All three 0 FP/0 FN.
+
+**RS0707 (fallible `.new` factory) DEFERRED** — the analyzer determines factory fallibility by
+type-inferring the closure body (`is_result_type(hir_expr_type_name(...))`), which for
+`resourcepool-new-non-resource` needs the BUILTIN signature `Image.load -> Result<fresh Image,E>`.
+The token-scan `has_fallible_factory` covers only declared fallible resource-producers; left inert
+(implemented, not baked) pending a builtin-signature table.
+
 ### Milestone 2ba — RS0702 resource-escape + RS0802/RS0803 closure-escape (codes #74–76, BAKED)
 
 The three biggest remaining ownership codes, landed in one batched gate.
