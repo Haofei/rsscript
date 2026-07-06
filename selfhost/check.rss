@@ -2619,6 +2619,78 @@ fn fn_has_closure_capture_bad(toks: read List<Tok>, start: read Int, retains: re
     return result
 }
 
+// A declaration keyword sits at index i (start of a decl whose name+generics follow).
+fn decl_kw_before(toks: read List<Tok>, i: read Int) -> Bool {
+    return is_kw_text(toks: read toks, i: read i, word: read "fn") || is_kw_text(toks: read toks, i: read i, word: read "struct") || is_kw_text(toks: read toks, i: read i, word: read "class") || is_kw_text(toks: read toks, i: read i, word: read "resource") || is_kw_text(toks: read toks, i: read i, word: read "sum") || is_kw_text(toks: read toks, i: read i, word: read "protocol") || is_kw_text(toks: read toks, i: read i, word: read "impl")
+}
+
+// A generic-clause segment starting at `segStart` declares `name` with a non-Resource bound.
+fn seg_is_nonresource_param(toks: read List<Tok>, segStart: read Int, name: read String) -> Bool {
+    if is_ident_tok(toks: read toks, i: read segStart) == false { return false }
+    if tk_text(toks: read toks, i: read segStart) != name { return false }
+    if at_symbol(toks: read toks, i: read (segStart + 1), code: read SYM_COLON) && tk_text(toks: read toks, i: read (segStart + 2)) == "Resource" {
+        return false
+    }
+    return true
+}
+
+// True if `name` is declared as a generic parameter (in some `fn/struct/class/resource/sum/
+// protocol/impl` header `Name<…>`) whose bound is NOT exactly `Resource`.
+fn nonresource_generic_param(toks: read List<Tok>, name: read String) -> Bool {
+    let n = List.len(list: read toks)
+    let mut k = 0
+    let mut found = false
+    while k < n {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE) && k >= 2 && is_ident_tok(toks: read toks, i: read (k - 1)) && decl_kw_before(toks: read toks, i: read (k - 2)) {
+            let close = find_matching(toks: read toks, open: read k, openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
+            if close > 0 {
+                let mut depth = 0
+                let mut segStart = k + 1
+                let mut j = k + 1
+                while j < close {
+                    if at_symbol(toks: read toks, i: read j, code: read SYM_LANGLE) || at_symbol(toks: read toks, i: read j, code: read SYM_LPAREN) {
+                        depth = depth + 1
+                    } else if at_symbol(toks: read toks, i: read j, code: read SYM_RANGLE) || at_symbol(toks: read toks, i: read j, code: read SYM_RPAREN) {
+                        if depth > 0 { depth = depth - 1 }
+                    } else if depth == 0 && at_symbol(toks: read toks, i: read j, code: read SYM_COMMA) {
+                        if seg_is_nonresource_param(toks: read toks, segStart: read segStart, name: read name) { found = true }
+                        segStart = j + 1
+                    }
+                    j = j + 1
+                }
+                if seg_is_nonresource_param(toks: read toks, segStart: read segStart, name: read name) { found = true }
+            }
+        }
+        k = k + 1
+    }
+    return found
+}
+
+// RS0703: any `ResourcePool<X>` whose argument X is a declared/stdlib non-resource type or a
+// non-Resource-bounded generic parameter. Unknown/undeclared X → OK.
+fn has_resource_pool_type_bad(toks: read List<Tok>, resources: read Set<String>, declared: read Set<String>) -> Bool {
+    let n = List.len(list: read toks)
+    let mut k = 0
+    while k < n {
+        if tk_text(toks: read toks, i: read k) == "ResourcePool" && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_LANGLE) && is_ident_tok(toks: read toks, i: read (k + 2)) {
+            let x = tk_text(toks: read toks, i: read (k + 2))
+            let mut fire = false
+            if x == "Resource" {
+                fire = false
+            } else if Set.contains<String>(set: read resources, value: read x) {
+                fire = false
+            } else if Set.contains<String>(set: read declared, value: read x) {
+                fire = true
+            } else if nonresource_generic_param(toks: read toks, name: read x) {
+                fire = true
+            }
+            if fire { return true }
+        }
+        k = k + 1
+    }
+    return false
+}
+
 // The aggregate access effect of `name` across an explicit closure body: "take" > "mut" > "read",
 // or "" if `name` never appears as an external use.
 fn capture_body_effect(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, name: read String, params: read Set<String>, inner: read Set<String>) -> String {
@@ -9745,6 +9817,8 @@ fn main() -> Unit {
     let resourceField = has_resource_field(toks: read toks, resources: read resources)
     // RS0805: an explicit closure's captures(...) contract doesn't match its body's external uses.
     let captureContract = has_capture_contract_bad(toks: read toks)
+    // RS0703: a ResourcePool<X> whose X is a non-resource type or non-Resource-bounded generic param.
+    let resourcePoolTypeBad = has_resource_pool_type_bad(toks: read toks, resources: read resources, declared: read declared)
     // RS0604: a fresh-returning call used directly with mut/take.
     let freshMut = has_fresh_requires_local(toks: read toks)
     // RS0603: a fresh return type that is a generic param, not a struct.
@@ -10211,6 +10285,9 @@ fn main() -> Unit {
     if captureContract {
         Log.write(message: read "RS0805")
     }
+    if resourcePoolTypeBad {
+        Log.write(message: read "RS0703")
+    }
     if resourceField {
         Log.write(message: read "RS0701")
     }
@@ -10254,7 +10331,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || useAfterManage || retainedLocal || placeConflict0303 || placeConflict0305 || placeConflict0309 || placeConflict0302 || placeConflict0304 || freshReturnBad || closureCapture0801 || closureCapture0804 || captureContract || takeHandle || weakInit || weakRead
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || useAfterManage || retainedLocal || placeConflict0303 || placeConflict0305 || placeConflict0309 || placeConflict0302 || placeConflict0304 || freshReturnBad || closureCapture0801 || closureCapture0804 || captureContract || resourcePoolTypeBad || takeHandle || weakInit || weakRead
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
