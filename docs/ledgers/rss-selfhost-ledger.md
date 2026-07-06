@@ -1899,6 +1899,37 @@ container whose type can't be resolved, is never flagged (a deliberate safe fals
 **BAKED as code #56.** Byte-exact 615/615, 0 FP. The fixture (`values["a"] = 1` on a `Map`)
 plus corpus.
 
+### Milestone 2az — RS0711 lazy-pool-factory capture (code #73, BAKED)
+
+`fn_has_lazy_capture_bad`: a `ResourcePool<..>.lazy(…)`/`.try_lazy(…)` factory closure is stored in the
+pool, so it must capture only owned `local` bindings — fires when its `create` closure captures a
+parameter or a managed `let`. Handles **expression-bodied** closures (`create: || Session.open(…)`, no
+braces) by scanning the arg region to a depth-0 comma / call close. Params collected by scanning the
+first `(` directly (the `find_top_sym` opening-paren bug — it hits depth++ before the match).
+**Key FP fix (1 → 0):** exclude argument labels (`host:`) and field-access bases — the real capture is
+the *value* (`read host`), not a coincidentally-named label; `resourcepool-try-borrow-escape` has a
+`local`-capturing factory whose call label `host:` collided with the `host` param. **Baked #73.**
+
+### Milestone 2ay — RS0703/RS0704 resource-generic type validation (codes #71–72, BAKED)
+
+Two structural resource codes sharing the `resources` (file-declared resource names) +
+`collect_declared_types` + `collect_generics` substrate.
+
+**RS0703 — invalid ResourcePool type argument.** `ResourcePool<X>` is valid only when X is a resource
+(or the literal bound `Resource`, or a Resource-bounded generic param). Fires when X is an
+**in-file-declared** non-resource (variant 2 — `struct Image`) or a non-Resource-bounded generic param
+(variant 3 — `<T: Managed>`). **Isolation insight (10 FPs → 0):** `analyze_source` runs per-file, so an
+undeclared/builtin name like `DbConnection` in `db_pool.rss` has `type_kind None` → OK. Do NOT use
+`is_stdlib_type` — fire only on `x ∈ declared` (file-declared struct/class/sum), with `resources`
+checked first so a file-declared resource is always OK.
+
+**RS0704 — resource used generically.** Sub-rule A: a file-declared resource as a generic type-arg of
+a non-pool container (`List<File>`), with two exemptions — under `ResourcePool<…>`, and
+`Result<Resource, E>` at arg-0 in a **return** type (4 corpus files declare a resource and return
+`Result<it>`; a `Result<Resource>` *parameter* still fires). Sub-rules B1/B2: a `resource Name<params>`
+with an unbounded param (B1), or a Resource-bounded param used directly (not under ResourcePool) in a
+field type (B2). New helper `enclosing_generic_head`. Both 0 FP/0 FN. **Baked #71–72.**
+
 ### Milestone 2aw — RS0805 explicit-closure capture contract (code #70, BAKED)
 
 `has_capture_contract_bad` scans each explicit closure `fn(params) captures(list) effects(...) { body }`
