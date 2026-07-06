@@ -1899,6 +1899,17 @@ container whose type can't be resolved, is never flagged (a deliberate safe fals
 **BAKED as code #56.** Byte-exact 615/615, 0 FP. The fixture (`values["a"] = 1` on a `Map`)
 plus corpus.
 
+### Milestone 2aw — RS0805 explicit-closure capture contract (code #70, BAKED)
+
+`has_capture_contract_bad` scans each explicit closure `fn(params) captures(list) effects(...) { body }`
+and fires when the declared captures don't exactly match the body's external-variable uses: a
+used-but-undeclared external (Missing), a declared-but-unused capture (Unused), or a declared effect
+that differs from the body's use (Mismatch, read/mut/take). Self-contained per closure — no cross-fn
+registry. Two dialect gotchas fixed: (1) only `tk_kind == TOK_IDENT` tokens are captures — keywords
+(`return`/`if`/`let`) are `is_ident_tok`-true but not variables (they caused 8 FPs, incl. benchmark
+kernels); (2) `==` scans as two `SYM_EQ`, so assignment detection (→ mut) must check `m+2 != SYM_EQ`.
+Only 4 corpus files use `captures(`. Path: 8 FP → 0. **Baked #70.**
+
 ### Milestone 2av — RS0801/RS0804 closure-capture (codes #68–69, BAKED)
 
 First codes needing real **closure-capture analysis** — the subsystem the borrow tier kept deferring.
