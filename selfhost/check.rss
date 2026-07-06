@@ -2619,6 +2619,138 @@ fn fn_has_closure_capture_bad(toks: read List<Tok>, start: read Int, retains: re
     return result
 }
 
+// The container head immediately enclosing the type-arg at `pos` (ident before the opening `<` of
+// the innermost generic clause containing `pos`), or "".
+fn enclosing_generic_head(toks: read List<Tok>, pos: read Int) -> String {
+    let mut m = pos - 1
+    let mut depth = 0
+    let mut result = ""
+    let mut going = true
+    while going {
+        if m <= 0 {
+            going = false
+        } else if at_symbol(toks: read toks, i: read m, code: read SYM_RANGLE) {
+            depth = depth + 1
+            m = m - 1
+        } else if at_symbol(toks: read toks, i: read m, code: read SYM_LANGLE) {
+            if depth == 0 {
+                if is_ident_tok(toks: read toks, i: read (m - 1)) { result = tk_text(toks: read toks, i: read (m - 1)) }
+                going = false
+            } else {
+                depth = depth - 1
+                m = m - 1
+            }
+        } else {
+            m = m - 1
+        }
+    }
+    return result
+}
+
+// A resource-decl generic-param segment: returns true if UNBOUNDED (B1); records a Resource-bounded
+// param name into `resParams`.
+fn seg_generic_kind(toks: read List<Tok>, segStart: read Int, resParams: mut Set<String>) -> Bool {
+    if is_ident_tok(toks: read toks, i: read segStart) == false { return false }
+    let nm = tk_text(toks: read toks, i: read segStart)
+    if at_symbol(toks: read toks, i: read (segStart + 1), code: read SYM_COLON) == false {
+        return true
+    }
+    if tk_text(toks: read toks, i: read (segStart + 2)) == "Resource" {
+        Set.insert<String>(set: mut resParams, value: read nm)
+    }
+    return false
+}
+
+// RS0704 sub-rule A: a file-declared resource used as a generic type-argument of a non-pool
+// container. Exempt under ResourcePool<…>, and Result<Resource, E> at arg-0 in a return type.
+fn has_resource_generic_arg(toks: read List<Tok>, resources: read Set<String>) -> Bool {
+    let n = List.len(list: read toks)
+    let mut k = 0
+    while k < n {
+        if is_ident_tok(toks: read toks, i: read k) && Set.contains<String>(set: read resources, value: read tk_text(toks: read toks, i: read k)) && k >= 1 && (at_symbol(toks: read toks, i: read (k - 1), code: read SYM_LANGLE) || at_symbol(toks: read toks, i: read (k - 1), code: read SYM_COMMA)) {
+            let head = enclosing_generic_head(toks: read toks, pos: read k)
+            let mut skip = false
+            if head == "ResourcePool" {
+                skip = true
+            } else if head == "Result" && at_symbol(toks: read toks, i: read (k - 1), code: read SYM_LANGLE) {
+                let mut bp = k - 3
+                if is_kw_text(toks: read toks, i: read bp, word: read "fresh") { bp = bp - 1 }
+                if at_symbol(toks: read toks, i: read bp, code: read SYM_ARROW) { skip = true }
+            }
+            if skip == false { return true }
+        }
+        k = k + 1
+    }
+    return false
+}
+
+// RS0704 sub-rules B1/B2: a `resource Name<params>` with an unbounded param (B1), or a
+// Resource-bounded param used directly (not under ResourcePool) in a field type (B2).
+fn has_resource_decl_generic_bad(toks: read List<Tok>) -> Bool {
+    let n = List.len(list: read toks)
+    let mut k = 0
+    while k < n {
+        if is_kw_text(toks: read toks, i: read k, word: read "resource") && is_ident_tok(toks: read toks, i: read (k + 1)) && at_symbol(toks: read toks, i: read (k + 2), code: read SYM_LANGLE) {
+            let gOpen = k + 2
+            let gClose = find_matching(toks: read toks, open: read gOpen, openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
+            if gClose > 0 {
+                let mut resParams = Set.new<String>()
+                let mut depth = 0
+                let mut segStart = gOpen + 1
+                let mut j = gOpen + 1
+                let mut b1 = false
+                while j < gClose {
+                    if at_symbol(toks: read toks, i: read j, code: read SYM_LANGLE) || at_symbol(toks: read toks, i: read j, code: read SYM_LPAREN) {
+                        depth = depth + 1
+                    } else if at_symbol(toks: read toks, i: read j, code: read SYM_RANGLE) || at_symbol(toks: read toks, i: read j, code: read SYM_RPAREN) {
+                        if depth > 0 { depth = depth - 1 }
+                    } else if depth == 0 && at_symbol(toks: read toks, i: read j, code: read SYM_COMMA) {
+                        if seg_generic_kind(toks: read toks, segStart: read segStart, resParams: mut resParams) { b1 = true }
+                        segStart = j + 1
+                    }
+                    j = j + 1
+                }
+                if seg_generic_kind(toks: read toks, segStart: read segStart, resParams: mut resParams) { b1 = true }
+                if b1 { return true }
+                let mut bOpen = gClose + 1
+                let mut findBody = true
+                while findBody {
+                    if bOpen >= n {
+                        findBody = false
+                    } else if at_symbol(toks: read toks, i: read bOpen, code: read SYM_LBRACE) {
+                        findBody = false
+                    } else {
+                        bOpen = bOpen + 1
+                    }
+                }
+                if bOpen < n {
+                    let bClose = find_matching(toks: read toks, open: read bOpen, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+                    if bClose > 0 {
+                        let mut f = bOpen + 1
+                        while f < bClose {
+                            if is_ident_tok(toks: read toks, i: read f) && Set.contains<String>(set: read resParams, value: read tk_text(toks: read toks, i: read f)) && f >= 1 && (at_symbol(toks: read toks, i: read (f - 1), code: read SYM_COLON) || at_symbol(toks: read toks, i: read (f - 1), code: read SYM_LANGLE) || at_symbol(toks: read toks, i: read (f - 1), code: read SYM_COMMA)) {
+                                if enclosing_generic_head(toks: read toks, pos: read f) != "ResourcePool" {
+                                    return true
+                                }
+                            }
+                            f = f + 1
+                        }
+                    }
+                }
+            }
+        }
+        k = k + 1
+    }
+    return false
+}
+
+// RS0704 whole-file predicate.
+fn has_resource_generic_bad(toks: read List<Tok>, resources: read Set<String>) -> Bool {
+    if has_resource_generic_arg(toks: read toks, resources: read resources) { return true }
+    if has_resource_decl_generic_bad(toks: read toks) { return true }
+    return false
+}
+
 // A declaration keyword sits at index i (start of a decl whose name+generics follow).
 fn decl_kw_before(toks: read List<Tok>, i: read Int) -> Bool {
     return is_kw_text(toks: read toks, i: read i, word: read "fn") || is_kw_text(toks: read toks, i: read i, word: read "struct") || is_kw_text(toks: read toks, i: read i, word: read "class") || is_kw_text(toks: read toks, i: read i, word: read "resource") || is_kw_text(toks: read toks, i: read i, word: read "sum") || is_kw_text(toks: read toks, i: read i, word: read "protocol") || is_kw_text(toks: read toks, i: read i, word: read "impl")
@@ -9819,6 +9951,8 @@ fn main() -> Unit {
     let captureContract = has_capture_contract_bad(toks: read toks)
     // RS0703: a ResourcePool<X> whose X is a non-resource type or non-Resource-bounded generic param.
     let resourcePoolTypeBad = has_resource_pool_type_bad(toks: read toks, resources: read resources, declared: read declared)
+    // RS0704: a resource used as a generic argument, or a bad resource-decl generic param.
+    let resourceGenericBad = has_resource_generic_bad(toks: read toks, resources: read resources)
     // RS0604: a fresh-returning call used directly with mut/take.
     let freshMut = has_fresh_requires_local(toks: read toks)
     // RS0603: a fresh return type that is a generic param, not a struct.
@@ -10288,6 +10422,9 @@ fn main() -> Unit {
     if resourcePoolTypeBad {
         Log.write(message: read "RS0703")
     }
+    if resourceGenericBad {
+        Log.write(message: read "RS0704")
+    }
     if resourceField {
         Log.write(message: read "RS0701")
     }
@@ -10331,7 +10468,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || useAfterManage || retainedLocal || placeConflict0303 || placeConflict0305 || placeConflict0309 || placeConflict0302 || placeConflict0304 || freshReturnBad || closureCapture0801 || closureCapture0804 || captureContract || resourcePoolTypeBad || takeHandle || weakInit || weakRead
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || useAfterManage || retainedLocal || placeConflict0303 || placeConflict0305 || placeConflict0309 || placeConflict0302 || placeConflict0304 || freshReturnBad || closureCapture0801 || closureCapture0804 || captureContract || resourcePoolTypeBad || resourceGenericBad || takeHandle || weakInit || weakRead
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
