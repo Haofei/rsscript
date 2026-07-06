@@ -3121,6 +3121,444 @@ fn has_capture_contract_bad(toks: read List<Tok>) -> Bool {
     return false
 }
 
+// Dotted names of fns whose return type root is a resource, or Result<Resource, E>.
+fn collect_producer_fns(toks: read List<Tok>, resources: read Set<String>) -> Set<String> {
+    let n = List.len(list: read toks)
+    let mut out = Set.new<String>()
+    let mut k = 0
+    while k < n {
+        if is_kw_text(toks: read toks, i: read k, word: read "fn") && is_ident_tok(toks: read toks, i: read (k + 1)) {
+            let ns = k + 1
+            // find `->` at depth 0 (works for bodyless fn decls too — don't rely on the body `{`)
+            let mut a = ns + 1
+            let mut arrow = 0 - 1
+            let mut d = 0
+            let mut scanning = true
+            while scanning {
+                if a >= n {
+                    scanning = false
+                } else if at_symbol(toks: read toks, i: read a, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read a, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read a, code: read SYM_LANGLE) {
+                    d = d + 1
+                    a = a + 1
+                } else if at_symbol(toks: read toks, i: read a, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read a, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read a, code: read SYM_RANGLE) {
+                    if d > 0 { d = d - 1 }
+                    a = a + 1
+                } else if d == 0 && at_symbol(toks: read toks, i: read a, code: read SYM_ARROW) {
+                    arrow = a
+                    scanning = false
+                } else if d == 0 && (at_symbol(toks: read toks, i: read a, code: read SYM_LBRACE) || is_kw_text(toks: read toks, i: read a, word: read "fn")) {
+                    scanning = false
+                } else {
+                    a = a + 1
+                }
+            }
+            if arrow > 0 {
+                let mut r = arrow + 1
+                if is_kw_text(toks: read toks, i: read r, word: read "fresh") { r = r + 1 }
+                let root = tk_text(toks: read toks, i: read r)
+                let mut isProducer = false
+                if Set.contains<String>(set: read resources, value: read root) {
+                    isProducer = true
+                } else if root == "Result" && at_symbol(toks: read toks, i: read (r + 1), code: read SYM_LANGLE) && Set.contains<String>(set: read resources, value: read tk_text(toks: read toks, i: read (r + 2))) {
+                    isProducer = true
+                }
+                if isProducer {
+                    Set.insert<String>(set: mut out, value: read dotted_name_text(toks: read toks, i: read ns))
+                }
+            }
+            k = ns
+        } else {
+            k = k + 1
+        }
+    }
+    return out
+}
+
+// M3: ResourcePool.borrow/.try_borrow lease used outside a `with` resource slot.
+fn has_pool_lease_escape(toks: read List<Tok>) -> Bool {
+    let n = List.len(list: read toks)
+    let mut m = 0
+    while m < n {
+        let mt = tk_text(toks: read toks, i: read m)
+        if (mt == "borrow" || mt == "try_borrow") && m >= 2 && at_symbol(toks: read toks, i: read (m - 1), code: read SYM_DOT) {
+            let mut root = m - 2
+            if at_symbol(toks: read toks, i: read (m - 2), code: read SYM_RANGLE) {
+                let mut depth = 0
+                let mut b = m - 2
+                let mut going = true
+                while going {
+                    if b <= 0 {
+                        going = false
+                    } else if at_symbol(toks: read toks, i: read b, code: read SYM_RANGLE) {
+                        depth = depth + 1
+                        b = b - 1
+                    } else if at_symbol(toks: read toks, i: read b, code: read SYM_LANGLE) {
+                        depth = depth - 1
+                        if depth == 0 {
+                            root = b - 1
+                            going = false
+                        } else {
+                            b = b - 1
+                        }
+                    } else {
+                        b = b - 1
+                    }
+                }
+            }
+            if tk_text(toks: read toks, i: read root) == "ResourcePool" && is_kw_text(toks: read toks, i: read (root - 1), word: read "with") == false {
+                return true
+            }
+        }
+        m = m + 1
+    }
+    return false
+}
+
+// M4: a resource producer (a producer-fn call or a resource constructor `R(`) that is not the
+// resource expression of a `with` (its root ident is not immediately preceded by `with`), and is
+// not the producer fn's own declaration (`fn R.open(...)`).
+fn has_producer_escape(toks: read List<Tok>, resources: read Set<String>, producerFns: read Set<String>) -> Bool {
+    let n = List.len(list: read toks)
+    let mut k = 0
+    while k < n {
+        if is_ident_tok(toks: read toks, i: read k) && (is_kw_text(toks: read toks, i: read (k - 1), word: read "return") || at_symbol(toks: read toks, i: read (k - 1), code: read SYM_EQ)) {
+            // only a producer that is directly returned or bound (`let x = producer`) escapes — one
+            // used as a sub-expression (e.g. a factory `create: || Producer.open(...)` closure) is OK
+            // resource constructor `R(`
+            let mut isProducer = false
+            if Set.contains<String>(set: read resources, value: read tk_text(toks: read toks, i: read k)) && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_LPAREN) {
+                isProducer = true
+            } else {
+                // producer-fn call `A.b(` — match the dotted name against the registry
+                let de = dotted_end(toks: read toks, i: read k)
+                if de > k && at_symbol(toks: read toks, i: read de, code: read SYM_LPAREN) && Set.contains<String>(set: read producerFns, value: read dotted_name_text(toks: read toks, i: read k)) {
+                    isProducer = true
+                }
+            }
+            if isProducer { return true }
+        }
+        k = k + 1
+    }
+    return false
+}
+
+// The operand base of an escape after skipping read/mut/take, `?`, and Ok/Err/Some wrappers.
+fn escape_operand_is(toks: read List<Tok>, pos: read Int, name: read String) -> Bool {
+    let mut p = pos
+    let mut going = true
+    while going {
+        if is_effect_kw(toks: read toks, i: read p) {
+            p = p + 1
+        } else if (tk_text(toks: read toks, i: read p) == "Ok" || tk_text(toks: read toks, i: read p) == "Err" || tk_text(toks: read toks, i: read p) == "Some") && at_symbol(toks: read toks, i: read (p + 1), code: read SYM_LPAREN) {
+            p = p + 2
+        } else {
+            going = false
+        }
+    }
+    return tk_text(toks: read toks, i: read p) == name
+}
+
+// M1: within a `with … as B { body }`, B escapes via return / plain `let` / manage / take-arg /
+// retains-arg. (Closure captures are M2/M5.)
+fn with_binding_escapes(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, name: read String, retains: read Set<String>) -> Bool {
+    let mut k = bodyOpen + 1
+    while k < bodyClose {
+        if is_kw_text(toks: read toks, i: read k, word: read "return") {
+            if escape_operand_is(toks: read toks, pos: read (k + 1), name: read name) { return true }
+        } else if is_kw_text(toks: read toks, i: read k, word: read "let") {
+            // let [mut] x = <wrap> B
+            let mut e = k + 1
+            while e < bodyClose && at_symbol(toks: read toks, i: read e, code: read SYM_EQ) == false && at_symbol(toks: read toks, i: read e, code: read SYM_LBRACE) == false {
+                e = e + 1
+            }
+            if e < bodyClose && at_symbol(toks: read toks, i: read e, code: read SYM_EQ) {
+                if escape_operand_is(toks: read toks, pos: read (e + 1), name: read name) { return true }
+            }
+        } else if is_kw_text(toks: read toks, i: read k, word: read "manage") {
+            if tk_text(toks: read toks, i: read (k + 1)) == name { return true }
+        } else if is_kw_text(toks: read toks, i: read k, word: read "take") && tk_text(toks: read toks, i: read (k + 1)) == name && (at_symbol(toks: read toks, i: read (k + 2), code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read (k + 2), code: read SYM_COMMA)) {
+            return true
+        } else if is_ident_tok(toks: read toks, i: read k) && tk_text(toks: read toks, i: read k) == name && is_effect_kw(toks: read toks, i: read (k - 1)) && at_symbol(toks: read toks, i: read (k - 2), code: read SYM_COLON) {
+            // retains-arg: `callee(… label: <effect> B …)` where callee|label declares retains(label)
+            let label = tk_text(toks: read toks, i: read (k - 3))
+            let callOpen = enclosing_paren_open(toks: read toks, p: read k, floor: read bodyOpen)
+            if callOpen > 0 && is_ident_tok(toks: read toks, i: read (callOpen - 1)) {
+                let key = String.concat(left: read String.concat(left: read tk_text(toks: read toks, i: read (callOpen - 1)), right: read "|"), right: read label)
+                if Set.contains<String>(set: read retains, value: read key) { return true }
+            }
+        }
+        k = k + 1
+    }
+    return false
+}
+
+// M2/M5: within a `with … as B { body }`, a closure captures B. A stored `let` closure (M2) or a
+// ResourcePool factory `create:` closure (M5) fires; a bare `local` closure does not.
+fn with_binding_closure_capture(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, name: read String) -> Bool {
+    let mut k = bodyOpen + 1
+    while k < bodyClose {
+        // closure body `{` preceded by a `|`
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE) && at_symbol(toks: read toks, i: read (k - 1), code: read SYM_PIPE) {
+            let cbClose = find_matching(toks: read toks, open: read k, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+            let op = find_closure_open_pipe(toks: read toks, cb: read k, floor: read bodyOpen)
+            if cbClose > 0 && op > 0 {
+                // does the body reference B (bare)?
+                let mut refsB = false
+                let mut m = k + 1
+                while m < cbClose {
+                    if is_ident_tok(toks: read toks, i: read m) && tk_text(toks: read toks, i: read m) == name && at_symbol(toks: read toks, i: read (m - 1), code: read SYM_DOT) == false && at_symbol(toks: read toks, i: read (m + 1), code: read SYM_COLON) == false {
+                        refsB = true
+                    }
+                    m = m + 1
+                }
+                if refsB {
+                    // stored-let closure, or a factory closure (`create:` / preceded by a label:)
+                    let mut bpos = op - 1
+                    if is_effect_kw(toks: read toks, i: read bpos) { bpos = bpos - 1 }
+                    // see through a `Some(`/`Ok(`/`Err(` wrapper around the closure
+                    if at_symbol(toks: read toks, i: read bpos, code: read SYM_LPAREN) && is_ident_tok(toks: read toks, i: read (bpos - 1)) && (tk_text(toks: read toks, i: read (bpos - 1)) == "Some" || tk_text(toks: read toks, i: read (bpos - 1)) == "Ok" || tk_text(toks: read toks, i: read (bpos - 1)) == "Err") {
+                        bpos = bpos - 2
+                        if is_effect_kw(toks: read toks, i: read bpos) { bpos = bpos - 1 }
+                    }
+                    if at_symbol(toks: read toks, i: read bpos, code: read SYM_EQ) {
+                        let mut kw = bpos - 2
+                        if is_kw_text(toks: read toks, i: read kw, word: read "mut") { kw = kw - 1 }
+                        if is_kw_text(toks: read toks, i: read kw, word: read "let") { return true }
+                    } else if at_symbol(toks: read toks, i: read bpos, code: read SYM_COLON) {
+                        // a labelled closure argument (create: || …) — factory capture
+                        return true
+                    }
+                }
+            }
+            k = cbClose
+        }
+        k = k + 1
+    }
+    return false
+}
+
+// M5: within a `with … as B { body }`, a ResourcePool factory (.new/.try_new/.lazy/.try_lazy)
+// `create` closure (expression- or block-bodied) references B.
+fn with_body_factory_captures(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, name: read String) -> Bool {
+    let mut k = bodyOpen + 1
+    while k < bodyClose {
+        if tk_text(toks: read toks, i: read k) == "ResourcePool" {
+            let mut mpos = k + 1
+            if at_symbol(toks: read toks, i: read (k + 1), code: read SYM_LANGLE) {
+                let rangle = find_matching(toks: read toks, open: read (k + 1), openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
+                if rangle >= 0 { mpos = rangle + 1 }
+            }
+            if at_symbol(toks: read toks, i: read mpos, code: read SYM_DOT) {
+                let method = tk_text(toks: read toks, i: read (mpos + 1))
+                if (method == "new" || method == "try_new" || method == "lazy" || method == "try_lazy") && at_symbol(toks: read toks, i: read (mpos + 2), code: read SYM_LPAREN) {
+                    let callOpen = mpos + 2
+                    let callClose = find_matching(toks: read toks, open: read callOpen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+                    if callClose > 0 {
+                        // scan the whole factory-call arg region for a bare reference to B
+                        let mut m = callOpen + 1
+                        while m < callClose {
+                            if is_ident_tok(toks: read toks, i: read m) && tk_text(toks: read toks, i: read m) == name && at_symbol(toks: read toks, i: read (m - 1), code: read SYM_DOT) == false && at_symbol(toks: read toks, i: read (m + 1), code: read SYM_COLON) == false {
+                                return true
+                            }
+                            m = m + 1
+                        }
+                        k = callClose
+                    }
+                }
+            }
+        }
+        k = k + 1
+    }
+    return false
+}
+
+// RS0702 whole-file predicate combining all five paths.
+fn has_resource_escape(toks: read List<Tok>, resources: read Set<String>, retains: read Set<String>) -> Bool {
+    if has_pool_lease_escape(toks: read toks) { return true }
+    let producerFns = collect_producer_fns(toks: read toks, resources: read resources)
+    if has_producer_escape(toks: read toks, resources: read resources, producerFns: read producerFns) { return true }
+    // M1/M2/M5: iterate `with EXPR as B { body }`
+    let n = List.len(list: read toks)
+    let mut k = 0
+    while k < n {
+        if is_kw_text(toks: read toks, i: read k, word: read "with") {
+            // find `as B {` — the binding name follows `as`, the body `{` follows the name
+            let mut a = k + 1
+            let mut asPos = 0 - 1
+            while a < n {
+                if is_kw_text(toks: read toks, i: read a, word: read "as") {
+                    asPos = a
+                    a = n
+                } else if at_symbol(toks: read toks, i: read a, code: read SYM_LBRACE) {
+                    a = n
+                } else {
+                    a = a + 1
+                }
+            }
+            if asPos > 0 && is_ident_tok(toks: read toks, i: read (asPos + 1)) && at_symbol(toks: read toks, i: read (asPos + 2), code: read SYM_LBRACE) {
+                let name = tk_text(toks: read toks, i: read (asPos + 1))
+                let bodyOpen = asPos + 2
+                let bodyClose = find_matching(toks: read toks, open: read bodyOpen, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+                if bodyClose > 0 {
+                    if with_binding_escapes(toks: read toks, bodyOpen: read bodyOpen, bodyClose: read bodyClose, name: read name, retains: read retains) { return true }
+                    if with_binding_closure_capture(toks: read toks, bodyOpen: read bodyOpen, bodyClose: read bodyClose, name: read name) { return true }
+                    if with_body_factory_captures(toks: read toks, bodyOpen: read bodyOpen, bodyClose: read bodyClose, name: read name) { return true }
+                }
+            }
+        } else if is_kw_text(toks: read toks, i: read k, word: read "view") && is_ident_tok(toks: read toks, i: read (k + 1)) && at_symbol(toks: read toks, i: read (k + 2), code: read SYM_EQ) {
+            // `view NAME = EXPR` desugars to a with-lease scoped to the rest of the enclosing block
+            let name = tk_text(toks: read toks, i: read (k + 1))
+            let mut depth = 0
+            let mut e = k + 3
+            let mut ec = 0 - 1
+            while e < n {
+                if at_symbol(toks: read toks, i: read e, code: read SYM_LBRACE) {
+                    depth = depth + 1
+                    e = e + 1
+                } else if at_symbol(toks: read toks, i: read e, code: read SYM_RBRACE) {
+                    if depth == 0 {
+                        ec = e
+                        e = n
+                    } else {
+                        depth = depth - 1
+                        e = e + 1
+                    }
+                } else {
+                    e = e + 1
+                }
+            }
+            if ec > 0 {
+                if with_binding_escapes(toks: read toks, bodyOpen: read (k + 2), bodyClose: read ec, name: read name, retains: read retains) { return true }
+                if with_binding_closure_capture(toks: read toks, bodyOpen: read (k + 2), bodyClose: read ec, name: read name) { return true }
+            }
+        }
+        k = k + 1
+    }
+    return false
+}
+
+// `name` escapes as an ordinary value: return name / let y = name / pass to a non-noescape param.
+fn value_escapes(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, name: read String, noescape: read Set<String>) -> Bool {
+    let mut k = bodyOpen + 1
+    while k < bodyClose {
+        if is_kw_text(toks: read toks, i: read k, word: read "return") {
+            let mut p = k + 1
+            if is_effect_kw(toks: read toks, i: read p) { p = p + 1 }
+            // `return name` escapes; `return name()` (a direct call) does not
+            if tk_text(toks: read toks, i: read p) == name && at_symbol(toks: read toks, i: read (p + 1), code: read SYM_LPAREN) == false && at_symbol(toks: read toks, i: read (p + 1), code: read SYM_DOT) == false { return true }
+        } else if is_kw_text(toks: read toks, i: read k, word: read "let") {
+            let mut e = k + 1
+            while e < bodyClose && at_symbol(toks: read toks, i: read e, code: read SYM_EQ) == false && at_symbol(toks: read toks, i: read e, code: read SYM_LBRACE) == false {
+                e = e + 1
+            }
+            if e < bodyClose && at_symbol(toks: read toks, i: read e, code: read SYM_EQ) {
+                let mut r = e + 1
+                if is_effect_kw(toks: read toks, i: read r) { r = r + 1 }
+                if tk_text(toks: read toks, i: read r) == name && at_symbol(toks: read toks, i: read (r + 1), code: read SYM_LPAREN) == false && at_symbol(toks: read toks, i: read (r + 1), code: read SYM_DOT) == false { return true }
+            }
+        } else if is_ident_tok(toks: read toks, i: read k) && tk_text(toks: read toks, i: read k) == name && is_effect_kw(toks: read toks, i: read (k - 1)) && at_symbol(toks: read toks, i: read (k - 2), code: read SYM_COLON) && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_LPAREN) == false {
+            // pass as arg `callee(label: <effect> name)` — escapes unless the target is noescape
+            let label = tk_text(toks: read toks, i: read (k - 3))
+            let callOpen = enclosing_paren_open(toks: read toks, p: read k, floor: read bodyOpen)
+            if callOpen > 0 && is_ident_tok(toks: read toks, i: read (callOpen - 1)) {
+                let key = String.concat(left: read String.concat(left: read tk_text(toks: read toks, i: read (callOpen - 1)), right: read "|"), right: read label)
+                if Set.contains<String>(set: read noescape, value: read key) == false { return true }
+            }
+        }
+        k = k + 1
+    }
+    return false
+}
+
+// A stored `let X = |…| { … name … }` closure captures `name` (RS0802 stored-closure escape).
+fn stored_closure_captures(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, name: read String) -> Bool {
+    let mut k = bodyOpen + 1
+    while k < bodyClose {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE) && at_symbol(toks: read toks, i: read (k - 1), code: read SYM_PIPE) {
+            let cbClose = find_matching(toks: read toks, open: read k, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+            let op = find_closure_open_pipe(toks: read toks, cb: read k, floor: read bodyOpen)
+            if cbClose > 0 && op > 0 {
+                // stored: opening pipe preceded (skip effect) by `=` and a `let`
+                let mut bpos = op - 1
+                if is_effect_kw(toks: read toks, i: read bpos) { bpos = bpos - 1 }
+                let mut stored = false
+                if at_symbol(toks: read toks, i: read bpos, code: read SYM_EQ) {
+                    let mut kw = bpos - 2
+                    if is_kw_text(toks: read toks, i: read kw, word: read "mut") { kw = kw - 1 }
+                    if is_kw_text(toks: read toks, i: read kw, word: read "let") { stored = true }
+                }
+                if stored {
+                    let mut m = k + 1
+                    while m < cbClose {
+                        if is_ident_tok(toks: read toks, i: read m) && tk_text(toks: read toks, i: read m) == name && at_symbol(toks: read toks, i: read (m - 1), code: read SYM_DOT) == false && at_symbol(toks: read toks, i: read (m + 1), code: read SYM_COLON) == false {
+                            return true
+                        }
+                        m = m + 1
+                    }
+                }
+            }
+            k = cbClose
+        }
+        k = k + 1
+    }
+    return false
+}
+
+// RS0802: a `noescape Fn()` parameter that is retained by its own fn (signature variant) or escapes
+// in the body (return / let-store / pass-ordinary / stored-closure capture).
+fn fn_noescape_escape(toks: read List<Tok>, start: read Int, noescape: read Set<String>) -> Bool {
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+    // signature-retains variant: a noescape param `p` with `retains(p)` in the same signature
+    let mut q = ns
+    while q < sigEnd {
+        if is_ident_tok(toks: read toks, i: read q) && at_symbol(toks: read toks, i: read (q + 1), code: read SYM_COLON) && is_kw_text(toks: read toks, i: read (q + 2), word: read "noescape") {
+            let pname = tk_text(toks: read toks, i: read q)
+            let mut rr = ns
+            while rr < sigEnd {
+                if is_kw_text(toks: read toks, i: read rr, word: read "retains") && at_symbol(toks: read toks, i: read (rr + 1), code: read SYM_LPAREN) && tk_text(toks: read toks, i: read (rr + 2)) == pname {
+                    return true
+                }
+                rr = rr + 1
+            }
+        }
+        q = q + 1
+    }
+    if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
+    let bodyClose = find_matching(toks: read toks, open: read sigEnd, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    if bodyClose < 0 { return false }
+    // escape variant: any noescape param escaping in the body
+    let mut pit = ns
+    while pit < sigEnd {
+        if is_ident_tok(toks: read toks, i: read pit) && at_symbol(toks: read toks, i: read (pit + 1), code: read SYM_COLON) && is_kw_text(toks: read toks, i: read (pit + 2), word: read "noescape") {
+            let pname = tk_text(toks: read toks, i: read pit)
+            if value_escapes(toks: read toks, bodyOpen: read sigEnd, bodyClose: read bodyClose, name: read pname, noescape: read noescape) { return true }
+            if stored_closure_captures(toks: read toks, bodyOpen: read sigEnd, bodyClose: read bodyClose, name: read pname) { return true }
+        }
+        pit = pit + 1
+    }
+    return false
+}
+
+// RS0803: a `local`-bound closure that escapes (return / let-store / pass-ordinary).
+fn fn_local_closure_escape(toks: read List<Tok>, start: read Int, noescape: read Set<String>) -> Bool {
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+    if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
+    let bodyClose = find_matching(toks: read toks, open: read sigEnd, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    if bodyClose < 0 { return false }
+    let mut k = sigEnd + 1
+    while k < bodyClose {
+        // `local X = |` — a local closure binding
+        if is_kw_text(toks: read toks, i: read k, word: read "local") && is_ident_tok(toks: read toks, i: read (k + 1)) && at_symbol(toks: read toks, i: read (k + 2), code: read SYM_EQ) && at_symbol(toks: read toks, i: read (k + 3), code: read SYM_PIPE) {
+            let cname = tk_text(toks: read toks, i: read (k + 1))
+            if value_escapes(toks: read toks, bodyOpen: read sigEnd, bodyClose: read bodyClose, name: read cname, noescape: read noescape) { return true }
+        }
+        k = k + 1
+    }
+    return false
+}
+
 fn fn_has_fresh_return_bad(toks: read List<Tok>, start: read Int, handleFields: read Set<String>, retains: read Set<String>, freshFns: read Set<String>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
@@ -10145,6 +10583,8 @@ fn main() -> Unit {
     let mut closureCapture0801 = false
     let mut closureCapture0804 = false
     let mut lazyCaptureBad = false
+    let mut noescapeEscape = false
+    let mut localClosureEscape = false
     let freshFnReg = collect_fresh_fns(toks: read toks)
     let mut retainsReg = Set.new<String>()
     collect_retains(toks: read toks, out: mut retainsReg)
@@ -10152,6 +10592,8 @@ fn main() -> Unit {
     collect_noescape_params(toks: read toks, out: mut noescapeReg)
     let mut handleFieldNames = Set.new<String>()
     collect_handle_field_names(toks: read toks, out: mut handleFieldNames)
+    // RS0702: a resource escaping its `with`/`view` scope (5 paths).
+    let resourceEscape = has_resource_escape(toks: read toks, resources: read resources, retains: read retainsReg)
     let mut assignTypeMismatch = false
     // RS0312: index assignment on a non-List container.
     let indexAssignBad = has_index_assign_non_list(toks: read toks)
@@ -10343,6 +10785,8 @@ fn main() -> Unit {
                     if bit_set(mask: read pcMask, bitval: read 16) { placeConflict0304 = true }
                     if fn_has_fresh_return_bad(toks: read toks, start: read i, handleFields: read handleFieldNames, retains: read retainsReg, freshFns: read freshFnReg) { freshReturnBad = true }
                     if fn_has_lazy_capture_bad(toks: read toks, start: read i) { lazyCaptureBad = true }
+                    if fn_noescape_escape(toks: read toks, start: read i, noescape: read noescapeReg) { noescapeEscape = true }
+                    if fn_local_closure_escape(toks: read toks, start: read i, noescape: read noescapeReg) { localClosureEscape = true }
                     let ccMask = fn_has_closure_capture_bad(toks: read toks, start: read i, retains: read retainsReg, noescape: read noescapeReg)
                     if bit_set(mask: read ccMask, bitval: read 1) { closureCapture0801 = true }
                     if bit_set(mask: read ccMask, bitval: read 2) { closureCapture0804 = true }
@@ -10570,6 +11014,15 @@ fn main() -> Unit {
     if lazyCaptureBad {
         Log.write(message: read "RS0711")
     }
+    if noescapeEscape {
+        Log.write(message: read "RS0802")
+    }
+    if localClosureEscape {
+        Log.write(message: read "RS0803")
+    }
+    if resourceEscape {
+        Log.write(message: read "RS0702")
+    }
     if resourceField {
         Log.write(message: read "RS0701")
     }
@@ -10613,7 +11066,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || useAfterManage || retainedLocal || placeConflict0303 || placeConflict0305 || placeConflict0309 || placeConflict0302 || placeConflict0304 || freshReturnBad || closureCapture0801 || closureCapture0804 || captureContract || resourcePoolTypeBad || resourceGenericBad || lazyCaptureBad || takeHandle || weakInit || weakRead
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || useAfterManage || retainedLocal || placeConflict0303 || placeConflict0305 || placeConflict0309 || placeConflict0302 || placeConflict0304 || freshReturnBad || closureCapture0801 || closureCapture0804 || captureContract || resourcePoolTypeBad || resourceGenericBad || lazyCaptureBad || resourceEscape || noescapeEscape || localClosureEscape || takeHandle || weakInit || weakRead
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
