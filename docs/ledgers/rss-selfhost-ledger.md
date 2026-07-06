@@ -1899,6 +1899,31 @@ container whose type can't be resolved, is never flagged (a deliberate safe fals
 **BAKED as code #56.** Byte-exact 615/615, 0 FP. The fixture (`values["a"] = 1` on a `Map`)
 plus corpus.
 
+### Milestone 2ba — RS0702 resource-escape + RS0802/RS0803 closure-escape (codes #74–76, BAKED)
+
+The three biggest remaining ownership codes, landed in one batched gate.
+
+**RS0702 (resource escape) — 5 message paths in `has_resource_escape` + 8 sub-fns.** A resource must
+live/die inside a `with`/`view` scope. **M1** (`with_binding_escapes`): the binding escapes via
+`return`/plain-`let`/`manage`/`take`-arg/retains-arg (reuses the retains registry + enclosing-paren
+callee resolution). **M2** (`with_binding_closure_capture`): a stored `let` closure capturing the
+binding — sees through `Some(…)`/`Ok(…)` wrappers. **M3** (`has_pool_lease_escape`): a
+`ResourcePool.borrow`/`.try_borrow` lease not in a `with` slot. **M4** (`has_producer_escape` +
+`collect_producer_fns`): a resource-producer (constructor `R(` or a fn returning a resource/
+`Result<Resource,E>`) that is directly **returned or bound** — fires only when preceded by `return`/`=`,
+NOT when used as a sub-expression (the crux FP: a producer inside a factory `create: || R.open(…)`
+closure is allowed). Producer registry uses a depth-0 `->` scan (not `function_signature_end`, which
+breaks on **bodyless** fn decls). **M5** (`with_body_factory_captures`): a ResourcePool factory
+`create` closure (expression- or block-bodied) referencing the with-binding. Also handles `view NAME =`
+(desugars to a with-lease scoped to the enclosing block). Path: 0 FP/2 FN → 7 FP (factory producers) →
+0/0.
+
+**RS0802 (noescape callback escapes) / RS0803 (local closure escapes).** Shared `value_escapes`:
+`return X` / `let y = X` / pass to a non-noescape param (guarded against call-results `X()` and
+noescape-forwarding). RS0802 adds the signature-retains variant (`fn f(p: noescape Fn())
+effects(retains(p))`) and `stored_closure_captures` (a `let s = ||{… p …}`). RS0803 targets
+`local X = |…|` closures. Reuses `collect_noescape_params`. Both byte-exact first try. **Baked #74–76.**
+
 ### Milestone 2az — RS0711 lazy-pool-factory capture (code #73, BAKED)
 
 `fn_has_lazy_capture_bad`: a `ResourcePool<..>.lazy(…)`/`.try_lazy(…)` factory closure is stored in the
