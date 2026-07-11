@@ -7505,8 +7505,8 @@ pub(in crate::reg_vm) fn native_scalar_replace_variants_in_region(
                 });
             }
             // `DeepCopy` of a scalar-replaced variant: drop it (scalars copy by value).
-            RegInstr::DeepCopy { reg } | RegInstr::DeepCopyElided { reg } if region && var[*reg] => {
-            }
+            RegInstr::DeepCopy { reg } | RegInstr::DeepCopyElided { reg }
+                if region && var[*reg] => {}
             // Copy-through, remapping jump/match targets.
             RegInstr::Jump { target }
             | RegInstr::JumpIfBool { target, .. }

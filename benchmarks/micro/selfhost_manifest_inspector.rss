@@ -2,7 +2,7 @@ features: native, local
 
 // Self-hosted RSS tool: inspect an `rsspkg.toml` package manifest and emit a JSON
 // report. Used both as a real tool and as a cross-backend (VM/JIT/AOT) benchmark
-// and hardening pressure-test (see docs/rss-selfhost-ledger.md).
+// and hardening pressure-test (see docs/self-hosting.md).
 
 fn edition_of(package: read JsonValue) -> Result<fresh String, JsonError> {
     // SH-002: the optional-field-or-default shape collapses to one line via the

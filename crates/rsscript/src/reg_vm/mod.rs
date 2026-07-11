@@ -28,6 +28,8 @@ use crate::hir::{
     ParamEffect, TypeInfo,
 };
 use crate::interfaces::builtin_interfaces;
+#[cfg(test)]
+use crate::interfaces::standard_package_interfaces;
 use crate::package::package_lowering_input;
 use crate::syntax::ast::{
     BinaryOp, Callee, MatchFieldPattern, MatchLiteral, MatchPattern, merge_programs,
@@ -37,8 +39,7 @@ use crate::syntax::parse_source;
 use crate::text_util::string_pad_len;
 use crate::text_util::{
     decode_char_token, decode_string_token, string_format, string_pad, string_slice_range,
-    type_arg_names,
-    type_root_name,
+    type_arg_names, type_root_name,
 };
 use crate::vm_value::{
     TypeLayout, TypedVec, ValueMap, VmClosure, VmMapKey, VmNative, VmStruct, VmValue, intern_layout,
@@ -1273,6 +1274,36 @@ pub fn reg_vm_compile_source(file: &str, source: &str) -> Result<RegVmExecutable
     let mut program = parse_source(file, source);
     crate::syntax::isolate_module_namespaces(&mut program);
     let hir = Hir::from_syntax_with_standard_package_interfaces(&program);
+    Ok(RegVmExecutable {
+        unit: Rc::new(RegUnit::lower(&hir)?),
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn reg_vm_compile_sources(
+    sources: &[(&str, &str)],
+) -> Result<RegVmExecutable, EvalError> {
+    let interface_refs = standard_package_interfaces().collect::<Vec<_>>();
+    let diagnostics = crate::analyze_sources_with_interfaces(sources, &interface_refs);
+    let errors = diagnostics
+        .into_iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Error)
+        .collect::<Vec<_>>();
+    if !errors.is_empty() {
+        return Err(EvalError::Diagnostics(errors));
+    }
+
+    let mut program = merge_programs(
+        sources
+            .iter()
+            .map(|(path, source)| parse_source(path, source)),
+    );
+    crate::syntax::isolate_module_namespaces(&mut program);
+    let interface_programs = interface_refs
+        .iter()
+        .map(|(path, source)| parse_source(path, source))
+        .collect::<Vec<_>>();
+    let hir = Hir::from_syntax_with_interfaces(&program, &interface_programs);
     Ok(RegVmExecutable {
         unit: Rc::new(RegUnit::lower(&hir)?),
     })
@@ -2611,8 +2642,7 @@ fn jit_missed_opt_report(unit: &RegUnit, native: &NativeState) -> Vec<String> {
             Some(_) => {
                 if native.report_native_ok.contains(&key) {
                     block.push("  native: ok".to_string());
-                } else if let Some(reason) =
-                    native.stats.unprofitable_declined_fns.get(&func.name)
+                } else if let Some(reason) = native.stats.unprofitable_declined_fns.get(&func.name)
                 {
                     // Runtime attribution (ground truth from this run's cost-model
                     // consult) — the common "why no JIT" case now the model enforces
@@ -2622,9 +2652,7 @@ fn jit_missed_opt_report(unit: &RegUnit, native: &NativeState) -> Vec<String> {
                 } else {
                     // Eligible but never observed running natively this run
                     // (tier-deferred, not called hot, or demoted by another gate).
-                    block.push(
-                        "  native: eligible (not run natively this execution)".to_string(),
-                    );
+                    block.push("  native: eligible (not run natively this execution)".to_string());
                 }
             }
             None => {

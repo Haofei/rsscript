@@ -606,10 +606,7 @@ impl<'a> RustLowerer<'a> {
     /// keep their `&mut Struct` binding and are never dereferenced here.
     fn is_mut_copy_scalar_param(&self, name: &str) -> bool {
         matches!(self.param_effects.get(name), Some(DataEffect::Mut))
-            && self
-                .value_types
-                .get(name)
-                .is_some_and(is_copy_type_ref)
+            && self.value_types.get(name).is_some_and(is_copy_type_ref)
     }
 
     pub(super) fn lower_expr(&mut self, expr: &Expr) -> String {

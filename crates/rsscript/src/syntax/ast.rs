@@ -567,9 +567,10 @@ impl MatchPattern {
     pub fn binding_names(&self) -> Vec<&str> {
         match self {
             Self::Binding { name, .. } => vec![name.as_str()],
-            Self::Variant { bindings, .. } => {
-                bindings.iter().flat_map(MatchPattern::binding_names).collect()
-            }
+            Self::Variant { bindings, .. } => bindings
+                .iter()
+                .flat_map(MatchPattern::binding_names)
+                .collect(),
             Self::Struct { fields, .. } => fields
                 .iter()
                 .flat_map(|field| {

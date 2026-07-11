@@ -23,7 +23,7 @@ LLMs); everything else lives here, grouped into categorized subfolders.
 
 | Doc | What it governs |
 |-----|-----------------|
-| [rss-selfhost-ledger.md](ledgers/rss-selfhost-ledger.md) | Self-hosting progress ledger for the RSScript-in-RSScript toolchain. |
+| [self-hosting.md](self-hosting.md) | Single canonical self-hosting doc: status, validation model, dump formats, and `SH-*` ledger. |
 
 ## Development
 

@@ -1034,7 +1034,9 @@ fn callee_label(callee: &Callee) -> String {
 fn package_expr_label(expr: &Expr) -> String {
     match expr {
         Expr::Ident(name, _) => name.clone(),
-        Expr::String(value, _) | Expr::CharLiteral(value, _) | Expr::MultilineString(value, _) => format!("{value:?}"),
+        Expr::String(value, _) | Expr::CharLiteral(value, _) | Expr::MultilineString(value, _) => {
+            format!("{value:?}")
+        }
         Expr::Field { base, name, .. } => format!("{}.{}", package_expr_label(base), name),
         Expr::Index { base, .. } => format!("{}[]", package_expr_label(base)),
         Expr::Call { callee, .. } => format!("{}()", callee_label(callee)),

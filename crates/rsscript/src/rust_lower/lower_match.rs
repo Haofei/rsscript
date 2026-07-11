@@ -266,8 +266,7 @@ impl RustLowerer<'_> {
                         rebindings.extend(self.owned_rebinding_for(name, &field_ty));
                     }
                     MatchPattern::Wildcard(_) => {}
-                    _ => rebindings
-                        .extend(self.owned_payload_rebindings(binding, Some(&field_ty))),
+                    _ => rebindings.extend(self.owned_payload_rebindings(binding, Some(&field_ty))),
                 }
             }
             return rebindings;

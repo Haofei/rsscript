@@ -1,6 +1,8 @@
 // Self-hosted rss AST-dump producer — step 2 of frontend object parity.
 //
-// Streams the canonical AST dump defined in selfhost/AST_FORMAT.md, matching the
+features: local
+//
+// Streams the canonical AST dump defined in docs/self-hosting.md, matching the
 // Rust oracle (crate::syntax::parse_source_raw serialized by crate::selfhost_parity)
 // byte-for-byte at tier 0. Reads rss source as argv[0]; prints the dump.
 //
@@ -8,8 +10,8 @@
 // parser STREAMS the dump directly — no handle-based AST is materialized. Each
 // parse fn emits its node line(s) at a threaded `depth` and returns the token
 // index just past what it consumed (the same cursor convention as the recognition
-// parser in scan.rss). The shared tokenizer / accessors / constants come from the
-// prepended scan.rss prelude.
+// parser in scan.rss). The shared tokenizer / accessors / constants come from
+// scan.rss.
 //
 // COVERAGE: this is a growing core, not yet full-grammar. It targets the curated
 // samples under selfhost/samples/ast/ (byte-exact, gated non-ignored) and is
@@ -19,6 +21,10 @@
 //
 // rss constraints honored (SH-016/017/018): char literals, `||` chains kept on one
 // line / wrapped via operator continuation, cursors threaded positionally.
+
+module selfhost.astdump
+
+use selfhost.scan.*
 
 // Symbol codes not already named in scan.rss (single-char ASCII).
 const SYM_QUESTION: Int = 63    // '?'

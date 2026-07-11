@@ -861,8 +861,8 @@ fn main() -> Unit {
 }
 "#;
 
-    let output =
-        eval_source_main("reg-vm-live-closure-intrinsics.rss", source).expect("eval should succeed");
+    let output = eval_source_main("reg-vm-live-closure-intrinsics.rss", source)
+        .expect("eval should succeed");
 
     let expected = "true\n\
 true\n\

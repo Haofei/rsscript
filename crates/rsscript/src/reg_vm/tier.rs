@@ -259,10 +259,9 @@ fn jit_function_scalar_leaf_callable(jit_fn: &vm_jit::JitFunction) -> bool {
                 | vm_jit::JitInstr::HostCall { .. }
                 | vm_jit::JitInstr::MemoizedHostCall { .. }
                 | vm_jit::JitInstr::Return { .. }
-                | vm_jit::JitInstr::Bail
-        // Flat-list direct ops (get/set/len/is_empty) come from the canonical
-        // `is_flat_list_direct` set so this list can't drift out of sync with the
-        // cost model / simple-subset sites (the historical leaf-set omission bug).
+                | vm_jit::JitInstr::Bail // Flat-list direct ops (get/set/len/is_empty) come from the canonical
+                                         // `is_flat_list_direct` set so this list can't drift out of sync with the
+                                         // cost model / simple-subset sites (the historical leaf-set omission bug).
         ) || instr.is_flat_list_direct())
             && !matches!(
                 instr,

@@ -884,7 +884,10 @@ fn collect_ordered_moved_uses_from_expr(
                 }
             }
         }
-        HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Char { .. } | HirExpr::Unknown(_) => {}
+        HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Char { .. }
+        | HirExpr::Unknown(_) => {}
         HirExpr::Match {
             value,
             scrutinee_effect,
@@ -1464,7 +1467,9 @@ fn callee_display(callee: &Callee) -> String {
 fn local_expr_label(expr: &Expr) -> String {
     match expr {
         Expr::Ident(name, _) => name.clone(),
-        Expr::String(value, _) | Expr::CharLiteral(value, _) | Expr::MultilineString(value, _) => format!("{value:?}"),
+        Expr::String(value, _) | Expr::CharLiteral(value, _) | Expr::MultilineString(value, _) => {
+            format!("{value:?}")
+        }
         Expr::Field { base, name, .. } => format!("{}.{}", local_expr_label(base), name),
         Expr::Index { base, .. } => format!("{}[]", local_expr_label(base)),
         Expr::Call { callee, .. } => format!("{}()", callee_display(callee)),

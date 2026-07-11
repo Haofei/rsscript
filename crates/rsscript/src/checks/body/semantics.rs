@@ -559,13 +559,7 @@ pub(super) fn check_match_pattern_matches_type(
             // `Some` carries one payload, `None` carries none.
             let expected = if name == "Some" { 1 } else { 0 };
             if !bindings.is_empty() && bindings.len() != expected {
-                push_variant_pattern_arity_mismatch(
-                    analyzer,
-                    name,
-                    expected,
-                    bindings.len(),
-                    span,
-                );
+                push_variant_pattern_arity_mismatch(analyzer, name, expected, bindings.len(), span);
                 return;
             }
             if name == "Some"

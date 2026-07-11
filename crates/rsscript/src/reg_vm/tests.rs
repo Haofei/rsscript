@@ -610,8 +610,8 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-        let executable = reg_vm_compile_source("deepcopy-elision.rss", source)
-            .expect("lowering should succeed");
+        let executable =
+            reg_vm_compile_source("deepcopy-elision.rss", source).expect("lowering should succeed");
 
         let sum_reads_id = executable.unit.function_ids["sum_reads"];
         let sum_reads = executable.unit.functions[sum_reads_id].as_ref();

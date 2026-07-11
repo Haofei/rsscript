@@ -2672,7 +2672,8 @@ impl RegLowerer<'_> {
                             });
                         }
                         _ => {
-                            failures.extend(self.lower_match_pattern(binding, field_reg, field_ty)?);
+                            failures
+                                .extend(self.lower_match_pattern(binding, field_reg, field_ty)?);
                         }
                     }
                 }
@@ -2781,10 +2782,7 @@ impl RegLowerer<'_> {
                 MatchPattern::Variant { name, bindings, .. }
                     if name == "Some" && !bindings.is_empty() =>
                 {
-                    some_binding = bindings
-                        .iter()
-                        .flat_map(MatchPattern::binding_names)
-                        .next();
+                    some_binding = bindings.iter().flat_map(MatchPattern::binding_names).next();
                 }
                 MatchPattern::Variant { name, .. } if name == "None" => {
                     has_none = true;
@@ -3780,6 +3778,9 @@ fn collect_free_locals_expr(
                 collect_free_locals_block(&arm.body, &mut arm_bound, free);
             }
         }
-        HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Char { .. } | HirExpr::Unknown(_) => {}
+        HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Char { .. }
+        | HirExpr::Unknown(_) => {}
     }
 }

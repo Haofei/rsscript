@@ -1,0 +1,6 @@
+features: async, native, local
+
+async fn send_generic<T>() -> Result<Unit, ChannelError> {
+    let channel = Channel.message<T>(capacity: 4)?
+    return Ok(Unit)
+}

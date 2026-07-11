@@ -43,8 +43,8 @@ const DEFAULT_THRESHOLD_PCT: f64 = 75.0;
 /// run-to-run noise so it never false-fails, but tight enough to catch a moderate
 /// regression. Kernels not listed here use `DEFAULT_THRESHOLD_PCT`.
 const CASE_THRESHOLD_PCT: &[(&str, f64)] = &[
-    ("native_scalar_loop.rss", 30.0), // pure scalar, ~7% observed
-    ("selfhost_mailbox_bench.rss", 25.0), // real workload, ~2% run-to-run (baseline refreshed)
+    ("native_scalar_loop.rss", 30.0),       // pure scalar, ~7% observed
+    ("selfhost_mailbox_bench.rss", 25.0),   // real workload, ~2% run-to-run (baseline refreshed)
     ("selfhost_stdlib_reporter.rss", 40.0), // real workload, ~10% run-to-run
 ];
 

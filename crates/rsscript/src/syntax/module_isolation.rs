@@ -14,6 +14,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::text_util::{type_arg_names, type_root_name};
+
 use super::ast::{
     Block, Callee, ConstDecl, Expr, FunctionDecl, Item, MatchArm, MatchFieldPattern, MatchPattern,
     Program, ProtocolImpl, Stmt, SumTypeDecl, TypeAliasDecl, TypeDecl, TypeRef,
@@ -747,13 +749,12 @@ impl Resolver {
     fn rewrite_callee(&self, callee: &mut Callee, file: &str, scope: &mut HashSet<String>) {
         match callee {
             Callee::Name(name) => {
-                if !scope.contains(name)
-                    && let Some(mangled) = self.resolve_bare(file, name)
-                {
-                    *name = mangled;
-                }
+                *name = self.rewrite_bare_callee_segment(name, file, scope);
             }
             Callee::Qualified { namespace, name } => {
+                *namespace = self.rewrite_type_name_text(namespace, file);
+                let method_root = type_root_name(name).to_string();
+                *name = self.rewrite_callee_segment_type_args(name, file);
                 if scope.contains(namespace.as_str()) {
                     return;
                 }
@@ -769,14 +770,20 @@ impl Resolver {
                 if self
                     .module_defs
                     .get(&prefix)
-                    .is_some_and(|names| names.contains(name))
+                    .is_some_and(|names| names.contains(method_root.as_str()))
                 {
-                    *callee = Callee::Name(format!("{prefix}{MODULE_SEP}{name}"));
+                    *callee = Callee::Name(self.rewrite_callee_segment_with_root(
+                        name,
+                        &format!("{prefix}{MODULE_SEP}{method_root}"),
+                        file,
+                    ));
                 }
             }
             Callee::ReceiverCall {
                 receiver, method, ..
             } => {
+                let method_root = type_root_name(method).to_string();
+                *method = self.rewrite_callee_segment_type_args(method, file);
                 // A lowercase `module.fn()` parses as a receiver call, but if the
                 // receiver names a module (not a local in scope) whose free
                 // function is `method`, it is a module-qualified call: collapse it
@@ -786,14 +793,95 @@ impl Resolver {
                     && self
                         .module_defs
                         .get(&prefix)
-                        .is_some_and(|names| names.contains(method))
+                        .is_some_and(|names| names.contains(method_root.as_str()))
                 {
-                    *callee = Callee::Name(format!("{prefix}{MODULE_SEP}{method}"));
+                    *callee = Callee::Name(self.rewrite_callee_segment_with_root(
+                        method,
+                        &format!("{prefix}{MODULE_SEP}{method_root}"),
+                        file,
+                    ));
                     return;
                 }
                 self.rewrite_expr(receiver, file, scope);
             }
         }
+    }
+
+    fn rewrite_bare_callee_segment(
+        &self,
+        segment: &str,
+        file: &str,
+        scope: &HashSet<String>,
+    ) -> String {
+        let root = type_root_name(segment);
+        let resolved_root = if scope.contains(root) {
+            root.to_string()
+        } else {
+            self.resolve_bare(file, root)
+                .unwrap_or_else(|| root.to_string())
+        };
+        self.rewrite_callee_segment_with_root(segment, &resolved_root, file)
+    }
+
+    fn rewrite_callee_segment_with_root(&self, segment: &str, root: &str, file: &str) -> String {
+        let Some(args) = type_arg_names(segment) else {
+            return root.to_string();
+        };
+        let args = args
+            .into_iter()
+            .map(|arg| self.rewrite_type_name_text(arg, file))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("{root}<{args}>")
+    }
+
+    fn rewrite_callee_segment_type_args(&self, segment: &str, file: &str) -> String {
+        let Some(args) = type_arg_names(segment) else {
+            return segment.to_string();
+        };
+        let root = type_root_name(segment);
+        let args = args
+            .into_iter()
+            .map(|arg| self.rewrite_type_name_text(arg, file))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("{root}<{args}>")
+    }
+
+    fn rewrite_type_name_text(&self, type_name: &str, file: &str) -> String {
+        let trimmed = type_name.trim();
+        let (fresh, base) = trimmed
+            .strip_prefix("fresh ")
+            .map_or(("", trimmed), |rest| ("fresh ", rest));
+        let rewritten = if let Some(args) = type_arg_names(base) {
+            let root = self.rewrite_type_name_root(type_root_name(base), file);
+            let args = args
+                .into_iter()
+                .map(|arg| self.rewrite_type_name_text(arg, file))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{root}<{args}>")
+        } else {
+            self.rewrite_type_name_root(base, file)
+        };
+        format!("{fresh}{rewritten}")
+    }
+
+    fn rewrite_type_name_root(&self, root: &str, file: &str) -> String {
+        if let Some(mangled) = self.resolve_type_namespace(file, root) {
+            return mangled;
+        }
+        if let Some((namespace, type_name)) = root.rsplit_once('.') {
+            let prefix = module_prefix_from_dotted(namespace);
+            if self
+                .module_types
+                .get(&prefix)
+                .is_some_and(|types| types.contains(type_name))
+            {
+                return format!("{prefix}{MODULE_SEP}{type_name}");
+            }
+        }
+        root.to_string()
     }
 
     fn rewrite_type(&self, ty: &mut TypeRef, file: &str) {
@@ -1111,6 +1199,72 @@ mod tests {
         assert!(
             body.contains("a_b__count"),
             "multi-segment qualified call should resolve to a_b__count: {body}"
+        );
+    }
+
+    #[test]
+    fn module_local_type_rewrites_in_explicit_call_type_args() {
+        let mut program = parse_source(
+            "scan.rss",
+            "module selfhost.scan\n\nstruct Tok {\n    value: Int\n}\n\nfn make() -> fresh List<Tok> {\n    let mut toks = List.new<Tok>()\n    let t = Tok(value: 1)\n    List.push(list: mut toks, value: read t)\n    return toks\n}\n",
+        );
+        isolate_module_namespaces(&mut program);
+        let body = body_of(&program, "selfhost_scan__make");
+        assert!(
+            body.contains("new<selfhost_scan__Tok>"),
+            "explicit generic call arg should be module-qualified: {body}"
+        );
+    }
+
+    #[test]
+    fn module_local_generic_free_call_rewrites_root_and_type_args() {
+        let mut program = parse_source(
+            "scan.rss",
+            "module selfhost.scan\n\nstruct Tok {\n    value: Int\n}\n\nfn id<T>(value: read T) -> T {\n    return value\n}\n\nfn make() -> Tok {\n    let t = Tok(value: 1)\n    return id<Tok>(value: read t)\n}\n",
+        );
+        isolate_module_namespaces(&mut program);
+        let body = body_of(&program, "selfhost_scan__make");
+        assert!(
+            body.contains("selfhost_scan__id<selfhost_scan__Tok>"),
+            "module-local generic free call should mangle root and type args: {body}"
+        );
+    }
+
+    #[test]
+    fn imported_generic_free_call_rewrites_root_and_type_args() {
+        let lib = parse_source(
+            "lib.rss",
+            "module lib\n\nstruct Item {\n    value: Int\n}\n\nfn id<T>(value: read T) -> T {\n    return value\n}\n",
+        );
+        let app = parse_source(
+            "app.rss",
+            "module app\n\nuse lib.id\nuse lib.Item\n\nfn run(x: read Item) -> Item {\n    return id<Item>(value: read x)\n}\n",
+        );
+        let mut program = merge_programs([lib, app]);
+        isolate_module_namespaces(&mut program);
+        let body = body_of(&program, "app__run");
+        assert!(
+            body.contains("lib__id<lib__Item>"),
+            "imported generic free call should mangle root and type args: {body}"
+        );
+    }
+
+    #[test]
+    fn qualified_generic_module_call_rewrites_root_and_type_args() {
+        let lib = parse_source(
+            "lib.rss",
+            "module lib\n\nstruct Item {\n    value: Int\n}\n\nfn id<T>(value: read T) -> T {\n    return value\n}\n",
+        );
+        let app = parse_source(
+            "app.rss",
+            "module app\n\nfn run(x: read lib.Item) -> lib.Item {\n    return lib.id<lib.Item>(value: read x)\n}\n",
+        );
+        let mut program = merge_programs([lib, app]);
+        isolate_module_namespaces(&mut program);
+        let body = body_of(&program, "app__run");
+        assert!(
+            body.contains("lib__id<lib__Item>"),
+            "qualified generic module call should mangle root and type args: {body}"
         );
     }
 }

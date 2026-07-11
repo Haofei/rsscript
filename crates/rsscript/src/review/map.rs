@@ -603,7 +603,9 @@ pub(super) fn review_map_expr_type_name_with_facts(
 pub(super) fn review_expr_label(expr: &Expr) -> String {
     match expr {
         Expr::Ident(name, _) => name.clone(),
-        Expr::String(value, _) | Expr::CharLiteral(value, _) | Expr::MultilineString(value, _) => format!("{value:?}"),
+        Expr::String(value, _) | Expr::CharLiteral(value, _) | Expr::MultilineString(value, _) => {
+            format!("{value:?}")
+        }
         Expr::Field { base, name, .. } => format!("{}.{}", review_expr_label(base), name),
         Expr::Index { base, .. } => format!("{}[]", review_expr_label(base)),
         Expr::Call { callee, .. } => format!("{}()", review_callee_display(callee)),

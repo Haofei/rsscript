@@ -2,7 +2,7 @@
 //
 // Reads rss source as argv[0] and prints the analyzer diagnostic codes it finds,
 // one per line, or `CLEAN` if none. Oracle: crate::analyze_source filtered to the
-// target codes (see selfhost_parity.rs). Target: RS0005 (DUPLICATE_DECLARATION).
+// target codes (see SELFHOST_CHECKER_TARGET_CODES and selfhost_parity.rs).
 //
 // Namespace grouping replicated from crate::hir::lower::collect_item_signatures:
 //   * callable namespace: fn names + type (struct/resource/class/opaque)
@@ -14,13 +14,19 @@
 // alone (no body parsing; see ledger SH-021).
 //
 // The tokenizer, token accessors, declaration parsers and dispatch predicates
-// live in selfhost/scan.rss (the shared prelude the harness prepends at compile
-// time). The unified `Tok` carries identifier TEXT so names can compare. Only the
-// checker-unique text accessor, name/field extraction, and the driver are here.
+// live in selfhost/scan.rss. The unified `Tok` carries identifier TEXT so names
+// can compare. Only the checker-unique text accessor, name/field extraction, and
+// the driver are here.
 //
 // rss constraints (SH-016/017/018): char literals for code-point tests and
 // `||` chains wrapped via operator continuation (both in the shared scan.rss
 // prelude), cursors threaded positionally.
+
+module selfhost.check
+
+use selfhost.scan.*
+use selfhost.interfaces.*
+use selfhost.types.*
 
 // ';' — the semicolon symbol code (not in the shared scan.rss prelude; used by
 // the RS0021 arm scanner, mirroring astdump).
@@ -3437,6 +3443,85 @@ fn has_resource_escape(toks: read List<Tok>, resources: read Set<String>, retain
     return false
 }
 
+fn is_copy_scalar_name(name: read String) -> Bool {
+    return name == "Bool" || name == "Byte" || name == "Char" || name == "Float" || name == "Float32" || name == "Float64" || name == "Int" || name == "Int8" || name == "Int16" || name == "Int32" || name == "Int64" || name == "UInt" || name == "UInt8" || name == "UInt16" || name == "UInt32" || name == "UInt64" || name == "Unit"
+}
+
+// Is the payload type in token range [lo, hi) transferable? Bare enclosing fn
+// type params are unresolved here, so mirror Rust and leave them for a future
+// Sendable-style bound instead of false-positiveing.
+fn channel_payload_transferable(toks: read List<Tok>, lo: read Int, hi: read Int, generics: read Set<String>) -> Bool {
+    // any nested generic (`<`) ⇒ not Copy, not String/Bytes ⇒ non-transferable
+    let mut i = lo
+    while i < hi {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LANGLE) { return false }
+        i = i + 1
+    }
+    // strip a leading `fresh`
+    let mut s = lo
+    if is_kw_text(toks: read toks, i: read s, word: read "fresh") { s = s + 1 }
+    if s == hi - 1 {
+        let t = tk_text(toks: read toks, i: read s)
+        if Set.contains<String>(set: read generics, value: read t) { return true }
+        return is_copy_scalar_name(name: read t) || t == "String" || t == "Bytes"
+    }
+    return false
+}
+
+// RS0036 inside [start,end): any `Channel.message<T>` whose payload `T` is not transferable.
+fn region_has_nontransferable_channel(toks: read List<Tok>, start: read Int, end: read Int, generics: read Set<String>) -> Bool {
+    let mut k = start
+    while k < end {
+        if tk_text(toks: read toks, i: read k) == "Channel" && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_DOT) && tk_text(toks: read toks, i: read (k + 2)) == "message" && at_symbol(toks: read toks, i: read (k + 3), code: read SYM_LANGLE) {
+            let open = k + 3
+            let mut depth = 0
+            let mut j = open
+            let mut close = 0 - 1
+            while j < end && close < 0 {
+                if at_symbol(toks: read toks, i: read j, code: read SYM_LANGLE) {
+                    depth = depth + 1
+                } else if at_symbol(toks: read toks, i: read j, code: read SYM_RANGLE) {
+                    depth = depth - 1
+                    if depth == 0 { close = j }
+                }
+                j = j + 1
+            }
+            if close > open + 1 {
+                if channel_payload_transferable(toks: read toks, lo: read (open + 1), hi: read close, generics: read generics) == false {
+                    return true
+                }
+            }
+        }
+        k = k + 1
+    }
+    return false
+}
+
+// RS0036: whole-file wrapper. Walk function bodies so bare function generics can
+// be skipped exactly like the Rust analyzer.
+fn has_nontransferable_channel(toks: read List<Tok>) -> Bool {
+    let n = List.len(list: read toks)
+    let mut k = 0
+    while k < n {
+        let isPub = at_ident(toks: read toks, i: read k, wid: read WORD_PUB)
+        if starts_fn_like(toks: read toks, i: read k, isPub: read isPub) {
+            let ns = fn_name_start(toks: read toks, i: read k)
+            let nameEnd = dotted_end(toks: read toks, i: read ns)
+            let generics = collect_generics(toks: read toks, nameEnd: read nameEnd)
+            let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+            if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) {
+                let bodyClose = find_matching(toks: read toks, open: read sigEnd, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+                if bodyClose > 0 {
+                    if region_has_nontransferable_channel(toks: read toks, start: read sigEnd, end: read bodyClose, generics: read generics) { return true }
+                    k = bodyClose
+                }
+            }
+        }
+        k = k + 1
+    }
+    return false
+}
+
 // Dotted names of fns whose return type is `Result<Resource, E>` (or `Result<fresh Resource, E>`) —
 // i.e. FALLIBLE resource producers. Mirrors collect_producer_fns but only the Result<Resource> case.
 fn collect_fallible_producers(toks: read List<Tok>, resources: read Set<String>) -> Set<String> {
@@ -3484,6 +3569,15 @@ fn collect_fallible_producers(toks: read List<Tok>, resources: read Set<String>)
         k = k + 1
     }
     return out
+}
+
+// Builtin fallible resource producers whose signatures come from stdlib interfaces,
+// not the source file. Only add them when the file does not declare the same
+// dotted fn name; same-file declarations shadow the builtin signature.
+fn add_builtin_fallible_producers(out: mut Set<String>, allFns: read Set<String>) -> Unit {
+    if Set.contains<String>(set: read allFns, value: read "Image.load") == false {
+        Set.insert<String>(set: mut out, value: read "Image.load")
+    }
 }
 
 // RS0706: `with <fallible-producer call> as B` with no `?` before `as` (the Result is not unwrapped).
@@ -7052,6 +7146,496 @@ fn file_unsafe_use(toks: read List<Tok>) -> Bool {
 }
 
 // ---------------------------------------------------------------------------
+// RS0015 UNSUPPORTED_SYNTAX.
+//
+// This is deliberately a conservative recognizer for the fail-corpus shapes the
+// Rust frontend reports as RS0015. It is not a generic parser fallback: the
+// self-host checker keeps scanning after malformed items, so broad "parse failed"
+// rules would risk false positives on constructs this lightweight parser skips.
+// ---------------------------------------------------------------------------
+
+fn rs0015_literal_token(toks: read List<Tok>, i: read Int) -> Bool {
+    let k = tk_kind(toks: read toks, i: read i)
+    if k == TOK_STRING || k == TOK_MULTILINE || k == TOK_INTERP || k == TOK_NUMBER || k == TOK_CHAR { return true }
+    if is_ident_tok(toks: read toks, i: read i) {
+        let t = tk_text(toks: read toks, i: read i)
+        return t == "true" || t == "false" || t == "Unit" || t == "None" || t == "null"
+    }
+    return false
+}
+
+fn rs0015_has_unmatched_delimiter(toks: read List<Tok>) -> Bool {
+    let n = List.len(list: read toks)
+    let mut i = 0
+    let mut hit = false
+    while i < n {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) {
+            if find_matching(toks: read toks, open: read i, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN) < 0 { hit = true }
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) {
+            if find_matching(toks: read toks, open: read i, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE) < 0 { hit = true }
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) {
+            if find_matching(toks: read toks, open: read i, openSym: read SYM_LBRACKET, closeSym: read SYM_RBRACKET) < 0 { hit = true }
+        }
+        i = i + 1
+    }
+    return hit
+}
+
+fn rs0015_supported_derive(name: read String) -> Bool {
+    return name == "Clone" || name == "Eq" || name == "Ord" || name == "Hash" || name == "JsonEncode" || name == "JsonDecode" || name == "Schema" || name == "ReviewSchema"
+}
+
+fn rs0015_has_bad_derive_name(toks: read List<Tok>) -> Bool {
+    let n = List.len(list: read toks)
+    let mut i = 0
+    let mut hit = false
+    while i < n {
+        if at_ident(toks: read toks, i: read i, wid: read WORD_DERIVES) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_LPAREN) {
+            let close = find_matching(toks: read toks, open: read (i + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+            if close > 0 {
+                let mut j = i + 2
+                while j < close {
+                    if is_ident_tok(toks: read toks, i: read j) {
+                        if rs0015_supported_derive(name: read tk_text(toks: read toks, i: read j)) == false { hit = true }
+                    }
+                    j = j + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    return hit
+}
+
+fn rs0015_has_duplicate_use_name(toks: read List<Tok>) -> Bool {
+    let n = List.len(list: read toks)
+    let mut seen = Set<String>.new()
+    let mut hit = false
+    let mut i = 0
+    while i < n {
+        if at_ident(toks: read toks, i: read i, wid: read WORD_USE) {
+            let lineEnd = declaration_line_end(toks: read toks, start: read i)
+            let mut alias = ""
+            let mut last = ""
+            let mut j = i + 1
+            while j < lineEnd {
+                if at_ident(toks: read toks, i: read j, wid: read WORD_AS) && is_ident_tok(toks: read toks, i: read (j + 1)) {
+                    alias = tk_text(toks: read toks, i: read (j + 1))
+                } else if is_ident_tok(toks: read toks, i: read j) {
+                    last = tk_text(toks: read toks, i: read j)
+                }
+                j = j + 1
+            }
+            let mut localName = last
+            if String.len(value: read alias) > 0 { localName = alias }
+            if String.len(value: read localName) > 0 {
+                if Set.contains<String>(set: read seen, value: read localName) { hit = true }
+                Set.insert<String>(set: mut seen, value: read localName)
+            }
+            i = lineEnd
+        } else {
+            i = i + 1
+        }
+    }
+    return hit
+}
+
+fn rs0015_has_reserved_or_unknown_top(toks: read List<Tok>) -> Bool {
+    let n = List.len(list: read toks)
+    let mut i = 0
+    let mut hit = false
+    while i < n {
+        if is_ident_tok(toks: read toks, i: read i) {
+            let t = tk_text(toks: read toks, i: read i)
+            if t == "namespace" || t == "enum" { hit = true }
+            if t == "spawn" { hit = true }
+            if String.starts_with(value: read t, prefix: read "__rss_") || String.starts_with(value: read t, prefix: read "__rsscript_") { hit = true }
+            if t == "own" && at_ident(toks: read toks, i: read (i + 1), wid: read WORD_STRUCT) { hit = true }
+        }
+        i = i + 1
+    }
+    return hit
+}
+
+fn rs0015_has_bad_type_surface(toks: read List<Tok>) -> Bool {
+    let n = List.len(list: read toks)
+    let mut i = 0
+    let mut hit = false
+    while i < n {
+        if at_ident(toks: read toks, i: read i, wid: read WORD_OPAQUE) && starts_type_decl(toks: read toks, i: read i, isPub: read false) {
+            let r = parse_type_decl(toks: read toks, i: read i)
+            if r > i {
+                let ob = find_body_open(toks: read toks, i: read i, end: read r)
+                if ob >= 0 { hit = true }
+                i = r
+            } else {
+                hit = true
+                i = i + 1
+            }
+        } else if (at_ident(toks: read toks, i: read i, wid: read WORD_STRUCT) || at_ident(toks: read toks, i: read i, wid: read WORD_CLASS) || at_ident(toks: read toks, i: read i, wid: read WORD_RESOURCE)) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_LBRACE) {
+            hit = true
+            i = i + 1
+        } else {
+            i = i + 1
+        }
+    }
+    return hit
+}
+
+fn rs0015_has_malformed_field(toks: read List<Tok>) -> Bool {
+    let n = List.len(list: read toks)
+    let mut i = 0
+    let mut hit = false
+    while i < n {
+        if starts_type_decl(toks: read toks, i: read i, isPub: read at_ident(toks: read toks, i: read i, wid: read WORD_PUB)) {
+            let r = parse_type_decl(toks: read toks, i: read i)
+            if r > i {
+                let ob = find_body_open(toks: read toks, i: read i, end: read r)
+                if ob >= 0 {
+                    let close = find_matching(toks: read toks, open: read ob, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+                    let mut j = ob + 1
+                    while j < close {
+                        if is_kw_text(toks: read toks, i: read j, word: read "drop") && at_symbol(toks: read toks, i: read (j + 1), code: read SYM_LBRACE) {
+                            let dc = find_matching(toks: read toks, open: read (j + 1), openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+                            if dc > j { j = dc + 1 } else { j = j + 1 }
+                        } else if is_ident_tok(toks: read toks, i: read j) {
+                            let lineEnd = declaration_line_end(toks: read toks, start: read j)
+                            if lineEnd <= close {
+                                let colon = find_top_sym(toks: read toks, start: read j, end: read lineEnd, code: read SYM_COLON)
+                                if colon < 0 || colon == (lineEnd - 1) { hit = true }
+                                j = lineEnd
+                            } else {
+                                j = j + 1
+                            }
+                        } else {
+                            j = j + 1
+                        }
+                    }
+                }
+                i = r
+            } else {
+                i = i + 1
+            }
+        } else {
+            i = i + 1
+        }
+    }
+    return hit
+}
+
+fn rs0015_has_bad_generic_params(toks: read List<Tok>) -> Bool {
+    let n = List.len(list: read toks)
+    let mut i = 0
+    let mut hit = false
+    while i < n {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LANGLE) {
+            let close = find_matching(toks: read toks, open: read i, openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
+            if close > i {
+                let mut j = i + 1
+                while j < close {
+                    if is_effect_kw(toks: read toks, i: read j) { hit = true }
+                    if at_symbol(toks: read toks, i: read j, code: read SYM_COMMA) {
+                        if at_symbol(toks: read toks, i: read (j + 1), code: read SYM_COMMA) || at_symbol(toks: read toks, i: read (j + 1), code: read SYM_RANGLE) { hit = true }
+                    }
+                    j = j + 1
+                }
+                if at_symbol(toks: read toks, i: read (i + 1), code: read SYM_COMMA) { hit = true }
+                i = close + 1
+            } else {
+                i = i + 1
+            }
+        } else {
+            i = i + 1
+        }
+    }
+    return hit
+}
+
+fn rs0015_call_has_empty_arg(toks: read List<Tok>, open: read Int, close: read Int) -> Bool {
+    if at_symbol(toks: read toks, i: read (open + 1), code: read SYM_COMMA) { return true }
+    let mut k = open + 1
+    while k < close {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_COMMA) { return true }
+        if at_symbol(toks: read toks, i: read k, code: read SYM_COLON) {
+            if at_symbol(toks: read toks, i: read (k + 1), code: read SYM_COMMA) || (k + 1) == close { return true }
+        }
+        k = k + 1
+    }
+    return false
+}
+
+fn rs0015_has_bad_call_forms(toks: read List<Tok>) -> Bool {
+    let n = List.len(list: read toks)
+    let mut i = 1
+    let mut hit = false
+    while i < n {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) && is_ident_tok(toks: read toks, i: read (i - 1)) {
+            let name = tk_text(toks: read toks, i: read (i - 1))
+            let close = find_matching(toks: read toks, open: read i, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+            if close > i {
+                if name == "None" || name == "Option" || name == "Result" { hit = true }
+                if (name == "Some" || name == "Ok" || name == "Err") && find_top_sym(toks: read toks, start: read (i + 1), end: read close, code: read SYM_COLON) >= 0 { hit = true }
+                if rs0015_call_has_empty_arg(toks: read toks, open: read i, close: read close) { hit = true }
+                if close + 1 < n && name != "fn" && tk_line(toks: read toks, i: read (close + 1)) == tk_line(toks: read toks, i: read close) && is_ident_tok(toks: read toks, i: read (close + 1)) {
+                    let next = tk_text(toks: read toks, i: read (close + 1))
+                    if next != "as" && next != "else" && next != "captures" && next != "effects" { hit = true }
+                }
+                i = close + 1
+            } else {
+                i = i + 1
+            }
+        } else {
+            i = i + 1
+        }
+    }
+    return hit
+}
+
+fn rs0015_has_const_nonliteral(toks: read List<Tok>) -> Bool {
+    let n = List.len(list: read toks)
+    let mut i = 0
+    let mut hit = false
+    while i < n {
+        if at_ident(toks: read toks, i: read i, wid: read WORD_CONST) {
+            let lineEnd = declaration_line_end(toks: read toks, start: read i)
+            let mut eq = i
+            while eq < lineEnd && at_symbol(toks: read toks, i: read eq, code: read SYM_EQ) == false { eq = eq + 1 }
+            if eq < lineEnd {
+                let rhs = eq + 1
+                if rhs >= lineEnd {
+                    hit = true
+                } else if (rhs + 1) != lineEnd {
+                    hit = true
+                } else if rs0015_literal_token(toks: read toks, i: read rhs) == false {
+                    hit = true
+                }
+            }
+            i = lineEnd
+        } else {
+            i = i + 1
+        }
+    }
+    return hit
+}
+
+fn rs0015_has_bad_control_or_binding(toks: read List<Tok>) -> Bool {
+    let n = List.len(list: read toks)
+    let mut i = 0
+    let mut hit = false
+    while i < n {
+        if is_kw_text(toks: read toks, i: read i, word: read "else") {
+            if at_symbol(toks: read toks, i: read (i + 1), code: read SYM_LBRACE) == false && is_kw_text(toks: read toks, i: read (i + 1), word: read "if") == false { hit = true }
+        } else if is_kw_text(toks: read toks, i: read i, word: read "loop") {
+            if at_symbol(toks: read toks, i: read (i + 1), code: read SYM_LBRACE) == false { hit = true }
+        } else if is_kw_text(toks: read toks, i: read i, word: read "while") {
+            if at_symbol(toks: read toks, i: read (i + 1), code: read SYM_LBRACE) { hit = true }
+        } else if is_kw_text(toks: read toks, i: read i, word: read "match") {
+            if at_symbol(toks: read toks, i: read (i + 1), code: read SYM_LBRACE) { hit = true }
+        } else if is_kw_text(toks: read toks, i: read i, word: read "let") || is_kw_text(toks: read toks, i: read i, word: read "local") {
+            let lineEnd = declaration_line_end(toks: read toks, start: read i)
+            let mut eq = i
+            while eq < lineEnd && at_symbol(toks: read toks, i: read eq, code: read SYM_EQ) == false { eq = eq + 1 }
+            if eq < lineEnd && (eq + 1) >= lineEnd { hit = true }
+            i = lineEnd - 1
+        } else if is_kw_text(toks: read toks, i: read i, word: read "with") {
+            let mut bodyOpen = i + 1
+            while bodyOpen < n && at_symbol(toks: read toks, i: read bodyOpen, code: read SYM_LBRACE) == false { bodyOpen = bodyOpen + 1 }
+            let mut hasAs = false
+            let mut asHasBinding = false
+            let mut j = i + 1
+            while j < bodyOpen {
+                if at_ident(toks: read toks, i: read j, wid: read WORD_AS) {
+                    hasAs = true
+                    if is_ident_tok(toks: read toks, i: read (j + 1)) { asHasBinding = true }
+                }
+                j = j + 1
+            }
+            if hasAs == false || asHasBinding == false { hit = true }
+        } else if is_kw_text(toks: read toks, i: read i, word: read "spawn") {
+            hit = true
+        }
+        i = i + 1
+    }
+    return hit
+}
+
+fn rs0015_has_bad_param_decl(toks: read List<Tok>) -> Bool {
+    let n = List.len(list: read toks)
+    let mut i = 0
+    let mut hit = false
+    while i < n {
+        let cls = classify_top(toks: read toks, i: read i)
+        if starts_fn_like(toks: read toks, i: read i, isPub: read cls.isPub) {
+            let ns = fn_name_start(toks: read toks, i: read i)
+            let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+            let open = find_param_open(toks: read toks, from: read ns, end: read sigEnd)
+            if open >= 0 {
+                let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+                if close > open {
+                    let mut seg = open + 1
+                    let mut j = open + 1
+                    while j <= close {
+                        if j == close || at_symbol(toks: read toks, i: read j, code: read SYM_COMMA) {
+                            if seg < j {
+                                let colon = find_top_sym(toks: read toks, start: read seg, end: read j, code: read SYM_COLON)
+                                if colon < 0 && is_effect_kw(toks: read toks, i: read seg) { hit = true }
+                            }
+                            seg = j + 1
+                        }
+                        j = j + 1
+                    }
+                    i = close + 1
+                } else {
+                    i = i + 1
+                }
+            } else {
+                i = i + 1
+            }
+        } else {
+            i = i + 1
+        }
+    }
+    return hit
+}
+
+fn rs0015_has_bad_match_arm(toks: read List<Tok>) -> Bool {
+    let n = List.len(list: read toks)
+    let mut i = 0
+    let mut hit = false
+    while i < n {
+        if is_kw_text(toks: read toks, i: read i, word: read "match") {
+            let mut ob = i + 1
+            while ob < n && at_symbol(toks: read toks, i: read ob, code: read SYM_LBRACE) == false { ob = ob + 1 }
+            if ob < n {
+                let close = find_matching(toks: read toks, open: read ob, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+                if close > ob {
+                    let mut j = ob + 1
+                    let mut depth = 0
+                    while j < close {
+                        if at_symbol(toks: read toks, i: read j, code: read SYM_LBRACE) {
+                            depth = depth + 1
+                        } else if at_symbol(toks: read toks, i: read j, code: read SYM_RBRACE) {
+                            if depth > 0 { depth = depth - 1 }
+                        } else if depth == 0 && tk_line(toks: read toks, i: read j) != tk_line(toks: read toks, i: read (j - 1)) {
+                            let lineEnd = declaration_line_end(toks: read toks, start: read j)
+                            if j < close && lineEnd <= close {
+                                let arrow = find_top_sym(toks: read toks, start: read j, end: read lineEnd, code: read SYM_FATARROW)
+                                if arrow < 0 && is_ident_tok(toks: read toks, i: read j) { hit = true }
+                            }
+                        }
+                        j = j + 1
+                    }
+                    i = close
+                }
+            }
+        }
+        i = i + 1
+    }
+    return hit
+}
+
+fn rs0015_has_native_body(toks: read List<Tok>) -> Bool {
+    let n = List.len(list: read toks)
+    let mut i = 0
+    let mut hit = false
+    while i < n {
+        if at_ident(toks: read toks, i: read i, wid: read WORD_NATIVE) && at_ident(toks: read toks, i: read (i + 1), wid: read WORD_FN) {
+            let sigEnd = function_signature_end(toks: read toks, start: read i)
+            if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) { hit = true }
+            i = sigEnd + 1
+        } else {
+            i = i + 1
+        }
+    }
+    return hit
+}
+
+fn rs0015_has_protocol_default_body(toks: read List<Tok>) -> Bool {
+    let n = List.len(list: read toks)
+    let mut i = 0
+    let mut hit = false
+    while i < n {
+        if at_ident(toks: read toks, i: read i, wid: read WORD_PROTOCOL) {
+            let r = parse_protocol_decl(toks: read toks, i: read i)
+            if r > i {
+                let ob = find_body_open(toks: read toks, i: read i, end: read r)
+                let close = find_matching(toks: read toks, open: read ob, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+                let mut j = ob + 1
+                while j < close {
+                    if at_ident(toks: read toks, i: read j, wid: read WORD_FN) {
+                        let sigEnd = function_signature_end(toks: read toks, start: read j)
+                        if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) { hit = true }
+                    }
+                    j = j + 1
+                }
+                i = r
+            } else {
+                i = i + 1
+            }
+        } else {
+            i = i + 1
+        }
+    }
+    return hit
+}
+
+fn rs0015_has_profile_decl(toks: read List<Tok>) -> Bool {
+    let n = List.len(list: read toks)
+    let mut i = 0
+    let mut hit = false
+    let mut depth = 0
+    while i < n {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RBRACE) {
+            if depth > 0 { depth = depth - 1 }
+        } else if depth == 0
+            && at_ident(toks: read toks, i: read i, wid: read WORD_PROFILE)
+            && tk_line(toks: read toks, i: read i) != tk_line(toks: read toks, i: read (i - 1))
+            && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_COLON) {
+            hit = true
+        }
+        i = i + 1
+    }
+    return hit
+}
+
+fn rs0015_has_malformed_fn_decl(toks: read List<Tok>) -> Bool {
+    let n = List.len(list: read toks)
+    let mut i = 0
+    let mut hit = false
+    while i < n {
+        if at_ident(toks: read toks, i: read i, wid: read WORD_FN) && tk_line(toks: read toks, i: read i) != tk_line(toks: read toks, i: read (i - 1)) {
+            if is_ident_tok(toks: read toks, i: read (i + 1)) == false {
+                hit = true
+            }
+        }
+        i = i + 1
+    }
+    return hit
+}
+
+fn has_unsupported_syntax_rs0015(toks: read List<Tok>) -> Bool {
+    return rs0015_has_unmatched_delimiter(toks: read toks)
+        || rs0015_has_bad_derive_name(toks: read toks)
+        || rs0015_has_duplicate_use_name(toks: read toks)
+        || rs0015_has_reserved_or_unknown_top(toks: read toks)
+        || rs0015_has_bad_type_surface(toks: read toks)
+        || rs0015_has_malformed_field(toks: read toks)
+        || rs0015_has_bad_generic_params(toks: read toks)
+        || rs0015_has_bad_call_forms(toks: read toks)
+        || rs0015_has_const_nonliteral(toks: read toks)
+        || rs0015_has_bad_control_or_binding(toks: read toks)
+        || rs0015_has_bad_param_decl(toks: read toks)
+        || rs0015_has_bad_match_arm(toks: read toks)
+        || rs0015_has_native_body(toks: read toks)
+        || rs0015_has_protocol_default_body(toks: read toks)
+        || rs0015_has_malformed_fn_decl(toks: read toks)
+        || has_implicit_conversion(toks: read toks)
+        || rs0015_has_profile_decl(toks: read toks)
+}
+
+// ---------------------------------------------------------------------------
 // Type-inference engine — slice 1: conservative expression type-of + RS0013.
 //
 // `expr_type_root` computes the type ROOT of an expression region, but ONLY for
@@ -7184,10 +7768,9 @@ fn try_operand_root(toks: read List<Tok>, qPos: read Int, bodyOpen: read Int, po
 }
 
 // ===================================================================
-// RS0208 RETURN_TYPE_MISMATCH — type-inference engine (in progress).
+// RS0208 RETURN_TYPE_MISMATCH — type-inference engine.
 // Ports crates/rsscript/src/checks/calls.rs check_return_type/expr/payload +
-// argument_type_matches. Wired behind is_target_code so it is invisible to the
-// parity gate until byte-exact (iterate with RSS_CHECKER_EXTRA_CODES=RS0208).
+// argument_type_matches. Baked into CHECKER_TARGET_CODES.
 // ===================================================================
 
 // The token range [ts, te) of a fn's declared return type (after `->`, up to the
@@ -7196,6 +7779,21 @@ struct RetRange {
     ts: Int
     te: Int
     ok: Bool
+}
+
+struct FileTypeModel {
+    fnIdx: handle Map<String, Int>
+    aliasIdx: handle Map<String, String>
+    declared: handle Set<String>
+    prefix: String
+}
+
+struct BodyTypeModel {
+    locals: handle Map<String, List<Int>>
+    bodyOpen: Int
+    bodyClose: Int
+    paramOpen: Int
+    paramClose: Int
 }
 
 // Canonical string of a type token range, mirroring text_util type_ref_name:
@@ -7330,118 +7928,13 @@ fn expand_type_alias(aliasIdx: read Map<String, String>, ty: read String) -> Str
     return cur
 }
 
-// index of `needle` in `s`, or -1 (String.index_of returns Option<Int>).
-fn str_find(s: read String, needle: read String) -> Int {
-    match String.index_of(value: read s, needle: read needle) {
-        Some(i) => {
-            return i
-        }
-        None => {
-            return 0 - 1
-        }
-    }
-}
-
-// strip a leading "fresh " marker (text_util strip_fresh_type).
-fn str_strip_fresh(s: read String) -> String {
-    if String.starts_with(value: read s, prefix: read "fresh ") {
-        let n = String.len(value: read s)
-        return String.slice(value: read s, start: read 6, len: read (n - 6))
-    }
-    return s
-}
-
-// root name before the first `<` (after stripping `fresh `). text_util type_root_name.
-fn str_type_root(s: read String) -> String {
-    let b = str_strip_fresh(s: read s)
-    let lt = str_find(s: read b, needle: read "<")
-    if lt < 0 { return b }
-    return String.slice(value: read b, start: read 0, len: read lt)
-}
-
-// trim ASCII spaces from both ends.
-fn str_trim(s: read String) -> String {
-    let cs = String.chars(value: read s)
-    let n = List.len(list: read cs)
-    let mut a = 0
-    let mut sc = true
-    while sc {
-        if a >= n { sc = false } else if List.get(list: read cs, index: read a) == ' ' { a = a + 1 } else { sc = false }
-    }
-    let mut b = n
-    let mut sc2 = true
-    while sc2 {
-        if b <= a { sc2 = false } else if List.get(list: read cs, index: read (b - 1)) == ' ' { b = b - 1 } else { sc2 = false }
-    }
-    return String.slice(value: read s, start: read a, len: read (b - a))
-}
-
-// The `which`-th top-level generic argument of a canonical type string, or ""
-// (text_util type_arg_names + split_top_level_type_args). Commas nested in <>/()
-// are not separators.
-fn str_top_arg(s: read String, which: read Int) -> String {
-    let b = str_strip_fresh(s: read s)
-    let lt = str_find(s: read b, needle: read "<")
-    if lt < 0 { return "" }
-    let n = String.len(value: read b)
-    let inner = String.slice(value: read b, start: read (lt + 1), len: read ((n - 1) - (lt + 1)))
-    let cs = String.chars(value: read inner)
-    let m = List.len(list: read cs)
-    let mut depth = 0
-    let mut start = 0
-    let mut argno = 0
-    let mut idx = 0
-    let mut result = ""
-    let mut found = false
-    while idx < m {
-        let c = List.get(list: read cs, index: read idx)
-        if c == '<' || c == '(' {
-            depth = depth + 1
-        } else if c == '>' || c == ')' {
-            depth = depth - 1
-        } else if c == ',' && depth == 0 {
-            if argno == which && found == false {
-                result = String.slice(value: read inner, start: read start, len: read (idx - start))
-                found = true
-            }
-            argno = argno + 1
-            start = idx + 1
-        }
-        idx = idx + 1
-    }
-    if found == false && argno == which {
-        result = String.slice(value: read inner, start: read start, len: read (m - start))
-        found = true
-    }
-    if found == false { return "" }
-    return str_trim(s: read result)
-}
-
-// argument_type_matches (calls.rs): equality, Self, fresh-stripped equality, and the
-// Option<?>/Result<?> wildcards produced by variant constructors.
-fn arg_type_matches(expected: read String, actual: read String) -> Bool {
-    if expected == actual { return true }
-    if expected == "Self" { return true }
-    if str_strip_fresh(s: read expected) == str_strip_fresh(s: read actual) { return true }
-    if actual == "Option<?>" { return str_type_root(s: read expected) == "Option" }
-    if actual == "Result<?>" { return str_type_root(s: read expected) == "Result" }
-    return false
-}
-
-// unresolved_generic_type (calls.rs): a single uppercase-letter root, or any generic
-// arg that is itself unresolved. (noescape/fresh nesting handled via strip + root.)
-fn str_is_unresolved_generic(s: read String) -> Bool {
-    let root = str_type_root(s: read s)
-    if String.len(value: read root) == 1 {
-        let rc = String.chars(value: read root)
-        let ch = List.get(list: read rc, index: read 0)
-        if Char.is_upper(value: read ch) { return true }
-    }
-    let a0 = str_top_arg(s: read s, which: read 0)
-    if String.len(value: read a0) > 0 && str_is_unresolved_generic(s: read a0) { return true }
-    let a1 = str_top_arg(s: read s, which: read 1)
-    if String.len(value: read a1) > 0 && str_is_unresolved_generic(s: read a1) { return true }
-    return false
+fn build_file_type_model(toks: read List<Tok>) -> FileTypeModel {
+    return FileTypeModel(
+        fnIdx: read collect_fn_decl_index(toks: read toks),
+        aliasIdx: read collect_type_alias_index(toks: read toks),
+        declared: read collect_declared_types(toks: read toks),
+        prefix: module_prefix(toks: read toks)
+    )
 }
 
 // The declared-return-type token range of a fn (handles fn generics `<...>`).
@@ -7649,6 +8142,45 @@ fn build_local_index(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read I
     // scans entirely for the common case (they are otherwise hit per non-local ident).
     if hasWithSel { Map.insert<String, List<Int>>(map: mut m, key: read " ws", value: read empty) }
     return m
+}
+
+fn build_body_type_model(toks: read List<Tok>, fnStart: read Int) -> BodyTypeModel {
+    let ns = fn_name_start(toks: read toks, i: read fnStart)
+    let bo = function_signature_end(toks: read toks, start: read (ns - 1))
+    if at_symbol(toks: read toks, i: read bo, code: read SYM_LBRACE) == false {
+        let empty = Map<String, List<Int>>.new()
+        return BodyTypeModel(locals: read empty, bodyOpen: 0 - 1, bodyClose: 0 - 1, paramOpen: 0 - 1, paramClose: 0 - 1)
+    }
+    let bc = find_matching(toks: read toks, open: read bo, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    if bc < 0 {
+        let empty2 = Map<String, List<Int>>.new()
+        return BodyTypeModel(locals: read empty2, bodyOpen: 0 - 1, bodyClose: 0 - 1, paramOpen: 0 - 1, paramClose: 0 - 1)
+    }
+    let mut pp = dotted_end(toks: read toks, i: read ns)
+    if at_symbol(toks: read toks, i: read pp, code: read SYM_LANGLE) {
+        let gc = find_matching(toks: read toks, open: read pp, openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
+        if gc >= 0 { pp = gc + 1 }
+    }
+    let mut popen = 0 - 1
+    let mut pclose = 0 - 1
+    if at_symbol(toks: read toks, i: read pp, code: read SYM_LPAREN) {
+        let pc = find_matching(toks: read toks, open: read pp, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+        if pc >= 0 {
+            popen = pp
+            pclose = pc
+        }
+    }
+    return BodyTypeModel(
+        locals: read build_local_index(toks: read toks, bodyOpen: read bo, bodyClose: read bc),
+        bodyOpen: bo,
+        bodyClose: bc,
+        paramOpen: popen,
+        paramClose: pclose
+    )
+}
+
+fn body_type_model_ok(body: read BodyTypeModel) -> Bool {
+    return body.bodyOpen >= 0 && body.bodyClose >= 0
 }
 
 // O(1)-amortized replacement for find_let_rhs_start using the per-fn local index: the
@@ -7934,43 +8466,23 @@ fn return_expr_mismatch(toks: read List<Tok>, s: read Int, e: read Int, expected
 }
 
 // Walk one fn body's top-level `return <expr>` statements and check each.
-fn fn_has_return_type_mismatch(toks: read List<Tok>, start: read Int, prefix: read String, declared: read Set<String>, fnIdx: read Map<String, Int>) -> Bool {
+fn fn_has_return_type_mismatch(toks: read List<Tok>, start: read Int, model: read FileTypeModel) -> Bool {
     let rr = fn_return_range(toks: read toks, start: read start)
     if rr.ok == false { return false }
-    let expected = qualified_type_string(toks: read toks, ts: read rr.ts, te: read rr.te, prefix: read prefix, declared: read declared)
+    let expected = qualified_type_string(toks: read toks, ts: read rr.ts, te: read rr.te, prefix: read model.prefix, declared: read model.declared)
     if str_is_unresolved_generic(s: read expected) { return false }
-    let ns = fn_name_start(toks: read toks, i: read start)
-    let bo = function_signature_end(toks: read toks, start: read (ns - 1))
-    if at_symbol(toks: read toks, i: read bo, code: read SYM_LBRACE) == false { return false }
-    let bc = find_matching(toks: read toks, open: read bo, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
-    if bc < 0 { return false }
-    // Per-fn local index: O(1) bare-ident binding resolution inside return_actual_type.
-    let locals = build_local_index(toks: read toks, bodyOpen: read bo, bodyClose: read bc)
-    // Param-list range, for typing bare-ident returns that are parameters.
-    let mut pp = dotted_end(toks: read toks, i: read ns)
-    if at_symbol(toks: read toks, i: read pp, code: read SYM_LANGLE) {
-        let gc = find_matching(toks: read toks, open: read pp, openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
-        if gc >= 0 { pp = gc + 1 }
-    }
-    let mut popen = 0 - 1
-    let mut pclose = 0 - 1
-    if at_symbol(toks: read toks, i: read pp, code: read SYM_LPAREN) {
-        let pc = find_matching(toks: read toks, open: read pp, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
-        if pc >= 0 {
-            popen = pp
-            pclose = pc
-        }
-    }
-    let mut i = bo + 1
+    let body = build_body_type_model(toks: read toks, fnStart: read start)
+    if body_type_model_ok(body: read body) == false { return false }
+    let mut i = body.bodyOpen + 1
     let mut hit = false
-    while i < bc {
+    while i < body.bodyClose {
         if at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) && is_closure_brace(toks: read toks, b: read i) {
             let cc = find_matching(toks: read toks, open: read i, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
-            if cc < 0 { i = bc } else { i = cc + 1 }
+            if cc < 0 { i = body.bodyClose } else { i = cc + 1 }
         } else if is_kw_text(toks: read toks, i: read i, word: read "return") {
-            let re = stmt_expr_end(toks: read toks, start: read (i + 1), end: read bc)
+            let re = stmt_expr_end(toks: read toks, start: read (i + 1), end: read body.bodyClose)
             if (i + 1) < re {
-                if return_expr_mismatch(toks: read toks, s: read (i + 1), e: read re, expected: read expected, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals) { hit = true }
+                if return_expr_mismatch(toks: read toks, s: read (i + 1), e: read re, expected: read expected, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals) { hit = true }
             }
             i = i + 1
         } else {
@@ -7983,7 +8495,7 @@ fn fn_has_return_type_mismatch(toks: read List<Tok>, start: read Int, prefix: re
     // terminate all paths); an rss fn has no implicit tail-return, so a straight-line
     // body with no return is a definite fallthrough.
     if hit == false && str_type_root(s: read expected) != "Unit" {
-        if body_falls_through(toks: read toks, bodyOpen: read bo, bodyClose: read bc) { hit = true }
+        if body_falls_through(toks: read toks, bodyOpen: read body.bodyOpen, bodyClose: read body.bodyClose) { hit = true }
     }
     return hit
 }
@@ -8091,10 +8603,8 @@ fn closure_paramless(toks: read List<Tok>, b: read Int) -> Bool {
 // Walk all top-level fns and report any RS0208 return-type mismatch.
 fn has_return_type_mismatch(toks: read List<Tok>) -> Bool {
     let ntok = List.len(list: read toks)
-    let prefix = module_prefix(toks: read toks)
-    let declared = collect_declared_types(toks: read toks)
-    // File fn-decl index: built ONCE, shared across all fns for O(1) return-type lookups.
-    let fnIdx = collect_fn_decl_index(toks: read toks)
+    // File type model: built ONCE, shared across all fns for O(1) return/type lookups.
+    let model = build_file_type_model(toks: read toks)
     let mut i = 0
     let mut running = true
     let mut hit = false
@@ -8118,7 +8628,7 @@ fn has_return_type_mismatch(toks: read List<Tok>) -> Bool {
                 if r < 0 {
                     running = false
                 } else {
-                    if fn_has_return_type_mismatch(toks: read toks, start: read i, prefix: read prefix, declared: read declared, fnIdx: read fnIdx) { hit = true }
+                    if fn_has_return_type_mismatch(toks: read toks, start: read i, model: read model) { hit = true }
                     i = r
                 }
             } else {
@@ -8129,180 +8639,35 @@ fn has_return_type_mismatch(toks: read List<Tok>) -> Bool {
     return hit
 }
 
-// Curated stdlib parameter-type table (the checker has no file IO, so signatures the
-// analyzer reads from stdlib/*.rssi are embedded here — same pattern as
-// stdlib_return_type). Only entries needed for RS0207 are present; an absent
-// ns.method.label yields "" (unknown => no diagnostic => FP-safe). Values are the exact
-// canonical parameter-type strings the analyzer resolves.
+// Generated stdlib parameter types are intentionally consumed through an FP-safe
+// allowlist. The generated `selfhost.interfaces` table is broader than the
+// current self-host type model: enabling it wholesale adds RS0207 alongside
+// primary diagnostics (for example ResourcePool generics and malformed
+// `&mut Buffer` surface syntax). The allowlist owns only "which call shapes are
+// safe"; the actual type strings come from the real `.rssi` metadata.
+fn stdlib_param_type_is_safe(ns: read String, method: read String, label: read String) -> Bool {
+    if ns == "Log" && method == "write" && label == "message" { return true }
+    if ns == "String" && method == "concat" && label == "left" { return true }
+    if ns == "String" && method == "concat" && label == "right" { return true }
+    if ns == "String" && method == "len" && label == "value" { return true }
+    if ns == "File" && method == "write" && label == "data" { return true }
+    if ns == "Image" && method == "inspect" && label == "image" { return true }
+    if ns == "Image" && method == "normalize" && label == "image" { return true }
+    if ns == "Image" && method == "resize" && label == "image" { return true }
+    if ns == "Image" && method == "resize" && label == "width" { return true }
+    if ns == "Image" && method == "resize" && label == "height" { return true }
+    if ns == "Image" && method == "save" && label == "image" { return true }
+    if ns == "Image" && method == "save" && label == "path" { return true }
+    if ns == "Image" && method == "load" && label == "path" { return true }
+    if ns == "Request" && method == "path" && label == "request" { return true }
+    return false
+}
+
 fn stdlib_param_type(ns: read String, method: read String, label: read String) -> String {
-    if ns == "Log" && method == "write" && label == "message" { return "String" }
-    if ns == "String" && method == "concat" && label == "left" { return "String" }
-    if ns == "String" && method == "concat" && label == "right" { return "String" }
-    if ns == "String" && method == "len" && label == "value" { return "String" }
-    if ns == "File" && method == "write" && label == "data" { return "Bytes" }
-    if ns == "Image" && method == "inspect" && label == "image" { return "Image" }
-    if ns == "Image" && method == "normalize" && label == "image" { return "Image" }
-    if ns == "Image" && method == "resize" && label == "image" { return "Image" }
-    if ns == "Image" && method == "resize" && label == "width" { return "Int" }
-    if ns == "Image" && method == "resize" && label == "height" { return "Int" }
-    if ns == "Image" && method == "save" && label == "image" { return "Image" }
-    if ns == "Image" && method == "save" && label == "path" { return "Path" }
-    if ns == "Image" && method == "load" && label == "path" { return "Path" }
-    if ns == "Request" && method == "path" && label == "request" { return "Request" }
+    if stdlib_param_type_is_safe(ns: read ns, method: read method, label: read label) {
+        return generated_stdlib_param_type(ns: read ns, method: read method, pname: read label)
+    }
     return ""
-}
-
-// Strip leading `noescape `/`owned `/`fresh ` type prefixes (analyzer type_util).
-fn strip_type_prefixes(s: read String) -> String {
-    let mut t = s
-    let mut go = true
-    while go {
-        go = false
-        if String.starts_with(value: read t, prefix: read "noescape ") {
-            t = String.slice(value: read t, start: read 9, len: read (String.len(value: read t) - 9))
-            go = true
-        } else if String.starts_with(value: read t, prefix: read "owned ") {
-            t = String.slice(value: read t, start: read 6, len: read (String.len(value: read t) - 6))
-            go = true
-        } else if String.starts_with(value: read t, prefix: read "fresh ") {
-            t = String.slice(value: read t, start: read 6, len: read (String.len(value: read t) - 6))
-            go = true
-        }
-    }
-    return t
-}
-
-// Arity of a `Fn(a, b, ...) -> ret` type body (prefixes already stripped): the count of
-// top-level comma-separated arg types in the paren group (0 for `Fn()`), or -1 if `body`
-// is not a Fn type. Commas nested in ()/[]/<> are not separators.
-fn fn_type_arity(body: read String) -> Int {
-    if String.starts_with(value: read body, prefix: read "Fn(") == false { return 0 - 1 }
-    let cs = String.chars(value: read body)
-    let n = List.len(list: read cs)
-    let mut i = 3
-    let mut depth = 0
-    let mut angle = 0
-    let mut args = 0
-    let mut sawContent = false
-    let mut scanning = true
-    while scanning {
-        if i >= n {
-            scanning = false
-        } else {
-            let c = List.get(list: read cs, index: read i)
-            if c == '(' || c == '[' {
-                depth = depth + 1
-                sawContent = true
-            } else if c == ')' || c == ']' {
-                if depth == 0 {
-                    scanning = false
-                } else {
-                    depth = depth - 1
-                }
-            } else if c == '<' {
-                angle = angle + 1
-                sawContent = true
-            } else if c == '>' {
-                if angle > 0 { angle = angle - 1 }
-            } else if c == ',' && depth == 0 && angle == 0 {
-                args = args + 1
-                sawContent = true
-            } else if c != ' ' {
-                sawContent = true
-            }
-            if scanning { i = i + 1 }
-        }
-    }
-    if sawContent == false { return 0 }
-    return args + 1
-}
-
-// The return type of a `Fn(...) -> ret` body (prefixes stripped): the text after the
-// Fn's own closing paren and `-> `, trimmed. "" if not a well-formed Fn type.
-fn fn_type_return(body: read String) -> String {
-    if String.starts_with(value: read body, prefix: read "Fn(") == false { return "" }
-    let cs = String.chars(value: read body)
-    let n = List.len(list: read cs)
-    let mut i = 3
-    let mut depth = 0
-    let mut close = 0 - 1
-    let mut scanning = true
-    while scanning {
-        if i >= n {
-            scanning = false
-        } else {
-            let c = List.get(list: read cs, index: read i)
-            if c == '(' || c == '[' {
-                depth = depth + 1
-            } else if c == ')' || c == ']' {
-                if depth == 0 {
-                    close = i
-                    scanning = false
-                } else {
-                    depth = depth - 1
-                }
-            }
-            if scanning { i = i + 1 }
-        }
-    }
-    if close < 0 { return "" }
-    let rest = String.slice(value: read body, start: read (close + 1), len: read (n - (close + 1)))
-    let ar = str_find(s: read rest, needle: read "-> ")
-    if ar < 0 { return "" }
-    let rn = String.len(value: read rest)
-    return str_trim(s: read String.slice(value: read rest, start: read (ar + 3), len: read (rn - (ar + 3))))
-}
-
-// The `which`-th argument type of a `Fn(a, b, ...) -> ret` body (prefixes stripped), or
-// "" if absent. Commas nested in ()/[]/<> are not separators. Used to type positional
-// arguments of a call whose callee is a Fn-typed parameter.
-fn fn_type_arg_at(body: read String, which: read Int) -> String {
-    if String.starts_with(value: read body, prefix: read "Fn(") == false { return "" }
-    let cs = String.chars(value: read body)
-    let n = List.len(list: read cs)
-    let mut i = 3
-    let mut depth = 0
-    let mut angle = 0
-    let mut segStart = 3
-    let mut argno = 0
-    let mut result = ""
-    let mut found = false
-    let mut scanning = true
-    while scanning {
-        if i >= n {
-            scanning = false
-        } else {
-            let c = List.get(list: read cs, index: read i)
-            if c == '(' || c == '[' {
-                depth = depth + 1
-            } else if c == ')' || c == ']' {
-                if depth == 0 {
-                    if argno == which && i > segStart {
-                        result = String.slice(value: read body, start: read segStart, len: read (i - segStart))
-                        found = true
-                    }
-                    scanning = false
-                } else {
-                    depth = depth - 1
-                }
-            } else if c == '<' {
-                angle = angle + 1
-            } else if c == '>' {
-                if angle > 0 { angle = angle - 1 }
-            } else if c == ',' && depth == 0 && angle == 0 {
-                if argno == which {
-                    result = String.slice(value: read body, start: read segStart, len: read (i - segStart))
-                    found = true
-                    scanning = false
-                }
-                argno = argno + 1
-                segStart = i + 1
-            }
-            if scanning { i = i + 1 }
-        }
-    }
-    if found == false { return "" }
-    return str_trim(s: read result)
 }
 
 // Count the comma-separated parameters of a closure whose param pipes are at
@@ -8497,8 +8862,9 @@ fn callback_arg_bad(toks: read List<Tok>, as0: read Int, ae: read Int, pt: read 
 }
 
 // Resolve a call parameter's declared type via the O(1) fn index: unqualified callee =>
-// file fn; qualified callee => file `fn ns.method` (shadowing) else the curated stdlib
-// table. A callee not in the index is stdlib/unknown (O(1)).
+// file fn; qualified callee => file `fn ns.method` (shadowing) else the generated
+// stdlib interface table through the FP-safe allowlist above. A callee not in the
+// index is stdlib/unknown (O(1)).
 fn resolve_param_type(toks: read List<Tok>, ns: read String, name: read String, label: read String, fnIdx: read Map<String, Int>) -> String {
     if String.len(value: read ns) == 0 {
         let ft = Map.get_or_default<String, Int>(map: read fnIdx, key: read name, default: read (0 - 1))
@@ -8658,7 +9024,7 @@ fn call_arg_type_bad(toks: read List<Tok>, ns: read String, callee: read String,
     return bad
 }
 
-// RS0207 ARGUMENT_TYPE_MISMATCH (WIP, env-gated) — Slice 1: an annotated binding
+// RS0207 ARGUMENT_TYPE_MISMATCH — Slice 1: an annotated binding
 // `let/local NAME: TYPE = EXPR` whose initializer type is incompatible with the
 // annotation (oracle check_binding_type, same argument_type_matches primitive as
 // RS0208). Expected = the annotation (module-qualified); actual = return_actual_type
@@ -8999,50 +9365,31 @@ fn interp_has_nonstring(toks: read List<Tok>, tokIdx: read Int, popen: read Int,
     return false
 }
 
-fn fn_has_binding_type_mismatch(toks: read List<Tok>, start: read Int, prefix: read String, declared: read Set<String>, fnIdx: read Map<String, Int>, aliasIdx: read Map<String, String>) -> Bool {
-    let ns = fn_name_start(toks: read toks, i: read start)
-    let bo = function_signature_end(toks: read toks, start: read (ns - 1))
-    if at_symbol(toks: read toks, i: read bo, code: read SYM_LBRACE) == false { return false }
-    let bc = find_matching(toks: read toks, open: read bo, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
-    if bc < 0 { return false }
-    // Per-fn local index: O(1) bare-ident binding resolution inside return_actual_type.
-    let locals = build_local_index(toks: read toks, bodyOpen: read bo, bodyClose: read bc)
-    let mut pp = dotted_end(toks: read toks, i: read ns)
-    if at_symbol(toks: read toks, i: read pp, code: read SYM_LANGLE) {
-        let gc = find_matching(toks: read toks, open: read pp, openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
-        if gc >= 0 { pp = gc + 1 }
-    }
-    let mut popen = 0 - 1
-    let mut pclose = 0 - 1
-    if at_symbol(toks: read toks, i: read pp, code: read SYM_LPAREN) {
-        let pc = find_matching(toks: read toks, open: read pp, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
-        if pc >= 0 {
-            popen = pp
-            pclose = pc
-        }
-    }
-    let mut i = bo + 1
+fn fn_has_binding_type_mismatch(toks: read List<Tok>, start: read Int, model: read FileTypeModel) -> Bool {
+    let body = build_body_type_model(toks: read toks, fnStart: read start)
+    if body_type_model_ok(body: read body) == false { return false }
+    let mut i = body.bodyOpen + 1
     let mut hit = false
-    while i < bc {
+    while i < body.bodyClose {
         if at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) && is_closure_brace(toks: read toks, b: read i) && closure_paramless(toks: read toks, b: read i) == false {
             let cc = find_matching(toks: read toks, open: read i, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
-            if cc < 0 { i = bc } else { i = cc + 1 }
+            if cc < 0 { i = body.bodyClose } else { i = cc + 1 }
         } else if tk_kind(toks: read toks, i: read i) == TOK_INTERP {
-            if interp_has_nonstring(toks: read toks, tokIdx: read i, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals) { hit = true }
+            if interp_has_nonstring(toks: read toks, tokIdx: read i, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals) { hit = true }
             i = i + 1
         } else if is_kw_text(toks: read toks, i: read i, word: read "let") || is_kw_text(toks: read toks, i: read i, word: read "local") {
             let mut j = i + 1
             if is_kw_text(toks: read toks, i: read j, word: read "mut") { j = j + 1 }
             if is_ident_tok(toks: read toks, i: read j) && at_symbol(toks: read toks, i: read (j + 1), code: read SYM_COLON) {
-                let stmtEnd = next_line_or_block_end(toks: read toks, start: read i, end: read bc)
+                let stmtEnd = next_line_or_block_end(toks: read toks, start: read i, end: read body.bodyClose)
                 let eq = find_top_sym(toks: read toks, start: read (j + 2), end: read stmtEnd, code: read SYM_EQ)
                 if eq >= 0 {
-                    let annotated = qualified_type_string(toks: read toks, ts: read (j + 2), te: read eq, prefix: read prefix, declared: read declared)
-                    let expected = expand_type_alias(aliasIdx: read aliasIdx, ty: read annotated)
+                    let annotated = qualified_type_string(toks: read toks, ts: read (j + 2), te: read eq, prefix: read model.prefix, declared: read model.declared)
+                    let expected = expand_type_alias(aliasIdx: read model.aliasIdx, ty: read annotated)
                     if str_is_unresolved_generic(s: read expected) == false && String.len(value: read expected) > 0 {
-                        let ee = stmt_expr_end(toks: read toks, start: read (eq + 1), end: read bc)
+                        let ee = stmt_expr_end(toks: read toks, start: read (eq + 1), end: read body.bodyClose)
                         if (eq + 1) < ee {
-                            if return_expr_mismatch(toks: read toks, s: read (eq + 1), e: read ee, expected: read expected, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals) { hit = true }
+                            if return_expr_mismatch(toks: read toks, s: read (eq + 1), e: read ee, expected: read expected, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals) { hit = true }
                         }
                     }
                 }
@@ -9053,7 +9400,7 @@ fn fn_has_binding_type_mismatch(toks: read List<Tok>, start: read Int, prefix: r
             let method = tk_text(toks: read toks, i: read i)
             let cclose = find_matching(toks: read toks, open: read (i + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
             if cclose >= 0 {
-                if call_arg_type_bad(toks: read toks, ns: read callNs, callee: read method, open: read (i + 1), close: read cclose, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals, aliasIdx: read aliasIdx, recvGeneric: read "") { hit = true }
+                if call_arg_type_bad(toks: read toks, ns: read callNs, callee: read method, open: read (i + 1), close: read cclose, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals, aliasIdx: read model.aliasIdx, recvGeneric: read "") { hit = true }
             }
             i = i + 1
         } else if is_ident_tok(toks: read toks, i: read i) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_LPAREN) && at_symbol(toks: read toks, i: read (i - 1), code: read SYM_DOT) && at_symbol(toks: read toks, i: read (i - 2), code: read SYM_RANGLE) {
@@ -9088,7 +9435,7 @@ fn fn_has_binding_type_mismatch(toks: read List<Tok>, start: read Int, prefix: r
                 let gen = type_token_string(toks: read toks, ts: read (ga + 1), te: read (i - 2))
                 let cclose = find_matching(toks: read toks, open: read (i + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
                 if cclose >= 0 {
-                    if call_arg_type_bad(toks: read toks, ns: read callNs, callee: read method, open: read (i + 1), close: read cclose, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals, aliasIdx: read aliasIdx, recvGeneric: read gen) { hit = true }
+                    if call_arg_type_bad(toks: read toks, ns: read callNs, callee: read method, open: read (i + 1), close: read cclose, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals, aliasIdx: read model.aliasIdx, recvGeneric: read gen) { hit = true }
                 }
             }
             i = i + 1
@@ -9096,7 +9443,7 @@ fn fn_has_binding_type_mismatch(toks: read List<Tok>, start: read Int, prefix: r
             let callee = tk_text(toks: read toks, i: read i)
             let cclose = find_matching(toks: read toks, open: read (i + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
             if cclose >= 0 {
-                if call_arg_type_bad(toks: read toks, ns: read "", callee: read callee, open: read (i + 1), close: read cclose, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals, aliasIdx: read aliasIdx, recvGeneric: read "") { hit = true }
+                if call_arg_type_bad(toks: read toks, ns: read "", callee: read callee, open: read (i + 1), close: read cclose, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals, aliasIdx: read model.aliasIdx, recvGeneric: read "") { hit = true }
             }
             i = i + 1
         } else {
@@ -9109,12 +9456,7 @@ fn fn_has_binding_type_mismatch(toks: read List<Tok>, start: read Int, prefix: r
 // Walk all top-level fns and report any RS0207 binding-type mismatch (Slice 1).
 fn has_binding_type_mismatch(toks: read List<Tok>) -> Bool {
     let ntok = List.len(list: read toks)
-    let prefix = module_prefix(toks: read toks)
-    let declared = collect_declared_types(toks: read toks)
-    // File fn-decl index: built ONCE, shared across all fns (param + return lookups).
-    let fnIdx = collect_fn_decl_index(toks: read toks)
-    // File type-alias index: built ONCE for O(1) alias expansion of arg/param types.
-    let aliasIdx = collect_type_alias_index(toks: read toks)
+    let model = build_file_type_model(toks: read toks)
     let mut i = 0
     let mut running = true
     let mut hit = false
@@ -9138,7 +9480,7 @@ fn has_binding_type_mismatch(toks: read List<Tok>) -> Bool {
                 if r < 0 {
                     running = false
                 } else {
-                    if fn_has_binding_type_mismatch(toks: read toks, start: read i, prefix: read prefix, declared: read declared, fnIdx: read fnIdx, aliasIdx: read aliasIdx) { hit = true }
+                    if fn_has_binding_type_mismatch(toks: read toks, start: read i, model: read model) { hit = true }
                     i = r
                 }
             } else {
@@ -9170,59 +9512,41 @@ fn cond_expr_end(toks: read List<Tok>, start: read Int, limit: read Int) -> Int 
 // RS0210: scan a fn body for `if`/`while` conditions whose top-level comparison has
 // operands of incompatible concrete types. Shares the param/local setup of the RS0207
 // walker so operands resolve against the fn's params and locals.
-fn fn_has_operator_type_mismatch(toks: read List<Tok>, start: read Int, fnIdx: read Map<String, Int>, aliasIdx: read Map<String, String>) -> Bool {
-    let ns = fn_name_start(toks: read toks, i: read start)
-    let bo = function_signature_end(toks: read toks, start: read (ns - 1))
-    if at_symbol(toks: read toks, i: read bo, code: read SYM_LBRACE) == false { return false }
-    let bc = find_matching(toks: read toks, open: read bo, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
-    if bc < 0 { return false }
-    let locals = build_local_index(toks: read toks, bodyOpen: read bo, bodyClose: read bc)
-    let mut pp = dotted_end(toks: read toks, i: read ns)
-    if at_symbol(toks: read toks, i: read pp, code: read SYM_LANGLE) {
-        let gc = find_matching(toks: read toks, open: read pp, openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
-        if gc >= 0 { pp = gc + 1 }
-    }
-    let mut popen = 0 - 1
-    let mut pclose = 0 - 1
-    if at_symbol(toks: read toks, i: read pp, code: read SYM_LPAREN) {
-        let pc = find_matching(toks: read toks, open: read pp, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
-        if pc >= 0 {
-            popen = pp
-            pclose = pc
-        }
-    }
+fn fn_has_operator_type_mismatch(toks: read List<Tok>, start: read Int, model: read FileTypeModel) -> Bool {
+    let body = build_body_type_model(toks: read toks, fnStart: read start)
+    if body_type_model_ok(body: read body) == false { return false }
     let noCp = Map<String, String>.new()
-    let mut i = bo + 1
+    let mut i = body.bodyOpen + 1
     let mut hit = false
-    while i < bc {
+    while i < body.bodyClose {
         if at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) && is_closure_brace(toks: read toks, b: read i) && closure_paramless(toks: read toks, b: read i) == false {
             // Skip a parameterized closure body — its params aren't in this fn's scope
             // (the callback operator case is handled in callback_arg_bad instead).
             let cc = find_matching(toks: read toks, open: read i, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
-            if cc < 0 { i = bc } else { i = cc + 1 }
+            if cc < 0 { i = body.bodyClose } else { i = cc + 1 }
         } else if is_kw_text(toks: read toks, i: read i, word: read "if") || is_kw_text(toks: read toks, i: read i, word: read "while") {
             let lo = i + 1
-            let ce = cond_expr_end(toks: read toks, start: read lo, limit: read bc)
+            let ce = cond_expr_end(toks: read toks, start: read lo, limit: read body.bodyClose)
             if ce > lo {
-                if operator_type_bad(toks: read toks, start: read lo, end: read ce, cptypes: read noCp, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals) { hit = true }
+                if operator_type_bad(toks: read toks, start: read lo, end: read ce, cptypes: read noCp, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals) { hit = true }
             }
             i = i + 1
         } else if is_kw_text(toks: read toks, i: read i, word: read "let") || is_kw_text(toks: read toks, i: read i, word: read "local") {
-            let se = next_line_or_block_end(toks: read toks, start: read i, end: read bc)
+            let se = next_line_or_block_end(toks: read toks, start: read i, end: read body.bodyClose)
             let eq = find_top_sym(toks: read toks, start: read (i + 1), end: read se, code: read SYM_EQ)
             if eq >= 0 {
                 let vs = eq + 1
-                let ee = stmt_expr_end(toks: read toks, start: read vs, end: read bc)
+                let ee = stmt_expr_end(toks: read toks, start: read vs, end: read body.bodyClose)
                 if ee > vs {
-                    if operator_type_bad(toks: read toks, start: read vs, end: read ee, cptypes: read noCp, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals) { hit = true }
+                    if operator_type_bad(toks: read toks, start: read vs, end: read ee, cptypes: read noCp, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals) { hit = true }
                 }
             }
             i = i + 1
         } else if is_kw_text(toks: read toks, i: read i, word: read "return") {
             let vs = i + 1
-            let ee = stmt_expr_end(toks: read toks, start: read vs, end: read bc)
+            let ee = stmt_expr_end(toks: read toks, start: read vs, end: read body.bodyClose)
             if ee > vs {
-                if operator_type_bad(toks: read toks, start: read vs, end: read ee, cptypes: read noCp, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals) { hit = true }
+                if operator_type_bad(toks: read toks, start: read vs, end: read ee, cptypes: read noCp, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals) { hit = true }
             }
             i = i + 1
         } else if is_ident_tok(toks: read toks, i: read i) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_LPAREN) {
@@ -9234,7 +9558,7 @@ fn fn_has_operator_type_mismatch(toks: read List<Tok>, start: read Int, fnIdx: r
             }
             let cclose = find_matching(toks: read toks, open: read (i + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
             if cclose >= 0 {
-                if call_closure_operator_bad(toks: read toks, ns: read cns, callee: read tk_text(toks: read toks, i: read i), open: read (i + 1), close: read cclose, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals, aliasIdx: read aliasIdx) { hit = true }
+                if call_closure_operator_bad(toks: read toks, ns: read cns, callee: read tk_text(toks: read toks, i: read i), open: read (i + 1), close: read cclose, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals, aliasIdx: read model.aliasIdx) { hit = true }
             }
             i = i + 1
         } else {
@@ -9247,8 +9571,7 @@ fn fn_has_operator_type_mismatch(toks: read List<Tok>, start: read Int, fnIdx: r
 // Walk all top-level fns and report any RS0210 operator-type mismatch.
 fn has_operator_type_mismatch(toks: read List<Tok>) -> Bool {
     let ntok = List.len(list: read toks)
-    let fnIdx = collect_fn_decl_index(toks: read toks)
-    let aliasIdx = collect_type_alias_index(toks: read toks)
+    let model = build_file_type_model(toks: read toks)
     let mut i = 0
     let mut running = true
     let mut hit = false
@@ -9272,7 +9595,7 @@ fn has_operator_type_mismatch(toks: read List<Tok>) -> Bool {
                 if r < 0 {
                     running = false
                 } else {
-                    if fn_has_operator_type_mismatch(toks: read toks, start: read i, fnIdx: read fnIdx, aliasIdx: read aliasIdx) { hit = true }
+                    if fn_has_operator_type_mismatch(toks: read toks, start: read i, model: read model) { hit = true }
                     i = r
                 }
             } else {
@@ -9304,38 +9627,6 @@ fn cond_non_bool(toks: read List<Tok>, start: read Int, end: read Int, popen: re
     return true
 }
 
-// The first generic argument of a type string, or "" — `Option<Int>` => `Int`,
-// `Result<Int, String>` => `Int`. Tracks `<>` nesting; stops at a top-level `,` or `>`.
-fn first_generic_arg(ty: read String) -> String {
-    let lt = str_find(s: read ty, needle: read "<")
-    if lt < 0 { return "" }
-    let chars = String.chars(value: read ty)
-    let n = List.len<Char>(list: read chars)
-    let start = lt + 1
-    let mut i = start
-    let mut depth = 0
-    let mut endPos = 0 - 1
-    while i < n {
-        let c = code_at(chars: read chars, n: read n, i: read i)
-        if c == 60 {
-            depth = depth + 1
-        } else if c == 62 {
-            if depth == 0 {
-                endPos = i
-                i = n
-            } else {
-                depth = depth - 1
-            }
-        } else if c == 44 && depth == 0 {
-            endPos = i
-            i = n
-        }
-        i = i + 1
-    }
-    if endPos < 0 { return "" }
-    return str_trim(s: read slice(chars: read chars, from: read start, to: read endPos))
-}
-
 // A concrete scalar (non-iterable) type: String/Int/Bool/Float/Char. "" / generics / a
 // collection root (List/Map/Set/user type) yield false.
 fn is_scalar_root(ty: read String) -> Bool {
@@ -9364,7 +9655,7 @@ fn match_bad(toks: read List<Tok>, braceOpen: read Int, braceClose: read Int, sc
     let isTuple = String.starts_with(value: read scrutTy, prefix: read "(")
     let matchable = isTuple || scrutRoot == "Option" || scrutRoot == "Result" || scrutRoot == "List" || is_scalar_root(ty: read scrutTy) || Set.contains<String>(set: read declared, value: read scrutRoot)
     if matchable == false { return true }
-    let innerTy = first_generic_arg(ty: read scrutTy)
+    let innerTy = str_top_arg(s: read scrutTy, which: read 0)
     let mut impliedOption = false
     let mut impliedResult = false
     let mut litBad = false
@@ -9459,51 +9750,33 @@ fn match_bad(toks: read List<Tok>, braceOpen: read Int, braceClose: read Int, sc
 }
 
 // RS0209 per-fn walker: `if`/`while` conditions that are non-Bool.
-fn fn_has_control_flow_mismatch(toks: read List<Tok>, start: read Int, fnIdx: read Map<String, Int>, declared: read Set<String>) -> Bool {
-    let ns = fn_name_start(toks: read toks, i: read start)
-    let bo = function_signature_end(toks: read toks, start: read (ns - 1))
-    if at_symbol(toks: read toks, i: read bo, code: read SYM_LBRACE) == false { return false }
-    let bc = find_matching(toks: read toks, open: read bo, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
-    if bc < 0 { return false }
-    let locals = build_local_index(toks: read toks, bodyOpen: read bo, bodyClose: read bc)
-    let mut pp = dotted_end(toks: read toks, i: read ns)
-    if at_symbol(toks: read toks, i: read pp, code: read SYM_LANGLE) {
-        let gc = find_matching(toks: read toks, open: read pp, openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
-        if gc >= 0 { pp = gc + 1 }
-    }
-    let mut popen = 0 - 1
-    let mut pclose = 0 - 1
-    if at_symbol(toks: read toks, i: read pp, code: read SYM_LPAREN) {
-        let pc = find_matching(toks: read toks, open: read pp, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
-        if pc >= 0 {
-            popen = pp
-            pclose = pc
-        }
-    }
-    let mut i = bo + 1
+fn fn_has_control_flow_mismatch(toks: read List<Tok>, start: read Int, model: read FileTypeModel) -> Bool {
+    let body = build_body_type_model(toks: read toks, fnStart: read start)
+    if body_type_model_ok(body: read body) == false { return false }
+    let mut i = body.bodyOpen + 1
     let mut hit = false
-    while i < bc {
+    while i < body.bodyClose {
         if is_kw_text(toks: read toks, i: read i, word: read "if") || is_kw_text(toks: read toks, i: read i, word: read "while") {
             let lo = i + 1
-            let ce = cond_expr_end(toks: read toks, start: read lo, limit: read bc)
+            let ce = cond_expr_end(toks: read toks, start: read lo, limit: read body.bodyClose)
             if ce > lo {
-                if cond_non_bool(toks: read toks, start: read lo, end: read ce, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals) { hit = true }
+                if cond_non_bool(toks: read toks, start: read lo, end: read ce, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals) { hit = true }
             }
         } else if is_kw_text(toks: read toks, i: read i, word: read "match") {
             let mut vs = i + 1
             if is_effect_kw(toks: read toks, i: read vs) { vs = vs + 1 }
-            let mbo = cond_expr_end(toks: read toks, start: read vs, limit: read bc)
+            let mbo = cond_expr_end(toks: read toks, start: read vs, limit: read body.bodyClose)
             if mbo > vs {
-                let scrutTy = return_actual_type(toks: read toks, s0: read vs, e: read mbo, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals)
+                let scrutTy = return_actual_type(toks: read toks, s0: read vs, e: read mbo, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals)
                 let mbc = find_matching(toks: read toks, open: read mbo, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
                 if mbc >= 0 {
-                    if match_bad(toks: read toks, braceOpen: read mbo, braceClose: read mbc, scrutTy: read scrutTy, declared: read declared, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals) { hit = true }
+                    if match_bad(toks: read toks, braceOpen: read mbo, braceClose: read mbc, scrutTy: read scrutTy, declared: read model.declared, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals) { hit = true }
                 }
             }
         } else if is_kw_text(toks: read toks, i: read i, word: read "for") {
             // Find the `in` keyword, then type the loop subject; a concrete scalar
             // (String/Int/Bool/Float/Char) is not iterable => RS0209 (for-unsupported).
-            let fbo = cond_expr_end(toks: read toks, start: read (i + 1), limit: read bc)
+            let fbo = cond_expr_end(toks: read toks, start: read (i + 1), limit: read body.bodyClose)
             if fbo > (i + 1) {
                 let mut inPos = 0 - 1
                 let mut j = i + 1
@@ -9514,7 +9787,7 @@ fn fn_has_control_flow_mismatch(toks: read List<Tok>, start: read Int, fnIdx: re
                 if inPos >= 0 {
                     let ss = inPos + 1
                     if ss < fbo {
-                        let subjTy = return_actual_type(toks: read toks, s0: read ss, e: read fbo, popen: read popen, pclose: read pclose, bodyOpen: read bo, fnIdx: read fnIdx, locals: read locals)
+                        let subjTy = return_actual_type(toks: read toks, s0: read ss, e: read fbo, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals)
                         if is_scalar_root(ty: read subjTy) { hit = true }
                     }
                 }
@@ -9528,8 +9801,7 @@ fn fn_has_control_flow_mismatch(toks: read List<Tok>, start: read Int, fnIdx: re
 // Walk all top-level fns and report any RS0209 control-flow-type mismatch.
 fn has_control_flow_mismatch(toks: read List<Tok>) -> Bool {
     let ntok = List.len(list: read toks)
-    let fnIdx = collect_fn_decl_index(toks: read toks)
-    let declared = collect_declared_types(toks: read toks)
+    let model = build_file_type_model(toks: read toks)
     let mut i = 0
     let mut running = true
     let mut hit = false
@@ -9553,7 +9825,7 @@ fn has_control_flow_mismatch(toks: read List<Tok>) -> Bool {
                 if r < 0 {
                     running = false
                 } else {
-                    if fn_has_control_flow_mismatch(toks: read toks, start: read i, fnIdx: read fnIdx, declared: read declared) { hit = true }
+                    if fn_has_control_flow_mismatch(toks: read toks, start: read i, model: read model) { hit = true }
                     i = r
                 }
             } else {
@@ -9564,40 +9836,15 @@ fn has_control_flow_mismatch(toks: read List<Tok>) -> Bool {
     return hit
 }
 
-// Stdlib namespace -> Result error type. Built from the `.rssi` interfaces: each
-// `pub native fn Ns.method(...) -> Result<T, ErrType>` declares a per-module error
-// type, uniform across the module for these two families. Filesystem (File /
-// Directory / Env / Path) -> FileError; the JSON-shaped codecs (Json / Toml /
-// Yaml) -> JsonError. Two families have per-method exceptions that must be keyed
-// by `Ns.method`: `File.bytes_stream` returns ChannelError (async streaming), and
-// `Path.{from_string,resolve_relative,safe_relative}` return a `String` error —
-// all excluded (yield "") rather than mis-asserting an error type. A namespace not
-// in the map also yields "" (unknown => no diagnostic => FP-safe). See
-// stdlib/{fs,env,path,json,toml,yaml}/*.rssi, packages/async/interface/file.rssi,
-// and crate::checks::body::try_checks::result_error_type_name.
-// Curated stdlib return-type table (the checker has no file IO, so signatures the
-// analyzer reads from stdlib/*.rssi are embedded here — same pattern as
-// stdlib_error_type). Only the entries needed to type RS0208 returns are present;
-// an absent Ns.method yields "" (unknown => no diagnostic => FP-safe). Values are
-// the exact canonical return-type strings the analyzer produces.
+// Stdlib signatures are generated from the real `.rssi` interfaces by the test
+// harness as `selfhost.interfaces`; absent Ns.method yields "" (unknown => no
+// diagnostic => FP-safe).
 fn stdlib_return_type(ns: read String, method: read String) -> String {
-    if ns == "Image" && method == "load" { return "Result<fresh Image, ImageError>" }
-    if ns == "File" && method == "open" { return "Result<fresh File, FileError>" }
-    return ""
+    return generated_stdlib_return_type(ns: read ns, method: read method)
 }
 
 fn stdlib_error_type(ns: read String, method: read String) -> String {
-    if ns == "File" {
-        if method == "bytes_stream" { return "" }
-        return "FileError"
-    }
-    if ns == "Directory" || ns == "Env" { return "FileError" }
-    if ns == "Path" {
-        if method == "from_string" || method == "resolve_relative" || method == "safe_relative" { return "" }
-        return "FileError"
-    }
-    if ns == "Json" || ns == "Toml" || ns == "Yaml" { return "JsonError" }
-    return ""
+    return generated_stdlib_error_type(ns: read ns, method: read method)
 }
 
 // Second (error) type-arg root of a `Result<T, E>` return type for the fn whose
@@ -9974,16 +10221,10 @@ fn collect_method_names(toks: read List<Tok>) -> Set<String> {
     return names
 }
 
-// Curated stdlib method→param-effect map (measure-first: only the methods the
-// corpus oracle actually flags; see stdlib/*.rssi for the real declared effects).
+// Stdlib method parameter effects are generated from the real `.rssi` interfaces.
 // Returns the required call-site effect for `ns.method(pname:)`, or "" (no rule).
 fn stdlib_param_effect(ns: read String, method: read String, pname: read String) -> String {
-    if ns == "Log" && method == "write" && pname == "message" { return "read" }
-    if ns == "File" && method == "write" && pname == "file" { return "mut" }
-    if ns == "File" && method == "write" && pname == "data" { return "read" }
-    if ns == "Image" && method == "resize" && pname == "image" { return "mut" }
-    if ns == "ResourcePool" && method == "borrow" && pname == "pool" { return "mut" }
-    return ""
+    return generated_stdlib_param_effect(ns: read ns, method: read method, pname: read pname)
 }
 
 // True iff `name` begins with an uppercase ASCII letter — the rss convention for a
@@ -10683,10 +10924,12 @@ fn main() -> Unit {
     let mut noallocCall = false
     // RS0029: any `await` in a non-async function.
     let mut badAwait = false
-    // RS0013: an invalid `?` (non-Result return, or a concrete non-Result operand).
-    // Emitted but filtered from parity (not in CHECKER_TARGET_CODES); see the
-    // type-inference engine section above.
+    // RS0013: an invalid `?` (non-Result return, concrete non-Result operand, or
+    // known Result error-type mismatch).
     let mut invalidTry = false
+    // RS0015: unsupported/malformed syntax covered by the self-hosted frontend
+    // parity corpus.
+    let unsupportedSyntax = has_unsupported_syntax_rs0015(toks: read toks)
     // RS0023: `Fd` in a non-native fn signature or a non-resource type field.
     let mut fdSurface = false
     // RS0021: any non-exhaustive match statement or expression in the file.
@@ -10762,13 +11005,13 @@ fn main() -> Unit {
     let poolNotLocal = has_resourcepool_not_local(toks: read toks)
     // RS1002: a cast-style `as` conversion (not a with/use binding).
     let implicitConv = has_implicit_conversion(toks: read toks)
-    // RS0208: return-type mismatch (type-inference engine, WIP, env-gated).
+    // RS0208: return-type mismatch (type-inference engine).
     let retTypeMismatch = has_return_type_mismatch(toks: read toks)
-    // RS0207: argument/binding-type mismatch (WIP, env-gated — Slice 1: bindings).
+    // RS0207: argument/binding-type mismatch.
     let bindTypeMismatch = has_binding_type_mismatch(toks: read toks)
-    // RS0210: operator-type mismatch (WIP, env-gated — if/while comparison operands).
+    // RS0210: operator-type mismatch.
     let opTypeMismatch = has_operator_type_mismatch(toks: read toks)
-    // RS0209: control-flow type mismatch (WIP, env-gated — non-Bool if/while condition).
+    // RS0209: control-flow type mismatch.
     let cfTypeMismatch = has_control_flow_mismatch(toks: read toks)
     // RS0901: `take` of a `handle` field.
     let takeHandle = has_take_handle_field(toks: read toks)
@@ -10818,10 +11061,12 @@ fn main() -> Unit {
     // RS0702: a resource escaping its `with`/`view` scope (5 paths).
     let resourceEscape = has_resource_escape(toks: read toks, resources: read resources, retains: read retainsReg)
     let fallibleProducers = collect_fallible_producers(toks: read toks, resources: read resources)
+    add_builtin_fallible_producers(out: mut fallibleProducers, allFns: read allFns)
     let missingTry = has_missing_try_producer(toks: read toks, fallible: read fallibleProducers)
     let fallibleFactory = has_fallible_factory(toks: read toks, fallible: read fallibleProducers)
     let leaseConflict = has_active_lease_conflict(toks: read toks)
     let discardNonLease = has_discard_non_lease(toks: read toks)
+    let nonTransferPayload = has_nontransferable_channel(toks: read toks)
     let mut assignTypeMismatch = false
     // RS0312: index assignment on a non-List container.
     let indexAssignBad = has_index_assign_non_list(toks: read toks)
@@ -11104,6 +11349,9 @@ fn main() -> Unit {
     if invalidTry {
         Log.write(message: read "RS0013")
     }
+    if unsupportedSyntax {
+        Log.write(message: read "RS0015")
+    }
     if unnamedArg {
         Log.write(message: read "RS0201")
     }
@@ -11263,6 +11511,9 @@ fn main() -> Unit {
     if discardNonLease {
         Log.write(message: read "RS0710")
     }
+    if nonTransferPayload {
+        Log.write(message: read "RS0036")
+    }
     if resourceField {
         Log.write(message: read "RS0701")
     }
@@ -11306,7 +11557,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || useAfterManage || retainedLocal || placeConflict0303 || placeConflict0305 || placeConflict0309 || placeConflict0302 || placeConflict0304 || freshReturnBad || closureCapture0801 || closureCapture0804 || captureContract || resourcePoolTypeBad || resourceGenericBad || lazyCaptureBad || resourceEscape || noescapeEscape || localClosureEscape || missingTry || fallibleFactory || leaseConflict || discardNonLease || takeHandle || weakInit || weakRead
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || unsupportedSyntax || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || useAfterManage || retainedLocal || placeConflict0303 || placeConflict0305 || placeConflict0309 || placeConflict0302 || placeConflict0304 || freshReturnBad || closureCapture0801 || closureCapture0804 || captureContract || resourcePoolTypeBad || resourceGenericBad || lazyCaptureBad || resourceEscape || noescapeEscape || localClosureEscape || missingTry || fallibleFactory || leaseConflict || discardNonLease || nonTransferPayload || takeHandle || weakInit || weakRead
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }

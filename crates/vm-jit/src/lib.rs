@@ -1633,9 +1633,8 @@ fn native_scalar_leaf_callable(function: &JitFunction, osr: bool, _returns_handl
                 | JitInstr::HostCall { .. }
                 | JitInstr::MemoizedHostCall { .. }
                 | JitInstr::Return { .. }
-                | JitInstr::Bail
-        // Flat-list direct ops via the canonical `is_flat_list_direct` set (single
-        // source of truth shared with the rsscript leaf/cost-model sites).
+                | JitInstr::Bail // Flat-list direct ops via the canonical `is_flat_list_direct` set (single
+                                 // source of truth shared with the rsscript leaf/cost-model sites).
         ) || instr.is_flat_list_direct())
             && !matches!(
                 instr,
@@ -2110,7 +2109,12 @@ impl NativeModule {
         &mut self,
         function: &JitFunction,
     ) -> Result<CompiledId, JitError> {
-        self.compile_inner(function, Some(ForcedDeopt::All), None, LimitChecks::default())
+        self.compile_inner(
+            function,
+            Some(ForcedDeopt::All),
+            None,
+            LimitChecks::default(),
+        )
     }
 
     /// Compile `function` as an **OSR (on-stack replacement) entry** at `header_ip`
@@ -4218,9 +4222,13 @@ fn build_function(
     let limit_var = limit_checks.step.then(|| bcx.declare_var(types::I64));
     let cancel_addr_var = limit_checks.cancel.then(|| bcx.declare_var(ptr_ty));
     if let (Some(steps_var), Some(limit_var)) = (steps_var, limit_var) {
-        let steps0 = bcx.ins().load(types::I64, MemFlags::trusted(), limits_ptr, 0);
+        let steps0 = bcx
+            .ins()
+            .load(types::I64, MemFlags::trusted(), limits_ptr, 0);
         bcx.def_var(steps_var, steps0);
-        let limit0 = bcx.ins().load(types::I64, MemFlags::trusted(), limits_ptr, 8);
+        let limit0 = bcx
+            .ins()
+            .load(types::I64, MemFlags::trusted(), limits_ptr, 8);
         bcx.def_var(limit_var, limit0);
     }
     if let Some(cancel_addr_var) = cancel_addr_var {

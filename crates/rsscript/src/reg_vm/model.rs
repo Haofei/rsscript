@@ -1913,7 +1913,9 @@ fn deepcopy_collect_regs(instr: &RegInstr, out: &mut Vec<Reg>) {
         | RegInstr::AwaitJoin { dst, src }
         | RegInstr::MakeSome { dst, value: src }
         | RegInstr::NativeClosureId { dst, closure: src }
-        | RegInstr::NativeClosureCapture { dst, closure: src, .. }
+        | RegInstr::NativeClosureCapture {
+            dst, closure: src, ..
+        }
         | RegInstr::NativeFieldClosureId { dst, base: src, .. }
         | RegInstr::NativeFieldClosureCapture { dst, base: src, .. } => {
             out.push(*dst);
@@ -2015,10 +2017,7 @@ fn deepcopy_collect_regs(instr: &RegInstr, out: &mut Vec<Reg>) {
             out.extend(args.iter().copied());
         }
         RegInstr::CallClosure {
-            dst,
-            closure,
-            args,
-            ..
+            dst, closure, args, ..
         } => {
             out.push(*dst);
             out.push(*closure);
@@ -2489,9 +2488,16 @@ fn deepcopy_instr_forces_keep(instr: &RegInstr, tainted: &[bool], n_regs: usize)
         //     copy there). Either way this CALL neither mutates nor escapes a tainted arg → safe.
         //   * Keep (Tier-3 / unclassified) → conservatively keep if it touches a tainted register
         //     (dst OR any arg), matching the former default-arm behavior.
-        RegInstr::CallIntrinsic { dst, intrinsic, args }
+        RegInstr::CallIntrinsic {
+            dst,
+            intrinsic,
+            args,
+        }
         | RegInstr::CallTypedIntrinsic {
-            dst, intrinsic, args, ..
+            dst,
+            intrinsic,
+            args,
+            ..
         } => match deepcopy_intrinsic_class(*intrinsic) {
             IntrinsicTaintClass::PureFreshReader | IntrinsicTaintClass::AliasReturner => false,
             IntrinsicTaintClass::Keep => is_t(*dst) || args.iter().any(|&r| is_t(r)),
@@ -2628,14 +2634,22 @@ fn deepcopy_elidable_param_regs(
                 // or escape of the aliased result force the copy to be kept in
                 // `deepcopy_instr_forces_keep`. PureFreshReader/Keep intrinsics do not propagate
                 // (a fresh result cannot alias; a Keep result already vetoes elision directly).
-                if let RegInstr::CallIntrinsic { dst, args, intrinsic }
+                if let RegInstr::CallIntrinsic {
+                    dst,
+                    args,
+                    intrinsic,
+                }
                 | RegInstr::CallTypedIntrinsic {
-                    dst, args, intrinsic, ..
+                    dst,
+                    args,
+                    intrinsic,
+                    ..
                 } = instr
                 {
                     if *dst < n_regs
                         && !tainted[*dst]
-                        && deepcopy_intrinsic_class(*intrinsic) == IntrinsicTaintClass::AliasReturner
+                        && deepcopy_intrinsic_class(*intrinsic)
+                            == IntrinsicTaintClass::AliasReturner
                         && args.iter().any(|&r| r < n_regs && tainted[r])
                     {
                         tainted[*dst] = true;
@@ -2746,8 +2760,11 @@ impl RegUnit {
             // byte-identical to before.
             if elide_deepcopy_enabled() {
                 let n_regs = lowerer.function.regs;
-                let elidable =
-                    deepcopy_elidable_param_regs(&lowerer.function.code, n_regs, &lowerer.scalar_regs);
+                let elidable = deepcopy_elidable_param_regs(
+                    &lowerer.function.code,
+                    n_regs,
+                    &lowerer.scalar_regs,
+                );
                 for instr in lowerer.function.code.iter_mut() {
                     if let RegInstr::DeepCopy { reg } = instr {
                         if elidable.contains(reg) {

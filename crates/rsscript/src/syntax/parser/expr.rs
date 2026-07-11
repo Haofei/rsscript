@@ -181,10 +181,9 @@ pub(super) fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<E
         )),
         TokenKind::Number(value) => Some(Expr::Number(value.clone(), tokens[start].span.clone())),
         TokenKind::String(value) => Some(Expr::String(value.clone(), tokens[start].span.clone())),
-        TokenKind::Char(value) => Some(Expr::CharLiteral(
-            value.clone(),
-            tokens[start].span.clone(),
-        )),
+        TokenKind::Char(value) => {
+            Some(Expr::CharLiteral(value.clone(), tokens[start].span.clone()))
+        }
         TokenKind::InterpolatedString(value) => {
             Some(parse_interpolated_string_expr(value, &tokens[start].span))
         }

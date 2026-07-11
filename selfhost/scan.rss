@@ -1,10 +1,11 @@
 // Self-hosted rss shared scanner prelude.
 //
 // This file is the single source of truth for low-level tokenization shared by
-// the self-hosted lexer, parser, and checker. The single-file VM model has no
-// cross-file import, so the test harness (selfhost_parity.rs) PREPENDS this file
-// to each tool at compile time (scan.rss first, then the tool). `features: local`
-// therefore appears here EXACTLY ONCE for the whole concatenated program.
+// the self-hosted lexer, parser, and checker. The test harness
+// (selfhost_parity.rs) compiles this file and each tool as separate VM sources;
+// tools import it with `use selfhost.scan.*`.
+// This file declares `features: local` for its own tokenizer helpers; tool files
+// that use local-only constructs declare their own feature header.
 //
 // Contents:
 //   * the unified `Tok` struct (carries kind, val, line, col, and identifier/
@@ -23,6 +24,8 @@
 // Chars flow only into `Char.*` intrinsics / compares / `List.get`).
 
 features: local
+
+module selfhost.scan
 
 // The unified token. `kind` is one of the TOK_* constants below; `val` carries
 // the symbol code (SYM_*) for symbols or the declaration-keyword id (WORD_*) for

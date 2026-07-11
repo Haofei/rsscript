@@ -586,8 +586,7 @@ pub(super) fn match_pattern_binding_types(
             // by index.
             let mut result = Vec::new();
             for (binding, field_type) in bindings.iter().zip(field_types.iter()) {
-                let field_type_name =
-                    substitute_type_params(&field_type.type_name, &substitutions);
+                let field_type_name = substitute_type_params(&field_type.type_name, &substitutions);
                 result.extend(match_pattern_binding_types(
                     hir,
                     binding,

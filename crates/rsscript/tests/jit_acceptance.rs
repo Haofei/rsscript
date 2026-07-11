@@ -4568,7 +4568,10 @@ fn main() -> Unit {
         std::iter::empty::<String>(),
     )
     .expect("report run");
-    assert_eq!(interp.stdout, out.stdout, "decline must stay byte-identical");
+    assert_eq!(
+        interp.stdout, out.stdout,
+        "decline must stay byte-identical"
+    );
     assert!(
         stats.unprofitable_declines > 0,
         "the PIC must be declined under the default cost model: {stats:?}",
@@ -4577,8 +4580,7 @@ fn main() -> Unit {
     // The cost-model decline summary (built from this run's telemetry) shows the PIC
     // decline with its score breakdown...
     assert!(
-        report.contains("jit-report: cost-model decline summary")
-            && report.contains("pic_sites=1"),
+        report.contains("jit-report: cost-model decline summary") && report.contains("pic_sites=1"),
         "report must summarize the cost-model decline with its score breakdown, got:\n{report}",
     );
     // ...and the per-function verdict now attributes it to the actual declined

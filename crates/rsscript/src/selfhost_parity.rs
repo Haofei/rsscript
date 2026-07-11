@@ -3,16 +3,25 @@
 //! Runs the rss-written lexer (`selfhost/lexer.rss`) on rss source and compares
 //! its canonical token dump against the real Rust lexer (`crate::lexer::lex`),
 //! which defines truth. In-process: the corpus file's *content* is passed as
-//! argv[0] to the rss program, whose stdout is the dump. See `selfhost/FORMAT.md`.
+//! argv[0] to the rss program, whose stdout is the dump. See `docs/self-hosting.md`.
 //!
 //! No new public API and no new CLI: this module is `#[cfg(test)]` and reaches
 //! the private `crate::lexer` and the VM entry point directly. Divergences are
-//! recorded as `SH-NNN` entries in `docs/ledgers/rss-selfhost-ledger.md`.
+//! recorded as `SH-NNN` entries in `docs/self-hosting.md`.
 
+use std::collections::{BTreeSet, VecDeque};
 use std::path::PathBuf;
 
+use crate::diagnostic::SELFHOST_CHECKER_TARGET_CODES;
+use crate::interface_metadata::{
+    collect_interface_metadata, format_selfhost_interface_metadata_rss,
+};
+use crate::interfaces::default_interfaces;
 use crate::lexer::{TokenKind, lex};
-use crate::{RegVmExecutable, Severity, analyze_source, reg_vm_compile_source};
+use crate::reg_vm::reg_vm_compile_sources;
+use crate::syntax::ast::Item;
+use crate::syntax::parse_source_raw;
+use crate::{RegVmExecutable, Severity, analyze_source};
 
 /// One token in the canonical dump. Positions are `None` when the producer
 /// emitted placeholders (the rss lexer does so until spans are implemented).
@@ -119,27 +128,111 @@ fn parse_line(line: &str) -> Option<CanonTok> {
     })
 }
 
-/// Read a self-hosted tool source, prepended with the shared `scan.rss` prelude.
-/// The single-file VM model has no cross-file import, so the shared scanner is
-/// concatenated (scan.rss first, then a newline, then the tool file) and the
-/// combined program is compiled as one unit. `features: local` therefore appears
-/// exactly once (only in scan.rss).
-fn combined_tool_source(tool: &str) -> Result<String, String> {
-    let dir = selfhost_dir();
-    let scan_path = dir.join("scan.rss");
-    let scan_src = std::fs::read_to_string(&scan_path)
-        .map_err(|e| format!("cannot read {}: {e}", scan_path.display()))?;
-    let tool_path = dir.join(tool);
-    let tool_src = std::fs::read_to_string(&tool_path)
-        .map_err(|e| format!("cannot read {}: {e}", tool_path.display()))?;
-    Ok(format!("{scan_src}\n{tool_src}"))
+fn selfhost_import_to_tool(path: &[String], glob: bool) -> Option<String> {
+    if path.len() >= 2 && path.first().is_some_and(|segment| segment == "selfhost") {
+        let tool_path = if glob || path.len() == 2 {
+            &path[1..]
+        } else {
+            &path[1..path.len() - 1]
+        };
+        if tool_path.len() == 1 && tool_path[0] == "interfaces" {
+            return Some("generated/interface_metadata.rss".to_string());
+        }
+        Some(format!("{}.rss", tool_path.join("/")))
+    } else {
+        None
+    }
 }
 
-/// Compile `selfhost/lexer.rss` (with the shared prelude) once for reuse.
+fn generated_selfhost_source(tool: &str) -> Option<String> {
+    if tool == "generated/interface_metadata.rss" {
+        let interfaces = default_interfaces().collect::<Vec<_>>();
+        let metadata = collect_interface_metadata(&interfaces);
+        Some(format_selfhost_interface_metadata_rss(&metadata))
+    } else {
+        None
+    }
+}
+
+fn selfhost_imports(file: &str, source: &str) -> Vec<String> {
+    parse_source_raw(file, source)
+        .items
+        .into_iter()
+        .filter_map(|item| match item {
+            Item::Use(decl) => selfhost_import_to_tool(&decl.path, decl.glob),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn selfhost_import_resolution_maps_symbols_to_owning_tool() {
+    assert_eq!(
+        selfhost_import_to_tool(&["selfhost".into(), "scan".into()], false).as_deref(),
+        Some("scan.rss")
+    );
+    assert_eq!(
+        selfhost_import_to_tool(&["selfhost".into(), "scan".into(), "Tok".into()], false)
+            .as_deref(),
+        Some("scan.rss")
+    );
+    assert_eq!(
+        selfhost_import_to_tool(&["selfhost".into(), "scan".into()], true).as_deref(),
+        Some("scan.rss")
+    );
+    assert_eq!(
+        selfhost_import_to_tool(
+            &["selfhost".into(), "interfaces".into(), "Lookup".into()],
+            false
+        )
+        .as_deref(),
+        Some("generated/interface_metadata.rss")
+    );
+}
+
+/// Read a self-hosted tool and its declared `use selfhost.*` dependencies as
+/// separate VM sources. `use` is not a filesystem loader in RSS itself; the
+/// test-only harness resolves local selfhost modules before calling the normal
+/// multi-source VM compiler.
+fn tool_sources(tool: &str) -> Result<Vec<(String, String)>, String> {
+    let dir = selfhost_dir();
+    let mut seen = BTreeSet::new();
+    let mut queue = VecDeque::from([tool.to_string()]);
+    let mut out = Vec::new();
+
+    while let Some(current) = queue.pop_front() {
+        if !seen.insert(current.clone()) {
+            continue;
+        }
+        let source = if let Some(source) = generated_selfhost_source(&current) {
+            source
+        } else {
+            let path = dir.join(&current);
+            std::fs::read_to_string(&path)
+                .map_err(|e| format!("cannot read {}: {e}", path.display()))?
+        };
+        for import in selfhost_imports(&format!("selfhost/{current}"), &source) {
+            queue.push_back(import);
+        }
+        out.push((format!("selfhost/{current}"), source));
+    }
+
+    Ok(out)
+}
+
+fn compile_selfhost_tool(tool: &str, label: &str) -> Result<RegVmExecutable, String> {
+    let sources = tool_sources(tool)?;
+    let source_refs = sources
+        .iter()
+        .map(|(path, source)| (path.as_str(), source.as_str()))
+        .collect::<Vec<_>>();
+    reg_vm_compile_sources(&source_refs)
+        .map_err(|e| format!("rss {label} failed to compile: {e:?}"))
+}
+
+/// Compile `selfhost/lexer.rss` with the shared scanner once for reuse.
 fn compile_lexer() -> Result<RegVmExecutable, String> {
-    let combined = combined_tool_source("lexer.rss")?;
-    reg_vm_compile_source("selfhost/lexer.rss", &combined)
-        .map_err(|e| format!("rss lexer failed to compile: {e:?}"))
+    compile_selfhost_tool("lexer.rss", "lexer")
 }
 
 /// Run a precompiled rss lexer over `source` and parse its dump.
@@ -188,7 +281,29 @@ fn compare(oracle: &[CanonTok], actual: &[CanonTok], tier: u8) -> Result<(), Str
     Ok(())
 }
 
-/// Recursively collect `*.rss` files under `root`, skipping build output.
+fn is_corpus_excluded_dir(path: &std::path::Path) -> bool {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    name == "target"
+        || name == ".git"
+        || path
+            .components()
+            .any(|component| component.as_os_str() == ".claude")
+}
+
+#[test]
+fn corpus_excludes_local_agent_worktrees() {
+    assert!(is_corpus_excluded_dir(std::path::Path::new(
+        "/repo/.claude/worktrees/review"
+    )));
+    assert!(!is_corpus_excluded_dir(std::path::Path::new(
+        "/repo/tests/fixtures"
+    )));
+}
+
+/// Recursively collect `*.rss` files under `root`, skipping build output and
+/// local agent worktrees. The self-host corpus must be hermetic to this checkout;
+/// mirrored worktrees under `.claude/` duplicate fixtures and make gate counts
+/// depend on local tooling state.
 fn collect_rss_files(root: &std::path::Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
@@ -200,8 +315,7 @@ fn collect_rss_files(root: &std::path::Path) -> Vec<PathBuf> {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if name == "target" || name == ".git" {
+                if is_corpus_excluded_dir(&path) {
                     continue;
                 }
                 stack.push(path);
@@ -239,7 +353,11 @@ fn lexer_parity_corpus() {
     let mut mismatches: Vec<String> = Vec::new();
     let mut ok = 0usize;
     for file in &files {
-        let rel = file.strip_prefix(&root).unwrap_or(file).display().to_string();
+        let rel = file
+            .strip_prefix(&root)
+            .unwrap_or(file)
+            .display()
+            .to_string();
         let source = match std::fs::read_to_string(file) {
             Ok(s) => s,
             Err(e) => {
@@ -294,7 +412,11 @@ fn lexer_perf_corpus() {
     let mut bytes: usize = 0;
     let mut n_ok = 0usize;
     for file in &files {
-        let rel = file.strip_prefix(&root).unwrap_or(file).display().to_string();
+        let rel = file
+            .strip_prefix(&root)
+            .unwrap_or(file)
+            .display()
+            .to_string();
         let Ok(source) = std::fs::read_to_string(file) else {
             continue;
         };
@@ -358,9 +480,7 @@ fn parse_position_tier() -> bool {
 }
 
 fn compile_parser() -> Result<RegVmExecutable, String> {
-    let combined = combined_tool_source("parser.rss")?;
-    reg_vm_compile_source("selfhost/parser.rss", &combined)
-        .map_err(|e| format!("rss parser failed to compile: {e:?}"))
+    compile_selfhost_tool("parser.rss", "parser")
 }
 
 /// Run the precompiled rss parser; parse its verdict line.
@@ -453,7 +573,11 @@ fn parser_parity_corpus() {
     let mut mismatches: Vec<String> = Vec::new();
     let mut ok = 0usize;
     for file in &files {
-        let rel = file.strip_prefix(&root).unwrap_or(file).display().to_string();
+        let rel = file
+            .strip_prefix(&root)
+            .unwrap_or(file)
+            .display()
+            .to_string();
         let source = match std::fs::read_to_string(file) {
             Ok(s) => s,
             Err(e) => {
@@ -502,15 +626,13 @@ fn parser_parity_corpus() {
 // (no expression/statement parsing needed; see SH-021).
 // ---------------------------------------------------------------------------
 
-/// Diagnostic codes the rss checker is expected to reproduce.
-const CHECKER_TARGET_CODES: &[&str] = &["RS0002","RS0003","RS0004","RS0005","RS0006","RS0007","RS0008","RS0009","RS0010","RS0011","RS0012","RS0016","RS0017","RS0021","RS0024","RS0028","RS0033","RS0029","RS0023","RS0035","RS0027","RS0014","RS0018","RS0019","RS0022","RS0101","RS0013","RS0201","RS0202","RS0212","RS0037","RS0034","RS0311","RS0205","RS0020","RS0902","RS1003","RS0306","RS0701","RS0604","RS0901","RS0904","RS0903","RS0603","RS0705","RS1002","RS0208","RS0207","RS0210","RS0209","RS0211","RS0032","RS1004","RS0708","RS0313","RS0312","RS0307","RS0308","RS0301","RS0401","RS0501","RS0303","RS0305","RS0309","RS0601","RS0302","RS0304","RS0801","RS0804","RS0805","RS0703","RS0704","RS0711","RS0702","RS0802","RS0803","RS0706","RS0709","RS0710"];
-
 /// Dev-loop optimization: extra target codes from `RSS_CHECKER_EXTRA_CODES`
-/// (comma-separated) are unioned into the target set at runtime. `CHECKER_TARGET_CODES`
-/// is a compiled constant, so adding a code to it forces a ~1min lib rebuild — but
-/// `check.rss` is read from disk at runtime. So while developing a NEW code, wire it
-/// into `check.rss` and run `RSS_CHECKER_EXTRA_CODES=RS0XXX cargo test … checker_parity_corpus`
-/// to iterate with ZERO rebuilds; only bake it into the constant (one rebuild) at commit.
+/// (comma-separated) are unioned into the target set at runtime.
+/// `SELFHOST_CHECKER_TARGET_CODES` is compiled, so adding a code to it forces a
+/// rebuild; `check.rss` is read from disk at runtime. While developing a new
+/// code, wire it into `check.rss` and run
+/// `RSS_CHECKER_EXTRA_CODES=RS0XXX cargo test … checker_parity_corpus` to
+/// iterate without baking it into the target table yet.
 fn extra_target_codes() -> &'static Vec<String> {
     static EXTRA: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
     EXTRA.get_or_init(|| {
@@ -526,7 +648,22 @@ fn extra_target_codes() -> &'static Vec<String> {
 }
 
 fn is_target_code(code: &str) -> bool {
-    CHECKER_TARGET_CODES.contains(&code) || extra_target_codes().iter().any(|c| c == code)
+    SELFHOST_CHECKER_TARGET_CODES.contains(&code) || extra_target_codes().iter().any(|c| c == code)
+}
+
+#[test]
+fn checker_target_codes_are_known_and_unique() {
+    let mut seen = BTreeSet::new();
+    for code in SELFHOST_CHECKER_TARGET_CODES {
+        assert!(
+            code.starts_with("RS") && code.len() == 6,
+            "self-host checker target code must be an RS diagnostic code: {code}"
+        );
+        assert!(
+            seen.insert(*code),
+            "self-host checker target code must not be duplicated: {code}"
+        );
+    }
 }
 
 /// Oracle: the set of target diagnostic codes the real analyzer reports.
@@ -542,9 +679,7 @@ fn checker_oracle_codes(file: &str, source: &str) -> Vec<String> {
 }
 
 fn compile_checker() -> Result<RegVmExecutable, String> {
-    let combined = combined_tool_source("check.rss")?;
-    reg_vm_compile_source("selfhost/check.rss", &combined)
-        .map_err(|e| format!("rss checker failed to compile: {e:?}"))
+    compile_selfhost_tool("check.rss", "checker")
 }
 
 /// Run the rss checker; parse the target codes it reports (`CLEAN` => none).
@@ -552,16 +687,75 @@ fn run_checker(exe: &RegVmExecutable, source: &str) -> Result<Vec<String>, Strin
     let output = exe
         .eval_main_with_args([source.to_string()])
         .map_err(|e| format!("rss checker failed to run: {e:?}"))?;
-    let mut codes: Vec<String> = output
-        .stdout
-        .lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty() && *l != "CLEAN" && is_target_code(l))
-        .map(|l| l.to_string())
-        .collect();
+    parse_checker_output(&output.stdout)
+}
+
+fn parse_checker_output(stdout: &str) -> Result<Vec<String>, String> {
+    let mut codes = Vec::new();
+    let mut clean = false;
+    for line in stdout.lines() {
+        let code = line.trim();
+        if code.is_empty() {
+            continue;
+        }
+        if code == "CLEAN" {
+            clean = true;
+        } else if is_target_code(code) {
+            codes.push(code.to_string());
+        } else {
+            return Err(format!(
+                "rss checker emitted an unknown diagnostic line: {line:?}"
+            ));
+        }
+    }
+    if clean && !codes.is_empty() {
+        return Err("rss checker emitted CLEAN together with diagnostics".to_string());
+    }
     codes.sort();
     codes.dedup();
     Ok(codes)
+}
+
+#[test]
+fn checker_output_parser_rejects_unknown_lines() {
+    assert_eq!(
+        parse_checker_output("RS0005\nRS0207\n").unwrap(),
+        vec!["RS0005".to_string(), "RS0207".to_string()]
+    );
+    assert!(parse_checker_output("debug\n").is_err());
+    assert!(parse_checker_output("CLEAN\nRS0005\n").is_err());
+}
+
+#[test]
+fn type_helpers_detect_prefixed_and_late_generic_args() {
+    let mut sources = tool_sources("types.rss").expect("selfhost types deps should load");
+    sources.push((
+        "selfhost/type_helpers_test.rss".to_string(),
+        r#"
+module selfhost.type_helpers_test
+
+use selfhost.types.*
+
+fn main() -> Unit {
+    if str_is_unresolved_generic(s: read "owned T") {
+        Log.write(message: read "owned")
+    }
+    if str_is_unresolved_generic(s: read "Triple<Int, Int, T>") {
+        Log.write(message: read "third")
+    }
+}
+"#
+        .to_string(),
+    ));
+    let source_refs = sources
+        .iter()
+        .map(|(path, source)| (path.as_str(), source.as_str()))
+        .collect::<Vec<_>>();
+    let exe = reg_vm_compile_sources(&source_refs).expect("type helper test should compile");
+    let output = exe
+        .eval_main_with_args(std::iter::empty::<String>())
+        .expect("type helper test should run");
+    assert_eq!(output.stdout.trim(), "owned\nthird");
 }
 
 /// Phase-3 proof: the rss checker agrees with the analyzer on a tiny sample
@@ -583,8 +777,7 @@ fn checker_parity_tiny_sample() {
 /// `CLEAN`; this closes that gap without the (ignored) full-corpus gate.
 #[test]
 fn checker_reports_rs0005_for_duplicate_declaration_smoke() {
-    let source =
-        "fn dup() -> Unit {\n    return Unit\n}\nfn dup() -> Unit {\n    return Unit\n}\n";
+    let source = "fn dup() -> Unit {\n    return Unit\n}\nfn dup() -> Unit {\n    return Unit\n}\n";
     let oracle = checker_oracle_codes("checker-duplicate.rss", source);
     assert!(
         oracle.contains(&"RS0005".to_string()),
@@ -676,8 +869,11 @@ fn checker_parity_corpus() {
                             break;
                         }
                         let file = &files[i];
-                        let rel =
-                            file.strip_prefix(root).unwrap_or(file).display().to_string();
+                        let rel = file
+                            .strip_prefix(root)
+                            .unwrap_or(file)
+                            .display()
+                            .to_string();
                         let Ok(source) = std::fs::read_to_string(file) else {
                             run_failures.push(format!("{rel}: unreadable"));
                             continue;
@@ -707,7 +903,7 @@ fn checker_parity_corpus() {
         mismatches.extend(mm);
     }
     eprintln!(
-        "\n=== checker_parity_corpus (codes {CHECKER_TARGET_CODES:?}) ===\n  files: {total}\n  \
+        "\n=== checker_parity_corpus (codes {SELFHOST_CHECKER_TARGET_CODES:?}) ===\n  files: {total}\n  \
          ok: {ok}\n  run-failures: {}\n  code-mismatches: {}\n",
         run_failures.len(),
         mismatches.len()
@@ -729,10 +925,10 @@ fn checker_parity_corpus() {
 // ---------------------------------------------------------------------------
 // AST-dump parity — format contract + Rust oracle (step 1 of frontend object
 // parity). The rss parser will one day emit the canonical AST dump defined in
-// `selfhost/AST_FORMAT.md`; this oracle emits it from the surface-preserving
+// `docs/self-hosting.md`; this oracle emits it from the surface-preserving
 // tree (`crate::syntax::parse_source_raw`, NOT the desugared `parse_source`).
 // Byte-identical dumps = AST parity. This ships BEFORE `parser.rss` builds an
-// AST, exactly as the token FORMAT.md + oracle preceded the rss lexer.
+// AST, exactly as the token dump contract + oracle preceded the rss lexer.
 //
 // The serializer is TOTAL over the AST (every Item/Stmt/Expr/Pattern variant is
 // rendered) so a future producer cannot pass by silently dropping a node. Tier 0:
@@ -848,7 +1044,10 @@ fn ast_oracle_dump(file: &str, source: &str) -> String {
         push_line(
             &mut out,
             1,
-            &format!("protocol-impl protocol={} type={}", pi.protocol, pi.type_name),
+            &format!(
+                "protocol-impl protocol={} type={}",
+                pi.protocol, pi.type_name
+            ),
         );
         for m in &pi.mappings {
             push_line(
@@ -862,7 +1061,11 @@ fn ast_oracle_dump(file: &str, source: &str) -> String {
         push_line(&mut out, 1, &format!("unknown-feature {}", escape(&f.name)));
     }
     for f in &program.duplicate_features {
-        push_line(&mut out, 1, &format!("duplicate-feature {}", escape(&f.name)));
+        push_line(
+            &mut out,
+            1,
+            &format!("duplicate-feature {}", escape(&f.name)),
+        );
     }
     for _ in &program.unknown_top_level_spans {
         push_line(&mut out, 1, "unknown-top-level");
@@ -876,7 +1079,12 @@ fn ast_oracle_dump(file: &str, source: &str) -> String {
 fn dump_item(out: &mut String, depth: usize, item: &ast::Item) {
     match item {
         ast::Item::Module(m) => {
-            push_node(out, depth, &format!("module path={}", m.path.join(".")), &m.span);
+            push_node(
+                out,
+                depth,
+                &format!("module path={}", m.path.join(".")),
+                &m.span,
+            );
         }
         ast::Item::Use(u) => {
             let mut line = format!("use path={} glob={}", u.path.join("."), u.glob);
@@ -1215,7 +1423,11 @@ fn dump_stmt(out: &mut String, depth: usize, s: &ast::Stmt) {
         ast::Stmt::Select(s) => {
             push_node(out, depth, "select", &s.span);
             for arm in &s.arms {
-                push_line(out, depth + 1, &format!("select-arm binding={}", arm.binding));
+                push_line(
+                    out,
+                    depth + 1,
+                    &format!("select-arm binding={}", arm.binding),
+                );
                 push_line(out, depth + 2, "operation");
                 dump_expr(out, depth + 3, &arm.operation);
                 dump_block(out, depth + 2, &arm.body);
@@ -1224,7 +1436,12 @@ fn dump_stmt(out: &mut String, depth: usize, s: &ast::Stmt) {
         ast::Stmt::Break(s) => push_node(out, depth, "break", s),
         ast::Stmt::Continue(s) => push_node(out, depth, "continue", s),
         ast::Stmt::LetElse(l) => {
-            push_node(out, depth, &format!("let-else binding={}", l.binding_name), &l.span);
+            push_node(
+                out,
+                depth,
+                &format!("let-else binding={}", l.binding_name),
+                &l.span,
+            );
             push_line(out, depth + 1, "pattern");
             dump_pattern(out, depth + 2, &l.pattern);
             push_line(out, depth + 1, "value");
@@ -1489,7 +1706,7 @@ fn ast_oracle_dump_is_deterministic_smoke() {
 }
 
 /// Phase-5 golden (non-ignored): pins the exact AST dump of the tiny sample so
-/// the format contract in `selfhost/AST_FORMAT.md` is locked BEFORE `parser.rss`
+/// the format contract in `docs/self-hosting.md` is locked BEFORE `parser.rss`
 /// targets it. When the rss parser is built, its dump must equal this byte for
 /// byte at tier 0.
 #[test]
@@ -1512,7 +1729,10 @@ program
               ident x
               number 1
 ";
-    assert_eq!(dump, expected, "AST dump golden mismatch\n--- actual ---\n{dump}");
+    assert_eq!(
+        dump, expected,
+        "AST dump golden mismatch\n--- actual ---\n{dump}"
+    );
 }
 
 /// Phase-5 totality gate (ignored by default): the AST oracle renders every file
@@ -1528,7 +1748,11 @@ fn ast_oracle_total_over_corpus() {
     let mut ok = 0usize;
     let mut empty: Vec<String> = Vec::new();
     for file in &files {
-        let rel = file.strip_prefix(&root).unwrap_or(file).display().to_string();
+        let rel = file
+            .strip_prefix(&root)
+            .unwrap_or(file)
+            .display()
+            .to_string();
         let Ok(source) = std::fs::read_to_string(file) else {
             continue;
         };
@@ -1549,7 +1773,11 @@ fn ast_oracle_total_over_corpus() {
     for line in empty.iter().take(20) {
         eprintln!("[degenerate] {line}");
     }
-    assert!(empty.is_empty(), "{} files produced a degenerate dump", empty.len());
+    assert!(
+        empty.is_empty(),
+        "{} files produced a degenerate dump",
+        empty.len()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1565,9 +1793,7 @@ fn ast_oracle_total_over_corpus() {
 // ---------------------------------------------------------------------------
 
 fn compile_astdump() -> Result<RegVmExecutable, String> {
-    let combined = combined_tool_source("astdump.rss")?;
-    reg_vm_compile_source("selfhost/astdump.rss", &combined)
-        .map_err(|e| format!("rss astdump failed to compile: {e:?}"))
+    compile_selfhost_tool("astdump.rss", "astdump")
 }
 
 /// Run the precompiled rss AST-dump producer; its stdout IS the dump.
@@ -1725,7 +1951,11 @@ fn ast_parity_corpus() {
     let mut run_failures = 0usize;
     let mut sample_mismatches: Vec<String> = Vec::new();
     for file in &files {
-        let rel = file.strip_prefix(&root).unwrap_or(file).display().to_string();
+        let rel = file
+            .strip_prefix(&root)
+            .unwrap_or(file)
+            .display()
+            .to_string();
         let Ok(source) = std::fs::read_to_string(file) else {
             continue;
         };

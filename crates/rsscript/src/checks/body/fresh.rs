@@ -99,7 +99,9 @@ pub(super) fn body_callee_display(callee: &Callee) -> String {
 pub(super) fn body_expr_label(expr: &Expr) -> String {
     match expr {
         Expr::Ident(name, _) => name.clone(),
-        Expr::String(value, _) | Expr::CharLiteral(value, _) | Expr::MultilineString(value, _) => format!("{value:?}"),
+        Expr::String(value, _) | Expr::CharLiteral(value, _) | Expr::MultilineString(value, _) => {
+            format!("{value:?}")
+        }
         Expr::Field { base, name, .. } => format!("{}.{}", body_expr_label(base), name),
         Expr::Index { base, .. } => format!("{}[]", body_expr_label(base)),
         Expr::Call { callee, .. } => format!("{}()", body_callee_display(callee)),
@@ -603,7 +605,10 @@ pub(super) fn collect_spawn_capture_idents(expr: &HirExpr, captures: &mut Vec<(S
                 collect_spawn_capture_idents(item, captures);
             }
         }
-        HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Char { .. } | HirExpr::Unknown(_) => {}
+        HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Char { .. }
+        | HirExpr::Unknown(_) => {}
     }
 }
 

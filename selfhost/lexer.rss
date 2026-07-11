@@ -1,13 +1,16 @@
 // Self-hosted rss lexer — Phase 1 (driver only).
 //
-// Reads rss source as argv[0], emits the canonical token dump (see FORMAT.md):
+// Reads rss source as argv[0], emits the canonical token dump (see docs/self-hosting.md):
 //   <line>:<col>:<len>\t<KIND>\t<PAYLOAD>   one token per line, in lex order.
 // Replicates crate::lexer::lex (the oracle) tokenization at tier 0: positions
 // are placeholders (0:0:0) — tier-0 parity ignores them.
 //
-// The scanner itself lives in selfhost/scan.rss (the shared prelude the harness
-// prepends at compile time). This driver simply runs `tokenize` and prints one
-// dump line per token: `0:0:0\t<KIND>\t<escape(text)>`.
+module selfhost.lexer
+
+use selfhost.scan.*
+
+// The scanner itself lives in selfhost/scan.rss. This driver simply runs
+// `tokenize` and prints one dump line per token: `0:0:0\t<KIND>\t<escape(text)>`.
 
 // Map a Tok.kind int to the canonical KIND name.
 fn kind_name(k: read Int) -> String {

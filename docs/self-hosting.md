@@ -1,4 +1,170 @@
-# RSS Self-Hosting Ledger
+# RSS Self-Hosting
+
+This is the single canonical document for RSScript self-hosting. It contains the
+current status, the validation plan, the canonical token/AST dump contracts, and
+the historical `SH-*` ledger. Do not add separate self-hosting status or format
+docs; append new findings here.
+
+## Current Status
+
+- **Lexer:** self-hosted in `selfhost/lexer.rss`; parity is checked against the
+  Rust lexer through the test-only harness in `crates/rsscript/src/selfhost_parity.rs`.
+- **Parser/recognizer:** self-hosted in `selfhost/parser.rss`; recognition parity
+  is checked against `crate::syntax::parse_source_raw`.
+- **AST dump:** self-hosted in `selfhost/astdump.rss`; byte-exact dump parity is
+  checked against the Rust AST oracle.
+- **Checker:** self-hosted in `selfhost/check.rss`; the baked checker parity set
+  currently lives in `SELFHOST_CHECKER_TARGET_CODES` in `crates/rsscript/src/diagnostic.rs`.
+  It covers 82 of the 83 currently defined diagnostic codes; the remaining
+  defined frontier code is `RS1301`. Extra in-development codes can be exercised
+  with `RSS_CHECKER_EXTRA_CODES`.
+- **Remaining frontier:** the full semantic frontend: broader type inference,
+  callee resolution, borrow/ownership analysis, and eventually lowering/codegen
+  if the goal expands from self-hosted frontend tools to a self-hosted compiler.
+
+## Current Roadmap / Pending Work
+
+This section is the authoritative current self-hosting roadmap. Older `SH-*`
+entries below are a historical ledger and may describe work that was later
+completed.
+
+The compiler is **not fully self-hosted**. The current self-hosted pieces are the
+lexer, parser recognizer, AST dump, and a partial checker. Remaining work:
+
+1. **Complete self-hosted checker semantics** — broader type inference, callee
+   resolution, builtin/core signature knowledge, borrow/ownership diagnostics,
+   and the remaining analyzer diagnostic families. Avoid adding more hand-curated
+  stdlib tables: the test harness now generates a self-host-readable
+   `selfhost.interfaces` RSS module from the real `.rssi` interfaces, and
+   `check.rss` imports it for generated return-type, Result-error, and
+   parameter-effect lookups. Parameter-type lookup remains an explicit FP-safe
+   allowlist until the checker has a real stdlib/type-shape model; using the
+   generated table wholesale produces RS0207 false positives on ResourcePool and
+   broader pass fixtures.
+2. **Keep self-hosted tools modular** — `selfhost/scan.rss` is now a real
+   `module selfhost.scan`, and `lexer.rss`, `parser.rss`, `check.rss`, and
+   `astdump.rss` import it with `use selfhost.scan.*`. The test harness resolves
+   local `use selfhost.*` dependencies before calling the normal multi-source VM
+   compiler. Remaining module work is package-level ergonomics, not hidden
+   concatenation.
+3. **Grow the self-hosted type model** — `selfhost/types.rss` owns the shared
+   canonical type-string primitives used by `check.rss` (`root`, generic-arg,
+   prefix stripping, generic detection, and argument compatibility). `check.rss`
+   now routes RS0207/RS0208/RS0209/RS0210 through `FileTypeModel` and
+   `BodyTypeModel`, with managed maps/sets stored as explicit `handle` fields.
+   The next step is to widen those models with richer symbol/type-shape facts,
+   then use that model to safely broaden generated stdlib parameter types.
+4. **Move from frontend tools to compiler self-hosting** — lowering/codegen are
+   still Rust-owned. Start this only if the goal expands from self-hosted
+   frontend tooling to a self-hosted compiler.
+5. **Keep JIT/VM collection performance tracked outside this backlog** — the
+   stale local-collection item (`SH-004`, informed by `SH-011`) is closed below:
+   native local collection construction/mutation support now exists, and the
+   remaining Rust-speed gap is a broader JIT/VM collection-representation project,
+   not a self-hosting correctness blocker.
+
+## Validation Model
+
+Self-hosting is a stress test, not just a port. Each RSS-written tool is run
+against the same corpus as the Rust implementation and must match an explicit
+oracle:
+
+| Layer | RSS tool | Oracle |
+|-------|----------|--------|
+| Lexer | `selfhost/lexer.rss` | `crate::lexer::lex` canonical token dump |
+| Parser recognition | `selfhost/parser.rss` | `crate::syntax::parse_source_raw` accept/reject result |
+| AST dump | `selfhost/astdump.rss` | surface-preserving Rust AST dump |
+| Checker | `selfhost/check.rss` | `crate::analyze_source`, filtered to target diagnostic codes |
+
+Checker parity is a per-file code-presence check: for each corpus file, the
+self-hosted checker and Rust analyzer must agree on the set of target diagnostic
+codes present in that file. It does not compare diagnostic counts, message text,
+labels, causes, or spans.
+
+The harness is test-only. It does not add public CLI commands or user-facing
+debug modes. Findings are recorded below as `SH-NNN` entries.
+
+Useful gates:
+
+```sh
+docker compose run --rm dev cargo test -p rsscript selfhost_parity -- --test-threads=1
+docker compose run --rm dev cargo test -p rsscript selfhost_parity::lexer_parity_corpus -- --ignored --test-threads=1 --nocapture
+docker compose run --rm dev cargo test -p rsscript selfhost_parity::parser_parity_corpus -- --ignored --test-threads=1 --nocapture
+docker compose run --rm dev cargo test -p rsscript selfhost_parity::checker_parity_corpus -- --ignored --test-threads=1 --nocapture
+docker compose run --rm dev cargo test -p rsscript selfhost_parity::ast_parity_corpus -- --ignored --test-threads=1 --nocapture
+```
+
+During checker development, use `RSS_CHECKER_EXTRA_CODES=RS0XXX` to include a
+new diagnostic in the parity target without baking it into the compiled
+`SELFHOST_CHECKER_TARGET_CODES` table.
+
+## Token Dump Contract
+
+The canonical lexer dump has one token per line:
+
+```text
+<line>:<col>:<len>\t<KIND>\t<PAYLOAD>
+```
+
+- `line`, `col`, and `len` are the token start position and byte length.
+- `KIND` is one exact token kind name:
+  `Ident Number String Char InterpolatedString MultilineString Keyword Symbol Unknown Eof`.
+- `PAYLOAD` is the raw token text/content; `Eof` has an empty payload.
+- Payload escaping is deterministic: `\` -> `\\`, newline -> `\n`, tab -> `\t`,
+  carriage return -> `\r`.
+
+`RSS_SELFHOST_TIER` controls comparison strictness:
+
+- `0`: compare `(KIND, PAYLOAD)`.
+- `1`: also compare `(line, col)`.
+- `2`: also compare `len`.
+
+The Rust lexer is the oracle. If the RSS lexer diverges, record the reason as an
+`SH-*` finding before changing either side.
+
+## AST Dump Contract
+
+The canonical AST dump is an indentation tree:
+
+```text
+<indent><TAG>[ <key>=<value>]*[ <PAYLOAD>]
+```
+
+- Indent is exactly two spaces per depth.
+- Tags and attribute order are fixed.
+- Payload, when present, is last and uses the same escaping as token payloads.
+- Lines are UTF-8, newline-separated, and end with a trailing newline.
+
+Tier 0 omits spans entirely. If span parity is reintroduced, each node may gain a
+trailing `@L:C:N` field that the harness strips below the active tier.
+
+Top-level dump order:
+
+1. `program`
+2. `feature <name>` lines
+3. items in source order
+4. `protocol <name>` lines
+5. `protocol-impl protocol=<p> type=<t>` lines and method mappings
+6. diagnostic marker lines when present
+
+Common node families:
+
+- Items: `module`, `use`, `type`, `sum`, `type-alias`, `const`, `fn`.
+- Supporting nodes: `generic`, `field`, `param`, `type`.
+- Statements: `let`, `return`, `with`, `if`, `loop`, `for`, `match`,
+  `task-group`, `select`, `break`, `continue`, `let-else`, `assign`,
+  `expr-stmt`, and malformed/unknown markers.
+- Patterns: `pat-binding`, `pat-variant`, `pat-struct`, `pat-literal`,
+  `pat-list`, `pat-wildcard`.
+- Expressions: `ident`, `number`, `string`, `char`, `multiline`, `object`,
+  `map`, `array`, `binary`, `field-access`, `index`, `call`, `effect`,
+  `manage`, `spawn`, `await`, `try`, `closure`, `match-expr`, `unknown-expr`.
+
+`selfhost/astdump.rss` streams this format directly rather than materializing a
+full handle-based AST. The oracle uses `crate::syntax::parse_source_raw`, never
+the desugared parser.
+
+## Historical Ledger
 
 Real RSS-written tools are the feedback loop for hardening RSScript. As each tool
 is written and run across the VM, JIT, and AOT backends, every bug, slow path, or
@@ -83,7 +249,7 @@ Status:         open | decided | done
 ### SH-004 — collection loops over *local* collections get no native acceleration
 
 - **Tool:** stdlib conformance reporter
-- **Symptom:** an IO-free, loop-heavy tool *still* shows `translated: 0,
+- **Historical symptom:** an IO-free, loop-heavy tool *still* showed `translated: 0,
   native_calls: 0` — the JIT accelerates none of it.
 - **Minimal RSS:**
   ```
@@ -92,24 +258,32 @@ Status:         open | decided | done
   while j < List.len<Int>(list: read xs) { total = total + List.get<Int>(list: read xs, index: j); ... }
   ```
 - **Backend:** jit-native (and tier-0).
-- **Root cause:** two gaps compound. (1) Collection *construction/mutation*
+- **Historical root cause:** two gaps compounded. (1) Collection *construction/mutation*
   (`List.push`, `Map.insert`) is not in the native subset at all. (2) The
   read ops that *are* native (`ListLen`/`ListGet`/`GetFieldSlot`) only fire when
   the collection is a **handle parameter** — handles never originate in native
   code, so a locally-built `let mut xs` can't be read natively. Real tool code
   builds and processes collections locally, so the Phase-2 read-heap coverage
   rarely applies.
+- **Current correction (2026-07-07):** the first half is no longer true. The
+  native tier now has collection construction/write/read helper coverage for the
+  relevant local-collection shapes: `ListNewInt`, `ListPush*`, `ListSet*`,
+  `MapInsert*`, `SetInsert*`, `SortedSetInsert*`, `SortedMapInsert*`, and
+  `DequePush*`, plus directed OSR tests for local list/map mutation. A local
+  list mutated inside a loop OSRs safely through journaled heap helpers
+  (`native_osr_mutated_list_in_loop_stays_correct`), while invariant typed-list
+  reads can use direct len/get paths (`native_osr_direct_invariant_list_read_matches_interpreter`).
 - **Classification:** JIT (coverage) + VM (representation).
-- **Decision:** this is the measured case for **Phase 3 (local mutation)**: to
-  accelerate real tool loops the native tier needs (a) native `List.push`/
-  `Map.insert` on locally-owned collections and (b) native reads of *local*
-  (not just parameter) collections — i.e. handles that originate from native
-  `MakeList`/`MakeMap`, with the VM's copy-on-write/aliasing rules. Larger than
-  a single helper; recorded as the next high-value JIT direction with real-program
-  evidence (rather than guessed from microbenchmarks).
+- **Decision:** closed as a self-hosting pending item. The old concrete missing
+  capability, native local collection mutation, has landed. The remaining gap is
+  not "can self-hosted RSS build and process local collections under JIT?" but
+  "can VM/JIT collection-heavy code approach AOT/Rust speed?" That requires a
+  broader native-friendly collection representation / cheaper helper boundary,
+  tracked by the JIT performance roadmap rather than this self-hosting backlog.
 - **Tests:** `backends_agree_on_stdlib_reporter` (5-way).
 - **Benchmark:** `selfhost_stdlib_reporter.rss` in the matrix.
-- **Status:** open (informs Phase 3).
+- **Status:** closed for self-hosting; residual performance work is JIT/VM
+  architecture, not a pending self-host feature.
 
 ### SH-005 — `main` returning `Err` diverges: VM exit 0 vs AOT exit 101
 
@@ -240,11 +414,14 @@ Status:         open | decided | done
   by reference where a by-value position is expected isn't auto-deref'd by the
   lowerer (here the value is bound by a match on a borrowed Option).
 - **Classification:** AOT (lowering).
-- **Decision:** worked around in the Mailbox driver (match the *owned* Option from
-  the take call directly, so `v` is an owned `Int`). The general auto-deref fix is
-  the same shape as the earlier `read_effect_lowers_by_value` work; recorded for a
-  scoped follow-up.
-- **Status:** open (worked around).
+- **Decision (DONE):** the lowerer now shadows borrowed match payload bindings with
+  owned values before the arm body sees them: `*x` for `Copy` payloads,
+  `x.clone()` for cloneable non-resource payloads. Resource payloads remain
+  borrowed and are rejected by the resource move rules when used by value.
+- **Tests:** `vm_eval_parity::misc::parity_borrowed_match_payload_used_by_value`
+  proves VM/AOT parity for `read Option<Int>`, `read Option<String>`, and
+  `read Result<Int, String>` payloads.
+- **Status:** done.
 
 ### SH-011 — self-hosted collection: VM/JIT ~470–590× slower than AOT
 
@@ -276,6 +453,16 @@ Status:         open | decided | done
   collections, AOT is the only fast path today; closing the VM/JIT gap needs
   Phase-3 native local-collection support (SH-004) and/or cheaper VM intrinsic
   dispatch + value representation — a large effort, now justified by real data.
+- **Current correction (2026-07-07):** Phase-3 native local-collection helper
+  coverage has since landed, so this entry is no longer evidence for "no native
+  local collection support." It remains evidence for the residual representation
+  gap: helper-backed managed collections are still far from AOT/Rust on tight
+  collection kernels. Current committed baseline evidence still shows the broad
+  gap (`after-session.json`: `selfhost_mailbox_bench.rss` about 67 ms VM/JIT and
+  69 ms native vs 0.43 ms Rust), while focused ring-buffer code can get native
+  speedups (`baseline-20260626-jit-fixes.json`: mailbox-ring native about 4.2 ms
+  vs 32 ms VM). That makes the remaining work a JIT/VM performance project, not a
+  self-hosting correctness or language blocker.
 - **Tests/Benchmark:** `selfhost_mailbox_bench.rss` (add to the matrix);
   correctness via `backends_agree_on_selfhost_mailbox`.
 - **Status:** decided.
@@ -347,11 +534,13 @@ Status:         open | decided | done
   VM ran fine.
 - **Classification:** AOT (lowering) — same family as SH-010 (a `read`/borrowed
   value reaching a by-value/owned position isn't cloned/deref'd).
-- **Decision:** worked around by dropping the placeholder pre-fill and growing the
-  ring lazily on send (`if tail < len { set } else { push }`), so the generic
-  element only enters the list via the proven `read value` send path. The general
-  AOT auto-clone fix is the SH-010 follow-up.
-- **Status:** open (worked around).
+- **Decision (DONE):** `read`-parameter managed values now lower to owned values
+  when they enter owned positions, so storing a borrowed generic/non-Copy value in
+  an owned collection does not produce `Vec<&T>` / `&&T`.
+- **Tests:** `tests/fixtures/pass/read-param-into-owned-collection.rss` is in the
+  pass-fixture checker gate; it covers pushing `read Node` values into an owned
+  `List<Node>`.
+- **Status:** done.
 
 ### SH-004/SH-006 update — fixed ring-buffer Mailbox across modes (60k cycles)
 
@@ -932,7 +1121,7 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
 
 - **Context:** step 2 of frontend object parity (after the AST-dump format +
   oracle keystone, SH-adjacent). `selfhost/astdump.rss` is a recursive-descent
-  rss parser that STREAMS the canonical dump (`selfhost/AST_FORMAT.md`); the
+  rss parser that STREAMS the canonical dump (see "AST Dump Contract"); the
   harness (`crate::selfhost_parity`) diffs it byte-for-byte against the Rust
   oracle over `parse_source_raw`.
 - **Reach:** **543 / 587** corpus files byte-exact (~92.5%), **0 run-failures** — the
@@ -987,11 +1176,9 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   tier-strip mechanism + ~150 producer emit sites, node spans non-uniform).
 - **rss limitation found:** `if/else` is not valid as an *expression*
   (`let x = if c {..} else {..}` → RS0015) — worked around with helper functions.
-- **Status:** open, but well-formed grammar is COMPLETE — 92.5% byte-exact with
-  every remaining mismatch a malformed-recovery fixture. The producer + parity gate
-  + risk mitigations (curated fast gate; module-story decision in AST_FORMAT.md) are
-  in place; the deferred residuals (malformed recovery, protocols, `@L:C:N` spans)
-  are additive and tracked by the ratcheting floor.
+- **Status:** superseded by SH-027/SH-026. This was the open mid-point of AST dump
+  parity; later milestones closed the AST structure/span ladder. It is retained as
+  historical context, not a current pending item.
 
 ### SH-026 — Frontend object parity: diagnostics-codes (step 2) + lexer spans (step 3)
 
@@ -1124,13 +1311,17 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
       inference (`mut cache.put(key: "x")` must resolve `cache: Cache`). The fixtures are
       core/receiver/generic calls (`Image.resize`, `Db.close`, `ResourcePool<…>.borrow`).
       → **needs type inference**.
-    - **RS0036** (payload-not-transferable) — needs message-payload Send/transferability
-      analysis. → **needs type inference**. RS0038 (char-literal) still has 0 corpus
+    - **RS0036** (payload-not-transferable) — at this historical point it was
+      treated as needing message-payload Send/transferability analysis.
+      Superseded: RS0036 is now baked as code #80; the self-host checker skips
+      bare enclosing-function type params (`Channel.message<T>`) to match the
+      Rust analyzer and fires on concrete non-transferable payloads like
+      `Channel.message<List<Int>>`. RS0038 (char-literal) still has 0 corpus
       fixtures.
 - **THE TOKEN-DECIDABLE TIER IS EXHAUSTED; the cross-function signature table adds exactly
   RS0022 (25 codes total).** The remaining candidates SKIPPED because they need type
   inference / callee-signature resolution (measured, not ducked): RS0201, RS0013, RS0202,
-  RS0036 (all above). None is blocked on *borrow* analysis specifically — they are all
+  RS0036 (all above; now superseded/baked). None is blocked on *borrow* analysis specifically — they are all
   type-inference / callee-resolution gaps (the #3 borrow/ownership engine is a separate
   need, seen in RS0301-0313/RS06xx/RS07xx below). THE REMAINING BULK (~260 corpus files when ALL
   ~100 codes are targeted → 305 mismatch): RS0207/0208/0209/0210 (type/return/control-
@@ -1180,9 +1371,10 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   `T: Unknown` bound is semantic; only the `<read T>` half is decidable); malformed-control-
   statement (else-without-block / `while {` / `match {` need statement-grammar parsing). Since
   the 9 require the same semantic/expression engine as the deferred SH-025 malformed-recovery
-  tail, RS0015 stays **OUT of CHECKER_TARGET_CODES**; it is planned for the semantic-frontier
-  phase alongside RS0207-0210 / RS0301-0313 / RS0025-0026. RS0025/RS0026 have 0 corpus
+  tail, RS0015 was kept **OUT of CHECKER_TARGET_CODES** at this point and planned for the
+  semantic-frontier phase alongside RS0207-0210 / RS0301-0313 / RS0025-0026. RS0025/RS0026 have 0 corpus
   fixtures (skip, as noted in 2j).
+  **Superseded:** RS0015 is now baked; see Milestone 2be.
 - **Lexer spans (step 3):** added a `len` field to the shared `Tok`
   (= consumed source span `j-i`, matching the Rust lexer's `index-start`) and made
   `lexer.rss` emit the real `<line>:<col>:<len>` prefix. `lexer_parity_corpus` is
@@ -1233,7 +1425,7 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   line:col:len) is CLOSED. Remaining self-host frontier is the semantic tier
   (type-inference + borrow-checker codes; see the SH-026 step-2 tail).
 
-### Milestone 2l — type-inference engine slice 1: conservative `expr_type_root` + RS0013 (FALLBACK: foundation committed, RS0013 left OUT of the gate)
+### Milestone 2l — historical RS0013 fallback before the stdlib error-type map
 
 - **Goal:** begin the semantic type tier — a CONSERVATIVE expression type-of pass
   (`selfhost/check.rss::expr_type_root`) and use it to land RS0013 (invalid-try),
@@ -1265,7 +1457,7 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   * **C — error-type mismatch** (`checks/body/try_checks.rs::check_try_error_types`):
     a `?` whose operand `Result<T, E_op>` has `E_op` ≠ the fn's declared error
     type. Reproduced for unqualified operands only.
-- **BLOCKER (why RS0013 is NOT in CHECKER_TARGET_CODES):**
+- **Historical blocker (why RS0013 was not yet in CHECKER_TARGET_CODES):**
   `tests/fixtures/fail/ast-call-missing-effect-nested.rss` (fn returns
   `Result<Unit, IOError>`) fires sub-rule C on TWO **qualified stdlib** operands —
   `File.open_write(..)?` and `File.write(..)?`, whose error type the oracle knows
@@ -1274,16 +1466,18 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   keeps UNKNOWN (typing them risks corpus-wide false positives on the many clean
   `File.*?`/`Json.*?` calls whose error type matches). So RS0013 cannot reach
   0-mismatch at the spec's conservatism level — FALLBACK taken.
-- **Outcome:** `expr_type_root` + the RS0013 sub-rule A/B wiring are committed and
-  exercised across all 619 corpus files (0 run-failures). RS0013 is EMITTED by the
-  checker but stays OUT of `CHECKER_TARGET_CODES` (filtered from parity), so the
-  gate is unchanged. It fires correctly on 11 of the 13 oracle-RS0013 files (all
+- **Historical outcome:** `expr_type_root` + the RS0013 sub-rule A/B wiring were committed and
+  exercised across all 619 corpus files (0 run-failures). At this historical
+  point, RS0013 was emitted by the checker but not yet part of the parity target
+  code set, so the gate was unchanged. It fired correctly on 11 of the 13 oracle-RS0013 files (all
   sub-rule A + B); the 2 sub-rule-C files stay unflagged (the documented blocker),
   and every clean `?` file stays unflagged (0 false positives, verified).
 - **Gate:** `checker_parity_corpus` 619/619 ok, 0 mismatches, 0 run-failures at
   the SAME 26 codes (RS0013 absent). Green.
 - **Next slice:** RS0013 becomes gateable once qualified-call error-type inference
   exists; meanwhile `expr_type_root` is ready for RS0210/RS0207/RS0208.
+  **Superseded by Milestone 2m**, which added the stdlib namespace error-type map
+  and baked RS0013.
 
 ### Milestone 2m — type-inference engine slice 2: stdlib namespace→error-type map + RS0013 sub-rule C → RS0013 GATED (27 codes)
 
@@ -1733,15 +1927,16 @@ inference. The `type_token_string` / `arg_type_matches` / `return_actual_type`
 infrastructure built here is the foundation for the sibling RS0206/0207/0209/0210
 bucket (~120 file-fires, the dominant remaining mass).
 
-### Milestone 2ag — RS0207 argument-type-mismatch engine (env-gated, ~25/36 files, 0 FP)
+### Milestone 2ag — RS0207 argument-type-mismatch engine (historical dev gate; later baked)
 
 RS0207 ARGUMENT_TYPE_MISMATCH: a call argument whose inferred type is incompatible
 with the callee parameter's declared type (oracle `argument_type_matches` ==
 `arg_type_matches`; `hir_expr_type_name` == `return_actual_type`). Built on the RS0208
 type engine but **per-argument** rather than per-return, which surfaced a real
-performance question (see below). Progress this milestone (all committed to `main`,
-RS0207 kept env-gated behind `RSS_CHECKER_EXTRA_CODES=RS0207` — NOT in
-CHECKER_TARGET_CODES — until byte-exact):
+performance question (see below). Progress before baking (all committed to
+`main`; RS0207 was initially developed with
+`RSS_CHECKER_EXTRA_CODES=RS0207` before it became byte-exact and was added to
+`CHECKER_TARGET_CODES`):
 
 - **Perf foundation (c78ba754):** `return_actual_type` made O(1)-resolution — a fn-decl
   `Map<String,Int>` index (`collect_fn_decl_index`), a per-fn local-decl index
@@ -1756,12 +1951,14 @@ CHECKER_TARGET_CODES — until byte-exact):
   (~1.8x).**
 - **Bindings + file-fn args + qualified builtin args:** `let/local x: T = e` annotation
   mismatch (`return_expr_mismatch`), plus call args resolved via `resolve_param_type`
-  (file fns through the fn index → `param_type_at_fn`/`param_type_string`; builtins
-  through a curated `stdlib_param_type`).
-- **Curated builtin params + no-`?` with-binding (35ce5644):** `stdlib_param_type` for
-  Image.inspect/normalize/resize/save/load + Request.path (exact effect-stripped types
-  from the `.rssi`). Fires the manage-Result cases — a `local = Image.load(...)` types to
-  `Result<fresh Image, ImageError>` and is passed to a bare `Image` param. Also
+  (file fns through the fn index → `param_type_at_fn`/`param_type_string`; stdlib
+  methods through generated `.rssi` metadata behind a false-positive-safe allowlist).
+- **Generated-backed builtin params + no-`?` with-binding (35ce5644):**
+  `stdlib_param_type` allowlists Image.inspect/normalize/resize/save/load +
+  Request.path and a small string/log/file slice, but the returned type strings
+  are generated from the real `.rssi` metadata. Fires the manage-Result cases —
+  a `local = Image.load(...)` types to `Result<fresh Image, ImageError>` and is
+  passed to a bare `Image` param. Also
   `with EXPR as name` WITHOUT `?` now types `name` as EXPR's whole value type (previously
   only the `?`-unwrap case) — fires `resource-producer-missing-try`.
 - **Parameterless-closure descent (73e0429e):** the RS0207 arg walker now descends into
@@ -1899,6 +2096,69 @@ container whose type can't be resolved, is never flagged (a deliberate safe fals
 **BAKED as code #56.** Byte-exact 615/615, 0 FP. The fixture (`values["a"] = 1` on a `Map`)
 plus corpus.
 
+### Milestone 2bd — RS0707 ResourcePool fallible factory (code #81, BAKED)
+
+`ResourcePool<T>.new` and `.lazy` are infallible constructors; their `create`
+factory must return a bare resource, not `Result<T, E>`. The self-host checker
+now catches both sources the current corpus needs:
+
+- same-file fallible resource producers, e.g. `DbConnection.try_open(...) ->
+  Result<DbConnection, DbError>`;
+- stdlib builtin fallible producers, currently `Image.load -> Result<fresh Image,
+  ImageError>`, added only when the file does not declare its own `Image.load`.
+
+The second path closes the previously deferred
+`resourcepool-new-non-resource.rss` case, where the Rust analyzer reports both
+RS0703 and RS0707.
+
+**BAKED as code #81.** Verification: Docker fixture parity is byte-exact:
+`RSS_SELFHOST_DEV=1 cargo test -p rsscript
+selfhost_parity::checker_parity_corpus -- --ignored --test-threads=1
+--nocapture` => all selected fixture files ok, 0 run-failures, 0 code-mismatches.
+
+### Milestone 2be — RS0015 unsupported syntax (code #82, BAKED)
+
+`RS0015` is now covered by a conservative self-hosted recognizer for the current
+frontend parity corpus. The checker handles the token-decidable malformed forms
+plus the previously deferred semantic-tail fixtures:
+
+- unsupported constructors / variant call forms (`None()`, `None(1)`,
+  `Option(1)`, `Result(1)`, named variant payloads);
+- malformed call/type/generic/parameter/function/type/control forms;
+- native function bodies, protocol default method bodies, unsupported `spawn`,
+  removed `profile:` declarations, unsupported `as` casts, unsupported derives,
+  reserved generated names, duplicate imports, opaque bodies, and unsupported
+  top-level forms.
+
+The recognizer is intentionally not a broad "parse failed" fallback; it is scoped
+to RS0015 oracle shapes so valid resource bodies, protocol methods, closures,
+multiline `with ... as`, accepted dunder names, and schema/review derives do not
+false-positive.
+
+**BAKED as code #82.** Verification: Docker checker fixture parity is byte-exact:
+`RSS_SELFHOST_DEV=1 cargo test -p rsscript
+selfhost_parity::checker_parity_corpus -- --ignored --test-threads=1
+--nocapture` => all selected fixture files ok, 0 run-failures, 0 code-mismatches.
+
+### Milestone 2bc — RS0036 message payload transferability (code #80, BAKED)
+
+`Channel.message<T>` payloads must be cross-isolate-transferable. The self-host
+checker now mirrors the Rust analyzer: `Copy` scalars, `String`, and `Bytes` are
+accepted; concrete managed/container payloads such as `List<Int>` fire RS0036;
+and a bare enclosing-function type parameter (`Channel.message<T>`) is skipped
+because transferability cannot be proven without a future bound.
+
+The implementation walks function bodies so it can collect the current function's
+generic params with `collect_generics` and apply that generic skip only in the
+right scope. `RS0036` is baked into `CHECKER_TARGET_CODES`.
+
+**BAKED as code #80.** Verification: Rust checker accepts
+`message-channel-generic-payload.rss`, rejects
+`message-channel-non-transferable.rss` with RS0036, and Docker fixture parity is
+byte-exact: `RSS_SELFHOST_DEV=1 cargo test -p rsscript
+selfhost_parity::checker_parity_corpus -- --ignored --test-threads=1
+--nocapture` => all selected fixture files ok, 0 run-failures, 0 code-mismatches.
+
 ### Milestone 2bb — RS0706/RS0709/RS0710 resource-pool flow (codes #77–79, BAKED)
 
 **RS0706** RESOURCE_PRODUCER_MISSING_TRY: `with <fallible-producer>(…) as B` with no `?` before `as`
@@ -1909,11 +2169,9 @@ another borrow of the SAME pool `P` (`borrow_pool_value` extracts `P`; `pool_rec
 a `Name<…>` receiver). **RS0710** RESOURCE_POOL_DISCARD_NOT_LEASE: `ResourcePool.discard(lease: mut X)`
 where `X` is not bound by any `with …borrow… as X`. All three 0 FP/0 FN.
 
-**RS0707 (fallible `.new` factory) DEFERRED** — the analyzer determines factory fallibility by
-type-inferring the closure body (`is_result_type(hir_expr_type_name(...))`), which for
-`resourcepool-new-non-resource` needs the BUILTIN signature `Image.load -> Result<fresh Image,E>`.
-The token-scan `has_fallible_factory` covers only declared fallible resource-producers; left inert
-(implemented, not baked) pending a builtin-signature table.
+**RS0707 update:** this deferred note is superseded by Milestone 2bd. The
+self-host checker now covers the declared-producer path plus the stdlib
+`Image.load -> Result<fresh Image, ImageError>` builtin case and RS0707 is baked.
 
 ### Milestone 2ba — RS0702 resource-escape + RS0802/RS0803 closure-escape (codes #74–76, BAKED)
 
@@ -2138,8 +2396,8 @@ in a function body FIRES unless `x` is excluded by any of:
    captured into a closure (declared in the outer scope) fires — this is what "closure-capture
    analysis" reduced to.
 
-**BAKED as codes #57/#58.** Byte-exact over the corpus, 0 FP / 0 FN (both env-gated FAST and
-default bake gates: ok 1230, code-mismatches 0). The collectors (take-params, with-binds,
+**BAKED as codes #57/#58.** Byte-exact over the corpus, 0 FP / 0 FN (both the development
+FAST gate and default bake gates: ok 1230, code-mismatches 0). The collectors (take-params, with-binds,
 match-binds, closure-scope) are the reusable substrate for the rest of the borrow tier (RS0301
 managed-to-local, RS0303/0304/0309 field-path, RS0401/0501/0601/0702).
 
@@ -2248,8 +2506,8 @@ whole condition and fires when it is a concrete non-Bool value (`if "yes"` → S
 condition with a top-level comparison/logical operator (recognised via `find_binop` +
 `op_matches_tier`, tiers 1/2/6) or a leading `!` is Bool by construction and skipped; an
 un-typeable condition yields "" and is skipped (FP-safe). New walker
-`has_control_flow_mismatch`/`fn_has_control_flow_mismatch`; emission env-gated via
-`RSS_CHECKER_EXTRA_CODES=RS0209`.
+`has_control_flow_mismatch`/`fn_has_control_flow_mismatch`; initially developed
+with `RSS_CHECKER_EXTRA_CODES=RS0209` before baking.
 
 **Verification:** fires `non-bool-if-condition`; full fast-subset 0 false-positives, 0
 baked-code regression, ~159s.
@@ -2264,7 +2522,7 @@ baked-code regression, ~159s.
 **Status: 7/9 RS0209 files byte-exact, 0 false-positives corpus-wide, ~163s.**
 
 **Completed to bake (slices 5-6):**
-- `match-expression-arm-type-mismatch` — arm-result-type consistency: `first_generic_arg`
+- `match-expression-arm-type-mismatch` — arm-result-type consistency: `str_top_arg`
   extracts the scrutinee inner type, fed to `operand_type_cp` as a per-arm binding map
   (`Some(result)` on Option<Int> ⇒ result:Int); produced value = a block's single non-`return`
   statement or a bare expr arm.

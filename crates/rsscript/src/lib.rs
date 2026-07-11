@@ -21,6 +21,8 @@ mod fnv;
 mod formatter;
 mod generate;
 mod hir;
+#[cfg(test)]
+mod interface_metadata;
 mod interfaces;
 mod lexer;
 mod lint;
