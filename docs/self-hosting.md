@@ -1,102 +1,257 @@
 # RSS Self-Hosting
 
-This is the single canonical document for RSScript self-hosting. It contains the
-current status, the validation plan, the canonical token/AST dump contracts, and
-the historical `SH-*` ledger. Do not add separate self-hosting status or format
-docs; append new findings here.
+This is the single canonical document for RSScript self-hosting. It defines the
+goal, current architecture, bootstrap path, validation contracts, current work,
+and historical `SH-*` evidence. Do not create separate self-hosting plans,
+status reports, format specifications, or ledgers; update this document.
 
-## Current Status
+## What Self-Hosting Means
 
-- **Lexer:** self-hosted in `selfhost/lexer.rss`; parity is checked against the
-  Rust lexer through the test-only harness in `crates/rsscript/src/selfhost_parity.rs`.
-- **Parser/recognizer:** self-hosted in `selfhost/parser.rss`; recognition parity
-  is checked against `crate::syntax::parse_source_raw`.
-- **AST dump:** self-hosted in `selfhost/astdump.rss`; byte-exact dump parity is
-  checked against the Rust AST oracle.
-- **Checker:** self-hosted in `selfhost/check.rss`; the baked checker parity set
-  currently lives in `SELFHOST_CHECKER_TARGET_CODES` in `crates/rsscript/src/diagnostic.rs`.
-  It covers 82 of the 83 currently defined diagnostic codes; the remaining
-  defined frontier code is `RS1301`. Extra in-development codes can be exercised
-  with `RSS_CHECKER_EXTRA_CODES`.
-- **Remaining frontier:** the full semantic frontend: broader type inference,
-  callee resolution, borrow/ownership analysis, and eventually lowering/codegen
-  if the goal expands from self-hosted frontend tools to a self-hosted compiler.
+The project uses three distinct terms. They must not be treated as equivalent:
 
-## Current Roadmap / Pending Work
+| State | Meaning | Rust required? |
+|-------|---------|----------------|
+| Self-hosting stress test | RSS frontend tools run through the Rust-built VM and are compared with Rust oracles | Yes, for build and truth |
+| Self-hosted frontend | One RSS lexer/parser/AST/checker can analyze the compiler's own RSS sources | Yes, until lowering/backend bootstrap exists |
+| Self-hosted compiler | A compiler written in RSS lowers and emits executable code, then compiles itself | No Rust required after a bootstrap binary is available |
 
-This section is the authoritative current self-hosting roadmap. Older `SH-*`
-entries below are a historical ledger and may describe work that was later
-completed.
+The repository is currently in the first state and has substantial frontend
+coverage. It is not yet a self-hosted frontend or compiler. Publishing the
+existing Rust compiler as a binary can remove Rust from the *user installation*
+path, but only stage bootstrap removes Rust from the *compiler development and
+rebuild* path.
 
-The compiler is **not fully self-hosted**. The current self-hosted pieces are the
-lexer, parser recognizer, AST dump, and a partial checker. Remaining work:
+## Final Target
 
-1. **Complete self-hosted checker semantics** — broader type inference, callee
-   resolution, builtin/core signature knowledge, borrow/ownership diagnostics,
-   and the remaining analyzer diagnostic families. Avoid adding more hand-curated
-  stdlib tables: the test harness now generates a self-host-readable
-   `selfhost.interfaces` RSS module from the real `.rssi` interfaces, and
-   `check.rss` imports it for generated return-type, Result-error, and
-   parameter-effect lookups. Parameter-type lookup remains an explicit FP-safe
-   allowlist until the checker has a real stdlib/type-shape model; using the
-   generated table wholesale produces RS0207 false positives on ResourcePool and
-   broader pass fixtures.
-2. **Keep self-hosted tools modular** — `selfhost/scan.rss` is now a real
-   `module selfhost.scan`, and `lexer.rss`, `parser.rss`, `check.rss`, and
-   `astdump.rss` import it with `use selfhost.scan.*`. The test harness resolves
-   local `use selfhost.*` dependencies before calling the normal multi-source VM
-   compiler. Remaining module work is package-level ergonomics, not hidden
-   concatenation.
-3. **Grow the self-hosted type model** — `selfhost/types.rss` owns the shared
-   canonical type-string primitives used by `check.rss` (`root`, generic-arg,
-   prefix stripping, generic detection, and argument compatibility). `check.rss`
-   now routes RS0207/RS0208/RS0209/RS0210 through `FileTypeModel` and
-   `BodyTypeModel`, with managed maps/sets stored as explicit `handle` fields.
-   The next step is to widen those models with richer symbol/type-shape facts,
-   then use that model to safely broaden generated stdlib parameter types.
-4. **Move from frontend tools to compiler self-hosting** — lowering/codegen are
-   still Rust-owned. Start this only if the goal expands from self-hosted
-   frontend tooling to a self-hosted compiler.
-5. **Keep JIT/VM collection performance tracked outside this backlog** — the
-   stale local-collection item (`SH-004`, informed by `SH-011`) is closed below:
-   native local collection construction/mutation support now exists, and the
-   remaining Rust-speed gap is a broader JIT/VM collection-representation project,
-   not a self-hosting correctness blocker.
+The intended independent toolchain is:
+
+```text
+RSS source packages
+    -> RSS lexer and parser
+    -> materialized Program AST
+    -> RSS name/type/effect/package checking
+    -> RSS lowering to a stable compiler IR
+    -> RSS bootstrap backend
+    -> stable runtime ABI and independently buildable runtime
+    -> native compiler executable
+```
+
+The first bootstrap backend should minimize implementation risk. The current
+recommended path is an RSS emitter for portable C, followed by the platform C
+compiler and linker. That removes the Rust toolchain dependency without first
+requiring RSS to implement an object writer, linker, Cranelift, or LLVM. The VM
+bytecode backend remains useful for differential testing, but relying on a
+Rust-built VM alone would not complete independent bootstrap.
+
+Bootstrap stages:
+
+```text
+stage0: current trusted Rust compiler builds the compiler written in RSS
+stage1: the resulting RSS compiler builds the same RSS compiler sources
+stage2: the stage1 compiler builds those sources again
+proof:  stage1 and stage2 canonical IR and normalized output are identical
+```
+
+After reproducible stage2 is established, releases can ship a bootstrap binary.
+The Rust implementation should remain as an oracle for several releases; it is
+not deleted merely because stage2 first succeeds.
+
+There are also two runtime dependency milestones:
+
+- **Binary independence:** users and compiler developers can use released
+  compiler/runtime binaries without installing Rust. A prebuilt Rust-origin
+  runtime may temporarily satisfy this milestone.
+- **Source independence:** a clean environment can rebuild the compiler and
+  required runtime from maintained non-Rust sources. The current
+  `crates/runtime` implementation means this stronger milestone is still
+  pending even after an RSS compiler first reaches stage2.
+
+Before Stage 4 completes, choose and document one runtime path: migrate the
+bootstrap-required runtime core to portable C/RSS, or define a stable C ABI and
+maintain an independently buildable implementation behind it. Optional platform
+features may remain separate native libraries, but the minimal compiler rebuild
+must not invoke Cargo.
+
+## Current Architecture
+
+| Component | Current implementation | What it proves | Principal gap |
+|-----------|------------------------|----------------|---------------|
+| Shared scanner | `selfhost/scan.rss` | Reusable tokenization primitives | Not yet the sole token source for one frontend |
+| Lexer | `selfhost/lexer.rss` | Full-corpus canonical token parity | Runs only through the test harness |
+| Recognizer | `selfhost/parser.rss` | Top-level accept/reject parity | Does not produce the reusable AST |
+| AST producer | `selfhost/astdump.rss` | Canonical AST dump parity | Reparses tokens and streams text instead of building an AST |
+| Type helpers | `selfhost/types.rss` | Shared canonical type-string operations | Not a complete symbol/type representation |
+| Single-file checker | `selfhost/check.rss` | Presence parity for 82 diagnostic families | Independent token probes; no structured diagnostic parity |
+| Package checker | `selfhost/package_contract.rss` | Initial public-function `RS1301` parity | Other declarations, exemptions, and multi-file bundles missing |
+| Lowering and IR | Rust | Production compilation | No RSS implementation |
+| VM/JIT/AOT backend | Rust | Production execution and code generation | No bootstrap backend written in RSS |
+
+The harness in `crates/rsscript/src/selfhost_parity.rs` resolves the RSS modules,
+compiles them through the normal register VM compiler, runs them in-process, and
+compares their deterministic output with production Rust oracles. It is
+`#[cfg(test)]`; self-hosting adds no public CLI commands.
+
+Generated `selfhost.interfaces` data comes from real `.rssi` interfaces. It
+provides return-type, Result-error, and parameter-effect facts to `check.rss`.
+Parameter-type lookup remains an explicit false-positive-safe subset until the
+self-hosted checker has a real symbol and type-shape model.
+
+## Current Baseline
+
+Snapshot: **2026-07-11**, from local Docker runs against this worktree.
+
+| Gate | Result | Scope |
+|------|--------|-------|
+| Self-host parity unit/smoke suite | 19 passed, 6 ignored | Non-exhaustive harness tests |
+| Lexer corpus parity, tier 2 | 622 / 622 | Full checked-in RSS corpus |
+| Parser recognition parity, tier 1 | 622 / 622 | Full checked-in RSS corpus |
+| Checker FAST parity | 618 / 618 | Non-giant inputs; diagnostic-code presence only |
+| Package-contract parity | Passed | Public function missing/signature-mismatch smoke cases |
+| Curated AST parity | Passed | Fast representative sample set |
+| Full AST corpus parity | Not established for this snapshot | Scheduled/manual because of runtime |
+| Checker FULL parity | Not established for this snapshot | Scheduled/manual; includes giant inputs |
+| Remote CI | Not established for this snapshot | Local Docker results only |
+
+`selfhost/corpus.txt` contains 622 repository-relative `.rss` paths. Any count
+change must update that manifest in the same change. FAST excludes checker input
+files over 40 KiB; FULL sets `RSS_SELFHOST_FULL=1`. Historical numbers below
+describe their original milestones and do not override this snapshot.
+
+## Delivery Stages
+
+Work proceeds in dependency order. Later stages must not create a second parser,
+type model, or IR to bypass an unfinished earlier stage.
+
+### Stage 1 — Reliable Frontend Parity (in progress)
+
+1. Complete package-level `RS1301` parity for functions, types/resources/classes,
+   sums and variants, aliases, constants, protocols and implementations,
+   native-binding exemptions, and resolved multi-file bundles.
+2. Upgrade checker parity from a deduplicated code set to sorted structured
+   diagnostic multisets: code, occurrence, stable span, then label class,
+   causes, and fix identifiers where stable.
+3. Keep malformed tool output, unreadable corpus files, stale corpus discovery,
+   and invalid tier values fail-closed.
+
+Exit: every supported frontend result is deterministic and compared at the
+correct semantic level, including package contracts.
+
+### Stage 2 — One Self-Hosted Frontend (pending)
+
+1. Define RSS syntax and AST modules that materialize a `Program` value.
+2. Make one parser produce that AST.
+3. Make AST serialization consume it instead of reparsing and streaming tokens.
+4. Migrate checker families from token probes to AST, symbol, type, and effect
+   models incrementally; remove superseded probes after each parity gate passes.
+5. Parse and check the compiler's own RSS package through the normal package
+   model, not only test-harness source injection.
+
+Exit: lexer -> parser -> AST -> checker is one reusable frontend, full corpus
+parity is exact, and the compiler's RSS sources pass self-analysis.
+
+### Stage 3 — Self-Hosted Lowering and IR (pending)
+
+1. Define a deterministic, versioned compiler IR that can be serialized and
+   compared independently of addresses or map iteration order.
+2. Implement AST-to-IR lowering in RSS.
+3. Compare RSS IR byte-for-byte with normalized Rust lowering over the corpus.
+4. Cover control flow, generics, ownership/effects, interfaces, closures,
+   intrinsics, and runtime ABI records before declaring lowering complete.
+
+Exit: RSS and Rust frontends produce equivalent canonical IR for the supported
+language, and the RSS compiler can lower its own sources.
+
+### Stage 4 — Bootstrap Backend (pending)
+
+1. Specify the runtime ABI used by generated code.
+2. Implement a minimal C emitter in RSS from the stable IR.
+3. Differential-test generated programs against VM and existing AOT execution.
+4. Identify the minimal runtime needed by the compiler and make it buildable
+   without Cargo, while preserving differential tests against `crates/runtime`.
+5. Build packages and the compiler itself through the C toolchain.
+
+Exit: stage0 can produce a standalone stage1 compiler without compiling new
+Rust code. A system C compiler/linker is permitted; the Rust toolchain is not.
+
+### Stage 5 — Reproducible Bootstrap and Release (pending)
+
+1. Run stage0 -> stage1 -> stage2 from a clean Docker environment.
+2. Compare canonical IR and normalized stage1/stage2 outputs.
+3. Build the standard library, package manager, test runner, and compiler with
+   stage2.
+4. Publish bootstrap binaries with provenance, version compatibility, and a
+   documented clean rebuild procedure.
+5. Keep Rust-vs-RSS differential jobs until the RSS implementation has remained
+   stable across multiple releases.
+6. Perform at least one diverse double-bootstrap or independently reproduced
+   build to reduce dependence on a single opaque stage0 binary.
+
+Exit: a contributor can rebuild and evolve RSS without installing Rust, using
+only a released bootstrap compiler and documented platform build dependencies.
+
+## Immediate Order
+
+The next implementation sessions remain frontend-focused:
+
+1. Broaden `RS1301` package-contract parity.
+2. Add structured diagnostic multiset parity.
+3. Introduce the materialized RSS AST and migrate AST dump first.
+4. Migrate checker families onto the shared AST/type model.
+5. Make exhaustive AST/checker gates sustainable in Docker.
+6. Design the stable IR only after the frontend exit criteria hold.
+
+JIT/VM collection performance is tracked outside this roadmap. It affects how
+quickly self-hosting tests execute, but it is not a correctness prerequisite for
+bootstrap. Likewise, a direct native machine-code backend is deliberately not
+required for the first independent compiler.
+
+## Completion Criteria
+
+| Milestone | Required proof |
+|-----------|----------------|
+| Reliable parity harness | Exact corpus inventory, strict protocols, full frontend/package oracle coverage |
+| Self-hosted frontend | One materialized AST and semantic model analyze the compiler's own sources |
+| Self-hosted lowering | RSS and Rust canonical IR agree across the supported corpus |
+| Binary-independent compiler | RSS frontend + lowering + bootstrap backend produce a standalone compiler and use a released runtime |
+| Source-independent toolchain | Compiler and minimal runtime rebuild without Cargo or `rustc` |
+| Full bootstrap | Clean stage1/stage2 rebuild is reproducible and independently checked without the Rust toolchain |
+
+Line count, number of RSS files, and diagnostic-family count are progress
+signals, not completion proofs.
 
 ## Validation Model
 
-Self-hosting is a stress test, not just a port. Each RSS-written tool is run
-against the same corpus as the Rust implementation and must match an explicit
-oracle:
+Each RSS-written layer runs against the same input as its production Rust oracle:
 
-| Layer | RSS tool | Oracle |
-|-------|----------|--------|
-| Lexer | `selfhost/lexer.rss` | `crate::lexer::lex` canonical token dump |
-| Parser recognition | `selfhost/parser.rss` | `crate::syntax::parse_source_raw` accept/reject result |
-| AST dump | `selfhost/astdump.rss` | surface-preserving Rust AST dump |
-| Checker | `selfhost/check.rss` | `crate::analyze_source`, filtered to target diagnostic codes |
+| Layer | RSS tool | Current oracle and comparison |
+|-------|----------|-------------------------------|
+| Lexer | `selfhost/lexer.rss` | `crate::lexer::lex`; canonical token records |
+| Parser recognition | `selfhost/parser.rss` | `crate::syntax::parse_source_raw`; accept/reject and position tier |
+| AST dump | `selfhost/astdump.rss` | surface-preserving Rust AST dump; byte-exact text |
+| Checker | `selfhost/check.rss` | `crate::analyze_source`; currently target-code presence |
+| Package contract | `selfhost/package_contract.rss` | `crate::review_package_dir`; filtered `RS1301` results |
+| Future lowering | RSS lowering | normalized Rust IR; byte-exact canonical serialization |
+| Future backend | RSS C emitter | VM/existing AOT observable behavior and generated-artifact checks |
 
-Checker parity is a per-file code-presence check: for each corpus file, the
-self-hosted checker and Rust analyzer must agree on the set of target diagnostic
-codes present in that file. It does not compare diagnostic counts, message text,
-labels, causes, or spans.
+Current checker parity does not compare diagnostic counts, messages, labels,
+causes, fixes, or spans. Stage 1 explicitly closes that limitation.
 
-The harness is test-only. It does not add public CLI commands or user-facing
-debug modes. Findings are recorded below as `SH-NNN` entries.
-
-Useful gates:
+Useful Docker gates:
 
 ```sh
 docker compose run --rm dev cargo test -p rsscript selfhost_parity -- --test-threads=1
-docker compose run --rm dev cargo test -p rsscript selfhost_parity::lexer_parity_corpus -- --ignored --test-threads=1 --nocapture
-docker compose run --rm dev cargo test -p rsscript selfhost_parity::parser_parity_corpus -- --ignored --test-threads=1 --nocapture
-docker compose run --rm dev cargo test -p rsscript selfhost_parity::checker_parity_corpus -- --ignored --test-threads=1 --nocapture
-docker compose run --rm dev cargo test -p rsscript selfhost_parity::ast_parity_corpus -- --ignored --test-threads=1 --nocapture
+docker compose run --rm -e RSS_SELFHOST_TIER=2 dev cargo test -p rsscript --release --lib selfhost_parity::lexer_parity_corpus -- --ignored --exact --test-threads=1 --nocapture
+docker compose run --rm -e RSS_SELFHOST_PARSE_TIER=1 dev cargo test -p rsscript --release --lib selfhost_parity::parser_parity_corpus -- --ignored --exact --test-threads=1 --nocapture
+docker compose run --rm dev cargo test -p rsscript --release --lib selfhost_parity::checker_parity_corpus -- --ignored --exact --test-threads=1 --nocapture
+docker compose run --rm -e RSS_SELFHOST_AST_TIER=2 dev cargo test -p rsscript --release --lib selfhost_parity::ast_parity_samples -- --exact --test-threads=1 --nocapture
+docker compose run --rm dev cargo test -p rsscript --lib selfhost_parity::package_contract_function_rs1301_parity_smoke -- --exact --nocapture
 ```
 
-During checker development, use `RSS_CHECKER_EXTRA_CODES=RS0XXX` to include a
-new diagnostic in the parity target without baking it into the compiled
-`SELFHOST_CHECKER_TARGET_CODES` table.
+During checker development, `RSS_CHECKER_EXTRA_CODES=RS0XXX` adds a diagnostic
+to the parity target without baking it into `SELFHOST_CHECKER_TARGET_CODES`.
+Pull-request CI covers lexer/parser corpus parity, curated AST parity, checker
+FAST, and package-contract smoke. Scheduled/manual jobs cover checker FULL and
+the full AST corpus.
 
 ## Token Dump Contract
 
@@ -106,7 +261,9 @@ The canonical lexer dump has one token per line:
 <line>:<col>:<len>\t<KIND>\t<PAYLOAD>
 ```
 
-- `line`, `col`, and `len` are the token start position and byte length.
+- `line` and `col` are the token start position. `len` is the number of Unicode
+  scalar values consumed by the token. It is not a UTF-8 byte count or grapheme
+  count.
 - `KIND` is one exact token kind name:
   `Ident Number String Char InterpolatedString MultilineString Keyword Symbol Unknown Eof`.
 - `PAYLOAD` is the raw token text/content; `Eof` has an empty payload.
@@ -121,6 +278,10 @@ The canonical lexer dump has one token per line:
 
 The Rust lexer is the oracle. If the RSS lexer diverges, record the reason as an
 `SH-*` finding before changing either side.
+
+`selfhost/corpus.txt` is the checked-in inventory for repository-wide parity
+gates. Any intentional addition or removal of `.rss` corpus files should update
+that manifest in the same change.
 
 ## AST Dump Contract
 
@@ -1093,15 +1254,16 @@ gap is VM value-representation / intrinsic-dispatch cost (the next big lever).
   across all backends; RS0037 removed as a restriction and repurposed for arity;
   spec §20.1 amended.
 
-### SH-027 — AST-dump parity COMPLETE: streaming rss producer at 619/619 byte-exact
+### SH-027 — AST-dump parity COMPLETE: streaming rss producer at full-corpus byte-exact
 
 - **Context:** completes the SH-025 AST-structure arm (step 1 of the 3-step
   frontend-object-parity goal). The self-hosted streaming producer
   (`selfhost/astdump.rss`) now matches the Rust oracle (`parse_source_raw` via
   `crate::selfhost_parity`) **byte-for-byte over the ENTIRE corpus**.
-- **Reach:** **619 / 619** corpus files byte-exact (**100%**), **0 run-failures**.
-  `AST_CORPUS_PARITY_FLOOR = 619`; `ast_parity_samples` fast gate over 62 curated
-  `samples/ast/*.rss` (added coverage for every construct fixed in the final push).
+- **Reach:** the self-hosted AST dump reached full-corpus byte-exact parity at
+  the time of this milestone. The current gate checks `ok == total` instead of a
+  numeric floor; `ast_parity_samples` is the fast curated gate over
+  `samples/ast/*.rss`.
 - **Final long-tail closed (592 → 619):** protocols (methods as source-order
   functions with Self:Managed injection; `protocol`/`protocol-impl`+`mapping`
   passes), protocol-impls, let-else (`parse_block(open+1)` off-by-one reproduced),

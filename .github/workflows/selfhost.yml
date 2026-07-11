@@ -1,0 +1,90 @@
+name: Self-host parity
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 9 * * *"
+  workflow_dispatch:
+
+jobs:
+  corpus:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Lexer corpus parity
+        run: |
+          RSS_SELFHOST_TIER=2 \
+          cargo test -p rsscript --release --lib \
+            selfhost_parity::lexer_parity_corpus \
+            -- --ignored --exact --nocapture --test-threads=1
+
+      - name: Parser corpus parity
+        run: |
+          RSS_SELFHOST_PARSE_TIER=1 \
+          cargo test -p rsscript --release --lib \
+            selfhost_parity::parser_parity_corpus \
+            -- --ignored --exact --nocapture --test-threads=1
+
+      - name: AST curated parity
+        run: |
+          RSS_SELFHOST_AST_TIER=2 \
+          cargo test -p rsscript --release --lib \
+            selfhost_parity::ast_parity_samples \
+            -- --exact --nocapture --test-threads=1
+
+      - name: Checker FAST corpus parity
+        run: |
+          cargo test -p rsscript --release --lib \
+            selfhost_parity::checker_parity_corpus \
+            -- --ignored --exact --nocapture --test-threads=1
+
+      - name: Package contract RS1301 parity
+        run: |
+          cargo test -p rsscript --release --lib \
+            selfhost_parity::package_contract_function_rs1301_parity_smoke \
+            -- --exact --nocapture --test-threads=1
+
+  checker-full:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Checker exhaustive corpus parity
+        run: |
+          RSS_SELFHOST_FULL=1 \
+          cargo test -p rsscript --release --lib \
+            selfhost_parity::checker_parity_corpus \
+            -- --ignored --exact --nocapture --test-threads=1
+
+  ast-full:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: AST exhaustive corpus parity
+        run: |
+          RSS_SELFHOST_AST_TIER=2 \
+          cargo test -p rsscript --release --lib \
+            selfhost_parity::ast_parity_corpus \
+            -- --ignored --exact --nocapture --test-threads=1

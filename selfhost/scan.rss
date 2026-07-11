@@ -1101,7 +1101,9 @@ fn parse_use_decl(toks: read List<Tok>, i: read Int) -> Int {
     if j < 0 {
         return -1
     }
-    if at_symbol(toks: read toks, i: read j, code: read SYM_STAR) {
+    if at_symbol(toks: read toks, i: read j, code: read SYM_DOT) && at_symbol(toks: read toks, i: read (j + 1), code: read SYM_STAR) {
+        j = j + 2
+    } else if at_symbol(toks: read toks, i: read j, code: read SYM_STAR) {
         j = j + 1
     } else if at_ident(toks: read toks, i: read j, wid: read WORD_AS) {
         j = j + 1

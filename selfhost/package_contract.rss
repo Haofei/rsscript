@@ -1,0 +1,145 @@
+// Self-hosted package-contract checker — RS1301 frontier.
+//
+// Reads interface source as argv[0] and package source as argv[1]. Emits RS1301
+// when a public interface function is missing from source or has a different
+// canonical function signature; otherwise emits CLEAN.
+//
+// This is intentionally separate from check.rss: RS1301 is package-level, not a
+// single-source analyzer diagnostic.
+
+features: local
+
+module selfhost.package_contract
+
+use selfhost.scan.*
+
+fn tk_text_at(toks: read List<Tok>, i: read Int) -> String {
+    if i < 0 { return "" }
+    if i >= List.len(list: read toks) { return "" }
+    let t = List.get(list: read toks, index: read i)
+    return t.text
+}
+
+fn dotted_name_text(toks: read List<Tok>, i: read Int) -> String {
+    if is_ident_tok(toks: read toks, i: read i) == false { return "" }
+    let mut out = tk_text_at(toks: read toks, i: read i)
+    let mut j = i + 1
+    let mut going = true
+    while going {
+        if at_symbol(toks: read toks, i: read j, code: read SYM_DOT)
+            && is_ident_tok(toks: read toks, i: read (j + 1)) {
+            out = String.concat(left: read out, right: read ".")
+            out = String.concat(left: read out, right: read tk_text_at(toks: read toks, i: read (j + 1)))
+            j = j + 2
+        } else {
+            going = false
+        }
+    }
+    return out
+}
+
+fn canonical_token_text(toks: read List<Tok>, i: read Int) -> String {
+    if at_symbol(toks: read toks, i: read i, code: read SYM_ARROW) { return "->" }
+    if at_symbol(toks: read toks, i: read i, code: read SYM_FATARROW) { return "=>" }
+    return tk_text_at(toks: read toks, i: read i)
+}
+
+fn canonical_signature(toks: read List<Tok>, start: read Int, end: read Int) -> String {
+    local out = StringBuilder.new()
+    let mut i = start
+    while i < end {
+        let text = canonical_token_text(toks: read toks, i: read i)
+        if text != "" {
+            StringBuilder.push(builder: mut out, value: read text)
+        }
+        i = i + 1
+    }
+    return StringBuilder.finish(builder: take out)
+}
+
+fn fn_token_index(toks: read List<Tok>, start: read Int) -> Int {
+    let mut i = start
+    let mut scanning = true
+    while scanning {
+        if at_ident(toks: read toks, i: read i, wid: read WORD_FN) {
+            return i
+        }
+        let isMod = at_ident(toks: read toks, i: read i, wid: read WORD_PUB)
+            || at_ident(toks: read toks, i: read i, wid: read WORD_ASYNC)
+            || at_ident(toks: read toks, i: read i, wid: read WORD_NATIVE)
+        if isMod {
+            i = i + 1
+        } else {
+            scanning = false
+        }
+    }
+    return -1
+}
+
+struct PackageFnIndex {
+    names: List<String>
+    sigs: handle Map<String, String>
+}
+
+fn collect_package_functions(source: read String, requirePub: read Bool) -> PackageFnIndex {
+    let toks = tokenize(source: read source)
+    let n = List.len(list: read toks)
+    let mut names = List<String>.new()
+    let mut sigs = Map<String, String>.new()
+    let mut i = 0
+    while i < n {
+        let isPub = at_ident(toks: read toks, i: read i, wid: read WORD_PUB)
+        let fnIdx = fn_token_index(toks: read toks, start: read i)
+        if fnIdx >= 0 && at_ident(toks: read toks, i: read fnIdx, wid: read WORD_FN) {
+            if requirePub == false || isPub {
+                let nameIdx = fnIdx + 1
+                if is_ident_tok(toks: read toks, i: read nameIdx) {
+                    let name = dotted_name_text(toks: read toks, i: read nameIdx)
+                    let end = function_signature_end(toks: read toks, start: read fnIdx)
+                    let sig = canonical_signature(toks: read toks, start: read i, end: read end)
+                    if Map.contains_key<String, String>(map: read sigs, key: read name) == false {
+                        List.push<String>(list: mut names, value: read name)
+                    }
+                    Map.insert<String, String>(map: mut sigs, key: read name, value: read sig)
+                    i = end
+                } else {
+                    i = i + 1
+                }
+            } else {
+                i = i + 1
+            }
+        } else {
+            i = i + 1
+        }
+    }
+    return PackageFnIndex(names: names, sigs: read sigs)
+}
+
+fn has_function_contract_mismatch(interfaceSource: read String, source: read String) -> Bool {
+    let interfaceFns = collect_package_functions(source: read interfaceSource, requirePub: read true)
+    let sourceFns = collect_package_functions(source: read source, requirePub: read true)
+    let n = List.len(list: read interfaceFns.names)
+    let mut i = 0
+    let mut mismatch = false
+    while i < n {
+        let name = List.get(list: read interfaceFns.names, index: read i)
+        let want = Map.get_or_default<String, String>(map: read interfaceFns.sigs, key: read name, default: read "")
+        let got = Map.get_or_default<String, String>(map: read sourceFns.sigs, key: read name, default: read "")
+        if got == "" || got != want {
+            mismatch = true
+        }
+        i = i + 1
+    }
+    return mismatch
+}
+
+fn main() -> Unit {
+    let interfaceSource = Args.get_or_default(index: 0, default: read "")
+    let source = Args.get_or_default(index: 1, default: read "")
+    if has_function_contract_mismatch(interfaceSource: read interfaceSource, source: read source) {
+        Log.write(message: read "RS1301")
+    } else {
+        Log.write(message: read "CLEAN")
+    }
+    return Unit
+}

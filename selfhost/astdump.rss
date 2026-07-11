@@ -13,11 +13,9 @@ features: local
 // parser in scan.rss). The shared tokenizer / accessors / constants come from
 // scan.rss.
 //
-// COVERAGE: this is a growing core, not yet full-grammar. It targets the curated
-// samples under selfhost/samples/ast/ (byte-exact, gated non-ignored) and is
-// measured unaided over the whole corpus by the ignored ast_parity_corpus gate.
-// Constructs outside the core emit `unknown-expr`/`unknown-stmt` markers rather
-// than desyncing — divergences are tracked as SH-025.
+// COVERAGE: the ignored ast_parity_corpus gate now requires byte-exact parity
+// over every discovered corpus file. The curated samples under
+// selfhost/samples/ast/ remain the fast non-ignored inner-loop gate.
 //
 // rss constraints honored (SH-016/017/018): char literals, `||` chains kept on one
 // line / wrapped via operator continuation, cursors threaded positionally.

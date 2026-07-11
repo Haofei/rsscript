@@ -10,9 +10,9 @@
 //! recorded as `SH-NNN` entries in `docs/self-hosting.md`.
 
 use std::collections::{BTreeSet, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use crate::diagnostic::SELFHOST_CHECKER_TARGET_CODES;
+use crate::diagnostic::{SELFHOST_CHECKER_TARGET_CODES, code};
 use crate::interface_metadata::{
     collect_interface_metadata, format_selfhost_interface_metadata_rss,
 };
@@ -21,10 +21,10 @@ use crate::lexer::{TokenKind, lex};
 use crate::reg_vm::reg_vm_compile_sources;
 use crate::syntax::ast::Item;
 use crate::syntax::parse_source_raw;
-use crate::{RegVmExecutable, Severity, analyze_source};
+use crate::{RegVmExecutable, Severity, analyze_source, review_package_dir};
 
-/// One token in the canonical dump. Positions are `None` when the producer
-/// emitted placeholders (the rss lexer does so until spans are implemented).
+/// One token in the canonical dump. `len` is a Unicode-scalar span length,
+/// matching the Rust lexer spans and the RSS scanner's `String.chars` cursor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CanonTok {
     line: usize,
@@ -42,13 +42,32 @@ fn selfhost_dir() -> PathBuf {
     workspace_root().join("selfhost")
 }
 
+fn env_tier_u8(var: &str, default: u8, allowed: &[u8]) -> u8 {
+    let Some(value) = std::env::var(var).ok() else {
+        return default;
+    };
+    let parsed = value
+        .parse::<u8>()
+        .unwrap_or_else(|_| panic!("{var} must be one of {allowed:?}, got {value:?}"));
+    assert!(
+        allowed.contains(&parsed),
+        "{var} must be one of {allowed:?}, got {value:?}"
+    );
+    parsed
+}
+
 /// Comparison tier from `RSS_SELFHOST_TIER` (default 0). 0 = kind+payload,
-/// 1 = +position, 2 = +byte length.
+/// 1 = +position, 2 = +Unicode-scalar span length.
 fn tier() -> u8 {
-    match std::env::var("RSS_SELFHOST_TIER").ok().as_deref() {
-        Some("1") => 1,
-        Some("2") => 2,
-        _ => 0,
+    static T: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *T.get_or_init(|| env_tier_u8("RSS_SELFHOST_TIER", 0, &[0, 1, 2]))
+}
+
+fn env_flag_tier(var: &str) -> bool {
+    match std::env::var(var).ok().as_deref() {
+        Some("1") => true,
+        Some("0") | None => false,
+        Some(value) => panic!("{var} must be unset, 0, or 1, got {value:?}"),
     }
 }
 
@@ -109,16 +128,25 @@ fn oracle_dump(file: &str, source: &str) -> Vec<CanonTok> {
         .collect()
 }
 
-/// Parse a `L:C:N\tKIND\tPAYLOAD` line into a token (permissive on positions).
+/// Parse a `L:C:N\tKIND\tPAYLOAD` line into a token.
 fn parse_line(line: &str) -> Option<CanonTok> {
-    let mut parts = line.splitn(3, '\t');
-    let pos = parts.next()?;
-    let kind = parts.next()?.to_string();
-    let payload = parts.next().unwrap_or("").to_string();
+    let parts = line.split('\t').collect::<Vec<_>>();
+    if parts.len() != 3 {
+        return None;
+    }
+    let pos = parts[0];
+    let kind = parts[1].to_string();
+    let payload = parts[2].to_string();
+    if kind.is_empty() {
+        return None;
+    }
     let mut nums = pos.split(':');
-    let line_no = nums.next().and_then(|v| v.parse().ok()).unwrap_or(0);
-    let col = nums.next().and_then(|v| v.parse().ok()).unwrap_or(0);
-    let len = nums.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let line_no = nums.next()?.parse().ok()?;
+    let col = nums.next()?.parse().ok()?;
+    let len = nums.next()?.parse().ok()?;
+    if nums.next().is_some() {
+        return None;
+    }
     Some(CanonTok {
         line: line_no,
         col,
@@ -258,6 +286,16 @@ fn rss_dump(source: &str) -> Result<Vec<CanonTok>, String> {
     rss_dump_with(&compile_lexer()?, source)
 }
 
+#[test]
+fn lexer_output_parser_rejects_malformed_lines() {
+    assert!(parse_line("1:2:3\tIdent\tname").is_some());
+    assert!(parse_line("1:2\tIdent\tname").is_none());
+    assert!(parse_line("1:2:x\tIdent\tname").is_none());
+    assert!(parse_line("1:2:3:4\tIdent\tname").is_none());
+    assert!(parse_line("1:2:3\tIdent\tname\textra").is_none());
+    assert!(parse_line("1:2:3\t\tname").is_none());
+}
+
 /// Compare two token streams at the active tier; `Ok(())` or a diff message.
 fn compare(oracle: &[CanonTok], actual: &[CanonTok], tier: u8) -> Result<(), String> {
     let field = |t: &CanonTok| match tier {
@@ -300,19 +338,48 @@ fn corpus_excludes_local_agent_worktrees() {
     )));
 }
 
+#[test]
+fn corpus_manifest_matches_discovery() {
+    let root = workspace_root();
+    let manifest_path = selfhost_dir().join("corpus.txt");
+    let manifest = std::fs::read_to_string(&manifest_path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", manifest_path.display()));
+    let mut expected = manifest
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    expected.sort();
+    let mut actual = collect_rss_files(&root)
+        .expect("corpus discovery should succeed")
+        .into_iter()
+        .map(|path| {
+            path.strip_prefix(&root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/")
+        })
+        .collect::<Vec<_>>();
+    actual.sort();
+    assert_eq!(
+        actual, expected,
+        "selfhost/corpus.txt is stale; update it when adding/removing corpus .rss files"
+    );
+}
+
 /// Recursively collect `*.rss` files under `root`, skipping build output and
 /// local agent worktrees. The self-host corpus must be hermetic to this checkout;
 /// mirrored worktrees under `.claude/` duplicate fixtures and make gate counts
 /// depend on local tooling state.
-fn collect_rss_files(root: &std::path::Path) -> Vec<PathBuf> {
+fn collect_rss_files(root: &std::path::Path) -> Result<Vec<PathBuf>, String> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        for entry in entries.flatten() {
+        let entries =
+            std::fs::read_dir(&dir).map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
+        for entry in entries {
+            let entry =
+                entry.map_err(|e| format!("cannot read entry in {}: {e}", dir.display()))?;
             let path = entry.path();
             if path.is_dir() {
                 if is_corpus_excluded_dir(&path) {
@@ -325,7 +392,7 @@ fn collect_rss_files(root: &std::path::Path) -> Vec<PathBuf> {
         }
     }
     out.sort();
-    out
+    Ok(out)
 }
 
 /// Phase-0 proof: the rss lexer matches the Rust lexer on a tiny sample.
@@ -346,7 +413,7 @@ fn lexer_parity_tiny_sample() {
 #[ignore]
 fn lexer_parity_corpus() {
     let root = workspace_root();
-    let files = collect_rss_files(&root);
+    let files = collect_rss_files(&root).expect("corpus discovery should succeed");
     let tier = tier();
     let exe = compile_lexer().expect("rss lexer should compile");
     let mut run_failures: Vec<String> = Vec::new();
@@ -358,13 +425,8 @@ fn lexer_parity_corpus() {
             .unwrap_or(file)
             .display()
             .to_string();
-        let source = match std::fs::read_to_string(file) {
-            Ok(s) => s,
-            Err(e) => {
-                run_failures.push(format!("{rel}: unreadable: {e}"));
-                continue;
-            }
-        };
+        let source =
+            std::fs::read_to_string(file).unwrap_or_else(|e| panic!("cannot read {rel}: {e}"));
         let oracle = oracle_dump(&rel, &source);
         match rss_dump_with(&exe, &source) {
             Err(e) => run_failures.push(format!("{rel}: {e}")),
@@ -405,7 +467,7 @@ fn lexer_parity_corpus() {
 fn lexer_perf_corpus() {
     use std::time::Instant;
     let root = workspace_root();
-    let files = collect_rss_files(&root);
+    let files = collect_rss_files(&root).expect("corpus discovery should succeed");
     let exe = compile_lexer().expect("rss lexer should compile");
     let mut rust_ns: u128 = 0;
     let mut rss_ns: u128 = 0;
@@ -417,9 +479,8 @@ fn lexer_perf_corpus() {
             .unwrap_or(file)
             .display()
             .to_string();
-        let Ok(source) = std::fs::read_to_string(file) else {
-            continue;
-        };
+        let source =
+            std::fs::read_to_string(file).unwrap_or_else(|e| panic!("cannot read {rel}: {e}"));
         bytes += source.len();
         let t0 = Instant::now();
         let _ = lex(&rel, &source);
@@ -476,7 +537,7 @@ fn parse_oracle_error(file: &str, source: &str) -> Option<(usize, usize)> {
 }
 
 fn parse_position_tier() -> bool {
-    std::env::var("RSS_SELFHOST_PARSE_TIER").ok().as_deref() == Some("1")
+    env_flag_tier("RSS_SELFHOST_PARSE_TIER")
 }
 
 fn compile_parser() -> Result<RegVmExecutable, String> {
@@ -488,24 +549,55 @@ fn run_parser(exe: &RegVmExecutable, source: &str) -> Result<Option<(usize, usiz
     let output = exe
         .eval_main_with_args([source.to_string()])
         .map_err(|e| format!("rss parser failed to run: {e:?}"))?;
-    let verdict = output
-        .stdout
+    parse_parser_output(&output.stdout)
+}
+
+fn parse_parser_output(stdout: &str) -> Result<Option<(usize, usize)>, String> {
+    let lines = stdout
         .lines()
-        .rev()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("")
-        .trim()
-        .to_string();
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>();
+    if lines.len() != 1 {
+        return Err(format!(
+            "rss parser must emit exactly one non-empty verdict line, got {}",
+            lines.len()
+        ));
+    }
+    let verdict = lines[0];
     if verdict == "OK" {
         Ok(None)
-    } else if let Some(rest) = verdict.strip_prefix("ERR") {
+    } else if let Some(rest) = verdict.strip_prefix("ERR ") {
         let mut nums = rest.split_whitespace();
-        let line = nums.next().and_then(|v| v.parse().ok()).unwrap_or(0);
-        let col = nums.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+        let line = nums
+            .next()
+            .ok_or_else(|| format!("missing parser error line in verdict: {verdict:?}"))?
+            .parse::<usize>()
+            .map_err(|_| format!("invalid parser error line in verdict: {verdict:?}"))?;
+        let col = nums
+            .next()
+            .ok_or_else(|| format!("missing parser error column in verdict: {verdict:?}"))?
+            .parse::<usize>()
+            .map_err(|_| format!("invalid parser error column in verdict: {verdict:?}"))?;
+        if nums.next().is_some() || line == 0 || col == 0 {
+            return Err(format!("invalid parser error verdict: {verdict:?}"));
+        }
         Ok(Some((line, col)))
     } else {
         Err(format!("unrecognized parser verdict: {verdict:?}"))
     }
+}
+
+#[test]
+fn parser_output_parser_rejects_malformed_verdicts() {
+    assert_eq!(parse_parser_output("OK\n").unwrap(), None);
+    assert_eq!(parse_parser_output("ERR 2 3\n").unwrap(), Some((2, 3)));
+    assert!(parse_parser_output("").is_err());
+    assert!(parse_parser_output("debug\nOK\n").is_err());
+    assert!(parse_parser_output("ERR\n").is_err());
+    assert!(parse_parser_output("ERR bad\n").is_err());
+    assert!(parse_parser_output("ERR 0 3\n").is_err());
+    assert!(parse_parser_output("ERR 2 3 4\n").is_err());
 }
 
 /// Compare parser verdicts. Recognition tier: accept-vs-reject. Position tier:
@@ -566,7 +658,7 @@ fn parser_rejects_malformed_source_smoke() {
 #[ignore]
 fn parser_parity_corpus() {
     let root = workspace_root();
-    let files = collect_rss_files(&root);
+    let files = collect_rss_files(&root).expect("corpus discovery should succeed");
     let position = parse_position_tier();
     let exe = compile_parser().expect("rss parser should compile");
     let mut run_failures: Vec<String> = Vec::new();
@@ -578,13 +670,8 @@ fn parser_parity_corpus() {
             .unwrap_or(file)
             .display()
             .to_string();
-        let source = match std::fs::read_to_string(file) {
-            Ok(s) => s,
-            Err(e) => {
-                run_failures.push(format!("{rel}: unreadable: {e}"));
-                continue;
-            }
-        };
+        let source =
+            std::fs::read_to_string(file).unwrap_or_else(|e| panic!("cannot read {rel}: {e}"));
         let oracle = parse_oracle_error(&rel, &source);
         match run_parser(&exe, &source) {
             Err(e) => run_failures.push(format!("{rel}: {e}")),
@@ -692,14 +779,14 @@ fn run_checker(exe: &RegVmExecutable, source: &str) -> Result<Vec<String>, Strin
 
 fn parse_checker_output(stdout: &str) -> Result<Vec<String>, String> {
     let mut codes = Vec::new();
-    let mut clean = false;
+    let mut clean_count = 0usize;
     for line in stdout.lines() {
         let code = line.trim();
         if code.is_empty() {
             continue;
         }
         if code == "CLEAN" {
-            clean = true;
+            clean_count += 1;
         } else if is_target_code(code) {
             codes.push(code.to_string());
         } else {
@@ -708,8 +795,14 @@ fn parse_checker_output(stdout: &str) -> Result<Vec<String>, String> {
             ));
         }
     }
-    if clean && !codes.is_empty() {
+    if clean_count > 1 {
+        return Err("rss checker emitted duplicate CLEAN verdicts".to_string());
+    }
+    if clean_count == 1 && !codes.is_empty() {
         return Err("rss checker emitted CLEAN together with diagnostics".to_string());
+    }
+    if clean_count == 0 && codes.is_empty() {
+        return Err("rss checker emitted no verdict".to_string());
     }
     codes.sort();
     codes.dedup();
@@ -724,6 +817,9 @@ fn checker_output_parser_rejects_unknown_lines() {
     );
     assert!(parse_checker_output("debug\n").is_err());
     assert!(parse_checker_output("CLEAN\nRS0005\n").is_err());
+    assert!(parse_checker_output("").is_err());
+    assert!(parse_checker_output("  \n\t\n").is_err());
+    assert!(parse_checker_output("CLEAN\nCLEAN\n").is_err());
 }
 
 #[test]
@@ -791,13 +887,75 @@ fn checker_reports_rs0005_for_duplicate_declaration_smoke() {
     );
 }
 
+#[test]
+fn checker_rs0015_edge_parity() {
+    let root = workspace_root();
+    let cases = [
+        (
+            "comparison-before-generic.rss",
+            "features: local\n\
+             fn f(limit: Int) -> Unit {\n\
+                 let mut i = 0\n\
+                 while i < limit {\n\
+                     let values = List<Int>.new()\n\
+                     i = i + 1\n\
+                 }\n\
+                 return Unit\n\
+             }\n"
+            .to_string(),
+            false,
+        ),
+        (
+            "hostile-malformed/unicode-bidi.rss",
+            std::fs::read_to_string(
+                root.join("crates/rsscript/tests/hostile-malformed/unicode-bidi.rss"),
+            )
+            .expect("unicode fixture should be readable"),
+            true,
+        ),
+        (
+            "hostile-malformed/unterminated-string.rss",
+            std::fs::read_to_string(
+                root.join("crates/rsscript/tests/hostile-malformed/unterminated-string.rss"),
+            )
+            .expect("unterminated-string fixture should be readable"),
+            true,
+        ),
+        (
+            "samples/ast/async_let.rss",
+            std::fs::read_to_string(root.join("selfhost/samples/ast/async_let.rss"))
+                .expect("async-let sample should be readable"),
+            true,
+        ),
+        (
+            "core-properties/properties_result_option.rss",
+            std::fs::read_to_string(
+                root.join("packages/core-properties/src/properties_result_option.rss"),
+            )
+            .expect("result/option properties should be readable"),
+            false,
+        ),
+    ];
+    let exe = compile_checker().expect("rss checker should compile");
+    for (file, source, expects_rs0015) in cases {
+        let oracle = checker_oracle_codes(file, &source);
+        let actual = run_checker(&exe, &source).expect("rss checker should run");
+        assert_eq!(oracle, actual, "checker parity diverged for {file}");
+        assert_eq!(
+            oracle.contains(&"RS0015".to_string()),
+            expects_rs0015,
+            "unexpected Rust RS0015 result for {file}: {oracle:?}"
+        );
+    }
+}
+
 /// Phase-3 gate (ignored by default): the rss checker's target-code diagnostics
 /// match the analyzer over the whole `.rss` corpus.
 #[test]
 #[ignore]
 fn checker_parity_corpus() {
     let root = workspace_root();
-    let all_files = collect_rss_files(&root);
+    let all_files = collect_rss_files(&root).expect("corpus discovery should succeed");
     // Slow-test gate. A handful of ~4k-line self-hosted tools (check.rss ~220KB,
     // astdump.rss ~180KB, …) dominate the wall time: the checker's per-file cost is
     // super-linear and the reg-VM is an interpreter, so those few files take minutes
@@ -874,9 +1032,12 @@ fn checker_parity_corpus() {
                             .unwrap_or(file)
                             .display()
                             .to_string();
-                        let Ok(source) = std::fs::read_to_string(file) else {
-                            run_failures.push(format!("{rel}: unreadable"));
-                            continue;
+                        let source = match std::fs::read_to_string(file) {
+                            Ok(source) => source,
+                            Err(e) => {
+                                run_failures.push(format!("{rel}: unreadable: {e}"));
+                                continue;
+                            }
                         };
                         let oracle = checker_oracle_codes(&rel, &source);
                         match run_checker(&exe, &source) {
@@ -923,6 +1084,129 @@ fn checker_parity_corpus() {
 }
 
 // ---------------------------------------------------------------------------
+// Package-contract parity — RS1301 is not a single-source checker diagnostic.
+// The first self-hosted slice covers public function contracts: missing source
+// implementation and interface/source signature mismatch.
+// ---------------------------------------------------------------------------
+
+fn compile_package_contract_checker() -> Result<RegVmExecutable, String> {
+    compile_selfhost_tool("package_contract.rss", "package contract checker")
+}
+
+fn parse_package_contract_output(stdout: &str) -> Result<Vec<String>, String> {
+    let lines = stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    match lines.as_slice() {
+        ["CLEAN"] => Ok(Vec::new()),
+        [code::PACKAGE_INTERFACE_MISMATCH] => {
+            Ok(vec![code::PACKAGE_INTERFACE_MISMATCH.to_string()])
+        }
+        [] => Err("rss package contract checker emitted no verdict".to_string()),
+        _ => Err(format!(
+            "rss package contract checker emitted malformed output: {lines:?}"
+        )),
+    }
+}
+
+fn run_package_contract_checker(
+    exe: &RegVmExecutable,
+    interface_source: &str,
+    source: &str,
+) -> Result<Vec<String>, String> {
+    let output = exe
+        .eval_main_with_args([interface_source.to_string(), source.to_string()])
+        .map_err(|e| format!("rss package contract checker failed to run: {e:?}"))?;
+    parse_package_contract_output(&output.stdout)
+}
+
+fn selfhost_unique_temp_dir(prefix: &str) -> PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()))
+}
+
+fn write_package_contract_fixture(
+    dir: &Path,
+    interface_source: &str,
+    source: &str,
+) -> Result<(), String> {
+    std::fs::create_dir_all(dir.join("interface"))
+        .map_err(|e| format!("cannot create interface dir under {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(dir.join("src"))
+        .map_err(|e| format!("cannot create src dir under {}: {e}", dir.display()))?;
+    std::fs::write(
+        dir.join("rsspkg.toml"),
+        "[package]\nname = \"selfhost-contract-parity\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[interfaces]\npaths = [\"interface\"]\n",
+    )
+    .map_err(|e| format!("cannot write package manifest under {}: {e}", dir.display()))?;
+    std::fs::write(dir.join("interface/lib.rssi"), interface_source).map_err(|e| {
+        format!(
+            "cannot write package interface under {}: {e}",
+            dir.display()
+        )
+    })?;
+    std::fs::write(dir.join("src/lib.rss"), source)
+        .map_err(|e| format!("cannot write package source under {}: {e}", dir.display()))?;
+    Ok(())
+}
+
+fn package_contract_oracle_codes(interface_source: &str, source: &str) -> Vec<String> {
+    let dir = selfhost_unique_temp_dir("rss-selfhost-package-contract");
+    write_package_contract_fixture(&dir, interface_source, source)
+        .expect("package contract fixture should be writable");
+    let review = review_package_dir(&dir).expect("package review should succeed");
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut codes = review
+        .diagnostics
+        .into_iter()
+        .filter(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && diagnostic.code == code::PACKAGE_INTERFACE_MISMATCH
+        })
+        .map(|diagnostic| diagnostic.code)
+        .collect::<Vec<_>>();
+    codes.sort();
+    codes.dedup();
+    codes
+}
+
+#[test]
+fn package_contract_function_rs1301_parity_smoke() {
+    let cases = [
+        (
+            "matching function",
+            "pub fn render(body: read String) -> String\n",
+            "pub fn render(body: read String) -> String {\n    return body\n}\n",
+        ),
+        (
+            "missing implementation",
+            "pub fn render(body: read String) -> String\n",
+            "fn helper(body: read String) -> String {\n    return body\n}\n",
+        ),
+        (
+            "signature mismatch",
+            "pub fn render(body: read String) -> fresh String\n    effects(no_panic)\n",
+            "pub fn render(body: read String) -> String {\n    return body\n}\n",
+        ),
+    ];
+    let exe = compile_package_contract_checker().expect("rss package checker should compile");
+    for (name, interface_source, source) in cases {
+        let oracle = package_contract_oracle_codes(interface_source, source);
+        let actual = run_package_contract_checker(&exe, interface_source, source)
+            .expect("rss package contract checker should run");
+        assert_eq!(
+            oracle, actual,
+            "package contract parity diverged for {name}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // AST-dump parity — format contract + Rust oracle (step 1 of frontend object
 // parity). The rss parser will one day emit the canonical AST dump defined in
 // `docs/self-hosting.md`; this oracle emits it from the surface-preserving
@@ -951,13 +1235,7 @@ fn push_line(out: &mut String, depth: usize, content: &str) {
 /// Cached once per process (a corpus run is single-tier).
 fn ast_tier() -> u8 {
     static T: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
-    *T.get_or_init(
-        || match std::env::var("RSS_SELFHOST_AST_TIER").ok().as_deref() {
-            Some("1") => 1,
-            Some("2") => 2,
-            _ => 0,
-        },
-    )
+    *T.get_or_init(|| env_tier_u8("RSS_SELFHOST_AST_TIER", 0, &[0, 1, 2]))
 }
 
 /// Span suffix for a node head line at the active AST tier (empty at tier 0).
@@ -1744,7 +2022,7 @@ program
 #[ignore]
 fn ast_oracle_total_over_corpus() {
     let root = workspace_root();
-    let files = collect_rss_files(&root);
+    let files = collect_rss_files(&root).expect("corpus discovery should succeed");
     let mut ok = 0usize;
     let mut empty: Vec<String> = Vec::new();
     for file in &files {
@@ -1753,9 +2031,8 @@ fn ast_oracle_total_over_corpus() {
             .unwrap_or(file)
             .display()
             .to_string();
-        let Ok(source) = std::fs::read_to_string(file) else {
-            continue;
-        };
+        let source =
+            std::fs::read_to_string(file).unwrap_or_else(|e| panic!("cannot read {rel}: {e}"));
         let a = ast_oracle_dump(&rel, &source);
         let b = ast_oracle_dump(&rel, &source);
         assert_eq!(a, b, "{rel}: AST oracle dump is non-deterministic");
@@ -1784,12 +2061,9 @@ fn ast_oracle_total_over_corpus() {
 // AST-dump PARITY — the rss producer (`selfhost/astdump.rss`) vs the oracle.
 //
 // Step 2: the rss recursive-descent parser streams the canonical AST dump; the
-// harness compares it byte-for-byte against `ast_oracle_dump`. Coverage is a
-// growing core (see astdump.rss): the curated `samples/ast/*.rss` set is a
-// non-ignored fast gate (also the risk mitigation for corpus-gate runtime — AST
-// dumps are much larger than token dumps), while `ast_parity_corpus` measures
-// unaided reach over all 556 files and ratchets a floor. Residual divergences
-// are tracked as SH-025.
+// harness compares it byte-for-byte against `ast_oracle_dump`. The curated
+// `samples/ast/*.rss` set is a non-ignored fast gate, while
+// `ast_parity_corpus` is the full equality gate over the discovered corpus.
 // ---------------------------------------------------------------------------
 
 fn compile_astdump() -> Result<RegVmExecutable, String> {
@@ -1926,68 +2200,123 @@ fn ast_parity_samples() {
 /// against a vacuous pass if the samples dir goes missing).
 const AST_SAMPLE_MIN: usize = 6;
 
-/// Floor for `ast_parity_corpus` — the number of corpus files whose rss AST dump
-/// already matches the oracle byte-for-byte. Ratchets up as the producer's
-/// coverage grows; a drop signals a regression. (Full parity = files.len().)
-const AST_CORPUS_PARITY_FLOOR: usize = 619;
-
-/// Step-2 measurement gate (ignored by default): how many corpus files the rss
-/// producer reproduces byte-for-byte. Not full parity yet — this ratchets a floor
-/// so coverage can only grow, asserts the producer never crashes (0 run-failures),
-/// and prints the current count so the residual (SH-025) is visible.
+/// Step-2 corpus gate (ignored by default): the rss AST producer reproduces the
+/// Rust AST oracle byte-for-byte for every discovered `.rss` file.
 ///
-/// RUNTIME: this compiles the rss producer once and runs it over all ~560 corpus
-/// files on the reg-VM; in a debug build that is slow (minutes). Run it in release
-/// for a quick measurement:
+/// RUNTIME: each worker compiles one private rss producer (the executable uses
+/// non-thread-safe Rc state) and reuses it over a size-descending share of the
+/// corpus. Giant inputs start first to avoid a long single-worker tail. A debug
+/// build is still slow; run the gate in release:
 /// `cargo test -p rsscript --release --lib selfhost_parity::ast_parity_corpus -- --ignored --nocapture`.
 /// The fast inner-loop gate is `ast_parity_samples` (non-ignored, curated subset).
 #[test]
 #[ignore]
 fn ast_parity_corpus() {
     let root = workspace_root();
-    let files = collect_rss_files(&root);
-    let exe = compile_astdump().expect("rss astdump should compile");
-    let mut ok = 0usize;
-    let mut run_failures = 0usize;
-    let mut sample_mismatches: Vec<String> = Vec::new();
-    for file in &files {
-        let rel = file
-            .strip_prefix(&root)
-            .unwrap_or(file)
-            .display()
-            .to_string();
-        let Ok(source) = std::fs::read_to_string(file) else {
-            continue;
-        };
-        let oracle = ast_oracle_dump(&rel, &source);
-        match run_astdump(&exe, &source) {
-            Err(_) => run_failures += 1,
-            Ok(actual) => {
-                if actual == oracle {
-                    ok += 1;
-                } else if sample_mismatches.len() < 10 {
-                    let first_diff = oracle
-                        .lines()
-                        .zip(actual.lines())
-                        .find(|(o, a)| o != a)
-                        .map(|(o, a)| format!("\n    oracle: {o:?}\n    rss:    {a:?}"))
-                        .unwrap_or_else(|| {
-                            format!(
-                                "\n    (line count: oracle {} vs rss {})",
-                                oracle.lines().count(),
-                                actual.lines().count()
-                            )
-                        });
-                    sample_mismatches.push(format!("{rel}{first_diff}"));
-                }
-            }
-        }
-    }
+    let files = collect_rss_files(&root).expect("corpus discovery should succeed");
+    // Start expensive inputs first so a giant self-hosted tool does not become
+    // the sole straggler after every other worker has drained the small files.
+    // Paths break equal-size ties to keep scheduling deterministic.
+    let mut sized_files = files
+        .into_iter()
+        .map(|path| {
+            let len = std::fs::metadata(&path)
+                .unwrap_or_else(|e| panic!("cannot stat {}: {e}", path.display()))
+                .len();
+            (len, path)
+        })
+        .collect::<Vec<_>>();
+    sized_files.sort_by(|(left_len, left), (right_len, right)| {
+        right_len.cmp(left_len).then_with(|| left.cmp(right))
+    });
+    let files = sized_files
+        .into_iter()
+        .map(|(_, path)| path)
+        .collect::<Vec<_>>();
     let total = files.len();
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .clamp(1, total.max(1));
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let partials: Vec<(usize, Vec<String>, Vec<String>)> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..workers)
+            .map(|_| {
+                let (root, files, next) = (&root, &files, &next);
+                scope.spawn(move || {
+                    let exe = compile_astdump().expect("rss astdump should compile");
+                    let mut ok = 0usize;
+                    let mut run_failures = Vec::new();
+                    let mut mismatches = Vec::new();
+                    loop {
+                        let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if i >= files.len() {
+                            break;
+                        }
+                        let file = &files[i];
+                        let rel = file
+                            .strip_prefix(root)
+                            .unwrap_or(file)
+                            .display()
+                            .to_string();
+                        let source = match std::fs::read_to_string(file) {
+                            Ok(source) => source,
+                            Err(e) => {
+                                run_failures.push(format!("{rel}: unreadable: {e}"));
+                                continue;
+                            }
+                        };
+                        let oracle = ast_oracle_dump(&rel, &source);
+                        match run_astdump(&exe, &source) {
+                            Err(e) => run_failures.push(format!("{rel}: {e}")),
+                            Ok(actual) if actual == oracle => ok += 1,
+                            Ok(actual) if mismatches.len() < 10 => {
+                                let first_diff = oracle
+                                    .lines()
+                                    .zip(actual.lines())
+                                    .find(|(o, a)| o != a)
+                                    .map(|(o, a)| format!("\n    oracle: {o:?}\n    rss:    {a:?}"))
+                                    .unwrap_or_else(|| {
+                                        format!(
+                                            "\n    (line count: oracle {} vs rss {})",
+                                            oracle.lines().count(),
+                                            actual.lines().count()
+                                        )
+                                    });
+                                mismatches.push(format!("{rel}{first_diff}"));
+                            }
+                            Ok(_) => {}
+                        }
+                    }
+                    (ok, run_failures, mismatches)
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect()
+    });
+    let mut ok = 0usize;
+    let mut run_failures = Vec::new();
+    let mut sample_mismatches = Vec::new();
+    for (partial_ok, partial_failures, partial_mismatches) in partials {
+        ok += partial_ok;
+        run_failures.extend(partial_failures);
+        sample_mismatches.extend(partial_mismatches);
+    }
+    run_failures.sort();
+    sample_mismatches.sort();
+    sample_mismatches.truncate(10);
     eprintln!(
-        "\n=== ast_parity_corpus ===\n  files: {total}\n  byte-exact: {ok}\n  \
-         run-failures: {run_failures}\n  floor: {AST_CORPUS_PARITY_FLOOR}\n"
+        "\n=== ast_parity_corpus ===\n  files: {total}\n  checked: {}\n  byte-exact: {ok}\n  \
+         run-failures: {}\n",
+        total - run_failures.len(),
+        run_failures.len()
     );
+    for failure in &run_failures {
+        eprintln!("[run-fail] {failure}");
+    }
     for rel in &sample_mismatches {
         eprintln!("[mismatch] {rel}");
     }
@@ -1995,12 +2324,21 @@ fn ast_parity_corpus() {
     // expected to mismatch (partial/`unknown-*` output), not error. A run-failure
     // is a real regression even if `ok` still clears the floor.
     assert_eq!(
-        run_failures, 0,
-        "rss AST producer had {run_failures} run-failures over {total} corpus files \
-         (it must degrade to a mismatch, never crash)"
+        run_failures.len(),
+        0,
+        "rss AST producer had {} run-failures over {total} corpus files \
+         (it must degrade to a mismatch, never crash)",
+        run_failures.len()
     );
-    assert!(
-        ok >= AST_CORPUS_PARITY_FLOOR,
-        "AST corpus parity regressed: {ok} byte-exact < floor {AST_CORPUS_PARITY_FLOOR}"
+    assert_eq!(
+        total - run_failures.len(),
+        total,
+        "some corpus files were not readable or were not checked"
+    );
+    assert_eq!(
+        ok,
+        total,
+        "AST dump must match every corpus file; first mismatches:\n{}",
+        sample_mismatches.join("\n\n")
     );
 }
