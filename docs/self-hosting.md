@@ -102,7 +102,7 @@ Snapshot: **2026-07-12**, from local Docker runs against this worktree.
 
 | Gate | Result | Scope |
 |------|--------|-------|
-| Self-host parity unit/smoke suite | 66 passed, 6 ignored | Non-exhaustive harness tests; full Docker run on 2026-07-12 took 391.98s |
+| Self-host parity unit/smoke suite | 66 passed, 6 ignored | Non-exhaustive harness tests; cached-checker Docker run on 2026-07-12 took 65.75s |
 | Lexer corpus parity, tier 2 | 622 / 622 | Full checked-in RSS corpus |
 | Parser recognition parity, tier 1 | 622 / 622 | Full checked-in RSS corpus |
 | Checker FAST parity | 618 / 618 | Non-giant inputs; diagnostic-code presence only |
