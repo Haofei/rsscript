@@ -11324,7 +11324,13 @@ fn arm_pattern_arity_bad(toks: read List<Tok>, ps: read Int, pe: read Int, ariti
 }
 
 // One match's arm brace [braceOpen,braceClose]: any positional-arity-bad arm.
-fn match_arm_arity_bad(toks: read List<Tok>, braceOpen: read Int, braceClose: read Int, arities: read Set<String>) -> Bool {
+fn collect_match_arm_arity_bad_tokens(
+    toks: read List<Tok>,
+    braceOpen: read Int,
+    braceClose: read Int,
+    arities: read Set<String>,
+    out: mut List<Int>
+) -> Bool {
     let mut i = braceOpen + 1
     let mut hit = false
     while i < braceClose {
@@ -11336,7 +11342,10 @@ fn match_arm_arity_bad(toks: read List<Tok>, braceOpen: read Int, braceClose: re
             if arrow < 0 {
                 if lineEnd > i { i = lineEnd } else { i = i + 1 }
             } else {
-                if arm_pattern_arity_bad(toks: read toks, ps: read i, pe: read arrow, arities: read arities) { hit = true }
+                if arm_pattern_arity_bad(toks: read toks, ps: read i, pe: read arrow, arities: read arities) {
+                    List.push<Int>(list: mut out, value: read i)
+                    hit = true
+                }
                 let bodyStart = arrow + 1
                 if at_symbol(toks: read toks, i: read bodyStart, code: read SYM_LBRACE) {
                     let bclose = find_matching(toks: read toks, open: read bodyStart, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
@@ -11352,7 +11361,7 @@ fn match_arm_arity_bad(toks: read List<Tok>, braceOpen: read Int, braceClose: re
 }
 
 // RS0037 over the whole file: any `match` with a positional-arity-bad variant arm.
-fn has_variant_arity_mismatch(toks: read List<Tok>) -> Bool {
+fn collect_variant_arity_mismatch_tokens(toks: read List<Tok>, out: mut List<Int>) -> Bool {
     let arities = collect_variant_arities(toks: read toks)
     let ntok = List.len(list: read toks)
     let mut k = 0
@@ -11365,7 +11374,13 @@ fn has_variant_arity_mismatch(toks: read List<Tok>) -> Bool {
             if braceOpen >= 0 {
                 let braceClose = find_matching(toks: read toks, open: read braceOpen, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
                 if braceClose >= 0 {
-                    if match_arm_arity_bad(toks: read toks, braceOpen: read braceOpen, braceClose: read braceClose, arities: read arities) { hit = true }
+                    if collect_match_arm_arity_bad_tokens(
+                        toks: read toks,
+                        braceOpen: read braceOpen,
+                        braceClose: read braceClose,
+                        arities: read arities,
+                        out: mut out
+                    ) { hit = true }
                 }
             }
             k = k + 1
@@ -11601,7 +11616,8 @@ fn main() -> Unit {
     let mut poolMaxSizeTokens = List<Int>.new()
     let poolMaxSize = collect_resourcepool_maxsize_bad_tokens(toks: read toks, out: mut poolMaxSizeTokens)
     // RS0037: a positional variant pattern binding != the variant's declared arity.
-    let variantArity = has_variant_arity_mismatch(toks: read toks)
+    let mut variantArityTokens = List<Int>.new()
+    let variantArity = collect_variant_arity_mismatch_tokens(toks: read toks, out: mut variantArityTokens)
     // RS0902: a `weak` field whose type is a known non-class.
     let mut invalidWeakTokens = List<Int>.new()
     let invalidWeak = collect_invalid_weak_fields(toks: read toks, out: mut invalidWeakTokens)
@@ -11994,6 +12010,7 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_records(code: read "RS0022", toks: read toks, tokenIndices: read asyncNotConsumedTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0029", toks: read toks, tokenIndices: read badAwaitTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0036", toks: read toks, tokenIndices: read nonTransferPayloadTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0037", toks: read toks, tokenIndices: read variantArityTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0311", toks: read toks, tokenIndices: read immutableAssignTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0313", toks: read toks, tokenIndices: read assignTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0312", toks: read toks, tokenIndices: read indexAssignBadTokens)
@@ -12250,7 +12267,7 @@ fn main() -> Unit {
     if poolMaxSize {
         Log.write(message: read "RS0708")
     }
-    if variantArity {
+    if variantArity && structured == false {
         Log.write(message: read "RS0037")
     }
     if uninferable {

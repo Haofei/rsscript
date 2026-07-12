@@ -1416,6 +1416,32 @@ async fn generic<T>() -> Result<Unit, ChannelError> {
 }
 
 #[test]
+fn checker_rs0037_structured_multiset_parity() {
+    let source = r#"sum Pairish {
+    Pair(left: Int, right: Int)
+    Empty
+}
+
+fn inspect(value: read Pairish) -> Int {
+    match value {
+        Pair(one) => return one
+        Pair(one, two, three) => return one
+        Pair(left, right) => return left + right
+        Empty => return 0
+    }
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0037.rss", source, "RS0037");
+    assert_eq!(
+        oracle.len(),
+        2,
+        "fixture must preserve too-few and too-many positional bindings"
+    );
+    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0037 structured diagnostics diverged");
+}
+
+#[test]
 fn checker_rs0201_structured_multiset_parity() {
     let source = r#"pub fn publish(first: Int, second: Int) -> Unit {
     return Unit
