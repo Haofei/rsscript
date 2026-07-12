@@ -1819,6 +1819,43 @@ fn exercise() -> Unit {
 }
 
 #[test]
+fn checker_rs0601_structured_multiset_parity() {
+    let source = r#"features: local
+
+struct Boxed {
+    value: Int
+}
+
+struct Holder {
+    boxed: handle Boxed
+}
+
+fn Holder.create() -> fresh Holder
+
+fn bad_direct(value: read Boxed) -> fresh Boxed {
+    return value
+}
+
+fn bad_wrapper(value: read Boxed) -> Option<fresh Boxed> {
+    return Some(value)
+}
+
+fn bad_field() -> fresh Boxed {
+    local holder = Holder.create()
+    return holder.boxed
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0601.rss", source, "RS0601");
+    assert_eq!(
+        oracle.len(),
+        3,
+        "fixture must exercise identifier, wrapper, and field-expression spans"
+    );
+    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0601 structured diagnostics diverged");
+}
+
+#[test]
 fn checker_rs0311_structured_multiset_parity() {
     let source = r#"features: local
 

@@ -206,6 +206,59 @@ fn emit_diagnostic_records(code: read String, toks: read List<Tok>, tokenIndices
     return i
 }
 
+struct DiagnosticSite {
+    line: Int
+    column: Int
+    length: Int
+}
+
+fn source_scalar_offset(source: read String, targetLine: read Int, targetColumn: read Int) -> Int {
+    let chars = String.chars(value: read source)
+    let mut line = 1
+    let mut column = 1
+    let mut i = 0
+    while i < List.len(list: read chars) {
+        if line == targetLine && column == targetColumn { return i }
+        let ch = List.get(list: read chars, index: read i)
+        if ch == '\n' {
+            line = line + 1
+            column = 1
+        } else {
+            column = column + 1
+        }
+        i = i + 1
+    }
+    return i
+}
+
+fn token_range_diagnostic_site(source: read String, toks: read List<Tok>, start: read Int, endInclusive: read Int) -> DiagnosticSite {
+    let first = List.get(list: read toks, index: read start)
+    let last = List.get(list: read toks, index: read endInclusive)
+    let begin = source_scalar_offset(source: read source, targetLine: read first.line, targetColumn: read first.col)
+    let end = source_scalar_offset(source: read source, targetLine: read last.line, targetColumn: read (last.col + last.len))
+    return DiagnosticSite(line: first.line, column: first.col, length: end - begin)
+}
+
+fn emit_diagnostic_site(code: read String, site: read DiagnosticSite) -> Unit {
+    let line = String.from_int(value: site.line)
+    let column = String.from_int(value: site.column)
+    let length = String.from_int(value: site.length)
+    let a = String.concat(left: read String.concat(left: read code, right: read "\t"), right: read line)
+    let b = String.concat(left: read String.concat(left: read a, right: read "\t"), right: read column)
+    let record = String.concat(left: read String.concat(left: read b, right: read "\t"), right: read length)
+    Log.write(message: read record)
+    return Unit
+}
+
+fn emit_diagnostic_sites(code: read String, sites: read List<DiagnosticSite>) -> Int {
+    let mut i = 0
+    while i < List.len(list: read sites) {
+        emit_diagnostic_site(code: read code, site: read List.get(list: read sites, index: read i))
+        i = i + 1
+    }
+    return i
+}
+
 // The file features recognized by the compiler (parse_file_feature). Anything
 // else in a `features:` header is an unknown feature (RS0016).
 fn is_known_feature(name: read String) -> Bool {
@@ -4021,7 +4074,7 @@ fn fn_local_closure_escape(toks: read List<Tok>, start: read Int, noescape: read
     return false
 }
 
-fn fn_has_fresh_return_bad(toks: read List<Tok>, start: read Int, handleFields: read Set<String>, retains: read Set<String>, freshFns: read Set<String>) -> Bool {
+fn collect_fn_fresh_return_bad_sites(source: read String, toks: read List<Tok>, start: read Int, handleFields: read Set<String>, retains: read Set<String>, freshFns: read Set<String>, out: mut List<DiagnosticSite>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
     if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
@@ -4045,6 +4098,7 @@ fn fn_has_fresh_return_bad(toks: read List<Tok>, start: read Int, handleFields: 
         if is_kw_text(toks: read toks, i: read k, word: read "return") {
             let mut v = k + 1
             if is_effect_kw(toks: read toks, i: read v) { v = v + 1 }
+            let exprStart = v
             let mut unwrap = true
             while unwrap {
                 if is_ident_tok(toks: read toks, i: read v) && (tk_text(toks: read toks, i: read v) == "Some" || tk_text(toks: read toks, i: read v) == "Ok") && at_symbol(toks: read toks, i: read (v + 1), code: read SYM_LPAREN) {
@@ -4059,19 +4113,26 @@ fn fn_has_fresh_return_bad(toks: read List<Tok>, start: read Int, handleFields: 
                 let base = tk_text(toks: read toks, i: read v)
                 let nextDot = at_symbol(toks: read toks, i: read (v + 1), code: read SYM_DOT)
                 let nextParen = at_symbol(toks: read toks, i: read (v + 1), code: read SYM_LPAREN)
+                let mut issue = false
                 if nextDot {
                     // a handle-field access `x.f` (not a method call) is not clean
-                    if is_ident_tok(toks: read toks, i: read (v + 2)) && at_symbol(toks: read toks, i: read (v + 3), code: read SYM_LPAREN) == false && Set.contains<String>(set: read handleFields, value: read tk_text(toks: read toks, i: read (v + 2))) { hit = true }
+                    if is_ident_tok(toks: read toks, i: read (v + 2)) && at_symbol(toks: read toks, i: read (v + 3), code: read SYM_LPAREN) == false && Set.contains<String>(set: read handleFields, value: read tk_text(toks: read toks, i: read (v + 2))) { issue = true }
                 } else if nextParen == false {
                     if Set.contains<String>(set: read fireParams, value: read base) {
-                        hit = true
+                        issue = true
                     } else if Set.contains<String>(set: read matchBinds, value: read base) {
-                        hit = true
+                        issue = true
                     } else if Set.contains<String>(set: read nonFreshLets, value: read base) {
-                        hit = true
+                        issue = true
                     } else if (Set.contains<String>(set: read localNames, value: read base) || Set.contains<String>(set: read managed, value: read base)) && Set.contains<String>(set: read tainted, value: read base) {
-                        hit = true
+                        issue = true
                     }
+                }
+                if issue {
+                    // Production anchors this diagnostic at the return proof's
+                    // root identifier, not the entire wrapper or field path.
+                    List.push<DiagnosticSite>(list: mut out, value: read token_range_diagnostic_site(source: read source, toks: read toks, start: read exprStart, endInclusive: read exprStart))
+                    hit = true
                 }
             }
         }
@@ -11517,6 +11578,7 @@ fn main() -> Unit {
     let mut placeConflict0302 = false
     let mut placeConflict0304 = false
     let mut freshReturnBad = false
+    let mut freshReturnBadSites = List<DiagnosticSite>.new()
     let mut closureCapture0801 = false
     let mut closureCapture0804 = false
     let mut lazyCaptureBad = false
@@ -11743,7 +11805,7 @@ fn main() -> Unit {
                     if bit_set(mask: read pcMask, bitval: read 4) { placeConflict0309 = true }
                     if bit_set(mask: read pcMask, bitval: read 8) { placeConflict0302 = true }
                     if bit_set(mask: read pcMask, bitval: read 16) { placeConflict0304 = true }
-                    if fn_has_fresh_return_bad(toks: read toks, start: read i, handleFields: read handleFieldNames, retains: read retainsReg, freshFns: read freshFnReg) { freshReturnBad = true }
+                    if collect_fn_fresh_return_bad_sites(source: read source, toks: read toks, start: read i, handleFields: read handleFieldNames, retains: read retainsReg, freshFns: read freshFnReg, out: mut freshReturnBadSites) { freshReturnBad = true }
                     if collect_fn_lazy_capture_tokens(toks: read toks, start: read i, out: mut lazyCaptureTokens) { lazyCaptureBad = true }
                     if fn_noescape_escape(toks: read toks, start: read i, noescape: read noescapeReg) { noescapeEscape = true }
                     if fn_local_closure_escape(toks: read toks, start: read i, noescape: read noescapeReg) { localClosureEscape = true }
@@ -11821,6 +11883,7 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_records(code: read "RS0301", toks: read toks, tokenIndices: read managedToLocalTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0401", toks: read toks, tokenIndices: read useAfterManageTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0501", toks: read toks, tokenIndices: read retainedLocalTokens)
+        emitted = emitted + emit_diagnostic_sites(code: read "RS0601", sites: read freshReturnBadSites)
         emitted = emitted + emit_diagnostic_records(code: read "RS0212", toks: read toks, tokenIndices: read resourceDeriveTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0306", toks: read toks, tokenIndices: read localClassTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0701", toks: read toks, tokenIndices: read resourceFieldTokens)
