@@ -1262,6 +1262,80 @@ struct Holder {
 }
 
 #[test]
+fn checker_rs0703_structured_multiset_parity() {
+    let source = r#"features: local
+
+struct Image {
+    id: Int
+}
+
+fn typed(pool: mut ResourcePool<Image>) -> Unit {
+    return Unit
+}
+
+fn generic<T: Managed>(pool: mut ResourcePool<T>) -> Unit {
+    return Unit
+}
+
+fn constructed() -> Unit {
+    local pool = ResourcePool<Image>.new(
+        create: || Image(id: 1),
+        max_size: 1,
+    )
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0703.rss", source, "RS0703");
+    assert_eq!(
+        oracle.len(),
+        3,
+        "fixture must exercise concrete, generic, and call-site pool types"
+    );
+    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0703 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0704_structured_multiset_parity() {
+    let source = r#"resource File {
+    fd: Int
+
+    drop {
+        OS.close(fd: fd)
+    }
+}
+
+struct Archive {
+    files: List<File>
+    backups: Option<File>
+}
+
+resource Unbounded<T> {
+    id: Int
+
+    drop {
+        OS.close()
+    }
+}
+
+resource Direct<T: Resource> {
+    item: T
+
+    drop {
+        OS.close()
+    }
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0704.rss", source, "RS0704");
+    assert_eq!(
+        oracle.len(),
+        4,
+        "fixture must exercise resource arguments and declaration constraints"
+    );
+    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0704 structured diagnostics diverged");
+}
+
+#[test]
 fn checker_rs0705_structured_multiset_parity() {
     let source = r#"features: local
 

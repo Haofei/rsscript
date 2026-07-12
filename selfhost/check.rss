@@ -2966,9 +2966,10 @@ fn seg_generic_kind(toks: read List<Tok>, segStart: read Int, resParams: mut Set
 
 // RS0704 sub-rule A: a file-declared resource used as a generic type-argument of a non-pool
 // container. Exempt under ResourcePool<…>, and Result<Resource, E> at arg-0 in a return type.
-fn has_resource_generic_arg(toks: read List<Tok>, resources: read Set<String>) -> Bool {
+fn collect_resource_generic_arg_tokens(toks: read List<Tok>, resources: read Set<String>, out: mut List<Int>) -> Bool {
     let n = List.len(list: read toks)
     let mut k = 0
+    let mut hit = false
     while k < n {
         if is_ident_tok(toks: read toks, i: read k) && Set.contains<String>(set: read resources, value: read tk_text(toks: read toks, i: read k)) && k >= 1 && (at_symbol(toks: read toks, i: read (k - 1), code: read SYM_LANGLE) || at_symbol(toks: read toks, i: read (k - 1), code: read SYM_COMMA)) {
             let head = enclosing_generic_head(toks: read toks, pos: read k)
@@ -2980,18 +2981,22 @@ fn has_resource_generic_arg(toks: read List<Tok>, resources: read Set<String>) -
                 if is_kw_text(toks: read toks, i: read bp, word: read "fresh") { bp = bp - 1 }
                 if at_symbol(toks: read toks, i: read bp, code: read SYM_ARROW) { skip = true }
             }
-            if skip == false { return true }
+            if skip == false {
+                List.push<Int>(list: mut out, value: read k)
+                hit = true
+            }
         }
         k = k + 1
     }
-    return false
+    return hit
 }
 
 // RS0704 sub-rules B1/B2: a `resource Name<params>` with an unbounded param (B1), or a
 // Resource-bounded param used directly (not under ResourcePool) in a field type (B2).
-fn has_resource_decl_generic_bad(toks: read List<Tok>) -> Bool {
+fn collect_resource_decl_generic_bad_tokens(toks: read List<Tok>, out: mut List<Int>) -> Bool {
     let n = List.len(list: read toks)
     let mut k = 0
+    let mut hit = false
     while k < n {
         if is_kw_text(toks: read toks, i: read k, word: read "resource") && is_ident_tok(toks: read toks, i: read (k + 1)) && at_symbol(toks: read toks, i: read (k + 2), code: read SYM_LANGLE) {
             let gOpen = k + 2
@@ -3001,20 +3006,24 @@ fn has_resource_decl_generic_bad(toks: read List<Tok>) -> Bool {
                 let mut depth = 0
                 let mut segStart = gOpen + 1
                 let mut j = gOpen + 1
-                let mut b1 = false
                 while j < gClose {
                     if at_symbol(toks: read toks, i: read j, code: read SYM_LANGLE) || at_symbol(toks: read toks, i: read j, code: read SYM_LPAREN) {
                         depth = depth + 1
                     } else if at_symbol(toks: read toks, i: read j, code: read SYM_RANGLE) || at_symbol(toks: read toks, i: read j, code: read SYM_RPAREN) {
                         if depth > 0 { depth = depth - 1 }
                     } else if depth == 0 && at_symbol(toks: read toks, i: read j, code: read SYM_COMMA) {
-                        if seg_generic_kind(toks: read toks, segStart: read segStart, resParams: mut resParams) { b1 = true }
+                        if seg_generic_kind(toks: read toks, segStart: read segStart, resParams: mut resParams) {
+                            List.push<Int>(list: mut out, value: read segStart)
+                            hit = true
+                        }
                         segStart = j + 1
                     }
                     j = j + 1
                 }
-                if seg_generic_kind(toks: read toks, segStart: read segStart, resParams: mut resParams) { b1 = true }
-                if b1 { return true }
+                if seg_generic_kind(toks: read toks, segStart: read segStart, resParams: mut resParams) {
+                    List.push<Int>(list: mut out, value: read segStart)
+                    hit = true
+                }
                 let mut bOpen = gClose + 1
                 let mut findBody = true
                 while findBody {
@@ -3033,7 +3042,8 @@ fn has_resource_decl_generic_bad(toks: read List<Tok>) -> Bool {
                         while f < bClose {
                             if is_ident_tok(toks: read toks, i: read f) && Set.contains<String>(set: read resParams, value: read tk_text(toks: read toks, i: read f)) && f >= 1 && (at_symbol(toks: read toks, i: read (f - 1), code: read SYM_COLON) || at_symbol(toks: read toks, i: read (f - 1), code: read SYM_LANGLE) || at_symbol(toks: read toks, i: read (f - 1), code: read SYM_COMMA)) {
                                 if enclosing_generic_head(toks: read toks, pos: read f) != "ResourcePool" {
-                                    return true
+                                    List.push<Int>(list: mut out, value: read f)
+                                    hit = true
                                 }
                             }
                             f = f + 1
@@ -3044,14 +3054,15 @@ fn has_resource_decl_generic_bad(toks: read List<Tok>) -> Bool {
         }
         k = k + 1
     }
-    return false
+    return hit
 }
 
 // RS0704 whole-file predicate.
-fn has_resource_generic_bad(toks: read List<Tok>, resources: read Set<String>) -> Bool {
-    if has_resource_generic_arg(toks: read toks, resources: read resources) { return true }
-    if has_resource_decl_generic_bad(toks: read toks) { return true }
-    return false
+fn collect_resource_generic_bad_tokens(toks: read List<Tok>, resources: read Set<String>, out: mut List<Int>) -> Bool {
+    let mut hit = false
+    if collect_resource_generic_arg_tokens(toks: read toks, resources: read resources, out: mut out) { hit = true }
+    if collect_resource_decl_generic_bad_tokens(toks: read toks, out: mut out) { hit = true }
+    return hit
 }
 
 // A declaration keyword sits at index i (start of a decl whose name+generics follow).
@@ -3103,9 +3114,10 @@ fn nonresource_generic_param(toks: read List<Tok>, name: read String) -> Bool {
 
 // RS0703: any `ResourcePool<X>` whose argument X is a declared/stdlib non-resource type or a
 // non-Resource-bounded generic parameter. Unknown/undeclared X → OK.
-fn has_resource_pool_type_bad(toks: read List<Tok>, resources: read Set<String>, declared: read Set<String>) -> Bool {
+fn collect_resource_pool_type_bad_sites(source: read String, toks: read List<Tok>, resources: read Set<String>, declared: read Set<String>, out: mut List<DiagnosticSite>) -> Bool {
     let n = List.len(list: read toks)
     let mut k = 0
+    let mut hit = false
     while k < n {
         if tk_text(toks: read toks, i: read k) == "ResourcePool" && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_LANGLE) && is_ident_tok(toks: read toks, i: read (k + 2)) {
             let x = tk_text(toks: read toks, i: read (k + 2))
@@ -3119,11 +3131,20 @@ fn has_resource_pool_type_bad(toks: read List<Tok>, resources: read Set<String>,
             } else if nonresource_generic_param(toks: read toks, name: read x) {
                 fire = true
             }
-            if fire { return true }
+            if fire {
+                let mut start = k + 2
+                let mut finish = k + 2
+                if at_symbol(toks: read toks, i: read (k + 3), code: read SYM_RANGLE) && at_symbol(toks: read toks, i: read (k + 4), code: read SYM_DOT) && tk_text(toks: read toks, i: read (k + 5)) == "new" && at_symbol(toks: read toks, i: read (k + 6), code: read SYM_LPAREN) {
+                    start = k
+                    finish = k
+                }
+                List.push<DiagnosticSite>(list: mut out, value: read token_range_diagnostic_site(source: read source, toks: read toks, start: read start, endInclusive: read finish))
+                hit = true
+            }
         }
         k = k + 1
     }
-    return false
+    return hit
 }
 
 // The aggregate access effect of `name` across an explicit closure body: "take" > "mut" > "read",
@@ -11517,9 +11538,11 @@ fn main() -> Unit {
     // RS0805: an explicit closure's captures(...) contract doesn't match its body's external uses.
     let captureContract = has_capture_contract_bad(toks: read toks)
     // RS0703: a ResourcePool<X> whose X is a non-resource type or non-Resource-bounded generic param.
-    let resourcePoolTypeBad = has_resource_pool_type_bad(toks: read toks, resources: read resources, declared: read declared)
+    let mut resourcePoolTypeBadSites = List<DiagnosticSite>.new()
+    let resourcePoolTypeBad = collect_resource_pool_type_bad_sites(source: read source, toks: read toks, resources: read resources, declared: read declared, out: mut resourcePoolTypeBadSites)
     // RS0704: a resource used as a generic argument, or a bad resource-decl generic param.
-    let resourceGenericBad = has_resource_generic_bad(toks: read toks, resources: read resources)
+    let mut resourceGenericBadTokens = List<Int>.new()
+    let resourceGenericBad = collect_resource_generic_bad_tokens(toks: read toks, resources: read resources, out: mut resourceGenericBadTokens)
     // RS0604: a fresh-returning call used directly with mut/take.
     let mut freshMutSites = List<DiagnosticSite>.new()
     let freshMut = collect_fresh_requires_local_sites(source: read source, toks: read toks, out: mut freshMutSites)
@@ -11894,6 +11917,8 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_sites(code: read "RS0601", sites: read freshReturnBadSites)
         emitted = emitted + emit_diagnostic_sites(code: read "RS0604", sites: read freshMutSites)
         emitted = emitted + emit_diagnostic_records(code: read "RS0603", toks: read toks, tokenIndices: read invalidFreshRetTokens)
+        emitted = emitted + emit_diagnostic_sites(code: read "RS0703", sites: read resourcePoolTypeBadSites)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0704", toks: read toks, tokenIndices: read resourceGenericBadTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0212", toks: read toks, tokenIndices: read resourceDeriveTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0306", toks: read toks, tokenIndices: read localClassTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0701", toks: read toks, tokenIndices: read resourceFieldTokens)
