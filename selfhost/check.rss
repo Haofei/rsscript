@@ -6748,7 +6748,7 @@ fn collect_fresh_fns(toks: read List<Tok>) -> Set<String> {
 }
 
 // RS0604 over the file: a `mut`/`take` immediately applied to a fresh-returning call.
-fn has_fresh_requires_local(toks: read List<Tok>) -> Bool {
+fn collect_fresh_requires_local_sites(source: read String, toks: read List<Tok>, out: mut List<DiagnosticSite>) -> Bool {
     let freshFns = collect_fresh_fns(toks: read toks)
     let ntok = List.len(list: read toks)
     let mut k = 0
@@ -6758,7 +6758,11 @@ fn has_fresh_requires_local(toks: read List<Tok>) -> Bool {
             if is_ident_tok(toks: read toks, i: read (k + 1)) {
                 let ce = dotted_end(toks: read toks, i: read (k + 1))
                 if at_symbol(toks: read toks, i: read ce, code: read SYM_LPAREN) {
-                    if Set.contains<String>(set: read freshFns, value: read dotted_name_text(toks: read toks, i: read (k + 1))) { hit = true }
+                    if Set.contains<String>(set: read freshFns, value: read dotted_name_text(toks: read toks, i: read (k + 1))) {
+                        // The HIR effect span is anchored at the effect keyword.
+                        List.push<DiagnosticSite>(list: mut out, value: read token_range_diagnostic_site(source: read source, toks: read toks, start: read k, endInclusive: read k))
+                        hit = true
+                    }
                 }
             }
         }
@@ -11515,7 +11519,8 @@ fn main() -> Unit {
     // RS0704: a resource used as a generic argument, or a bad resource-decl generic param.
     let resourceGenericBad = has_resource_generic_bad(toks: read toks, resources: read resources)
     // RS0604: a fresh-returning call used directly with mut/take.
-    let freshMut = has_fresh_requires_local(toks: read toks)
+    let mut freshMutSites = List<DiagnosticSite>.new()
+    let freshMut = collect_fresh_requires_local_sites(source: read source, toks: read toks, out: mut freshMutSites)
     // RS0603: a fresh return type that is a generic param, not a struct.
     let invalidFreshRet = has_invalid_fresh_return(toks: read toks)
     // RS0705: a ResourcePool value bound with let instead of local.
@@ -11884,6 +11889,7 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_records(code: read "RS0401", toks: read toks, tokenIndices: read useAfterManageTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0501", toks: read toks, tokenIndices: read retainedLocalTokens)
         emitted = emitted + emit_diagnostic_sites(code: read "RS0601", sites: read freshReturnBadSites)
+        emitted = emitted + emit_diagnostic_sites(code: read "RS0604", sites: read freshMutSites)
         emitted = emitted + emit_diagnostic_records(code: read "RS0212", toks: read toks, tokenIndices: read resourceDeriveTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0306", toks: read toks, tokenIndices: read localClassTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0701", toks: read toks, tokenIndices: read resourceFieldTokens)

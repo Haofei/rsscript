@@ -1856,6 +1856,31 @@ fn bad_field() -> fresh Boxed {
 }
 
 #[test]
+fn checker_rs0604_structured_multiset_parity() {
+    let source = r#"features: local
+
+struct Image {
+    width: Int
+}
+
+fn Image.load(width: read Int) -> fresh Image
+fn mutate(image: mut Image) -> Unit
+fn consume(image: take Image) -> Unit
+
+fn exercise() -> Unit {
+    mutate(image: mut Image.load(width: read 1))
+    consume(image: take Image.load(width: read 2))
+    local image = Image.load(width: read 3)
+    mutate(image: mut image)
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0604.rss", source, "RS0604");
+    assert_eq!(oracle.len(), 2, "fixture must exercise mut and take ranges");
+    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0604 structured diagnostics diverged");
+}
+
+#[test]
 fn checker_rs0311_structured_multiset_parity() {
     let source = r#"features: local
 
