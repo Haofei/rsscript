@@ -1230,6 +1230,30 @@ fn checker_rs0028_structured_multiset_parity() {
 }
 
 #[test]
+fn checker_rs0022_structured_multiset_parity() {
+    let source = r#"features: async
+
+async fn fetch(value: read Int) -> Int {
+    return value
+}
+
+async fn exercise(value: read Int) -> Unit {
+    let first = fetch(value: read value)
+    fetch(value: read first)
+    let consumed = await fetch(value: read value)
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0022.rss", source, "RS0022");
+    assert_eq!(
+        oracle.len(),
+        2,
+        "fixture must preserve unconsumed calls and exempt await"
+    );
+    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0022 structured diagnostics diverged");
+}
+
+#[test]
 fn checker_rs0023_structured_multiset_parity() {
     let source = r#"struct BadHandle {
     input: Fd

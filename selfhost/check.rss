@@ -6041,7 +6041,11 @@ fn collect_fn_fd_surface_tokens(toks: read List<Tok>, start: read Int, out: mut 
 // RHS, so a token-adjacency probe is exact here.
 // ---------------------------------------------------------------------------
 
-fn has_unconsumed_async_call(toks: read List<Tok>, asyncFns: read Set<String>) -> Bool {
+fn collect_unconsumed_async_call_tokens(
+    toks: read List<Tok>,
+    asyncFns: read Set<String>,
+    out: mut List<Int>
+) -> Bool {
     let n = List.len(list: read toks)
     let mut i = 0
     let mut hit = false
@@ -6057,6 +6061,7 @@ fn has_unconsumed_async_call(toks: read List<Tok>, asyncFns: read Set<String>) -
                 let spawned = is_kw_text(toks: read toks, i: read (i - 1), word: read "spawn")
                 let asyncLet = at_symbol(toks: read toks, i: read (i - 1), code: read SYM_EQ) && is_kw_text(toks: read toks, i: read (i - 3), word: read "let") && at_ident(toks: read toks, i: read (i - 4), wid: read WORD_ASYNC)
                 if awaited == false && spawned == false && asyncLet == false {
+                    List.push<Int>(list: mut out, value: read i)
                     hit = true
                 }
             }
@@ -11545,7 +11550,12 @@ fn main() -> Unit {
     // RS0020: names of `effects(noalloc)` fns (allowed callees inside noalloc fns).
     let noallocFns = collect_noalloc_fns(toks: read toks)
     // RS0022: an unconsumed call to a same-file async fn.
-    let asyncNotConsumed = has_unconsumed_async_call(toks: read toks, asyncFns: read asyncFns)
+    let mut asyncNotConsumedTokens = List<Int>.new()
+    let asyncNotConsumed = collect_unconsumed_async_call_tokens(
+        toks: read toks,
+        asyncFns: read asyncFns,
+        out: mut asyncNotConsumedTokens
+    )
     // RS0033: any decimal integer literal in the file that overflows i64.
     let mut outOfRangeIntTokens = List<Int>.new()
     let outOfRangeInt = collect_out_of_range_int_tokens(toks: read toks, out: mut outOfRangeIntTokens)
@@ -11952,6 +11962,7 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_sites(code: read "RS0019", sites: read noPanicCallSites)
         emitted = emitted + emit_diagnostic_sites(code: read "RS0027", sites: read unknownProtocolSites)
         emitted = emitted + emit_diagnostic_records(code: read "RS0023", toks: read toks, tokenIndices: read fdSurfaceTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0022", toks: read toks, tokenIndices: read asyncNotConsumedTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0311", toks: read toks, tokenIndices: read immutableAssignTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0313", toks: read toks, tokenIndices: read assignTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0312", toks: read toks, tokenIndices: read indexAssignBadTokens)
