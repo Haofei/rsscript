@@ -219,6 +219,7 @@ pub(crate) const SELFHOST_CHECKER_TARGET_CODES: &[&str] = &[
     code::RESOURCE_POOL_FALLIBLE_FACTORY,
     code::RESOURCE_POOL_ACTIVE_LEASE_CONFLICT,
     code::RESOURCE_POOL_DISCARD_NOT_LEASE,
+    code::OPERATOR_OVERLOAD_ATTEMPT,
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

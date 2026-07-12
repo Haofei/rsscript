@@ -1065,7 +1065,7 @@ fn let_is_uninferable(toks: read List<Tok>, letPos: read Int, bodyOpen: read Int
 }
 
 // RS0034 over one fn body: any uninferable `let` binding.
-fn fn_has_uninferable_binding(toks: read List<Tok>, start: read Int) -> Bool {
+fn collect_fn_uninferable_binding_tokens(toks: read List<Tok>, start: read Int, out: mut List<Int>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
     if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
@@ -1075,7 +1075,10 @@ fn fn_has_uninferable_binding(toks: read List<Tok>, start: read Int) -> Bool {
     let mut hit = false
     while k < bodyClose {
         if is_kw_text(toks: read toks, i: read k, word: read "let") {
-            if let_is_uninferable(toks: read toks, letPos: read k, bodyOpen: read sigEnd, bodyClose: read bodyClose) { hit = true }
+            if let_is_uninferable(toks: read toks, letPos: read k, bodyOpen: read sigEnd, bodyClose: read bodyClose) {
+                List.push<Int>(list: mut out, value: read k)
+                hit = true
+            }
         }
         k = k + 1
     }
@@ -1134,7 +1137,7 @@ fn collect_param_names(toks: read List<Tok>, ns: read Int, sigEnd: read Int, out
     return Unit
 }
 
-fn fn_has_immutable_assign(toks: read List<Tok>, start: read Int) -> Bool {
+fn collect_fn_invalid_assignment_tokens(toks: read List<Tok>, start: read Int, out: mut List<Int>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
     if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
@@ -1142,7 +1145,24 @@ fn fn_has_immutable_assign(toks: read List<Tok>, start: read Int) -> Bool {
     if bodyClose < 0 { return false }
     let mut immut = Set<String>.new()
     let mut mutable = Set<String>.new()
-    collect_param_names(toks: read toks, ns: read ns, sigEnd: read sigEnd, out: mut mutable)
+    let popen = dotted_end(toks: read toks, i: read ns)
+    if at_symbol(toks: read toks, i: read popen, code: read SYM_LPAREN) {
+        let pclose = find_matching(toks: read toks, open: read popen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+        let mut p = popen + 1
+        while p < pclose {
+            if is_ident_tok(toks: read toks, i: read p) && at_symbol(toks: read toks, i: read (p + 1), code: read SYM_COLON) {
+                let name = tk_text(toks: read toks, i: read p)
+                Set.insert<String>(set: mut immut, value: read name)
+                if is_kw_text(toks: read toks, i: read (p + 2), word: read "mut") {
+                    let root = tk_text(toks: read toks, i: read (p + 3))
+                    if root == "Int" || root == "Float" || root == "Bool" || root == "Char" || root == "Byte" {
+                        Set.insert<String>(set: mut mutable, value: read name)
+                    }
+                }
+            }
+            p = p + 1
+        }
+    }
     collect_let_kinds(toks: read toks, bodyOpen: read sigEnd, bodyClose: read bodyClose, immut: mut immut, mutable: mut mutable)
     let mut k = sigEnd + 1
     let mut hit = false
@@ -1157,6 +1177,7 @@ fn fn_has_immutable_assign(toks: read List<Tok>, start: read Int) -> Bool {
                     if notLet && notMut && notLocal {
                         if Set.contains<String>(set: read immut, value: read assignee) {
                             if Set.contains<String>(set: read mutable, value: read assignee) == false {
+                                List.push<Int>(list: mut out, value: read (k - 1))
                                 hit = true
                             }
                         }
@@ -2674,7 +2695,7 @@ fn fn_has_closure_capture_bad(toks: read List<Tok>, start: read Int, retains: re
 
 // RS0711: a ResourcePool<..>.lazy(…)/.try_lazy(…) factory closure captures a non-owned binding
 // (a parameter or managed `let`) instead of only owned `local` bindings.
-fn fn_has_lazy_capture_bad(toks: read List<Tok>, start: read Int) -> Bool {
+fn collect_fn_lazy_capture_tokens(toks: read List<Tok>, start: read Int, out: mut List<Int>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
     if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
@@ -2712,6 +2733,7 @@ fn fn_has_lazy_capture_bad(toks: read List<Tok>, start: read Int) -> Bool {
     let mut letImmut = Set.new<String>()
     let mut letMut = Set.new<String>()
     collect_let_kinds(toks: read toks, bodyOpen: read sigEnd, bodyClose: read bodyClose, immut: mut letImmut, mutable: mut letMut)
+    let mut hit = false
     let mut k = sigEnd + 1
     while k < bodyClose {
         if tk_text(toks: read toks, i: read k) == "ResourcePool" {
@@ -2789,14 +2811,27 @@ fn fn_has_lazy_capture_bad(toks: read List<Tok>, start: read Int) -> Bool {
                                         }
                                     }
                                 }
+                                let mut declaredInside = Set.new<String>()
+                                let mut d = bodyStart
+                                while d < bodyEnd {
+                                    if (is_kw_text(toks: read toks, i: read d, word: read "let") || is_kw_text(toks: read toks, i: read d, word: read "local")) {
+                                        let mut dn = d + 1
+                                        if is_kw_text(toks: read toks, i: read dn, word: read "mut") { dn = dn + 1 }
+                                        if is_ident_tok(toks: read toks, i: read dn) {
+                                            Set.insert<String>(set: mut declaredInside, value: read tk_text(toks: read toks, i: read dn))
+                                        }
+                                    }
+                                    d = d + 1
+                                }
                                 let mut m = bodyStart
                                 while m < bodyEnd {
                                     // a real capture is a value, not an argument label (`host:`) or a
                                     // field/method access base (`x.f`)
                                     if is_ident_tok(toks: read toks, i: read m) && at_symbol(toks: read toks, i: read (m + 1), code: read SYM_COLON) == false && at_symbol(toks: read toks, i: read (m - 1), code: read SYM_DOT) == false {
                                         let nm = tk_text(toks: read toks, i: read m)
-                                        if (Set.contains<String>(set: read nonOwned, value: read nm) || Set.contains<String>(set: read letImmut, value: read nm) || Set.contains<String>(set: read letMut, value: read nm)) && Set.contains<String>(set: read cparams, value: read nm) == false {
-                                            return true
+                                        if (Set.contains<String>(set: read nonOwned, value: read nm) || Set.contains<String>(set: read letImmut, value: read nm) || Set.contains<String>(set: read letMut, value: read nm)) && Set.contains<String>(set: read cparams, value: read nm) == false && Set.contains<String>(set: read declaredInside, value: read nm) == false {
+                                            List.push<Int>(list: mut out, value: read m)
+                                            hit = true
                                         }
                                     }
                                     m = m + 1
@@ -2809,7 +2844,7 @@ fn fn_has_lazy_capture_bad(toks: read List<Tok>, start: read Int) -> Bool {
         }
         k = k + 1
     }
-    return false
+    return hit
 }
 
 // The container head immediately enclosing the type-arg at `pos` (ident before the opening `<` of
@@ -4030,7 +4065,7 @@ fn fn_has_fresh_return_bad(toks: read List<Tok>, start: read Int, handleFields: 
 // struct-field colons (`{x: 1}` — inside `{}`, depth>0), nested-call labels, and
 // typed closure params. Positional duplicates (same param filled twice without a
 // label) need callee resolution and are left as a safe false-negative.
-fn call_has_dup_arg(toks: read List<Tok>, open: read Int, close: read Int) -> Bool {
+fn collect_call_dup_arg_tokens(toks: read List<Tok>, open: read Int, close: read Int, out: mut List<Int>) -> Bool {
     let mut seen = Set<String>.new()
     let mut dup = false
     let mut depth = 0
@@ -4040,6 +4075,7 @@ fn call_has_dup_arg(toks: read List<Tok>, open: read Int, close: read Int) -> Bo
         if depth == 0 && atArgStart && is_ident_tok(toks: read toks, i: read k) && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_COLON) {
             let label = tk_text(toks: read toks, i: read k)
             if Set.contains<String>(set: read seen, value: read label) {
+                List.push<Int>(list: mut out, value: read k)
                 dup = true
             } else {
                 Set.insert<String>(set: mut seen, value: read label)
@@ -4061,7 +4097,7 @@ fn call_has_dup_arg(toks: read List<Tok>, open: read Int, close: read Int) -> Bo
 // RS0205 over one fn body: any `(...)` whose arg list repeats a label. Runs on every
 // paren (grouping parens carry no labels, so this is safe); cost is O(tokens * depth),
 // fine for the shallow call nesting in real code.
-fn fn_has_dup_arg(toks: read List<Tok>, start: read Int) -> Bool {
+fn collect_fn_dup_arg_tokens(toks: read List<Tok>, start: read Int, out: mut List<Int>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
     if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
@@ -4073,7 +4109,7 @@ fn fn_has_dup_arg(toks: read List<Tok>, start: read Int) -> Bool {
         if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) {
             let close = find_matching(toks: read toks, open: read k, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
             if close >= 0 {
-                if call_has_dup_arg(toks: read toks, open: read k, close: read close) { hit = true }
+                if collect_call_dup_arg_tokens(toks: read toks, open: read k, close: read close, out: mut out) { hit = true }
             }
         }
         k = k + 1
@@ -7066,7 +7102,7 @@ fn enclosing_is_weak_upgrade(toks: read List<Tok>, argStart: read Int, bodyOpen:
     return result
 }
 
-fn fn_has_weak_field_read(toks: read List<Tok>, start: read Int, weakKeys: read Set<String>) -> Bool {
+fn collect_fn_weak_field_read_tokens(toks: read List<Tok>, start: read Int, weakKeys: read Set<String>, out: mut List<Int>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
     let popen = dotted_end(toks: read toks, i: read ns)
     if at_symbol(toks: read toks, i: read popen, code: read SYM_LPAREN) == false { return false }
@@ -7086,7 +7122,10 @@ fn fn_has_weak_field_read(toks: read List<Tok>, start: read Int, weakKeys: read 
                     let rtype = param_type_root(toks: read toks, open: read popen, close: read pclose, name: read tk_text(toks: read toks, i: read (k + 1)))
                     if String.len(value: read rtype) > 0 {
                         if Set.contains<String>(set: read weakKeys, value: read field_key(typeName: read rtype, field: read tk_text(toks: read toks, i: read (de - 1)))) {
-                            if enclosing_is_weak_upgrade(toks: read toks, argStart: read k, bodyOpen: read sigEnd) == false { hit = true }
+                            if enclosing_is_weak_upgrade(toks: read toks, argStart: read k, bodyOpen: read sigEnd) == false {
+                                List.push<Int>(list: mut out, value: read (k + 1))
+                                hit = true
+                            }
                         }
                     }
                 }
@@ -7097,7 +7136,7 @@ fn fn_has_weak_field_read(toks: read List<Tok>, start: read Int, weakKeys: read 
     return hit
 }
 
-fn has_weak_field_read(toks: read List<Tok>) -> Bool {
+fn collect_weak_field_read_tokens(toks: read List<Tok>, out: mut List<Int>) -> Bool {
     let weakKeys = collect_modifier_field_keys(toks: read toks, modifier: read "weak")
     let ntok = List.len(list: read toks)
     let mut i = 0
@@ -7120,7 +7159,7 @@ fn has_weak_field_read(toks: read List<Tok>) -> Bool {
                 if r < 0 {
                     running = false
                 } else {
-                    if fn_has_weak_field_read(toks: read toks, start: read i, weakKeys: read weakKeys) { hit = true }
+                    if collect_fn_weak_field_read_tokens(toks: read toks, start: read i, weakKeys: read weakKeys, out: mut out) { hit = true }
                     i = r
                 }
             } else {
@@ -7145,7 +7184,7 @@ fn value_is_weak_producing(toks: read List<Tok>, v: read Int) -> Bool {
 
 // One simple-name call [open,close]: a named arg for a `weak` field of `callee` whose
 // value is not weak-producing.
-fn call_weak_field_bad(toks: read List<Tok>, callee: read String, open: read Int, close: read Int, weakKeys: read Set<String>) -> Bool {
+fn collect_call_weak_field_bad_tokens(toks: read List<Tok>, callee: read String, open: read Int, close: read Int, weakKeys: read Set<String>, out: mut List<Int>) -> Bool {
     let mut depth = 0
     let mut atArgStart = true
     let mut k = open + 1
@@ -7153,7 +7192,10 @@ fn call_weak_field_bad(toks: read List<Tok>, callee: read String, open: read Int
     while k < close {
         if depth == 0 && atArgStart && is_ident_tok(toks: read toks, i: read k) && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_COLON) {
             if Set.contains<String>(set: read weakKeys, value: read field_key(typeName: read callee, field: read tk_text(toks: read toks, i: read k))) {
-                if value_is_weak_producing(toks: read toks, v: read (k + 2)) == false { hit = true }
+                if value_is_weak_producing(toks: read toks, v: read (k + 2)) == false {
+                    List.push<Int>(list: mut out, value: read (k + 2))
+                    hit = true
+                }
             }
         }
         atArgStart = false
@@ -7170,7 +7212,7 @@ fn call_weak_field_bad(toks: read List<Tok>, callee: read String, open: read Int
 }
 
 // RS0904 over the file: any constructor call with a bad weak-field initializer.
-fn has_weak_field_bad_init(toks: read List<Tok>) -> Bool {
+fn collect_weak_field_bad_init_tokens(toks: read List<Tok>, out: mut List<Int>) -> Bool {
     let weakKeys = collect_modifier_field_keys(toks: read toks, modifier: read "weak")
     let ntok = List.len(list: read toks)
     let mut k = 1
@@ -7179,7 +7221,7 @@ fn has_weak_field_bad_init(toks: read List<Tok>) -> Bool {
         if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) && is_ident_tok(toks: read toks, i: read (k - 1)) && at_symbol(toks: read toks, i: read (k - 2), code: read SYM_DOT) == false {
             let close = find_matching(toks: read toks, open: read k, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
             if close >= 0 {
-                if call_weak_field_bad(toks: read toks, callee: read tk_text(toks: read toks, i: read (k - 1)), open: read k, close: read close, weakKeys: read weakKeys) { hit = true }
+                if collect_call_weak_field_bad_tokens(toks: read toks, callee: read tk_text(toks: read toks, i: read (k - 1)), open: read k, close: read close, weakKeys: read weakKeys, out: mut out) { hit = true }
             }
         }
         k = k + 1
@@ -9445,6 +9487,38 @@ fn operand_type_cp(toks: read List<Tok>, s: read Int, e: read Int, cptypes: read
     return return_actual_type(toks: read toks, s0: read s, e: read e, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
 }
 
+fn type_is_numeric(ty: read String) -> Bool {
+    let root = str_type_root(s: read ty)
+    return root == "Int" || root == "Int8" || root == "Int16" || root == "Int32" || root == "Int64" || root == "UInt" || root == "UInt8" || root == "UInt16" || root == "UInt32" || root == "UInt64" || root == "Float" || root == "Float32" || root == "Float64"
+}
+
+fn op_is_arithmetic(toks: read List<Tok>, op: read Int, end: read Int) -> Bool {
+    return op_matches_tier(toks: read toks, i: read op, end: read end, tier: read 3) || op_matches_tier(toks: read toks, i: read op, end: read end, tier: read 4) || op_matches_tier(toks: read toks, i: read op, end: read end, tier: read 5) || op_matches_tier(toks: read toks, i: read op, end: read end, tier: read 7) || op_matches_tier(toks: read toks, i: read op, end: read end, tier: read 8) || op_matches_tier(toks: read toks, i: read op, end: read end, tier: read 9)
+}
+
+fn collect_operator_overloads_in_expr(toks: read List<Tok>, start: read Int, end: read Int, popen: read Int, pclose: read Int, bodyOpen: read Int, fnIdx: read Map<String, Int>, locals: read Map<String, List<Int>>, out: mut List<Int>) -> Bool {
+    if start >= end { return false }
+    let op = find_binop(toks: read toks, start: read start, end: read end)
+    if op < 0 { return false }
+    let width = binop_width_at(toks: read toks, i: read op, end: read end)
+    if op <= start || (op + width) >= end { return false }
+    let noCp = Map<String, String>.new()
+    let lt = operand_type_cp(toks: read toks, s: read start, e: read op, cptypes: read noCp, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
+    let rt = operand_type_cp(toks: read toks, s: read (op + width), e: read end, cptypes: read noCp, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
+    let mut hit = false
+    if op_is_arithmetic(toks: read toks, op: read op, end: read end) {
+        let leftBad = String.len(value: read lt) > 0 && str_is_unresolved_generic(s: read lt) == false && type_is_numeric(ty: read lt) == false
+        let rightBad = String.len(value: read rt) > 0 && str_is_unresolved_generic(s: read rt) == false && type_is_numeric(ty: read rt) == false
+        if leftBad || rightBad {
+            List.push<Int>(list: mut out, value: read op)
+            hit = true
+        }
+    }
+    if collect_operator_overloads_in_expr(toks: read toks, start: read start, end: read op, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals, out: mut out) { hit = true }
+    if collect_operator_overloads_in_expr(toks: read toks, start: read (op + width), end: read end, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals, out: mut out) { hit = true }
+    return hit
+}
+
 fn operator_type_bad(toks: read List<Tok>, start: read Int, end: read Int, cptypes: read Map<String, String>, popen: read Int, pclose: read Int, bodyOpen: read Int, fnIdx: read Map<String, Int>, locals: read Map<String, List<Int>>) -> Bool {
     if start >= end { return false }
     let op = find_binop(toks: read toks, start: read start, end: read end)
@@ -9879,6 +9953,59 @@ fn has_operator_type_mismatch(toks: read List<Tok>) -> Bool {
             } else {
                 i = i + 1
             }
+        }
+    }
+    return hit
+}
+
+fn collect_fn_operator_overload_tokens(toks: read List<Tok>, start: read Int, model: read FileTypeModel, out: mut List<Int>) -> Bool {
+    let body = build_body_type_model(toks: read toks, fnStart: read start)
+    if body_type_model_ok(body: read body) == false { return false }
+    let mut i = body.bodyOpen + 1
+    let mut hit = false
+    while i < body.bodyClose {
+        if is_kw_text(toks: read toks, i: read i, word: read "if") || is_kw_text(toks: read toks, i: read i, word: read "while") {
+            let lo = i + 1
+            let ee = cond_expr_end(toks: read toks, start: read lo, limit: read body.bodyClose)
+            if ee > lo {
+                if collect_operator_overloads_in_expr(toks: read toks, start: read lo, end: read ee, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals, out: mut out) { hit = true }
+            }
+        } else if is_kw_text(toks: read toks, i: read i, word: read "let") || is_kw_text(toks: read toks, i: read i, word: read "local") {
+            let se = next_line_or_block_end(toks: read toks, start: read i, end: read body.bodyClose)
+            let eq = find_top_sym(toks: read toks, start: read (i + 1), end: read se, code: read SYM_EQ)
+            if eq >= 0 {
+                let vs = eq + 1
+                let ee = stmt_expr_end(toks: read toks, start: read vs, end: read body.bodyClose)
+                if ee > vs {
+                    if collect_operator_overloads_in_expr(toks: read toks, start: read vs, end: read ee, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals, out: mut out) { hit = true }
+                }
+            }
+        } else if is_kw_text(toks: read toks, i: read i, word: read "return") {
+            let vs = i + 1
+            let ee = stmt_expr_end(toks: read toks, start: read vs, end: read body.bodyClose)
+            if ee > vs {
+                if collect_operator_overloads_in_expr(toks: read toks, start: read vs, end: read ee, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals, out: mut out) { hit = true }
+            }
+        }
+        i = i + 1
+    }
+    return hit
+}
+
+fn collect_operator_overload_tokens(toks: read List<Tok>, out: mut List<Int>) -> Bool {
+    let ntok = List.len(list: read toks)
+    let model = build_file_type_model(toks: read toks)
+    let mut i = 0
+    let mut hit = false
+    while i < ntok {
+        let cls = classify_top(toks: read toks, i: read i)
+        if starts_fn_like(toks: read toks, i: read i, isPub: read cls.isPub) {
+            let r = parse_function_decl(toks: read toks, i: read i)
+            if r < 0 { return hit }
+            if collect_fn_operator_overload_tokens(toks: read toks, start: read i, model: read model, out: mut out) { hit = true }
+            i = r
+        } else {
+            i = i + 1
         }
     }
     return hit
@@ -11313,15 +11440,20 @@ fn main() -> Unit {
     let bindTypeMismatch = has_binding_type_mismatch(toks: read toks)
     // RS0210: operator-type mismatch.
     let opTypeMismatch = has_operator_type_mismatch(toks: read toks)
+    // RS1001: arithmetic or bitwise operator with a known non-numeric operand.
+    let mut operatorOverloadTokens = List<Int>.new()
+    let operatorOverload = collect_operator_overload_tokens(toks: read toks, out: mut operatorOverloadTokens)
     // RS0209: control-flow type mismatch.
     let cfTypeMismatch = has_control_flow_mismatch(toks: read toks)
     // RS0901: `take` of a `handle` field.
     let mut takeHandleTokens = List<Int>.new()
     let takeHandle = collect_take_handle_field_tokens(toks: read toks, out: mut takeHandleTokens)
     // RS0904: a weak field initialized without Weak.from/downgrade.
-    let weakInit = has_weak_field_bad_init(toks: read toks)
+    let mut weakInitTokens = List<Int>.new()
+    let weakInit = collect_weak_field_bad_init_tokens(toks: read toks, out: mut weakInitTokens)
     // RS0903: reading a weak field without Weak.upgrade.
-    let weakRead = has_weak_field_read(toks: read toks)
+    let mut weakReadTokens = List<Int>.new()
+    let weakRead = collect_weak_field_read_tokens(toks: read toks, out: mut weakReadTokens)
     // RS0101: feature-gating. Declared features (pre-pass, order-independent) and
     // whole-file construct probes for local/async/unsafe; native is tracked in the
     // fn walk below (the missing-effect source fires even when native is declared).
@@ -11336,8 +11468,10 @@ fn main() -> Unit {
     let mut missingDataEffect = false
     // RS0034: a bare Ok/Err/None bound to an unused, unannotated name.
     let mut uninferable = false
+    let mut uninferableTokens = List<Int>.new()
     // RS0311: reassigning an immutable `let` local.
     let mut immutableAssign = false
+    let mut immutableAssignTokens = List<Int>.new()
     let mut manageNonLocal = false
     let mut takeNonLocal = false
     let mut managedToLocal = false
@@ -11352,6 +11486,7 @@ fn main() -> Unit {
     let mut closureCapture0801 = false
     let mut closureCapture0804 = false
     let mut lazyCaptureBad = false
+    let mut lazyCaptureTokens = List<Int>.new()
     let mut noescapeEscape = false
     let mut localClosureEscape = false
     let freshFnReg = collect_fresh_fns(toks: read toks)
@@ -11379,6 +11514,7 @@ fn main() -> Unit {
     let indexAssignBad = has_index_assign_non_list(toks: read toks)
     // RS0205: a call that repeats a named argument.
     let mut dupArg = false
+    let mut dupArgTokens = List<Int>.new()
     let methodNames = collect_method_names(toks: read toks)
     let mut i = 0
     let mut running = true
@@ -11556,8 +11692,8 @@ fn main() -> Unit {
                     if fn_invalid_try(toks: read toks, start: read i, declared: read declared, allFns: read allFns) { invalidTry = true }
                     if fn_has_unnamed_arg(toks: read toks, start: read i, pubFns: read pubFns, dottedFns: read dottedFns) { unnamedArg = true }
                     if fn_data_effect_bad(toks: read toks, start: read i, declared: read declared, methodNames: read methodNames) { missingDataEffect = true }
-                    if fn_has_uninferable_binding(toks: read toks, start: read i) { uninferable = true }
-                    if fn_has_immutable_assign(toks: read toks, start: read i) { immutableAssign = true }
+                    if collect_fn_uninferable_binding_tokens(toks: read toks, start: read i, out: mut uninferableTokens) { uninferable = true }
+                    if collect_fn_invalid_assignment_tokens(toks: read toks, start: read i, out: mut immutableAssignTokens) { immutableAssign = true }
                     if fn_manage_take_bad(toks: read toks, start: read i, keyword: read "manage") { manageNonLocal = true }
                     if fn_manage_take_bad(toks: read toks, start: read i, keyword: read "take") { takeNonLocal = true }
                     if fn_has_managed_to_local(toks: read toks, start: read i, handleFields: read handleFieldNames) { managedToLocal = true }
@@ -11572,14 +11708,14 @@ fn main() -> Unit {
                     if bit_set(mask: read pcMask, bitval: read 8) { placeConflict0302 = true }
                     if bit_set(mask: read pcMask, bitval: read 16) { placeConflict0304 = true }
                     if fn_has_fresh_return_bad(toks: read toks, start: read i, handleFields: read handleFieldNames, retains: read retainsReg, freshFns: read freshFnReg) { freshReturnBad = true }
-                    if fn_has_lazy_capture_bad(toks: read toks, start: read i) { lazyCaptureBad = true }
+                    if collect_fn_lazy_capture_tokens(toks: read toks, start: read i, out: mut lazyCaptureTokens) { lazyCaptureBad = true }
                     if fn_noescape_escape(toks: read toks, start: read i, noescape: read noescapeReg) { noescapeEscape = true }
                     if fn_local_closure_escape(toks: read toks, start: read i, noescape: read noescapeReg) { localClosureEscape = true }
                     let ccMask = fn_has_closure_capture_bad(toks: read toks, start: read i, retains: read retainsReg, noescape: read noescapeReg)
                     if bit_set(mask: read ccMask, bitval: read 1) { closureCapture0801 = true }
                     if bit_set(mask: read ccMask, bitval: read 2) { closureCapture0804 = true }
                     if fn_has_assign_type_mismatch(toks: read toks, start: read i) { assignTypeMismatch = true }
-                    if fn_has_dup_arg(toks: read toks, start: read i) { dupArg = true }
+                    if collect_fn_dup_arg_tokens(toks: read toks, start: read i, out: mut dupArgTokens) { dupArg = true }
                     if fn_has_fd_surface(toks: read toks, start: read i) { fdSurface = true }
                     // RS0027: an unknown protocol in this fn's generic bounds.
                     if generics_unknown_protocol(toks: read toks, nameEnd: read dotted_end(toks: read toks, i: read ns), protocols: read protocols) { unknownProtocol = true }
@@ -11638,6 +11774,9 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_records(code: read "RS0017", toks: read toks, tokenIndices: read duplicateFeatureTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0028", toks: read toks, tokenIndices: read invalidSelfTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0033", toks: read toks, tokenIndices: read outOfRangeIntTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0034", toks: read toks, tokenIndices: read uninferableTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0205", toks: read toks, tokenIndices: read dupArgTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0311", toks: read toks, tokenIndices: read immutableAssignTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0212", toks: read toks, tokenIndices: read resourceDeriveTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0306", toks: read toks, tokenIndices: read localClassTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0701", toks: read toks, tokenIndices: read resourceFieldTokens)
@@ -11647,11 +11786,15 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_records(code: read "RS0707", toks: read toks, tokenIndices: read factoryContractTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0709", toks: read toks, tokenIndices: read leaseConflictTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0710", toks: read toks, tokenIndices: read discardNonLeaseTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0711", toks: read toks, tokenIndices: read lazyCaptureTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0902", toks: read toks, tokenIndices: read invalidWeakTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0901", toks: read toks, tokenIndices: read takeHandleTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0903", toks: read toks, tokenIndices: read weakReadTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0904", toks: read toks, tokenIndices: read weakInitTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS1003", toks: read toks, tokenIndices: read ownStructTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS1002", toks: read toks, tokenIndices: read implicitConvTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS1004", toks: read toks, tokenIndices: read surfaceRefTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS1001", toks: read toks, tokenIndices: read operatorOverloadTokens)
         if emitted == 0 { Log.write(message: read "CLEAN") }
         return Unit
     }
@@ -11997,6 +12140,9 @@ fn main() -> Unit {
     if implicitConv {
         Log.write(message: read "RS1002")
     }
+    if operatorOverload {
+        Log.write(message: read "RS1001")
+    }
     if retTypeMismatch {
         Log.write(message: read "RS0208")
     }
@@ -12025,7 +12171,7 @@ fn main() -> Unit {
     if featureViol {
         Log.write(message: read "RS0101")
     }
-    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || unsupportedSyntax || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || useAfterManage || retainedLocal || placeConflict0303 || placeConflict0305 || placeConflict0309 || placeConflict0302 || placeConflict0304 || freshReturnBad || closureCapture0801 || closureCapture0804 || captureContract || resourcePoolTypeBad || resourceGenericBad || lazyCaptureBad || resourceEscape || noescapeEscape || localClosureEscape || missingTry || fallibleFactory || leaseConflict || discardNonLease || nonTransferPayload || takeHandle || weakInit || weakRead
+    let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || unsupportedSyntax || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || operatorOverload || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || useAfterManage || retainedLocal || placeConflict0303 || placeConflict0305 || placeConflict0309 || placeConflict0302 || placeConflict0304 || freshReturnBad || closureCapture0801 || closureCapture0804 || captureContract || resourcePoolTypeBad || resourceGenericBad || lazyCaptureBad || resourceEscape || noescapeEscape || localClosureEscape || missingTry || fallibleFactory || leaseConflict || discardNonLease || nonTransferPayload || takeHandle || weakInit || weakRead
     if anyDiag == false {
         Log.write(message: read "CLEAN")
     }
