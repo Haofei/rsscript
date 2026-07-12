@@ -1207,6 +1207,28 @@ fn exercise() -> Unit {
 }
 
 #[test]
+fn checker_rs0201_structured_multiset_parity() {
+    let source = r#"pub fn publish(first: Int, second: Int) -> Unit {
+    return Unit
+}
+
+fn exercise() -> Unit {
+    publish(1, 2)
+    publish(first: 3, 4)
+    publish(first: 5, second: 6)
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0201.rss", source, "RS0201");
+    assert_eq!(
+        oracle.len(),
+        3,
+        "fixture must exercise each unnamed argument"
+    );
+    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0201 structured diagnostics diverged");
+}
+
+#[test]
 fn checker_rs0212_structured_multiset_parity() {
     let source = r#"resource Connection derives(Clone, Eq, Hash) {
     id: Int

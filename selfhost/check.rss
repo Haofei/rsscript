@@ -10545,7 +10545,7 @@ fn seg_is_unnamed(toks: read List<Tok>, s: read Int, e: read Int) -> Bool {
 
 // True iff the arg list [op+1, close) has any unnamed argument. A single trailing
 // empty segment (trailing comma) does NOT count; empty leading/middle segments do.
-fn args_have_unnamed(toks: read List<Tok>, op: read Int, close: read Int) -> Bool {
+fn collect_unnamed_arg_tokens(toks: read List<Tok>, op: read Int, close: read Int, out: mut List<Int>) -> Bool {
     let mut k = op + 1
     let mut depth = 0
     let mut angle = 0
@@ -10566,20 +10566,26 @@ fn args_have_unnamed(toks: read List<Tok>, op: read Int, close: read Int) -> Boo
         } else if depth == 0 && angle == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_PIPE) {
             inPipe = inPipe == false
         } else if depth == 0 && angle == 0 && inPipe == false && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
-            if seg_is_unnamed(toks: read toks, s: read segStart, e: read k) { hit = true }
+            if seg_is_unnamed(toks: read toks, s: read segStart, e: read k) {
+                if segStart < k { List.push<Int>(list: mut out, value: read segStart) }
+                hit = true
+            }
             segStart = k + 1
         }
         k = k + 1
     }
     if segStart < close {
-        if seg_is_unnamed(toks: read toks, s: read segStart, e: read close) { hit = true }
+        if seg_is_unnamed(toks: read toks, s: read segStart, e: read close) {
+            List.push<Int>(list: mut out, value: read segStart)
+            hit = true
+        }
     }
     return hit
 }
 
 // RS0201 over a fn body [sigEnd+1, bodyClose): any resolved named-required call
 // site with an unnamed argument.
-fn fn_has_unnamed_arg(toks: read List<Tok>, start: read Int, pubFns: read Set<String>, dottedFns: read Set<String>) -> Bool {
+fn collect_fn_unnamed_arg_tokens(toks: read List<Tok>, start: read Int, pubFns: read Set<String>, dottedFns: read Set<String>, out: mut List<Int>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
     if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
@@ -10592,7 +10598,7 @@ fn fn_has_unnamed_arg(toks: read List<Tok>, start: read Int, pubFns: read Set<St
             if call_requires_named(toks: read toks, op: read op, pubFns: read pubFns, dottedFns: read dottedFns) {
                 let close = find_matching(toks: read toks, open: read op, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
                 if close >= 0 && close <= bodyClose {
-                    if args_have_unnamed(toks: read toks, op: read op, close: read close) { hit = true }
+                    if collect_unnamed_arg_tokens(toks: read toks, op: read op, close: read close, out: mut out) { hit = true }
                 }
             }
         }
@@ -11403,6 +11409,7 @@ fn main() -> Unit {
     let mut dottedFns = Set<String>.new()
     collect_call_fn_sigs(toks: read toks, pubFns: mut pubFns, dottedFns: mut dottedFns)
     let mut unnamedArg = false
+    let mut unnamedArgTokens = List<Int>.new()
     // Signature table (cross-function): same-file async fn names, for RS0022.
     let mut asyncFns = Set<String>.new()
     collect_rs0009(toks: read toks, resources: mut resources, sumVariants: mut sumVariants, pureFns: mut pureFns, allFns: mut allFns, noBlockFns: mut noBlockFns, noPanicFns: mut noPanicFns, asyncFns: mut asyncFns)
@@ -11719,7 +11726,7 @@ fn main() -> Unit {
                     if fn_has_nonexhaustive_match(toks: read toks, start: read i, declared: read declared, allFns: read allFns) { nonExhaustive = true }
                     if fn_has_bad_await(toks: read toks, start: read i) { badAwait = true }
                     if fn_invalid_try(toks: read toks, start: read i, declared: read declared, allFns: read allFns) { invalidTry = true }
-                    if fn_has_unnamed_arg(toks: read toks, start: read i, pubFns: read pubFns, dottedFns: read dottedFns) { unnamedArg = true }
+                    if collect_fn_unnamed_arg_tokens(toks: read toks, start: read i, pubFns: read pubFns, dottedFns: read dottedFns, out: mut unnamedArgTokens) { unnamedArg = true }
                     if fn_data_effect_bad(toks: read toks, start: read i, declared: read declared, methodNames: read methodNames) { missingDataEffect = true }
                     if collect_fn_uninferable_binding_tokens(toks: read toks, start: read i, out: mut uninferableTokens) { uninferable = true }
                     if collect_fn_invalid_assignment_tokens(toks: read toks, start: read i, out: mut immutableAssignTokens) { immutableAssign = true }
@@ -11805,6 +11812,7 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_records(code: read "RS0033", toks: read toks, tokenIndices: read outOfRangeIntTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0034", toks: read toks, tokenIndices: read uninferableTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0205", toks: read toks, tokenIndices: read dupArgTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0201", toks: read toks, tokenIndices: read unnamedArgTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0311", toks: read toks, tokenIndices: read immutableAssignTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0313", toks: read toks, tokenIndices: read assignTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0312", toks: read toks, tokenIndices: read indexAssignBadTokens)
