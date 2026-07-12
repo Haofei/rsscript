@@ -6290,7 +6290,7 @@ fn fn_guarantee_call_bad(toks: read List<Tok>, start: read Int, effName: read St
 
 // RS0014: a fn declaring effects(noalloc) whose body constructs a value (an
 // unqualified call to a declared type) or uses `manage`.
-fn fn_noalloc_alloc(toks: read List<Tok>, start: read Int, declared: read Set<String>) -> Bool {
+fn collect_fn_noalloc_alloc_sites(source: read String, toks: read List<Tok>, start: read Int, declared: read Set<String>, out: mut List<DiagnosticSite>) -> Bool {
     if fn_has_named_effect(toks: read toks, start: read start, effName: read "noalloc") == false { return false }
     let ns = fn_name_start(toks: read toks, i: read start)
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
@@ -6301,12 +6301,19 @@ fn fn_noalloc_alloc(toks: read List<Tok>, start: read Int, declared: read Set<St
     let mut hit = false
     while k < bodyClose {
         if tk_text(toks: read toks, i: read k) == "manage" {
+            List.push<DiagnosticSite>(list: mut out, value: read token_range_diagnostic_site(source: read source, toks: read toks, start: read k, endInclusive: read k))
             hit = true
         } else if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) && tk_kind(toks: read toks, i: read (k - 1)) == TOK_IDENT {
             let name = tk_text(toks: read toks, i: read (k - 1))
             let qualified = at_symbol(toks: read toks, i: read (k - 2), code: read SYM_DOT) && is_ident_tok(toks: read toks, i: read (k - 3))
             if qualified == false {
-                if Set.contains<String>(set: read declared, value: read name) { hit = true }
+                if Set.contains<String>(set: read declared, value: read name) {
+                    let close = find_matching(toks: read toks, open: read k, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+                    if close > 0 {
+                        List.push<DiagnosticSite>(list: mut out, value: read token_range_diagnostic_site(source: read source, toks: read toks, start: read (k - 1), endInclusive: read (k - 1)))
+                        hit = true
+                    }
+                }
             }
         }
         k = k + 1
@@ -11478,6 +11485,7 @@ fn main() -> Unit {
     let protocols = collect_protocols(toks: read toks)
     // RS0014/0018/0019: runtime-guarantee body violations.
     let mut noallocAlloc = false
+    let mut noallocAllocSites = List<DiagnosticSite>.new()
     let mut noBlockCall = false
     let mut noPanicCall = false
     // RS0024: forward-reference-tolerant known-type set for the whole file.
@@ -11849,7 +11857,7 @@ fn main() -> Unit {
                     // RS0027: an unknown protocol in this fn's generic bounds.
                     if generics_unknown_protocol(toks: read toks, nameEnd: read dotted_end(toks: read toks, i: read ns), protocols: read protocols) { unknownProtocol = true }
                     // RS0014/0018/0019: runtime-guarantee body violations.
-                    if fn_noalloc_alloc(toks: read toks, start: read i, declared: read declared) { noallocAlloc = true }
+                    if collect_fn_noalloc_alloc_sites(source: read source, toks: read toks, start: read i, declared: read declared, out: mut noallocAllocSites) { noallocAlloc = true }
                     if fn_guarantee_call_bad(toks: read toks, start: read i, effName: read "no_block", allFns: read allFns, guaranteeFns: read noBlockFns) { noBlockCall = true }
                     if fn_guarantee_call_bad(toks: read toks, start: read i, effName: read "no_panic", allFns: read allFns, guaranteeFns: read noPanicFns) { noPanicCall = true }
                     // RS0101: a fn with `effects(native)` (gated by the `native`
@@ -11906,6 +11914,7 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_records(code: read "RS0034", toks: read toks, tokenIndices: read uninferableTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0205", toks: read toks, tokenIndices: read dupArgTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0201", toks: read toks, tokenIndices: read unnamedArgTokens)
+        emitted = emitted + emit_diagnostic_sites(code: read "RS0014", sites: read noallocAllocSites)
         emitted = emitted + emit_diagnostic_records(code: read "RS0311", toks: read toks, tokenIndices: read immutableAssignTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0313", toks: read toks, tokenIndices: read assignTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0312", toks: read toks, tokenIndices: read indexAssignBadTokens)

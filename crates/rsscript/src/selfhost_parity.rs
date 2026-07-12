@@ -1083,6 +1083,7 @@ fn checker_rs0012_structured_multiset_parity() {
 {
     return Unit
 }
+
 "#;
     let oracle = checker_oracle_records("structured-rs0012.rss", source, "RS0012");
     assert_eq!(
@@ -1092,6 +1093,33 @@ fn checker_rs0012_structured_multiset_parity() {
     );
     let actual = run_cached_checker_records(source).expect("rss checker should emit records");
     assert_eq!(oracle, actual, "RS0012 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0014_structured_multiset_parity() {
+    let source = r#"features: local
+
+struct Pair {
+    left: Int
+    right: Int
+}
+
+fn build() -> Pair
+    effects(noalloc)
+{
+    local first = Pair(left: 1, right: 2)
+    local second = Pair(left: 3, right: 4)
+    return manage first
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0014.rss", source, "RS0014");
+    assert_eq!(
+        oracle.len(),
+        3,
+        "fixture must preserve constructor and manage allocation sites"
+    );
+    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0014 structured diagnostics diverged");
 }
 
 #[test]
