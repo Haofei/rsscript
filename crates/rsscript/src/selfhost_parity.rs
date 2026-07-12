@@ -1217,6 +1217,7 @@ fn checker_rs0028_structured_multiset_parity() {
     let source = r#"fn wrong(self: read String, other: Int, self: read String) -> Unit {
     return Unit
 }
+
 "#;
     let oracle = checker_oracle_records("structured-rs0028.rss", source, "RS0028");
     assert_eq!(
@@ -1226,6 +1227,26 @@ fn checker_rs0028_structured_multiset_parity() {
     );
     let actual = run_cached_checker_records(source).expect("rss checker should emit records");
     assert_eq!(oracle, actual, "RS0028 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0027_structured_multiset_parity() {
+    let source = r#"struct Box<T: MissingBoxProtocol> {
+    value: T
+}
+
+fn combine<A: MissingLeft, B: MissingRight>(left: read A, right: read B) -> Unit {
+    return Unit
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0027.rss", source, "RS0027");
+    assert_eq!(
+        oracle.len(),
+        3,
+        "fixture must preserve type and function generic-bound failures"
+    );
+    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0027 structured diagnostics diverged");
 }
 
 #[test]

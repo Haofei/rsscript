@@ -6200,7 +6200,7 @@ fn bound_unknown_protocol(toks: read List<Tok>, s: read Int, e: read Int, protoc
 
 // True if the generic clause opening at `nameEnd` (`<...>`) has a protocol bound
 // naming a protocol that is not visible.
-fn generics_unknown_protocol(toks: read List<Tok>, nameEnd: read Int, protocols: read Set<String>) -> Bool {
+fn collect_unknown_protocol_sites(source: read String, toks: read List<Tok>, nameEnd: read Int, protocols: read Set<String>, out: mut List<DiagnosticSite>) -> Bool {
     if at_symbol(toks: read toks, i: read nameEnd, code: read SYM_LANGLE) == false { return false }
     let close = find_matching(toks: read toks, open: read nameEnd, openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
     if close < 0 { return false }
@@ -6214,12 +6214,18 @@ fn generics_unknown_protocol(toks: read List<Tok>, nameEnd: read Int, protocols:
         } else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) || at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) {
             if depth > 0 { depth = depth - 1 }
         } else if depth == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
-            if bound_unknown_protocol(toks: read toks, s: read segStart, e: read k, protocols: read protocols) { hit = true }
+            if bound_unknown_protocol(toks: read toks, s: read segStart, e: read k, protocols: read protocols) {
+                List.push<DiagnosticSite>(list: mut out, value: read token_range_diagnostic_site(source: read source, toks: read toks, start: read segStart, endInclusive: read segStart))
+                hit = true
+            }
             segStart = k + 1
         }
         k = k + 1
     }
-    if bound_unknown_protocol(toks: read toks, s: read segStart, e: read close, protocols: read protocols) { hit = true }
+    if bound_unknown_protocol(toks: read toks, s: read segStart, e: read close, protocols: read protocols) {
+        List.push<DiagnosticSite>(list: mut out, value: read token_range_diagnostic_site(source: read source, toks: read toks, start: read segStart, endInclusive: read segStart))
+        hit = true
+    }
     return hit
 }
 
@@ -11488,6 +11494,7 @@ fn main() -> Unit {
     let mut firstPinnedLowered = Set<String>.new()
     // RS0027: an unknown protocol named by a generic bound.
     let mut unknownProtocol = false
+    let mut unknownProtocolSites = List<DiagnosticSite>.new()
     let protocols = collect_protocols(toks: read toks)
     // RS0014/0018/0019: runtime-guarantee body violations.
     let mut noallocAlloc = false
@@ -11733,7 +11740,7 @@ fn main() -> Unit {
                     }
                     if type_decl_unknown(toks: read toks, i: read i, r: read r, declared: read declared) { unknownType = true }
                     // RS0027: an unknown protocol in this type's generic bounds.
-                    if generics_unknown_protocol(toks: read toks, nameEnd: read dotted_end(toks: read toks, i: read ns), protocols: read protocols) { unknownProtocol = true }
+                    if collect_unknown_protocol_sites(source: read source, toks: read toks, nameEnd: read dotted_end(toks: read toks, i: read ns), protocols: read protocols, out: mut unknownProtocolSites) { unknownProtocol = true }
                     // RS0023: an `Fd`-typed field on a non-resource type. Resource
                     // types are the trusted internal boundary and are skipped.
                     if at_ident(toks: read toks, i: read (ns - 1), wid: read WORD_RESOURCE) == false {
@@ -11863,7 +11870,7 @@ fn main() -> Unit {
                     if collect_fn_dup_arg_tokens(toks: read toks, start: read i, out: mut dupArgTokens) { dupArg = true }
                     if fn_has_fd_surface(toks: read toks, start: read i) { fdSurface = true }
                     // RS0027: an unknown protocol in this fn's generic bounds.
-                    if generics_unknown_protocol(toks: read toks, nameEnd: read dotted_end(toks: read toks, i: read ns), protocols: read protocols) { unknownProtocol = true }
+                    if collect_unknown_protocol_sites(source: read source, toks: read toks, nameEnd: read dotted_end(toks: read toks, i: read ns), protocols: read protocols, out: mut unknownProtocolSites) { unknownProtocol = true }
                     // RS0014/0018/0019: runtime-guarantee body violations.
                     if collect_fn_noalloc_alloc_sites(source: read source, toks: read toks, start: read i, declared: read declared, out: mut noallocAllocSites) { noallocAlloc = true }
                     if collect_fn_guarantee_call_bad_sites(source: read source, toks: read toks, start: read i, effName: read "no_block", allFns: read allFns, guaranteeFns: read noBlockFns, out: mut noBlockCallSites) { noBlockCall = true }
@@ -11925,6 +11932,7 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_sites(code: read "RS0014", sites: read noallocAllocSites)
         emitted = emitted + emit_diagnostic_sites(code: read "RS0018", sites: read noBlockCallSites)
         emitted = emitted + emit_diagnostic_sites(code: read "RS0019", sites: read noPanicCallSites)
+        emitted = emitted + emit_diagnostic_sites(code: read "RS0027", sites: read unknownProtocolSites)
         emitted = emitted + emit_diagnostic_records(code: read "RS0311", toks: read toks, tokenIndices: read immutableAssignTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0313", toks: read toks, tokenIndices: read assignTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0312", toks: read toks, tokenIndices: read indexAssignBadTokens)
