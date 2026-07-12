@@ -1390,6 +1390,42 @@ fn exercise() -> Unit {
 }
 
 #[test]
+fn checker_rs0035_structured_multiset_parity() {
+    let source = r#"#lower_name("dup_symbol")
+fn first() -> Unit {
+    return Unit
+}
+
+#lower_name("dup_symbol")
+fn second() -> Unit {
+    return Unit
+}
+
+#lower_name("has-a-dash")
+fn invalid() -> Unit {
+    return Unit
+}
+
+#lower_name("plain")
+fn pinned_plain() -> Unit {
+    return Unit
+}
+
+fn plain() -> Unit {
+    return Unit
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0035.rss", source, "RS0035");
+    assert_eq!(
+        oracle.len(),
+        3,
+        "fixture must preserve pin collision, invalid pin, and pinned/default collision"
+    );
+    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0035 structured diagnostics diverged");
+}
+
+#[test]
 fn checker_rs0036_structured_multiset_parity() {
     let source = r#"features: async, native, local
 

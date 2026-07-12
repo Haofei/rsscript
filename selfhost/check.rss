@@ -11556,6 +11556,7 @@ fn main() -> Unit {
     let mut nonExhaustive = false
     // RS0035: an invalid `#lower_name` pin or a lowered-name collision.
     let mut lowerConflict = false
+    let mut lowerConflictTokens = List<Int>.new()
     let mut seenLowered = Set<String>.new()
     let mut firstPinnedLowered = Set<String>.new()
     // RS0027: an unknown protocol named by a generic bound.
@@ -11958,8 +11959,10 @@ fn main() -> Unit {
                         let pin = fn_lower_name_pin(toks: read toks, start: read i)
                         if is_valid_rust_ident(name: read pin) == false {
                             lowerConflict = true
+                            List.push<Int>(list: mut lowerConflictTokens, value: read i)
                         } else if Set.contains<String>(set: read seenLowered, value: read pin) {
                             lowerConflict = true
+                            List.push<Int>(list: mut lowerConflictTokens, value: read i)
                         } else {
                             Set.insert<String>(set: mut seenLowered, value: read pin)
                             Set.insert<String>(set: mut firstPinnedLowered, value: read pin)
@@ -11967,7 +11970,10 @@ fn main() -> Unit {
                     } else {
                         let lowered = default_lowered_name(name: read name)
                         if Set.contains<String>(set: read seenLowered, value: read lowered) {
-                            if Set.contains<String>(set: read firstPinnedLowered, value: read lowered) { lowerConflict = true }
+                            if Set.contains<String>(set: read firstPinnedLowered, value: read lowered) {
+                                lowerConflict = true
+                                List.push<Int>(list: mut lowerConflictTokens, value: read i)
+                            }
                         } else {
                             Set.insert<String>(set: mut seenLowered, value: read lowered)
                         }
@@ -12011,6 +12017,7 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_records(code: read "RS0029", toks: read toks, tokenIndices: read badAwaitTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0036", toks: read toks, tokenIndices: read nonTransferPayloadTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0037", toks: read toks, tokenIndices: read variantArityTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0035", toks: read toks, tokenIndices: read lowerConflictTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0311", toks: read toks, tokenIndices: read immutableAssignTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0313", toks: read toks, tokenIndices: read assignTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0312", toks: read toks, tokenIndices: read indexAssignBadTokens)
@@ -12182,7 +12189,7 @@ fn main() -> Unit {
     if fdSurface {
         Log.write(message: read "RS0023")
     }
-    if lowerConflict {
+    if lowerConflict && structured == false {
         Log.write(message: read "RS0035")
     }
     if unknownProtocol {
