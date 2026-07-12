@@ -1,8 +1,8 @@
 // Self-hosted package-contract checker — RS1301 frontier.
 //
-// Reads interface source as argv[0] and package source as argv[1]. Emits RS1301
-// when a public interface function is missing from source or has a different
-// canonical function signature; otherwise emits CLEAN.
+// Reads interface source as argv[0], package source as argv[1], and an optional
+// comma-separated native-binding symbol list as argv[2]. Emits RS1301 when the
+// interface and source package contracts differ; otherwise emits CLEAN.
 //
 // This is intentionally separate from check.rss: RS1301 is package-level, not a
 // single-source analyzer diagnostic.
@@ -81,22 +81,31 @@ struct PackageFnIndex {
     sigs: handle Map<String, String>
 }
 
-fn collect_package_functions(source: read String, requirePub: read Bool) -> PackageFnIndex {
+fn collect_package_functions(source: read String, sourceVisibility: read Bool) -> PackageFnIndex {
     let toks = tokenize(source: read source)
     let n = List.len(list: read toks)
     let mut names = List<String>.new()
     let mut sigs = Map<String, String>.new()
     let mut i = 0
     while i < n {
-        let isPub = at_ident(toks: read toks, i: read i, wid: read WORD_PUB)
-        let fnIdx = fn_token_index(toks: read toks, start: read i)
-        if fnIdx >= 0 && at_ident(toks: read toks, i: read fnIdx, wid: read WORD_FN) {
-            if requirePub == false || isPub {
+        let declKind = declaration_kind(toks: read toks, start: read i)
+        if declKind > 0 {
+            let declEnd = declaration_end(toks: read toks, start: read i, kind: read declKind)
+            if declEnd > i { i = declEnd } else { i = i + 1 }
+        } else {
+            let isPub = at_ident(toks: read toks, i: read i, wid: read WORD_PUB)
+            let fnIdx = fn_token_index(toks: read toks, start: read i)
+            if fnIdx >= 0 && at_ident(toks: read toks, i: read fnIdx, wid: read WORD_FN) {
+            if sourceVisibility == false || isPub {
                 let nameIdx = fnIdx + 1
                 if is_ident_tok(toks: read toks, i: read nameIdx) {
                     let name = dotted_name_text(toks: read toks, i: read nameIdx)
                     let end = function_signature_end(toks: read toks, start: read fnIdx)
-                    let sig = canonical_signature(toks: read toks, start: read i, end: read end)
+                    let mut contractStart = i
+                    if at_ident(toks: read toks, i: read contractStart, wid: read WORD_PUB) {
+                        contractStart = contractStart + 1
+                    }
+                    let sig = canonical_signature(toks: read toks, start: read contractStart, end: read end)
                     if Map.contains_key<String, String>(map: read sigs, key: read name) == false {
                         List.push<String>(list: mut names, value: read name)
                     }
@@ -108,16 +117,37 @@ fn collect_package_functions(source: read String, requirePub: read Bool) -> Pack
             } else {
                 i = i + 1
             }
-        } else {
-            i = i + 1
+            } else {
+                i = i + 1
+            }
         }
     }
     return PackageFnIndex(names: names, sigs: read sigs)
 }
 
-fn has_function_contract_mismatch(interfaceSource: read String, source: read String) -> Bool {
-    let interfaceFns = collect_package_functions(source: read interfaceSource, requirePub: read true)
-    let sourceFns = collect_package_functions(source: read source, requirePub: read true)
+fn comma_list_contains(values: read String, wanted: read String) -> Bool {
+    let parts = String.split(value: read values, delimiter: read ",")
+    let mut i = 0
+    while i < List.len(list: read parts) {
+        if List.get(list: read parts, index: read i) == wanted { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn signature_has_native(toks: read List<Tok>, start: read Int, end: read Int) -> Bool {
+    let mut i = start
+    while i < end {
+        if at_ident(toks: read toks, i: read i, wid: read WORD_NATIVE) { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn has_function_contract_mismatch(interfaceSource: read String, source: read String, nativeBindings: read String) -> Bool {
+    let interfaceFns = collect_package_functions(source: read interfaceSource, sourceVisibility: read false)
+    let sourceFns = collect_package_functions(source: read source, sourceVisibility: read true)
+    let interfaceToks = tokenize(source: read interfaceSource)
     let n = List.len(list: read interfaceFns.names)
     let mut i = 0
     let mut mismatch = false
@@ -125,7 +155,24 @@ fn has_function_contract_mismatch(interfaceSource: read String, source: read Str
         let name = List.get(list: read interfaceFns.names, index: read i)
         let want = Map.get_or_default<String, String>(map: read interfaceFns.sigs, key: read name, default: read "")
         let got = Map.get_or_default<String, String>(map: read sourceFns.sigs, key: read name, default: read "")
-        if got == "" || got != want {
+        if got == "" {
+            let mut nativeExempt = false
+            let mut j = 0
+            let tokenCount = List.len(list: read interfaceToks)
+            while j < tokenCount {
+                let fnIdx = fn_token_index(toks: read interfaceToks, start: read j)
+                if fnIdx >= 0 && dotted_name_text(toks: read interfaceToks, i: read (fnIdx + 1)) == name {
+                    let end = function_signature_end(toks: read interfaceToks, start: read fnIdx)
+                    nativeExempt = signature_has_native(toks: read interfaceToks, start: read j, end: read end)
+                    j = tokenCount
+                } else {
+                    j = j + 1
+                }
+            }
+            if nativeExempt == false || comma_list_contains(values: read nativeBindings, wanted: read name) == false {
+                mismatch = true
+            }
+        } else if got != want {
             mismatch = true
         }
         i = i + 1
@@ -133,10 +180,144 @@ fn has_function_contract_mismatch(interfaceSource: read String, source: read Str
     return mismatch
 }
 
+struct PackageDeclIndex {
+    keys: List<String>
+    contracts: handle Map<String, String>
+    opaqueTypes: handle Set<String>
+    typeHeaders: handle Map<String, String>
+}
+
+fn prefixed_key(prefix: read String, name: read String) -> String {
+    return String.concat(left: read String.concat(left: read prefix, right: read ":"), right: read name)
+}
+
+fn declaration_name_index(toks: read List<Tok>, start: read Int, kind: read Int) -> Int {
+    let mut i = start
+    if at_ident(toks: read toks, i: read i, wid: read WORD_PUB) { i = i + 1 }
+    if kind == 1 && at_ident(toks: read toks, i: read i, wid: read WORD_OPAQUE) { i = i + 1 }
+    if kind == 1 || kind == 2 || kind == 3 || kind == 4 || kind == 5 {
+        return i + 1
+    }
+    return -1
+}
+
+fn declaration_kind(toks: read List<Tok>, start: read Int) -> Int {
+    let mut i = start
+    if at_ident(toks: read toks, i: read i, wid: read WORD_PUB) { i = i + 1 }
+    if at_ident(toks: read toks, i: read i, wid: read WORD_OPAQUE) { return 1 }
+    if at_ident(toks: read toks, i: read i, wid: read WORD_STRUCT) || at_ident(toks: read toks, i: read i, wid: read WORD_CLASS) || at_ident(toks: read toks, i: read i, wid: read WORD_RESOURCE) { return 1 }
+    if at_ident(toks: read toks, i: read i, wid: read WORD_SUM) { return 2 }
+    if at_ident(toks: read toks, i: read i, wid: read WORD_TYPE) { return 3 }
+    if at_ident(toks: read toks, i: read i, wid: read WORD_CONST) { return 4 }
+    if at_ident(toks: read toks, i: read i, wid: read WORD_PROTOCOL) { return 5 }
+    if at_ident(toks: read toks, i: read i, wid: read WORD_IMPL) { return 6 }
+    return 0
+}
+
+fn declaration_end(toks: read List<Tok>, start: read Int, kind: read Int) -> Int {
+    if kind == 1 { return parse_type_decl(toks: read toks, i: read start) }
+    if kind == 2 { return parse_sum_decl(toks: read toks, i: read start) }
+    if kind == 3 { return parse_type_alias_decl(toks: read toks, i: read start) }
+    if kind == 4 { return parse_const_decl(toks: read toks, i: read start) }
+    if kind == 5 {
+        let mut i = start
+        if at_ident(toks: read toks, i: read i, wid: read WORD_PUB) { i = i + 1 }
+        return parse_protocol_decl(toks: read toks, i: read i)
+    }
+    if kind == 6 { return parse_impl_decl(toks: read toks, i: read start) }
+    return -1
+}
+
+fn declaration_key(toks: read List<Tok>, start: read Int, kind: read Int) -> String {
+    if kind == 6 {
+        let protocol = tk_text_at(toks: read toks, i: read (start + 1))
+        let mut i = start + 2
+        while at_ident(toks: read toks, i: read i, wid: read WORD_FOR) == false && i < List.len(list: read toks) { i = i + 1 }
+        let typeName = dotted_name_text(toks: read toks, i: read (i + 1))
+        return prefixed_key(prefix: read "impl", name: read String.concat(left: read String.concat(left: read protocol, right: read " for "), right: read typeName))
+    }
+    let nameIdx = declaration_name_index(toks: read toks, start: read start, kind: read kind)
+    let name = dotted_name_text(toks: read toks, i: read nameIdx)
+    if kind == 1 { return prefixed_key(prefix: read "type", name: read name) }
+    if kind == 2 { return prefixed_key(prefix: read "sum", name: read name) }
+    if kind == 3 { return prefixed_key(prefix: read "alias", name: read name) }
+    if kind == 4 { return prefixed_key(prefix: read "const", name: read name) }
+    return prefixed_key(prefix: read "protocol", name: read name)
+}
+
+fn collect_package_declarations(source: read String, sourceVisibility: read Bool) -> PackageDeclIndex {
+    let toks = tokenize(source: read source)
+    let n = List.len(list: read toks)
+    let mut keys = List<String>.new()
+    let mut contracts = Map<String, String>.new()
+    let mut opaqueTypes = Set<String>.new()
+    let mut typeHeaders = Map<String, String>.new()
+    let mut i = 0
+    while i < n {
+        let kind = declaration_kind(toks: read toks, start: read i)
+        let isPub = at_ident(toks: read toks, i: read i, wid: read WORD_PUB)
+        let include = kind > 0 && (sourceVisibility == false || isPub || kind == 5 || kind == 6)
+        if include {
+            let end = declaration_end(toks: read toks, start: read i, kind: read kind)
+            if end > i {
+                let key = declaration_key(toks: read toks, start: read i, kind: read kind)
+                if Map.contains_key<String, String>(map: read contracts, key: read key) == false {
+                    List.push<String>(list: mut keys, value: read key)
+                }
+                let mut contractStart = i
+                if at_ident(toks: read toks, i: read contractStart, wid: read WORD_PUB) { contractStart = contractStart + 1 }
+                Map.insert<String, String>(map: mut contracts, key: read key, value: read canonical_signature(toks: read toks, start: read contractStart, end: read end))
+                if kind == 1 {
+                    let mut p = i
+                    if at_ident(toks: read toks, i: read p, wid: read WORD_PUB) { p = p + 1 }
+                    if at_ident(toks: read toks, i: read p, wid: read WORD_OPAQUE) {
+                        Set.insert<String>(set: mut opaqueTypes, value: read key)
+                        p = p + 1
+                    }
+                    let mut headerEnd = p
+                    while headerEnd < end && at_symbol(toks: read toks, i: read headerEnd, code: read SYM_LBRACE) == false { headerEnd = headerEnd + 1 }
+                    Map.insert<String, String>(map: mut typeHeaders, key: read key, value: read canonical_signature(toks: read toks, start: read p, end: read headerEnd))
+                }
+                i = end
+            } else {
+                i = i + 1
+            }
+        } else {
+            i = i + 1
+        }
+    }
+    return PackageDeclIndex(keys: keys, contracts: read contracts, opaqueTypes: read opaqueTypes, typeHeaders: read typeHeaders)
+}
+
+fn has_declaration_contract_mismatch(interfaceSource: read String, source: read String) -> Bool {
+    let wanted = collect_package_declarations(source: read interfaceSource, sourceVisibility: read false)
+    let actual = collect_package_declarations(source: read source, sourceVisibility: read true)
+    let mut i = 0
+    while i < List.len(list: read wanted.keys) {
+        let key = List.get(list: read wanted.keys, index: read i)
+        let got = Map.get_or_default<String, String>(map: read actual.contracts, key: read key, default: read "")
+        if got == "" { return true }
+        let isOpaque = Set.contains<String>(set: read wanted.opaqueTypes, value: read key)
+        if isOpaque {
+            let wantHeader = Map.get_or_default<String, String>(map: read wanted.typeHeaders, key: read key, default: read "")
+            let gotHeader = Map.get_or_default<String, String>(map: read actual.typeHeaders, key: read key, default: read "")
+            if wantHeader != gotHeader { return true }
+        } else {
+            let want = Map.get_or_default<String, String>(map: read wanted.contracts, key: read key, default: read "")
+            if got != want { return true }
+        }
+        i = i + 1
+    }
+    return false
+}
+
 fn main() -> Unit {
     let interfaceSource = Args.get_or_default(index: 0, default: read "")
     let source = Args.get_or_default(index: 1, default: read "")
-    if has_function_contract_mismatch(interfaceSource: read interfaceSource, source: read source) {
+    let nativeBindings = Args.get_or_default(index: 2, default: read "")
+    let fnMismatch = has_function_contract_mismatch(interfaceSource: read interfaceSource, source: read source, nativeBindings: read nativeBindings)
+    let declMismatch = has_declaration_contract_mismatch(interfaceSource: read interfaceSource, source: read source)
+    if fnMismatch || declMismatch {
         Log.write(message: read "RS1301")
     } else {
         Log.write(message: read "CLEAN")

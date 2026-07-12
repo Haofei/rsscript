@@ -142,10 +142,9 @@ fn find_body_open(toks: read List<Tok>, i: read Int, end: read Int) -> Int {
     return -1
 }
 
-// True if the type body (open brace `ob`, matching close `close`) declares any
-// field name twice. A field name is the token immediately before a `:` that sits
-// at the top level of the body (not inside (), [], <>, or a nested {}).
-fn body_has_duplicate_field(toks: read List<Tok>, ob: read Int, close: read Int) -> Bool {
+// Collect every duplicate field occurrence, preserving the second and later
+// declaration spans for structured diagnostic parity.
+fn collect_duplicate_field_tokens(toks: read List<Tok>, ob: read Int, close: read Int, out: mut List<Int>) -> Bool {
     let mut seen = Set<String>.new()
     let mut dup = false
     let mut paren = 0
@@ -160,37 +159,51 @@ fn body_has_duplicate_field(toks: read List<Tok>, ob: read Int, close: read Int)
             let name = tk_text(toks: read toks, i: read (k - 1))
             if Set.contains<String>(set: read seen, value: read name) {
                 dup = true
+                List.push<Int>(list: mut out, value: read (k - 1))
             }
             Set.insert<String>(set: mut seen, value: read name)
         }
         if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) {
             paren = paren + 1
         } else if at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) {
-            if paren > 0 {
-                paren = paren - 1
-            }
+            if paren > 0 { paren = paren - 1 }
         } else if at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) {
             br = br + 1
         } else if at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) {
-            if br > 0 {
-                br = br - 1
-            }
+            if br > 0 { br = br - 1 }
         } else if at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE) {
             ang = ang + 1
         } else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) {
-            if ang > 0 {
-                ang = ang - 1
-            }
+            if ang > 0 { ang = ang - 1 }
         } else if at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE) {
             brace = brace + 1
         } else if at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE) {
-            if brace > 0 {
-                brace = brace - 1
-            }
+            if brace > 0 { brace = brace - 1 }
         }
         k = k + 1
     }
     return dup
+}
+
+fn emit_diagnostic_record(code: read String, toks: read List<Tok>, tokenIndex: read Int) -> Unit {
+    let token = List.get(list: read toks, index: read tokenIndex)
+    let line = String.from_int(value: token.line)
+    let column = String.from_int(value: token.col)
+    let length = String.from_int(value: token.len)
+    let a = String.concat(left: read String.concat(left: read code, right: read "\t"), right: read line)
+    let b = String.concat(left: read String.concat(left: read a, right: read "\t"), right: read column)
+    let record = String.concat(left: read String.concat(left: read b, right: read "\t"), right: read length)
+    Log.write(message: read record)
+    return Unit
+}
+
+fn emit_diagnostic_records(code: read String, toks: read List<Tok>, tokenIndices: read List<Int>) -> Int {
+    let mut i = 0
+    while i < List.len(list: read tokenIndices) {
+        emit_diagnostic_record(code: read code, toks: read toks, tokenIndex: read List.get(list: read tokenIndices, index: read i))
+        i = i + 1
+    }
+    return i
 }
 
 // The file features recognized by the compiler (parse_file_feature). Anything
@@ -263,7 +276,7 @@ fn seg_is_untyped(toks: read List<Tok>, segStart: read Int, segEnd: read Int) ->
 // RS0003: any parameter lacking an explicit type (check_params, param.ty.name
 // is_empty). Splits the param list on top-level commas (depth-aware for
 // ()[]{}<>) and tests each segment with seg_is_untyped.
-fn fn_has_untyped_param(toks: read List<Tok>, start: read Int) -> Bool {
+fn collect_untyped_param_tokens(toks: read List<Tok>, start: read Int, out: mut List<Int>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
     // Signature scan must begin at the `fn` keyword (ns - 1), not the decl start:
     // when the decl is attribute-led (`#deprecated(...) fn …`), starting at `#`
@@ -290,12 +303,18 @@ fn fn_has_untyped_param(toks: read List<Tok>, start: read Int) -> Bool {
         } else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) {
             if angle > 0 { angle = angle - 1 }
         } else if depth == 0 && angle == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
-            if seg_is_untyped(toks: read toks, segStart: read segStart, segEnd: read k) { untyped = true }
+            if seg_is_untyped(toks: read toks, segStart: read segStart, segEnd: read k) {
+                untyped = true
+                List.push<Int>(list: mut out, value: read segStart)
+            }
             segStart = k + 1
         }
         k = k + 1
     }
-    if seg_is_untyped(toks: read toks, segStart: read segStart, segEnd: read close) { untyped = true }
+    if seg_is_untyped(toks: read toks, segStart: read segStart, segEnd: read close) {
+        untyped = true
+        List.push<Int>(list: mut out, value: read segStart)
+    }
     return untyped
 }
 
@@ -362,6 +381,11 @@ fn effect_item_kind(toks: read List<Tok>, segStart: read Int, segEnd: read Int) 
 // recover to RS0015 and are skipped). `mode`: 0 = RS0004 (unknown effect: `fresh`
 // or an unrecognized name), 1 = RS0012 (removed runtime effect).
 fn effects_name_probe(toks: read List<Tok>, start: read Int, mode: read Int) -> Bool {
+    let mut ignored = List<Int>.new()
+    return collect_effect_name_tokens(toks: read toks, start: read start, mode: read mode, out: mut ignored)
+}
+
+fn collect_effect_name_tokens(toks: read List<Tok>, start: read Int, mode: read Int, out: mut List<Int>) -> Bool {
     let effOpen = find_effects_open(toks: read toks, start: read start)
     if effOpen < 0 { return false }
     let effClose = find_matching(toks: read toks, open: read effOpen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
@@ -376,12 +400,18 @@ fn effects_name_probe(toks: read List<Tok>, start: read Int, mode: read Int) -> 
         } else if at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) {
             if depth > 0 { depth = depth - 1 }
         } else if depth == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
-            if effect_name_hits(toks: read toks, segStart: read segStart, segEnd: read k, mode: read mode) { hit = true }
+            if effect_name_hits(toks: read toks, segStart: read segStart, segEnd: read k, mode: read mode) {
+                hit = true
+                List.push<Int>(list: mut out, value: read start)
+            }
             segStart = k + 1
         }
         k = k + 1
     }
-    if effect_name_hits(toks: read toks, segStart: read segStart, segEnd: read effClose, mode: read mode) { hit = true }
+    if effect_name_hits(toks: read toks, segStart: read segStart, segEnd: read effClose, mode: read mode) {
+        hit = true
+        List.push<Int>(list: mut out, value: read start)
+    }
     return hit
 }
 
@@ -400,7 +430,7 @@ fn effect_name_hits(toks: read List<Tok>, segStart: read Int, segEnd: read Int, 
 }
 
 // RS0011: a parameter written `name: share …` (no data effect, type name `share`).
-fn fn_has_share_param(toks: read List<Tok>, start: read Int) -> Bool {
+fn collect_share_param_tokens(toks: read List<Tok>, start: read Int, out: mut List<Int>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
     // Signature scan must begin at the `fn` keyword (ns - 1), not the decl start:
     // when the decl is attribute-led (`#deprecated(...) fn …`), starting at `#`
@@ -427,12 +457,18 @@ fn fn_has_share_param(toks: read List<Tok>, start: read Int) -> Bool {
         } else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) {
             if angle > 0 { angle = angle - 1 }
         } else if depth == 0 && angle == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
-            if seg_is_share(toks: read toks, segStart: read segStart, segEnd: read k) { hit = true }
+            if seg_is_share(toks: read toks, segStart: read segStart, segEnd: read k) {
+                hit = true
+                List.push<Int>(list: mut out, value: read (segStart + 2))
+            }
             segStart = k + 1
         }
         k = k + 1
     }
-    if seg_is_share(toks: read toks, segStart: read segStart, segEnd: read close) { hit = true }
+    if seg_is_share(toks: read toks, segStart: read segStart, segEnd: read close) {
+        hit = true
+        List.push<Int>(list: mut out, value: read (segStart + 2))
+    }
     return hit
 }
 
@@ -479,13 +515,16 @@ fn is_int_out_of_range(text: read String) -> Bool {
 }
 
 // Whole-file scan: any decimal integer literal token out of i64 range → RS0033.
-fn has_out_of_range_int(toks: read List<Tok>) -> Bool {
+fn collect_out_of_range_int_tokens(toks: read List<Tok>, out: mut List<Int>) -> Bool {
     let n = List.len(list: read toks)
     let mut i = 0
     let mut hit = false
     while i < n {
         if tk_kind(toks: read toks, i: read i) == TOK_NUMBER {
-            if is_int_out_of_range(text: read tk_text(toks: read toks, i: read i)) { hit = true }
+            if is_int_out_of_range(text: read tk_text(toks: read toks, i: read i)) {
+                hit = true
+                List.push<Int>(list: mut out, value: read i)
+            }
         }
         i = i + 1
     }
@@ -502,7 +541,7 @@ fn is_banned_resource_derive(name: read String) -> Bool {
 
 // Scan a resource decl's header [nameIdx, declEnd) for a `derives(...)` clause and
 // report a banned value derive. The body `{` terminates the header.
-fn resource_derives_bad(toks: read List<Tok>, nameIdx: read Int, declEnd: read Int) -> Bool {
+fn collect_bad_resource_derive_tokens(toks: read List<Tok>, nameIdx: read Int, declEnd: read Int, declToken: read Int, out: mut List<Int>) -> Bool {
     let mut k = nameIdx + 1
     let mut hit = false
     let mut going = true
@@ -520,6 +559,7 @@ fn resource_derives_bad(toks: read List<Tok>, nameIdx: read Int, declEnd: read I
                 while m < close {
                     if is_ident_tok(toks: read toks, i: read m) && is_banned_resource_derive(name: read tk_text(toks: read toks, i: read m)) {
                         hit = true
+                        List.push<Int>(list: mut out, value: read declToken)
                     }
                     m = m + 1
                 }
@@ -532,7 +572,7 @@ fn resource_derives_bad(toks: read List<Tok>, nameIdx: read Int, declEnd: read I
     return hit
 }
 
-fn has_bad_resource_derive(toks: read List<Tok>) -> Bool {
+fn collect_bad_resource_derives(toks: read List<Tok>, out: mut List<Int>) -> Bool {
     let ntok = List.len(list: read toks)
     let mut i = 0
     let mut hit = false
@@ -551,7 +591,7 @@ fn has_bad_resource_derive(toks: read List<Tok>) -> Bool {
                     running = false
                 } else {
                     if at_ident(toks: read toks, i: read (ns - 1), wid: read WORD_RESOURCE) {
-                        if resource_derives_bad(toks: read toks, nameIdx: read ns, declEnd: read r) { hit = true }
+                        if collect_bad_resource_derive_tokens(toks: read toks, nameIdx: read ns, declEnd: read r, declToken: read i, out: mut out) { hit = true }
                     }
                     i = r
                 }
@@ -789,14 +829,18 @@ fn has_protocol_violation(toks: read List<Tok>) -> Bool {
 // `&`). Message: "surface reference syntax is not part of RSScript." Detect `& mut` (mut is a
 // reserved keyword, so this is never a bitwise-and), `: &` (a type starting with `&`), or
 // `-> &` (a return type starting with `&`). Bitwise-and `a & b` never matches these.
-fn has_surface_reference(toks: read List<Tok>) -> Bool {
+fn collect_surface_references(toks: read List<Tok>, out: mut List<Int>) -> Bool {
     let ntok = List.len(list: read toks)
     let mut i = 0
     let mut hit = false
     while (i + 1) < ntok {
-        if at_symbol(toks: read toks, i: read i, code: read SYM_AMP) && tk_text(toks: read toks, i: read (i + 1)) == "mut" { hit = true }
-        if at_symbol(toks: read toks, i: read i, code: read SYM_COLON) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_AMP) { hit = true }
-        if at_symbol(toks: read toks, i: read i, code: read SYM_ARROW) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_AMP) { hit = true }
+        if at_symbol(toks: read toks, i: read i, code: read SYM_AMP) {
+            let typePrefix = at_symbol(toks: read toks, i: read (i - 1), code: read SYM_COLON) || at_symbol(toks: read toks, i: read (i - 1), code: read SYM_ARROW)
+            if typePrefix || tk_text(toks: read toks, i: read (i + 1)) == "mut" {
+                hit = true
+                List.push<Int>(list: mut out, value: read i)
+            }
+        }
         i = i + 1
     }
     return hit
@@ -837,7 +881,7 @@ fn maxsize_value_bad(toks: read List<Tok>, vs: read Int, ve: read Int, consts: r
     return true
 }
 
-fn has_resourcepool_maxsize_bad(toks: read List<Tok>) -> Bool {
+fn collect_resourcepool_maxsize_bad_tokens(toks: read List<Tok>, out: mut List<Int>) -> Bool {
     let ntok = List.len(list: read toks)
     let consts = collect_const_names(toks: read toks)
     let mut i = 0
@@ -853,7 +897,10 @@ fn has_resourcepool_maxsize_bad(toks: read List<Tok>) -> Bool {
                         if tk_text(toks: read toks, i: read k) == "max_size" && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_COLON) {
                             let vs = k + 2
                             let ve = arg_end(toks: read toks, start: read vs, limit: read callClose)
-                            if maxsize_value_bad(toks: read toks, vs: read vs, ve: read ve, consts: read consts) { hit = true }
+                            if maxsize_value_bad(toks: read toks, vs: read vs, ve: read ve, consts: read consts) {
+                                List.push<Int>(list: mut out, value: read vs)
+                                hit = true
+                            }
                         }
                         k = k + 1
                     }
@@ -3581,9 +3628,10 @@ fn add_builtin_fallible_producers(out: mut Set<String>, allFns: read Set<String>
 }
 
 // RS0706: `with <fallible-producer call> as B` with no `?` before `as` (the Result is not unwrapped).
-fn has_missing_try_producer(toks: read List<Tok>, fallible: read Set<String>) -> Bool {
+fn collect_missing_try_producer_tokens(toks: read List<Tok>, fallible: read Set<String>, out: mut List<Int>) -> Bool {
     let n = List.len(list: read toks)
     let mut k = 0
+    let mut hit = false
     while k < n {
         if is_kw_text(toks: read toks, i: read k, word: read "with") && is_ident_tok(toks: read toks, i: read (k + 1)) {
             let de = dotted_end(toks: read toks, i: read (k + 1))
@@ -3597,43 +3645,67 @@ fn has_missing_try_producer(toks: read List<Tok>, fallible: read Set<String>) ->
                         if at_symbol(toks: read toks, i: read m, code: read SYM_QUESTION) { hasTry = true }
                         m = m + 1
                     }
-                    if hasTry == false { return true }
-                }
-            }
-        }
-        k = k + 1
-    }
-    return false
-}
-
-// RS0707: `ResourcePool<…>.new(create: || <fallible-producer>(…))` — `.new` demands an infallible factory.
-fn has_fallible_factory(toks: read List<Tok>, fallible: read Set<String>) -> Bool {
-    let n = List.len(list: read toks)
-    let mut k = 0
-    while k < n {
-        // `.new(` whose receiver root is ResourcePool
-        if tk_text(toks: read toks, i: read k) == "new" && at_symbol(toks: read toks, i: read (k - 1), code: read SYM_DOT) && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_LPAREN) {
-            let root = pool_receiver_root(toks: read toks, dot: read (k - 1))
-            if tk_text(toks: read toks, i: read root) == "ResourcePool" {
-                let close = find_matching(toks: read toks, open: read (k + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
-                if close > 0 {
-                    // any fallible producer call inside the arg region ⇒ fallible factory
-                    let mut m = k + 2
-                    while m < close {
-                        if is_ident_tok(toks: read toks, i: read m) && at_symbol(toks: read toks, i: read (m - 1), code: read SYM_DOT) == false {
-                            let de = dotted_end(toks: read toks, i: read m)
-                            if de > m && at_symbol(toks: read toks, i: read de, code: read SYM_LPAREN) && Set.contains<String>(set: read fallible, value: read dotted_name_text(toks: read toks, i: read m)) {
-                                return true
-                            }
-                        }
-                        m = m + 1
+                    if hasTry == false {
+                        List.push<Int>(list: mut out, value: read (k + 1))
+                        hit = true
                     }
                 }
             }
         }
         k = k + 1
     }
-    return false
+    return hit
+}
+
+// RS0707: `.new` demands an infallible factory and `.try_new` demands a
+// fallible one. Each constructor contributes at most one diagnostic.
+fn collect_factory_contract_tokens(toks: read List<Tok>, fallible: read Set<String>, out: mut List<Int>) -> Bool {
+    let n = List.len(list: read toks)
+    let mut k = 0
+    let mut hit = false
+    while k < n {
+        let ctor = tk_text(toks: read toks, i: read k)
+        if (ctor == "new" || ctor == "try_new") && at_symbol(toks: read toks, i: read (k - 1), code: read SYM_DOT) && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_LPAREN) {
+            let root = pool_receiver_root(toks: read toks, dot: read (k - 1))
+            if tk_text(toks: read toks, i: read root) == "ResourcePool" {
+                let close = find_matching(toks: read toks, open: read (k + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+                if close > 0 {
+                    let mut factoryStart = k + 2
+                    let mut factoryEnd = arg_end(toks: read toks, start: read factoryStart, limit: read close)
+                    let mut a = k + 2
+                    while a < close {
+                        if tk_text(toks: read toks, i: read a) == "create" && at_symbol(toks: read toks, i: read (a + 1), code: read SYM_COLON) {
+                            factoryStart = a + 2
+                            factoryEnd = arg_end(toks: read toks, start: read factoryStart, limit: read close)
+                            a = close
+                        } else {
+                            a = a + 1
+                        }
+                    }
+                    let mut producer = 0 - 1
+                    let mut m = factoryStart
+                    while m < factoryEnd && producer < 0 {
+                        if is_ident_tok(toks: read toks, i: read m) && at_symbol(toks: read toks, i: read (m - 1), code: read SYM_DOT) == false {
+                            let de = dotted_end(toks: read toks, i: read m)
+                            if de > m && at_symbol(toks: read toks, i: read de, code: read SYM_LPAREN) && Set.contains<String>(set: read fallible, value: read dotted_name_text(toks: read toks, i: read m)) {
+                                producer = m
+                            }
+                        }
+                        m = m + 1
+                    }
+                    if ctor == "new" && producer >= 0 {
+                        List.push<Int>(list: mut out, value: read producer)
+                        hit = true
+                    } else if ctor == "try_new" && producer < 0 {
+                        List.push<Int>(list: mut out, value: read factoryStart)
+                        hit = true
+                    }
+                }
+            }
+        }
+        k = k + 1
+    }
+    return hit
 }
 
 // receiver root of a `.method` — walks back over a `Name<…>` generic clause.
@@ -3675,9 +3747,10 @@ fn borrow_pool_value(toks: read List<Tok>, open: read Int, close: read Int) -> I
 }
 
 // RS0709: a `with ResourcePool.borrow(pool: mut P) as _ { … }` nested inside another borrow of the SAME P.
-fn has_active_lease_conflict(toks: read List<Tok>) -> Bool {
+fn collect_active_lease_conflict_tokens(toks: read List<Tok>, out: mut List<Int>) -> Bool {
     let n = List.len(list: read toks)
     let mut k = 0
+    let mut hit = false
     while k < n {
         if (tk_text(toks: read toks, i: read k) == "borrow" || tk_text(toks: read toks, i: read k) == "try_borrow") && at_symbol(toks: read toks, i: read (k - 1), code: read SYM_DOT) && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_LPAREN) {
             let root = pool_receiver_root(toks: read toks, dot: read (k - 1))
@@ -3686,7 +3759,9 @@ fn has_active_lease_conflict(toks: read List<Tok>) -> Bool {
                 let pv = borrow_pool_value(toks: read toks, open: read (k + 1), close: read close)
                 if close > 0 && pv >= 0 {
                     let pname = tk_text(toks: read toks, i: read pv)
-                    // find this with-body `{ … }` and scan it for another borrow of pname
+                    // Every explicit place effect on the active pool is forbidden.
+                    // A nested borrow is represented by its `mut pool` argument,
+                    // so it follows the same path as ordinary read/take/manage uses.
                     let mut b = close + 1
                     while b < n && at_symbol(toks: read toks, i: read b, code: read SYM_LBRACE) == false { b = b + 1 }
                     if b < n {
@@ -3694,13 +3769,9 @@ fn has_active_lease_conflict(toks: read List<Tok>) -> Bool {
                         if bodyClose > 0 {
                             let mut m = b + 1
                             while m < bodyClose {
-                                if (tk_text(toks: read toks, i: read m) == "borrow" || tk_text(toks: read toks, i: read m) == "try_borrow") && at_symbol(toks: read toks, i: read (m - 1), code: read SYM_DOT) && at_symbol(toks: read toks, i: read (m + 1), code: read SYM_LPAREN) {
-                                    let r2 = pool_receiver_root(toks: read toks, dot: read (m - 1))
-                                    if tk_text(toks: read toks, i: read r2) == "ResourcePool" {
-                                        let c2 = find_matching(toks: read toks, open: read (m + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
-                                        let pv2 = borrow_pool_value(toks: read toks, open: read (m + 1), close: read c2)
-                                        if pv2 >= 0 && tk_text(toks: read toks, i: read pv2) == pname { return true }
-                                    }
+                                if (is_effect_kw(toks: read toks, i: read m) || is_kw_text(toks: read toks, i: read m, word: read "manage")) && is_ident_tok(toks: read toks, i: read (m + 1)) && tk_text(toks: read toks, i: read (m + 1)) == pname {
+                                    List.push<Int>(list: mut out, value: read m)
+                                    hit = true
                                 }
                                 m = m + 1
                             }
@@ -3711,20 +3782,43 @@ fn has_active_lease_conflict(toks: read List<Tok>) -> Bool {
         }
         k = k + 1
     }
+    return hit
+}
+
+fn is_named_pool_lease_at(toks: read List<Tok>, name: read String, useIndex: read Int) -> Bool {
+    let n = List.len(list: read toks)
+    let mut k = 0
+    while k < n {
+        if is_kw_text(toks: read toks, i: read k, word: read "with") && tk_text(toks: read toks, i: read (k + 1)) == "ResourcePool" && at_symbol(toks: read toks, i: read (k + 2), code: read SYM_DOT) && (tk_text(toks: read toks, i: read (k + 3)) == "borrow" || tk_text(toks: read toks, i: read (k + 3)) == "try_borrow") {
+            let mut a = k + 4
+            let mut named = false
+            while a < n && at_symbol(toks: read toks, i: read a, code: read SYM_LBRACE) == false {
+                if is_kw_text(toks: read toks, i: read a, word: read "as") && is_ident_tok(toks: read toks, i: read (a + 1)) && tk_text(toks: read toks, i: read (a + 1)) == name { named = true }
+                a = a + 1
+            }
+            if named && a < n {
+                let bodyClose = find_matching(toks: read toks, open: read a, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+                if useIndex > a && useIndex < bodyClose { return true }
+            }
+        }
+        k = k + 1
+    }
     return false
 }
 
 // RS0710: `ResourcePool.discard(lease: <effect> X)` where X is not bound by a `with …borrow… as X`.
-fn has_discard_non_lease(toks: read List<Tok>) -> Bool {
+fn collect_discard_non_lease_tokens(toks: read List<Tok>, out: mut List<Int>) -> Bool {
     let n = List.len(list: read toks)
     let mut k = 0
+    let mut hit = false
     while k < n {
         if tk_text(toks: read toks, i: read k) == "discard" && at_symbol(toks: read toks, i: read (k - 1), code: read SYM_DOT) && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_LPAREN) {
             let root = pool_receiver_root(toks: read toks, dot: read (k - 1))
             if tk_text(toks: read toks, i: read root) == "ResourcePool" {
                 let close = find_matching(toks: read toks, open: read (k + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
                 // lease arg value
-                let mut lv = 0 - 1
+                let mut lv = k + 2
+                if is_effect_kw(toks: read toks, i: read lv) { lv = lv + 1 }
                 let mut m = k + 2
                 while m < close {
                     if tk_text(toks: read toks, i: read m) == "lease" && at_symbol(toks: read toks, i: read (m + 1), code: read SYM_COLON) {
@@ -3736,22 +3830,16 @@ fn has_discard_non_lease(toks: read List<Tok>) -> Bool {
                 }
                 if lv >= 0 {
                     let lname = tk_text(toks: read toks, i: read lv)
-                    // is lname bound by `with ResourcePool.borrow(…) as lname`?
-                    let mut isLease = false
-                    let mut w = 0
-                    while w < n {
-                        if is_kw_text(toks: read toks, i: read w, word: read "as") && is_ident_tok(toks: read toks, i: read (w + 1)) && tk_text(toks: read toks, i: read (w + 1)) == lname {
-                            isLease = true
-                        }
-                        w = w + 1
+                    if is_named_pool_lease_at(toks: read toks, name: read lname, useIndex: read root) == false {
+                        List.push<Int>(list: mut out, value: read root)
+                        hit = true
                     }
-                    if isLease == false { return true }
                 }
             }
         }
         k = k + 1
     }
-    return false
+    return hit
 }
 
 // `name` escapes as an ordinary value: return name / let y = name / pass to a non-noescape param.
@@ -3996,7 +4084,7 @@ fn fn_has_dup_arg(toks: read List<Tok>, start: read Int) -> Bool {
 // RS0028: a parameter named `self` that is not the first parameter of a qualified
 // method (check_params: `self` && (!is_qualified_method || index != 0)). A method
 // is qualified iff its name is dotted (`Type.method`).
-fn fn_has_invalid_self(toks: read List<Tok>, start: read Int) -> Bool {
+fn collect_invalid_self_tokens(toks: read List<Tok>, start: read Int, out: mut List<Int>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
     let qualified = at_symbol(toks: read toks, i: read (ns + 1), code: read SYM_DOT)
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
@@ -4022,13 +4110,19 @@ fn fn_has_invalid_self(toks: read List<Tok>, start: read Int) -> Bool {
         } else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) {
             if angle > 0 { angle = angle - 1 }
         } else if depth == 0 && angle == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
-            if seg_is_bad_self(toks: read toks, segStart: read segStart, segEnd: read k, idx: read idx, qualified: read qualified) { hit = true }
+            if seg_is_bad_self(toks: read toks, segStart: read segStart, segEnd: read k, idx: read idx, qualified: read qualified) {
+                hit = true
+                List.push<Int>(list: mut out, value: read segStart)
+            }
             segStart = k + 1
             idx = idx + 1
         }
         k = k + 1
     }
-    if seg_is_bad_self(toks: read toks, segStart: read segStart, segEnd: read close, idx: read idx, qualified: read qualified) { hit = true }
+    if seg_is_bad_self(toks: read toks, segStart: read segStart, segEnd: read close, idx: read idx, qualified: read qualified) {
+        hit = true
+        List.push<Int>(list: mut out, value: read segStart)
+    }
     return hit
 }
 
@@ -4124,6 +4218,32 @@ fn param_retains_status(toks: read List<Tok>, open: read Int, close: read Int, p
     return status
 }
 
+fn param_retains_token(toks: read List<Tok>, open: read Int, close: read Int, pname: read String) -> Int {
+    let mut k = open + 1
+    let mut depth = 0
+    let mut angle = 0
+    let mut segStart = open + 1
+    while k < close {
+        let opener = at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE)
+        let closer = at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE)
+        if opener {
+            depth = depth + 1
+        } else if closer {
+            if depth > 0 { depth = depth - 1 }
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE) {
+            angle = angle + 1
+        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) {
+            if angle > 0 { angle = angle - 1 }
+        } else if depth == 0 && angle == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
+            if one_param_status(toks: read toks, segStart: read segStart, segEnd: read k, pname: read pname) != -1 { return segStart }
+            segStart = k + 1
+        }
+        k = k + 1
+    }
+    if one_param_status(toks: read toks, segStart: read segStart, segEnd: read close, pname: read pname) != -1 { return segStart }
+    return -1
+}
+
 // One effects-clause item [segStart,segEnd): a `retains(p)` where p is not a
 // param, or is a Copy param → RS0007.
 fn retains_item_bad(toks: read List<Tok>, segStart: read Int, segEnd: read Int, popen: read Int, pclose: read Int) -> Bool {
@@ -4134,7 +4254,7 @@ fn retains_item_bad(toks: read List<Tok>, segStart: read Int, segEnd: read Int, 
 }
 
 // RS0007: an `effects(retains(p))` item whose p is not a param, or is a Copy param.
-fn fn_retains_bad(toks: read List<Tok>, start: read Int) -> Bool {
+fn collect_bad_retains_tokens(toks: read List<Tok>, start: read Int, out: mut List<Int>) -> Bool {
     let effOpen = find_effects_open(toks: read toks, start: read start)
     if effOpen < 0 { return false }
     let effClose = find_matching(toks: read toks, open: read effOpen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
@@ -4155,12 +4275,22 @@ fn fn_retains_bad(toks: read List<Tok>, start: read Int) -> Bool {
         } else if at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) {
             if depth > 0 { depth = depth - 1 }
         } else if depth == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
-            if retains_item_bad(toks: read toks, segStart: read segStart, segEnd: read k, popen: read popen, pclose: read pclose) { hit = true }
+            if retains_item_bad(toks: read toks, segStart: read segStart, segEnd: read k, popen: read popen, pclose: read pclose) {
+                hit = true
+                let pname = tk_text(toks: read toks, i: read (segStart + 2))
+                let paramToken = param_retains_token(toks: read toks, open: read popen, close: read pclose, pname: read pname)
+                if paramToken >= 0 { List.push<Int>(list: mut out, value: read paramToken) } else { List.push<Int>(list: mut out, value: read start) }
+            }
             segStart = k + 1
         }
         k = k + 1
     }
-    if retains_item_bad(toks: read toks, segStart: read segStart, segEnd: read effClose, popen: read popen, pclose: read pclose) { hit = true }
+    if retains_item_bad(toks: read toks, segStart: read segStart, segEnd: read effClose, popen: read popen, pclose: read pclose) {
+        hit = true
+        let pname = tk_text(toks: read toks, i: read (segStart + 2))
+        let paramToken = param_retains_token(toks: read toks, open: read popen, close: read pclose, pname: read pname)
+        if paramToken >= 0 { List.push<Int>(list: mut out, value: read paramToken) } else { List.push<Int>(list: mut out, value: read start) }
+    }
     return hit
 }
 
@@ -4653,7 +4783,7 @@ fn param_seg_missing_effect(toks: read List<Tok>, segStart: read Int, segEnd: re
 }
 
 // RS0008: any parameter of the fn that must declare an effect but doesn't.
-fn fn_missing_param_effect(toks: read List<Tok>, start: read Int, sums: read Set<String>) -> Bool {
+fn collect_missing_param_effect_tokens(toks: read List<Tok>, start: read Int, sums: read Set<String>, out: mut List<Int>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
     let open = find_param_open(toks: read toks, from: read ns, end: read sigEnd)
@@ -4677,12 +4807,18 @@ fn fn_missing_param_effect(toks: read List<Tok>, start: read Int, sums: read Set
         } else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) {
             if angle > 0 { angle = angle - 1 }
         } else if depth == 0 && angle == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
-            if param_seg_missing_effect(toks: read toks, segStart: read segStart, segEnd: read k, sums: read sums) { hit = true }
+            if param_seg_missing_effect(toks: read toks, segStart: read segStart, segEnd: read k, sums: read sums) {
+                hit = true
+                List.push<Int>(list: mut out, value: read segStart)
+            }
             segStart = k + 1
         }
         k = k + 1
     }
-    if param_seg_missing_effect(toks: read toks, segStart: read segStart, segEnd: read close, sums: read sums) { hit = true }
+    if param_seg_missing_effect(toks: read toks, segStart: read segStart, segEnd: read close, sums: read sums) {
+        hit = true
+        List.push<Int>(list: mut out, value: read segStart)
+    }
     return hit
 }
 
@@ -6125,13 +6261,14 @@ fn fn_has_noalloc_call(toks: read List<Tok>, start: read Int, declared: read Set
 // RS1003 OWN_STRUCT_ATTEMPT: `own struct` is not part of the language (oracle
 // checks/forbidden.rs scans for the adjacent `own` `struct` tokens). Byte-for-byte
 // the same check: any `own` immediately followed by `struct`.
-fn has_own_struct(toks: read List<Tok>) -> Bool {
+fn collect_own_struct_tokens(toks: read List<Tok>, out: mut List<Int>) -> Bool {
     let ntok = List.len(list: read toks)
     let mut i = 0
     let mut hit = false
     while i < (ntok - 1) {
         if is_kw_text(toks: read toks, i: read i, word: read "own") && is_kw_text(toks: read toks, i: read (i + 1), word: read "struct") {
             hit = true
+            List.push<Int>(list: mut out, value: read i)
         }
         i = i + 1
     }
@@ -6212,7 +6349,7 @@ fn collect_type_kinds(toks: read List<Tok>, classes: mut Set<String>, nonClasses
 
 // A type body [bodyOpen..} with a field `name: weak T` (optional `handle`) whose T is
 // a known non-class type.
-fn type_body_has_invalid_weak(toks: read List<Tok>, bodyOpen: read Int, nonClass: read Set<String>) -> Bool {
+fn collect_type_body_invalid_weak(toks: read List<Tok>, bodyOpen: read Int, nonClass: read Set<String>, out: mut List<Int>) -> Bool {
     let close = find_matching(toks: read toks, open: read bodyOpen, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
     if close < 0 { return false }
     let mut k = bodyOpen + 1
@@ -6229,7 +6366,10 @@ fn type_body_has_invalid_weak(toks: read List<Tok>, bodyOpen: read Int, nonClass
                 if is_kw_text(toks: read toks, i: read u, word: read "handle") { u = u + 1 }
                 if is_ident_tok(toks: read toks, i: read u) {
                     let tn = tk_text(toks: read toks, i: read u)
-                    if is_scalar_name(name: read tn) || Set.contains<String>(set: read nonClass, value: read tn) { hit = true }
+                    if is_scalar_name(name: read tn) || Set.contains<String>(set: read nonClass, value: read tn) {
+                        hit = true
+                        List.push<Int>(list: mut out, value: read k)
+                    }
                 }
             }
         }
@@ -6239,7 +6379,7 @@ fn type_body_has_invalid_weak(toks: read List<Tok>, bodyOpen: read Int, nonClass
 }
 
 // RS0902 over the file: any type with an invalid `weak` field.
-fn has_invalid_weak_field(toks: read List<Tok>) -> Bool {
+fn collect_invalid_weak_fields(toks: read List<Tok>, out: mut List<Int>) -> Bool {
     let mut classes = Set<String>.new()
     let mut nonClass = Set<String>.new()
     collect_type_kinds(toks: read toks, classes: mut classes, nonClasses: mut nonClass)
@@ -6269,7 +6409,7 @@ fn has_invalid_weak_field(toks: read List<Tok>) -> Bool {
                 } else {
                     let ob = find_body_open(toks: read toks, i: read i, end: read r)
                     if ob >= 0 {
-                        if type_body_has_invalid_weak(toks: read toks, bodyOpen: read ob, nonClass: read nonClass) { hit = true }
+                        if collect_type_body_invalid_weak(toks: read toks, bodyOpen: read ob, nonClass: read nonClass, out: mut out) { hit = true }
                     }
                     i = r
                 }
@@ -6310,7 +6450,7 @@ fn has_invalid_weak_field(toks: read List<Tok>) -> Bool {
 // FP-safe subset: the direct-constructor form `local [mut] NAME = ClassName(...)`
 // where ClassName is a class declared in this file; indirect (fn-returned) class
 // values are a safe false-negative (no corpus file needs them).
-fn has_local_class_binding(toks: read List<Tok>) -> Bool {
+fn collect_local_class_bindings(toks: read List<Tok>, out: mut List<Int>) -> Bool {
     let mut classes = Set<String>.new()
     let mut nonClass = Set<String>.new()
     collect_type_kinds(toks: read toks, classes: mut classes, nonClasses: mut nonClass)
@@ -6322,7 +6462,10 @@ fn has_local_class_binding(toks: read List<Tok>) -> Bool {
             let mut q = i + 1
             if is_kw_text(toks: read toks, i: read q, word: read "mut") { q = q + 1 }
             if is_ident_tok(toks: read toks, i: read q) && at_symbol(toks: read toks, i: read (q + 1), code: read SYM_EQ) && is_ident_tok(toks: read toks, i: read (q + 2)) && at_symbol(toks: read toks, i: read (q + 3), code: read SYM_LPAREN) {
-                if Set.contains<String>(set: read classes, value: read tk_text(toks: read toks, i: read (q + 2))) { hit = true }
+                if Set.contains<String>(set: read classes, value: read tk_text(toks: read toks, i: read (q + 2))) {
+                    hit = true
+                    List.push<Int>(list: mut out, value: read i)
+                }
             }
         }
         i = i + 1
@@ -6334,7 +6477,7 @@ fn has_local_class_binding(toks: read List<Tok>) -> Bool {
 // declared resource (oracle analyzer/resource_types.rs) — resources must live behind
 // `with`/`ResourcePool`, not as plain fields. FP-safe: fire only when the field type
 // root is a KNOWN resource; the containing type must not itself be a resource.
-fn type_body_has_resource_field(toks: read List<Tok>, bodyOpen: read Int, resources: read Set<String>) -> Bool {
+fn collect_type_body_resource_fields(toks: read List<Tok>, bodyOpen: read Int, resources: read Set<String>, out: mut List<Int>) -> Bool {
     let close = find_matching(toks: read toks, open: read bodyOpen, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
     if close < 0 { return false }
     let mut k = bodyOpen + 1
@@ -6356,7 +6499,10 @@ fn type_body_has_resource_field(toks: read List<Tok>, bodyOpen: read Int, resour
                 }
             }
             if is_ident_tok(toks: read toks, i: read u) {
-                if Set.contains<String>(set: read resources, value: read tk_text(toks: read toks, i: read u)) { hit = true }
+                if Set.contains<String>(set: read resources, value: read tk_text(toks: read toks, i: read u)) {
+                    hit = true
+                    List.push<Int>(list: mut out, value: read k)
+                }
             }
         }
         k = k + 1
@@ -6364,7 +6510,7 @@ fn type_body_has_resource_field(toks: read List<Tok>, bodyOpen: read Int, resour
     return hit
 }
 
-fn has_resource_field(toks: read List<Tok>, resources: read Set<String>) -> Bool {
+fn collect_resource_fields(toks: read List<Tok>, resources: read Set<String>, out: mut List<Int>) -> Bool {
     let ntok = List.len(list: read toks)
     let mut i = 0
     let mut running = true
@@ -6394,7 +6540,7 @@ fn has_resource_field(toks: read List<Tok>, resources: read Set<String>) -> Bool
                     if isResource == false {
                         let ob = find_body_open(toks: read toks, i: read i, end: read r)
                         if ob >= 0 {
-                            if type_body_has_resource_field(toks: read toks, bodyOpen: read ob, resources: read resources) { hit = true }
+                            if collect_type_body_resource_fields(toks: read toks, bodyOpen: read ob, resources: read resources, out: mut out) { hit = true }
                         }
                     }
                     i = r
@@ -6584,7 +6730,7 @@ fn has_invalid_fresh_return(toks: read List<Tok>) -> Bool {
 // checks/body/resource_pool.rs). A binding is local iff it is a `local` binding OR a
 // `mut`/`take` param. So a `let` binding of `ResourcePool<...>.new(...)`, or a
 // `read`/no-effect param typed `ResourcePool<...>`, fires.
-fn fn_pool_param_bad(toks: read List<Tok>, start: read Int) -> Bool {
+fn collect_fn_pool_param_bad_tokens(toks: read List<Tok>, start: read Int, out: mut List<Int>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
     let mut p = dotted_end(toks: read toks, i: read ns)
     if at_symbol(toks: read toks, i: read p, code: read SYM_LANGLE) {
@@ -6611,7 +6757,10 @@ fn fn_pool_param_bad(toks: read List<Tok>, start: read Int) -> Bool {
                 t = t + 1
             }
             if is_ident_tok(toks: read toks, i: read t) && tk_text(toks: read toks, i: read t) == "ResourcePool" {
-                if eff != "mut" && eff != "take" { hit = true }
+                if eff != "mut" && eff != "take" {
+                    List.push<Int>(list: mut out, value: read k)
+                    hit = true
+                }
             }
         }
         k = k + 1
@@ -6619,7 +6768,7 @@ fn fn_pool_param_bad(toks: read List<Tok>, start: read Int) -> Bool {
     return hit
 }
 
-fn has_resourcepool_not_local(toks: read List<Tok>) -> Bool {
+fn collect_resourcepool_not_local_tokens(toks: read List<Tok>, out: mut List<Int>) -> Bool {
     let ntok = List.len(list: read toks)
     let mut hit = false
     let mut j = 0
@@ -6641,7 +6790,7 @@ fn has_resourcepool_not_local(toks: read List<Tok>) -> Bool {
                 if r < 0 {
                     running = false
                 } else {
-                    if fn_pool_param_bad(toks: read toks, start: read j) { hit = true }
+                    if collect_fn_pool_param_bad_tokens(toks: read toks, start: read j, out: mut out) { hit = true }
                     j = r
                 }
             } else {
@@ -6662,7 +6811,10 @@ fn has_resourcepool_not_local(toks: read List<Tok>) -> Bool {
                         if gc >= 0 { r = gc + 1 }
                     }
                     if at_symbol(toks: read toks, i: read r, code: read SYM_DOT) && is_ident_tok(toks: read toks, i: read (r + 1)) {
-                        if tk_text(toks: read toks, i: read (r + 1)) == "new" { hit = true }
+                        if tk_text(toks: read toks, i: read (r + 1)) == "new" {
+                            List.push<Int>(list: mut out, value: read i)
+                            hit = true
+                        }
                     }
                 }
             }
@@ -6700,7 +6852,7 @@ fn as_belongs_to_use(toks: read List<Tok>, asIdx: read Int) -> Bool {
     return false
 }
 
-fn has_implicit_conversion(toks: read List<Tok>) -> Bool {
+fn collect_implicit_conversions(toks: read List<Tok>, out: mut List<Int>) -> Bool {
     let ntok = List.len(list: read toks)
     let mut i = 0
     let mut hit = false
@@ -6708,11 +6860,17 @@ fn has_implicit_conversion(toks: read List<Tok>) -> Bool {
         if is_kw_text(toks: read toks, i: read i, word: read "as") {
             if as_belongs_to_with(toks: read toks, asIdx: read i) == false && as_belongs_to_use(toks: read toks, asIdx: read i) == false {
                 hit = true
+                List.push<Int>(list: mut out, value: read i)
             }
         }
         i = i + 1
     }
     return hit
+}
+
+fn has_implicit_conversion(toks: read List<Tok>) -> Bool {
+    let mut ignored = List<Int>.new()
+    return collect_implicit_conversions(toks: read toks, out: mut ignored)
 }
 
 // RS0901 TAKE_HANDLE_FIELD: `take receiver.field` where `field` is a `handle` field of
@@ -6811,7 +6969,7 @@ fn collect_modifier_field_keys(toks: read List<Tok>, modifier: read String) -> S
 
 // One fn: a `take receiver.field` where `receiver` is a single param whose type has
 // `field` declared `handle`.
-fn fn_has_take_handle(toks: read List<Tok>, start: read Int, keys: read Set<String>) -> Bool {
+fn collect_fn_take_handle_tokens(toks: read List<Tok>, start: read Int, keys: read Set<String>, out: mut List<Int>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
     let popen = dotted_end(toks: read toks, i: read ns)
     if at_symbol(toks: read toks, i: read popen, code: read SYM_LPAREN) == false { return false }
@@ -6829,7 +6987,10 @@ fn fn_has_take_handle(toks: read List<Tok>, start: read Int, keys: read Set<Stri
             if de >= (k + 4) && (de - 3) == (k + 1) && at_symbol(toks: read toks, i: read (de - 2), code: read SYM_DOT) && is_ident_tok(toks: read toks, i: read (de - 1)) {
                 let rtype = param_type_root(toks: read toks, open: read popen, close: read pclose, name: read tk_text(toks: read toks, i: read (k + 1)))
                 if String.len(value: read rtype) > 0 {
-                    if Set.contains<String>(set: read keys, value: read field_key(typeName: read rtype, field: read tk_text(toks: read toks, i: read (de - 1)))) { hit = true }
+                    if Set.contains<String>(set: read keys, value: read field_key(typeName: read rtype, field: read tk_text(toks: read toks, i: read (de - 1)))) {
+                        List.push<Int>(list: mut out, value: read k)
+                        hit = true
+                    }
                 }
             }
         }
@@ -6839,7 +7000,7 @@ fn fn_has_take_handle(toks: read List<Tok>, start: read Int, keys: read Set<Stri
 }
 
 // RS0901 over the file: any fn taking a handle field of a param's type.
-fn has_take_handle_field(toks: read List<Tok>) -> Bool {
+fn collect_take_handle_field_tokens(toks: read List<Tok>, out: mut List<Int>) -> Bool {
     let keys = collect_modifier_field_keys(toks: read toks, modifier: read "handle")
     let ntok = List.len(list: read toks)
     let mut i = 0
@@ -6862,7 +7023,7 @@ fn has_take_handle_field(toks: read List<Tok>) -> Bool {
                 if r < 0 {
                     running = false
                 } else {
-                    if fn_has_take_handle(toks: read toks, start: read i, keys: read keys) { hit = true }
+                    if collect_fn_take_handle_tokens(toks: read toks, start: read i, keys: read keys, out: mut out) { hit = true }
                     i = r
                 }
             } else {
@@ -6871,6 +7032,11 @@ fn has_take_handle_field(toks: read List<Tok>) -> Bool {
         }
     }
     return hit
+}
+
+fn has_take_handle_field(toks: read List<Tok>) -> Bool {
+    let mut ignored = List<Int>.new()
+    return collect_take_handle_field_tokens(toks: read toks, out: mut ignored)
 }
 
 // RS0903 WEAK_FIELD_REQUIRES_UPGRADE: reading a `weak` field as a value (`read`/`mut`
@@ -11008,29 +11174,43 @@ fn receiver_self_effect_bad(toks: read List<Tok>, head: read Int, popen: read In
 
 fn main() -> Unit {
     let source = Args.get_or_default(index: 0, default: read "")
+    let structured = Args.get_or_default(index: 1, default: read "") == "records"
     let toks = tokenize(source: read source)
     let ntok = List.len(list: read toks)
     let mut callable = Set<String>.new()
     let mut types = Set<String>.new()
     let mut found = false
+    let mut duplicateTokens = List<Int>.new()
     // Feature-header diagnostics: RS0016 (unknown feature), RS0017 (duplicate
     // feature within a header), RS0006 (a second `features:` header).
     let mut headerCount = 0
+    let mut duplicateHeaderTokens = List<Int>.new()
     let mut hasUnknownFeat = false
     let mut hasDupFeat = false
+    let mut unknownFeatureTokens = List<Int>.new()
+    let mut duplicateFeatureTokens = List<Int>.new()
     // RS0002 (any fn missing an explicit return type) / RS0003 (any untyped param).
     let mut missingReturn = false
+    let mut missingReturnTokens = List<Int>.new()
     let mut untypedParam = false
+    let mut untypedParamTokens = List<Int>.new()
     // Signature-family diagnostics: RS0004 (unknown effect), RS0010 (removed
     // profile), RS0011 (removed share data effect), RS0012 (removed runtime effect).
     let mut hasProfile = false
+    let mut profileTokens = List<Int>.new()
     let mut shareParam = false
+    let mut shareParamTokens = List<Int>.new()
     let mut unknownEffect = false
+    let mut unknownEffectTokens = List<Int>.new()
     let mut removedRuntime = false
+    let mut removedRuntimeTokens = List<Int>.new()
     let mut invalidSelf = false
+    let mut invalidSelfTokens = List<Int>.new()
     let mut retainsBad = false
+    let mut retainsBadTokens = List<Int>.new()
     let mut unknownType = false
     let mut missingEffect = false
+    let mut missingEffectTokens = List<Int>.new()
     let mut pureBad = false
     // RS0020: a noalloc fn that calls a non-variant, non-noalloc function.
     let mut noallocCall = false
@@ -11082,27 +11262,35 @@ fn main() -> Unit {
     // RS0022: an unconsumed call to a same-file async fn.
     let asyncNotConsumed = has_unconsumed_async_call(toks: read toks, asyncFns: read asyncFns)
     // RS0033: any decimal integer literal in the file that overflows i64.
-    let outOfRangeInt = has_out_of_range_int(toks: read toks)
+    let mut outOfRangeIntTokens = List<Int>.new()
+    let outOfRangeInt = collect_out_of_range_int_tokens(toks: read toks, out: mut outOfRangeIntTokens)
     // RS0212: a value derive (Clone/Eq/Ord/Hash/JsonEncode/JsonDecode) on a resource.
-    let resourceDerive = has_bad_resource_derive(toks: read toks)
+    let mut resourceDeriveTokens = List<Int>.new()
+    let resourceDerive = collect_bad_resource_derives(toks: read toks, out: mut resourceDeriveTokens)
     // RS0211: a value-derive trait unsupported by a field type (Float/handle not Eq/Ord/Hash).
     let deriveFieldBad = has_bad_derive_field(toks: read toks)
     // RS0032: a generic method's type arg doesn't satisfy the required protocol (Hashable/Ord).
     let protocolBad = has_protocol_violation(toks: read toks)
     // RS1004: surface reference syntax (`&T`/`&mut T`) is not part of RSScript.
-    let surfaceRef = has_surface_reference(toks: read toks)
+    let mut surfaceRefTokens = List<Int>.new()
+    let surfaceRef = collect_surface_references(toks: read toks, out: mut surfaceRefTokens)
     // RS0708: eager ResourcePool<T>.new needs a positive-literal / const max_size.
-    let poolMaxSize = has_resourcepool_maxsize_bad(toks: read toks)
+    let mut poolMaxSizeTokens = List<Int>.new()
+    let poolMaxSize = collect_resourcepool_maxsize_bad_tokens(toks: read toks, out: mut poolMaxSizeTokens)
     // RS0037: a positional variant pattern binding != the variant's declared arity.
     let variantArity = has_variant_arity_mismatch(toks: read toks)
     // RS0902: a `weak` field whose type is a known non-class.
-    let invalidWeak = has_invalid_weak_field(toks: read toks)
+    let mut invalidWeakTokens = List<Int>.new()
+    let invalidWeak = collect_invalid_weak_fields(toks: read toks, out: mut invalidWeakTokens)
     // RS1003: an `own struct` declaration (removed from the language).
-    let ownStruct = has_own_struct(toks: read toks)
+    let mut ownStructTokens = List<Int>.new()
+    let ownStruct = collect_own_struct_tokens(toks: read toks, out: mut ownStructTokens)
     // RS0306: a `local` binding of a class instance.
-    let localClass = has_local_class_binding(toks: read toks)
+    let mut localClassTokens = List<Int>.new()
+    let localClass = collect_local_class_bindings(toks: read toks, out: mut localClassTokens)
     // RS0701: a non-resource type with a resource-typed field.
-    let resourceField = has_resource_field(toks: read toks, resources: read resources)
+    let mut resourceFieldTokens = List<Int>.new()
+    let resourceField = collect_resource_fields(toks: read toks, resources: read resources, out: mut resourceFieldTokens)
     // RS0805: an explicit closure's captures(...) contract doesn't match its body's external uses.
     let captureContract = has_capture_contract_bad(toks: read toks)
     // RS0703: a ResourcePool<X> whose X is a non-resource type or non-Resource-bounded generic param.
@@ -11114,9 +11302,11 @@ fn main() -> Unit {
     // RS0603: a fresh return type that is a generic param, not a struct.
     let invalidFreshRet = has_invalid_fresh_return(toks: read toks)
     // RS0705: a ResourcePool value bound with let instead of local.
-    let poolNotLocal = has_resourcepool_not_local(toks: read toks)
+    let mut poolNotLocalTokens = List<Int>.new()
+    let poolNotLocal = collect_resourcepool_not_local_tokens(toks: read toks, out: mut poolNotLocalTokens)
     // RS1002: a cast-style `as` conversion (not a with/use binding).
-    let implicitConv = has_implicit_conversion(toks: read toks)
+    let mut implicitConvTokens = List<Int>.new()
+    let implicitConv = collect_implicit_conversions(toks: read toks, out: mut implicitConvTokens)
     // RS0208: return-type mismatch (type-inference engine).
     let retTypeMismatch = has_return_type_mismatch(toks: read toks)
     // RS0207: argument/binding-type mismatch.
@@ -11126,7 +11316,8 @@ fn main() -> Unit {
     // RS0209: control-flow type mismatch.
     let cfTypeMismatch = has_control_flow_mismatch(toks: read toks)
     // RS0901: `take` of a `handle` field.
-    let takeHandle = has_take_handle_field(toks: read toks)
+    let mut takeHandleTokens = List<Int>.new()
+    let takeHandle = collect_take_handle_field_tokens(toks: read toks, out: mut takeHandleTokens)
     // RS0904: a weak field initialized without Weak.from/downgrade.
     let weakInit = has_weak_field_bad_init(toks: read toks)
     // RS0903: reading a weak field without Weak.upgrade.
@@ -11174,10 +11365,14 @@ fn main() -> Unit {
     let resourceEscape = has_resource_escape(toks: read toks, resources: read resources, retains: read retainsReg)
     let fallibleProducers = collect_fallible_producers(toks: read toks, resources: read resources)
     add_builtin_fallible_producers(out: mut fallibleProducers, allFns: read allFns)
-    let missingTry = has_missing_try_producer(toks: read toks, fallible: read fallibleProducers)
-    let fallibleFactory = has_fallible_factory(toks: read toks, fallible: read fallibleProducers)
-    let leaseConflict = has_active_lease_conflict(toks: read toks)
-    let discardNonLease = has_discard_non_lease(toks: read toks)
+    let mut missingTryTokens = List<Int>.new()
+    let missingTry = collect_missing_try_producer_tokens(toks: read toks, fallible: read fallibleProducers, out: mut missingTryTokens)
+    let mut factoryContractTokens = List<Int>.new()
+    let fallibleFactory = collect_factory_contract_tokens(toks: read toks, fallible: read fallibleProducers, out: mut factoryContractTokens)
+    let mut leaseConflictTokens = List<Int>.new()
+    let leaseConflict = collect_active_lease_conflict_tokens(toks: read toks, out: mut leaseConflictTokens)
+    let mut discardNonLeaseTokens = List<Int>.new()
+    let discardNonLease = collect_discard_non_lease_tokens(toks: read toks, out: mut discardNonLeaseTokens)
     let nonTransferPayload = has_nontransferable_channel(toks: read toks)
     let mut assignTypeMismatch = false
     // RS0312: index assignment on a non-List container.
@@ -11202,6 +11397,7 @@ fn main() -> Unit {
             let isTypeAlias = cls.isTypeAlias
             let isConst = cls.isConst
             if isFeatures {
+                if headerCount >= 1 { List.push<Int>(list: mut duplicateHeaderTokens, value: read i) }
                 headerCount = headerCount + 1
                 let lineEnd = declaration_line_end(toks: read toks, start: read i)
                 // Feature list is [i+2, lineEnd) (skip the `features :` prefix).
@@ -11219,11 +11415,13 @@ fn main() -> Unit {
                         if is_known_feature(name: read fname) {
                             if Set.contains<String>(set: read seen, value: read fname) {
                                 hasDupFeat = true
+                                List.push<Int>(list: mut duplicateFeatureTokens, value: read j)
                             } else {
                                 Set.insert<String>(set: mut seen, value: read fname)
                             }
                         } else {
                             hasUnknownFeat = true
+                            List.push<Int>(list: mut unknownFeatureTokens, value: read j)
                         }
                         j = j + 1
                     }
@@ -11231,6 +11429,7 @@ fn main() -> Unit {
                 i = lineEnd
             } else if isProfile {
                 hasProfile = true
+                List.push<Int>(list: mut profileTokens, value: read i)
                 i = declaration_line_end(toks: read toks, start: read i)
             } else if starts_type_decl(toks: read toks, i: read i, isPub: read isPub) {
                 let r = parse_type_decl(toks: read toks, i: read i)
@@ -11241,14 +11440,13 @@ fn main() -> Unit {
                     let name = dotted_name_text(toks: read toks, i: read ns)
                     let inTypes = Set.contains<String>(set: read types, value: read name)
                     let inCallable = Set.contains<String>(set: read callable, value: read name)
-                    if inTypes || inCallable {
-                        found = true
-                    }
+                    if inTypes { found = true; List.push<Int>(list: mut duplicateTokens, value: read i) }
+                    if inCallable { found = true; List.push<Int>(list: mut duplicateTokens, value: read i) }
                     Set.insert<String>(set: mut types, value: read name)
                     Set.insert<String>(set: mut callable, value: read name)
                     let ob = find_body_open(toks: read toks, i: read i, end: read r)
                     if ob >= 0 {
-                        if body_has_duplicate_field(toks: read toks, ob: read ob, close: read (r - 1)) {
+                        if collect_duplicate_field_tokens(toks: read toks, ob: read ob, close: read (r - 1), out: mut duplicateTokens) {
                             found = true
                         }
                     }
@@ -11273,6 +11471,7 @@ fn main() -> Unit {
                     let name = dotted_name_text(toks: read toks, i: read ns)
                     if Set.contains<String>(set: read types, value: read name) {
                         found = true
+                        List.push<Int>(list: mut duplicateTokens, value: read i)
                     }
                     Set.insert<String>(set: mut types, value: read name)
                     i = r
@@ -11335,17 +11534,21 @@ fn main() -> Unit {
                     let name = dotted_name_text(toks: read toks, i: read ns)
                     if Set.contains<String>(set: read callable, value: read name) {
                         found = true
+                        List.push<Int>(list: mut duplicateTokens, value: read i)
                     }
                     Set.insert<String>(set: mut callable, value: read name)
-                    if fn_missing_return(toks: read toks, start: read i) { missingReturn = true }
-                    if fn_has_untyped_param(toks: read toks, start: read i) { untypedParam = true }
-                    if fn_has_share_param(toks: read toks, start: read i) { shareParam = true }
-                    if effects_name_probe(toks: read toks, start: read i, mode: read 0) { unknownEffect = true }
-                    if effects_name_probe(toks: read toks, start: read i, mode: read 1) { removedRuntime = true }
-                    if fn_has_invalid_self(toks: read toks, start: read i) { invalidSelf = true }
-                    if fn_retains_bad(toks: read toks, start: read i) { retainsBad = true }
+                    if fn_missing_return(toks: read toks, start: read i) {
+                        missingReturn = true
+                        List.push<Int>(list: mut missingReturnTokens, value: read i)
+                    }
+                    if collect_untyped_param_tokens(toks: read toks, start: read i, out: mut untypedParamTokens) { untypedParam = true }
+                    if collect_share_param_tokens(toks: read toks, start: read i, out: mut shareParamTokens) { shareParam = true }
+                    if collect_effect_name_tokens(toks: read toks, start: read i, mode: read 0, out: mut unknownEffectTokens) { unknownEffect = true }
+                    if collect_effect_name_tokens(toks: read toks, start: read i, mode: read 1, out: mut removedRuntimeTokens) { removedRuntime = true }
+                    if collect_invalid_self_tokens(toks: read toks, start: read i, out: mut invalidSelfTokens) { invalidSelf = true }
+                    if collect_bad_retains_tokens(toks: read toks, start: read i, out: mut retainsBadTokens) { retainsBad = true }
                     if fn_types_unknown(toks: read toks, start: read i, declared: read declared) { unknownType = true }
-                    if fn_missing_param_effect(toks: read toks, start: read i, sums: read payloadlessSums) { missingEffect = true }
+                    if collect_missing_param_effect_tokens(toks: read toks, start: read i, sums: read payloadlessSums, out: mut missingEffectTokens) { missingEffect = true }
                     if fn_pure_bad(toks: read toks, start: read i, resources: read resources, sumVariants: read sumVariants, pureFns: read pureFns, allFns: read allFns, declared: read declared) { pureBad = true }
                     if fn_has_noalloc_call(toks: read toks, start: read i, declared: read declared, sumVariants: read sumVariants, noallocFns: read noallocFns) { noallocCall = true }
                     if fn_has_nonexhaustive_match(toks: read toks, start: read i, declared: read declared, allFns: read allFns) { nonExhaustive = true }
@@ -11419,35 +11622,148 @@ fn main() -> Unit {
             }
         }
     }
+    if structured {
+        let mut emitted = 0
+        emitted = emitted + emit_diagnostic_records(code: read "RS0002", toks: read toks, tokenIndices: read missingReturnTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0003", toks: read toks, tokenIndices: read untypedParamTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0004", toks: read toks, tokenIndices: read unknownEffectTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0005", toks: read toks, tokenIndices: read duplicateTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0006", toks: read toks, tokenIndices: read duplicateHeaderTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0007", toks: read toks, tokenIndices: read retainsBadTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0008", toks: read toks, tokenIndices: read missingEffectTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0010", toks: read toks, tokenIndices: read profileTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0011", toks: read toks, tokenIndices: read shareParamTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0012", toks: read toks, tokenIndices: read removedRuntimeTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0016", toks: read toks, tokenIndices: read unknownFeatureTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0017", toks: read toks, tokenIndices: read duplicateFeatureTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0028", toks: read toks, tokenIndices: read invalidSelfTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0033", toks: read toks, tokenIndices: read outOfRangeIntTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0212", toks: read toks, tokenIndices: read resourceDeriveTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0306", toks: read toks, tokenIndices: read localClassTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0701", toks: read toks, tokenIndices: read resourceFieldTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0705", toks: read toks, tokenIndices: read poolNotLocalTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0708", toks: read toks, tokenIndices: read poolMaxSizeTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0706", toks: read toks, tokenIndices: read missingTryTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0707", toks: read toks, tokenIndices: read factoryContractTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0709", toks: read toks, tokenIndices: read leaseConflictTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0710", toks: read toks, tokenIndices: read discardNonLeaseTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0902", toks: read toks, tokenIndices: read invalidWeakTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0901", toks: read toks, tokenIndices: read takeHandleTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS1003", toks: read toks, tokenIndices: read ownStructTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS1002", toks: read toks, tokenIndices: read implicitConvTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS1004", toks: read toks, tokenIndices: read surfaceRefTokens)
+        if emitted == 0 { Log.write(message: read "CLEAN") }
+        return Unit
+    }
     if missingReturn {
-        Log.write(message: read "RS0002")
+        if structured {
+            let mut missingReturnIndex = 0
+            while missingReturnIndex < List.len(list: read missingReturnTokens) {
+                emit_diagnostic_record(code: read "RS0002", toks: read toks, tokenIndex: read List.get(list: read missingReturnTokens, index: read missingReturnIndex))
+                missingReturnIndex = missingReturnIndex + 1
+            }
+        } else {
+            Log.write(message: read "RS0002")
+        }
     }
     if untypedParam {
-        Log.write(message: read "RS0003")
+        if structured {
+            let mut untypedParamIndex = 0
+            while untypedParamIndex < List.len(list: read untypedParamTokens) {
+                emit_diagnostic_record(code: read "RS0003", toks: read toks, tokenIndex: read List.get(list: read untypedParamTokens, index: read untypedParamIndex))
+                untypedParamIndex = untypedParamIndex + 1
+            }
+        } else {
+            Log.write(message: read "RS0003")
+        }
     }
     if unknownEffect {
-        Log.write(message: read "RS0004")
+        if structured {
+            let mut unknownEffectIndex = 0
+            while unknownEffectIndex < List.len(list: read unknownEffectTokens) {
+                emit_diagnostic_record(code: read "RS0004", toks: read toks, tokenIndex: read List.get(list: read unknownEffectTokens, index: read unknownEffectIndex))
+                unknownEffectIndex = unknownEffectIndex + 1
+            }
+        } else {
+            Log.write(message: read "RS0004")
+        }
     }
     if found {
-        Log.write(message: read "RS0005")
+        if structured {
+            let mut duplicateIndex = 0
+            while duplicateIndex < List.len(list: read duplicateTokens) {
+                emit_diagnostic_record(code: read "RS0005", toks: read toks, tokenIndex: read List.get(list: read duplicateTokens, index: read duplicateIndex))
+                duplicateIndex = duplicateIndex + 1
+            }
+        } else {
+            Log.write(message: read "RS0005")
+        }
     }
     if hasProfile {
-        Log.write(message: read "RS0010")
+        if structured {
+            let mut profileIndex = 0
+            while profileIndex < List.len(list: read profileTokens) {
+                emit_diagnostic_record(code: read "RS0010", toks: read toks, tokenIndex: read List.get(list: read profileTokens, index: read profileIndex))
+                profileIndex = profileIndex + 1
+            }
+        } else {
+            Log.write(message: read "RS0010")
+        }
     }
     if shareParam {
-        Log.write(message: read "RS0011")
+        if structured {
+            let mut shareParamIndex = 0
+            while shareParamIndex < List.len(list: read shareParamTokens) {
+                emit_diagnostic_record(code: read "RS0011", toks: read toks, tokenIndex: read List.get(list: read shareParamTokens, index: read shareParamIndex))
+                shareParamIndex = shareParamIndex + 1
+            }
+        } else {
+            Log.write(message: read "RS0011")
+        }
     }
     if removedRuntime {
-        Log.write(message: read "RS0012")
+        if structured {
+            let mut removedRuntimeIndex = 0
+            while removedRuntimeIndex < List.len(list: read removedRuntimeTokens) {
+                emit_diagnostic_record(code: read "RS0012", toks: read toks, tokenIndex: read List.get(list: read removedRuntimeTokens, index: read removedRuntimeIndex))
+                removedRuntimeIndex = removedRuntimeIndex + 1
+            }
+        } else {
+            Log.write(message: read "RS0012")
+        }
     }
     if invalidSelf {
-        Log.write(message: read "RS0028")
+        if structured {
+            let mut invalidSelfIndex = 0
+            while invalidSelfIndex < List.len(list: read invalidSelfTokens) {
+                emit_diagnostic_record(code: read "RS0028", toks: read toks, tokenIndex: read List.get(list: read invalidSelfTokens, index: read invalidSelfIndex))
+                invalidSelfIndex = invalidSelfIndex + 1
+            }
+        } else {
+            Log.write(message: read "RS0028")
+        }
     }
     if retainsBad {
-        Log.write(message: read "RS0007")
+        if structured {
+            let mut retainsBadIndex = 0
+            while retainsBadIndex < List.len(list: read retainsBadTokens) {
+                emit_diagnostic_record(code: read "RS0007", toks: read toks, tokenIndex: read List.get(list: read retainsBadTokens, index: read retainsBadIndex))
+                retainsBadIndex = retainsBadIndex + 1
+            }
+        } else {
+            Log.write(message: read "RS0007")
+        }
     }
     if missingEffect {
-        Log.write(message: read "RS0008")
+        if structured {
+            let mut missingEffectIndex = 0
+            while missingEffectIndex < List.len(list: read missingEffectTokens) {
+                emit_diagnostic_record(code: read "RS0008", toks: read toks, tokenIndex: read List.get(list: read missingEffectTokens, index: read missingEffectIndex))
+                missingEffectIndex = missingEffectIndex + 1
+            }
+        } else {
+            Log.write(message: read "RS0008")
+        }
     }
     if pureBad {
         Log.write(message: read "RS0009")
@@ -11461,7 +11777,7 @@ fn main() -> Unit {
     if invalidTry {
         Log.write(message: read "RS0013")
     }
-    if unsupportedSyntax {
+    if unsupportedSyntax && structured == false {
         Log.write(message: read "RS0015")
     }
     if unnamedArg {
@@ -11491,23 +11807,63 @@ fn main() -> Unit {
     if noPanicCall {
         Log.write(message: read "RS0019")
     }
-    if unknownType {
+    if unknownType && structured == false {
         Log.write(message: read "RS0024")
     }
     if outOfRangeInt {
-        Log.write(message: read "RS0033")
+        if structured {
+            let mut outOfRangeIntIndex = 0
+            while outOfRangeIntIndex < List.len(list: read outOfRangeIntTokens) {
+                emit_diagnostic_record(code: read "RS0033", toks: read toks, tokenIndex: read List.get(list: read outOfRangeIntTokens, index: read outOfRangeIntIndex))
+                outOfRangeIntIndex = outOfRangeIntIndex + 1
+            }
+        } else {
+            Log.write(message: read "RS0033")
+        }
     }
     if hasUnknownFeat {
-        Log.write(message: read "RS0016")
+        if structured {
+            let mut unknownFeatureIndex = 0
+            while unknownFeatureIndex < List.len(list: read unknownFeatureTokens) {
+                emit_diagnostic_record(code: read "RS0016", toks: read toks, tokenIndex: read List.get(list: read unknownFeatureTokens, index: read unknownFeatureIndex))
+                unknownFeatureIndex = unknownFeatureIndex + 1
+            }
+        } else {
+            Log.write(message: read "RS0016")
+        }
     }
     if hasDupFeat {
-        Log.write(message: read "RS0017")
+        if structured {
+            let mut duplicateFeatureIndex = 0
+            while duplicateFeatureIndex < List.len(list: read duplicateFeatureTokens) {
+                emit_diagnostic_record(code: read "RS0017", toks: read toks, tokenIndex: read List.get(list: read duplicateFeatureTokens, index: read duplicateFeatureIndex))
+                duplicateFeatureIndex = duplicateFeatureIndex + 1
+            }
+        } else {
+            Log.write(message: read "RS0017")
+        }
     }
     if headerCount >= 2 {
-        Log.write(message: read "RS0006")
+        if structured {
+            let mut duplicateHeaderIndex = 0
+            while duplicateHeaderIndex < List.len(list: read duplicateHeaderTokens) {
+                emit_diagnostic_record(code: read "RS0006", toks: read toks, tokenIndex: read List.get(list: read duplicateHeaderTokens, index: read duplicateHeaderIndex))
+                duplicateHeaderIndex = duplicateHeaderIndex + 1
+            }
+        } else {
+            Log.write(message: read "RS0006")
+        }
     }
     if resourceDerive {
-        Log.write(message: read "RS0212")
+        if structured {
+            let mut resourceDeriveIndex = 0
+            while resourceDeriveIndex < List.len(list: read resourceDeriveTokens) {
+                emit_diagnostic_record(code: read "RS0212", toks: read toks, tokenIndex: read List.get(list: read resourceDeriveTokens, index: read resourceDeriveIndex))
+                resourceDeriveIndex = resourceDeriveIndex + 1
+            }
+        } else {
+            Log.write(message: read "RS0212")
+        }
     }
     if deriveFieldBad {
         Log.write(message: read "RS0211")

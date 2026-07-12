@@ -765,6 +765,35 @@ fn checker_oracle_codes(file: &str, source: &str) -> Vec<String> {
     codes
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct SelfhostDiagnosticRecord {
+    code: String,
+    line: usize,
+    column: usize,
+    length: usize,
+}
+
+fn checker_oracle_records(
+    file: &str,
+    source: &str,
+    target_code: &str,
+) -> Vec<SelfhostDiagnosticRecord> {
+    let mut records = analyze_source(file, source)
+        .into_iter()
+        .filter(|diagnostic| {
+            diagnostic.severity == Severity::Error && diagnostic.code == target_code
+        })
+        .map(|diagnostic| SelfhostDiagnosticRecord {
+            code: diagnostic.code,
+            line: diagnostic.span.line,
+            column: diagnostic.span.column,
+            length: diagnostic.span.length,
+        })
+        .collect::<Vec<_>>();
+    records.sort();
+    records
+}
+
 fn compile_checker() -> Result<RegVmExecutable, String> {
     compile_selfhost_tool("check.rss", "checker")
 }
@@ -809,6 +838,56 @@ fn parse_checker_output(stdout: &str) -> Result<Vec<String>, String> {
     Ok(codes)
 }
 
+fn parse_checker_records(stdout: &str) -> Result<Vec<SelfhostDiagnosticRecord>, String> {
+    let mut records = Vec::new();
+    let lines = stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    if lines.as_slice() == ["CLEAN"] {
+        return Ok(Vec::new());
+    }
+    if lines.iter().any(|line| *line == "CLEAN") {
+        return Err("rss checker emitted CLEAN together with structured diagnostics".to_string());
+    }
+    for line in lines {
+        let fields = line.split('\t').collect::<Vec<_>>();
+        let [code, line, column, length] = fields.as_slice() else {
+            return Err(format!("malformed structured diagnostic: {line:?}"));
+        };
+        if !is_target_code(code) {
+            return Err(format!("unknown structured diagnostic code: {code:?}"));
+        }
+        let parse_number = |name: &str, value: &str| {
+            value
+                .parse::<usize>()
+                .map_err(|_| format!("invalid diagnostic {name}: {value:?}"))
+        };
+        records.push(SelfhostDiagnosticRecord {
+            code: (*code).to_string(),
+            line: parse_number("line", line)?,
+            column: parse_number("column", column)?,
+            length: parse_number("length", length)?,
+        });
+    }
+    if records.is_empty() {
+        return Err("rss checker emitted no structured diagnostics".to_string());
+    }
+    records.sort();
+    Ok(records)
+}
+
+fn run_checker_records(
+    exe: &RegVmExecutable,
+    source: &str,
+) -> Result<Vec<SelfhostDiagnosticRecord>, String> {
+    let output = exe
+        .eval_main_with_args([source.to_string(), "records".to_string()])
+        .map_err(|e| format!("rss structured checker failed to run: {e:?}"))?;
+    parse_checker_records(&output.stdout)
+}
+
 #[test]
 fn checker_output_parser_rejects_unknown_lines() {
     assert_eq!(
@@ -820,6 +899,612 @@ fn checker_output_parser_rejects_unknown_lines() {
     assert!(parse_checker_output("").is_err());
     assert!(parse_checker_output("  \n\t\n").is_err());
     assert!(parse_checker_output("CLEAN\nCLEAN\n").is_err());
+}
+
+#[test]
+fn checker_record_parser_is_strict_and_preserves_duplicates() {
+    let records = parse_checker_records("RS0005\t2\t1\t2\nRS0005\t2\t1\t2\n")
+        .expect("valid records should parse");
+    assert_eq!(
+        records.len(),
+        2,
+        "structured parity must retain occurrences"
+    );
+    assert_eq!(parse_checker_records("CLEAN\n").unwrap(), Vec::new());
+    assert!(parse_checker_records("").is_err());
+    assert!(parse_checker_records("CLEAN\nRS0005\t2\t1\t2\n").is_err());
+    assert!(parse_checker_records("RS0005\t2\t1\n").is_err());
+    assert!(parse_checker_records("RS0005\ttwo\t1\t2\n").is_err());
+    assert!(parse_checker_records("RS9999\t2\t1\t2\n").is_err());
+}
+
+#[test]
+fn checker_structured_clean_verdict() {
+    let source = "fn clean(value: Int) -> Int {\n    return value\n}\n";
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit CLEAN");
+    assert!(
+        actual.is_empty(),
+        "clean source emitted records: {actual:?}"
+    );
+}
+
+#[test]
+fn checker_rs0005_structured_multiset_parity() {
+    let source = r#"struct Response {
+    status: Int
+    status: String
+}
+
+struct Response {
+    body: String
+}
+
+fn render() -> Unit {
+    return Unit
+}
+
+fn render() -> Unit {
+    return Unit
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0005.rss", source, "RS0005");
+    assert!(
+        oracle.len() > 1,
+        "fixture must exercise duplicate occurrences"
+    );
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0005 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0002_structured_multiset_parity() {
+    let source = r#"fn first() {
+    return Unit
+}
+
+fn second() {
+    return Unit
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0002.rss", source, "RS0002");
+    assert_eq!(oracle.len(), 2, "fixture must exercise both functions");
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0002 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0003_structured_multiset_parity() {
+    let source = r#"fn combine(first, second, typed: Int) -> Unit {
+    return Unit
+}
+
+"#;
+    let oracle = checker_oracle_records("structured-rs0003.rss", source, "RS0003");
+    assert_eq!(oracle.len(), 2, "fixture must exercise both parameters");
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0003 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0004_structured_multiset_parity() {
+    let source = r#"fn work() -> Unit
+    effects(mystery, fresh)
+{
+    return Unit
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0004.rss", source, "RS0004");
+    assert_eq!(oracle.len(), 2, "fixture must exercise both effects");
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0004 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0006_structured_multiset_parity() {
+    let source = "features: local\nfeatures: async\nfeatures: native\n";
+    let oracle = checker_oracle_records("structured-rs0006.rss", source, "RS0006");
+    assert_eq!(oracle.len(), 2, "fixture must exercise both extra headers");
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0006 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0008_structured_multiset_parity() {
+    let source = r#"fn combine(first: String, second: List<Int>) -> Unit {
+    return Unit
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0008.rss", source, "RS0008");
+    assert_eq!(oracle.len(), 2, "fixture must exercise both parameters");
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0008 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0007_structured_multiset_parity() {
+    let source = r#"fn sample(count: Int, text: read String) -> Unit
+    effects(retains(count), retains(missing))
+{
+    return Unit
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0007.rss", source, "RS0007");
+    assert_eq!(
+        oracle.len(),
+        2,
+        "fixture must exercise both retains failures"
+    );
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0007 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0010_structured_multiset_parity() {
+    let source = "profile: managed\nprofile: managed\n";
+    let oracle = checker_oracle_records("structured-rs0010.rss", source, "RS0010");
+    assert_eq!(oracle.len(), 2, "fixture must exercise both profiles");
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0010 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0012_structured_multiset_parity() {
+    let source = r#"fn work() -> Unit
+    effects(io, may_panic)
+{
+    return Unit
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0012.rss", source, "RS0012");
+    assert_eq!(
+        oracle.len(),
+        2,
+        "fixture must exercise both removed effects"
+    );
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0012 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0016_structured_multiset_parity() {
+    let source = "features: mystery, other\n";
+    let oracle = checker_oracle_records("structured-rs0016.rss", source, "RS0016");
+    assert_eq!(
+        oracle.len(),
+        2,
+        "fixture must exercise both unknown features"
+    );
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0016 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0017_structured_multiset_parity() {
+    let source = "features: local, local, local\n";
+    let oracle = checker_oracle_records("structured-rs0017.rss", source, "RS0017");
+    assert_eq!(
+        oracle.len(),
+        2,
+        "fixture must exercise both duplicate features"
+    );
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0017 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0011_structured_multiset_parity() {
+    let source = r#"fn old(first: share String, second: share List<Int>) -> Unit {
+    return Unit
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0011.rss", source, "RS0011");
+    assert_eq!(oracle.len(), 2, "fixture must exercise both share types");
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0011 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0028_structured_multiset_parity() {
+    let source = r#"fn wrong(self: read String, other: Int, self: read String) -> Unit {
+    return Unit
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0028.rss", source, "RS0028");
+    assert_eq!(
+        oracle.len(),
+        2,
+        "fixture must exercise both self parameters"
+    );
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0028 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0033_structured_multiset_parity() {
+    let source = r#"fn first() -> Int {
+    return 9223372036854775808
+}
+
+fn second() -> Int {
+    return 999999999999999999999999999999
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0033.rss", source, "RS0033");
+    assert_eq!(oracle.len(), 2, "fixture must exercise both integers");
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0033 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0212_structured_multiset_parity() {
+    let source = r#"resource Connection derives(Clone, Eq, Hash) {
+    id: Int
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0212.rss", source, "RS0212");
+    assert_eq!(oracle.len(), 3, "fixture must exercise all banned derives");
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0212 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0701_structured_multiset_parity() {
+    let source = r#"resource Connection {
+    id: Int
+}
+
+struct Holder {
+    primary: Connection
+    backup: Connection
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0701.rss", source, "RS0701");
+    assert_eq!(
+        oracle.len(),
+        2,
+        "fixture must exercise both resource fields"
+    );
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0701 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0705_structured_multiset_parity() {
+    let source = r#"features: local
+
+resource Connection {
+    id: Int
+}
+
+fn inspect(first: read ResourcePool<Connection>, second: read ResourcePool<Connection>) -> Unit {
+    let managed = ResourcePool<Connection>.new(create: || Connection { id: 1 }, max_size: 1)
+}
+
+fn valid(pool: mut ResourcePool<Connection>, owned: take ResourcePool<Connection>) -> Unit {
+    local direct = ResourcePool<Connection>.new(create: || Connection { id: 1 }, max_size: 1)
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0705.rss", source, "RS0705");
+    assert_eq!(
+        oracle.len(),
+        3,
+        "fixture must exercise two parameters and one managed binding"
+    );
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0705 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0708_structured_multiset_parity() {
+    let source = r#"features: local
+
+resource Connection {
+    id: Int
+}
+
+const POOL_SIZE: Int = 2
+
+fn zero() -> Unit {
+    local pool = ResourcePool<Connection>.new(create: || Connection { id: 1 }, max_size: 0)
+}
+
+fn negative() -> Unit {
+    local pool = ResourcePool<Connection>.new(create: || Connection { id: 1 }, max_size: -1)
+}
+
+fn dynamic(size: Int) -> Unit {
+    local pool = ResourcePool<Connection>.new(create: || Connection { id: 1 }, max_size: size)
+}
+
+fn valid() -> Unit {
+    local literal = ResourcePool<Connection>.new(create: || Connection { id: 1 }, max_size: 1)
+    local named = ResourcePool<Connection>.new(create: || Connection { id: 1 }, max_size: POOL_SIZE)
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0708.rss", source, "RS0708");
+    assert_eq!(
+        oracle.len(),
+        3,
+        "fixture must exercise zero, negative, and dynamic sizes"
+    );
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0708 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0706_structured_multiset_parity() {
+    let source = r#"features: local
+
+resource File {
+    fd: Int
+}
+
+fn File.open_result(path: read Path) -> Result<File, IOError>
+fn File.stat(file: read File) -> Unit
+
+fn missing_first(path: read Path) -> Unit {
+    with File.open_result(path: read path) as file {
+        File.stat(file: read file)
+    }
+}
+
+fn valid(path: read Path) -> Result<Unit, IOError> {
+    with File.open_result(path: read path)? as file {
+        File.stat(file: read file)
+    }
+    return Ok(Unit)
+}
+
+fn missing_second(path: read Path) -> Unit {
+    with File.open_result(path: read path) as file {
+        File.stat(file: read file)
+    }
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0706.rss", source, "RS0706");
+    assert_eq!(oracle.len(), 2, "fixture must exercise both missing tries");
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0706 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0707_structured_multiset_parity() {
+    let source = r#"features: local
+
+resource Connection {
+    id: Int
+}
+
+fn Connection.open() -> Connection
+fn Connection.try_open() -> Result<Connection, IOError>
+
+fn bad_new() -> Unit {
+    local pool = ResourcePool<Connection>.new(
+        create: || Connection.try_open(),
+        max_size: 1,
+    )
+}
+
+fn bad_try_new() -> Result<Unit, IOError> {
+    local pool = ResourcePool<Connection>.try_new(
+        create: || Connection.open(),
+        max_size: 1,
+    )?
+    return Ok(Unit)
+}
+
+fn valid() -> Result<Unit, IOError> {
+    local direct = ResourcePool<Connection>.new(create: || Connection.open(), max_size: 1)
+    local checked = ResourcePool<Connection>.try_new(create: || Connection.try_open(), max_size: 1)?
+    return Ok(Unit)
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0707.rss", source, "RS0707");
+    assert_eq!(
+        oracle.len(),
+        2,
+        "fixture must exercise both constructor directions"
+    );
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0707 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0709_structured_multiset_parity() {
+    let source = r#"features: local
+
+resource Connection {
+    id: Int
+}
+
+fn Connection.open() -> Connection
+
+fn exercise() -> Unit {
+    local first = ResourcePool<Connection>.new(create: || Connection.open(), max_size: 2)
+    local second = ResourcePool<Connection>.new(create: || Connection.open(), max_size: 1)
+
+    with ResourcePool.borrow(pool: mut first) as lease {
+        with ResourcePool.borrow(pool: mut first) as nested {
+            Log.write(message: read "nested")
+        }
+        ResourcePool.reset(pool: mut first)
+        let count = ResourcePool.stats(pool: read first)
+        with ResourcePool.borrow(pool: mut second) as other {
+            Log.write(message: read "different pool")
+        }
+    }
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0709.rss", source, "RS0709");
+    assert_eq!(
+        oracle.len(),
+        3,
+        "fixture must exercise nested, mut, and read conflicts"
+    );
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0709 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0710_structured_multiset_parity() {
+    let source = r#"features: local
+
+resource Connection {
+    id: Int
+}
+
+fn Connection.open() -> Connection
+
+fn invalid(first: mut Connection, second: mut Connection) -> Unit {
+    ResourcePool.discard(lease: mut first)
+    ResourcePool.discard(lease: mut second)
+}
+
+fn valid() -> Unit {
+    local pool = ResourcePool<Connection>.new(create: || Connection.open(), max_size: 1)
+    with ResourcePool.borrow(pool: mut pool) as lease {
+        ResourcePool.discard(lease: mut lease)
+    }
+    ResourcePool.discard(lease: mut lease)
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0710.rss", source, "RS0710");
+    assert_eq!(
+        oracle.len(),
+        3,
+        "fixture must exercise ordinary values and an expired lease name"
+    );
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0710 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0902_structured_multiset_parity() {
+    let source = r#"struct Value {
+    id: Int
+}
+
+struct Holder {
+    first: weak Value
+    second: weak Int
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0902.rss", source, "RS0902");
+    assert_eq!(oracle.len(), 2, "fixture must exercise both weak fields");
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0902 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0901_structured_multiset_parity() {
+    let source = r#"features: local
+
+struct Rule {
+    name: String
+}
+
+struct Config {
+    first: handle List<Rule>
+    second: handle List<Rule>
+    owned: List<Rule>
+}
+
+fn consume(config: mut Config) -> Unit {
+    List.consume(list: take config.first)
+    List.consume(list: take config.owned)
+    List.consume(list: take config.second)
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0901.rss", source, "RS0901");
+    assert_eq!(oracle.len(), 2, "fixture must exercise both handle fields");
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0901 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs1003_structured_multiset_parity() {
+    let source = "own struct First\nown struct Second\n";
+    let oracle = checker_oracle_records("structured-rs1003.rss", source, "RS1003");
+    assert_eq!(oracle.len(), 2, "fixture must exercise both own structs");
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS1003 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0306_structured_multiset_parity() {
+    let source = r#"features: local
+
+class Session
+
+fn create() -> Unit {
+    local first = Session()
+    local second = Session()
+    return Unit
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0306.rss", source, "RS0306");
+    assert_eq!(oracle.len(), 2, "fixture must exercise both local bindings");
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0306 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs1002_structured_multiset_parity() {
+    let source = r#"fn convert(value: Int) -> Int {
+    let first = value as String
+    let second = value as Float
+    return value
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs1002.rss", source, "RS1002");
+    assert_eq!(oracle.len(), 2, "fixture must exercise both conversions");
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS1002 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs1004_structured_multiset_parity() {
+    let source = r#"fn first(value: &Int) -> Int {
+    return 0
+}
+
+fn second() -> &String {
+    return ""
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs1004.rss", source, "RS1004");
+    assert_eq!(oracle.len(), 2, "fixture must exercise both references");
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS1004 structured diagnostics diverged");
 }
 
 #[test]
@@ -1085,8 +1770,8 @@ fn checker_parity_corpus() {
 
 // ---------------------------------------------------------------------------
 // Package-contract parity — RS1301 is not a single-source checker diagnostic.
-// The first self-hosted slice covers public function contracts: missing source
-// implementation and interface/source signature mismatch.
+// The self-hosted checker covers functions plus the package data-model and
+// protocol declarations that production treats as one RS1301 contract surface.
 // ---------------------------------------------------------------------------
 
 fn compile_package_contract_checker() -> Result<RegVmExecutable, String> {
@@ -1116,8 +1801,21 @@ fn run_package_contract_checker(
     interface_source: &str,
     source: &str,
 ) -> Result<Vec<String>, String> {
+    run_package_contract_checker_with_native(exe, interface_source, source, "")
+}
+
+fn run_package_contract_checker_with_native(
+    exe: &RegVmExecutable,
+    interface_source: &str,
+    source: &str,
+    native_bindings: &str,
+) -> Result<Vec<String>, String> {
     let output = exe
-        .eval_main_with_args([interface_source.to_string(), source.to_string()])
+        .eval_main_with_args([
+            interface_source.to_string(),
+            source.to_string(),
+            native_bindings.to_string(),
+        ])
         .map_err(|e| format!("rss package contract checker failed to run: {e:?}"))?;
     parse_package_contract_output(&output.stdout)
 }
@@ -1156,9 +1854,27 @@ fn write_package_contract_fixture(
 }
 
 fn package_contract_oracle_codes(interface_source: &str, source: &str) -> Vec<String> {
+    package_contract_oracle_codes_with_native(interface_source, source, &[])
+}
+
+fn package_contract_oracle_codes_with_native(
+    interface_source: &str,
+    source: &str,
+    native_bindings: &[(&str, &str)],
+) -> Vec<String> {
     let dir = selfhost_unique_temp_dir("rss-selfhost-package-contract");
     write_package_contract_fixture(&dir, interface_source, source)
         .expect("package contract fixture should be writable");
+    if !native_bindings.is_empty() {
+        std::fs::create_dir_all(dir.join("native"))
+            .expect("native binding directory should be writable");
+        let mut manifest = String::from("[bindings]\n");
+        for (symbol, target) in native_bindings {
+            manifest.push_str(&format!("\"{symbol}\" = \"{target}\"\n"));
+        }
+        std::fs::write(dir.join("native/bindings.rssbind.toml"), manifest)
+            .expect("native binding manifest should be writable");
+    }
     let review = review_package_dir(&dir).expect("package review should succeed");
     let _ = std::fs::remove_dir_all(&dir);
     let mut codes = review
@@ -1173,6 +1889,54 @@ fn package_contract_oracle_codes(interface_source: &str, source: &str) -> Vec<St
     codes.sort();
     codes.dedup();
     codes
+}
+
+fn package_contract_oracle_bundle_codes(
+    interface_sources: &[(&str, &str)],
+    source_files: &[(&str, &str)],
+) -> Vec<String> {
+    let dir = selfhost_unique_temp_dir("rss-selfhost-package-contract-bundle");
+    std::fs::create_dir_all(dir.join("interface"))
+        .expect("package interface directory should be writable");
+    std::fs::create_dir_all(dir.join("src")).expect("package source directory should be writable");
+    std::fs::write(
+        dir.join("rsspkg.toml"),
+        "[package]\nname = \"selfhost-contract-bundle\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[interfaces]\npaths = [\"interface\"]\n",
+    )
+    .expect("package manifest should be writable");
+    for (path, contents) in interface_sources {
+        std::fs::write(dir.join("interface").join(path), contents)
+            .expect("package interface file should be writable");
+    }
+    for (path, contents) in source_files {
+        std::fs::write(dir.join("src").join(path), contents)
+            .expect("package source file should be writable");
+    }
+    let review = review_package_dir(&dir).expect("package bundle review should succeed");
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut codes = review
+        .diagnostics
+        .into_iter()
+        .filter(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && diagnostic.code == code::PACKAGE_INTERFACE_MISMATCH
+        })
+        .map(|diagnostic| diagnostic.code)
+        .collect::<Vec<_>>();
+    codes.sort();
+    codes.dedup();
+    codes
+}
+
+fn join_package_contract_sources(files: &[(&str, &str)]) -> String {
+    let mut joined = String::new();
+    for (_, contents) in files {
+        joined.push_str(contents);
+        if !contents.ends_with('\n') {
+            joined.push('\n');
+        }
+    }
+    joined
 }
 
 #[test]
@@ -1202,6 +1966,132 @@ fn package_contract_function_rs1301_parity_smoke() {
         assert_eq!(
             oracle, actual,
             "package contract parity diverged for {name}"
+        );
+    }
+}
+
+#[test]
+fn package_contract_declaration_rs1301_parity() {
+    let cases = [
+        (
+            "matching struct",
+            "struct Config {\n    retries: Int\n}\n",
+            "pub struct Config {\n    retries: Int\n}\n",
+        ),
+        (
+            "struct field mismatch",
+            "struct Config {\n    retries: Int\n}\n",
+            "pub struct Config {\n    retries: String\n}\n",
+        ),
+        (
+            "opaque struct hides fields",
+            "opaque struct Config\n",
+            "pub struct Config {\n    retries: Int\n}\n",
+        ),
+        (
+            "opaque type still checks kind",
+            "opaque struct Config\n",
+            "pub resource Config {\n    retries: Int\n}\n",
+        ),
+        (
+            "matching sum",
+            "sum PackageError {\n    Io(code: Int),\n    Invalid\n}\n",
+            "pub sum PackageError {\n    Io(code: Int),\n    Invalid\n}\n",
+        ),
+        (
+            "sum variant mismatch",
+            "sum PackageError {\n    Io(code: Int),\n    Invalid\n}\n",
+            "pub sum PackageError {\n    Io(code: String),\n    Invalid\n}\n",
+        ),
+        (
+            "matching alias and const",
+            "type PackageName = String\nconst MAX_RETRIES: Int = 3\n",
+            "pub type PackageName = String\npub const MAX_RETRIES: Int = 3\n",
+        ),
+        (
+            "const mismatch",
+            "const MAX_RETRIES: Int = 3\n",
+            "pub const MAX_RETRIES: Int = 4\n",
+        ),
+        (
+            "matching protocol",
+            "protocol Writer {\n    fn write(self: mut Self, message: read String) -> Unit\n        effects(retains(message))\n}\n",
+            "protocol Writer {\n    fn write(self: mut Self, message: read String) -> Unit\n        effects(retains(message))\n}\n",
+        ),
+        (
+            "protocol mismatch",
+            "protocol Writer {\n    fn write(self: mut Self, message: read String) -> Unit\n        effects(retains(message))\n}\n",
+            "protocol Writer {\n    fn write(self: mut Self, message: read String) -> Unit\n}\n",
+        ),
+        (
+            "protocol impl mismatch",
+            "protocol Writer {\n    fn write(self: mut Self) -> Unit\n}\nstruct Buffer\nimpl Writer for Buffer {\n    write = Buffer.write\n}\n",
+            "protocol Writer {\n    fn write(self: mut Self) -> Unit\n}\npub struct Buffer\nimpl Writer for Buffer {\n    write = Buffer.audit\n}\n",
+        ),
+    ];
+    let exe = compile_package_contract_checker().expect("rss package checker should compile");
+    for (name, interface_source, source) in cases {
+        let oracle = package_contract_oracle_codes(interface_source, source);
+        let actual = run_package_contract_checker(&exe, interface_source, source)
+            .expect("rss package contract checker should run");
+        assert_eq!(
+            oracle, actual,
+            "package declaration contract parity diverged for {name}"
+        );
+    }
+}
+
+#[test]
+fn package_contract_native_function_exemption_parity() {
+    let interface_source = "features: native\n\nnative fn Native.echo(message: read String) -> String\n    effects(native)\n";
+    let source = "fn helper() -> Unit {\n    return Unit\n}\n";
+    let native_bindings = [("Native.echo", "rss_native::echo")];
+    let oracle =
+        package_contract_oracle_codes_with_native(interface_source, source, &native_bindings);
+    let exe = compile_package_contract_checker().expect("rss package checker should compile");
+    let actual =
+        run_package_contract_checker_with_native(&exe, interface_source, source, "Native.echo")
+            .expect("rss package contract checker should run");
+    assert_eq!(oracle, actual, "native interface exemption diverged");
+}
+
+#[test]
+fn package_contract_resolved_multifile_bundle_parity() {
+    let interface_sources = [
+        ("api.rssi", "fn render(body: read String) -> String\n"),
+        (
+            "model.rssi",
+            "struct Config {\n    retries: Int\n}\ntype PackageName = String\n",
+        ),
+    ];
+    let matching_sources = [
+        (
+            "api.rss",
+            "pub fn render(body: read String) -> String {\n    return body\n}\n",
+        ),
+        (
+            "model.rss",
+            "pub struct Config {\n    retries: Int\n}\npub type PackageName = String\n",
+        ),
+    ];
+    let missing_sources = [(
+        "api.rss",
+        "pub fn render(body: read String) -> String {\n    return body\n}\n",
+    )];
+    let exe = compile_package_contract_checker().expect("rss package checker should compile");
+    let interface_bundle = join_package_contract_sources(&interface_sources);
+
+    for (name, sources) in [
+        ("matching bundle", matching_sources.as_slice()),
+        ("missing model file", missing_sources.as_slice()),
+    ] {
+        let oracle = package_contract_oracle_bundle_codes(&interface_sources, sources);
+        let source_bundle = join_package_contract_sources(sources);
+        let actual = run_package_contract_checker(&exe, &interface_bundle, &source_bundle)
+            .expect("rss package bundle checker should run");
+        assert_eq!(
+            oracle, actual,
+            "resolved package bundle diverged for {name}"
         );
     }
 }

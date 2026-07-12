@@ -50,8 +50,8 @@ jobs:
       - name: Package contract RS1301 parity
         run: |
           cargo test -p rsscript --release --lib \
-            selfhost_parity::package_contract_function_rs1301_parity_smoke \
-            -- --exact --nocapture --test-threads=1
+            selfhost_parity::package_contract_ \
+            -- --nocapture --test-threads=1
 
   checker-full:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
