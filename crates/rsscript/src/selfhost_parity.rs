@@ -1123,6 +1123,58 @@ fn build() -> Pair
 }
 
 #[test]
+fn checker_rs0018_structured_multiset_parity() {
+    let source = r#"fn may_block(value: Int) -> Int {
+    return value
+}
+
+fn safe(value: Int) -> Int
+    effects(no_block)
+{
+    return value
+}
+
+fn promised(value: Int) -> Int
+    effects(no_block)
+{
+    let first = may_block(value: value)
+    let second = may_block(value: first)
+    return safe(value: second)
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0018.rss", source, "RS0018");
+    assert_eq!(oracle.len(), 2, "fixture must preserve both blocking calls");
+    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0018 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0019_structured_multiset_parity() {
+    let source = r#"fn may_panic(value: Int) -> Int {
+    return value
+}
+
+fn safe(value: Int) -> Int
+    effects(no_panic)
+{
+    return value
+}
+
+fn promised(value: Int) -> Int
+    effects(no_panic)
+{
+    let first = may_panic(value: value)
+    let second = may_panic(value: first)
+    return safe(value: second)
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0019.rss", source, "RS0019");
+    assert_eq!(oracle.len(), 2, "fixture must preserve both panic calls");
+    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0019 structured diagnostics diverged");
+}
+
+#[test]
 fn checker_rs0016_structured_multiset_parity() {
     let source = "features: mystery, other\n";
     let oracle = checker_oracle_records("structured-rs0016.rss", source, "RS0016");

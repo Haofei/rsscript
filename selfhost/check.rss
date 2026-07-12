@@ -6266,7 +6266,7 @@ fn fn_has_named_effect(toks: read List<Tok>, start: read Int, effName: read Stri
 
 // RS0018/RS0019: a guarantee-carrying fn whose body makes an unqualified call to
 // a user function that does not carry the same guarantee.
-fn fn_guarantee_call_bad(toks: read List<Tok>, start: read Int, effName: read String, allFns: read Set<String>, guaranteeFns: read Set<String>) -> Bool {
+fn collect_fn_guarantee_call_bad_sites(source: read String, toks: read List<Tok>, start: read Int, effName: read String, allFns: read Set<String>, guaranteeFns: read Set<String>, out: mut List<DiagnosticSite>) -> Bool {
     if fn_has_named_effect(toks: read toks, start: read start, effName: read effName) == false { return false }
     let ns = fn_name_start(toks: read toks, i: read start)
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
@@ -6280,7 +6280,13 @@ fn fn_guarantee_call_bad(toks: read List<Tok>, start: read Int, effName: read St
             let name = tk_text(toks: read toks, i: read (k - 1))
             let qualified = at_symbol(toks: read toks, i: read (k - 2), code: read SYM_DOT) && is_ident_tok(toks: read toks, i: read (k - 3))
             if qualified == false {
-                if Set.contains<String>(set: read allFns, value: read name) && Set.contains<String>(set: read guaranteeFns, value: read name) == false { hit = true }
+                if Set.contains<String>(set: read allFns, value: read name) && Set.contains<String>(set: read guaranteeFns, value: read name) == false {
+                    let close = find_matching(toks: read toks, open: read k, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+                    if close > 0 {
+                        List.push<DiagnosticSite>(list: mut out, value: read token_range_diagnostic_site(source: read source, toks: read toks, start: read (k - 1), endInclusive: read (k - 1)))
+                        hit = true
+                    }
+                }
             }
         }
         k = k + 1
@@ -11487,7 +11493,9 @@ fn main() -> Unit {
     let mut noallocAlloc = false
     let mut noallocAllocSites = List<DiagnosticSite>.new()
     let mut noBlockCall = false
+    let mut noBlockCallSites = List<DiagnosticSite>.new()
     let mut noPanicCall = false
+    let mut noPanicCallSites = List<DiagnosticSite>.new()
     // RS0024: forward-reference-tolerant known-type set for the whole file.
     let declared = collect_declared_types(toks: read toks)
     // RS0008: user sum names whose every variant is payloadless.
@@ -11858,8 +11866,8 @@ fn main() -> Unit {
                     if generics_unknown_protocol(toks: read toks, nameEnd: read dotted_end(toks: read toks, i: read ns), protocols: read protocols) { unknownProtocol = true }
                     // RS0014/0018/0019: runtime-guarantee body violations.
                     if collect_fn_noalloc_alloc_sites(source: read source, toks: read toks, start: read i, declared: read declared, out: mut noallocAllocSites) { noallocAlloc = true }
-                    if fn_guarantee_call_bad(toks: read toks, start: read i, effName: read "no_block", allFns: read allFns, guaranteeFns: read noBlockFns) { noBlockCall = true }
-                    if fn_guarantee_call_bad(toks: read toks, start: read i, effName: read "no_panic", allFns: read allFns, guaranteeFns: read noPanicFns) { noPanicCall = true }
+                    if collect_fn_guarantee_call_bad_sites(source: read source, toks: read toks, start: read i, effName: read "no_block", allFns: read allFns, guaranteeFns: read noBlockFns, out: mut noBlockCallSites) { noBlockCall = true }
+                    if collect_fn_guarantee_call_bad_sites(source: read source, toks: read toks, start: read i, effName: read "no_panic", allFns: read allFns, guaranteeFns: read noPanicFns, out: mut noPanicCallSites) { noPanicCall = true }
                     // RS0101: a fn with `effects(native)` (gated by the `native`
                     // feature), and a `native fn` missing that effect (ungated).
                     let hasNativeEff = effects_name_probe(toks: read toks, start: read i, mode: read 2)
@@ -11915,6 +11923,8 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_records(code: read "RS0205", toks: read toks, tokenIndices: read dupArgTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0201", toks: read toks, tokenIndices: read unnamedArgTokens)
         emitted = emitted + emit_diagnostic_sites(code: read "RS0014", sites: read noallocAllocSites)
+        emitted = emitted + emit_diagnostic_sites(code: read "RS0018", sites: read noBlockCallSites)
+        emitted = emitted + emit_diagnostic_sites(code: read "RS0019", sites: read noPanicCallSites)
         emitted = emitted + emit_diagnostic_records(code: read "RS0311", toks: read toks, tokenIndices: read immutableAssignTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0313", toks: read toks, tokenIndices: read assignTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0312", toks: read toks, tokenIndices: read indexAssignBadTokens)
