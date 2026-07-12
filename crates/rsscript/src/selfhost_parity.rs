@@ -1230,6 +1230,33 @@ fn checker_rs0028_structured_multiset_parity() {
 }
 
 #[test]
+fn checker_rs0029_structured_multiset_parity() {
+    let source = r#"features: async
+
+async fn fetch(value: read Int) -> Int {
+    return value
+}
+
+fn exercise(value: read Int) -> Unit {
+    let first = await fetch(value: read value)
+    let second = await fetch(value: read first)
+}
+
+async fn valid(value: read Int) -> Int {
+    return await fetch(value: read value)
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0029.rss", source, "RS0029");
+    assert_eq!(
+        oracle.len(),
+        2,
+        "fixture must preserve two invalid awaits and exempt async functions"
+    );
+    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0029 structured diagnostics diverged");
+}
+
+#[test]
 fn checker_rs0022_structured_multiset_parity() {
     let source = r#"features: async
 

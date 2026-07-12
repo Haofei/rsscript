@@ -5919,7 +5919,11 @@ fn fn_is_async(toks: read List<Tok>, start: read Int) -> Bool {
 
 // RS0029: a non-async fn body that contains an `await` keyword and no `async`
 // (task_group `async let`) binding to make the await valid.
-fn fn_has_bad_await(toks: read List<Tok>, start: read Int) -> Bool {
+fn collect_fn_bad_await_tokens(
+    toks: read List<Tok>,
+    start: read Int,
+    out: mut List<Int>
+) -> Bool {
     if fn_is_async(toks: read toks, start: read start) { return false }
     let ns = fn_name_start(toks: read toks, i: read start)
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
@@ -5938,7 +5942,15 @@ fn fn_has_bad_await(toks: read List<Tok>, start: read Int) -> Bool {
         if is_kw_text(toks: read toks, i: read k, word: read "task_group") { suppress = true }
         k = k + 1
     }
-    return hasAwait && suppress == false
+    if hasAwait == false || suppress { return false }
+    k = sigEnd + 1
+    while k < bodyClose {
+        if is_kw_text(toks: read toks, i: read k, word: read "await") {
+            List.push<Int>(list: mut out, value: read k)
+        }
+        k = k + 1
+    }
+    return true
 }
 
 // ---------------------------------------------------------------------------
@@ -11500,6 +11512,7 @@ fn main() -> Unit {
     let mut noallocCall = false
     // RS0029: any `await` in a non-async function.
     let mut badAwait = false
+    let mut badAwaitTokens = List<Int>.new()
     // RS0013: an invalid `?` (non-Result return, concrete non-Result operand, or
     // known Result error-type mismatch).
     let mut invalidTry = false
@@ -11868,7 +11881,7 @@ fn main() -> Unit {
                     if fn_pure_bad(toks: read toks, start: read i, resources: read resources, sumVariants: read sumVariants, pureFns: read pureFns, allFns: read allFns, declared: read declared) { pureBad = true }
                     if fn_has_noalloc_call(toks: read toks, start: read i, declared: read declared, sumVariants: read sumVariants, noallocFns: read noallocFns) { noallocCall = true }
                     if fn_has_nonexhaustive_match(toks: read toks, start: read i, declared: read declared, allFns: read allFns) { nonExhaustive = true }
-                    if fn_has_bad_await(toks: read toks, start: read i) { badAwait = true }
+                    if collect_fn_bad_await_tokens(toks: read toks, start: read i, out: mut badAwaitTokens) { badAwait = true }
                     if fn_invalid_try(toks: read toks, start: read i, declared: read declared, allFns: read allFns) { invalidTry = true }
                     if collect_fn_unnamed_arg_tokens(toks: read toks, start: read i, pubFns: read pubFns, dottedFns: read dottedFns, out: mut unnamedArgTokens) { unnamedArg = true }
                     if fn_data_effect_bad(toks: read toks, start: read i, declared: read declared, methodNames: read methodNames) { missingDataEffect = true }
@@ -11963,6 +11976,7 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_sites(code: read "RS0027", sites: read unknownProtocolSites)
         emitted = emitted + emit_diagnostic_records(code: read "RS0023", toks: read toks, tokenIndices: read fdSurfaceTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0022", toks: read toks, tokenIndices: read asyncNotConsumedTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0029", toks: read toks, tokenIndices: read badAwaitTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0311", toks: read toks, tokenIndices: read immutableAssignTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0313", toks: read toks, tokenIndices: read assignTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0312", toks: read toks, tokenIndices: read indexAssignBadTokens)
@@ -12113,7 +12127,7 @@ fn main() -> Unit {
     if nonExhaustive {
         Log.write(message: read "RS0021")
     }
-    if badAwait {
+    if badAwait && structured == false {
         Log.write(message: read "RS0029")
     }
     if invalidTry {
