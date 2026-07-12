@@ -1390,6 +1390,32 @@ fn exercise() -> Unit {
 }
 
 #[test]
+fn checker_rs0036_structured_multiset_parity() {
+    let source = r#"features: async, native, local
+
+async fn exercise() -> Result<Unit, ChannelError> {
+    let first = Channel.message<List<Int>>(capacity: 4)?
+    let second = Channel.message<Map<String, Int>>(capacity: 4)?
+    let valid = Channel.message<String>(capacity: 4)?
+    return Ok(Unit)
+}
+
+async fn generic<T>() -> Result<Unit, ChannelError> {
+    let unresolved = Channel.message<T>(capacity: 4)?
+    return Ok(Unit)
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0036.rss", source, "RS0036");
+    assert_eq!(
+        oracle.len(),
+        2,
+        "fixture must preserve two non-transferable calls and exempt transferable/generic payloads"
+    );
+    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0036 structured diagnostics diverged");
+}
+
+#[test]
 fn checker_rs0201_structured_multiset_parity() {
     let source = r#"pub fn publish(first: Int, second: Int) -> Unit {
     return Unit

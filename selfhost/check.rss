@@ -3647,8 +3647,15 @@ fn channel_payload_transferable(toks: read List<Tok>, lo: read Int, hi: read Int
 }
 
 // RS0036 inside [start,end): any `Channel.message<T>` whose payload `T` is not transferable.
-fn region_has_nontransferable_channel(toks: read List<Tok>, start: read Int, end: read Int, generics: read Set<String>) -> Bool {
+fn collect_region_nontransferable_channel_tokens(
+    toks: read List<Tok>,
+    start: read Int,
+    end: read Int,
+    generics: read Set<String>,
+    out: mut List<Int>
+) -> Bool {
     let mut k = start
+    let mut hit = false
     while k < end {
         if tk_text(toks: read toks, i: read k) == "Channel" && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_DOT) && tk_text(toks: read toks, i: read (k + 2)) == "message" && at_symbol(toks: read toks, i: read (k + 3), code: read SYM_LANGLE) {
             let open = k + 3
@@ -3666,20 +3673,22 @@ fn region_has_nontransferable_channel(toks: read List<Tok>, start: read Int, end
             }
             if close > open + 1 {
                 if channel_payload_transferable(toks: read toks, lo: read (open + 1), hi: read close, generics: read generics) == false {
-                    return true
+                    List.push<Int>(list: mut out, value: read k)
+                    hit = true
                 }
             }
         }
         k = k + 1
     }
-    return false
+    return hit
 }
 
 // RS0036: whole-file wrapper. Walk function bodies so bare function generics can
 // be skipped exactly like the Rust analyzer.
-fn has_nontransferable_channel(toks: read List<Tok>) -> Bool {
+fn collect_nontransferable_channel_tokens(toks: read List<Tok>, out: mut List<Int>) -> Bool {
     let n = List.len(list: read toks)
     let mut k = 0
+    let mut hit = false
     while k < n {
         let isPub = at_ident(toks: read toks, i: read k, wid: read WORD_PUB)
         if starts_fn_like(toks: read toks, i: read k, isPub: read isPub) {
@@ -3690,14 +3699,20 @@ fn has_nontransferable_channel(toks: read List<Tok>) -> Bool {
             if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) {
                 let bodyClose = find_matching(toks: read toks, open: read sigEnd, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
                 if bodyClose > 0 {
-                    if region_has_nontransferable_channel(toks: read toks, start: read sigEnd, end: read bodyClose, generics: read generics) { return true }
+                    if collect_region_nontransferable_channel_tokens(
+                        toks: read toks,
+                        start: read sigEnd,
+                        end: read bodyClose,
+                        generics: read generics,
+                        out: mut out
+                    ) { hit = true }
                     k = bodyClose
                 }
             }
         }
         k = k + 1
     }
-    return false
+    return hit
 }
 
 // Dotted names of fns whose return type is `Result<Resource, E>` (or `Result<fresh Resource, E>`) —
@@ -11699,7 +11714,8 @@ fn main() -> Unit {
     let leaseConflict = collect_active_lease_conflict_tokens(toks: read toks, out: mut leaseConflictTokens)
     let mut discardNonLeaseTokens = List<Int>.new()
     let discardNonLease = collect_discard_non_lease_tokens(toks: read toks, out: mut discardNonLeaseTokens)
-    let nonTransferPayload = has_nontransferable_channel(toks: read toks)
+    let mut nonTransferPayloadTokens = List<Int>.new()
+    let nonTransferPayload = collect_nontransferable_channel_tokens(toks: read toks, out: mut nonTransferPayloadTokens)
     let mut assignTypeMismatch = false
     let mut assignTypeMismatchTokens = List<Int>.new()
     // RS0312: index assignment on a non-List container.
@@ -11977,6 +11993,7 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_records(code: read "RS0023", toks: read toks, tokenIndices: read fdSurfaceTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0022", toks: read toks, tokenIndices: read asyncNotConsumedTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0029", toks: read toks, tokenIndices: read badAwaitTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0036", toks: read toks, tokenIndices: read nonTransferPayloadTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0311", toks: read toks, tokenIndices: read immutableAssignTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0313", toks: read toks, tokenIndices: read assignTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0312", toks: read toks, tokenIndices: read indexAssignBadTokens)
@@ -12335,7 +12352,7 @@ fn main() -> Unit {
     if discardNonLease {
         Log.write(message: read "RS0710")
     }
-    if nonTransferPayload {
+    if nonTransferPayload && structured == false {
         Log.write(message: read "RS0036")
     }
     if resourceField {
