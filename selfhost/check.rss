@@ -6775,7 +6775,7 @@ fn collect_fresh_requires_local_sites(source: read String, toks: read List<Tok>,
 // type parameter, not a struct (oracle checks/body/resource_pool.rs). FP-safe: fire
 // only when the fresh return type name is one of the fn's own `<...>` generic params —
 // a concrete non-struct fresh return (class/resource) is a safe false-negative.
-fn fn_fresh_return_generic_bad(toks: read List<Tok>, start: read Int, classes: read Set<String>) -> Bool {
+fn collect_fn_invalid_fresh_return_tokens(toks: read List<Tok>, start: read Int, classes: read Set<String>, out: mut List<Int>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
     let mut p = dotted_end(toks: read toks, i: read ns)
     let mut genOpen = 0 - 1
@@ -6791,7 +6791,6 @@ fn fn_fresh_return_generic_bad(toks: read List<Tok>, start: read Int, classes: r
     if close < 0 { return false }
     if at_symbol(toks: read toks, i: read (close + 1), code: read SYM_ARROW) == false { return false }
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
-    if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
     // Scan the whole return-type region for a `fresh X` (possibly nested, e.g.
     // `Result<fresh User, E>`) whose X is a KNOWN non-struct: a scalar, a declared
     // class, or one of the fn's own generic params.
@@ -6801,10 +6800,13 @@ fn fn_fresh_return_generic_bad(toks: read List<Tok>, start: read Int, classes: r
         if is_kw_text(toks: read toks, i: read k, word: read "fresh") && is_ident_tok(toks: read toks, i: read (k + 1)) {
             let xname = tk_text(toks: read toks, i: read (k + 1))
             if is_scalar_name(name: read xname) {
+                List.push<Int>(list: mut out, value: read (k + 1))
                 hit = true
             } else if Set.contains<String>(set: read classes, value: read xname) {
+                List.push<Int>(list: mut out, value: read (k + 1))
                 hit = true
             } else if genOpen >= 0 && region_has_text(toks: read toks, s: read (genOpen + 1), e: read genClose, word: read xname) {
+                List.push<Int>(list: mut out, value: read (k + 1))
                 hit = true
             }
         }
@@ -6813,7 +6815,7 @@ fn fn_fresh_return_generic_bad(toks: read List<Tok>, start: read Int, classes: r
     return hit
 }
 
-fn has_invalid_fresh_return(toks: read List<Tok>) -> Bool {
+fn collect_invalid_fresh_return_tokens(toks: read List<Tok>, out: mut List<Int>) -> Bool {
     let mut classes = Set<String>.new()
     let mut nonClasses = Set<String>.new()
     collect_type_kinds(toks: read toks, classes: mut classes, nonClasses: mut nonClasses)
@@ -6838,7 +6840,7 @@ fn has_invalid_fresh_return(toks: read List<Tok>) -> Bool {
                 if r < 0 {
                     running = false
                 } else {
-                    if fn_fresh_return_generic_bad(toks: read toks, start: read i, classes: read classes) { hit = true }
+                    if collect_fn_invalid_fresh_return_tokens(toks: read toks, start: read i, classes: read classes, out: mut out) { hit = true }
                     i = r
                 }
             } else {
@@ -11522,7 +11524,8 @@ fn main() -> Unit {
     let mut freshMutSites = List<DiagnosticSite>.new()
     let freshMut = collect_fresh_requires_local_sites(source: read source, toks: read toks, out: mut freshMutSites)
     // RS0603: a fresh return type that is a generic param, not a struct.
-    let invalidFreshRet = has_invalid_fresh_return(toks: read toks)
+    let mut invalidFreshRetTokens = List<Int>.new()
+    let invalidFreshRet = collect_invalid_fresh_return_tokens(toks: read toks, out: mut invalidFreshRetTokens)
     // RS0705: a ResourcePool value bound with let instead of local.
     let mut poolNotLocalTokens = List<Int>.new()
     let poolNotLocal = collect_resourcepool_not_local_tokens(toks: read toks, out: mut poolNotLocalTokens)
@@ -11890,6 +11893,7 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_records(code: read "RS0501", toks: read toks, tokenIndices: read retainedLocalTokens)
         emitted = emitted + emit_diagnostic_sites(code: read "RS0601", sites: read freshReturnBadSites)
         emitted = emitted + emit_diagnostic_sites(code: read "RS0604", sites: read freshMutSites)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0603", toks: read toks, tokenIndices: read invalidFreshRetTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0212", toks: read toks, tokenIndices: read resourceDeriveTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0306", toks: read toks, tokenIndices: read localClassTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0701", toks: read toks, tokenIndices: read resourceFieldTokens)

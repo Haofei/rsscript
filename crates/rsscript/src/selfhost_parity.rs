@@ -1881,6 +1881,33 @@ fn exercise() -> Unit {
 }
 
 #[test]
+fn checker_rs0603_structured_multiset_parity() {
+    let source = r#"class User {
+    name: String
+}
+
+class BuildError {
+    code: Int
+}
+
+fn direct() -> fresh User
+fn nested() -> Result<fresh User, BuildError>
+
+fn generic<T>() -> fresh T {
+    return value
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0603.rss", source, "RS0603");
+    assert_eq!(
+        oracle.len(),
+        3,
+        "fixture must exercise direct, nested, and generic fresh targets"
+    );
+    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0603 structured diagnostics diverged");
+}
+
+#[test]
 fn checker_rs0311_structured_multiset_parity() {
     let source = r#"features: local
 
