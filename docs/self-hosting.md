@@ -81,7 +81,7 @@ must not invoke Cargo.
 | Recognizer | `selfhost/parser.rss` | Top-level accept/reject parity | Does not produce the reusable AST |
 | AST producer | `selfhost/astdump.rss` | Canonical AST dump parity | Reparses tokens and streams text instead of building an AST |
 | Type helpers | `selfhost/types.rss` | Shared canonical type-string operations | Not a complete symbol/type representation |
-| Single-file checker | `selfhost/check.rss` | Presence parity for 83 diagnostic families; occurrence+span parity for 35 families | Remaining families still use independent file-level token probes |
+| Single-file checker | `selfhost/check.rss` | Presence parity for 83 diagnostic families; occurrence+span parity for 42 families | Remaining families still use independent file-level token probes |
 | Package checker | `selfhost/package_contract.rss` | `RS1301` parity for functions, data declarations, protocols/impls, native exemptions, and resolved multi-file bundles | Path-sensitive bundle records and semantic edge cases remain |
 | Lowering and IR | Rust | Production compilation | No RSS implementation |
 | VM/JIT/AOT backend | Rust | Production execution and code generation | No bootstrap backend written in RSS |
@@ -102,7 +102,7 @@ Snapshot: **2026-07-12**, from local Docker runs against this worktree.
 
 | Gate | Result | Scope |
 |------|--------|-------|
-| Self-host parity unit/smoke suite | 59 passed, 6 ignored | Non-exhaustive harness tests; full Docker run on 2026-07-12 took 185.10s |
+| Self-host parity unit/smoke suite | 66 passed, 6 ignored | Non-exhaustive harness tests; full Docker run on 2026-07-12 took 391.98s |
 | Lexer corpus parity, tier 2 | 622 / 622 | Full checked-in RSS corpus |
 | Parser recognition parity, tier 1 | 622 / 622 | Full checked-in RSS corpus |
 | Checker FAST parity | 618 / 618 | Non-giant inputs; diagnostic-code presence only |
@@ -137,8 +137,8 @@ Exit: every supported frontend result is deterministic and compared at the
 correct semantic level, including package contracts.
 
 Structured checker migration currently covers RS0002-RS0008, RS0010-RS0012,
-RS0016-RS0017, RS0028, RS0033-RS0034, RS0205, RS0212, RS0306, RS0311, RS0701,
-RS0705-RS0711, RS0901-RS0904, and RS1001-RS1004 (35 of 83
+RS0016-RS0017, RS0028, RS0033-RS0034, RS0205, RS0212, RS0301, RS0306-RS0308,
+RS0311-RS0313, RS0401, RS0501, RS0701, RS0705-RS0711, RS0901-RS0904, and RS1001-RS1004 (42 of 83
 presence-parity families).
 The canonical wire record is
 `code<TAB>line<TAB>column<TAB>length`; records are sorted and compared as
@@ -241,13 +241,13 @@ Each RSS-written layer runs against the same input as its production Rust oracle
 | Lexer | `selfhost/lexer.rss` | `crate::lexer::lex`; canonical token records |
 | Parser recognition | `selfhost/parser.rss` | `crate::syntax::parse_source_raw`; accept/reject and position tier |
 | AST dump | `selfhost/astdump.rss` | surface-preserving Rust AST dump; byte-exact text |
-| Checker | `selfhost/check.rss` | `crate::analyze_source`; target-code presence for 83 families and structured occurrence+span parity for 35 |
+| Checker | `selfhost/check.rss` | `crate::analyze_source`; target-code presence for 83 families and structured occurrence+span parity for 42 |
 | Package contract | `selfhost/package_contract.rss` | `crate::review_package_dir`; filtered `RS1301` results |
 | Future lowering | RSS lowering | normalized Rust IR; byte-exact canonical serialization |
 | Future backend | RSS C emitter | VM/existing AOT observable behavior and generated-artifact checks |
 
 The legacy checker corpus gate compares diagnostic-code presence only. The
-structured migration compares occurrence counts and stable spans for 35
+structured migration compares occurrence counts and stable spans for 42
 families, but does not yet compare messages, label classes, causes, or fixes.
 Stage 1 explicitly closes that limitation family by family.
 

@@ -1278,7 +1278,7 @@ fn dynamic(size: Int) -> Unit {
     local pool = ResourcePool<Connection>.new(create: || Connection { id: 1 }, max_size: size)
 }
 
-fn valid() -> Unit {
+fn rebound_name_stays_moved() -> Unit {
     local literal = ResourcePool<Connection>.new(create: || Connection { id: 1 }, max_size: 1)
     local named = ResourcePool<Connection>.new(create: || Connection { id: 1 }, max_size: POOL_SIZE)
 }
@@ -1621,6 +1621,190 @@ fn create() -> Unit {
 }
 
 #[test]
+fn checker_rs0307_structured_multiset_parity() {
+    let source = r#"features: local
+
+class User {
+    id: Int
+}
+
+struct Frame {
+    id: Int
+}
+
+fn invalid(user: read User) -> Unit {
+    let managed = User(id: 1)
+    let first = manage user
+    let second = manage managed
+}
+
+fn valid() -> Unit {
+    local frame = Frame(id: 1)
+    let promoted = manage frame
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0307.rss", source, "RS0307");
+    assert_eq!(
+        oracle.len(),
+        2,
+        "fixture must exercise parameter and let values"
+    );
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0307 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0308_structured_multiset_parity() {
+    let source = r#"features: local
+
+struct Buffer {
+    id: Int
+}
+
+fn Buffer.consume(buffer: take Buffer) -> Unit
+
+fn invalid(buffer: read Buffer) -> Unit {
+    let managed = Buffer(id: 1)
+    Buffer.consume(buffer: take buffer)
+    Buffer.consume(buffer: take managed)
+}
+
+fn valid(owned: take Buffer) -> Unit {
+    local direct = Buffer(id: 1)
+    Buffer.consume(buffer: take direct)
+    Buffer.consume(buffer: take owned)
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0308.rss", source, "RS0308");
+    assert_eq!(
+        oracle.len(),
+        2,
+        "fixture must exercise parameter and let values"
+    );
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0308 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0301_structured_multiset_parity() {
+    let source = r#"features: local
+
+struct Rules {
+    id: Int
+}
+
+struct Holder {
+    rules: handle Rules
+}
+
+fn Holder.create() -> fresh Holder
+
+fn invalid() -> Unit {
+    let shared = Rules(id: 1)
+    local first = read shared
+    local second = read Some(shared)
+    local holder = Holder.create()
+    local third = read holder.rules
+    local fourth = read Ok(holder.rules)
+}
+
+fn valid() -> Unit {
+    local owned = Rules(id: 1)
+    local copy = read owned
+    local number = 1
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0301.rss", source, "RS0301");
+    assert_eq!(
+        oracle.len(),
+        4,
+        "fixture must exercise managed values, wrappers, and handle fields"
+    );
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0301 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0401_structured_multiset_parity() {
+    let source = r#"features: local
+
+struct Frame {
+    id: Int
+}
+
+fn consume(value: take Frame) -> Unit
+
+fn invalid_direct() -> Unit {
+    local value = Frame(id: 1)
+    consume(value: take value)
+    Log.write(message: read "moved")
+    let first = value.id
+    let second = value.id
+}
+
+fn invalid_field() -> Unit {
+    local holder = Frame(id: 2)
+    let moved = manage holder.id
+    let later = holder.id
+}
+
+fn valid() -> Unit {
+    local value = Frame(id: 3)
+    consume(value: take value)
+    local value = Frame(id: 4)
+    let id = value.id
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0401.rss", source, "RS0401");
+    assert_eq!(
+        oracle.len(),
+        4,
+        "fixture must exercise repeated direct uses, a field path, and a rebound name"
+    );
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0401 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0501_structured_multiset_parity() {
+    let source = r#"features: local
+
+struct Item {
+    id: Int
+}
+
+fn Cache.store(value: read Item) -> Unit
+    effects(retains(value))
+
+fn Cache.store_option(value: read Option<Item>) -> Unit
+    effects(retains(value))
+
+fn exercise() -> Unit {
+    local first = Item(id: 1)
+    local second = Item(id: 2)
+    let managed = Item(id: 3)
+    Cache.store(value: read first)
+    Cache.store(value: read second)
+    Cache.store_option(value: read Some(first))
+    Cache.store(value: read managed)
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0501.rss", source, "RS0501");
+    assert_eq!(
+        oracle.len(),
+        3,
+        "fixture must exercise direct, repeated, and wrapped local retention"
+    );
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0501 structured diagnostics diverged");
+}
+
+#[test]
 fn checker_rs0311_structured_multiset_parity() {
     let source = r#"features: local
 
@@ -1651,6 +1835,50 @@ fn valid(value: mut Int) -> Unit {
     let exe = compile_checker().expect("rss checker should compile");
     let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
     assert_eq!(oracle, actual, "RS0311 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0313_structured_multiset_parity() {
+    let source = r#"fn exercise() -> Unit {
+    let mut count: Int = 0
+    let mut label: String = "start"
+    let mut enabled: Bool = false
+    count = "wrong"
+    label = true
+    enabled = 1
+    count = 2
+    label = "valid"
+    enabled = false
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0313.rss", source, "RS0313");
+    assert_eq!(oracle.len(), 2, "fixture must exercise scalar mismatches");
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0313 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0312_structured_multiset_parity() {
+    let source = r#"fn exercise() -> Unit {
+    let mut values = Map<String, Int>.new()
+    let mut queue = Deque<Int>.new()
+    let mut items = List<Int>.new()
+    values["first"] = 1
+    values["second"] = 2
+    queue[0] = 3
+    items[0] = 4
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0312.rss", source, "RS0312");
+    assert_eq!(
+        oracle.len(),
+        3,
+        "fixture must exercise repeated Map and Deque index assignments"
+    );
+    let exe = compile_checker().expect("rss checker should compile");
+    let actual = run_checker_records(&exe, source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0312 structured diagnostics diverged");
 }
 
 #[test]

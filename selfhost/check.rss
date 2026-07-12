@@ -1211,10 +1211,8 @@ fn literal_scalar_cat(toks: read List<Tok>, i: read Int) -> String {
     if k == TOK_STRING { return "S" }
     if k == TOK_NUMBER { return "N" }
     if k == TOK_CHAR { return "C" }
-    if is_ident_tok(toks: read toks, i: read i) {
-        let t = tk_text(toks: read toks, i: read i)
-        if t == "true" || t == "false" { return "B" }
-    }
+    // The production assignment inference currently leaves bare Bool literals
+    // unresolved here, so RS0313 must conservatively skip them as well.
     return ""
 }
 
@@ -1242,7 +1240,7 @@ fn find_local_decl_type(toks: read List<Tok>, bodyOpen: read Int, bodyClose: rea
     return result
 }
 
-fn fn_has_assign_type_mismatch(toks: read List<Tok>, start: read Int) -> Bool {
+fn collect_fn_assign_type_mismatch_tokens(toks: read List<Tok>, start: read Int, out: mut List<Int>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
     if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
@@ -1263,7 +1261,10 @@ fn fn_has_assign_type_mismatch(toks: read List<Tok>, start: read Int) -> Bool {
                     let dcat = type_scalar_cat(t: read declType)
                     if dcat != "" {
                         let lcat = literal_scalar_cat(toks: read toks, i: read (k + 1))
-                        if lcat != "" && lcat != dcat { hit = true }
+                        if lcat != "" && lcat != dcat {
+                            List.push<Int>(list: mut out, value: read (k - 1))
+                            hit = true
+                        }
                     }
                 }
             }
@@ -1330,7 +1331,7 @@ fn matching_lbracket(toks: read List<Tok>, closePos: read Int) -> Int {
     return result
 }
 
-fn has_index_assign_non_list(toks: read List<Tok>) -> Bool {
+fn collect_index_assign_non_list_tokens(toks: read List<Tok>, out: mut List<Int>) -> Bool {
     let nonList = collect_nonlist_collection_locals(toks: read toks)
     let ntok = List.len(list: read toks)
     let mut k = 1
@@ -1340,7 +1341,10 @@ fn has_index_assign_non_list(toks: read List<Tok>) -> Bool {
             let j = matching_lbracket(toks: read toks, closePos: read (k - 1))
             if j > 0 && is_ident_tok(toks: read toks, i: read (j - 1)) {
                 let container = tk_text(toks: read toks, i: read (j - 1))
-                if Set.contains<String>(set: read nonList, value: read container) { hit = true }
+                if Set.contains<String>(set: read nonList, value: read container) {
+                    List.push<Int>(list: mut out, value: read (j - 1))
+                    hit = true
+                }
             }
         }
         k = k + 1
@@ -1504,7 +1508,7 @@ fn local_in_scope_all(toks: read List<Tok>, open: read Int, close: read Int, x: 
     return found
 }
 
-fn fn_manage_take_bad(toks: read List<Tok>, start: read Int, keyword: read String) -> Bool {
+fn collect_fn_manage_take_bad_tokens(toks: read List<Tok>, start: read Int, keyword: read String, out: mut List<Int>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
     if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
@@ -1534,7 +1538,10 @@ fn fn_manage_take_bad(toks: read List<Tok>, start: read Int, keyword: read Strin
                 let scopeOpen = enclosing_capture_open(toks: read toks, p: read k, fnBody: read sigEnd)
                 let mut scopeClose = find_matching(toks: read toks, open: read scopeOpen, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
                 if scopeClose < 0 { scopeClose = bodyClose }
-                if local_in_scope_all(toks: read toks, open: read scopeOpen, close: read scopeClose, x: read x) == false { hit = true }
+                if local_in_scope_all(toks: read toks, open: read scopeOpen, close: read scopeClose, x: read x) == false {
+                    List.push<Int>(list: mut out, value: read k)
+                    hit = true
+                }
             }
         }
         k = k + 1
@@ -1562,23 +1569,25 @@ fn collect_handle_field_names(toks: read List<Tok>, out: mut Set<String>) -> Uni
 
 // Whether the RHS value at `vs` is a managed place for RS0301: a `let` binding, a
 // `handle`-field access `_.f`, or `Some(…)`/`Ok(…)` wrapping one (after an optional effect).
-fn rhs_managed_for_local(toks: read List<Tok>, vs: read Int, end: read Int, managed: read Set<String>, handleFields: read Set<String>) -> Bool {
+fn rhs_managed_token_for_local(toks: read List<Tok>, vs: read Int, end: read Int, managed: read Set<String>, handleFields: read Set<String>) -> Int {
     let mut s = vs
     if is_effect_kw(toks: read toks, i: read s) { s = s + 1 }
-    if s >= end { return false }
-    if is_ident_tok(toks: read toks, i: read s) == false { return false }
+    if s >= end { return 0 - 1 }
+    if is_ident_tok(toks: read toks, i: read s) == false { return 0 - 1 }
     let head = tk_text(toks: read toks, i: read s)
     if (head == "Some" || head == "Ok") && at_symbol(toks: read toks, i: read (s + 1), code: read SYM_LPAREN) {
-        return rhs_managed_for_local(toks: read toks, vs: read (s + 2), end: read end, managed: read managed, handleFields: read handleFields)
+        return rhs_managed_token_for_local(toks: read toks, vs: read (s + 2), end: read end, managed: read managed, handleFields: read handleFields)
     }
     if at_symbol(toks: read toks, i: read (s + 1), code: read SYM_DOT) && is_ident_tok(toks: read toks, i: read (s + 2)) {
         let field = tk_text(toks: read toks, i: read (s + 2))
-        return Set.contains<String>(set: read handleFields, value: read field)
+        if Set.contains<String>(set: read handleFields, value: read field) { return s }
+        return 0 - 1
     }
-    return Set.contains<String>(set: read managed, value: read head)
+    if Set.contains<String>(set: read managed, value: read head) { return s }
+    return 0 - 1
 }
 
-fn fn_has_managed_to_local(toks: read List<Tok>, start: read Int, handleFields: read Set<String>) -> Bool {
+fn collect_fn_managed_to_local_tokens(toks: read List<Tok>, start: read Int, handleFields: read Set<String>, out: mut List<Int>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
     if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
@@ -1608,7 +1617,11 @@ fn fn_has_managed_to_local(toks: read List<Tok>, start: read Int, handleFields: 
                     }
                 }
                 if eqPos > 0 {
-                    if rhs_managed_for_local(toks: read toks, vs: read (eqPos + 1), end: read bodyClose, managed: read managed, handleFields: read handleFields) { hit = true }
+                    let managedToken = rhs_managed_token_for_local(toks: read toks, vs: read (eqPos + 1), end: read bodyClose, managed: read managed, handleFields: read handleFields)
+                    if managedToken >= 0 {
+                        List.push<Int>(list: mut out, value: read managedToken)
+                        hit = true
+                    }
                 }
             }
         }
@@ -1622,7 +1635,7 @@ fn fn_has_managed_to_local(toks: read List<Tok>, start: read Int, handleFields: 
 // conditionally-moved value as moved on the continuation). A "use" is an occurrence of the
 // ident `x` that is not an arg/field label (`x:`), not a field of another place (`_.x`), not a
 // (re)binding position (`let`/`local`/`mut x`), and not an assignment target (`x =`).
-fn used_after_move(toks: read List<Tok>, from: read Int, close: read Int, x: read String) -> Bool {
+fn collect_uses_after_move(toks: read List<Tok>, from: read Int, close: read Int, x: read String, out: mut List<Int>) -> Bool {
     let mut m = from
     let mut found = false
     while m < close {
@@ -1631,7 +1644,10 @@ fn used_after_move(toks: read List<Tok>, from: read Int, close: read Int, x: rea
             let prevBind = is_kw_text(toks: read toks, i: read (m - 1), word: read "let") || is_kw_text(toks: read toks, i: read (m - 1), word: read "local") || is_kw_text(toks: read toks, i: read (m - 1), word: read "mut")
             let nextColon = at_symbol(toks: read toks, i: read (m + 1), code: read SYM_COLON)
             let nextAssign = at_symbol(toks: read toks, i: read (m + 1), code: read SYM_EQ) && at_symbol(toks: read toks, i: read (m + 2), code: read SYM_EQ) == false
-            if prevDot == false && prevBind == false && nextColon == false && nextAssign == false { found = true }
+            if prevDot == false && prevBind == false && nextColon == false && nextAssign == false {
+                List.push<Int>(list: mut out, value: read m)
+                found = true
+            }
         }
         m = m + 1
     }
@@ -1679,21 +1695,24 @@ fn has_return_or_break(toks: read List<Tok>, from: read Int, to: read Int) -> Bo
 }
 
 // Whether the field path `base . field` is used in [from, close), excluding a binding position.
-fn used_field_after_move(toks: read List<Tok>, from: read Int, close: read Int, base: read String, field: read String) -> Bool {
+fn collect_field_uses_after_move(toks: read List<Tok>, from: read Int, close: read Int, base: read String, field: read String, out: mut List<Int>) -> Bool {
     let mut m = from
     let mut found = false
     while m < close {
         if is_ident_tok(toks: read toks, i: read m) && tk_text(toks: read toks, i: read m) == base && at_symbol(toks: read toks, i: read (m + 1), code: read SYM_DOT) && is_ident_tok(toks: read toks, i: read (m + 2)) && tk_text(toks: read toks, i: read (m + 2)) == field {
             let prevBind = is_kw_text(toks: read toks, i: read (m - 1), word: read "let") || is_kw_text(toks: read toks, i: read (m - 1), word: read "local")
             let prevDot = at_symbol(toks: read toks, i: read (m - 1), code: read SYM_DOT)
-            if prevBind == false && prevDot == false { found = true }
+            if prevBind == false && prevDot == false {
+                List.push<Int>(list: mut out, value: read m)
+                found = true
+            }
         }
         m = m + 1
     }
     return found
 }
 
-fn fn_has_use_after_manage(toks: read List<Tok>, start: read Int) -> Bool {
+fn collect_fn_use_after_manage_tokens(toks: read List<Tok>, start: read Int, out: mut List<Int>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
     if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
@@ -1716,9 +1735,9 @@ fn fn_has_use_after_manage(toks: read List<Tok>, start: read Int) -> Bool {
                 if exits { scanEnd = bc }
                 if at_symbol(toks: read toks, i: read (k + 2), code: read SYM_DOT) && is_ident_tok(toks: read toks, i: read (k + 3)) {
                     let field = tk_text(toks: read toks, i: read (k + 3))
-                    if used_field_after_move(toks: read toks, from: read (k + 4), close: read scanEnd, base: read x, field: read field) { hit = true }
+                    if collect_field_uses_after_move(toks: read toks, from: read (k + 4), close: read scanEnd, base: read x, field: read field, out: mut out) { hit = true }
                 } else {
-                    if used_after_move(toks: read toks, from: read (k + 2), close: read scanEnd, x: read x) { hit = true }
+                    if collect_uses_after_move(toks: read toks, from: read (k + 2), close: read scanEnd, x: read x, out: mut out) { hit = true }
                 }
             }
         }
@@ -1829,7 +1848,7 @@ fn builtin_retains_label(toks: read List<Tok>, callPos: read Int, label: read St
     return label == "key" || label == "value"
 }
 
-fn fn_has_retained_local(toks: read List<Tok>, start: read Int, retains: read Set<String>) -> Bool {
+fn collect_fn_retained_local_tokens(toks: read List<Tok>, start: read Int, retains: read Set<String>, out: mut List<Int>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
     if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
@@ -1873,7 +1892,10 @@ fn fn_has_retained_local(toks: read List<Tok>, start: read Int, retains: read Se
                                     unwrap = false
                                 }
                             }
-                            if is_ident_tok(toks: read toks, i: read v) && nearest_binding_is_local(toks: read toks, from: read k, bodyOpen: read sigEnd, name: read tk_text(toks: read toks, i: read v)) { hit = true }
+                            if is_ident_tok(toks: read toks, i: read v) && nearest_binding_is_local(toks: read toks, from: read k, bodyOpen: read sigEnd, name: read tk_text(toks: read toks, i: read v)) {
+                                List.push<Int>(list: mut out, value: read v)
+                                hit = true
+                            }
                         }
                         atStart = false
                     } else {
@@ -11473,10 +11495,15 @@ fn main() -> Unit {
     let mut immutableAssign = false
     let mut immutableAssignTokens = List<Int>.new()
     let mut manageNonLocal = false
+    let mut manageNonLocalTokens = List<Int>.new()
     let mut takeNonLocal = false
+    let mut takeNonLocalTokens = List<Int>.new()
     let mut managedToLocal = false
+    let mut managedToLocalTokens = List<Int>.new()
     let mut useAfterManage = false
+    let mut useAfterManageTokens = List<Int>.new()
     let mut retainedLocal = false
+    let mut retainedLocalTokens = List<Int>.new()
     let mut placeConflict0303 = false
     let mut placeConflict0305 = false
     let mut placeConflict0309 = false
@@ -11510,8 +11537,10 @@ fn main() -> Unit {
     let discardNonLease = collect_discard_non_lease_tokens(toks: read toks, out: mut discardNonLeaseTokens)
     let nonTransferPayload = has_nontransferable_channel(toks: read toks)
     let mut assignTypeMismatch = false
+    let mut assignTypeMismatchTokens = List<Int>.new()
     // RS0312: index assignment on a non-List container.
-    let indexAssignBad = has_index_assign_non_list(toks: read toks)
+    let mut indexAssignBadTokens = List<Int>.new()
+    let indexAssignBad = collect_index_assign_non_list_tokens(toks: read toks, out: mut indexAssignBadTokens)
     // RS0205: a call that repeats a named argument.
     let mut dupArg = false
     let mut dupArgTokens = List<Int>.new()
@@ -11694,11 +11723,11 @@ fn main() -> Unit {
                     if fn_data_effect_bad(toks: read toks, start: read i, declared: read declared, methodNames: read methodNames) { missingDataEffect = true }
                     if collect_fn_uninferable_binding_tokens(toks: read toks, start: read i, out: mut uninferableTokens) { uninferable = true }
                     if collect_fn_invalid_assignment_tokens(toks: read toks, start: read i, out: mut immutableAssignTokens) { immutableAssign = true }
-                    if fn_manage_take_bad(toks: read toks, start: read i, keyword: read "manage") { manageNonLocal = true }
-                    if fn_manage_take_bad(toks: read toks, start: read i, keyword: read "take") { takeNonLocal = true }
-                    if fn_has_managed_to_local(toks: read toks, start: read i, handleFields: read handleFieldNames) { managedToLocal = true }
-                    if fn_has_use_after_manage(toks: read toks, start: read i) { useAfterManage = true }
-                    if fn_has_retained_local(toks: read toks, start: read i, retains: read retainsReg) { retainedLocal = true }
+                    if collect_fn_manage_take_bad_tokens(toks: read toks, start: read i, keyword: read "manage", out: mut manageNonLocalTokens) { manageNonLocal = true }
+                    if collect_fn_manage_take_bad_tokens(toks: read toks, start: read i, keyword: read "take", out: mut takeNonLocalTokens) { takeNonLocal = true }
+                    if collect_fn_managed_to_local_tokens(toks: read toks, start: read i, handleFields: read handleFieldNames, out: mut managedToLocalTokens) { managedToLocal = true }
+                    if collect_fn_use_after_manage_tokens(toks: read toks, start: read i, out: mut useAfterManageTokens) { useAfterManage = true }
+                    if collect_fn_retained_local_tokens(toks: read toks, start: read i, retains: read retainsReg, out: mut retainedLocalTokens) { retainedLocal = true }
                     let mut pcMutParams = Set.new<String>()
                     collect_mut_params(toks: read toks, ns: read (fn_name_start(toks: read toks, i: read i)), sigEnd: read (function_signature_end(toks: read toks, start: read (fn_name_start(toks: read toks, i: read i) - 1))), out: mut pcMutParams)
                     let pcMask = fn_place_conflicts(toks: read toks, start: read i, handleFields: read handleFieldNames, mutParams: read pcMutParams)
@@ -11714,7 +11743,7 @@ fn main() -> Unit {
                     let ccMask = fn_has_closure_capture_bad(toks: read toks, start: read i, retains: read retainsReg, noescape: read noescapeReg)
                     if bit_set(mask: read ccMask, bitval: read 1) { closureCapture0801 = true }
                     if bit_set(mask: read ccMask, bitval: read 2) { closureCapture0804 = true }
-                    if fn_has_assign_type_mismatch(toks: read toks, start: read i) { assignTypeMismatch = true }
+                    if collect_fn_assign_type_mismatch_tokens(toks: read toks, start: read i, out: mut assignTypeMismatchTokens) { assignTypeMismatch = true }
                     if collect_fn_dup_arg_tokens(toks: read toks, start: read i, out: mut dupArgTokens) { dupArg = true }
                     if fn_has_fd_surface(toks: read toks, start: read i) { fdSurface = true }
                     // RS0027: an unknown protocol in this fn's generic bounds.
@@ -11777,6 +11806,13 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_records(code: read "RS0034", toks: read toks, tokenIndices: read uninferableTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0205", toks: read toks, tokenIndices: read dupArgTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0311", toks: read toks, tokenIndices: read immutableAssignTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0313", toks: read toks, tokenIndices: read assignTypeMismatchTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0312", toks: read toks, tokenIndices: read indexAssignBadTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0307", toks: read toks, tokenIndices: read manageNonLocalTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0308", toks: read toks, tokenIndices: read takeNonLocalTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0301", toks: read toks, tokenIndices: read managedToLocalTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0401", toks: read toks, tokenIndices: read useAfterManageTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0501", toks: read toks, tokenIndices: read retainedLocalTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0212", toks: read toks, tokenIndices: read resourceDeriveTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0306", toks: read toks, tokenIndices: read localClassTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0701", toks: read toks, tokenIndices: read resourceFieldTokens)
