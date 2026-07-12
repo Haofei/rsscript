@@ -1230,6 +1230,37 @@ fn checker_rs0028_structured_multiset_parity() {
 }
 
 #[test]
+fn checker_rs0023_structured_multiset_parity() {
+    let source = r#"struct BadHandle {
+    input: Fd
+    output: Fd
+}
+
+resource AllowedHandle {
+    fd: Fd
+
+    drop {
+        OS.close(fd: fd)
+    }
+}
+
+native fn allowed(fd: Fd) -> Fd
+
+fn exposed(first: Fd, second: Fd) -> Fd {
+    return first
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0023.rss", source, "RS0023");
+    assert_eq!(
+        oracle.len(),
+        5,
+        "fixture must preserve fields, parameters, and return surface failures"
+    );
+    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    assert_eq!(oracle, actual, "RS0023 structured diagnostics diverged");
+}
+
+#[test]
 fn checker_rs0027_structured_multiset_parity() {
     let source = r#"struct Box<T: MissingBoxProtocol> {
     value: T

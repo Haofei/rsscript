@@ -5962,7 +5962,20 @@ fn fn_is_native(toks: read List<Tok>, start: read Int) -> Bool {
 }
 
 // RS0023 over a non-native fn: any param type or the return type names `Fd`.
-fn fn_has_fd_surface(toks: read List<Tok>, start: read Int) -> Bool {
+fn collect_text_tokens(toks: read List<Tok>, s: read Int, e: read Int, word: read String, out: mut List<Int>) -> Bool {
+    let mut k = s
+    let mut hit = false
+    while k < e {
+        if tk_text(toks: read toks, i: read k) == word {
+            List.push<Int>(list: mut out, value: read k)
+            hit = true
+        }
+        k = k + 1
+    }
+    return hit
+}
+
+fn collect_fn_fd_surface_tokens(toks: read List<Tok>, start: read Int, out: mut List<Int>) -> Bool {
     if fn_is_native(toks: read toks, start: read start) { return false }
     let ns = fn_name_start(toks: read toks, i: read start)
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
@@ -5987,12 +6000,16 @@ fn fn_has_fd_surface(toks: read List<Tok>, start: read Int) -> Bool {
         } else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) {
             if angle > 0 { angle = angle - 1 }
         } else if depth == 0 && angle == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
-            if seg_type_has_fd(toks: read toks, segStart: read segStart, segEnd: read k) { hit = true }
+            if seg_type_has_fd(toks: read toks, segStart: read segStart, segEnd: read k) {
+                if collect_text_tokens(toks: read toks, s: read (segStart + 2), e: read k, word: read "Fd", out: mut out) { hit = true }
+            }
             segStart = k + 1
         }
         k = k + 1
     }
-    if seg_type_has_fd(toks: read toks, segStart: read segStart, segEnd: read close) { hit = true }
+    if seg_type_has_fd(toks: read toks, segStart: read segStart, segEnd: read close) {
+        if collect_text_tokens(toks: read toks, s: read (segStart + 2), e: read close, word: read "Fd", out: mut out) { hit = true }
+    }
     // Return type region: `-> Type` before effects/`{`/`=`.
     if at_symbol(toks: read toks, i: read (close + 1), code: read SYM_ARROW) {
         let rs = close + 2
@@ -6006,7 +6023,7 @@ fn fn_has_fd_surface(toks: read List<Tok>, start: read Int) -> Bool {
                 scanning = false
             }
         }
-        if region_has_text(toks: read toks, s: read rs, e: read re, word: read "Fd") { hit = true }
+        if collect_text_tokens(toks: read toks, s: read rs, e: read re, word: read "Fd", out: mut out) { hit = true }
     }
     return hit
 }
@@ -11486,6 +11503,7 @@ fn main() -> Unit {
     let unsupportedSyntax = has_unsupported_syntax_rs0015(source: read source, toks: read toks)
     // RS0023: `Fd` in a non-native fn signature or a non-resource type field.
     let mut fdSurface = false
+    let mut fdSurfaceTokens = List<Int>.new()
     // RS0021: any non-exhaustive match statement or expression in the file.
     let mut nonExhaustive = false
     // RS0035: an invalid `#lower_name` pin or a lowered-name collision.
@@ -11745,7 +11763,7 @@ fn main() -> Unit {
                     // types are the trusted internal boundary and are skipped.
                     if at_ident(toks: read toks, i: read (ns - 1), wid: read WORD_RESOURCE) == false {
                         if ob >= 0 {
-                            if region_has_text(toks: read toks, s: read (ob + 1), e: read (r - 1), word: read "Fd") { fdSurface = true }
+                            if collect_text_tokens(toks: read toks, s: read (ob + 1), e: read (r - 1), word: read "Fd", out: mut fdSurfaceTokens) { fdSurface = true }
                         }
                     }
                     i = r
@@ -11868,7 +11886,7 @@ fn main() -> Unit {
                     if bit_set(mask: read ccMask, bitval: read 2) { closureCapture0804 = true }
                     if collect_fn_assign_type_mismatch_tokens(toks: read toks, start: read i, out: mut assignTypeMismatchTokens) { assignTypeMismatch = true }
                     if collect_fn_dup_arg_tokens(toks: read toks, start: read i, out: mut dupArgTokens) { dupArg = true }
-                    if fn_has_fd_surface(toks: read toks, start: read i) { fdSurface = true }
+                    if collect_fn_fd_surface_tokens(toks: read toks, start: read i, out: mut fdSurfaceTokens) { fdSurface = true }
                     // RS0027: an unknown protocol in this fn's generic bounds.
                     if collect_unknown_protocol_sites(source: read source, toks: read toks, nameEnd: read dotted_end(toks: read toks, i: read ns), protocols: read protocols, out: mut unknownProtocolSites) { unknownProtocol = true }
                     // RS0014/0018/0019: runtime-guarantee body violations.
@@ -11933,6 +11951,7 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_sites(code: read "RS0018", sites: read noBlockCallSites)
         emitted = emitted + emit_diagnostic_sites(code: read "RS0019", sites: read noPanicCallSites)
         emitted = emitted + emit_diagnostic_sites(code: read "RS0027", sites: read unknownProtocolSites)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0023", toks: read toks, tokenIndices: read fdSurfaceTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0311", toks: read toks, tokenIndices: read immutableAssignTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0313", toks: read toks, tokenIndices: read assignTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0312", toks: read toks, tokenIndices: read indexAssignBadTokens)
