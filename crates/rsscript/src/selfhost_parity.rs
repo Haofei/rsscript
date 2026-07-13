@@ -1379,6 +1379,36 @@ fn exposed(first: Fd, second: Fd) -> Fd {
 }
 
 #[test]
+fn checker_rs0024_structured_multiset_parity() {
+    let source = r#"struct Holder<T> {
+    first: Missing
+    second: List<Other>
+    callback: Fn(Arg, T) -> ReturnMissing
+}
+
+fn exercise<T>(
+    first: read UnknownParam,
+    second: read Map<String, NestedUnknown>,
+    known: read T,
+    holder: read Holder<T>
+) -> Result<UnknownReturn, ErrorUnknown> {
+    return Unit
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0024.rss", source, "RS0024");
+    assert_eq!(
+        oracle.len(),
+        8,
+        "fixture must preserve every unknown root while exempting generic and declared types"
+    );
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0024",
+    );
+    assert_eq!(oracle, actual, "RS0024 structured diagnostics diverged");
+}
+
+#[test]
 fn checker_rs0027_structured_multiset_parity() {
     let source = r#"struct Box<T: MissingBoxProtocol> {
     value: T
