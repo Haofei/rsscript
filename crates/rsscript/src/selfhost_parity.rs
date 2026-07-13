@@ -2567,6 +2567,95 @@ fn local_escapes() -> Callback {
 }
 
 #[test]
+fn checker_rs0702_structured_multiset_parity() {
+    let source = r#"features: local
+
+resource File { fd: Int }
+resource Conn { fd: Int }
+class Registry
+
+fn File.open(path: read Path) -> File
+fn File.inspect(file: mut File) -> Unit
+fn Conn.from_file(file: read File) -> Conn
+fn consume(file: take File) -> Unit
+fn register(registry: mut Registry, file: read File) -> Unit
+    effects(retains(file))
+
+fn lease(pool: mut ResourcePool<File>) -> Unit {
+    local file = ResourcePool.borrow(pool: mut pool)
+}
+
+fn producer(path: read Path) -> Unit {
+    let file = File.open(path: read path)
+}
+
+fn returned(path: read Path) -> File {
+    with File.open(path: read path) as file {
+        return read file
+    }
+}
+
+fn bound(path: read Path) -> Unit {
+    with File.open(path: read path) as file {
+        let saved = read file
+    }
+}
+
+fn managed(path: read Path) -> Unit {
+    with File.open(path: read path) as file {
+        let shared = manage file
+    }
+}
+
+fn taken(path: read Path) -> Unit {
+    with File.open(path: read path) as file {
+        consume(file: take file)
+    }
+}
+
+fn retained(registry: mut Registry, path: read Path) -> Unit {
+    with File.open(path: read path) as file {
+        register(registry: mut registry, file: read file)
+    }
+}
+
+fn captured(path: read Path) -> Unit {
+    with File.open(path: read path) as file {
+        let callback = || {
+            File.inspect(file: mut file)
+        }
+    }
+}
+
+fn factory(path: read Path) -> Unit {
+    with File.open(path: read path) as file {
+        local pool = ResourcePool<Conn>.new(
+            create: || Conn.from_file(file: read file),
+            max_size: 1,
+        )
+    }
+}
+
+fn viewed(data: read Bytes) -> BytesView {
+    view item = Bytes.view(value: read data, start: 0, len: 1)
+    return item
+}
+"#;
+
+    let oracle = checker_oracle_records("structured-rs0702.rss", source, "RS0702");
+    assert_eq!(
+        oracle.len(),
+        11,
+        "fixture must preserve every resource escape path"
+    );
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0702",
+    );
+    assert_eq!(oracle, actual, "RS0702 structured diagnostics diverged");
+}
+
+#[test]
 fn checker_rs0902_structured_multiset_parity() {
     let source = r#"struct Value {
     id: Int

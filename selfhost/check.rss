@@ -3457,9 +3457,10 @@ fn collect_producer_fns(toks: read List<Tok>, resources: read Set<String>) -> Se
 }
 
 // M3: ResourcePool.borrow/.try_borrow lease used outside a `with` resource slot.
-fn has_pool_lease_escape(toks: read List<Tok>) -> Bool {
+fn collect_pool_lease_escape_tokens(toks: read List<Tok>, out: mut List<Int>) -> Bool {
     let n = List.len(list: read toks)
     let mut m = 0
+    let mut hit = false
     while m < n {
         let mt = tk_text(toks: read toks, i: read m)
         if (mt == "borrow" || mt == "try_borrow") && m >= 2 && at_symbol(toks: read toks, i: read (m - 1), code: read SYM_DOT) {
@@ -3488,20 +3489,25 @@ fn has_pool_lease_escape(toks: read List<Tok>) -> Bool {
                 }
             }
             if tk_text(toks: read toks, i: read root) == "ResourcePool" && is_kw_text(toks: read toks, i: read (root - 1), word: read "with") == false {
-                return true
+                List.push<Int>(list: mut out, value: read root)
+                // A bare pool lease is both an unscoped lease and an escaping
+                // resource producer in the production checker.
+                List.push<Int>(list: mut out, value: read root)
+                hit = true
             }
         }
         m = m + 1
     }
-    return false
+    return hit
 }
 
 // M4: a resource producer (a producer-fn call or a resource constructor `R(`) that is not the
 // resource expression of a `with` (its root ident is not immediately preceded by `with`), and is
 // not the producer fn's own declaration (`fn R.open(...)`).
-fn has_producer_escape(toks: read List<Tok>, resources: read Set<String>, producerFns: read Set<String>) -> Bool {
+fn collect_producer_escape_tokens(toks: read List<Tok>, resources: read Set<String>, producerFns: read Set<String>, out: mut List<Int>) -> Bool {
     let n = List.len(list: read toks)
     let mut k = 0
+    let mut hit = false
     while k < n {
         if is_ident_tok(toks: read toks, i: read k) && (is_kw_text(toks: read toks, i: read (k - 1), word: read "return") || at_symbol(toks: read toks, i: read (k - 1), code: read SYM_EQ)) {
             // only a producer that is directly returned or bound (`let x = producer`) escapes — one
@@ -3517,15 +3523,18 @@ fn has_producer_escape(toks: read List<Tok>, resources: read Set<String>, produc
                     isProducer = true
                 }
             }
-            if isProducer { return true }
+            if isProducer {
+                List.push<Int>(list: mut out, value: read k)
+                hit = true
+            }
         }
         k = k + 1
     }
-    return false
+    return hit
 }
 
 // The operand base of an escape after skipping read/mut/take, `?`, and Ok/Err/Some wrappers.
-fn escape_operand_is(toks: read List<Tok>, pos: read Int, name: read String) -> Bool {
+fn escape_operand_pos(toks: read List<Tok>, pos: read Int, name: read String) -> Int {
     let mut p = pos
     let mut going = true
     while going {
@@ -3537,16 +3546,19 @@ fn escape_operand_is(toks: read List<Tok>, pos: read Int, name: read String) -> 
             going = false
         }
     }
-    return tk_text(toks: read toks, i: read p) == name
+    if tk_text(toks: read toks, i: read p) == name { return p }
+    return 0 - 1
 }
 
 // M1: within a `with … as B { body }`, B escapes via return / plain `let` / manage / take-arg /
 // retains-arg. (Closure captures are M2/M5.)
-fn with_binding_escapes(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, name: read String, retains: read Set<String>) -> Bool {
+fn collect_with_binding_escape_tokens(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, name: read String, retains: read Set<String>, out: mut List<Int>) -> Bool {
     let mut k = bodyOpen + 1
+    let mut hit = false
     while k < bodyClose {
         if is_kw_text(toks: read toks, i: read k, word: read "return") {
-            if escape_operand_is(toks: read toks, pos: read (k + 1), name: read name) { return true }
+            let p = escape_operand_pos(toks: read toks, pos: read (k + 1), name: read name)
+            if p >= 0 { List.push<Int>(list: mut out, value: read p); hit = true }
         } else if is_kw_text(toks: read toks, i: read k, word: read "let") {
             // let [mut] x = <wrap> B
             let mut e = k + 1
@@ -3554,30 +3566,33 @@ fn with_binding_escapes(toks: read List<Tok>, bodyOpen: read Int, bodyClose: rea
                 e = e + 1
             }
             if e < bodyClose && at_symbol(toks: read toks, i: read e, code: read SYM_EQ) {
-                if escape_operand_is(toks: read toks, pos: read (e + 1), name: read name) { return true }
+                let p2 = escape_operand_pos(toks: read toks, pos: read (e + 1), name: read name)
+                if p2 >= 0 { List.push<Int>(list: mut out, value: read p2); hit = true }
             }
         } else if is_kw_text(toks: read toks, i: read k, word: read "manage") {
-            if tk_text(toks: read toks, i: read (k + 1)) == name { return true }
+            if tk_text(toks: read toks, i: read (k + 1)) == name { List.push<Int>(list: mut out, value: read k); hit = true }
         } else if is_kw_text(toks: read toks, i: read k, word: read "take") && tk_text(toks: read toks, i: read (k + 1)) == name && (at_symbol(toks: read toks, i: read (k + 2), code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read (k + 2), code: read SYM_COMMA)) {
-            return true
+            List.push<Int>(list: mut out, value: read k)
+            hit = true
         } else if is_ident_tok(toks: read toks, i: read k) && tk_text(toks: read toks, i: read k) == name && is_effect_kw(toks: read toks, i: read (k - 1)) && at_symbol(toks: read toks, i: read (k - 2), code: read SYM_COLON) {
             // retains-arg: `callee(… label: <effect> B …)` where callee|label declares retains(label)
             let label = tk_text(toks: read toks, i: read (k - 3))
             let callOpen = enclosing_paren_open(toks: read toks, p: read k, floor: read bodyOpen)
             if callOpen > 0 && is_ident_tok(toks: read toks, i: read (callOpen - 1)) {
                 let key = String.concat(left: read String.concat(left: read tk_text(toks: read toks, i: read (callOpen - 1)), right: read "|"), right: read label)
-                if Set.contains<String>(set: read retains, value: read key) { return true }
+                if Set.contains<String>(set: read retains, value: read key) { List.push<Int>(list: mut out, value: read k); hit = true }
             }
         }
         k = k + 1
     }
-    return false
+    return hit
 }
 
 // M2/M5: within a `with … as B { body }`, a closure captures B. A stored `let` closure (M2) or a
 // ResourcePool factory `create:` closure (M5) fires; a bare `local` closure does not.
-fn with_binding_closure_capture(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, name: read String) -> Bool {
+fn collect_with_binding_closure_capture_tokens(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, name: read String, out: mut List<Int>) -> Bool {
     let mut k = bodyOpen + 1
+    let mut hit = false
     while k < bodyClose {
         // closure body `{` preceded by a `|`
         if at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE) && at_symbol(toks: read toks, i: read (k - 1), code: read SYM_PIPE) {
@@ -3605,10 +3620,11 @@ fn with_binding_closure_capture(toks: read List<Tok>, bodyOpen: read Int, bodyCl
                     if at_symbol(toks: read toks, i: read bpos, code: read SYM_EQ) {
                         let mut kw = bpos - 2
                         if is_kw_text(toks: read toks, i: read kw, word: read "mut") { kw = kw - 1 }
-                        if is_kw_text(toks: read toks, i: read kw, word: read "let") { return true }
+                        if is_kw_text(toks: read toks, i: read kw, word: read "let") { List.push<Int>(list: mut out, value: read op); hit = true }
                     } else if at_symbol(toks: read toks, i: read bpos, code: read SYM_COLON) {
                         // a labelled closure argument (create: || …) — factory capture
-                        return true
+                        List.push<Int>(list: mut out, value: read op)
+                        hit = true
                     }
                 }
             }
@@ -3616,13 +3632,14 @@ fn with_binding_closure_capture(toks: read List<Tok>, bodyOpen: read Int, bodyCl
         }
         k = k + 1
     }
-    return false
+    return hit
 }
 
 // M5: within a `with … as B { body }`, a ResourcePool factory (.new/.try_new/.lazy/.try_lazy)
 // `create` closure (expression- or block-bodied) references B.
-fn with_body_factory_captures(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, name: read String) -> Bool {
+fn collect_with_body_factory_capture_tokens(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, name: read String, out: mut List<Int>) -> Bool {
     let mut k = bodyOpen + 1
+    let mut hit = false
     while k < bodyClose {
         if tk_text(toks: read toks, i: read k) == "ResourcePool" {
             let mut mpos = k + 1
@@ -3640,7 +3657,8 @@ fn with_body_factory_captures(toks: read List<Tok>, bodyOpen: read Int, bodyClos
                         let mut m = callOpen + 1
                         while m < callClose {
                             if is_ident_tok(toks: read toks, i: read m) && tk_text(toks: read toks, i: read m) == name && at_symbol(toks: read toks, i: read (m - 1), code: read SYM_DOT) == false && at_symbol(toks: read toks, i: read (m + 1), code: read SYM_COLON) == false {
-                                return true
+                                List.push<Int>(list: mut out, value: read m)
+                                hit = true
                             }
                             m = m + 1
                         }
@@ -3651,14 +3669,15 @@ fn with_body_factory_captures(toks: read List<Tok>, bodyOpen: read Int, bodyClos
         }
         k = k + 1
     }
-    return false
+    return hit
 }
 
 // RS0702 whole-file predicate combining all five paths.
-fn has_resource_escape(toks: read List<Tok>, resources: read Set<String>, retains: read Set<String>) -> Bool {
-    if has_pool_lease_escape(toks: read toks) { return true }
+fn collect_resource_escape_tokens(toks: read List<Tok>, resources: read Set<String>, retains: read Set<String>, out: mut List<Int>) -> Bool {
+    let mut hit = false
+    if collect_pool_lease_escape_tokens(toks: read toks, out: mut out) { hit = true }
     let producerFns = collect_producer_fns(toks: read toks, resources: read resources)
-    if has_producer_escape(toks: read toks, resources: read resources, producerFns: read producerFns) { return true }
+    if collect_producer_escape_tokens(toks: read toks, resources: read resources, producerFns: read producerFns, out: mut out) { hit = true }
     // M1/M2/M5: iterate `with EXPR as B { body }`
     let n = List.len(list: read toks)
     let mut k = 0
@@ -3682,9 +3701,9 @@ fn has_resource_escape(toks: read List<Tok>, resources: read Set<String>, retain
                 let bodyOpen = asPos + 2
                 let bodyClose = find_matching(toks: read toks, open: read bodyOpen, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
                 if bodyClose > 0 {
-                    if with_binding_escapes(toks: read toks, bodyOpen: read bodyOpen, bodyClose: read bodyClose, name: read name, retains: read retains) { return true }
-                    if with_binding_closure_capture(toks: read toks, bodyOpen: read bodyOpen, bodyClose: read bodyClose, name: read name) { return true }
-                    if with_body_factory_captures(toks: read toks, bodyOpen: read bodyOpen, bodyClose: read bodyClose, name: read name) { return true }
+                    if collect_with_binding_escape_tokens(toks: read toks, bodyOpen: read bodyOpen, bodyClose: read bodyClose, name: read name, retains: read retains, out: mut out) { hit = true }
+                    if collect_with_binding_closure_capture_tokens(toks: read toks, bodyOpen: read bodyOpen, bodyClose: read bodyClose, name: read name, out: mut out) { hit = true }
+                    if collect_with_body_factory_capture_tokens(toks: read toks, bodyOpen: read bodyOpen, bodyClose: read bodyClose, name: read name, out: mut out) { hit = true }
                 }
             }
         } else if is_kw_text(toks: read toks, i: read k, word: read "view") && is_ident_tok(toks: read toks, i: read (k + 1)) && at_symbol(toks: read toks, i: read (k + 2), code: read SYM_EQ) {
@@ -3710,13 +3729,13 @@ fn has_resource_escape(toks: read List<Tok>, resources: read Set<String>, retain
                 }
             }
             if ec > 0 {
-                if with_binding_escapes(toks: read toks, bodyOpen: read (k + 2), bodyClose: read ec, name: read name, retains: read retains) { return true }
-                if with_binding_closure_capture(toks: read toks, bodyOpen: read (k + 2), bodyClose: read ec, name: read name) { return true }
+                if collect_with_binding_escape_tokens(toks: read toks, bodyOpen: read (k + 2), bodyClose: read ec, name: read name, retains: read retains, out: mut out) { hit = true }
+                if collect_with_binding_closure_capture_tokens(toks: read toks, bodyOpen: read (k + 2), bodyClose: read ec, name: read name, out: mut out) { hit = true }
             }
         }
         k = k + 1
     }
-    return false
+    return hit
 }
 
 fn is_copy_scalar_name(name: read String) -> Bool {
@@ -11973,7 +11992,8 @@ fn main() -> Unit {
     let mut handleFieldNames = Set.new<String>()
     collect_handle_field_names(toks: read toks, out: mut handleFieldNames)
     // RS0702: a resource escaping its `with`/`view` scope (5 paths).
-    let resourceEscape = has_resource_escape(toks: read toks, resources: read resources, retains: read retainsReg)
+    let mut resourceEscapeTokens = List<Int>.new()
+    let resourceEscape = collect_resource_escape_tokens(toks: read toks, resources: read resources, retains: read retainsReg, out: mut resourceEscapeTokens)
     let fallibleProducers = collect_fallible_producers(toks: read toks, resources: read resources)
     add_builtin_fallible_producers(out: mut fallibleProducers, allFns: read allFns)
     let mut missingTryTokens = List<Int>.new()
@@ -12316,6 +12336,7 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_records(code: read "RS0802", toks: read toks, tokenIndices: read noescapeEscapeTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0803", toks: read toks, tokenIndices: read localClosureEscapeTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0804", toks: read toks, tokenIndices: read closureCapture0804Tokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0702", toks: read toks, tokenIndices: read resourceEscapeTokens)
         emitted = emitted + emit_diagnostic_sites(code: read "RS0302", sites: read placeConflict0302Sites)
         emitted = emitted + emit_diagnostic_sites(code: read "RS0303", sites: read placeConflict0303Sites)
         emitted = emitted + emit_diagnostic_sites(code: read "RS0304", sites: read placeConflict0304Sites)
@@ -12664,7 +12685,7 @@ fn main() -> Unit {
     if localClosureEscape && structured == false {
         Log.write(message: read "RS0803")
     }
-    if resourceEscape {
+    if resourceEscape && structured == false {
         Log.write(message: read "RS0702")
     }
     if missingTry {
