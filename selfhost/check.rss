@@ -10646,7 +10646,7 @@ fn try_operand_error_type(toks: read List<Tok>, qPos: read Int, bodyOpen: read I
 // a confidently-known concrete non-Result/Option type (check_try_value_is_result).
 // (C) inside a fn returning `Result<T, E>`, a `?` whose operand's Result error
 // type is confidently known and differs from E (check_try_error_types).
-fn fn_invalid_try(toks: read List<Tok>, start: read Int, declared: read Set<String>, allFns: read Set<String>) -> Bool {
+fn collect_fn_invalid_try_tokens(toks: read List<Tok>, start: read Int, declared: read Set<String>, allFns: read Set<String>, out: mut List<Int>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
     if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
@@ -10665,13 +10665,19 @@ fn fn_invalid_try(toks: read List<Tok>, start: read Int, declared: read Set<Stri
     while k < bodyClose {
         if at_symbol(toks: read toks, i: read k, code: read SYM_QUESTION) {
             if returnsResult == false {
+                List.push<Int>(list: mut out, value: read k)
                 hit = true
-            } else {
-                let root = try_operand_root(toks: read toks, qPos: read k, bodyOpen: read sigEnd, popen: read popen, pclose: read pclose, declared: read declared, allFns: read allFns)
-                if String.len(value: read root) > 0 && root != "Result" && root != "Option" { hit = true }
-                if retRoot == "Result" && String.len(value: read fnErr) > 0 {
-                    let opErr = try_operand_error_type(toks: read toks, qPos: read k, bodyOpen: read sigEnd, allFns: read allFns)
-                    if String.len(value: read opErr) > 0 && opErr != fnErr { hit = true }
+            }
+            let root = try_operand_root(toks: read toks, qPos: read k, bodyOpen: read sigEnd, popen: read popen, pclose: read pclose, declared: read declared, allFns: read allFns)
+            if String.len(value: read root) > 0 && root != "Result" && root != "Option" {
+                List.push<Int>(list: mut out, value: read k)
+                hit = true
+            }
+            if retRoot == "Result" && String.len(value: read fnErr) > 0 {
+                let opErr = try_operand_error_type(toks: read toks, qPos: read k, bodyOpen: read sigEnd, allFns: read allFns)
+                if String.len(value: read opErr) > 0 && opErr != fnErr {
+                    List.push<Int>(list: mut out, value: read k)
+                    hit = true
                 }
             }
         }
@@ -11644,6 +11650,7 @@ fn main() -> Unit {
     // RS0013: an invalid `?` (non-Result return, concrete non-Result operand, or
     // known Result error-type mismatch).
     let mut invalidTry = false
+    let mut invalidTryTokens = List<Int>.new()
     // RS0015: unsupported/malformed syntax covered by the self-hosted frontend
     // parity corpus.
     let unsupportedSyntax = has_unsupported_syntax_rs0015(source: read source, toks: read toks)
@@ -12022,7 +12029,7 @@ fn main() -> Unit {
                     if fn_has_noalloc_call(toks: read toks, start: read i, declared: read declared, sumVariants: read sumVariants, noallocFns: read noallocFns) { noallocCall = true }
                     if fn_has_nonexhaustive_match(toks: read toks, start: read i, declared: read declared, allFns: read allFns) { nonExhaustive = true }
                     if collect_fn_bad_await_tokens(toks: read toks, start: read i, out: mut badAwaitTokens) { badAwait = true }
-                    if fn_invalid_try(toks: read toks, start: read i, declared: read declared, allFns: read allFns) { invalidTry = true }
+                    if collect_fn_invalid_try_tokens(toks: read toks, start: read i, declared: read declared, allFns: read allFns, out: mut invalidTryTokens) { invalidTry = true }
                     if collect_fn_unnamed_arg_tokens(toks: read toks, start: read i, pubFns: read pubFns, dottedFns: read dottedFns, out: mut unnamedArgTokens) { unnamedArg = true }
                     if fn_data_effect_bad(toks: read toks, start: read i, declared: read declared, methodNames: read methodNames) { missingDataEffect = true }
                     if collect_fn_uninferable_binding_tokens(toks: read toks, start: read i, out: mut uninferableTokens) { uninferable = true }
@@ -12142,6 +12149,7 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_records(code: read "RS0101", toks: read toks, tokenIndices: read featureViolationTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0024", toks: read toks, tokenIndices: read unknownTypeTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0009", toks: read toks, tokenIndices: read pureBadTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0013", toks: read toks, tokenIndices: read invalidTryTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0311", toks: read toks, tokenIndices: read immutableAssignTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0313", toks: read toks, tokenIndices: read assignTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0312", toks: read toks, tokenIndices: read indexAssignBadTokens)
@@ -12295,7 +12303,7 @@ fn main() -> Unit {
     if badAwait && structured == false {
         Log.write(message: read "RS0029")
     }
-    if invalidTry {
+    if invalidTry && structured == false {
         Log.write(message: read "RS0013")
     }
     if unsupportedSyntax && structured == false {

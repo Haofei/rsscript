@@ -1183,6 +1183,70 @@ fn checker_rs0012_structured_multiset_parity() {
 }
 
 #[test]
+fn checker_rs0013_structured_multiset_parity() {
+    let source = r#"struct Image {
+    value: Int
+}
+
+struct Config {
+    value: Int
+}
+
+struct ConfigError {
+    code: Int
+}
+
+struct AppError {
+    code: Int
+}
+
+fn load_image() -> Image {
+    return Image(value: 1)
+}
+
+fn load_config() -> Result<Config, ConfigError> {
+    return Ok(Config(value: 1))
+}
+
+fn load_app() -> Result<Config, AppError> {
+    return Ok(Config(value: 1))
+}
+
+fn scalar() -> Int {
+    let first = load_image()?
+    let second = load_image()?
+    return 0
+}
+
+fn bad_value() -> Result<Image, AppError> {
+    let image = load_image()?
+    return Ok(image)
+}
+
+fn bad_error() -> Result<Config, AppError> {
+    let config = load_config()?
+    return Ok(config)
+}
+
+fn valid() -> Result<Config, AppError> {
+    let config = load_app()?
+    return Ok(config)
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0013.rss", source, "RS0013");
+    assert_eq!(
+        oracle.len(),
+        6,
+        "fixture must preserve duplicate-span return/value failures and error mismatch"
+    );
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0013",
+    );
+    assert_eq!(oracle, actual, "RS0013 structured diagnostics diverged");
+}
+
+#[test]
 fn checker_rs0014_structured_multiset_parity() {
     let source = r#"features: local
 
