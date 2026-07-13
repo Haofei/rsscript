@@ -5909,7 +5909,7 @@ fn match_is_non_exhaustive(toks: read List<Tok>, braceOpen: read Int, braceClose
 }
 
 // RS0021: any `match` inside the fn body [i,r) whose arms are non-exhaustive.
-fn fn_has_nonexhaustive_match(toks: read List<Tok>, start: read Int, declared: read Set<String>, allFns: read Set<String>) -> Bool {
+fn collect_fn_nonexhaustive_match_tokens(toks: read List<Tok>, start: read Int, declared: read Set<String>, allFns: read Set<String>, out: mut List<Int>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
     if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
@@ -5930,7 +5930,10 @@ fn fn_has_nonexhaustive_match(toks: read List<Tok>, start: read Int, declared: r
                 let braceClose = find_matching(toks: read toks, open: read braceOpen, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
                 if braceClose >= 0 {
                     let root = scrutinee_root(toks: read toks, s0: read (k + 1), e: read braceOpen, bodyOpen: read sigEnd, matchPos: read k, popen: read popen, pclose: read pclose, declared: read declared, allFns: read allFns)
-                    if match_is_non_exhaustive(toks: read toks, braceOpen: read braceOpen, braceClose: read braceClose, root: read root, declared: read declared, allFns: read allFns) { hit = true }
+                    if match_is_non_exhaustive(toks: read toks, braceOpen: read braceOpen, braceClose: read braceClose, root: read root, declared: read declared, allFns: read allFns) {
+                        List.push<Int>(list: mut out, value: read k)
+                        hit = true
+                    }
                 }
             }
         }
@@ -11666,6 +11669,7 @@ fn main() -> Unit {
     let mut fdSurfaceTokens = List<Int>.new()
     // RS0021: any non-exhaustive match statement or expression in the file.
     let mut nonExhaustive = false
+    let mut nonExhaustiveTokens = List<Int>.new()
     // RS0035: an invalid `#lower_name` pin or a lowered-name collision.
     let mut lowerConflict = false
     let mut lowerConflictTokens = List<Int>.new()
@@ -12034,7 +12038,7 @@ fn main() -> Unit {
                     if collect_missing_param_effect_tokens(toks: read toks, start: read i, sums: read payloadlessSums, out: mut missingEffectTokens) { missingEffect = true }
                     if collect_fn_pure_bad_tokens(toks: read toks, start: read i, resources: read resources, sumVariants: read sumVariants, pureFns: read pureFns, allFns: read allFns, declared: read declared, out: mut pureBadTokens) { pureBad = true }
                     if collect_fn_noalloc_call_tokens(toks: read toks, start: read i, declared: read declared, sumVariants: read sumVariants, noallocFns: read noallocFns, out: mut noallocCallTokens) { noallocCall = true }
-                    if fn_has_nonexhaustive_match(toks: read toks, start: read i, declared: read declared, allFns: read allFns) { nonExhaustive = true }
+                    if collect_fn_nonexhaustive_match_tokens(toks: read toks, start: read i, declared: read declared, allFns: read allFns, out: mut nonExhaustiveTokens) { nonExhaustive = true }
                     if collect_fn_bad_await_tokens(toks: read toks, start: read i, out: mut badAwaitTokens) { badAwait = true }
                     if collect_fn_invalid_try_tokens(toks: read toks, start: read i, declared: read declared, allFns: read allFns, out: mut invalidTryTokens) { invalidTry = true }
                     if collect_fn_unnamed_arg_tokens(toks: read toks, start: read i, pubFns: read pubFns, dottedFns: read dottedFns, out: mut unnamedArgTokens) { unnamedArg = true }
@@ -12158,6 +12162,7 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_records(code: read "RS0009", toks: read toks, tokenIndices: read pureBadTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0013", toks: read toks, tokenIndices: read invalidTryTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0020", toks: read toks, tokenIndices: read noallocCallTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0021", toks: read toks, tokenIndices: read nonExhaustiveTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0311", toks: read toks, tokenIndices: read immutableAssignTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0313", toks: read toks, tokenIndices: read assignTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0312", toks: read toks, tokenIndices: read indexAssignBadTokens)
@@ -12305,7 +12310,7 @@ fn main() -> Unit {
     if pureBad && structured == false {
         Log.write(message: read "RS0009")
     }
-    if nonExhaustive {
+    if nonExhaustive && structured == false {
         Log.write(message: read "RS0021")
     }
     if badAwait && structured == false {

@@ -1389,6 +1389,40 @@ fn exercise(value: read Int) -> Int effects(noalloc) {
 }
 
 #[test]
+fn checker_rs0021_structured_multiset_parity() {
+    let source = r#"fn statement_bad(value: read Option<Int>) -> Int {
+    match value {
+        Some(item) => return item
+    }
+}
+
+fn expression_bad(name: read String) -> String {
+    return match name {
+        "read" => { "value" }
+    }
+}
+
+fn exhaustive(value: read Option<Int>) -> Int {
+    return match value {
+        Some(item) => { item }
+        None => { 0 }
+    }
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0021.rss", source, "RS0021");
+    assert_eq!(
+        oracle.len(),
+        2,
+        "fixture must preserve statement/expression mismatches and exempt exhaustive match"
+    );
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0021",
+    );
+    assert_eq!(oracle, actual, "RS0021 structured diagnostics diverged");
+}
+
+#[test]
 fn checker_rs0016_structured_multiset_parity() {
     let source = "features: mystery, other\n";
     let oracle = checker_oracle_records("structured-rs0016.rss", source, "RS0016");
