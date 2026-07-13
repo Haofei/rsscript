@@ -2727,6 +2727,68 @@ fn valid() -> Unit {
 }
 
 #[test]
+fn checker_place_conflicts_structured_multiset_parity() {
+    let source = r#"features: local
+
+struct Cache { value: Int }
+struct Inner { cache: Cache }
+struct State { inner: Inner }
+struct Buffer { value: Int }
+struct LocalVec { length: Int }
+struct Workspace { id: Int }
+struct Config { workspace: Workspace }
+struct SplitState { cache: Cache buffer: Buffer }
+
+fn use_state(state: read State, cache: mut Cache) -> Unit
+fn use_inner(inner: mut Inner, cache: mut Cache) -> Unit
+fn use_buffers(a: mut Buffer, b: mut Buffer) -> Unit
+fn use_config(config: take Config, workspace: read Workspace) -> Unit
+fn use_parts(cache: mut Cache, buffer: mut Buffer) -> Unit
+fn make_state() -> fresh State
+fn make_buffers() -> fresh LocalVec
+fn make_config() -> fresh Config
+
+fn whole_base() -> Unit {
+    local state = make_state()
+    use_state(state: read state, cache: mut state.inner.cache)
+}
+
+fn prefix() -> Unit {
+    local state = make_state()
+    use_inner(inner: mut state.inner, cache: mut state.inner.cache)
+    use_inner(inner: mut state.inner, cache: mut state.inner.cache)
+}
+
+fn indexed() -> Unit {
+    local buffers = make_buffers()
+    use_buffers(a: mut buffers[0], b: mut buffers[1])
+}
+
+fn moved() -> Unit {
+    local config = make_config()
+    use_config(config: take config, workspace: read config.workspace)
+}
+
+fn managed_split(state: mut SplitState) -> Unit {
+    use_parts(cache: mut state.cache, buffer: mut state.buffer)
+}
+"#;
+
+    let all_actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    for code in ["RS0302", "RS0303", "RS0304", "RS0305", "RS0309"] {
+        let oracle = checker_oracle_records("structured-place-conflicts.rss", source, code);
+        let expected = if code == "RS0303" { 2 } else { 1 };
+        assert_eq!(
+            oracle.len(),
+            expected,
+            "fixture must preserve every {code} occurrence"
+        );
+        let actual = diagnostic_records_for_code(all_actual.clone(), code);
+        assert_eq!(oracle, actual, "{code} structured diagnostics diverged");
+    }
+}
+
+#[test]
 fn checker_rs0401_structured_multiset_parity() {
     let source = r#"features: local
 
