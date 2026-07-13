@@ -3188,10 +3188,45 @@ fn capture_body_effect(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read
     return eff
 }
 
+fn capture_effect_rank(effect: read String) -> Int {
+    if effect == "take" { return 3 }
+    if effect == "mut" { return 2 }
+    if effect == "read" { return 1 }
+    return 0
+}
+
+fn declared_capture_effect(toks: read List<Tok>, start: read Int, close: read Int, name: read String) -> String {
+    let mut i = start
+    let mut result = ""
+    while i < close {
+        if is_effect_kw(toks: read toks, i: read i) && is_ident_tok(toks: read toks, i: read (i + 1)) && tk_text(toks: read toks, i: read (i + 1)) == name {
+            result = tk_text(toks: read toks, i: read i)
+            i = close
+        } else {
+            i = i + 1
+        }
+    }
+    return result
+}
+
+fn declared_capture_site(toks: read List<Tok>, start: read Int, close: read Int, name: read String) -> Int {
+    let mut i = start
+    let mut result = -1
+    while i < close {
+        if is_effect_kw(toks: read toks, i: read i) && is_ident_tok(toks: read toks, i: read (i + 1)) && tk_text(toks: read toks, i: read (i + 1)) == name {
+            result = i
+            i = close
+        } else {
+            i = i + 1
+        }
+    }
+    return result
+}
+
 // True if the explicit closure at `cp` (the `captures` keyword) violates its capture contract:
 // a used-but-undeclared external (Missing), a declared-but-unused capture (Unused), or a declared
 // effect that differs from the body's use (Mismatch).
-fn capture_contract_bad(toks: read List<Tok>, cp: read Int) -> Bool {
+fn collect_one_capture_contract_bad_tokens(toks: read List<Tok>, cp: read Int, out: mut List<Int>) -> Bool {
     let pClose = cp - 1
     if at_symbol(toks: read toks, i: read pClose, code: read SYM_RPAREN) == false { return false }
     let mut pOpen = 0 - 1
@@ -3256,27 +3291,11 @@ fn capture_contract_bad(toks: read List<Tok>, cp: read Int) -> Bool {
         }
         di = di + 1
     }
-    // declared captures: `name|eff` pairs (optional read/mut/take prefix, default read)
-    let mut declPairs = Set.new<String>()
-    let mut c = cp + 2
-    while c < capClose {
-        if is_effect_kw(toks: read toks, i: read c) && is_ident_tok(toks: read toks, i: read (c + 1)) {
-            let eff = tk_text(toks: read toks, i: read c)
-            let nm = tk_text(toks: read toks, i: read (c + 1))
-            Set.insert<String>(set: mut declPairs, value: read String.concat(left: read String.concat(left: read nm, right: read "|"), right: read eff))
-            c = c + 2
-        } else if is_ident_tok(toks: read toks, i: read c) {
-            let nm = tk_text(toks: read toks, i: read c)
-            Set.insert<String>(set: mut declPairs, value: read String.concat(left: read nm, right: read "|read"))
-            c = c + 1
-        } else {
-            c = c + 1
-        }
-    }
     // observed external uses (distinct); Missing/Mismatch fire here. Only plain identifiers
     // (TOK_IDENT) are captures — keywords (return/if/let/…) are is_ident_tok but not variables.
     let mut observedNames = Set.new<String>()
     let mut m = bOpen + 1
+    let mut hit = false
     while m < bClose {
         if tk_kind(toks: read toks, i: read m) == TOK_IDENT {
             let nm = tk_text(toks: read toks, i: read m)
@@ -3284,9 +3303,16 @@ fn capture_contract_bad(toks: read List<Tok>, cp: read Int) -> Bool {
                 let eff = capture_body_effect(toks: read toks, bodyOpen: read bOpen, bodyClose: read bClose, name: read nm, params: read params, inner: read inner)
                 if eff != "" {
                     Set.insert<String>(set: mut observedNames, value: read nm)
-                    let pair = String.concat(left: read String.concat(left: read nm, right: read "|"), right: read eff)
-                    if Set.contains<String>(set: read declPairs, value: read pair) == false {
-                        return true
+                    let declaredEffect = declared_capture_effect(toks: read toks, start: read (cp + 2), close: read capClose, name: read nm)
+                    if declaredEffect == "" {
+                        List.push<Int>(list: mut out, value: read bOpen)
+                        hit = true
+                    } else if capture_effect_rank(effect: read eff) > capture_effect_rank(effect: read declaredEffect) {
+                        let site = declared_capture_site(toks: read toks, start: read (cp + 2), close: read capClose, name: read nm)
+                        if site >= 0 {
+                            List.push<Int>(list: mut out, value: read site)
+                            hit = true
+                        }
                     }
                 }
             }
@@ -3299,25 +3325,30 @@ fn capture_contract_bad(toks: read List<Tok>, cp: read Int) -> Bool {
         if is_ident_tok(toks: read toks, i: read c2) && is_effect_kw(toks: read toks, i: read c2) == false {
             let dn = tk_text(toks: read toks, i: read c2)
             if Set.contains<String>(set: read observedNames, value: read dn) == false {
-                return true
+                let site = c2 - 1
+                if is_effect_kw(toks: read toks, i: read site) {
+                    List.push<Int>(list: mut out, value: read site)
+                    hit = true
+                }
             }
         }
         c2 = c2 + 1
     }
-    return false
+    return hit
 }
 
 // Any explicit closure in the file whose capture contract is violated (RS0805).
-fn has_capture_contract_bad(toks: read List<Tok>) -> Bool {
+fn collect_capture_contract_bad_tokens(toks: read List<Tok>, out: mut List<Int>) -> Bool {
     let n = List.len(list: read toks)
     let mut k = 0
+    let mut hit = false
     while k < n {
         if is_kw_text(toks: read toks, i: read k, word: read "captures") && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_LPAREN) {
-            if capture_contract_bad(toks: read toks, cp: read k) { return true }
+            if collect_one_capture_contract_bad_tokens(toks: read toks, cp: read k, out: mut out) { hit = true }
         }
         k = k + 1
     }
-    return false
+    return hit
 }
 
 // Dotted names of fns whose return type root is a resource, or Result<Resource, E>.
@@ -11766,7 +11797,8 @@ fn main() -> Unit {
     let mut resourceFieldTokens = List<Int>.new()
     let resourceField = collect_resource_fields(toks: read toks, resources: read resources, out: mut resourceFieldTokens)
     // RS0805: an explicit closure's captures(...) contract doesn't match its body's external uses.
-    let captureContract = has_capture_contract_bad(toks: read toks)
+    let mut captureContractTokens = List<Int>.new()
+    let captureContract = collect_capture_contract_bad_tokens(toks: read toks, out: mut captureContractTokens)
     // RS0703: a ResourcePool<X> whose X is a non-resource type or non-Resource-bounded generic param.
     let mut resourcePoolTypeBadSites = List<DiagnosticSite>.new()
     let resourcePoolTypeBad = collect_resource_pool_type_bad_sites(source: read source, toks: read toks, resources: read resources, declared: read declared, out: mut resourcePoolTypeBadSites)
@@ -12182,6 +12214,7 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_records(code: read "RS0021", toks: read toks, tokenIndices: read nonExhaustiveTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0032", toks: read toks, tokenIndices: read protocolBadTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0211", toks: read toks, tokenIndices: read deriveFieldBadTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0805", toks: read toks, tokenIndices: read captureContractTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0311", toks: read toks, tokenIndices: read immutableAssignTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0313", toks: read toks, tokenIndices: read assignTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0312", toks: read toks, tokenIndices: read indexAssignBadTokens)
@@ -12507,7 +12540,7 @@ fn main() -> Unit {
     if closureCapture0804 {
         Log.write(message: read "RS0804")
     }
-    if captureContract {
+    if captureContract && structured == false {
         Log.write(message: read "RS0805")
     }
     if resourcePoolTypeBad {

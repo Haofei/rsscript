@@ -2418,6 +2418,56 @@ fn build(host: read String) -> Unit {
 }
 
 #[test]
+fn checker_rs0805_structured_multiset_parity() {
+    let source = r#"features: local
+
+fn mismatch() -> Int {
+    let mut count = 0
+    local bump = fn() captures(read count) effects(pure) {
+        count = count + 1
+        return count
+    }
+    return bump()
+}
+
+fn missing() -> Int {
+    let offset = 2
+    local add = fn(value) captures() effects(pure) {
+        return value + offset
+    }
+    return add(40)
+}
+
+fn unused() -> Int {
+    let offset = 2
+    local identity = fn(value) captures(read offset) effects(pure) {
+        return value
+    }
+    return identity(40)
+}
+
+fn stronger_is_valid() -> Int {
+    let offset = 2
+    local add = fn(value) captures(take offset) effects(pure) {
+        return value + offset
+    }
+    return add(40)
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0805.rss", source, "RS0805");
+    assert_eq!(
+        oracle.len(),
+        3,
+        "fixture must preserve mismatch, missing, and unused capture diagnostics"
+    );
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0805",
+    );
+    assert_eq!(oracle, actual, "RS0805 structured diagnostics diverged");
+}
+
+#[test]
 fn checker_rs0902_structured_multiset_parity() {
     let source = r#"struct Value {
     id: Int
