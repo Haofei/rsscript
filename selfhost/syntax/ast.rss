@@ -1,0 +1,46 @@
+// Shared self-hosted syntax model. This is deliberately small at first: it
+// establishes one materialized Program for top-level declarations before
+// expressions, statements, and patterns migrate from the legacy stream parser.
+
+module selfhost.syntax.ast
+
+const ITEM_MODULE: Int = 1
+const ITEM_USE: Int = 2
+const ITEM_TYPE: Int = 3
+const ITEM_SUM: Int = 4
+const ITEM_TYPE_ALIAS: Int = 5
+const ITEM_CONST: Int = 6
+const ITEM_FUNCTION: Int = 7
+const ITEM_PROTOCOL: Int = 8
+const ITEM_IMPL: Int = 9
+const ITEM_NATIVE_MODULE: Int = 10
+const ITEM_FEATURES: Int = 11
+const ITEM_PROFILE: Int = 12
+const ITEM_UNKNOWN: Int = 13
+
+struct Item {
+    kind: Int
+    line: Int
+    column: Int
+    length: Int
+}
+
+struct Program {
+    items: List<Item>
+}
+
+fn Item.from(kind: Int, line: Int, column: Int, length: Int) -> fresh Item {
+    return Item(kind: kind, line: line, column: column, length: length)
+}
+
+fn Program.empty() -> fresh Program {
+    return Program(items: List<Item>.new())
+}
+
+fn Program.push(self: mut Program, item: read Item) -> Unit {
+    List.push<Item>(list: mut self.items, value: read item)
+}
+
+fn Program.len(self: read Program) -> Int {
+    return List.len(list: read self.items)
+}

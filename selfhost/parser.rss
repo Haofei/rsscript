@@ -24,6 +24,7 @@
 module selfhost.parser
 
 use selfhost.scan.*
+use selfhost.syntax.parser_items.*
 
 fn tk_col(toks: read List<Tok>, i: read Int) -> Int {
     if i < 0 { return 0 }
@@ -66,6 +67,9 @@ fn feature_dup(toks: read List<Tok>, fstart: read Int, k: read Int) -> Bool {
 fn main() -> Unit {
     let source = Args.get_or_default(index: 0, default: read "")
     let toks = tokenize(source: read source)
+    // Stage 2 owns the materialized top-level Program. Recognition keeps its
+    // established oracle protocol while the richer parser migrates incrementally.
+    let program = parse_program(toks: read toks)
     let ntok = List.len(list: read toks)
     let mut i = 0
     let mut errLine = -1

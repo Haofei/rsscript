@@ -1,0 +1,91 @@
+features: local
+// Stage 2 top-level parser slice. It owns Program construction and delegates
+// declaration boundary recognition to the established shared scanner helpers.
+
+module selfhost.syntax.parser_items
+
+use selfhost.scan.*
+use selfhost.syntax.ast.*
+
+fn item_name(toks: read List<Tok>, i: read Int) -> String {
+    if is_ident_tok(toks: read toks, i: read (i + 1)) {
+        let tok = List.get(list: read toks, index: read (i + 1))
+        return tok.text
+    }
+    return ""
+}
+
+fn push_item(program: mut Program, toks: read List<Tok>, i: read Int, kind: Int, name: read String) -> Unit {
+    let tok = List.get(list: read toks, index: read i)
+    let item = Item.from(kind: kind, line: tok.line, column: tok.col, length: tok.len)
+    Program.push(self: mut program, item: read item)
+}
+
+// Parse all recoverable top-level declarations. Unknown and malformed items are
+// represented explicitly so a later diagnostic pass can report them without
+// reparsing source text.
+fn parse_program(toks: read List<Tok>) -> Program {
+    let mut program = Program.empty()
+    let ntok = List.len(list: read toks)
+    let mut i = 0
+    let mut running = true
+    while running {
+        if i >= ntok || tk_kind(toks: read toks, i: read i) == TOK_EOF {
+            running = false
+        } else {
+            let cls = classify_top(toks: read toks, i: read i)
+            let isPub = cls.isPub
+            if cls.isFeatures {
+                push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_FEATURES, name: read "features")
+                i = declaration_line_end(toks: read toks, start: read i)
+            } else if cls.isProfile {
+                push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_PROFILE, name: read "profile")
+                i = declaration_line_end(toks: read toks, start: read i)
+            } else if starts_type_decl(toks: read toks, i: read i, isPub: read isPub) {
+                let r = parse_type_decl(toks: read toks, i: read i)
+                if r < 0 { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_UNKNOWN, name: read "") ; i = i + 1 }
+                else { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_TYPE, name: read item_name(toks: read toks, i: read i)) ; i = r }
+            } else if cls.isSum {
+                let r = parse_sum_decl(toks: read toks, i: read i)
+                if r < 0 { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_UNKNOWN, name: read "") ; i = i + 1 }
+                else { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_SUM, name: read item_name(toks: read toks, i: read i)) ; i = r }
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_PROTOCOL) {
+                let r = parse_protocol_decl(toks: read toks, i: read i)
+                if r < 0 { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_UNKNOWN, name: read "") ; i = i + 1 }
+                else { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_PROTOCOL, name: read item_name(toks: read toks, i: read i)) ; i = r }
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_IMPL) {
+                let r = parse_impl_decl(toks: read toks, i: read i)
+                if r < 0 { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_UNKNOWN, name: read "") ; i = i + 1 }
+                else { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_IMPL, name: read "") ; i = r }
+            } else if cls.isNativeMod {
+                let r = parse_native_module_decl(toks: read toks, i: read i)
+                if r < 0 { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_UNKNOWN, name: read "") ; i = i + 1 }
+                else { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_NATIVE_MODULE, name: read item_name(toks: read toks, i: read i)) ; i = r }
+            } else if cls.isTypeAlias {
+                let r = parse_type_alias_decl(toks: read toks, i: read i)
+                if r < 0 { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_UNKNOWN, name: read "") ; i = i + 1 }
+                else { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_TYPE_ALIAS, name: read item_name(toks: read toks, i: read i)) ; i = r }
+            } else if cls.isConst {
+                let r = parse_const_decl(toks: read toks, i: read i)
+                if r < 0 { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_UNKNOWN, name: read "") ; i = i + 1 }
+                else { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_CONST, name: read item_name(toks: read toks, i: read i)) ; i = r }
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_MODULE) {
+                let r = parse_module_decl(toks: read toks, i: read i)
+                if r < 0 { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_UNKNOWN, name: read "") ; i = i + 1 }
+                else { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_MODULE, name: read item_name(toks: read toks, i: read i)) ; i = r }
+            } else if at_ident(toks: read toks, i: read i, wid: read WORD_USE) {
+                let r = parse_use_decl(toks: read toks, i: read i)
+                if r < 0 { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_UNKNOWN, name: read "") ; i = i + 1 }
+                else { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_USE, name: read "") ; i = r }
+            } else if starts_fn_like(toks: read toks, i: read i, isPub: read isPub) {
+                let r = parse_function_decl(toks: read toks, i: read i)
+                if r < 0 { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_UNKNOWN, name: read "") ; i = i + 1 }
+                else { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_FUNCTION, name: read item_name(toks: read toks, i: read i)) ; i = r }
+            } else {
+                push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_UNKNOWN, name: read "")
+                i = i + 1
+            }
+        }
+    }
+    return program
+}

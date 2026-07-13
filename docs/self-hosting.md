@@ -300,6 +300,14 @@ requires a resolved package bundle rather than one source file.
 Exit: lexer -> parser -> AST -> checker is one reusable frontend, full corpus
 parity is exact, and the compiler's RSS sources pass self-analysis.
 
+The first Stage 2 slice is present: `selfhost/syntax/ast.rss` defines a
+materialized top-level `Program`, and `selfhost/syntax/parser_items.rss` builds
+it from the shared scanner. `parser.rss` invokes that parser while preserving
+the established recognition protocol. The current items retain declaration kind
+and representative span only; names, signatures, bodies, expressions, and
+patterns remain to be materialized before this can replace `astdump.rss` or
+`check.rss`.
+
 #### Stage 2 target architecture
 
 The target dependency direction is:
