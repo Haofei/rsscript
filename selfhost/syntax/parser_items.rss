@@ -7,9 +7,23 @@ module selfhost.syntax.parser_items
 use selfhost.scan.*
 use selfhost.syntax.ast.*
 
+// First name token after top-level modifiers. The shared scanner already owns
+// declaration recognition; this helper only normalizes the declaration head so
+// `pub struct`, `async fn`, and `pub fn` do not store a modifier as a name.
+fn item_name_index(toks: read List<Tok>, i: read Int) -> Int {
+    let mut j = i
+    if at_ident(toks: read toks, i: read j, wid: read WORD_PUB) { j = j + 1 }
+    if at_ident(toks: read toks, i: read j, wid: read WORD_ASYNC) || at_ident(toks: read toks, i: read j, wid: read WORD_NATIVE) { j = j + 1 }
+    if at_ident(toks: read toks, i: read j, wid: read WORD_FN) || at_ident(toks: read toks, i: read j, wid: read WORD_CLASS) || at_ident(toks: read toks, i: read j, wid: read WORD_STRUCT) || at_ident(toks: read toks, i: read j, wid: read WORD_RESOURCE) || at_ident(toks: read toks, i: read j, wid: read WORD_OPAQUE) || at_ident(toks: read toks, i: read j, wid: read WORD_SUM) || at_ident(toks: read toks, i: read j, wid: read WORD_TYPE) || at_ident(toks: read toks, i: read j, wid: read WORD_CONST) || at_ident(toks: read toks, i: read j, wid: read WORD_PROTOCOL) {
+        return j + 1
+    }
+    return j + 1
+}
+
 fn item_name(toks: read List<Tok>, i: read Int) -> String {
-    if is_ident_tok(toks: read toks, i: read (i + 1)) {
-        let tok = List.get(list: read toks, index: read (i + 1))
+    let nameIndex = item_name_index(toks: read toks, i: read i)
+    if is_ident_tok(toks: read toks, i: read nameIndex) {
+        let tok = List.get(list: read toks, index: read nameIndex)
         return tok.text
     }
     return ""

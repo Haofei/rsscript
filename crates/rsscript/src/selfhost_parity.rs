@@ -650,6 +650,12 @@ const LIMIT: Int = 3
 fn run() -> Unit {
     return Unit
 }
+pub struct PublicBox {
+    value: Int
+}
+async fn async_run() -> Unit {
+    return Unit
+}
 "#;
     let exe = compile_selfhost_tool("serialize/outline.rss", "top-level AST outline")
         .expect("top-level AST outline should compile");
@@ -667,6 +673,8 @@ fn run() -> Unit {
             "type-alias\tName\t10:1:4\n",
             "const\tLIMIT\t11:1:5\n",
             "function\trun\t12:1:2\n",
+            "type\tPublicBox\t15:1:3\n",
+            "function\tasync_run\t18:1:5\n",
         )
     );
 }
