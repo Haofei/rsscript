@@ -11150,6 +11150,24 @@ fn method_decl_param_open(toks: read List<Tok>, method: read String) -> Int {
     return result
 }
 
+// The param-list open of a same-file unqualified function declaration.
+fn function_decl_param_open(toks: read List<Tok>, name: read String) -> Int {
+    let n = List.len(list: read toks)
+    let mut i = 0
+    let mut result = -1
+    while i < n && result < 0 {
+        if at_ident(toks: read toks, i: read i, wid: read WORD_FN) {
+            let nameIdx = i + 1
+            if is_ident_tok(toks: read toks, i: read nameIdx) && tk_text(toks: read toks, i: read nameIdx) == name && at_symbol(toks: read toks, i: read (nameIdx + 1), code: read SYM_DOT) == false {
+                let sigEnd = function_signature_end(toks: read toks, start: read i)
+                result = find_param_open(toks: read toks, from: read nameIdx, end: read sigEnd)
+            }
+        }
+        i = i + 1
+    }
+    return result
+}
+
 // True iff any NAMED argument in the arg list [op+1,close) supplies an effect that
 // differs from its callee param's expected effect. `mode` selects the expected
 // source: 0 = stdlib map (ns/method), 1 = same-file signature params [sopen,sclose].
@@ -11680,14 +11698,20 @@ fn call_site_effect_bad(toks: read List<Tok>, op: read Int, bodyClose: read Int,
     // Classify the callee shape from cheap token checks BEFORE the (costly)
     // matching-paren scan, so the common bare/qualified calls short-circuit.
     if at_symbol(toks: read toks, i: read (nameLast - 1), code: read SYM_DOT) == false {
-        // Bare `Name(...)`: only a same-file struct/class constructor is relevant.
+        let close = find_matching(toks: read toks, open: read op, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+        if close < 0 || close > bodyClose { return false }
+        let fOpen = function_decl_param_open(toks: read toks, name: read method)
+        if fOpen >= 0 {
+            let fClose = find_matching(toks: read toks, open: read fOpen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+            if fClose < 0 { return false }
+            return arg_effect_bad(toks: read toks, op: read op, close: read close, mode: read 1, ns: read "", method: read method, sopen: read fOpen, sclose: read fClose)
+        }
+        // Otherwise a bare `Name(...)` can only be a same-file constructor.
         if Set.contains<String>(set: read declared, value: read method) == false { return false }
         let ob = type_body_open(toks: read toks, typeName: read method)
         if ob < 0 { return false }
         let obClose = find_matching(toks: read toks, open: read ob, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
         if obClose < 0 { return false }
-        let close = find_matching(toks: read toks, open: read op, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
-        if close < 0 || close > bodyClose { return false }
         return ctor_managed_bad(toks: read toks, op: read op, close: read close, ob: read ob, obClose: read obClose, declared: read declared, managed: read managed)
     }
     // The receiver/namespace ends just before the `.`; skip a `Type<...>` generic
@@ -11744,6 +11768,173 @@ fn receiver_self_effect_bad(toks: read List<Tok>, head: read Int, popen: read In
     let mut visible = "read"
     if is_effect_kw(toks: read toks, i: read (rstart - 1)) { visible = tk_text(toks: read toks, i: read (rstart - 1)) }
     return selfEffect != visible
+}
+
+// Structured RS0202 output uses the production diagnostic anchors: argument and
+// constructor values, the receiver base, and the structured pattern head.
+// Keep the boolean helpers above for the legacy code-presence protocol.
+fn collect_arg_effect_sites(source: read String, toks: read List<Tok>, op: read Int, close: read Int, mode: read Int, ns: read String, method: read String, sopen: read Int, sclose: read Int, out: mut List<DiagnosticSite>) -> Bool {
+    let mut k = op + 1
+    let mut depth = 0
+    let mut angle = 0
+    let mut inPipe = false
+    let mut segStart = op + 1
+    let mut hit = false
+    while k < close {
+        let opener = at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE)
+        let closer = at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE)
+        if opener { depth = depth + 1 }
+        else if closer { if depth > 0 { depth = depth - 1 } }
+        else if at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE) { angle = angle + 1 }
+        else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) { if angle > 0 { angle = angle - 1 } }
+        else if depth == 0 && angle == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_PIPE) { inPipe = inPipe == false }
+        else if depth == 0 && angle == 0 && inPipe == false && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
+            if arg_seg_effect_bad(toks: read toks, s: read segStart, e: read k, mode: read mode, ns: read ns, method: read method, sopen: read sopen, sclose: read sclose) {
+                List.push<DiagnosticSite>(list: mut out, value: read token_range_diagnostic_site(source: read source, toks: read toks, start: read (segStart + 2), endInclusive: read (segStart + 2)))
+                hit = true
+            }
+            segStart = k + 1
+        }
+        k = k + 1
+    }
+    if arg_seg_effect_bad(toks: read toks, s: read segStart, e: read close, mode: read mode, ns: read ns, method: read method, sopen: read sopen, sclose: read sclose) {
+        List.push<DiagnosticSite>(list: mut out, value: read token_range_diagnostic_site(source: read source, toks: read toks, start: read (segStart + 2), endInclusive: read (segStart + 2)))
+        hit = true
+    }
+    return hit
+}
+
+fn collect_ctor_managed_sites(source: read String, toks: read List<Tok>, op: read Int, close: read Int, ob: read Int, obClose: read Int, declared: read Set<String>, managed: read Set<String>, out: mut List<DiagnosticSite>) -> Bool {
+    let mut k = op + 1
+    let mut depth = 0
+    let mut angle = 0
+    let mut inPipe = false
+    let mut segStart = op + 1
+    let mut hit = false
+    while k < close {
+        let opener = at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE)
+        let closer = at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE)
+        if opener { depth = depth + 1 }
+        else if closer { if depth > 0 { depth = depth - 1 } }
+        else if at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE) { angle = angle + 1 }
+        else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) { if angle > 0 { angle = angle - 1 } }
+        else if depth == 0 && angle == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_PIPE) { inPipe = inPipe == false }
+        else if depth == 0 && angle == 0 && inPipe == false && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
+            if ctor_field_seg_bad(toks: read toks, s: read segStart, e: read k, ob: read ob, obClose: read obClose, declared: read declared, managed: read managed) {
+                List.push<DiagnosticSite>(list: mut out, value: read token_range_diagnostic_site(source: read source, toks: read toks, start: read (segStart + 2), endInclusive: read (segStart + 2)))
+                hit = true
+            }
+            segStart = k + 1
+        }
+        k = k + 1
+    }
+    if ctor_field_seg_bad(toks: read toks, s: read segStart, e: read close, ob: read ob, obClose: read obClose, declared: read declared, managed: read managed) {
+        List.push<DiagnosticSite>(list: mut out, value: read token_range_diagnostic_site(source: read source, toks: read toks, start: read (segStart + 2), endInclusive: read (segStart + 2)))
+        hit = true
+    }
+    return hit
+}
+
+fn collect_match_effect_sites(source: read String, toks: read List<Tok>, braceOpen: read Int, braceClose: read Int, out: mut List<DiagnosticSite>) -> Bool {
+    let mut i = braceOpen + 1
+    let mut hit = false
+    while i < braceClose {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_SEMI) || at_symbol(toks: read toks, i: read i, code: read SYM_COMMA) { i = i + 1 }
+        else {
+            let lineEnd = next_line_or_block_end(toks: read toks, start: read i, end: read braceClose)
+            let arrow = find_top_sym(toks: read toks, start: read i, end: read lineEnd, code: read SYM_FATARROW)
+            if arrow < 0 { if lineEnd > i { i = lineEnd } else { i = i + 1 } }
+            else {
+                if pattern_is_structured(toks: read toks, ps: read i, pe: read arrow) {
+                    List.push<DiagnosticSite>(list: mut out, value: read token_range_diagnostic_site(source: read source, toks: read toks, start: read i, endInclusive: read i))
+                    hit = true
+                }
+                let bodyStart = arrow + 1
+                if at_symbol(toks: read toks, i: read bodyStart, code: read SYM_LBRACE) {
+                    let bclose = find_matching(toks: read toks, open: read bodyStart, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+                    if bclose < 0 { i = braceClose } else { i = bclose + 1 }
+                } else {
+                    let bEnd = next_line_or_block_end(toks: read toks, start: read bodyStart, end: read braceClose)
+                    if bEnd > i { i = bEnd } else { i = i + 1 }
+                }
+            }
+        }
+    }
+    return hit
+}
+
+fn collect_fn_data_effect_sites(source: read String, toks: read List<Tok>, start: read Int, declared: read Set<String>, methodNames: read Set<String>, out: mut List<DiagnosticSite>) -> Bool {
+    let ns = fn_name_start(toks: read toks, i: read start)
+    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+    if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
+    let bodyClose = find_matching(toks: read toks, open: read sigEnd, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+    if bodyClose < 0 { return false }
+    let managed = collect_managed_names(toks: read toks, bodyOpen: read sigEnd, bodyClose: read bodyClose)
+    let mut k = sigEnd + 1
+    let mut hit = false
+    while k < bodyClose {
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) {
+            let nameLast = callee_name_last(toks: read toks, op: read k)
+            if nameLast >= 0 {
+                let method = tk_text(toks: read toks, i: read nameLast)
+                let close = find_matching(toks: read toks, open: read k, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+                if close >= 0 && close <= bodyClose {
+                    if at_symbol(toks: read toks, i: read (nameLast - 1), code: read SYM_DOT) == false {
+                        let fOpen = function_decl_param_open(toks: read toks, name: read method)
+                        if fOpen >= 0 {
+                            let fClose = find_matching(toks: read toks, open: read fOpen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+                            if fClose >= 0 && collect_arg_effect_sites(source: read source, toks: read toks, op: read k, close: read close, mode: read 1, ns: read "", method: read method, sopen: read fOpen, sclose: read fClose, out: mut out) { hit = true }
+                        } else if Set.contains<String>(set: read declared, value: read method) {
+                            let ob = type_body_open(toks: read toks, typeName: read method)
+                            if ob >= 0 {
+                                let obClose = find_matching(toks: read toks, open: read ob, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+                                if obClose >= 0 && collect_ctor_managed_sites(source: read source, toks: read toks, op: read k, close: read close, ob: read ob, obClose: read obClose, declared: read declared, managed: read managed, out: mut out) { hit = true }
+                            }
+                        }
+                    } else {
+                        let mut head = nameLast - 2
+                        if at_symbol(toks: read toks, i: read head, code: read SYM_RANGLE) {
+                            let openAngle = back_match_angle(toks: read toks, closePos: read head)
+                            if openAngle >= 0 { head = openAngle - 1 }
+                        }
+                        if is_ident_tok(toks: read toks, i: read head) {
+                            let headText = tk_text(toks: read toks, i: read head)
+                            let headChained = at_symbol(toks: read toks, i: read (head - 1), code: read SYM_DOT)
+                            if headChained == false && is_upper_head(name: read headText) {
+                                if is_effect_stdlib_ns(ns: read headText) && collect_arg_effect_sites(source: read source, toks: read toks, op: read k, close: read close, mode: read 0, ns: read headText, method: read method, sopen: read 0, sclose: read 0, out: mut out) { hit = true }
+                            } else if Set.contains<String>(set: read methodNames, value: read method) {
+                                let popen = method_decl_param_open(toks: read toks, method: read method)
+                                if popen >= 0 {
+                                    let pclose = find_matching(toks: read toks, open: read popen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+                                    if pclose >= 0 {
+                                        if collect_arg_effect_sites(source: read source, toks: read toks, op: read k, close: read close, mode: read 1, ns: read "", method: read method, sopen: read popen, sclose: read pclose, out: mut out) { hit = true }
+                                        if receiver_self_effect_bad(toks: read toks, head: read head, popen: read popen, pclose: read pclose) {
+                                            let mut rstart = head
+                                            let mut going = true
+                                            while going {
+                                                if at_symbol(toks: read toks, i: read (rstart - 1), code: read SYM_DOT) && is_ident_tok(toks: read toks, i: read (rstart - 2)) { rstart = rstart - 2 }
+                                                else { going = false }
+                                            }
+                                            List.push<DiagnosticSite>(list: mut out, value: read token_range_diagnostic_site(source: read source, toks: read toks, start: read rstart, endInclusive: read rstart))
+                                            hit = true
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else if is_kw_text(toks: read toks, i: read k, word: read "match") && at_symbol(toks: read toks, i: read (k - 1), code: read SYM_DOT) == false && is_effect_kw(toks: read toks, i: read (k + 1)) == false {
+            let braceOpen = find_match_arms_open(toks: read toks, start: read (k + 1), end: read bodyClose)
+            if braceOpen >= 0 {
+                let braceClose = find_matching(toks: read toks, open: read braceOpen, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+                if braceClose >= 0 && collect_match_effect_sites(source: read source, toks: read toks, braceOpen: read braceOpen, braceClose: read braceClose, out: mut out) { hit = true }
+            }
+        }
+        k = k + 1
+    }
+    return hit
 }
 
 fn main() -> Unit {
@@ -11951,6 +12142,7 @@ fn main() -> Unit {
     // RS0202: a missing/mismatched call-site data effect (any of four sub-cases).
     // Precompute the same-file method-name set (receiver-call resolution gate).
     let mut missingDataEffect = false
+    let mut missingDataEffectSites = List<DiagnosticSite>.new()
     // RS0034: a bare Ok/Err/None bound to an unused, unannotated name.
     let mut uninferable = false
     let mut uninferableTokens = List<Int>.new()
@@ -12196,6 +12388,7 @@ fn main() -> Unit {
                     if collect_fn_invalid_try_tokens(toks: read toks, start: read i, declared: read declared, allFns: read allFns, out: mut invalidTryTokens) { invalidTry = true }
                     if collect_fn_unnamed_arg_tokens(toks: read toks, start: read i, pubFns: read pubFns, dottedFns: read dottedFns, out: mut unnamedArgTokens) { unnamedArg = true }
                     if fn_data_effect_bad(toks: read toks, start: read i, declared: read declared, methodNames: read methodNames) { missingDataEffect = true }
+                    if structured && collect_fn_data_effect_sites(source: read source, toks: read toks, start: read i, declared: read declared, methodNames: read methodNames, out: mut missingDataEffectSites) { missingDataEffect = true }
                     if collect_fn_uninferable_binding_tokens(toks: read toks, start: read i, out: mut uninferableTokens) { uninferable = true }
                     if collect_fn_invalid_assignment_tokens(toks: read toks, start: read i, out: mut immutableAssignTokens) { immutableAssign = true }
                     if collect_fn_manage_take_bad_tokens(toks: read toks, start: read i, keyword: read "manage", out: mut manageNonLocalTokens) { manageNonLocal = true }
@@ -12321,6 +12514,7 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_records(code: read "RS0210", toks: read toks, tokenIndices: read opTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0209", toks: read toks, tokenIndices: read cfTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0201", toks: read toks, tokenIndices: read unnamedArgTokens)
+        emitted = emitted + emit_diagnostic_sites(code: read "RS0202", sites: read missingDataEffectSites)
         emitted = emitted + emit_diagnostic_sites(code: read "RS0014", sites: read noallocAllocSites)
         emitted = emitted + emit_diagnostic_sites(code: read "RS0018", sites: read noBlockCallSites)
         emitted = emitted + emit_diagnostic_sites(code: read "RS0019", sites: read noPanicCallSites)

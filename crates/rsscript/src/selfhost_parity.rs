@@ -1840,6 +1840,56 @@ fn patterns() -> Unit {
 }
 
 #[test]
+fn checker_rs0202_structured_multiset_parity() {
+    let source = r#"sum Expr {
+    Call(callee: String)
+}
+
+struct Item {
+    name: String
+}
+
+struct Boxed {
+    item: Item
+}
+
+fn Item.new() -> fresh Item {
+    return Item(name: "item")
+}
+
+fn use_item(value: read Item) -> Unit {
+    return Unit
+}
+
+fn Item.touch(self: mut Item, value: read String) -> Unit {
+    return Unit
+}
+
+fn bad(expr: read Expr) -> Unit {
+    let item = Item.new()
+    use_item(value: item)
+    let boxed = Boxed(item: read item)
+    read item.touch(value: read "name")
+    match expr {
+        Call { callee } => return Unit
+    }
+    return Unit
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0202.rss", source, "RS0202");
+    assert_eq!(
+        oracle.len(),
+        4,
+        "fixture must exercise argument, constructor, receiver, and match-effect spans"
+    );
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0202",
+    );
+    assert_eq!(oracle, actual, "RS0202 structured diagnostics diverged");
+}
+
+#[test]
 fn checker_rs0035_structured_multiset_parity() {
     let source = r#"#lower_name("dup_symbol")
 fn first() -> Unit {
