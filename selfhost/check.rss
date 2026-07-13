@@ -9761,6 +9761,57 @@ fn call_arg_type_bad(toks: read List<Tok>, ns: read String, callee: read String,
     return bad
 }
 
+// Structured counterpart of call_arg_type_bad. The type resolution and
+// conservative skip rules are intentionally identical; only the diagnostic
+// anchor changes from a file-level boolean to the offending argument value.
+fn collect_call_arg_type_bad_tokens(toks: read List<Tok>, ns: read String, callee: read String, open: read Int, close: read Int, popen: read Int, pclose: read Int, bodyOpen: read Int, fnIdx: read Map<String, Int>, locals: read Map<String, List<Int>>, aliasIdx: read Map<String, String>, recvGeneric: read String, out: mut List<Int>) -> Bool {
+    let mut depth = 0
+    let mut atArgStart = true
+    let mut hit = false
+    let mut k = open + 1
+    while k < close {
+        if depth == 0 && atArgStart && is_ident_tok(toks: read toks, i: read k) && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_COLON) {
+            let label = tk_text(toks: read toks, i: read k)
+            let mut pt0 = resolve_param_type(toks: read toks, ns: read ns, name: read callee, label: read label, fnIdx: read fnIdx)
+            if String.len(value: read pt0) == 0 && ns == "ResourcePool" && callee == "new" && label == "create" && String.len(value: read recvGeneric) > 0 {
+                pt0 = String.concat(left: read "Fn() -> ", right: read recvGeneric)
+            }
+            if String.len(value: read pt0) > 0 {
+                let pt = expand_type_alias(aliasIdx: read aliasIdx, ty: read pt0)
+                if str_is_unresolved_generic(s: read pt) == false {
+                    let cm = find_top_sym(toks: read toks, start: read (k + 2), end: read close, code: read SYM_COMMA)
+                    let mut ae = close
+                    if cm >= 0 { ae = cm }
+                    if (k + 2) < ae {
+                        let callbackBad = callback_arg_bad(toks: read toks, as0: read (k + 2), ae: read ae, pt: read pt, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
+                        let at = return_actual_type(toks: read toks, s0: read (k + 2), e: read ae, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
+                        let mut mismatch = callbackBad
+                        if String.len(value: read at) > 0 && str_is_unresolved_generic(s: read at) == false {
+                            if arg_type_matches(expected: read pt, actual: read at) == false { mismatch = true }
+                        } else if String.len(value: read at) == 0 {
+                            let mut ai = k + 2
+                            if is_effect_kw(toks: read toks, i: read ai) { ai = ai + 1 }
+                            if (ai + 1) == ae && is_ident_tok(toks: read toks, i: read ai) {
+                                if is_untyped_param(toks: read toks, popen: read popen, pclose: read pclose, name: read tk_text(toks: read toks, i: read ai)) { mismatch = true }
+                            }
+                        }
+                        if mismatch {
+                            List.push<Int>(list: mut out, value: read (k + 2))
+                            hit = true
+                        }
+                    }
+                }
+            }
+        }
+        atArgStart = false
+        if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) { depth = depth + 1 }
+        else if at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) { depth = depth - 1 }
+        else if depth == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) { atArgStart = true }
+        k = k + 1
+    }
+    return hit
+}
+
 // RS0207 ARGUMENT_TYPE_MISMATCH — Slice 1: an annotated binding
 // `let/local NAME: TYPE = EXPR` whose initializer type is incompatible with the
 // annotation (oracle check_binding_type, same argument_type_matches primitive as
@@ -10256,6 +10307,81 @@ fn has_binding_type_mismatch(toks: read List<Tok>) -> Bool {
             } else {
                 i = i + 1
             }
+        }
+    }
+    return hit
+}
+
+// Structured RS0207 collector for the same binding and call paths as the
+// presence checker. Complex callback-body diagnostics still enter through the
+// shared argument checker, so this collector never invents a type mismatch.
+fn collect_fn_binding_type_mismatch_tokens(toks: read List<Tok>, start: read Int, model: read FileTypeModel, out: mut List<Int>) -> Bool {
+    let body = build_body_type_model(toks: read toks, fnStart: read start)
+    if body_type_model_ok(body: read body) == false { return false }
+    let mut i = body.bodyOpen + 1
+    let mut hit = false
+    while i < body.bodyClose {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) && is_closure_brace(toks: read toks, b: read i) && closure_paramless(toks: read toks, b: read i) == false {
+            let cc = find_matching(toks: read toks, open: read i, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+            if cc < 0 { i = body.bodyClose } else { i = cc + 1 }
+        } else if is_kw_text(toks: read toks, i: read i, word: read "let") || is_kw_text(toks: read toks, i: read i, word: read "local") {
+            let mut j = i + 1
+            if is_kw_text(toks: read toks, i: read j, word: read "mut") { j = j + 1 }
+            if is_ident_tok(toks: read toks, i: read j) && at_symbol(toks: read toks, i: read (j + 1), code: read SYM_COLON) {
+                let stmtEnd = next_line_or_block_end(toks: read toks, start: read i, end: read body.bodyClose)
+                let eq = find_top_sym(toks: read toks, start: read (j + 2), end: read stmtEnd, code: read SYM_EQ)
+                if eq >= 0 {
+                    let annotated = qualified_type_string(toks: read toks, ts: read (j + 2), te: read eq, prefix: read model.prefix, declared: read model.declared)
+                    let expected = expand_type_alias(aliasIdx: read model.aliasIdx, ty: read annotated)
+                    if str_is_unresolved_generic(s: read expected) == false && String.len(value: read expected) > 0 {
+                        let ee = stmt_expr_end(toks: read toks, start: read (eq + 1), end: read body.bodyClose)
+                        if (eq + 1) < ee && return_expr_mismatch(toks: read toks, s: read (eq + 1), e: read ee, expected: read expected, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals) {
+                            List.push<Int>(list: mut out, value: read (eq + 1))
+                            hit = true
+                        }
+                    }
+                }
+            }
+            i = i + 1
+        } else if is_ident_tok(toks: read toks, i: read i) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_LPAREN) && at_symbol(toks: read toks, i: read (i - 1), code: read SYM_DOT) && is_ident_tok(toks: read toks, i: read (i - 2)) {
+            let callNs = tk_text(toks: read toks, i: read (i - 2))
+            let method = tk_text(toks: read toks, i: read i)
+            let cclose = find_matching(toks: read toks, open: read (i + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+            if cclose >= 0 && collect_call_arg_type_bad_tokens(toks: read toks, ns: read callNs, callee: read method, open: read (i + 1), close: read cclose, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals, aliasIdx: read model.aliasIdx, recvGeneric: read "", out: mut out) { hit = true }
+            i = i + 1
+        } else if is_ident_tok(toks: read toks, i: read i) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_LPAREN) && at_symbol(toks: read toks, i: read (i - 1), code: read SYM_DOT) == false && is_kw_text(toks: read toks, i: read (i - 1), word: read "fn") == false {
+            let callee = tk_text(toks: read toks, i: read i)
+            let cclose = find_matching(toks: read toks, open: read (i + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+            if cclose >= 0 && collect_call_arg_type_bad_tokens(toks: read toks, ns: read "", callee: read callee, open: read (i + 1), close: read cclose, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals, aliasIdx: read model.aliasIdx, recvGeneric: read "", out: mut out) { hit = true }
+            i = i + 1
+        } else { i = i + 1 }
+    }
+    return hit
+}
+
+fn collect_binding_type_mismatch_tokens(toks: read List<Tok>, out: mut List<Int>) -> Bool {
+    let ntok = List.len(list: read toks)
+    let model = build_file_type_model(toks: read toks)
+    let mut i = 0
+    let mut running = true
+    let mut hit = false
+    while running {
+        if i >= ntok || tk_kind(toks: read toks, i: read i) == TOK_EOF { running = false }
+        else {
+            let cls = classify_top(toks: read toks, i: read i)
+            let isPub = cls.isPub
+            if cls.isFeatures || cls.isProfile { i = declaration_line_end(toks: read toks, start: read i) }
+            else if starts_type_decl(toks: read toks, i: read i, isPub: read isPub) {
+                let r = parse_type_decl(toks: read toks, i: read i)
+                if r < 0 { running = false } else { i = r }
+            } else if starts_fn_like(toks: read toks, i: read i, isPub: read isPub) {
+                let r = parse_function_decl(toks: read toks, i: read i)
+                if r < 0 { running = false }
+                else {
+                    if collect_fn_binding_type_mismatch_tokens(toks: read toks, start: read i, model: read model, out: mut out) { hit = true }
+                    i = r
+                }
+            } else { i = i + 1 }
         }
     }
     return hit
@@ -12104,6 +12230,8 @@ fn main() -> Unit {
     let retTypeMismatch = collect_return_type_mismatch_tokens(toks: read toks, out: mut retTypeMismatchTokens)
     // RS0207: argument/binding-type mismatch.
     let bindTypeMismatch = has_binding_type_mismatch(toks: read toks)
+    let mut bindTypeMismatchTokens = List<Int>.new()
+    if structured { collect_binding_type_mismatch_tokens(toks: read toks, out: mut bindTypeMismatchTokens) }
     // RS0210: operator-type mismatch.
     let mut opTypeMismatchTokens = List<Int>.new()
     let opTypeMismatch = collect_operator_type_mismatch_tokens(toks: read toks, out: mut opTypeMismatchTokens)
@@ -12510,6 +12638,7 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_records(code: read "RS0033", toks: read toks, tokenIndices: read outOfRangeIntTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0034", toks: read toks, tokenIndices: read uninferableTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0205", toks: read toks, tokenIndices: read dupArgTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0207", toks: read toks, tokenIndices: read bindTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0208", toks: read toks, tokenIndices: read retTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0210", toks: read toks, tokenIndices: read opTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0209", toks: read toks, tokenIndices: read cfTypeMismatchTokens)

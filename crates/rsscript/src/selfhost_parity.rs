@@ -1890,6 +1890,32 @@ fn bad(expr: read Expr) -> Unit {
 }
 
 #[test]
+fn checker_rs0207_structured_multiset_parity() {
+    let source = r#"fn needs_text(value: read String) -> Unit {
+    return Unit
+}
+
+fn bad() -> Unit {
+    let value: String = 42
+    needs_text(value: read 7)
+    Log.write(message: read 9)
+    return Unit
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0207.rss", source, "RS0207");
+    assert_eq!(
+        oracle.len(),
+        3,
+        "fixture must exercise annotated binding, same-file, and stdlib call argument anchors"
+    );
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0207",
+    );
+    assert_eq!(oracle, actual, "RS0207 structured diagnostics diverged");
+}
+
+#[test]
 fn checker_rs0035_structured_multiset_parity() {
     let source = r#"#lower_name("dup_symbol")
 fn first() -> Unit {

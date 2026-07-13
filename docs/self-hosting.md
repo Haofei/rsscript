@@ -276,6 +276,13 @@ the token-probe checker does not yet share the Rust frontend's arm type model.
 It is an explicit Stage 2 shared-AST migration item, not a span-normalization
 problem.
 
+`RS0207` has structured anchors for annotated bindings and direct named call
+arguments, including same-file and curated stdlib signatures. Callback bodies,
+interpolations, and generic receiver calls remain presence-only because their
+Rust diagnostics attach to typed subexpressions that the token-probe checker
+does not materialize. It therefore remains outside the 81-family structured
+count until Stage 2 supplies that shared expression model.
+
 The inventory audit added the previously omitted reachable single-source
 `RS1001 OPERATOR_OVERLOAD_ATTEMPT` family. `RS1301` remains separate because it
 requires a resolved package bundle rather than one source file.
