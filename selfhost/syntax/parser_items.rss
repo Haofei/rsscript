@@ -12,8 +12,16 @@ use selfhost.syntax.ast.*
 // `pub struct`, `async fn`, and `pub fn` do not store a modifier as a name.
 fn item_name_index(toks: read List<Tok>, i: read Int) -> Int {
     let mut j = i
-    if at_ident(toks: read toks, i: read j, wid: read WORD_PUB) { j = j + 1 }
-    if at_ident(toks: read toks, i: read j, wid: read WORD_ASYNC) || at_ident(toks: read toks, i: read j, wid: read WORD_NATIVE) { j = j + 1 }
+    while at_symbol(toks: read toks, i: read j, code: read SYM_HASH) { j = j + 5 }
+    let mut modifiers = true
+    while modifiers {
+        if at_ident(toks: read toks, i: read j, wid: read WORD_PUB) || at_ident(toks: read toks, i: read j, wid: read WORD_ASYNC) || at_ident(toks: read toks, i: read j, wid: read WORD_NATIVE) {
+            j = j + 1
+        } else {
+            modifiers = false
+        }
+    }
+    if at_ident(toks: read toks, i: read j, wid: read WORD_OPAQUE) { j = j + 1 }
     if at_ident(toks: read toks, i: read j, wid: read WORD_FN) || at_ident(toks: read toks, i: read j, wid: read WORD_CLASS) || at_ident(toks: read toks, i: read j, wid: read WORD_STRUCT) || at_ident(toks: read toks, i: read j, wid: read WORD_RESOURCE) || at_ident(toks: read toks, i: read j, wid: read WORD_OPAQUE) || at_ident(toks: read toks, i: read j, wid: read WORD_SUM) || at_ident(toks: read toks, i: read j, wid: read WORD_TYPE) || at_ident(toks: read toks, i: read j, wid: read WORD_CONST) || at_ident(toks: read toks, i: read j, wid: read WORD_PROTOCOL) {
         return j + 1
     }
