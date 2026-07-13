@@ -2011,6 +2011,38 @@ fn checker_rs0212_structured_multiset_parity() {
 }
 
 #[test]
+fn checker_rs0211_structured_multiset_parity() {
+    let source = r#"class Entity {
+    value: Int
+}
+
+struct Bad derives(Eq, Hash) {
+    score: Float
+    target: handle Entity
+}
+
+struct DecodeBad derives(JsonDecode) {
+    values: Map<Float, Int>
+}
+
+struct Good derives(Eq, Hash) {
+    value: Int
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0211.rss", source, "RS0211");
+    assert_eq!(
+        oracle.len(),
+        5,
+        "fixture must preserve per-field/per-derive violations and valid scalar fields"
+    );
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0211",
+    );
+    assert_eq!(oracle, actual, "RS0211 structured diagnostics diverged");
+}
+
+#[test]
 fn checker_rs0701_structured_multiset_parity() {
     let source = r#"resource Connection {
     id: Int

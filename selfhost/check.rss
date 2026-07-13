@@ -1019,14 +1019,25 @@ fn field_type_bad_for_derive(toks: read List<Tok>, ts: read Int, te: read Int, h
 }
 
 // Iterate `name: Type` fields in the body [bodyOpen, bodyClose) and test each type.
-fn derive_body_fields_bad(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, hasEOH: read Bool, hasJD: read Bool, genParams: read Set<String>, derivesHash: read Bool) -> Bool {
+fn collect_derive_body_field_tokens(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, hasEq: read Bool, hasOrd: read Bool, hasHash: read Bool, hasJD: read Bool, genParams: read Set<String>, out: mut List<Int>) -> Bool {
     let mut i = bodyOpen + 1
     let mut hit = false
     while i < bodyClose {
         if is_ident_tok(toks: read toks, i: read i) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_COLON) {
             let ts = i + 2
             let te = field_type_end(toks: read toks, ts: read ts, bodyClose: read bodyClose)
-            if field_type_bad_for_derive(toks: read toks, ts: read ts, te: read te, hasEOH: read hasEOH, hasJD: read hasJD, genParams: read genParams, derivesHash: read derivesHash) { hit = true }
+            if (hasOrd || hasEq) && field_type_bad_for_derive(toks: read toks, ts: read ts, te: read te, hasEOH: read true, hasJD: read false, genParams: read genParams, derivesHash: read hasHash) {
+                List.push<Int>(list: mut out, value: read i)
+                hit = true
+            }
+            if hasHash && field_type_bad_for_derive(toks: read toks, ts: read ts, te: read te, hasEOH: read true, hasJD: read false, genParams: read genParams, derivesHash: read true) {
+                List.push<Int>(list: mut out, value: read i)
+                hit = true
+            }
+            if hasJD && field_type_bad_for_derive(toks: read toks, ts: read ts, te: read te, hasEOH: read false, hasJD: read true, genParams: read genParams, derivesHash: read hasHash) {
+                List.push<Int>(list: mut out, value: read i)
+                hit = true
+            }
             i = te
         } else {
             i = i + 1
@@ -1035,7 +1046,7 @@ fn derive_body_fields_bad(toks: read List<Tok>, bodyOpen: read Int, bodyClose: r
     return hit
 }
 
-fn has_bad_derive_field(toks: read List<Tok>) -> Bool {
+fn collect_bad_derive_field_tokens(toks: read List<Tok>, out: mut List<Int>) -> Bool {
     let ntok = List.len(list: read toks)
     let mut i = 0
     let mut hit = false
@@ -1064,7 +1075,7 @@ fn has_bad_derive_field(toks: read List<Tok>) -> Bool {
                             let bc = find_matching(toks: read toks, open: read bo, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
                             if bc >= 0 {
                                 let genParams = collect_struct_generics(toks: read toks, nameIdx: read ns, bodyOpen: read bo)
-                                if derive_body_fields_bad(toks: read toks, bodyOpen: read bo, bodyClose: read bc, hasEOH: read hasEOH, hasJD: read hasJD, genParams: read genParams, derivesHash: read hasHash) { hit = true }
+                                if collect_derive_body_field_tokens(toks: read toks, bodyOpen: read bo, bodyClose: read bc, hasEq: read hasEq, hasOrd: read hasOrd, hasHash: read hasHash, hasJD: read hasJD, genParams: read genParams, out: mut out) { hit = true }
                             }
                         }
                     }
@@ -11728,7 +11739,8 @@ fn main() -> Unit {
     let mut resourceDeriveTokens = List<Int>.new()
     let resourceDerive = collect_bad_resource_derives(toks: read toks, out: mut resourceDeriveTokens)
     // RS0211: a value-derive trait unsupported by a field type (Float/handle not Eq/Ord/Hash).
-    let deriveFieldBad = has_bad_derive_field(toks: read toks)
+    let mut deriveFieldBadTokens = List<Int>.new()
+    let deriveFieldBad = collect_bad_derive_field_tokens(toks: read toks, out: mut deriveFieldBadTokens)
     // RS0032: a generic method's type arg doesn't satisfy the required protocol (Hashable/Ord).
     let mut protocolBadTokens = List<Int>.new()
     let protocolBad = collect_protocol_violation_tokens(toks: read toks, out: mut protocolBadTokens)
@@ -12169,6 +12181,7 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_records(code: read "RS0020", toks: read toks, tokenIndices: read noallocCallTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0021", toks: read toks, tokenIndices: read nonExhaustiveTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0032", toks: read toks, tokenIndices: read protocolBadTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0211", toks: read toks, tokenIndices: read deriveFieldBadTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0311", toks: read toks, tokenIndices: read immutableAssignTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0313", toks: read toks, tokenIndices: read assignTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0312", toks: read toks, tokenIndices: read indexAssignBadTokens)
@@ -12413,7 +12426,7 @@ fn main() -> Unit {
             Log.write(message: read "RS0212")
         }
     }
-    if deriveFieldBad {
+    if deriveFieldBad && structured == false {
         Log.write(message: read "RS0211")
     }
     if protocolBad && structured == false {
