@@ -26,6 +26,8 @@ module selfhost.check
 
 use selfhost.scan.*
 use selfhost.interfaces.*
+use selfhost.syntax.ast.*
+use selfhost.syntax.parser_items.*
 use selfhost.types.*
 
 // ';' — the semicolon symbol code (not in the shared scan.rss prelude; used by
@@ -259,6 +261,34 @@ fn emit_diagnostic_sites(code: read String, sites: read List<DiagnosticSite>) ->
     return i
 }
 
+// Stage 2 signature rules consume the materialized Program, rather than
+// reopening declaration token ranges. RS0002 attaches to the function item;
+// RS0003 attaches to the parameter item. The legacy token collectors remain
+// below temporarily for independently migrating other signature rules.
+fn collect_program_signature_sites(program: read Program, missingReturns: mut List<DiagnosticSite>, untypedParams: mut List<DiagnosticSite>) -> Unit {
+    let mut itemIndex = 0
+    while itemIndex < Program.len(self: read program) {
+        let item = List.get<Item>(list: read program.items, index: read itemIndex)
+        if item.kind == ITEM_FUNCTION {
+            if String.len(value: read item.returnType) == 0 {
+                let site = DiagnosticSite(line: item.line, column: item.column, length: item.length)
+                List.push<DiagnosticSite>(list: mut missingReturns, value: read site)
+            }
+            let mut paramIndex = 0
+            while paramIndex < List.len(list: read item.params) {
+                let param = List.get<Param>(list: read item.params, index: read paramIndex)
+                if String.len(value: read param.typeText) == 0 {
+                    let site = DiagnosticSite(line: param.line, column: param.column, length: param.length)
+                    List.push<DiagnosticSite>(list: mut untypedParams, value: read site)
+                }
+                paramIndex = paramIndex + 1
+            }
+        }
+        itemIndex = itemIndex + 1
+    }
+    return Unit
+}
+
 // The file features recognized by the compiler (parse_file_feature). Anything
 // else in a `features:` header is an unknown feature (RS0016).
 fn is_known_feature(name: read String) -> Bool {
@@ -292,83 +322,6 @@ fn find_param_open(toks: read List<Tok>, from: read Int, end: read Int) -> Int {
         k = k + 1
     }
     return r
-}
-
-// RS0002: a function with no explicit `-> ReturnType` (check_return_type_explicit,
-// function.return_ty.is_none()). True iff no top-level `->` follows the param list.
-fn fn_missing_return(toks: read List<Tok>, start: read Int) -> Bool {
-    let ns = fn_name_start(toks: read toks, i: read start)
-    // Signature scan must begin at the `fn` keyword (ns - 1), not the decl start:
-    // when the decl is attribute-led (`#deprecated(...) fn …`), starting at `#`
-    // makes function_signature_end stop at the later `fn` (a top-level-item start).
-    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
-    let open = find_param_open(toks: read toks, from: read ns, end: read sigEnd)
-    if open < 0 { return false }
-    let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
-    if close < 0 { return false }
-    let mut k = close + 1
-    let mut hasArrow = false
-    while k < sigEnd {
-        if at_symbol(toks: read toks, i: read k, code: read SYM_ARROW) { hasArrow = true }
-        k = k + 1
-    }
-    return hasArrow == false
-}
-
-// A parameter segment [segStart,segEnd) is an untyped param iff it starts with a
-// non-effect identifier whose next token is not `:` (parse_params: empty ty.name).
-// Segments that start with a data-effect keyword or a non-ident are malformed and
-// produce no Param (so no RS0003).
-fn seg_is_untyped(toks: read List<Tok>, segStart: read Int, segEnd: read Int) -> Bool {
-    if segStart >= segEnd { return false }
-    if is_ident_tok(toks: read toks, i: read segStart) == false { return false }
-    if is_effect_kw(toks: read toks, i: read segStart) { return false }
-    return at_symbol(toks: read toks, i: read (segStart + 1), code: read SYM_COLON) == false
-}
-
-// RS0003: any parameter lacking an explicit type (check_params, param.ty.name
-// is_empty). Splits the param list on top-level commas (depth-aware for
-// ()[]{}<>) and tests each segment with seg_is_untyped.
-fn collect_untyped_param_tokens(toks: read List<Tok>, start: read Int, out: mut List<Int>) -> Bool {
-    let ns = fn_name_start(toks: read toks, i: read start)
-    // Signature scan must begin at the `fn` keyword (ns - 1), not the decl start:
-    // when the decl is attribute-led (`#deprecated(...) fn …`), starting at `#`
-    // makes function_signature_end stop at the later `fn` (a top-level-item start).
-    let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
-    let open = find_param_open(toks: read toks, from: read ns, end: read sigEnd)
-    if open < 0 { return false }
-    let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
-    if close < 0 { return false }
-    let mut k = open + 1
-    let mut depth = 0
-    let mut angle = 0
-    let mut segStart = open + 1
-    let mut untyped = false
-    while k < close {
-        let opener = at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE)
-        let closer = at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read k, code: read SYM_RBRACE)
-        if opener {
-            depth = depth + 1
-        } else if closer {
-            if depth > 0 { depth = depth - 1 }
-        } else if at_symbol(toks: read toks, i: read k, code: read SYM_LANGLE) {
-            angle = angle + 1
-        } else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) {
-            if angle > 0 { angle = angle - 1 }
-        } else if depth == 0 && angle == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
-            if seg_is_untyped(toks: read toks, segStart: read segStart, segEnd: read k) {
-                untyped = true
-                List.push<Int>(list: mut out, value: read segStart)
-            }
-            segStart = k + 1
-        }
-        k = k + 1
-    }
-    if seg_is_untyped(toks: read toks, segStart: read segStart, segEnd: read close) {
-        untyped = true
-        List.push<Int>(list: mut out, value: read segStart)
-    }
-    return untyped
 }
 
 // Valid v0.6 effect names for an `effects(...)` clause (check_function_effects).
@@ -12067,6 +12020,7 @@ fn main() -> Unit {
     let source = Args.get_or_default(index: 0, default: read "")
     let structured = Args.get_or_default(index: 1, default: read "") == "records"
     let toks = tokenize(source: read source)
+    let program = parse_program(toks: read toks)
     let ntok = List.len(list: read toks)
     let mut callable = Set<String>.new()
     let mut types = Set<String>.new()
@@ -12082,9 +12036,9 @@ fn main() -> Unit {
     let mut duplicateFeatureTokens = List<Int>.new()
     // RS0002 (any fn missing an explicit return type) / RS0003 (any untyped param).
     let mut missingReturn = false
-    let mut missingReturnTokens = List<Int>.new()
     let mut untypedParam = false
-    let mut untypedParamTokens = List<Int>.new()
+    let mut missingReturnSites = List<DiagnosticSite>.new()
+    let mut untypedParamSites = List<DiagnosticSite>.new()
     // Signature-family diagnostics: RS0004 (unknown effect), RS0010 (removed
     // profile), RS0011 (removed share data effect), RS0012 (removed runtime effect).
     let mut hasProfile = false
@@ -12497,11 +12451,6 @@ fn main() -> Unit {
                         List.push<Int>(list: mut duplicateTokens, value: read i)
                     }
                     Set.insert<String>(set: mut callable, value: read name)
-                    if fn_missing_return(toks: read toks, start: read i) {
-                        missingReturn = true
-                        List.push<Int>(list: mut missingReturnTokens, value: read i)
-                    }
-                    if collect_untyped_param_tokens(toks: read toks, start: read i, out: mut untypedParamTokens) { untypedParam = true }
                     if collect_share_param_tokens(toks: read toks, start: read i, out: mut shareParamTokens) { shareParam = true }
                     if collect_effect_name_tokens(toks: read toks, start: read i, mode: read 0, out: mut unknownEffectTokens) { unknownEffect = true }
                     if collect_effect_name_tokens(toks: read toks, start: read i, mode: read 1, out: mut removedRuntimeTokens) { removedRuntime = true }
@@ -12620,10 +12569,13 @@ fn main() -> Unit {
             }
         }
     }
+    collect_program_signature_sites(program: read program, missingReturns: mut missingReturnSites, untypedParams: mut untypedParamSites)
+    missingReturn = List.len(list: read missingReturnSites) > 0
+    untypedParam = List.len(list: read untypedParamSites) > 0
     if structured {
         let mut emitted = 0
-        emitted = emitted + emit_diagnostic_records(code: read "RS0002", toks: read toks, tokenIndices: read missingReturnTokens)
-        emitted = emitted + emit_diagnostic_records(code: read "RS0003", toks: read toks, tokenIndices: read untypedParamTokens)
+        emitted = emitted + emit_diagnostic_sites(code: read "RS0002", sites: read missingReturnSites)
+        emitted = emitted + emit_diagnostic_sites(code: read "RS0003", sites: read untypedParamSites)
         emitted = emitted + emit_diagnostic_records(code: read "RS0004", toks: read toks, tokenIndices: read unknownEffectTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0005", toks: read toks, tokenIndices: read duplicateTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0006", toks: read toks, tokenIndices: read duplicateHeaderTokens)
@@ -12708,26 +12660,10 @@ fn main() -> Unit {
         return Unit
     }
     if missingReturn {
-        if structured {
-            let mut missingReturnIndex = 0
-            while missingReturnIndex < List.len(list: read missingReturnTokens) {
-                emit_diagnostic_record(code: read "RS0002", toks: read toks, tokenIndex: read List.get(list: read missingReturnTokens, index: read missingReturnIndex))
-                missingReturnIndex = missingReturnIndex + 1
-            }
-        } else {
-            Log.write(message: read "RS0002")
-        }
+        Log.write(message: read "RS0002")
     }
     if untypedParam {
-        if structured {
-            let mut untypedParamIndex = 0
-            while untypedParamIndex < List.len(list: read untypedParamTokens) {
-                emit_diagnostic_record(code: read "RS0003", toks: read toks, tokenIndex: read List.get(list: read untypedParamTokens, index: read untypedParamIndex))
-                untypedParamIndex = untypedParamIndex + 1
-            }
-        } else {
-            Log.write(message: read "RS0003")
-        }
+        Log.write(message: read "RS0003")
     }
     if unknownEffect {
         if structured {
