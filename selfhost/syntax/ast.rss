@@ -1,3 +1,4 @@
+features: local
 // Shared self-hosted syntax model. This is deliberately small at first: it
 // establishes one materialized Program for top-level declarations before
 // expressions, statements, and patterns migrate from the legacy stream parser.
@@ -20,6 +21,7 @@ const ITEM_UNKNOWN: Int = 13
 
 struct Item {
     kind: Int
+    name: String
     line: Int
     column: Int
     length: Int
@@ -29,15 +31,17 @@ struct Program {
     items: List<Item>
 }
 
-fn Item.from(kind: Int, line: Int, column: Int, length: Int) -> fresh Item {
-    return Item(kind: kind, line: line, column: column, length: length)
+fn Item.from(kind: Int, name: take String, line: Int, column: Int, length: Int) -> fresh Item {
+    return Item(kind: kind, name: take name, line: line, column: column, length: length)
 }
 
 fn Program.empty() -> fresh Program {
     return Program(items: List<Item>.new())
 }
 
-fn Program.push(self: mut Program, item: read Item) -> Unit {
+fn Program.push(self: mut Program, item: read Item) -> Unit
+    effects(retains(item))
+{
     List.push<Item>(list: mut self.items, value: read item)
 }
 

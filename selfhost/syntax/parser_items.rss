@@ -17,7 +17,8 @@ fn item_name(toks: read List<Tok>, i: read Int) -> String {
 
 fn push_item(program: mut Program, toks: read List<Tok>, i: read Int, kind: Int, name: read String) -> Unit {
     let tok = List.get(list: read toks, index: read i)
-    let item = Item.from(kind: kind, line: tok.line, column: tok.col, length: tok.len)
+    local ownedName = String.copy(value: read name)
+    let item = Item.from(kind: kind, name: take ownedName, line: tok.line, column: tok.col, length: tok.len)
     Program.push(self: mut program, item: read item)
 }
 
