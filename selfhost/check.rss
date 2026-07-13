@@ -863,15 +863,19 @@ fn call_protocol_bad(toks: read List<Tok>, i: read Int, recv: read String, metho
     return false
 }
 
-fn has_protocol_violation(toks: read List<Tok>) -> Bool {
+fn collect_protocol_violation_tokens(toks: read List<Tok>, out: mut List<Int>) -> Bool {
     let ntok = List.len(list: read toks)
     let declared = collect_declared_types(toks: read toks)
     let mut i = 0
     let mut hit = false
     while i < ntok {
-        if call_protocol_bad(toks: read toks, i: read i, recv: read "Set", method: read "new", declared: read declared, wantHash: read true) { hit = true }
-        if call_protocol_bad(toks: read toks, i: read i, recv: read "Map", method: read "new", declared: read declared, wantHash: read true) { hit = true }
-        if call_protocol_bad(toks: read toks, i: read i, recv: read "List", method: read "sort", declared: read declared, wantHash: read false) { hit = true }
+        let badSet = call_protocol_bad(toks: read toks, i: read i, recv: read "Set", method: read "new", declared: read declared, wantHash: read true)
+        let badMap = call_protocol_bad(toks: read toks, i: read i, recv: read "Map", method: read "new", declared: read declared, wantHash: read true)
+        let badSort = call_protocol_bad(toks: read toks, i: read i, recv: read "List", method: read "sort", declared: read declared, wantHash: read false)
+        if badSet || badMap || badSort {
+            List.push<Int>(list: mut out, value: read i)
+            hit = true
+        }
         i = i + 1
     }
     return hit
@@ -11726,7 +11730,8 @@ fn main() -> Unit {
     // RS0211: a value-derive trait unsupported by a field type (Float/handle not Eq/Ord/Hash).
     let deriveFieldBad = has_bad_derive_field(toks: read toks)
     // RS0032: a generic method's type arg doesn't satisfy the required protocol (Hashable/Ord).
-    let protocolBad = has_protocol_violation(toks: read toks)
+    let mut protocolBadTokens = List<Int>.new()
+    let protocolBad = collect_protocol_violation_tokens(toks: read toks, out: mut protocolBadTokens)
     // RS1004: surface reference syntax (`&T`/`&mut T`) is not part of RSScript.
     let mut surfaceRefTokens = List<Int>.new()
     let surfaceRef = collect_surface_references(toks: read toks, out: mut surfaceRefTokens)
@@ -12163,6 +12168,7 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_records(code: read "RS0013", toks: read toks, tokenIndices: read invalidTryTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0020", toks: read toks, tokenIndices: read noallocCallTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0021", toks: read toks, tokenIndices: read nonExhaustiveTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0032", toks: read toks, tokenIndices: read protocolBadTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0311", toks: read toks, tokenIndices: read immutableAssignTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0313", toks: read toks, tokenIndices: read assignTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0312", toks: read toks, tokenIndices: read indexAssignBadTokens)
@@ -12410,7 +12416,7 @@ fn main() -> Unit {
     if deriveFieldBad {
         Log.write(message: read "RS0211")
     }
-    if protocolBad {
+    if protocolBad && structured == false {
         Log.write(message: read "RS0032")
     }
     if surfaceRef {

@@ -1634,6 +1634,44 @@ fn combine<A: MissingLeft, B: MissingRight>(left: read A, right: read B) -> Unit
 }
 
 #[test]
+fn checker_rs0032_structured_multiset_parity() {
+    let source = r#"features: local
+
+struct Plain {
+    value: Int
+}
+
+struct Hashable derives(Hash) {
+    value: Int
+}
+
+struct Ordered derives(Ord) {
+    value: Int
+}
+
+fn exercise(values: mut List<Plain>, ordered: mut List<Ordered>) -> Unit {
+    let bad_set = Set.new<Plain>()
+    let bad_map = Map.new<Plain, Int>()
+    List.sort<Plain>(list: mut values)
+    let good_set = Set.new<Hashable>()
+    List.sort<Ordered>(list: mut ordered)
+    return Unit
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0032.rss", source, "RS0032");
+    assert_eq!(
+        oracle.len(),
+        3,
+        "fixture must preserve Hashable/Ord failures and exempt derived implementations"
+    );
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0032",
+    );
+    assert_eq!(oracle, actual, "RS0032 structured diagnostics diverged");
+}
+
+#[test]
 fn checker_rs0033_structured_multiset_parity() {
     let source = r#"fn first() -> Int {
     return 9223372036854775808
