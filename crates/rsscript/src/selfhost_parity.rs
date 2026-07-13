@@ -1739,6 +1739,37 @@ fn exercise() -> Unit {
 }
 
 #[test]
+fn checker_rs0208_structured_multiset_parity() {
+    let source = r#"class BuildError {
+    code: Int
+}
+
+fn nested() -> Result<Option<String>, BuildError> {
+    return Ok(Some(42))
+}
+
+fn direct() -> String {
+    return 42
+}
+
+fn fallthrough() -> String {
+    42
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0208.rss", source, "RS0208");
+    assert_eq!(
+        oracle.len(),
+        3,
+        "fixture must exercise nested payload, direct return, and fallthrough anchors"
+    );
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0208",
+    );
+    assert_eq!(oracle, actual, "RS0208 structured diagnostics diverged");
+}
+
+#[test]
 fn checker_rs0035_structured_multiset_parity() {
     let source = r#"#lower_name("dup_symbol")
 fn first() -> Unit {

@@ -81,7 +81,7 @@ must not invoke Cargo.
 | Recognizer | `selfhost/parser.rss` | Top-level accept/reject parity | Does not produce the reusable AST |
 | AST producer | `selfhost/astdump.rss` | Canonical AST dump parity | Reparses tokens and streams text instead of building an AST |
 | Type helpers | `selfhost/types.rss` | Shared canonical type-string operations | Not a complete symbol/type representation |
-| Single-file checker | `selfhost/check.rss` | Presence parity for 83 diagnostic families; occurrence+span parity for 77 families | Remaining families still use independent file-level token probes |
+| Single-file checker | `selfhost/check.rss` | Presence parity for 83 diagnostic families; occurrence+span parity for 78 families | Five remaining families still use independent file-level token probes |
 | Package checker | `selfhost/package_contract.rss` | `RS1301` parity for functions, data declarations, protocols/impls, native exemptions, and resolved multi-file bundles | Path-sensitive bundle records and semantic edge cases remain |
 | Lowering and IR | Rust | Production compilation | No RSS implementation |
 | VM/JIT/AOT backend | Rust | Production execution and code generation | No bootstrap backend written in RSS |
@@ -95,6 +95,128 @@ Generated `selfhost.interfaces` data comes from real `.rssi` interfaces. It
 provides return-type, Result-error, and parameter-effect facts to `check.rss`.
 Parameter-type lookup remains an explicit false-positive-safe subset until the
 self-hosted checker has a real symbol and type-shape model.
+
+## Problems Exposed by Self-Hosting
+
+Self-hosting has tested more than whether RSS can express a lexer or checker. It
+has exercised parser recovery, ownership and effects, generic lowering, managed
+collections, backend agreement, and long-running VM workloads. The findings
+must be separated into fixed defects, remaining language ergonomics, runtime
+performance limits, and actual bootstrap blockers.
+
+### Fixed language and backend defects
+
+The stress tools exposed correctness gaps that are now covered by regression
+tests:
+
+- `mut` scalar parameters and scalar fields did not write back consistently
+  across the checker, VM, and AOT paths (`SH-007`, `SH-013`).
+- Generic function calls could be lowered as struct construction, and AOT
+  generic/read lowering could produce missing bounds or borrowed values where
+  owned values were required (`SH-008`-`SH-010`, `SH-015`).
+- Character literals, multiline leading-operator continuation, inherent `impl`
+  blocks, and positional multi-field variant patterns were missing or behaved
+  inconsistently (`SH-016`-`SH-018`, `SH-024`).
+- Freshness was lost at a control-flow merge, and VM/AOT disagreed on the exit
+  behavior of `main` returning `Err` (`SH-019`, `SH-005`).
+- Redundant eager `DeepCopy` of `read List<Char>` values made the self-hosted
+  lexer quadratic; the classifier fix changed that workload from about 79.5 s
+  to 0.73 s in the recorded release measurement (`SH-022`).
+
+These are historical findings, not current self-hosting blockers. Their detailed
+evidence and tests remain in the `SH-*` ledger below.
+
+### Remaining RSS and runtime limitations
+
+1. **Managed collection performance.** Tight RSS `List`, `Map`, and related
+   collection loops still pay dynamic `VmValue`, intrinsic/helper dispatch,
+   handle lookup, and managed borrow costs. Native local-collection helpers now
+   exist, so this is no longer a missing JIT capability, but collection-heavy VM
+   and JIT kernels remain far behind AOT/Rust (`SH-004`, `SH-011`, `SH-022`).
+   This affects self-host development speed; it does not prevent correctness or
+   bootstrap when AOT is used.
+2. **JIT fit for compiler workloads.** Parser and checker code is dominated by
+   strings, collections, generics, intrinsics, and `Result`/`Option`, while the
+   native tier is strongest on scalar/control-flow kernels. JIT therefore often
+   gives little improvement on self-host tools, and AOT remains the performance
+   path (`SH-001`, `SH-006`). This belongs to the VM/JIT performance roadmap,
+   not the Stage 1 parity exit criteria.
+3. **Explicit error conversion.** `?` does not implicitly convert between error
+   types, so compiler layers need explicit `match`-based adapters (`SH-003`).
+   This is a deliberate language rule, but it creates recurring boilerplate in
+   larger RSS programs.
+4. **Expression ergonomics.** Constructs such as `if`/`else` are statements,
+   not general value expressions, so some frontend code must use a helper or a
+   mutable result binding. This is workable and not a bootstrap blocker, but it
+   makes compiler-style code more verbose.
+
+### Reviewability and human factors
+
+The current self-host code is testable but not yet easy to review. This is a
+maintainability risk even where differential parity protects correctness:
+
+- `selfhost/check.rss` is about 12,700 lines with more than 400 top-level
+  functions. Its `main` is about 1,000 lines and owns rule setup, shared-model
+  construction, file traversal, structured output, legacy output, and the final
+  clean verdict. A reviewer cannot understand a new diagnostic from one local
+  diff.
+- One diagnostic family may be represented by a boolean, token-index list,
+  `DiagnosticSite` list, one or more collector functions, a structured-output
+  table entry, a legacy-output branch, Rust oracle filtering, an embedded test
+  fixture, and a ledger entry. These parallel wiring points can drift. The
+  structured branch returns early, leaving older `if structured` branches in
+  the legacy section unreachable and visually misleading.
+- The checker and AST dumper frequently pass raw token indices, `-1` sentinels,
+  integer mode flags, and long positional parameter lists. These are compact for
+  the VM but force reviewers to reconstruct the meaning and valid range of each
+  integer at every call site.
+- `selfhost/astdump.rss` is about 3,300 lines and directly combines parsing with
+  serialization. Large dispatch functions such as expression and statement
+  emission make grammar changes difficult to review independently from output
+  formatting.
+- Structured parity fixtures live inside the roughly 5,000-line Rust harness,
+  while the corresponding implementation lives in the large RSS checker. A
+  reviewer must navigate between distant files to verify one rule, and corpus
+  failures identify semantic divergence more reliably than they identify the
+  responsible subsystem.
+
+Reviewability is therefore an explicit Stage 2 requirement, not cosmetic
+cleanup. The convergence work should:
+
+1. split scanner, syntax AST, parser, semantic models, rule families, and
+   serialization into modules with one direction of dependency;
+2. replace per-rule boolean/token/site triples with one `DiagnosticBag` of typed
+   diagnostic records, from which presence and structured protocols are derived;
+3. replace integer modes and sentinel return values with named sums/records where
+   they cross function or module boundaries;
+4. keep each diagnostic family beside focused positive, negative, and
+   multiple-occurrence fixtures, with a short ownership/index table mapping an
+   `RSxxxx` code to its RSS rule module and oracle test; and
+5. keep `main` as orchestration only: build one analysis context, run rule
+   groups, sort diagnostics, and serialize the selected protocol.
+
+The split must follow the shared-AST migration rather than mechanically slicing
+the current token probes into many files. Mechanical file splitting alone would
+preserve the same hidden coupling while making navigation worse.
+
+### Self-host implementation gaps, not language defects
+
+- The recognizer, AST dumper, and checker still use separate parsing/token-probe
+  strategies. RSS can express the required data structures; Stage 2 must
+  converge them on one materialized `Program` AST and shared symbol/type/effect
+  model.
+- The RSS tools currently run through a `#[cfg(test)]` Rust harness. A normal
+  self-hosted frontend package and compiler entry point do not yet exist.
+- Lowering, compiler IR, code generation, and the runtime are still Rust. Stages
+  3-5 must add RSS lowering, a stable IR, a bootstrap C emitter, a documented
+  runtime ABI, and an independently buildable runtime before RSS can rebuild
+  itself without Cargo.
+
+The highest-priority current work remains frontend convergence: finish exact
+structured diagnostic parity, close the package-contract edge cases, then make
+the AST producer and checker consume one reusable RSS `Program` model. Runtime
+and JIT performance work should be driven by measured self-host wall time and
+must not be confused with bootstrap correctness.
 
 ## Current Baseline
 
@@ -138,7 +260,7 @@ correct semantic level, including package contracts.
 
 Structured checker migration currently covers RS0002-RS0014, RS0018-RS0024,
 RS0016-RS0017, RS0022-RS0024, RS0027-RS0029, RS0032-RS0037, RS0101, RS0201, RS0205, RS0211-RS0212, RS0301, RS0306-RS0308,
-RS0302-RS0305, RS0309, RS0311-RS0313, RS0401, RS0501, RS0601, RS0603-RS0604, RS0701-RS0711, RS0801-RS0805, RS0901-RS0904, and RS1001-RS1004 (77 of 83
+RS0302-RS0305, RS0309, RS0311-RS0313, RS0401, RS0501, RS0601, RS0603-RS0604, RS0701-RS0711, RS0801-RS0805, RS0901-RS0904, and RS1001-RS1004 (78 of 83
 presence-parity families).
 The canonical wire record is
 `code<TAB>line<TAB>column<TAB>length`; records are sorted and compared as
@@ -164,6 +286,71 @@ requires a resolved package bundle rather than one source file.
 
 Exit: lexer -> parser -> AST -> checker is one reusable frontend, full corpus
 parity is exact, and the compiler's RSS sources pass self-analysis.
+
+#### Stage 2 target architecture
+
+The target dependency direction is:
+
+```text
+source -> scanner -> tokens -> parser -> Program AST
+                                      -> AST serializer
+                                      -> symbols/types/effects -> rule groups
+                                                               -> DiagnosticBag
+                                                               -> output protocol
+```
+
+The provisional module ownership is:
+
+```text
+selfhost/syntax/token.rss
+selfhost/syntax/ast.rss
+selfhost/syntax/parser_items.rss
+selfhost/syntax/parser_expr.rss
+selfhost/syntax/parser_stmt.rss
+selfhost/syntax/parser_pattern.rss
+selfhost/semantics/context.rss
+selfhost/semantics/symbols.rss
+selfhost/semantics/types.rss
+selfhost/semantics/diagnostics.rss
+selfhost/semantics/check_signatures.rss
+selfhost/semantics/check_types.rss
+selfhost/semantics/check_ownership.rss
+selfhost/semantics/check_closures.rss
+selfhost/semantics/check_resources.rss
+selfhost/serialize/ast_dump.rss
+selfhost/main.rss
+```
+
+Names may change when the real dependency graph is implemented, but ownership
+must not regress to multiple parsers or a single all-rules file. Rule modules
+must consume the shared AST and semantic context, not parse source independently.
+
+The canonical diagnostic representation should be equivalent to:
+
+```rss
+struct Diagnostic {
+    code: String
+    line: Int
+    column: Int
+    length: Int
+}
+
+struct DiagnosticBag {
+    items: List<Diagnostic>
+}
+```
+
+Rules add typed records to one bag. Presence output, structured multiset output,
+sorting, and `CLEAN` are derived from that bag. A rule must not maintain a
+parallel boolean, token list, site list, and output branch. Label class, causes,
+and fix identifiers can extend `Diagnostic` as their parity tiers become stable.
+
+The final driver should only read input, build one analysis context, run rule
+groups, sort diagnostics, and serialize the requested protocol. Token cursors,
+lookup results, and cross-module modes should use named records or sums instead
+of raw `Int` modes and `-1` sentinels. Inherent methods may provide domain
+operations such as `cursor.peek`, `cursor.advance`, and token/span lookup so
+algorithmic code is not dominated by `List.get` plumbing.
 
 ### Stage 3 — Self-Hosted Lowering and IR (pending)
 
@@ -209,17 +396,54 @@ only a released bootstrap compiler and documented platform build dependencies.
 
 The next implementation sessions remain frontend-focused:
 
-1. Broaden `RS1301` package-contract parity.
-2. Add structured diagnostic multiset parity.
-3. Introduce the materialized RSS AST and migrate AST dump first.
-4. Migrate checker families onto the shared AST/type model.
-5. Make exhaustive AST/checker gates sustainable in Docker.
-6. Design the stable IR only after the frontend exit criteria hold.
+1. Finish structured diagnostic multiset parity for the remaining five
+   single-source families, then freeze additions to the token-probe checker.
+2. Broaden `RS1301` package-contract parity and establish the full Stage 1
+   corpus gates.
+3. Introduce `Diagnostic`/`DiagnosticBag`, derive both output protocols from it,
+   and remove unreachable or duplicated output wiring.
+4. Introduce the materialized RSS `Program` AST and migrate AST dump first.
+5. Build the shared symbol/type/effect context and migrate checker families by
+   ownership group, deleting each superseded token probe after its parity gate.
+6. Move focused fixtures beside their rule groups and maintain an
+   `RSxxxx -> RSS module -> Rust oracle test` ownership index in this document.
+7. Make exhaustive AST/checker gates sustainable in Docker.
+8. Design the stable IR only after the frontend exit criteria hold.
 
 JIT/VM collection performance is tracked outside this roadmap. It affects how
 quickly self-hosting tests execute, but it is not a correctness prerequisite for
 bootstrap. Likewise, a direct native machine-code backend is deliberately not
 required for the first independent compiler.
+
+## Reading and Review Guide
+
+A contributor should not start with `selfhost/check.rss`. Until Stage 2 replaces
+the current layout, use this reading order:
+
+1. `selfhost/lexer.rss` for the smallest complete RSS tool and output protocol.
+2. `selfhost/scan.rss` for token representation and shared cursor primitives.
+3. `selfhost/parser.rss` for current recognition scope and recovery behavior.
+4. `selfhost/astdump.rss` for the canonical AST contract, while remembering that
+   it currently reparses and streams output rather than materializing an AST.
+5. `selfhost/types.rss` and generated interface metadata for shared type facts.
+6. One small diagnostic collector in `selfhost/check.rss` together with its
+   structured parity test in `selfhost_parity.rs`.
+7. Ownership, closure, and resource rule groups only after the simpler
+   declaration and signature families are understood.
+8. `selfhost/package_contract.rss` last, because its input is a resolved
+   multi-file bundle rather than one source file.
+
+Every new Stage 2 module should begin with a short contract stating its input,
+output, owned invariants, non-responsibilities, and parity gate. Every diagnostic
+family must have a focused oracle-positive fixture, a nearby oracle-negative
+fixture, and a multiple-occurrence fixture where repetition is possible. The
+ownership index should let a reviewer navigate from an `RSxxxx` code to one RSS
+rule module and one Rust oracle test without searching the monolithic driver.
+
+Review changes in semantic slices: AST/data-model change, one migrated rule
+group, deletion of the replaced token probes, and parity proof. Do not combine a
+large mechanical file split with semantic migration, and do not create a second
+frontend merely to make a local diff smaller.
 
 ## Completion Criteria
 
@@ -244,13 +468,13 @@ Each RSS-written layer runs against the same input as its production Rust oracle
 | Lexer | `selfhost/lexer.rss` | `crate::lexer::lex`; canonical token records |
 | Parser recognition | `selfhost/parser.rss` | `crate::syntax::parse_source_raw`; accept/reject and position tier |
 | AST dump | `selfhost/astdump.rss` | surface-preserving Rust AST dump; byte-exact text |
-| Checker | `selfhost/check.rss` | `crate::analyze_source`; target-code presence for 83 families and structured occurrence+span parity for 77 |
+| Checker | `selfhost/check.rss` | `crate::analyze_source`; target-code presence for 83 families and structured occurrence+span parity for 78 |
 | Package contract | `selfhost/package_contract.rss` | `crate::review_package_dir`; filtered `RS1301` results |
 | Future lowering | RSS lowering | normalized Rust IR; byte-exact canonical serialization |
 | Future backend | RSS C emitter | VM/existing AOT observable behavior and generated-artifact checks |
 
 The legacy checker corpus gate compares diagnostic-code presence only. The
-structured migration compares occurrence counts and stable spans for 77
+structured migration compares occurrence counts and stable spans for 78
 families, but does not yet compare messages, label classes, causes, or fixes.
 Stage 1 explicitly closes that limitation family by family.
 
