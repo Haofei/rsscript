@@ -2521,6 +2521,52 @@ fn consuming() -> Unit {
 }
 
 #[test]
+fn checker_closure_escape_structured_multiset_parity() {
+    let source = r#"features: local
+
+struct Callback
+
+fn store(callback: read Callback) -> Unit
+
+fn invalid_signature(callback: noescape Fn()) -> Unit
+    effects(retains(callback))
+{
+    callback()
+}
+
+fn noescape_escapes(callback: noescape Fn()) -> Fn {
+    let stored = callback
+    store(callback: read callback)
+    let wrapper = || {
+        callback()
+    }
+    return callback
+}
+
+fn local_escapes() -> Callback {
+    local callback = || {
+        return Unit
+    }
+    let stored = callback
+    store(callback: read callback)
+    return callback
+}
+"#;
+
+    let all_actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    for (code, expected) in [("RS0802", 6), ("RS0803", 4)] {
+        let oracle = checker_oracle_records("structured-closure-escape.rss", source, code);
+        assert_eq!(
+            oracle.len(),
+            expected,
+            "fixture must preserve every {code} occurrence"
+        );
+        let actual = diagnostic_records_for_code(all_actual.clone(), code);
+        assert_eq!(oracle, actual, "{code} structured diagnostics diverged");
+    }
+}
+
+#[test]
 fn checker_rs0902_structured_multiset_parity() {
     let source = r#"struct Value {
     id: Int

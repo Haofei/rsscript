@@ -4087,14 +4087,18 @@ fn collect_discard_non_lease_tokens(toks: read List<Tok>, out: mut List<Int>) ->
 }
 
 // `name` escapes as an ordinary value: return name / let y = name / pass to a non-noescape param.
-fn value_escapes(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, name: read String, noescape: read Set<String>) -> Bool {
+fn collect_value_escape_tokens(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, name: read String, noescape: read Set<String>, out: mut List<Int>) -> Bool {
     let mut k = bodyOpen + 1
+    let mut hit = false
     while k < bodyClose {
         if is_kw_text(toks: read toks, i: read k, word: read "return") {
             let mut p = k + 1
             if is_effect_kw(toks: read toks, i: read p) { p = p + 1 }
             // `return name` escapes; `return name()` (a direct call) does not
-            if tk_text(toks: read toks, i: read p) == name && at_symbol(toks: read toks, i: read (p + 1), code: read SYM_LPAREN) == false && at_symbol(toks: read toks, i: read (p + 1), code: read SYM_DOT) == false { return true }
+            if tk_text(toks: read toks, i: read p) == name && at_symbol(toks: read toks, i: read (p + 1), code: read SYM_LPAREN) == false && at_symbol(toks: read toks, i: read (p + 1), code: read SYM_DOT) == false {
+                List.push<Int>(list: mut out, value: read p)
+                hit = true
+            }
         } else if is_kw_text(toks: read toks, i: read k, word: read "let") {
             let mut e = k + 1
             while e < bodyClose && at_symbol(toks: read toks, i: read e, code: read SYM_EQ) == false && at_symbol(toks: read toks, i: read e, code: read SYM_LBRACE) == false {
@@ -4103,7 +4107,10 @@ fn value_escapes(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, 
             if e < bodyClose && at_symbol(toks: read toks, i: read e, code: read SYM_EQ) {
                 let mut r = e + 1
                 if is_effect_kw(toks: read toks, i: read r) { r = r + 1 }
-                if tk_text(toks: read toks, i: read r) == name && at_symbol(toks: read toks, i: read (r + 1), code: read SYM_LPAREN) == false && at_symbol(toks: read toks, i: read (r + 1), code: read SYM_DOT) == false { return true }
+                if tk_text(toks: read toks, i: read r) == name && at_symbol(toks: read toks, i: read (r + 1), code: read SYM_LPAREN) == false && at_symbol(toks: read toks, i: read (r + 1), code: read SYM_DOT) == false {
+                    List.push<Int>(list: mut out, value: read r)
+                    hit = true
+                }
             }
         } else if is_ident_tok(toks: read toks, i: read k) && tk_text(toks: read toks, i: read k) == name && is_effect_kw(toks: read toks, i: read (k - 1)) && at_symbol(toks: read toks, i: read (k - 2), code: read SYM_COLON) && at_symbol(toks: read toks, i: read (k + 1), code: read SYM_LPAREN) == false {
             // pass as arg `callee(label: <effect> name)` — escapes unless the target is noescape
@@ -4111,17 +4118,24 @@ fn value_escapes(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, 
             let callOpen = enclosing_paren_open(toks: read toks, p: read k, floor: read bodyOpen)
             if callOpen > 0 && is_ident_tok(toks: read toks, i: read (callOpen - 1)) {
                 let key = String.concat(left: read String.concat(left: read tk_text(toks: read toks, i: read (callOpen - 1)), right: read "|"), right: read label)
-                if Set.contains<String>(set: read noescape, value: read key) == false { return true }
+                if Set.contains<String>(set: read noescape, value: read key) == false {
+                    List.push<Int>(list: mut out, value: read k)
+                    // The production checker reports both ordinary-value use and
+                    // non-noescape parameter forwarding at this same span.
+                    List.push<Int>(list: mut out, value: read k)
+                    hit = true
+                }
             }
         }
         k = k + 1
     }
-    return false
+    return hit
 }
 
 // A stored `let X = |…| { … name … }` closure captures `name` (RS0802 stored-closure escape).
-fn stored_closure_captures(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, name: read String) -> Bool {
+fn collect_stored_closure_capture_tokens(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, name: read String, out: mut List<Int>) -> Bool {
     let mut k = bodyOpen + 1
+    let mut hit = false
     while k < bodyClose {
         if at_symbol(toks: read toks, i: read k, code: read SYM_LBRACE) && at_symbol(toks: read toks, i: read (k - 1), code: read SYM_PIPE) {
             let cbClose = find_matching(toks: read toks, open: read k, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
@@ -4140,7 +4154,8 @@ fn stored_closure_captures(toks: read List<Tok>, bodyOpen: read Int, bodyClose: 
                     let mut m = k + 1
                     while m < cbClose {
                         if is_ident_tok(toks: read toks, i: read m) && tk_text(toks: read toks, i: read m) == name && at_symbol(toks: read toks, i: read (m - 1), code: read SYM_DOT) == false && at_symbol(toks: read toks, i: read (m + 1), code: read SYM_COLON) == false {
-                            return true
+                            List.push<Int>(list: mut out, value: read m)
+                            hit = true
                         }
                         m = m + 1
                     }
@@ -4150,14 +4165,15 @@ fn stored_closure_captures(toks: read List<Tok>, bodyOpen: read Int, bodyClose: 
         }
         k = k + 1
     }
-    return false
+    return hit
 }
 
 // RS0802: a `noescape Fn()` parameter that is retained by its own fn (signature variant) or escapes
 // in the body (return / let-store / pass-ordinary / stored-closure capture).
-fn fn_noescape_escape(toks: read List<Tok>, start: read Int, noescape: read Set<String>) -> Bool {
+fn collect_fn_noescape_escape_tokens(toks: read List<Tok>, start: read Int, noescape: read Set<String>, out: mut List<Int>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
+    let mut hit = false
     // signature-retains variant: a noescape param `p` with `retains(p)` in the same signature
     let mut q = ns
     while q < sigEnd {
@@ -4166,46 +4182,48 @@ fn fn_noescape_escape(toks: read List<Tok>, start: read Int, noescape: read Set<
             let mut rr = ns
             while rr < sigEnd {
                 if is_kw_text(toks: read toks, i: read rr, word: read "retains") && at_symbol(toks: read toks, i: read (rr + 1), code: read SYM_LPAREN) && tk_text(toks: read toks, i: read (rr + 2)) == pname {
-                    return true
+                    List.push<Int>(list: mut out, value: read start)
+                    hit = true
                 }
                 rr = rr + 1
             }
         }
         q = q + 1
     }
-    if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
+    if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return hit }
     let bodyClose = find_matching(toks: read toks, open: read sigEnd, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
-    if bodyClose < 0 { return false }
+    if bodyClose < 0 { return hit }
     // escape variant: any noescape param escaping in the body
     let mut pit = ns
     while pit < sigEnd {
         if is_ident_tok(toks: read toks, i: read pit) && at_symbol(toks: read toks, i: read (pit + 1), code: read SYM_COLON) && is_kw_text(toks: read toks, i: read (pit + 2), word: read "noescape") {
             let pname = tk_text(toks: read toks, i: read pit)
-            if value_escapes(toks: read toks, bodyOpen: read sigEnd, bodyClose: read bodyClose, name: read pname, noescape: read noescape) { return true }
-            if stored_closure_captures(toks: read toks, bodyOpen: read sigEnd, bodyClose: read bodyClose, name: read pname) { return true }
+            if collect_value_escape_tokens(toks: read toks, bodyOpen: read sigEnd, bodyClose: read bodyClose, name: read pname, noescape: read noescape, out: mut out) { hit = true }
+            if collect_stored_closure_capture_tokens(toks: read toks, bodyOpen: read sigEnd, bodyClose: read bodyClose, name: read pname, out: mut out) { hit = true }
         }
         pit = pit + 1
     }
-    return false
+    return hit
 }
 
 // RS0803: a `local`-bound closure that escapes (return / let-store / pass-ordinary).
-fn fn_local_closure_escape(toks: read List<Tok>, start: read Int, noescape: read Set<String>) -> Bool {
+fn collect_fn_local_closure_escape_tokens(toks: read List<Tok>, start: read Int, noescape: read Set<String>, out: mut List<Int>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
     if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
     let bodyClose = find_matching(toks: read toks, open: read sigEnd, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
     if bodyClose < 0 { return false }
     let mut k = sigEnd + 1
+    let mut hit = false
     while k < bodyClose {
         // `local X = |` — a local closure binding
         if is_kw_text(toks: read toks, i: read k, word: read "local") && is_ident_tok(toks: read toks, i: read (k + 1)) && at_symbol(toks: read toks, i: read (k + 2), code: read SYM_EQ) && at_symbol(toks: read toks, i: read (k + 3), code: read SYM_PIPE) {
             let cname = tk_text(toks: read toks, i: read (k + 1))
-            if value_escapes(toks: read toks, bodyOpen: read sigEnd, bodyClose: read bodyClose, name: read cname, noescape: read noescape) { return true }
+            if collect_value_escape_tokens(toks: read toks, bodyOpen: read sigEnd, bodyClose: read bodyClose, name: read cname, noescape: read noescape, out: mut out) { hit = true }
         }
         k = k + 1
     }
-    return false
+    return hit
 }
 
 fn collect_fn_fresh_return_bad_sites(source: read String, toks: read List<Tok>, start: read Int, handleFields: read Set<String>, retains: read Set<String>, freshFns: read Set<String>, out: mut List<DiagnosticSite>) -> Bool {
@@ -11945,6 +11963,8 @@ fn main() -> Unit {
     let mut lazyCaptureTokens = List<Int>.new()
     let mut noescapeEscape = false
     let mut localClosureEscape = false
+    let mut noescapeEscapeTokens = List<Int>.new()
+    let mut localClosureEscapeTokens = List<Int>.new()
     let freshFnReg = collect_fresh_fns(toks: read toks)
     let mut retainsReg = Set.new<String>()
     collect_retains(toks: read toks, out: mut retainsReg)
@@ -12179,8 +12199,8 @@ fn main() -> Unit {
                     if bit_set(mask: read pcMask, bitval: read 16) { placeConflict0304 = true }
                     if collect_fn_fresh_return_bad_sites(source: read source, toks: read toks, start: read i, handleFields: read handleFieldNames, retains: read retainsReg, freshFns: read freshFnReg, out: mut freshReturnBadSites) { freshReturnBad = true }
                     if collect_fn_lazy_capture_tokens(toks: read toks, start: read i, out: mut lazyCaptureTokens) { lazyCaptureBad = true }
-                    if fn_noescape_escape(toks: read toks, start: read i, noescape: read noescapeReg) { noescapeEscape = true }
-                    if fn_local_closure_escape(toks: read toks, start: read i, noescape: read noescapeReg) { localClosureEscape = true }
+                    if collect_fn_noescape_escape_tokens(toks: read toks, start: read i, noescape: read noescapeReg, out: mut noescapeEscapeTokens) { noescapeEscape = true }
+                    if collect_fn_local_closure_escape_tokens(toks: read toks, start: read i, noescape: read noescapeReg, out: mut localClosureEscapeTokens) { localClosureEscape = true }
                     let ccMask = collect_fn_closure_capture_bad(
                         toks: read toks,
                         start: read i,
@@ -12293,6 +12313,8 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_records(code: read "RS0211", toks: read toks, tokenIndices: read deriveFieldBadTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0805", toks: read toks, tokenIndices: read captureContractTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0801", toks: read toks, tokenIndices: read closureCapture0801Tokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0802", toks: read toks, tokenIndices: read noescapeEscapeTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0803", toks: read toks, tokenIndices: read localClosureEscapeTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0804", toks: read toks, tokenIndices: read closureCapture0804Tokens)
         emitted = emitted + emit_diagnostic_sites(code: read "RS0302", sites: read placeConflict0302Sites)
         emitted = emitted + emit_diagnostic_sites(code: read "RS0303", sites: read placeConflict0303Sites)
@@ -12636,10 +12658,10 @@ fn main() -> Unit {
     if lazyCaptureBad {
         Log.write(message: read "RS0711")
     }
-    if noescapeEscape {
+    if noescapeEscape && structured == false {
         Log.write(message: read "RS0802")
     }
-    if localClosureEscape {
+    if localClosureEscape && structured == false {
         Log.write(message: read "RS0803")
     }
     if resourceEscape {
