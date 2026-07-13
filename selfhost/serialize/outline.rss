@@ -1,0 +1,43 @@
+// Deterministic Stage 2 serializer for the materialized top-level Program.
+// This is test-only infrastructure, not a user-facing RSS command.
+
+module selfhost.serialize.outline
+
+use selfhost.scan.*
+use selfhost.syntax.ast.*
+use selfhost.syntax.parser_items.*
+
+fn kind_name(kind: Int) -> String {
+    if kind == ITEM_MODULE { return "module" }
+    if kind == ITEM_USE { return "use" }
+    if kind == ITEM_TYPE { return "type" }
+    if kind == ITEM_SUM { return "sum" }
+    if kind == ITEM_TYPE_ALIAS { return "type-alias" }
+    if kind == ITEM_CONST { return "const" }
+    if kind == ITEM_FUNCTION { return "function" }
+    if kind == ITEM_PROTOCOL { return "protocol" }
+    if kind == ITEM_IMPL { return "impl" }
+    if kind == ITEM_NATIVE_MODULE { return "native-module" }
+    if kind == ITEM_FEATURES { return "features" }
+    if kind == ITEM_PROFILE { return "profile" }
+    return "unknown"
+}
+
+fn item_line(item: read Item) -> String {
+    let head = String.concat(left: read String.concat(left: read kind_name(kind: item.kind), right: read "\t"), right: read item.name)
+    let pos = String.concat(left: read String.concat(left: read String.from_int(value: item.line), right: read ":"), right: read String.from_int(value: item.column))
+    return String.concat(left: read String.concat(left: read head, right: read "\t"), right: read String.concat(left: read pos, right: read String.concat(left: read ":", right: read String.from_int(value: item.length))))
+}
+
+fn main() -> Unit {
+    let source = Args.get_or_default(index: 0, default: read "")
+    let toks = tokenize(source: read source)
+    let program = parse_program(toks: read toks)
+    let mut i = 0
+    while i < Program.len(self: read program) {
+        let item = List.get<Item>(list: read program.items, index: read i)
+        Log.write(message: read item_line(item: read item))
+        i = i + 1
+    }
+    return Unit
+}

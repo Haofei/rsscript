@@ -634,6 +634,43 @@ fn parser_parity_tiny_sample() {
     compare_parse(oracle, actual, parse_position_tier()).unwrap_or_else(|msg| panic!("{msg}"));
 }
 
+#[test]
+fn selfhost_top_level_ast_outline_is_deterministic() {
+    let source = r#"features: local
+module demo.core
+use demo.util.*
+struct Boxed {
+    value: Int
+}
+sum Resultish {
+    Good
+}
+type Name = String
+const LIMIT: Int = 3
+fn run() -> Unit {
+    return Unit
+}
+"#;
+    let exe = compile_selfhost_tool("serialize/outline.rss", "top-level AST outline")
+        .expect("top-level AST outline should compile");
+    let output = exe
+        .eval_main_with_args([source.to_string()])
+        .expect("top-level AST outline should run");
+    assert_eq!(
+        output.stdout,
+        concat!(
+            "features\tfeatures\t1:1:8\n",
+            "module\tdemo\t2:1:6\n",
+            "use\t\t3:1:3\n",
+            "type\tBoxed\t4:1:6\n",
+            "sum\tResultish\t7:1:3\n",
+            "type-alias\tName\t10:1:4\n",
+            "const\tLIMIT\t11:1:5\n",
+            "function\trun\t12:1:2\n",
+        )
+    );
+}
+
 /// Phase-2 NEGATIVE smoke (non-ignored): the rss parser must REJECT malformed
 /// source, matching the Rust oracle. The accept-only tiny sample above would
 /// still pass if the rss parser degenerated to always printing `OK`; this closes

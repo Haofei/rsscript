@@ -303,10 +303,12 @@ parity is exact, and the compiler's RSS sources pass self-analysis.
 The first Stage 2 slice is present: `selfhost/syntax/ast.rss` defines a
 materialized top-level `Program`, and `selfhost/syntax/parser_items.rss` builds
 it from the shared scanner. `parser.rss` invokes that parser while preserving
-the established recognition protocol. The current items retain declaration kind
-and representative span only; names, signatures, bodies, expressions, and
+the established recognition protocol. The current items retain declaration
+kind, name, and representative span; signatures, bodies, expressions, and
 patterns remain to be materialized before this can replace `astdump.rss` or
-`check.rss`.
+`check.rss`. `selfhost/serialize/outline.rss` is the test-only deterministic
+serializer for this slice and proves that consumers read `Program`, rather than
+reparsing source text.
 
 #### Stage 2 target architecture
 
