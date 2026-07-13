@@ -19,20 +19,43 @@ const ITEM_FEATURES: Int = 11
 const ITEM_PROFILE: Int = 12
 const ITEM_UNKNOWN: Int = 13
 
+struct Param {
+    name: String
+    effect: String
+    typeText: String
+    line: Int
+    column: Int
+    length: Int
+}
+
 struct Item {
     kind: Int
     name: String
     line: Int
     column: Int
     length: Int
+    isPublic: Bool
+    isAsync: Bool
+    isNative: Bool
+    hasBody: Bool
+    params: List<Param>
+    returnType: String
 }
 
 struct Program {
     items: List<Item>
 }
 
-fn Item.from(kind: Int, name: take String, line: Int, column: Int, length: Int) -> fresh Item {
-    return Item(kind: kind, name: take name, line: line, column: column, length: length)
+fn Param.from(name: take String, effect: take String, typeText: take String, line: Int, column: Int, length: Int) -> fresh Param {
+    return Param(name: take name, effect: take effect, typeText: take typeText, line: line, column: column, length: length)
+}
+
+fn Item.plain(kind: Int, name: take String, line: Int, column: Int, length: Int) -> fresh Item {
+    return Item(kind: kind, name: take name, line: line, column: column, length: length, isPublic: false, isAsync: false, isNative: false, hasBody: false, params: List<Param>.new(), returnType: "")
+}
+
+fn Item.function(name: take String, line: Int, column: Int, length: Int, isPublic: Bool, isAsync: Bool, isNative: Bool, hasBody: Bool, params: take List<Param>, returnType: take String) -> fresh Item {
+    return Item(kind: ITEM_FUNCTION, name: take name, line: line, column: column, length: length, isPublic: isPublic, isAsync: isAsync, isNative: isNative, hasBody: hasBody, params: take params, returnType: take returnType)
 }
 
 fn Program.empty() -> fresh Program {

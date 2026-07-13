@@ -287,7 +287,7 @@ The inventory audit added the previously omitted reachable single-source
 `RS1001 OPERATOR_OVERLOAD_ATTEMPT` family. `RS1301` remains separate because it
 requires a resolved package bundle rather than one source file.
 
-### Stage 2 — One Self-Hosted Frontend (pending)
+### Stage 2 — One Self-Hosted Frontend (in progress)
 
 1. Define RSS syntax and AST modules that materialize a `Program` value.
 2. Make one parser produce that AST.
@@ -303,12 +303,17 @@ parity is exact, and the compiler's RSS sources pass self-analysis.
 The first Stage 2 slice is present: `selfhost/syntax/ast.rss` defines a
 materialized top-level `Program`, and `selfhost/syntax/parser_items.rss` builds
 it from the shared scanner. `parser.rss` invokes that parser while preserving
-the established recognition protocol. The current items retain declaration
-kind, name, and representative span; signatures, bodies, expressions, and
-patterns remain to be materialized before this can replace `astdump.rss` or
-`check.rss`. `selfhost/serialize/outline.rss` is the test-only deterministic
-serializer for this slice and proves that consumers read `Program`, rather than
-reparsing source text.
+the established recognition protocol. Every item retains declaration kind,
+name, and representative span. Function items additionally retain public,
+async, and native modifiers; body presence; ordered parameter records
+(name, data effect, canonical syntax type, and span); and a canonical syntax
+return type. The parser owns the shared function-name, parameter-boundary, and
+top-level-comma rules, including an attribute-led declaration following a
+body-less function. Signatures still lack generic/default/effects AST nodes,
+and bodies, expressions, and patterns remain to be materialized before this
+can replace `astdump.rss` or `check.rss`. `selfhost/serialize/outline.rss` is
+the test-only deterministic serializer for this slice and proves that consumers
+read `Program`, rather than reparsing source text.
 
 #### Stage 2 target architecture
 
@@ -419,8 +424,8 @@ only a released bootstrap compiler and documented platform build dependencies.
 
 The next implementation sessions remain frontend-focused:
 
-1. Finish structured diagnostic multiset parity for the remaining three
-   single-source families, then freeze additions to the token-probe checker.
+1. Finish structured diagnostic multiset parity for the remaining single-source
+   family gaps, then freeze additions to the token-probe checker.
 2. Broaden `RS1301` package-contract parity and establish the full Stage 1
    corpus gates.
 3. Introduce `Diagnostic`/`DiagnosticBag`, derive both output protocols from it,
@@ -491,13 +496,13 @@ Each RSS-written layer runs against the same input as its production Rust oracle
 | Lexer | `selfhost/lexer.rss` | `crate::lexer::lex`; canonical token records |
 | Parser recognition | `selfhost/parser.rss` | `crate::syntax::parse_source_raw`; accept/reject and position tier |
 | AST dump | `selfhost/astdump.rss` | surface-preserving Rust AST dump; byte-exact text |
-| Checker | `selfhost/check.rss` | `crate::analyze_source`; target-code presence for 83 families and structured occurrence+span parity for 80 |
+| Checker | `selfhost/check.rss` | `crate::analyze_source`; target-code presence for 83 families and structured occurrence+span parity for 81 |
 | Package contract | `selfhost/package_contract.rss` | `crate::review_package_dir`; filtered `RS1301` results |
 | Future lowering | RSS lowering | normalized Rust IR; byte-exact canonical serialization |
 | Future backend | RSS C emitter | VM/existing AOT observable behavior and generated-artifact checks |
 
 The legacy checker corpus gate compares diagnostic-code presence only. The
-structured migration compares occurrence counts and stable spans for 80
+structured migration compares occurrence counts and stable spans for 81
 families, but does not yet compare messages, label classes, causes, or fixes.
 Stage 1 explicitly closes that limitation family by family.
 

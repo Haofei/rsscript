@@ -29,6 +29,12 @@ fn item_line(item: read Item) -> String {
     return String.concat(left: read String.concat(left: read head, right: read "\t"), right: read String.concat(left: read pos, right: read String.concat(left: read ":", right: read String.from_int(value: item.length))))
 }
 
+fn param_line(param: read Param) -> String {
+    let mut out = String.concat(left: read "  param\t", right: read param.name)
+    if String.len(value: read param.effect) > 0 { out = String.concat(left: read String.concat(left: read out, right: read "\t"), right: read param.effect) }
+    return String.concat(left: read String.concat(left: read out, right: read "\t"), right: read param.typeText)
+}
+
 fn main() -> Unit {
     let source = Args.get_or_default(index: 0, default: read "")
     let toks = tokenize(source: read source)
@@ -37,6 +43,15 @@ fn main() -> Unit {
     while i < Program.len(self: read program) {
         let item = List.get<Item>(list: read program.items, index: read i)
         Log.write(message: read item_line(item: read item))
+        if item.kind == ITEM_FUNCTION {
+            Log.write(message: read String.concat(left: read "  header\tpublic=", right: read String.concat(left: read String.from_bool(value: item.isPublic), right: read String.concat(left: read "\tasync=", right: read String.concat(left: read String.from_bool(value: item.isAsync), right: read String.concat(left: read "\tnative=", right: read String.concat(left: read String.from_bool(value: item.isNative), right: read String.concat(left: read "\tbody=", right: read String.concat(left: read String.from_bool(value: item.hasBody), right: read String.concat(left: read "\treturn=", right: read item.returnType))))))))))
+            let mut p = 0
+            while p < List.len(list: read item.params) {
+                let param = List.get<Param>(list: read item.params, index: read p)
+                Log.write(message: read param_line(param: read param))
+                p = p + 1
+            }
+        }
         i = i + 1
     }
     return Unit

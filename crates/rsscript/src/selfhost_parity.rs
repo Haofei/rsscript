@@ -656,6 +656,7 @@ pub struct PublicBox {
 async fn async_run() -> Unit {
     return Unit
 }
+pub native fn external(value: take List<String>, count: mut Int = 1) -> fresh Result<Int, String>
 #lower_name("lowered_named")
 pub fn pinned_name() -> Unit {
     return Unit
@@ -677,9 +678,16 @@ pub fn pinned_name() -> Unit {
             "type-alias\tName\t10:1:4\n",
             "const\tLIMIT\t11:1:5\n",
             "function\trun\t12:1:2\n",
+            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
             "type\tPublicBox\t15:1:3\n",
             "function\tasync_run\t18:1:5\n",
-            "function\tpinned_name\t21:1:1\n",
+            "  header\tpublic=false\tasync=true\tnative=false\tbody=true\treturn=Unit\n",
+            "function\texternal\t21:1:3\n",
+            "  header\tpublic=true\tasync=false\tnative=true\tbody=false\treturn=fresh Result<Int, String>\n",
+            "  param\tvalue\ttake\tList<String>\n",
+            "  param\tcount\tmut\tInt\n",
+            "function\tpinned_name\t22:1:1\n",
+            "  header\tpublic=true\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
         )
     );
 }

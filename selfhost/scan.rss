@@ -703,9 +703,13 @@ fn starts_top_level_item(toks: read List<Tok>, index: read Int) -> Bool {
     if index > 0 && tk_line(toks: read toks, i: read (index - 1)) == tk_line(toks: read toks, i: read index) {
         return false
     }
-    if is_ident_tok(toks: read toks, i: read index) == false {
-        return false
+    // Attributes begin a declaration even though `#` is a symbol. In
+    // particular, a body-less native function may be followed immediately by
+    // `#lower_name(...) fn ...`; signature scanning must stop before it.
+    if at_symbol(toks: read toks, i: read index, code: read SYM_HASH) {
+        return true
     }
+    if is_ident_tok(toks: read toks, i: read index) == false { return false }
     let v = tk_val(toks: read toks, i: read index)
     return v == WORD_FEATURES || v == WORD_PROFILE || v == WORD_CLASS || v == WORD_STRUCT || v == WORD_RESOURCE || v == WORD_FN || v == WORD_PUB || v == WORD_ASYNC || v == WORD_NATIVE || v == WORD_PROTOCOL || v == WORD_IMPL
 }
@@ -770,6 +774,101 @@ fn take_function_name(toks: read List<Tok>, i: read Int) -> Int {
         }
     }
     return j
+}
+
+// The first identifier of a function name after attributes, modifiers, and
+// `fn`. This is shared syntax information; consumers must not each rediscover
+// the declaration prefix with their own token walk.
+fn function_decl_name_start(toks: read List<Tok>, i: read Int) -> Int {
+    let mut j = i
+    while at_symbol(toks: read toks, i: read j, code: read SYM_HASH) {
+        j = j + 5
+    }
+    let mut modifiers = true
+    while modifiers {
+        if at_ident(toks: read toks, i: read j, wid: read WORD_PUB) || at_ident(toks: read toks, i: read j, wid: read WORD_ASYNC) || at_ident(toks: read toks, i: read j, wid: read WORD_NATIVE) {
+            j = j + 1
+        } else {
+            modifiers = false
+        }
+    }
+    if at_ident(toks: read toks, i: read j, wid: read WORD_FN) {
+        return j + 1
+    }
+    return -1
+}
+
+// The first parameter-list `(` after a function name, skipping its generic
+// clause. Bounds may themselves contain parentheses.
+fn function_param_open(toks: read List<Tok>, from: read Int, end: read Int) -> Int {
+    let mut i = from
+    let mut angle = 0
+    while i < end {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LANGLE) {
+            angle = angle + 1
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RANGLE) {
+            if angle > 0 { angle = angle - 1 }
+        } else if angle == 0 && at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) {
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+// First comma at nesting depth zero in [start,end), or -1. Parameter and
+// generic parsers share this rule so nested type arguments remain intact.
+fn split_top_level_comma(toks: read List<Tok>, start: read Int, end: read Int) -> Int {
+    let mut i = start
+    let mut depth = 0
+    while i < end {
+        let opener = at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_LANGLE)
+        let closer = at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_RANGLE)
+        if opener {
+            depth = depth + 1
+        } else if closer {
+            if depth > 0 { depth = depth - 1 }
+        } else if depth == 0 && at_symbol(toks: read toks, i: read i, code: read SYM_COMMA) {
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+// Stable textual representation for a type token range. It is intentionally
+// syntax-only: resolution and canonical package qualification belong to the
+// semantic model, not to the parser.
+fn canonical_type_text(toks: read List<Tok>, start: read Int, end: read Int) -> String {
+    let mut out = ""
+    let mut i = start
+    while i < end {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_COMMA) {
+            out = String.concat(left: read out, right: read ", ")
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_LANGLE) {
+            out = String.concat(left: read out, right: read "<")
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RANGLE) {
+            out = String.concat(left: read out, right: read ">")
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) {
+            out = String.concat(left: read out, right: read "(")
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) {
+            out = String.concat(left: read out, right: read ")")
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_ARROW) {
+            out = String.concat(left: read out, right: read " -> ")
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_DOT) {
+            out = String.concat(left: read out, right: read ".")
+        } else if is_ident_tok(toks: read toks, i: read i) {
+            let tok = List.get(list: read toks, index: read i)
+            let text = tok.text
+            if text == "fresh" || text == "owned" || text == "noescape" {
+                out = String.concat(left: read String.concat(left: read out, right: read text), right: read " ")
+            } else {
+                out = String.concat(left: read out, right: read text)
+            }
+        }
+        i = i + 1
+    }
+    return out
 }
 
 fn parse_generic_params(toks: read List<Tok>, i: read Int) -> Int {
