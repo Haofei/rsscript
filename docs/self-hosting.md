@@ -315,9 +315,10 @@ can replace `astdump.rss` or `check.rss`. `selfhost/serialize/outline.rss` is
 the test-only deterministic serializer for this slice and proves that consumers
 read `Program`, rather than reparsing source text. `check.rss` now consumes
 these function and parameter nodes for RS0002 and RS0003, including their
-structured spans; the previous two token probes were removed. The remaining
-checker families are still token-probe based and must migrate one semantic group
-at a time with their existing parity gates.
+structured spans through the initial shared `DiagnosticBag`; the previous two
+token probes were removed. The remaining checker families are still token-probe
+based and must migrate one semantic group at a time with their existing parity
+gates.
 
 #### Stage 2 target architecture
 

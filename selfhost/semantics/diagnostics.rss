@@ -1,0 +1,39 @@
+features: local
+// Shared semantic diagnostic model.
+//
+// Input: rules add stable source spans. Output: one ordered bag. This module
+// does not sort, print, parse tokens, or decide which rules run; those remain
+// driver responsibilities while Stage 2 migrates the legacy checker in slices.
+
+module selfhost.semantics.diagnostics
+
+struct Diagnostic {
+    code: String
+    line: Int
+    column: Int
+    length: Int
+}
+
+struct DiagnosticBag {
+    items: List<Diagnostic>
+}
+
+fn DiagnosticBag.empty() -> fresh DiagnosticBag {
+    return DiagnosticBag(items: List<Diagnostic>.new())
+}
+
+fn DiagnosticBag.add(self: mut DiagnosticBag, code: read String, line: Int, column: Int, length: Int) -> Unit {
+    local ownedCode = String.copy(value: read code)
+    let diagnostic = Diagnostic(code: take ownedCode, line: line, column: column, length: length)
+    List.push<Diagnostic>(list: mut self.items, value: read diagnostic)
+}
+
+fn DiagnosticBag.has_code(self: read DiagnosticBag, code: read String) -> Bool {
+    let mut i = 0
+    while i < List.len(list: read self.items) {
+        let diagnostic = List.get<Diagnostic>(list: read self.items, index: read i)
+        if diagnostic.code == code { return true }
+        i = i + 1
+    }
+    return false
+}
