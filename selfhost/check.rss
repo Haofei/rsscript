@@ -9936,40 +9936,40 @@ fn collect_operator_overloads_in_expr(toks: read List<Tok>, start: read Int, end
     return hit
 }
 
-fn operator_type_bad(toks: read List<Tok>, start: read Int, end: read Int, cptypes: read Map<String, String>, popen: read Int, pclose: read Int, bodyOpen: read Int, fnIdx: read Map<String, Int>, locals: read Map<String, List<Int>>) -> Bool {
-    if start >= end { return false }
+fn operator_type_bad_token(toks: read List<Tok>, start: read Int, end: read Int, cptypes: read Map<String, String>, popen: read Int, pclose: read Int, bodyOpen: read Int, fnIdx: read Map<String, Int>, locals: read Map<String, List<Int>>) -> Int {
+    if start >= end { return -1 }
     let op = find_binop(toks: read toks, start: read start, end: read end)
-    if op < 0 { return false }
+    if op < 0 { return -1 }
     let isCmp = op_matches_tier(toks: read toks, i: read op, end: read end, tier: read 6)
     let isLogical = op_matches_tier(toks: read toks, i: read op, end: read end, tier: read 1) || op_matches_tier(toks: read toks, i: read op, end: read end, tier: read 2)
-    if isCmp == false && isLogical == false { return false }
+    if isCmp == false && isLogical == false { return -1 }
     let width = binop_width_at(toks: read toks, i: read op, end: read end)
-    if op <= start { return false }
-    if (op + width) >= end { return false }
+    if op <= start { return -1 }
+    if (op + width) >= end { return -1 }
     let lo2 = op + width
     let lt = operand_type_cp(toks: read toks, s: read start, e: read op, cptypes: read cptypes, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
     let rt = operand_type_cp(toks: read toks, s: read lo2, e: read end, cptypes: read cptypes, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
     if isLogical {
         // `&&` / `||`: each concrete operand must be Bool.
-        if String.len(value: read lt) > 0 && str_is_unresolved_generic(s: read lt) == false && str_strip_fresh(s: read lt) != "Bool" { return true }
-        if String.len(value: read rt) > 0 && str_is_unresolved_generic(s: read rt) == false && str_strip_fresh(s: read rt) != "Bool" { return true }
-        return false
+        if String.len(value: read lt) > 0 && str_is_unresolved_generic(s: read lt) == false && str_strip_fresh(s: read lt) != "Bool" { return op }
+        if String.len(value: read rt) > 0 && str_is_unresolved_generic(s: read rt) == false && str_strip_fresh(s: read rt) != "Bool" { return op }
+        return -1
     }
     // comparison: both operands must share a concrete root type.
-    if String.len(value: read lt) == 0 || str_is_unresolved_generic(s: read lt) { return false }
-    if String.len(value: read rt) == 0 || str_is_unresolved_generic(s: read rt) { return false }
-    if str_strip_fresh(s: read lt) == str_strip_fresh(s: read rt) { return false }
-    return true
+    if String.len(value: read lt) == 0 || str_is_unresolved_generic(s: read lt) { return -1 }
+    if String.len(value: read rt) == 0 || str_is_unresolved_generic(s: read rt) { return -1 }
+    if str_strip_fresh(s: read lt) == str_strip_fresh(s: read rt) { return -1 }
+    return op
 }
 
 // A closure argument `|params| body` passed where a `Fn(..)` is expected: type its params
 // from the Fn arg types and check the (single-expr) body for an operator-type mismatch
 // (`|value| value == "x"` with `Fn(Int) -> Bool` => value:Int vs String). Block bodies are
 // not scanned here (the fn-body operator walker covers non-closure code).
-fn closure_arg_operator_bad(toks: read List<Tok>, argStart: read Int, argEnd: read Int, fnType: read String, popen: read Int, pclose: read Int, bodyOpen: read Int, fnIdx: read Map<String, Int>, locals: read Map<String, List<Int>>) -> Bool {
-    if at_symbol(toks: read toks, i: read argStart, code: read SYM_PIPE) == false { return false }
+fn closure_arg_operator_bad_token(toks: read List<Tok>, argStart: read Int, argEnd: read Int, fnType: read String, popen: read Int, pclose: read Int, bodyOpen: read Int, fnIdx: read Map<String, Int>, locals: read Map<String, List<Int>>) -> Int {
+    if at_symbol(toks: read toks, i: read argStart, code: read SYM_PIPE) == false { return -1 }
     let body = strip_type_prefixes(s: read fnType)
-    if fn_type_arity(body: read body) < 0 { return false }
+    if fn_type_arity(body: read body) < 0 { return -1 }
     let mut p = argStart + 1
     let mut cp = 0 - 1
     let mut sc = true
@@ -9983,17 +9983,17 @@ fn closure_arg_operator_bad(toks: read List<Tok>, argStart: read Int, argEnd: re
             p = p + 1
         }
     }
-    if cp < 0 { return false }
+    if cp < 0 { return -1 }
     let cptypes = closure_param_types(toks: read toks, openPipe: read argStart, closePipe: read cp, fntype: read body)
     let bs = cp + 1
-    if bs >= argEnd { return false }
-    if at_symbol(toks: read toks, i: read bs, code: read SYM_LBRACE) { return false }
-    return operator_type_bad(toks: read toks, start: read bs, end: read argEnd, cptypes: read cptypes, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
+    if bs >= argEnd { return -1 }
+    if at_symbol(toks: read toks, i: read bs, code: read SYM_LBRACE) { return -1 }
+    return operator_type_bad_token(toks: read toks, start: read bs, end: read argEnd, cptypes: read cptypes, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
 }
 
 // Scan a call's labeled arguments for a closure passed to a `Fn`-typed parameter whose body
 // has an operator-type mismatch (RS0210). Mirrors call_arg_type_bad's arg iteration.
-fn call_closure_operator_bad(toks: read List<Tok>, ns: read String, callee: read String, open: read Int, close: read Int, popen: read Int, pclose: read Int, bodyOpen: read Int, fnIdx: read Map<String, Int>, locals: read Map<String, List<Int>>, aliasIdx: read Map<String, String>) -> Bool {
+fn collect_call_closure_operator_bad_tokens(toks: read List<Tok>, ns: read String, callee: read String, open: read Int, close: read Int, popen: read Int, pclose: read Int, bodyOpen: read Int, fnIdx: read Map<String, Int>, locals: read Map<String, List<Int>>, aliasIdx: read Map<String, String>, out: mut List<Int>) -> Bool {
     let mut k = open + 1
     let mut depth = 0
     let mut atArg = true
@@ -10008,7 +10008,8 @@ fn call_closure_operator_bad(toks: read List<Tok>, ns: read String, callee: read
                 let mut ae = close
                 if cm >= 0 { ae = cm }
                 if (k + 2) < ae {
-                    if closure_arg_operator_bad(toks: read toks, argStart: read (k + 2), argEnd: read ae, fnType: read pt, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals) { bad = true }
+                    let badToken = closure_arg_operator_bad_token(toks: read toks, argStart: read (k + 2), argEnd: read ae, fnType: read pt, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
+                    if badToken >= 0 { List.push<Int>(list: mut out, value: read badToken); bad = true }
                 }
             }
         }
@@ -10281,7 +10282,7 @@ fn cond_expr_end(toks: read List<Tok>, start: read Int, limit: read Int) -> Int 
 // RS0210: scan a fn body for `if`/`while` conditions whose top-level comparison has
 // operands of incompatible concrete types. Shares the param/local setup of the RS0207
 // walker so operands resolve against the fn's params and locals.
-fn fn_has_operator_type_mismatch(toks: read List<Tok>, start: read Int, model: read FileTypeModel) -> Bool {
+fn collect_fn_operator_type_mismatch_tokens(toks: read List<Tok>, start: read Int, model: read FileTypeModel, out: mut List<Int>) -> Bool {
     let body = build_body_type_model(toks: read toks, fnStart: read start)
     if body_type_model_ok(body: read body) == false { return false }
     let noCp = Map<String, String>.new()
@@ -10297,7 +10298,8 @@ fn fn_has_operator_type_mismatch(toks: read List<Tok>, start: read Int, model: r
             let lo = i + 1
             let ce = cond_expr_end(toks: read toks, start: read lo, limit: read body.bodyClose)
             if ce > lo {
-                if operator_type_bad(toks: read toks, start: read lo, end: read ce, cptypes: read noCp, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals) { hit = true }
+                let bad = operator_type_bad_token(toks: read toks, start: read lo, end: read ce, cptypes: read noCp, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals)
+                if bad >= 0 { List.push<Int>(list: mut out, value: read bad); hit = true }
             }
             i = i + 1
         } else if is_kw_text(toks: read toks, i: read i, word: read "let") || is_kw_text(toks: read toks, i: read i, word: read "local") {
@@ -10307,7 +10309,8 @@ fn fn_has_operator_type_mismatch(toks: read List<Tok>, start: read Int, model: r
                 let vs = eq + 1
                 let ee = stmt_expr_end(toks: read toks, start: read vs, end: read body.bodyClose)
                 if ee > vs {
-                    if operator_type_bad(toks: read toks, start: read vs, end: read ee, cptypes: read noCp, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals) { hit = true }
+                    let bad = operator_type_bad_token(toks: read toks, start: read vs, end: read ee, cptypes: read noCp, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals)
+                    if bad >= 0 { List.push<Int>(list: mut out, value: read bad); hit = true }
                 }
             }
             i = i + 1
@@ -10315,7 +10318,8 @@ fn fn_has_operator_type_mismatch(toks: read List<Tok>, start: read Int, model: r
             let vs = i + 1
             let ee = stmt_expr_end(toks: read toks, start: read vs, end: read body.bodyClose)
             if ee > vs {
-                if operator_type_bad(toks: read toks, start: read vs, end: read ee, cptypes: read noCp, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals) { hit = true }
+                let bad = operator_type_bad_token(toks: read toks, start: read vs, end: read ee, cptypes: read noCp, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals)
+                if bad >= 0 { List.push<Int>(list: mut out, value: read bad); hit = true }
             }
             i = i + 1
         } else if is_ident_tok(toks: read toks, i: read i) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_LPAREN) {
@@ -10327,7 +10331,7 @@ fn fn_has_operator_type_mismatch(toks: read List<Tok>, start: read Int, model: r
             }
             let cclose = find_matching(toks: read toks, open: read (i + 1), openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
             if cclose >= 0 {
-                if call_closure_operator_bad(toks: read toks, ns: read cns, callee: read tk_text(toks: read toks, i: read i), open: read (i + 1), close: read cclose, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals, aliasIdx: read model.aliasIdx) { hit = true }
+                if collect_call_closure_operator_bad_tokens(toks: read toks, ns: read cns, callee: read tk_text(toks: read toks, i: read i), open: read (i + 1), close: read cclose, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals, aliasIdx: read model.aliasIdx, out: mut out) { hit = true }
             }
             i = i + 1
         } else {
@@ -10337,8 +10341,9 @@ fn fn_has_operator_type_mismatch(toks: read List<Tok>, start: read Int, model: r
     return hit
 }
 
-// Walk all top-level fns and report any RS0210 operator-type mismatch.
-fn has_operator_type_mismatch(toks: read List<Tok>) -> Bool {
+// Collect every RS0210 operator span. Presence and structured output share this
+// traversal so callback and ordinary-expression paths cannot drift apart.
+fn collect_operator_type_mismatch_tokens(toks: read List<Tok>, out: mut List<Int>) -> Bool {
     let ntok = List.len(list: read toks)
     let model = build_file_type_model(toks: read toks)
     let mut i = 0
@@ -10364,7 +10369,7 @@ fn has_operator_type_mismatch(toks: read List<Tok>) -> Bool {
                 if r < 0 {
                     running = false
                 } else {
-                    if fn_has_operator_type_mismatch(toks: read toks, start: read i, model: read model) { hit = true }
+                    if collect_fn_operator_type_mismatch_tokens(toks: read toks, start: read i, model: read model, out: mut out) { hit = true }
                     i = r
                 }
             } else {
@@ -11911,7 +11916,8 @@ fn main() -> Unit {
     // RS0207: argument/binding-type mismatch.
     let bindTypeMismatch = has_binding_type_mismatch(toks: read toks)
     // RS0210: operator-type mismatch.
-    let opTypeMismatch = has_operator_type_mismatch(toks: read toks)
+    let mut opTypeMismatchTokens = List<Int>.new()
+    let opTypeMismatch = collect_operator_type_mismatch_tokens(toks: read toks, out: mut opTypeMismatchTokens)
     // RS1001: arithmetic or bitwise operator with a known non-numeric operand.
     let mut operatorOverloadTokens = List<Int>.new()
     let operatorOverload = collect_operator_overload_tokens(toks: read toks, out: mut operatorOverloadTokens)
@@ -12313,6 +12319,7 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_records(code: read "RS0034", toks: read toks, tokenIndices: read uninferableTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0205", toks: read toks, tokenIndices: read dupArgTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0208", toks: read toks, tokenIndices: read retTypeMismatchTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0210", toks: read toks, tokenIndices: read opTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0201", toks: read toks, tokenIndices: read unnamedArgTokens)
         emitted = emitted + emit_diagnostic_sites(code: read "RS0014", sites: read noallocAllocSites)
         emitted = emitted + emit_diagnostic_sites(code: read "RS0018", sites: read noBlockCallSites)

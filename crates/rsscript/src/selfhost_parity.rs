@@ -1770,6 +1770,37 @@ fn fallthrough() -> String {
 }
 
 #[test]
+fn checker_rs0210_structured_multiset_parity() {
+    let source = r#"fn apply(callback: noescape Fn(Int) -> Bool) -> Unit {
+    return Unit
+}
+
+fn direct() -> Unit {
+    if 1 == "one" {
+        return Unit
+    }
+    return Unit
+}
+
+fn callback() -> Unit {
+    apply(callback: |value| value == "text")
+    return Unit
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0210.rss", source, "RS0210");
+    assert_eq!(
+        oracle.len(),
+        2,
+        "fixture must exercise ordinary and callback operator spans"
+    );
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0210",
+    );
+    assert_eq!(oracle, actual, "RS0210 structured diagnostics diverged");
+}
+
+#[test]
 fn checker_rs0035_structured_multiset_parity() {
     let source = r#"#lower_name("dup_symbol")
 fn first() -> Unit {
