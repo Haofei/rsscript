@@ -2725,7 +2725,14 @@ fn arg_label_at(toks: read List<Tok>, callOpen: read Int, target: read Int) -> S
 
 // bit0 = RS0801 (managed/retained closure captures a local), bit1 = RS0804 (noescape closure
 // consumes — take/manage — a captured local).
-fn fn_has_closure_capture_bad(toks: read List<Tok>, start: read Int, retains: read Set<String>, noescape: read Set<String>) -> Int {
+fn collect_fn_closure_capture_bad(
+    toks: read List<Tok>,
+    start: read Int,
+    retains: read Set<String>,
+    noescape: read Set<String>,
+    out0801: mut List<Int>,
+    out0804: mut List<Int>
+) -> Int {
     let ns = fn_name_start(toks: read toks, i: read start)
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
     if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return 0 }
@@ -2758,15 +2765,17 @@ fn fn_has_closure_capture_bad(toks: read List<Tok>, start: read Int, retains: re
                     dl = dl + 1
                 }
                 let mut captured = Set.new<String>()
+                let mut capturePositions = List<Int>.new()
                 let mut anyCapture = false
                 let mut m = k + 1
                 while m < cbClose {
                     // Capturing a local's handle-field (`holder.image`) yields a managed value,
                     // not the local itself — only a bare local reference is a capture.
-                    if is_ident_tok(toks: read toks, i: read m) && at_symbol(toks: read toks, i: read (m + 1), code: read SYM_DOT) == false {
+                    if is_ident_tok(toks: read toks, i: read m) && at_symbol(toks: read toks, i: read (m + 1), code: read SYM_DOT) == false && at_symbol(toks: read toks, i: read (m + 1), code: read SYM_COLON) == false {
                         let nmv = tk_text(toks: read toks, i: read m)
                         if Set.contains<String>(set: read localNames, value: read nmv) && Set.contains<String>(set: read declInside, value: read nmv) == false {
                             Set.insert<String>(set: mut captured, value: read nmv)
+                            List.push<Int>(list: mut capturePositions, value: read m)
                             anyCapture = true
                         }
                     }
@@ -2778,7 +2787,14 @@ fn fn_has_closure_capture_bad(toks: read List<Tok>, start: read Int, retains: re
                     // stored: `let NAME = |…| {…}` — RS0801 only for a `let` (managed) closure
                     let mut kw = bpos - 2
                     if is_kw_text(toks: read toks, i: read kw, word: read "mut") { kw = kw - 1 }
-                    if is_kw_text(toks: read toks, i: read kw, word: read "let") && anyCapture { has0801 = true }
+                    if is_kw_text(toks: read toks, i: read kw, word: read "let") && anyCapture {
+                        let mut cp = 0
+                        while cp < List.len<Int>(list: read capturePositions) {
+                            List.push<Int>(list: mut out0801, value: read List.get<Int>(list: read capturePositions, index: read cp))
+                            cp = cp + 1
+                        }
+                        has0801 = true
+                    }
                 } else {
                     // call argument (possibly wrapped in `Some(…)`/`Ok(…)`)
                     let callOpen = closure_outer_call_open(toks: read toks, p: read op, floor: read sigEnd)
@@ -2787,11 +2803,21 @@ fn fn_has_closure_capture_bad(toks: read List<Tok>, start: read Int, retains: re
                         let label = arg_label_at(toks: read toks, callOpen: read callOpen, target: read op)
                         if label != "" {
                             let key = String.concat(left: read String.concat(left: read callee, right: read "|"), right: read label)
-                            if Set.contains<String>(set: read retains, value: read key) && anyCapture { has0801 = true }
+                            if Set.contains<String>(set: read retains, value: read key) && anyCapture {
+                                let mut cp2 = 0
+                                while cp2 < List.len<Int>(list: read capturePositions) {
+                                    List.push<Int>(list: mut out0801, value: read List.get<Int>(list: read capturePositions, index: read cp2))
+                                    cp2 = cp2 + 1
+                                }
+                                has0801 = true
+                            }
                             if Set.contains<String>(set: read noescape, value: read key) {
                                 let mut c = k + 1
                                 while c < cbClose {
-                                    if (is_kw_text(toks: read toks, i: read c, word: read "manage") || is_kw_text(toks: read toks, i: read c, word: read "take")) && is_ident_tok(toks: read toks, i: read (c + 1)) && Set.contains<String>(set: read captured, value: read tk_text(toks: read toks, i: read (c + 1))) { has0804 = true }
+                                    if (is_kw_text(toks: read toks, i: read c, word: read "manage") || is_kw_text(toks: read toks, i: read c, word: read "take")) && is_ident_tok(toks: read toks, i: read (c + 1)) && Set.contains<String>(set: read captured, value: read tk_text(toks: read toks, i: read (c + 1))) {
+                                        List.push<Int>(list: mut out0804, value: read c)
+                                        has0804 = true
+                                    }
                                     c = c + 1
                                 }
                             }
@@ -11913,6 +11939,8 @@ fn main() -> Unit {
     let mut freshReturnBadSites = List<DiagnosticSite>.new()
     let mut closureCapture0801 = false
     let mut closureCapture0804 = false
+    let mut closureCapture0801Tokens = List<Int>.new()
+    let mut closureCapture0804Tokens = List<Int>.new()
     let mut lazyCaptureBad = false
     let mut lazyCaptureTokens = List<Int>.new()
     let mut noescapeEscape = false
@@ -12153,7 +12181,14 @@ fn main() -> Unit {
                     if collect_fn_lazy_capture_tokens(toks: read toks, start: read i, out: mut lazyCaptureTokens) { lazyCaptureBad = true }
                     if fn_noescape_escape(toks: read toks, start: read i, noescape: read noescapeReg) { noescapeEscape = true }
                     if fn_local_closure_escape(toks: read toks, start: read i, noescape: read noescapeReg) { localClosureEscape = true }
-                    let ccMask = fn_has_closure_capture_bad(toks: read toks, start: read i, retains: read retainsReg, noescape: read noescapeReg)
+                    let ccMask = collect_fn_closure_capture_bad(
+                        toks: read toks,
+                        start: read i,
+                        retains: read retainsReg,
+                        noescape: read noescapeReg,
+                        out0801: mut closureCapture0801Tokens,
+                        out0804: mut closureCapture0804Tokens
+                    )
                     if bit_set(mask: read ccMask, bitval: read 1) { closureCapture0801 = true }
                     if bit_set(mask: read ccMask, bitval: read 2) { closureCapture0804 = true }
                     if collect_fn_assign_type_mismatch_tokens(toks: read toks, start: read i, out: mut assignTypeMismatchTokens) { assignTypeMismatch = true }
@@ -12257,6 +12292,8 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_records(code: read "RS0032", toks: read toks, tokenIndices: read protocolBadTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0211", toks: read toks, tokenIndices: read deriveFieldBadTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0805", toks: read toks, tokenIndices: read captureContractTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0801", toks: read toks, tokenIndices: read closureCapture0801Tokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0804", toks: read toks, tokenIndices: read closureCapture0804Tokens)
         emitted = emitted + emit_diagnostic_sites(code: read "RS0302", sites: read placeConflict0302Sites)
         emitted = emitted + emit_diagnostic_sites(code: read "RS0303", sites: read placeConflict0303Sites)
         emitted = emitted + emit_diagnostic_sites(code: read "RS0304", sites: read placeConflict0304Sites)
@@ -12581,10 +12618,10 @@ fn main() -> Unit {
     if freshReturnBad {
         Log.write(message: read "RS0601")
     }
-    if closureCapture0801 {
+    if closureCapture0801 && structured == false {
         Log.write(message: read "RS0801")
     }
-    if closureCapture0804 {
+    if closureCapture0804 && structured == false {
         Log.write(message: read "RS0804")
     }
     if captureContract && structured == false {

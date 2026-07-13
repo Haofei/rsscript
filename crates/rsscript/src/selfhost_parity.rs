@@ -2468,6 +2468,59 @@ fn stronger_is_valid() -> Int {
 }
 
 #[test]
+fn checker_closure_capture_structured_multiset_parity() {
+    let source = r#"features: local
+
+struct Image { id: Int }
+class Scheduler
+
+fn Image.inspect(image: read Image) -> Unit
+fn schedule(scheduler: mut Scheduler, callback: read Fn()) -> Unit
+    effects(retains(callback))
+fn apply(callback: noescape Fn()) -> Unit {
+    callback()
+}
+fn consume(image: take Image) -> Unit
+
+fn managed() -> Unit {
+    local image = Image(id: 1)
+    let callback = || {
+        Image.inspect(image: read image)
+        Image.inspect(image: read image)
+    }
+}
+
+fn retained(scheduler: mut Scheduler) -> Unit {
+    local image = Image(id: 2)
+    schedule(scheduler: mut scheduler, callback: read || {
+        Image.inspect(image: read image)
+    })
+}
+
+fn consuming() -> Unit {
+    local first = Image(id: 3)
+    local second = Image(id: 4)
+    apply(callback: || {
+        consume(image: take first)
+        consume(image: take second)
+    })
+}
+"#;
+
+    let all_actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    for (code, expected) in [("RS0801", 3), ("RS0804", 2)] {
+        let oracle = checker_oracle_records("structured-closure-capture.rss", source, code);
+        assert_eq!(
+            oracle.len(),
+            expected,
+            "fixture must preserve every {code} occurrence"
+        );
+        let actual = diagnostic_records_for_code(all_actual.clone(), code);
+        assert_eq!(oracle, actual, "{code} structured diagnostics diverged");
+    }
+}
+
+#[test]
 fn checker_rs0902_structured_multiset_parity() {
     let source = r#"struct Value {
     id: Int
