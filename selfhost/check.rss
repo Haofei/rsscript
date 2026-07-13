@@ -4501,7 +4501,7 @@ fn fn_is_pure(toks: read List<Tok>, start: read Int) -> Bool {
 }
 
 // True if the fn has a `retains(...)` effect item.
-fn fn_has_retains(toks: read List<Tok>, start: read Int) -> Bool {
+fn collect_fn_pure_retains_tokens(toks: read List<Tok>, start: read Int, out: mut List<Int>) -> Bool {
     let effOpen = find_effects_open(toks: read toks, start: read start)
     if effOpen < 0 { return false }
     let effClose = find_matching(toks: read toks, open: read effOpen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
@@ -4516,17 +4516,23 @@ fn fn_has_retains(toks: read List<Tok>, start: read Int) -> Bool {
         } else if at_symbol(toks: read toks, i: read k, code: read SYM_RPAREN) {
             if depth > 0 { depth = depth - 1 }
         } else if depth == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
-            if effect_item_kind(toks: read toks, segStart: read segStart, segEnd: read k) == 2 { hit = true }
+            if effect_item_kind(toks: read toks, segStart: read segStart, segEnd: read k) == 2 {
+                List.push<Int>(list: mut out, value: read start)
+                hit = true
+            }
             segStart = k + 1
         }
         k = k + 1
     }
-    if effect_item_kind(toks: read toks, segStart: read segStart, segEnd: read effClose) == 2 { hit = true }
+    if effect_item_kind(toks: read toks, segStart: read segStart, segEnd: read effClose) == 2 {
+        List.push<Int>(list: mut out, value: read start)
+        hit = true
+    }
     return hit
 }
 
 // True if any param uses the `mut` or `take` data effect.
-fn fn_has_mut_take_param(toks: read List<Tok>, start: read Int) -> Bool {
+fn collect_fn_pure_mut_take_tokens(toks: read List<Tok>, start: read Int, out: mut List<Int>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
     let open = find_param_open(toks: read toks, from: read ns, end: read sigEnd)
@@ -4550,12 +4556,18 @@ fn fn_has_mut_take_param(toks: read List<Tok>, start: read Int) -> Bool {
         } else if at_symbol(toks: read toks, i: read k, code: read SYM_RANGLE) {
             if angle > 0 { angle = angle - 1 }
         } else if depth == 0 && angle == 0 && at_symbol(toks: read toks, i: read k, code: read SYM_COMMA) {
-            if seg_is_mut_take(toks: read toks, segStart: read segStart, segEnd: read k) { hit = true }
+            if seg_is_mut_take(toks: read toks, segStart: read segStart, segEnd: read k) {
+                List.push<Int>(list: mut out, value: read segStart)
+                hit = true
+            }
             segStart = k + 1
         }
         k = k + 1
     }
-    if seg_is_mut_take(toks: read toks, segStart: read segStart, segEnd: read close) { hit = true }
+    if seg_is_mut_take(toks: read toks, segStart: read segStart, segEnd: read close) {
+        List.push<Int>(list: mut out, value: read segStart)
+        hit = true
+    }
     return hit
 }
 
@@ -4570,7 +4582,7 @@ fn seg_is_mut_take(toks: read List<Tok>, segStart: read Int, segEnd: read Int) -
 
 // True if a resource-typed value is returned. Mirrors resource_return_type_name:
 // for Result/Option the first type arg is the target, else the return itself.
-fn fn_pure_resource_return(toks: read List<Tok>, start: read Int, resources: read Set<String>) -> Bool {
+fn collect_fn_pure_resource_return_token(toks: read List<Tok>, start: read Int, resources: read Set<String>, out: mut List<Int>) -> Bool {
     let ns = fn_name_start(toks: read toks, i: read start)
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
     let open = find_param_open(toks: read toks, from: read ns, end: read sigEnd)
@@ -4600,7 +4612,9 @@ fn fn_pure_resource_return(toks: read List<Tok>, start: read Int, resources: rea
             target = dotted_name_text(toks: read toks, i: read q)
         }
     }
-    return is_stdlib_resource(name: read target) || Set.contains<String>(set: read resources, value: read target)
+    let bad = is_stdlib_resource(name: read target) || Set.contains<String>(set: read resources, value: read target)
+    if bad { List.push<Int>(list: mut out, value: read rs) }
+    return bad
 }
 
 // Stdlib resource types (the `resource` Item::Type decls in the .rssi interfaces).
@@ -4626,14 +4640,16 @@ fn unqual_call_bad(name: read String, sumVariants: read Set<String>, pureFns: re
 }
 
 // Scan a pure fn body [bodyOpen,bodyClose) for a `with`/`manage` or a non-pure call.
-fn pure_body_bad(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, sumVariants: read Set<String>, pureFns: read Set<String>, allFns: read Set<String>, declared: read Set<String>) -> Bool {
+fn collect_pure_body_bad_tokens(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, sumVariants: read Set<String>, pureFns: read Set<String>, allFns: read Set<String>, declared: read Set<String>, out: mut List<Int>) -> Bool {
     let mut k = bodyOpen + 1
     let mut hit = false
     while k < bodyClose {
         let t = tk_text(toks: read toks, i: read k)
         if t == "with" {
+            List.push<Int>(list: mut out, value: read k)
             hit = true
         } else if t == "manage" {
+            List.push<Int>(list: mut out, value: read k)
             hit = true
         } else if at_symbol(toks: read toks, i: read k, code: read SYM_LPAREN) && tk_kind(toks: read toks, i: read (k - 1)) == TOK_IDENT {
             let name = tk_text(toks: read toks, i: read (k - 1))
@@ -4648,9 +4664,15 @@ fn pure_body_bad(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, 
                         walking = false
                     }
                 }
-                if qualified_call_allowed(name: read tk_text(toks: read toks, i: read root), declared: read declared) == false { hit = true }
+                if qualified_call_allowed(name: read tk_text(toks: read toks, i: read root), declared: read declared) == false {
+                    List.push<Int>(list: mut out, value: read root)
+                    hit = true
+                }
             } else {
-                if unqual_call_bad(name: read name, sumVariants: read sumVariants, pureFns: read pureFns, allFns: read allFns, declared: read declared) { hit = true }
+                if unqual_call_bad(name: read name, sumVariants: read sumVariants, pureFns: read pureFns, allFns: read allFns, declared: read declared) {
+                    List.push<Int>(list: mut out, value: read (k - 1))
+                    hit = true
+                }
             }
         }
         k = k + 1
@@ -4660,18 +4682,18 @@ fn pure_body_bad(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, 
 
 // RS0009: a `pure` fn that returns a resource, has a mut/take param, retains a
 // param, or whose body uses `with`/`manage`/a non-pure call.
-fn fn_pure_bad(toks: read List<Tok>, start: read Int, resources: read Set<String>, sumVariants: read Set<String>, pureFns: read Set<String>, allFns: read Set<String>, declared: read Set<String>) -> Bool {
+fn collect_fn_pure_bad_tokens(toks: read List<Tok>, start: read Int, resources: read Set<String>, sumVariants: read Set<String>, pureFns: read Set<String>, allFns: read Set<String>, declared: read Set<String>, out: mut List<Int>) -> Bool {
     if fn_is_pure(toks: read toks, start: read start) == false { return false }
     let mut bad = false
-    if fn_pure_resource_return(toks: read toks, start: read start, resources: read resources) { bad = true }
-    if fn_has_mut_take_param(toks: read toks, start: read start) { bad = true }
-    if fn_has_retains(toks: read toks, start: read start) { bad = true }
+    if collect_fn_pure_resource_return_token(toks: read toks, start: read start, resources: read resources, out: mut out) { bad = true }
+    if collect_fn_pure_mut_take_tokens(toks: read toks, start: read start, out: mut out) { bad = true }
+    if collect_fn_pure_retains_tokens(toks: read toks, start: read start, out: mut out) { bad = true }
     let ns = fn_name_start(toks: read toks, i: read start)
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
     if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) {
         let bodyClose = find_matching(toks: read toks, open: read sigEnd, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
         if bodyClose >= 0 {
-            if pure_body_bad(toks: read toks, bodyOpen: read sigEnd, bodyClose: read bodyClose, sumVariants: read sumVariants, pureFns: read pureFns, allFns: read allFns, declared: read declared) { bad = true }
+            if collect_pure_body_bad_tokens(toks: read toks, bodyOpen: read sigEnd, bodyClose: read bodyClose, sumVariants: read sumVariants, pureFns: read pureFns, allFns: read allFns, declared: read declared, out: mut out) { bad = true }
         }
     }
     return bad
@@ -11613,6 +11635,7 @@ fn main() -> Unit {
     let mut missingEffect = false
     let mut missingEffectTokens = List<Int>.new()
     let mut pureBad = false
+    let mut pureBadTokens = List<Int>.new()
     // RS0020: a noalloc fn that calls a non-variant, non-noalloc function.
     let mut noallocCall = false
     // RS0029: any `await` in a non-async function.
@@ -11995,7 +12018,7 @@ fn main() -> Unit {
                     if collect_bad_retains_tokens(toks: read toks, start: read i, out: mut retainsBadTokens) { retainsBad = true }
                     if collect_fn_unknown_type_tokens(toks: read toks, start: read i, declared: read declared, out: mut unknownTypeTokens) { unknownType = true }
                     if collect_missing_param_effect_tokens(toks: read toks, start: read i, sums: read payloadlessSums, out: mut missingEffectTokens) { missingEffect = true }
-                    if fn_pure_bad(toks: read toks, start: read i, resources: read resources, sumVariants: read sumVariants, pureFns: read pureFns, allFns: read allFns, declared: read declared) { pureBad = true }
+                    if collect_fn_pure_bad_tokens(toks: read toks, start: read i, resources: read resources, sumVariants: read sumVariants, pureFns: read pureFns, allFns: read allFns, declared: read declared, out: mut pureBadTokens) { pureBad = true }
                     if fn_has_noalloc_call(toks: read toks, start: read i, declared: read declared, sumVariants: read sumVariants, noallocFns: read noallocFns) { noallocCall = true }
                     if fn_has_nonexhaustive_match(toks: read toks, start: read i, declared: read declared, allFns: read allFns) { nonExhaustive = true }
                     if collect_fn_bad_await_tokens(toks: read toks, start: read i, out: mut badAwaitTokens) { badAwait = true }
@@ -12118,6 +12141,7 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_records(code: read "RS0035", toks: read toks, tokenIndices: read lowerConflictTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0101", toks: read toks, tokenIndices: read featureViolationTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0024", toks: read toks, tokenIndices: read unknownTypeTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0009", toks: read toks, tokenIndices: read pureBadTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0311", toks: read toks, tokenIndices: read immutableAssignTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0313", toks: read toks, tokenIndices: read assignTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0312", toks: read toks, tokenIndices: read indexAssignBadTokens)
@@ -12262,7 +12286,7 @@ fn main() -> Unit {
             Log.write(message: read "RS0008")
         }
     }
-    if pureBad {
+    if pureBad && structured == false {
         Log.write(message: read "RS0009")
     }
     if nonExhaustive {

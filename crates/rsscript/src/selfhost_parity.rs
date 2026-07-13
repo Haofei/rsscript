@@ -1078,6 +1078,56 @@ fn checker_rs0008_structured_multiset_parity() {
 }
 
 #[test]
+fn checker_rs0009_structured_multiset_parity() {
+    let source = r#"features: local
+
+resource File {
+    fd: Int
+
+    drop {
+        Log.write(message: read "close")
+    }
+}
+
+struct Image {
+    value: Int
+}
+
+fn helper() -> Unit {
+    return Unit
+}
+
+fn inspect(
+    changed: mut Image,
+    consumed: take Image,
+    first: read String,
+    second: read String,
+    file: read File
+) -> File
+    effects(pure, retains(first), retains(second))
+{
+    with file as opened {
+        helper()
+    }
+    local image = Image(value: 1)
+    let shared = manage image
+    return File(fd: 1)
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0009.rss", source, "RS0009");
+    assert_eq!(
+        oracle.len(),
+        8,
+        "fixture must preserve every pure signature and body violation"
+    );
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0009",
+    );
+    assert_eq!(oracle, actual, "RS0009 structured diagnostics diverged");
+}
+
+#[test]
 fn checker_rs0007_structured_multiset_parity() {
     let source = r#"fn sample(count: Int, text: read String) -> Unit
     effects(retains(count), retains(missing))
