@@ -6455,7 +6455,7 @@ fn collect_noalloc_fns(toks: read List<Tok>) -> Set<String> {
 
 // A noalloc fn body containing a call to something that is neither an enum variant
 // nor a noalloc fn (constructors of declared types are RS0014, excluded).
-fn noalloc_body_bad(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, declared: read Set<String>, sumVariants: read Set<String>, noallocFns: read Set<String>) -> Bool {
+fn collect_noalloc_body_bad_tokens(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read Int, declared: read Set<String>, sumVariants: read Set<String>, noallocFns: read Set<String>, out: mut List<Int>) -> Bool {
     let mut k = bodyOpen + 1
     let mut hit = false
     while k < bodyClose {
@@ -6472,12 +6472,18 @@ fn noalloc_body_bad(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read In
                         walking = false
                     }
                 }
-                if Set.contains<String>(set: read noallocFns, value: read dotted_name_text(toks: read toks, i: read root)) == false { hit = true }
+                if Set.contains<String>(set: read noallocFns, value: read dotted_name_text(toks: read toks, i: read root)) == false {
+                    List.push<Int>(list: mut out, value: read root)
+                    hit = true
+                }
             } else {
                 let isCtor = Set.contains<String>(set: read declared, value: read name)
                 let isVariant = Set.contains<String>(set: read sumVariants, value: read name)
                 let isNoalloc = Set.contains<String>(set: read noallocFns, value: read name)
-                if isCtor == false && isVariant == false && isNoalloc == false { hit = true }
+                if isCtor == false && isVariant == false && isNoalloc == false {
+                    List.push<Int>(list: mut out, value: read (k - 1))
+                    hit = true
+                }
             }
         }
         k = k + 1
@@ -6486,14 +6492,14 @@ fn noalloc_body_bad(toks: read List<Tok>, bodyOpen: read Int, bodyClose: read In
 }
 
 // RS0020 over one fn: a noalloc fn whose body makes a disallowed call.
-fn fn_has_noalloc_call(toks: read List<Tok>, start: read Int, declared: read Set<String>, sumVariants: read Set<String>, noallocFns: read Set<String>) -> Bool {
+fn collect_fn_noalloc_call_tokens(toks: read List<Tok>, start: read Int, declared: read Set<String>, sumVariants: read Set<String>, noallocFns: read Set<String>, out: mut List<Int>) -> Bool {
     if fn_has_named_effect(toks: read toks, start: read start, effName: read "noalloc") == false { return false }
     let ns = fn_name_start(toks: read toks, i: read start)
     let sigEnd = function_signature_end(toks: read toks, start: read (ns - 1))
     if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) == false { return false }
     let bodyClose = find_matching(toks: read toks, open: read sigEnd, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
     if bodyClose < 0 { return false }
-    return noalloc_body_bad(toks: read toks, bodyOpen: read sigEnd, bodyClose: read bodyClose, declared: read declared, sumVariants: read sumVariants, noallocFns: read noallocFns)
+    return collect_noalloc_body_bad_tokens(toks: read toks, bodyOpen: read sigEnd, bodyClose: read bodyClose, declared: read declared, sumVariants: read sumVariants, noallocFns: read noallocFns, out: mut out)
 }
 
 // RS1003 OWN_STRUCT_ATTEMPT: `own struct` is not part of the language (oracle
@@ -11644,6 +11650,7 @@ fn main() -> Unit {
     let mut pureBadTokens = List<Int>.new()
     // RS0020: a noalloc fn that calls a non-variant, non-noalloc function.
     let mut noallocCall = false
+    let mut noallocCallTokens = List<Int>.new()
     // RS0029: any `await` in a non-async function.
     let mut badAwait = false
     let mut badAwaitTokens = List<Int>.new()
@@ -12026,7 +12033,7 @@ fn main() -> Unit {
                     if collect_fn_unknown_type_tokens(toks: read toks, start: read i, declared: read declared, out: mut unknownTypeTokens) { unknownType = true }
                     if collect_missing_param_effect_tokens(toks: read toks, start: read i, sums: read payloadlessSums, out: mut missingEffectTokens) { missingEffect = true }
                     if collect_fn_pure_bad_tokens(toks: read toks, start: read i, resources: read resources, sumVariants: read sumVariants, pureFns: read pureFns, allFns: read allFns, declared: read declared, out: mut pureBadTokens) { pureBad = true }
-                    if fn_has_noalloc_call(toks: read toks, start: read i, declared: read declared, sumVariants: read sumVariants, noallocFns: read noallocFns) { noallocCall = true }
+                    if collect_fn_noalloc_call_tokens(toks: read toks, start: read i, declared: read declared, sumVariants: read sumVariants, noallocFns: read noallocFns, out: mut noallocCallTokens) { noallocCall = true }
                     if fn_has_nonexhaustive_match(toks: read toks, start: read i, declared: read declared, allFns: read allFns) { nonExhaustive = true }
                     if collect_fn_bad_await_tokens(toks: read toks, start: read i, out: mut badAwaitTokens) { badAwait = true }
                     if collect_fn_invalid_try_tokens(toks: read toks, start: read i, declared: read declared, allFns: read allFns, out: mut invalidTryTokens) { invalidTry = true }
@@ -12150,6 +12157,7 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_records(code: read "RS0024", toks: read toks, tokenIndices: read unknownTypeTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0009", toks: read toks, tokenIndices: read pureBadTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0013", toks: read toks, tokenIndices: read invalidTryTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0020", toks: read toks, tokenIndices: read noallocCallTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0311", toks: read toks, tokenIndices: read immutableAssignTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0313", toks: read toks, tokenIndices: read assignTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0312", toks: read toks, tokenIndices: read indexAssignBadTokens)
@@ -12418,7 +12426,7 @@ fn main() -> Unit {
     if dupArg {
         Log.write(message: read "RS0205")
     }
-    if noallocCall {
+    if noallocCall && structured == false {
         Log.write(message: read "RS0020")
     }
     if invalidWeak {

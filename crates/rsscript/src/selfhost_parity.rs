@@ -1335,6 +1335,60 @@ fn promised(value: Int) -> Int
 }
 
 #[test]
+fn checker_rs0020_structured_multiset_parity() {
+    let source = r#"sum Choice {
+    One
+}
+
+struct Boxed {
+    value: Int
+}
+
+fn first(value: read Int) -> Int {
+    return value
+}
+
+fn second(value: read Int) -> Int {
+    return value
+}
+
+fn allowed(value: read Int) -> Int effects(noalloc) {
+    return value
+}
+
+fn Host.bad(value: read Int) -> Int {
+    return value
+}
+
+fn Host.allowed(value: read Int) -> Int effects(noalloc) {
+    return value
+}
+
+fn exercise(value: read Int) -> Int effects(noalloc) {
+    let a = first(value: read value)
+    let b = second(value: read a)
+    let c = Host.bad(value: read b)
+    let d = allowed(value: read c)
+    let e = Host.allowed(value: read d)
+    let variant = One
+    let boxed = Boxed(value: e)
+    return boxed.value
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0020.rss", source, "RS0020");
+    assert_eq!(
+        oracle.len(),
+        3,
+        "fixture must preserve simple and qualified calls while exempting noalloc/variant/constructor"
+    );
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0020",
+    );
+    assert_eq!(oracle, actual, "RS0020 structured diagnostics diverged");
+}
+
+#[test]
 fn checker_rs0016_structured_multiset_parity() {
     let source = "features: mystery, other\n";
     let oracle = checker_oracle_records("structured-rs0016.rss", source, "RS0016");
