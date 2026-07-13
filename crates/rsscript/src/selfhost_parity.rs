@@ -1801,6 +1801,45 @@ fn callback() -> Unit {
 }
 
 #[test]
+fn checker_rs0209_structured_multiset_parity() {
+    let source = r#"fn maybe() -> Option<Int> {
+    return Some(1)
+}
+
+fn conditions(value: read String) -> Unit {
+    if value {
+        return Unit
+    }
+    for item in value {
+        Log.write(message: read "item")
+    }
+    return Unit
+}
+
+fn patterns() -> Unit {
+    let value = maybe()
+    match value {
+        Ok(result) => return Unit
+        Err(error) => return Unit
+    }
+    return Unit
+}
+
+"#;
+    let oracle = checker_oracle_records("structured-rs0209.rss", source, "RS0209");
+    assert_eq!(
+        oracle.len(),
+        4,
+        "fixture must exercise condition, iterable, and both variant pattern occurrences"
+    );
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0209",
+    );
+    assert_eq!(oracle, actual, "RS0209 structured diagnostics diverged");
+}
+
+#[test]
 fn checker_rs0035_structured_multiset_parity() {
     let source = r#"#lower_name("dup_symbol")
 fn first() -> Unit {

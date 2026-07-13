@@ -10438,20 +10438,20 @@ fn collect_operator_overload_tokens(toks: read List<Tok>, out: mut List<Int>) ->
 // top-level comparison/logical operator (`==`, `&&`, …) or a leading `!` is Bool by
 // construction and skipped; only a plainly-typed non-Bool value (`if "yes"`, `if count`)
 // fires. FP-safe: an un-typeable condition yields "" and is skipped.
-fn cond_non_bool(toks: read List<Tok>, start: read Int, end: read Int, popen: read Int, pclose: read Int, bodyOpen: read Int, fnIdx: read Map<String, Int>, locals: read Map<String, List<Int>>) -> Bool {
-    if start >= end { return false }
-    if at_symbol(toks: read toks, i: read start, code: read SYM_BANG) { return false }
+fn cond_non_bool_token(toks: read List<Tok>, start: read Int, end: read Int, popen: read Int, pclose: read Int, bodyOpen: read Int, fnIdx: read Map<String, Int>, locals: read Map<String, List<Int>>) -> Int {
+    if start >= end { return -1 }
+    if at_symbol(toks: read toks, i: read start, code: read SYM_BANG) { return -1 }
     let op = find_binop(toks: read toks, start: read start, end: read end)
     if op >= 0 {
-        if op_matches_tier(toks: read toks, i: read op, end: read end, tier: read 1) { return false }
-        if op_matches_tier(toks: read toks, i: read op, end: read end, tier: read 2) { return false }
-        if op_matches_tier(toks: read toks, i: read op, end: read end, tier: read 6) { return false }
+        if op_matches_tier(toks: read toks, i: read op, end: read end, tier: read 1) { return -1 }
+        if op_matches_tier(toks: read toks, i: read op, end: read end, tier: read 2) { return -1 }
+        if op_matches_tier(toks: read toks, i: read op, end: read end, tier: read 6) { return -1 }
     }
     let ty = return_actual_type(toks: read toks, s0: read start, e: read end, popen: read popen, pclose: read pclose, bodyOpen: read bodyOpen, fnIdx: read fnIdx, locals: read locals)
-    if String.len(value: read ty) == 0 { return false }
-    if str_is_unresolved_generic(s: read ty) { return false }
-    if str_strip_fresh(s: read ty) == "Bool" { return false }
-    return true
+    if String.len(value: read ty) == 0 { return -1 }
+    if str_is_unresolved_generic(s: read ty) { return -1 }
+    if str_strip_fresh(s: read ty) == "Bool" { return -1 }
+    return start
 }
 
 // A concrete scalar (non-iterable) type: String/Int/Bool/Float/Char. "" / generics / a
@@ -10471,7 +10471,7 @@ fn is_scalar_root(ty: read String) -> Bool {
 //     differs from the scrutinee root fires.
 // Arm-result-type consistency is NOT checked here (it needs pattern-binding typing).
 // Arm-iteration mirrors astdump.rss emit_match_arms.
-fn match_bad(toks: read List<Tok>, braceOpen: read Int, braceClose: read Int, scrutTy: read String, declared: read Set<String>, popen: read Int, pclose: read Int, bodyOpen: read Int, fnIdx: read Map<String, Int>, locals: read Map<String, List<Int>>) -> Bool {
+fn collect_match_bad_tokens(toks: read List<Tok>, scrutStart: read Int, braceOpen: read Int, braceClose: read Int, scrutTy: read String, declared: read Set<String>, popen: read Int, pclose: read Int, bodyOpen: read Int, fnIdx: read Map<String, Int>, locals: read Map<String, List<Int>>, out: mut List<Int>) -> Bool {
     if String.len(value: read scrutTy) == 0 { return false }
     if str_is_unresolved_generic(s: read scrutTy) { return false }
     let scrutRoot = str_type_root(s: read scrutTy)
@@ -10481,15 +10481,12 @@ fn match_bad(toks: read List<Tok>, braceOpen: read Int, braceClose: read Int, sc
     // ToolRuntime lives in another file).
     let isTuple = String.starts_with(value: read scrutTy, prefix: read "(")
     let matchable = isTuple || scrutRoot == "Option" || scrutRoot == "Result" || scrutRoot == "List" || is_scalar_root(ty: read scrutTy) || Set.contains<String>(set: read declared, value: read scrutRoot)
-    if matchable == false { return true }
+    let mut hit = false
+    if matchable == false { List.push<Int>(list: mut out, value: read scrutStart); hit = true }
     let innerTy = str_top_arg(s: read scrutTy, which: read 0)
-    let mut impliedOption = false
-    let mut impliedResult = false
-    let mut litBad = false
     // Arm-result-type consistency: the first arm that produces a concrete value sets the
     // expected type; a later arm of a different concrete type fires.
     let mut firstArmTy = ""
-    let mut armBad = false
     let mut i = braceOpen + 1
     while i < braceClose {
         if at_symbol(toks: read toks, i: read i, code: read SYM_SEMI) || at_symbol(toks: read toks, i: read i, code: read SYM_COMMA) {
@@ -10507,27 +10504,27 @@ fn match_bad(toks: read List<Tok>, braceOpen: read Int, braceClose: read Int, sc
                 let armCp = Map<String, String>.new()
                 if i < patEnd {
                     let ph = tk_text(toks: read toks, i: read i)
-                    if ph == "Some" || ph == "None" { impliedOption = true }
-                    if ph == "Ok" || ph == "Err" { impliedResult = true }
+                    if (ph == "Some" || ph == "None") && scrutRoot != "Option" { List.push<Int>(list: mut out, value: read i); hit = true }
+                    if (ph == "Ok" || ph == "Err") && scrutRoot != "Result" { List.push<Int>(list: mut out, value: read i); hit = true }
                     if (ph == "Some" || ph == "Ok") && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_LPAREN) && is_ident_tok(toks: read toks, i: read (i + 2)) && String.len(value: read innerTy) > 0 {
                         Map.insert<String, String>(map: mut armCp, key: read tk_text(toks: read toks, i: read (i + 2)), value: read innerTy)
                     }
                     if (i + 1) == patEnd {
                         let k0 = tk_kind(toks: read toks, i: read i)
-                        if k0 == TOK_NUMBER && scrutRoot != "Int" { litBad = true }
-                        if k0 == TOK_STRING && scrutRoot != "String" { litBad = true }
-                        if k0 == TOK_CHAR && scrutRoot != "Char" { litBad = true }
+                        if k0 == TOK_NUMBER && scrutRoot != "Int" { List.push<Int>(list: mut out, value: read i); hit = true }
+                        if k0 == TOK_STRING && scrutRoot != "String" { List.push<Int>(list: mut out, value: read i); hit = true }
+                        if k0 == TOK_CHAR && scrutRoot != "Char" { List.push<Int>(list: mut out, value: read i); hit = true }
                     }
                     // A tuple pattern `(..)` can't match a scalar scrutinee; a list pattern
                     // `[..]` only matches a List.
-                    if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) && is_scalar_root(ty: read scrutTy) { litBad = true }
-                    if at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) && scrutRoot != "List" { litBad = true }
+                    if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) && is_scalar_root(ty: read scrutTy) { List.push<Int>(list: mut out, value: read i); hit = true }
+                    if at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) && scrutRoot != "List" { List.push<Int>(list: mut out, value: read i); hit = true }
                     // A scalar scrutinee (Int/String/…) admits only literal patterns and `_`;
                     // a bare-identifier pattern (`other`) cannot match it (`true`/`false` are
                     // the Bool literals, not bindings).
                     if is_scalar_root(ty: read scrutTy) && (i + 1) == patEnd && tk_kind(toks: read toks, i: read i) == TOK_IDENT {
                         let pn = tk_text(toks: read toks, i: read i)
-                        if pn != "_" && pn != "true" && pn != "false" { litBad = true }
+                        if pn != "_" && pn != "true" && pn != "false" { List.push<Int>(list: mut out, value: read i); hit = true }
                     }
                 }
                 let bodyStart = arrow + 1
@@ -10562,22 +10559,21 @@ fn match_bad(toks: read List<Tok>, braceOpen: read Int, braceClose: read Int, sc
                         if String.len(value: read firstArmTy) == 0 {
                             firstArmTy = ar
                         } else if ar != firstArmTy {
-                            armBad = true
+                            // Match-expression arm typing is diagnosed on the
+                            // expression's closing brace by the Rust frontend.
+                            List.push<Int>(list: mut out, value: read braceClose)
+                            hit = true
                         }
                     }
                 }
             }
         }
     }
-    if impliedOption && scrutRoot != "Option" { return true }
-    if impliedResult && scrutRoot != "Result" { return true }
-    if litBad { return true }
-    if armBad { return true }
-    return false
+    return hit
 }
 
 // RS0209 per-fn walker: `if`/`while` conditions that are non-Bool.
-fn fn_has_control_flow_mismatch(toks: read List<Tok>, start: read Int, model: read FileTypeModel) -> Bool {
+fn collect_fn_control_flow_mismatch_tokens(toks: read List<Tok>, start: read Int, model: read FileTypeModel, out: mut List<Int>) -> Bool {
     let body = build_body_type_model(toks: read toks, fnStart: read start)
     if body_type_model_ok(body: read body) == false { return false }
     let mut i = body.bodyOpen + 1
@@ -10587,7 +10583,8 @@ fn fn_has_control_flow_mismatch(toks: read List<Tok>, start: read Int, model: re
             let lo = i + 1
             let ce = cond_expr_end(toks: read toks, start: read lo, limit: read body.bodyClose)
             if ce > lo {
-                if cond_non_bool(toks: read toks, start: read lo, end: read ce, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals) { hit = true }
+                let bad = cond_non_bool_token(toks: read toks, start: read lo, end: read ce, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals)
+                if bad >= 0 { List.push<Int>(list: mut out, value: read bad); hit = true }
             }
         } else if is_kw_text(toks: read toks, i: read i, word: read "match") {
             let mut vs = i + 1
@@ -10597,7 +10594,7 @@ fn fn_has_control_flow_mismatch(toks: read List<Tok>, start: read Int, model: re
                 let scrutTy = return_actual_type(toks: read toks, s0: read vs, e: read mbo, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals)
                 let mbc = find_matching(toks: read toks, open: read mbo, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
                 if mbc >= 0 {
-                    if match_bad(toks: read toks, braceOpen: read mbo, braceClose: read mbc, scrutTy: read scrutTy, declared: read model.declared, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals) { hit = true }
+                    if collect_match_bad_tokens(toks: read toks, scrutStart: read vs, braceOpen: read mbo, braceClose: read mbc, scrutTy: read scrutTy, declared: read model.declared, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals, out: mut out) { hit = true }
                 }
             }
         } else if is_kw_text(toks: read toks, i: read i, word: read "for") {
@@ -10615,7 +10612,7 @@ fn fn_has_control_flow_mismatch(toks: read List<Tok>, start: read Int, model: re
                     let ss = inPos + 1
                     if ss < fbo {
                         let subjTy = return_actual_type(toks: read toks, s0: read ss, e: read fbo, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals)
-                        if is_scalar_root(ty: read subjTy) { hit = true }
+                        if is_scalar_root(ty: read subjTy) { List.push<Int>(list: mut out, value: read ss); hit = true }
                     }
                 }
             }
@@ -10625,8 +10622,9 @@ fn fn_has_control_flow_mismatch(toks: read List<Tok>, start: read Int, model: re
     return hit
 }
 
-// Walk all top-level fns and report any RS0209 control-flow-type mismatch.
-fn has_control_flow_mismatch(toks: read List<Tok>) -> Bool {
+// Collect every RS0209 anchor. Conditions, loop subjects, scrutinees, patterns,
+// and mismatching match arms all use their analyzer-compatible first token.
+fn collect_control_flow_mismatch_tokens(toks: read List<Tok>, out: mut List<Int>) -> Bool {
     let ntok = List.len(list: read toks)
     let model = build_file_type_model(toks: read toks)
     let mut i = 0
@@ -10652,7 +10650,7 @@ fn has_control_flow_mismatch(toks: read List<Tok>) -> Bool {
                 if r < 0 {
                     running = false
                 } else {
-                    if fn_has_control_flow_mismatch(toks: read toks, start: read i, model: read model) { hit = true }
+                    if collect_fn_control_flow_mismatch_tokens(toks: read toks, start: read i, model: read model, out: mut out) { hit = true }
                     i = r
                 }
             } else {
@@ -11922,7 +11920,8 @@ fn main() -> Unit {
     let mut operatorOverloadTokens = List<Int>.new()
     let operatorOverload = collect_operator_overload_tokens(toks: read toks, out: mut operatorOverloadTokens)
     // RS0209: control-flow type mismatch.
-    let cfTypeMismatch = has_control_flow_mismatch(toks: read toks)
+    let mut cfTypeMismatchTokens = List<Int>.new()
+    let cfTypeMismatch = collect_control_flow_mismatch_tokens(toks: read toks, out: mut cfTypeMismatchTokens)
     // RS0901: `take` of a `handle` field.
     let mut takeHandleTokens = List<Int>.new()
     let takeHandle = collect_take_handle_field_tokens(toks: read toks, out: mut takeHandleTokens)
@@ -12320,6 +12319,7 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_records(code: read "RS0205", toks: read toks, tokenIndices: read dupArgTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0208", toks: read toks, tokenIndices: read retTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0210", toks: read toks, tokenIndices: read opTypeMismatchTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0209", toks: read toks, tokenIndices: read cfTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0201", toks: read toks, tokenIndices: read unnamedArgTokens)
         emitted = emitted + emit_diagnostic_sites(code: read "RS0014", sites: read noallocAllocSites)
         emitted = emitted + emit_diagnostic_sites(code: read "RS0018", sites: read noBlockCallSites)
