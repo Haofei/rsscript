@@ -794,6 +794,16 @@ fn checker_oracle_records(
     records
 }
 
+fn diagnostic_records_for_code(
+    records: Vec<SelfhostDiagnosticRecord>,
+    target_code: &str,
+) -> Vec<SelfhostDiagnosticRecord> {
+    records
+        .into_iter()
+        .filter(|record| record.code == target_code)
+        .collect()
+}
+
 fn compile_checker() -> Result<RegVmExecutable, String> {
     compile_selfhost_tool("check.rss", "checker")
 }
@@ -981,7 +991,10 @@ fn render() -> Unit {
         oracle.len() > 1,
         "fixture must exercise duplicate occurrences"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0005",
+    );
     assert_eq!(oracle, actual, "RS0005 structured diagnostics diverged");
 }
 
@@ -997,7 +1010,10 @@ fn second() {
 "#;
     let oracle = checker_oracle_records("structured-rs0002.rss", source, "RS0002");
     assert_eq!(oracle.len(), 2, "fixture must exercise both functions");
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0002",
+    );
     assert_eq!(oracle, actual, "RS0002 structured diagnostics diverged");
 }
 
@@ -1010,7 +1026,10 @@ fn checker_rs0003_structured_multiset_parity() {
 "#;
     let oracle = checker_oracle_records("structured-rs0003.rss", source, "RS0003");
     assert_eq!(oracle.len(), 2, "fixture must exercise both parameters");
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0003",
+    );
     assert_eq!(oracle, actual, "RS0003 structured diagnostics diverged");
 }
 
@@ -1024,7 +1043,10 @@ fn checker_rs0004_structured_multiset_parity() {
 "#;
     let oracle = checker_oracle_records("structured-rs0004.rss", source, "RS0004");
     assert_eq!(oracle.len(), 2, "fixture must exercise both effects");
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0004",
+    );
     assert_eq!(oracle, actual, "RS0004 structured diagnostics diverged");
 }
 
@@ -1033,7 +1055,10 @@ fn checker_rs0006_structured_multiset_parity() {
     let source = "features: local\nfeatures: async\nfeatures: native\n";
     let oracle = checker_oracle_records("structured-rs0006.rss", source, "RS0006");
     assert_eq!(oracle.len(), 2, "fixture must exercise both extra headers");
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0006",
+    );
     assert_eq!(oracle, actual, "RS0006 structured diagnostics diverged");
 }
 
@@ -1045,7 +1070,10 @@ fn checker_rs0008_structured_multiset_parity() {
 "#;
     let oracle = checker_oracle_records("structured-rs0008.rss", source, "RS0008");
     assert_eq!(oracle.len(), 2, "fixture must exercise both parameters");
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0008",
+    );
     assert_eq!(oracle, actual, "RS0008 structured diagnostics diverged");
 }
 
@@ -1063,7 +1091,10 @@ fn checker_rs0007_structured_multiset_parity() {
         2,
         "fixture must exercise both retains failures"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0007",
+    );
     assert_eq!(oracle, actual, "RS0007 structured diagnostics diverged");
 }
 
@@ -1072,7 +1103,10 @@ fn checker_rs0010_structured_multiset_parity() {
     let source = "profile: managed\nprofile: managed\n";
     let oracle = checker_oracle_records("structured-rs0010.rss", source, "RS0010");
     assert_eq!(oracle.len(), 2, "fixture must exercise both profiles");
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0010",
+    );
     assert_eq!(oracle, actual, "RS0010 structured diagnostics diverged");
 }
 
@@ -1091,7 +1125,10 @@ fn checker_rs0012_structured_multiset_parity() {
         2,
         "fixture must exercise both removed effects"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0012",
+    );
     assert_eq!(oracle, actual, "RS0012 structured diagnostics diverged");
 }
 
@@ -1118,7 +1155,10 @@ fn build() -> Pair
         3,
         "fixture must preserve constructor and manage allocation sites"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0014",
+    );
     assert_eq!(oracle, actual, "RS0014 structured diagnostics diverged");
 }
 
@@ -1144,7 +1184,10 @@ fn promised(value: Int) -> Int
 "#;
     let oracle = checker_oracle_records("structured-rs0018.rss", source, "RS0018");
     assert_eq!(oracle.len(), 2, "fixture must preserve both blocking calls");
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0018",
+    );
     assert_eq!(oracle, actual, "RS0018 structured diagnostics diverged");
 }
 
@@ -1170,7 +1213,10 @@ fn promised(value: Int) -> Int
 "#;
     let oracle = checker_oracle_records("structured-rs0019.rss", source, "RS0019");
     assert_eq!(oracle.len(), 2, "fixture must preserve both panic calls");
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0019",
+    );
     assert_eq!(oracle, actual, "RS0019 structured diagnostics diverged");
 }
 
@@ -1183,7 +1229,10 @@ fn checker_rs0016_structured_multiset_parity() {
         2,
         "fixture must exercise both unknown features"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0016",
+    );
     assert_eq!(oracle, actual, "RS0016 structured diagnostics diverged");
 }
 
@@ -1196,7 +1245,10 @@ fn checker_rs0017_structured_multiset_parity() {
         2,
         "fixture must exercise both duplicate features"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0017",
+    );
     assert_eq!(oracle, actual, "RS0017 structured diagnostics diverged");
 }
 
@@ -1208,7 +1260,10 @@ fn checker_rs0011_structured_multiset_parity() {
 "#;
     let oracle = checker_oracle_records("structured-rs0011.rss", source, "RS0011");
     assert_eq!(oracle.len(), 2, "fixture must exercise both share types");
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0011",
+    );
     assert_eq!(oracle, actual, "RS0011 structured diagnostics diverged");
 }
 
@@ -1225,7 +1280,10 @@ fn checker_rs0028_structured_multiset_parity() {
         2,
         "fixture must exercise both self parameters"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0028",
+    );
     assert_eq!(oracle, actual, "RS0028 structured diagnostics diverged");
 }
 
@@ -1252,7 +1310,10 @@ async fn valid(value: read Int) -> Int {
         2,
         "fixture must preserve two invalid awaits and exempt async functions"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0029",
+    );
     assert_eq!(oracle, actual, "RS0029 structured diagnostics diverged");
 }
 
@@ -1276,7 +1337,10 @@ async fn exercise(value: read Int) -> Unit {
         2,
         "fixture must preserve unconsumed calls and exempt await"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0022",
+    );
     assert_eq!(oracle, actual, "RS0022 structured diagnostics diverged");
 }
 
@@ -1307,7 +1371,10 @@ fn exposed(first: Fd, second: Fd) -> Fd {
         5,
         "fixture must preserve fields, parameters, and return surface failures"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0023",
+    );
     assert_eq!(oracle, actual, "RS0023 structured diagnostics diverged");
 }
 
@@ -1327,7 +1394,10 @@ fn combine<A: MissingLeft, B: MissingRight>(left: read A, right: read B) -> Unit
         3,
         "fixture must preserve type and function generic-bound failures"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0027",
+    );
     assert_eq!(oracle, actual, "RS0027 structured diagnostics diverged");
 }
 
@@ -1343,7 +1413,10 @@ fn second() -> Int {
 "#;
     let oracle = checker_oracle_records("structured-rs0033.rss", source, "RS0033");
     assert_eq!(oracle.len(), 2, "fixture must exercise both integers");
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0033",
+    );
     assert_eq!(oracle, actual, "RS0033 structured diagnostics diverged");
 }
 
@@ -1365,7 +1438,10 @@ fn checker_rs0034_structured_multiset_parity() {
         3,
         "fixture must exercise bare Ok, Err, and None"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0034",
+    );
     assert_eq!(oracle, actual, "RS0034 structured diagnostics diverged");
 }
 
@@ -1385,7 +1461,10 @@ fn exercise() -> Unit {
         3,
         "fixture must preserve every duplicate after the first argument"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0205",
+    );
     assert_eq!(oracle, actual, "RS0205 structured diagnostics diverged");
 }
 
@@ -1421,7 +1500,10 @@ fn plain() -> Unit {
         3,
         "fixture must preserve pin collision, invalid pin, and pinned/default collision"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0035",
+    );
     assert_eq!(oracle, actual, "RS0035 structured diagnostics diverged");
 }
 
@@ -1447,7 +1529,10 @@ async fn generic<T>() -> Result<Unit, ChannelError> {
         2,
         "fixture must preserve two non-transferable calls and exempt transferable/generic payloads"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0036",
+    );
     assert_eq!(oracle, actual, "RS0036 structured diagnostics diverged");
 }
 
@@ -1473,8 +1558,146 @@ fn inspect(value: read Pairish) -> Int {
         2,
         "fixture must preserve too-few and too-many positional bindings"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0037",
+    );
     assert_eq!(oracle, actual, "RS0037 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0101_structured_declaration_parity() {
+    let source = r#"async fn async_entry() -> Unit {
+    return Unit
+}
+
+fn unsafe_entry() -> Unit
+    effects(unsafe)
+{
+    return Unit
+}
+
+fn native_effect_entry() -> Unit
+    effects(native)
+{
+    return Unit
+}
+
+native fn native_missing_effect() -> Unit {
+    return Unit
+}
+
+fn local_surface(pool: read ResourcePool<File>, value: take String) -> Unit {
+    return Unit
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0101-declarations.rss", source, "RS0101");
+    assert_eq!(
+        oracle.len(),
+        6,
+        "fixture must preserve declaration, type, and parameter feature uses"
+    );
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0101",
+    );
+    assert_eq!(oracle, actual, "RS0101 declaration diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0101_structured_body_parity() {
+    let source = r#"async fn fetch() -> Int {
+    return 1
+}
+
+fn dangerous() -> Unit
+    effects(unsafe)
+{
+    return Unit
+}
+
+fn exercise() -> Unit {
+    local value = 1
+    let managed = manage value
+    let first = await fetch()
+    spawn fetch()
+    dangerous()
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0101-body.rss", source, "RS0101");
+    assert_eq!(
+        oracle.len(),
+        9,
+        "fixture must preserve nested local, async, and unsafe feature uses"
+    );
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0101",
+    );
+    assert_eq!(oracle, actual, "RS0101 body diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0101_structured_feature_suppression_parity() {
+    let source = r#"features: local, native, unsafe, async
+
+async fn async_entry() -> Unit {
+    return Unit
+}
+
+fn unsafe_entry() -> Unit effects(unsafe) {
+    return Unit
+}
+
+fn native_entry(pool: read ResourcePool<File>, value: take String) -> Unit
+    effects(native)
+{
+    return Unit
+}
+
+native fn still_missing_effect() -> Unit {
+    return Unit
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0101-enabled.rss", source, "RS0101");
+    assert_eq!(
+        oracle.len(),
+        1,
+        "enabled features must suppress uses but not a native boundary missing its effect"
+    );
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0101",
+    );
+    assert_eq!(oracle, actual, "RS0101 feature suppression diverged");
+}
+
+#[test]
+fn checker_rs0101_structured_qualified_call_parity() {
+    let source = r#"async fn Worker.fetch<T>(value: read T) -> T {
+    return value
+}
+
+fn Host.danger() -> Unit effects(unsafe) {
+    return Unit
+}
+
+fn exercise() -> Unit {
+    let value = await Worker.fetch<Int>(value: read 1)
+    Host.danger()
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0101-qualified.rss", source, "RS0101");
+    assert_eq!(
+        oracle.len(),
+        5,
+        "fixture must preserve qualified declarations, await/call, and unsafe call uses"
+    );
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0101",
+    );
+    assert_eq!(oracle, actual, "RS0101 qualified-call diagnostics diverged");
 }
 
 #[test]
@@ -1495,7 +1718,10 @@ fn exercise() -> Unit {
         3,
         "fixture must exercise each unnamed argument"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0201",
+    );
     assert_eq!(oracle, actual, "RS0201 structured diagnostics diverged");
 }
 
@@ -1507,7 +1733,10 @@ fn checker_rs0212_structured_multiset_parity() {
 "#;
     let oracle = checker_oracle_records("structured-rs0212.rss", source, "RS0212");
     assert_eq!(oracle.len(), 3, "fixture must exercise all banned derives");
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0212",
+    );
     assert_eq!(oracle, actual, "RS0212 structured diagnostics diverged");
 }
 
@@ -1528,7 +1757,10 @@ struct Holder {
         2,
         "fixture must exercise both resource fields"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0701",
+    );
     assert_eq!(oracle, actual, "RS0701 structured diagnostics diverged");
 }
 
@@ -1561,7 +1793,10 @@ fn constructed() -> Unit {
         3,
         "fixture must exercise concrete, generic, and call-site pool types"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0703",
+    );
     assert_eq!(oracle, actual, "RS0703 structured diagnostics diverged");
 }
 
@@ -1602,7 +1837,10 @@ resource Direct<T: Resource> {
         4,
         "fixture must exercise resource arguments and declaration constraints"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0704",
+    );
     assert_eq!(oracle, actual, "RS0704 structured diagnostics diverged");
 }
 
@@ -1628,7 +1866,10 @@ fn valid(pool: mut ResourcePool<Connection>, owned: take ResourcePool<Connection
         3,
         "fixture must exercise two parameters and one managed binding"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0705",
+    );
     assert_eq!(oracle, actual, "RS0705 structured diagnostics diverged");
 }
 
@@ -1665,7 +1906,10 @@ fn rebound_name_stays_moved() -> Unit {
         3,
         "fixture must exercise zero, negative, and dynamic sizes"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0708",
+    );
     assert_eq!(oracle, actual, "RS0708 structured diagnostics diverged");
 }
 
@@ -1701,7 +1945,10 @@ fn missing_second(path: read Path) -> Unit {
 "#;
     let oracle = checker_oracle_records("structured-rs0706.rss", source, "RS0706");
     assert_eq!(oracle.len(), 2, "fixture must exercise both missing tries");
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0706",
+    );
     assert_eq!(oracle, actual, "RS0706 structured diagnostics diverged");
 }
 
@@ -1743,7 +1990,10 @@ fn valid() -> Result<Unit, IOError> {
         2,
         "fixture must exercise both constructor directions"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0707",
+    );
     assert_eq!(oracle, actual, "RS0707 structured diagnostics diverged");
 }
 
@@ -1779,7 +2029,10 @@ fn exercise() -> Unit {
         3,
         "fixture must exercise nested, mut, and read conflicts"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0709",
+    );
     assert_eq!(oracle, actual, "RS0709 structured diagnostics diverged");
 }
 
@@ -1812,7 +2065,10 @@ fn valid() -> Unit {
         3,
         "fixture must exercise ordinary values and an expired lease name"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0710",
+    );
     assert_eq!(oracle, actual, "RS0710 structured diagnostics diverged");
 }
 
@@ -1852,7 +2108,10 @@ fn build(host: read String) -> Unit {
         2,
         "fixture must preserve one parameter use and one managed capture"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0711",
+    );
     assert_eq!(oracle, actual, "RS0711 structured diagnostics diverged");
 }
 
@@ -1869,7 +2128,10 @@ struct Holder {
 "#;
     let oracle = checker_oracle_records("structured-rs0902.rss", source, "RS0902");
     assert_eq!(oracle.len(), 2, "fixture must exercise both weak fields");
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0902",
+    );
     assert_eq!(oracle, actual, "RS0902 structured diagnostics diverged");
 }
 
@@ -1897,7 +2159,10 @@ fn valid(session: read Session) -> Option<User> {
 "#;
     let oracle = checker_oracle_records("structured-rs0903.rss", source, "RS0903");
     assert_eq!(oracle.len(), 2, "fixture must exercise read and mut uses");
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0903",
+    );
     assert_eq!(oracle, actual, "RS0903 structured diagnostics diverged");
 }
 
@@ -1927,7 +2192,10 @@ fn valid(user: read User) -> Unit {
         2,
         "fixture must exercise both bad initializers"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0904",
+    );
     assert_eq!(oracle, actual, "RS0904 structured diagnostics diverged");
 }
 
@@ -1953,7 +2221,10 @@ fn consume(config: mut Config) -> Unit {
 "#;
     let oracle = checker_oracle_records("structured-rs0901.rss", source, "RS0901");
     assert_eq!(oracle.len(), 2, "fixture must exercise both handle fields");
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0901",
+    );
     assert_eq!(oracle, actual, "RS0901 structured diagnostics diverged");
 }
 
@@ -1962,7 +2233,10 @@ fn checker_rs1003_structured_multiset_parity() {
     let source = "own struct First\nown struct Second\n";
     let oracle = checker_oracle_records("structured-rs1003.rss", source, "RS1003");
     assert_eq!(oracle.len(), 2, "fixture must exercise both own structs");
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS1003",
+    );
     assert_eq!(oracle, actual, "RS1003 structured diagnostics diverged");
 }
 
@@ -1980,7 +2254,10 @@ fn create() -> Unit {
 "#;
     let oracle = checker_oracle_records("structured-rs0306.rss", source, "RS0306");
     assert_eq!(oracle.len(), 2, "fixture must exercise both local bindings");
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0306",
+    );
     assert_eq!(oracle, actual, "RS0306 structured diagnostics diverged");
 }
 
@@ -2013,7 +2290,10 @@ fn valid() -> Unit {
         2,
         "fixture must exercise parameter and let values"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0307",
+    );
     assert_eq!(oracle, actual, "RS0307 structured diagnostics diverged");
 }
 
@@ -2045,7 +2325,10 @@ fn valid(owned: take Buffer) -> Unit {
         2,
         "fixture must exercise parameter and let values"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0308",
+    );
     assert_eq!(oracle, actual, "RS0308 structured diagnostics diverged");
 }
 
@@ -2084,7 +2367,10 @@ fn valid() -> Unit {
         4,
         "fixture must exercise managed values, wrappers, and handle fields"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0301",
+    );
     assert_eq!(oracle, actual, "RS0301 structured diagnostics diverged");
 }
 
@@ -2125,7 +2411,10 @@ fn valid() -> Unit {
         4,
         "fixture must exercise repeated direct uses, a field path, and a rebound name"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0401",
+    );
     assert_eq!(oracle, actual, "RS0401 structured diagnostics diverged");
 }
 
@@ -2159,7 +2448,10 @@ fn exercise() -> Unit {
         3,
         "fixture must exercise direct, repeated, and wrapped local retention"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0501",
+    );
     assert_eq!(oracle, actual, "RS0501 structured diagnostics diverged");
 }
 
@@ -2196,7 +2488,10 @@ fn bad_field() -> fresh Boxed {
         3,
         "fixture must exercise identifier, wrapper, and field-expression spans"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0601",
+    );
     assert_eq!(oracle, actual, "RS0601 structured diagnostics diverged");
 }
 
@@ -2221,7 +2516,10 @@ fn exercise() -> Unit {
 "#;
     let oracle = checker_oracle_records("structured-rs0604.rss", source, "RS0604");
     assert_eq!(oracle.len(), 2, "fixture must exercise mut and take ranges");
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0604",
+    );
     assert_eq!(oracle, actual, "RS0604 structured diagnostics diverged");
 }
 
@@ -2248,7 +2546,10 @@ fn generic<T>() -> fresh T {
         3,
         "fixture must exercise direct, nested, and generic fresh targets"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0603",
+    );
     assert_eq!(oracle, actual, "RS0603 structured diagnostics diverged");
 }
 
@@ -2280,7 +2581,10 @@ fn valid(value: mut Int) -> Unit {
         4,
         "fixture must exercise repeated local and parameter assignments"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0311",
+    );
     assert_eq!(oracle, actual, "RS0311 structured diagnostics diverged");
 }
 
@@ -2300,7 +2604,10 @@ fn checker_rs0313_structured_multiset_parity() {
 "#;
     let oracle = checker_oracle_records("structured-rs0313.rss", source, "RS0313");
     assert_eq!(oracle.len(), 2, "fixture must exercise scalar mismatches");
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0313",
+    );
     assert_eq!(oracle, actual, "RS0313 structured diagnostics diverged");
 }
 
@@ -2322,7 +2629,10 @@ fn checker_rs0312_structured_multiset_parity() {
         3,
         "fixture must exercise repeated Map and Deque index assignments"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0312",
+    );
     assert_eq!(oracle, actual, "RS0312 structured diagnostics diverged");
 }
 
@@ -2336,7 +2646,10 @@ fn checker_rs1002_structured_multiset_parity() {
 "#;
     let oracle = checker_oracle_records("structured-rs1002.rss", source, "RS1002");
     assert_eq!(oracle.len(), 2, "fixture must exercise both conversions");
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS1002",
+    );
     assert_eq!(oracle, actual, "RS1002 structured diagnostics diverged");
 }
 
@@ -2362,7 +2675,10 @@ fn valid(left: Int, right: Int) -> Unit {
         2,
         "fixture must exercise both overload attempts"
     );
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS1001",
+    );
     assert_eq!(oracle, actual, "RS1001 structured diagnostics diverged");
 }
 
@@ -2378,7 +2694,10 @@ fn second() -> &String {
 "#;
     let oracle = checker_oracle_records("structured-rs1004.rss", source, "RS1004");
     assert_eq!(oracle.len(), 2, "fixture must exercise both references");
-    let actual = run_cached_checker_records(source).expect("rss checker should emit records");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS1004",
+    );
     assert_eq!(oracle, actual, "RS1004 structured diagnostics diverged");
 }
 

@@ -4679,7 +4679,7 @@ fn fn_pure_bad(toks: read List<Tok>, start: read Int, resources: read Set<String
 
 // Pre-pass filling RS0009 lookup sets: user resource type names, sum variant
 // names, pure fn (simple) names, and all fn (simple) names.
-fn collect_rs0009(toks: read List<Tok>, resources: mut Set<String>, sumVariants: mut Set<String>, pureFns: mut Set<String>, allFns: mut Set<String>, noBlockFns: mut Set<String>, noPanicFns: mut Set<String>, asyncFns: mut Set<String>) -> Unit {
+fn collect_rs0009(toks: read List<Tok>, resources: mut Set<String>, sumVariants: mut Set<String>, pureFns: mut Set<String>, allFns: mut Set<String>, noBlockFns: mut Set<String>, noPanicFns: mut Set<String>, asyncFns: mut Set<String>, unsafeFns: mut Set<String>) -> Unit {
     let ntok = List.len(list: read toks)
     let mut i = 0
     let mut running = true
@@ -4755,6 +4755,13 @@ fn collect_rs0009(toks: read List<Tok>, resources: mut Set<String>, sumVariants:
                     running = false
                 } else {
                     let nameIdx = fn_name_start(toks: read toks, i: read i)
+                    let fullName = dotted_name_text(toks: read toks, i: read nameIdx)
+                    if fn_is_async(toks: read toks, start: read i) {
+                        Set.insert<String>(set: mut asyncFns, value: read fullName)
+                    }
+                    if fn_has_named_effect(toks: read toks, start: read i, effName: read "unsafe") {
+                        Set.insert<String>(set: mut unsafeFns, value: read fullName)
+                    }
                     if at_symbol(toks: read toks, i: read (nameIdx + 1), code: read SYM_DOT) == false {
                         let fname = tk_text(toks: read toks, i: read nameIdx)
                         Set.insert<String>(set: mut allFns, value: read fname)
@@ -4766,9 +4773,6 @@ fn collect_rs0009(toks: read List<Tok>, resources: mut Set<String>, sumVariants:
                         }
                         if fn_has_named_effect(toks: read toks, start: read i, effName: read "no_panic") {
                             Set.insert<String>(set: mut noPanicFns, value: read fname)
-                        }
-                        if fn_is_async(toks: read toks, start: read i) {
-                            Set.insert<String>(set: mut asyncFns, value: read fname)
                         }
                     }
                     i = r
@@ -7486,6 +7490,72 @@ fn file_local_use(toks: read List<Tok>) -> Bool {
             hit = true
         }
         i = i + 1
+    }
+    return hit
+}
+
+// Record body/type feature uses at the same token spans used by HIR lowering.
+// Declaration-level async/native/unsafe uses are added by the top-level fn walk,
+// because their span is the declaration start rather than the effect keyword.
+fn collect_feature_use_tokens(
+    toks: read List<Tok>,
+    declared: read Set<String>,
+    asyncFns: read Set<String>,
+    unsafeFns: read Set<String>,
+    out: mut List<Int>
+) -> Bool {
+    let needLocal = Set.contains<String>(set: read declared, value: read "local") == false
+    let needAsync = Set.contains<String>(set: read declared, value: read "async") == false
+    let needUnsafe = Set.contains<String>(set: read declared, value: read "unsafe") == false
+    let n = List.len(list: read toks)
+    let mut i = 0
+    let mut hit = false
+    while i < n {
+        if at_ident(toks: read toks, i: read i, wid: read WORD_FEATURES) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_COLON) {
+            i = declaration_line_end(toks: read toks, start: read i)
+        } else {
+            if needLocal {
+                if at_ident(toks: read toks, i: read i, wid: read WORD_LOCAL) || kw_not_dotted(toks: read toks, i: read i, word: read "manage") {
+                    List.push<Int>(list: mut out, value: read i)
+                    hit = true
+                } else if kw_not_dotted(toks: read toks, i: read i, word: read "take") && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_COLON) == false {
+                    let mut site = i
+                    if at_symbol(toks: read toks, i: read (i - 1), code: read SYM_COLON) && is_ident_tok(toks: read toks, i: read (i - 2)) { site = i - 2 }
+                    List.push<Int>(list: mut out, value: read site)
+                    hit = true
+                } else if is_ident_tok(toks: read toks, i: read i) && tk_text(toks: read toks, i: read i) == "ResourcePool" {
+                    List.push<Int>(list: mut out, value: read i)
+                    hit = true
+                }
+            }
+            if needAsync {
+                let asyncStmt = at_ident(toks: read toks, i: read i, wid: read WORD_ASYNC) && (at_ident(toks: read toks, i: read (i + 1), wid: read WORD_FOR) || is_kw_text(toks: read toks, i: read (i + 1), word: read "let"))
+                if asyncStmt || kw_not_dotted(toks: read toks, i: read i, word: read "spawn") || kw_not_dotted(toks: read toks, i: read i, word: read "await") || kw_not_dotted(toks: read toks, i: read i, word: read "task_group") || kw_not_dotted(toks: read toks, i: read i, word: read "select") {
+                    List.push<Int>(list: mut out, value: read i)
+                    hit = true
+                }
+            }
+            if is_ident_tok(toks: read toks, i: read i) && at_ident(toks: read toks, i: read (i - 1), wid: read WORD_FN) == false && at_symbol(toks: read toks, i: read (i - 1), code: read SYM_DOT) == false {
+                let afterName = dotted_end(toks: read toks, i: read i)
+                let mut callOpen = afterName
+                if at_symbol(toks: read toks, i: read afterName, code: read SYM_LANGLE) {
+                    let genericClose = find_matching(toks: read toks, open: read afterName, openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
+                    if genericClose >= 0 { callOpen = genericClose + 1 }
+                }
+                if at_symbol(toks: read toks, i: read callOpen, code: read SYM_LPAREN) {
+                    let name = dotted_name_text(toks: read toks, i: read i)
+                    if needAsync && Set.contains<String>(set: read asyncFns, value: read name) {
+                        List.push<Int>(list: mut out, value: read i)
+                        hit = true
+                    }
+                    if needUnsafe && Set.contains<String>(set: read unsafeFns, value: read name) {
+                        List.push<Int>(list: mut out, value: read i)
+                        hit = true
+                    }
+                }
+            }
+            i = i + 1
+        }
     }
     return hit
 }
@@ -11590,7 +11660,8 @@ fn main() -> Unit {
     let mut unnamedArgTokens = List<Int>.new()
     // Signature table (cross-function): same-file async fn names, for RS0022.
     let mut asyncFns = Set<String>.new()
-    collect_rs0009(toks: read toks, resources: mut resources, sumVariants: mut sumVariants, pureFns: mut pureFns, allFns: mut allFns, noBlockFns: mut noBlockFns, noPanicFns: mut noPanicFns, asyncFns: mut asyncFns)
+    let mut unsafeFns = Set<String>.new()
+    collect_rs0009(toks: read toks, resources: mut resources, sumVariants: mut sumVariants, pureFns: mut pureFns, allFns: mut allFns, noBlockFns: mut noBlockFns, noPanicFns: mut noPanicFns, asyncFns: mut asyncFns, unsafeFns: mut unsafeFns)
     // RS0020: names of `effects(noalloc)` fns (allowed callees inside noalloc fns).
     let noallocFns = collect_noalloc_fns(toks: read toks)
     // RS0022: an unconsumed call to a same-file async fn.
@@ -11678,6 +11749,14 @@ fn main() -> Unit {
     let localViol = file_local_use(toks: read toks) && Set.contains<String>(set: read declaredFeatures, value: read "local") == false
     let asyncViol = file_async_use(toks: read toks) && Set.contains<String>(set: read declaredFeatures, value: read "async") == false
     let unsafeViol = file_unsafe_use(toks: read toks) && Set.contains<String>(set: read declaredFeatures, value: read "unsafe") == false
+    let mut featureViolationTokens = List<Int>.new()
+    let featureBodyViol = collect_feature_use_tokens(
+        toks: read toks,
+        declared: read declaredFeatures,
+        asyncFns: read asyncFns,
+        unsafeFns: read unsafeFns,
+        out: mut featureViolationTokens
+    )
     let mut nativeEffect = false
     let mut nativeMissing = false
     // RS0202: a missing/mismatched call-site data effect (any of four sub-cases).
@@ -11952,8 +12031,22 @@ fn main() -> Unit {
                     // RS0101: a fn with `effects(native)` (gated by the `native`
                     // feature), and a `native fn` missing that effect (ungated).
                     let hasNativeEff = effects_name_probe(toks: read toks, start: read i, mode: read 2)
-                    if hasNativeEff { nativeEffect = true }
-                    if fn_is_native(toks: read toks, start: read i) && hasNativeEff == false { nativeMissing = true }
+                    if hasNativeEff {
+                        nativeEffect = true
+                        if Set.contains<String>(set: read declaredFeatures, value: read "native") == false {
+                            List.push<Int>(list: mut featureViolationTokens, value: read i)
+                        }
+                    }
+                    if fn_has_named_effect(toks: read toks, start: read i, effName: read "unsafe") && Set.contains<String>(set: read declaredFeatures, value: read "unsafe") == false {
+                        List.push<Int>(list: mut featureViolationTokens, value: read i)
+                    }
+                    if fn_is_async(toks: read toks, start: read i) && Set.contains<String>(set: read declaredFeatures, value: read "async") == false {
+                        List.push<Int>(list: mut featureViolationTokens, value: read i)
+                    }
+                    if fn_is_native(toks: read toks, start: read i) && hasNativeEff == false {
+                        nativeMissing = true
+                        List.push<Int>(list: mut featureViolationTokens, value: read i)
+                    }
                     // RS0035: an invalid `#lower_name` pin or a lowered-name collision.
                     if fn_has_lower_name(toks: read toks, start: read i) {
                         let pin = fn_lower_name_pin(toks: read toks, start: read i)
@@ -12018,6 +12111,7 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_records(code: read "RS0036", toks: read toks, tokenIndices: read nonTransferPayloadTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0037", toks: read toks, tokenIndices: read variantArityTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0035", toks: read toks, tokenIndices: read lowerConflictTokens)
+        emitted = emitted + emit_diagnostic_records(code: read "RS0101", toks: read toks, tokenIndices: read featureViolationTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0311", toks: read toks, tokenIndices: read immutableAssignTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0313", toks: read toks, tokenIndices: read assignTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0312", toks: read toks, tokenIndices: read indexAssignBadTokens)
@@ -12421,8 +12515,8 @@ fn main() -> Unit {
     // RS0101: any unfeatured feature-requiring construct. Native fires if a fn has
     // `effects(native)` without the feature, OR a `native fn` omits that effect.
     let nativeViol = nativeMissing || (nativeEffect && Set.contains<String>(set: read declaredFeatures, value: read "native") == false)
-    let featureViol = localViol || asyncViol || unsafeViol || nativeViol
-    if featureViol {
+    let featureViol = featureBodyViol || localViol || asyncViol || unsafeViol || nativeViol
+    if featureViol && structured == false {
         Log.write(message: read "RS0101")
     }
     let anyDiag = found || hasUnknownFeat || hasDupFeat || headerCount >= 2 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || missingEffect || pureBad || nonExhaustive || badAwait || invalidTry || unsupportedSyntax || fdSurface || lowerConflict || unknownProtocol || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || operatorOverload || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || useAfterManage || retainedLocal || placeConflict0303 || placeConflict0305 || placeConflict0309 || placeConflict0302 || placeConflict0304 || freshReturnBad || closureCapture0801 || closureCapture0804 || captureContract || resourcePoolTypeBad || resourceGenericBad || lazyCaptureBad || resourceEscape || noescapeEscape || localClosureEscape || missingTry || fallibleFactory || leaseConflict || discardNonLease || nonTransferPayload || takeHandle || weakInit || weakRead
