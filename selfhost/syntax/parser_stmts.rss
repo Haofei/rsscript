@@ -79,7 +79,7 @@ fn parse_expression(program: mut Program, toks: read List<Tok>, start: read Int,
     return Program.push_expression(self: mut program, expression: read expression)
 }
 
-fn push_statement(program: mut Program, toks: read List<Tok>, start: read Int, end: read Int, statements: mut List<Stmt>) -> Unit {
+fn push_statement(program: mut Program, toks: read List<Tok>, start: read Int, end: read Int, statements: mut List<Int>) -> Unit {
     let stop = expression_end(toks: read toks, start: read start, end: read end)
     if start >= stop { return Unit }
     let tok = List.get(list: read toks, index: read start)
@@ -109,10 +109,11 @@ fn push_statement(program: mut Program, toks: read List<Tok>, start: read Int, e
     local ownedName = String.copy(value: read name)
     local ownedType = String.copy(value: read typeText)
     let statement = Stmt.from(kind: kind, name: take ownedName, typeText: take ownedType, line: tok.line, column: tok.col, length: tok.len, expression: expression)
-    List.push<Stmt>(list: mut statements, value: read statement)
+    let index = Program.push_statement(self: mut program, statement: read statement)
+    List.push<Int>(list: mut statements, value: read index)
 }
 
-fn parse_body_statements(program: mut Program, toks: read List<Tok>, open: read Int, close: read Int, statements: mut List<Stmt>) -> Unit {
+fn parse_body_statements(program: mut Program, toks: read List<Tok>, open: read Int, close: read Int, statements: mut List<Int>) -> Unit {
     let mut start = open + 1
     while start < close {
         if at_symbol(toks: read toks, i: read start, code: read 59) {

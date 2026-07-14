@@ -91,13 +91,14 @@ struct Item {
     generics: List<GenericParam>
     params: List<Param>
     effects: List<EffectName>
-    statements: List<Stmt>
+    statements: List<Int>
     returnType: String
 }
 
 struct Program {
     items: List<Item>
     expressions: List<Expr>
+    statements: List<Stmt>
 }
 
 fn Expr.from(kind: Int, text: take String, line: Int, column: Int, length: Int, children: take List<Int>) -> fresh Expr {
@@ -121,15 +122,15 @@ fn EffectName.from(name: take String, line: Int, column: Int, length: Int) -> fr
 }
 
 fn Item.plain(kind: Int, name: take String, line: Int, column: Int, length: Int) -> fresh Item {
-    return Item(kind: kind, name: take name, line: line, column: column, length: length, isPublic: false, isAsync: false, isNative: false, hasBody: false, generics: List<GenericParam>.new(), params: List<Param>.new(), effects: List<EffectName>.new(), statements: List<Stmt>.new(), returnType: "")
+    return Item(kind: kind, name: take name, line: line, column: column, length: length, isPublic: false, isAsync: false, isNative: false, hasBody: false, generics: List<GenericParam>.new(), params: List<Param>.new(), effects: List<EffectName>.new(), statements: List<Int>.new(), returnType: "")
 }
 
-fn Item.function(name: take String, line: Int, column: Int, length: Int, isPublic: Bool, isAsync: Bool, isNative: Bool, hasBody: Bool, generics: take List<GenericParam>, params: take List<Param>, effects: take List<EffectName>, statements: take List<Stmt>, returnType: take String) -> fresh Item {
+fn Item.function(name: take String, line: Int, column: Int, length: Int, isPublic: Bool, isAsync: Bool, isNative: Bool, hasBody: Bool, generics: take List<GenericParam>, params: take List<Param>, effects: take List<EffectName>, statements: take List<Int>, returnType: take String) -> fresh Item {
     return Item(kind: ITEM_FUNCTION, name: take name, line: line, column: column, length: length, isPublic: isPublic, isAsync: isAsync, isNative: isNative, hasBody: hasBody, generics: take generics, params: take params, effects: take effects, statements: take statements, returnType: take returnType)
 }
 
 fn Program.empty() -> fresh Program {
-    return Program(items: List<Item>.new(), expressions: List<Expr>.new())
+    return Program(items: List<Item>.new(), expressions: List<Expr>.new(), statements: List<Stmt>.new())
 }
 
 fn Program.push(self: mut Program, item: read Item) -> Unit
@@ -143,6 +144,14 @@ fn Program.push_expression(self: mut Program, expression: read Expr) -> Int
 {
     let index = List.len(list: read self.expressions)
     List.push<Expr>(list: mut self.expressions, value: read expression)
+    return index
+}
+
+fn Program.push_statement(self: mut Program, statement: read Stmt) -> Int
+    effects(retains(statement))
+{
+    let index = List.len(list: read self.statements)
+    List.push<Stmt>(list: mut self.statements, value: read statement)
     return index
 }
 

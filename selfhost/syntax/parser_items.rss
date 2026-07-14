@@ -232,7 +232,7 @@ fn push_function_item(program: mut Program, toks: read List<Tok>, start: read In
     local ret = return_type(toks: read toks, start: read nameEnd, end: read sigEnd)
     let bodyOpen = sigEnd
     let hasBody = at_symbol(toks: read toks, i: read bodyOpen, code: read SYM_LBRACE)
-    local statements = List<Stmt>.new()
+    local statements = List<Int>.new()
     if hasBody {
         let bodyClose = find_matching(toks: read toks, open: read bodyOpen, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
         if bodyClose >= 0 { parse_body_statements(program: mut program, toks: read toks, open: read bodyOpen, close: read bodyClose, statements: mut statements) }
