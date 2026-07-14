@@ -64,8 +64,13 @@ fn add_match_pattern_diagnostics(program: read Program, statement: read Stmt, co
             let optionVariant = pattern.text == "Some" || pattern.text == "None"
             let resultVariant = pattern.text == "Ok" || pattern.text == "Err"
             let bareScalarName = scalar_type(ty: read ty) && pattern.kind == EXPR_NAME && pattern.text != "_" && pattern.text != "true" && pattern.text != "false" && optionVariant == false && resultVariant == false
-            let invalid = (optionVariant && type_is_option(ty: read ty) == false) || (resultVariant && type_is_result(ty: read ty) == false) || literal_pattern_mismatches(ty: read ty, pattern: read pattern) || bareScalarName
-            if invalid { DiagnosticBag.add(self: mut diagnostics, code: read "RS0209", line: pattern.line, column: pattern.column, length: pattern.length) }
+            let tupleOnScalar = arm.shape == "(" && scalar_type(ty: read ty)
+            let listOnNonList = arm.shape == "[" && String.starts_with(value: read ty, prefix: read "List<") == false
+            let invalid = (optionVariant && type_is_option(ty: read ty) == false) || (resultVariant && type_is_result(ty: read ty) == false) || literal_pattern_mismatches(ty: read ty, pattern: read pattern) || bareScalarName || tupleOnScalar || listOnNonList
+            if invalid {
+                if tupleOnScalar || listOnNonList { DiagnosticBag.add(self: mut diagnostics, code: read "RS0209", line: arm.line, column: arm.column, length: arm.length) }
+                else { DiagnosticBag.add(self: mut diagnostics, code: read "RS0209", line: pattern.line, column: pattern.column, length: pattern.length) }
+            }
         }
         i = i + 1
     }

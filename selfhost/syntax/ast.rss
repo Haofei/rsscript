@@ -63,6 +63,7 @@ struct Stmt {
 
 struct MatchArm {
     pattern: Int
+    shape: String
     line: Int
     column: Int
     length: Int
@@ -127,8 +128,8 @@ fn Stmt.from(kind: Int, name: take String, typeText: take String, line: Int, col
     return Stmt(kind: kind, name: take name, typeText: take typeText, line: line, column: column, length: length, expression: expression, children: take children, elseChildren: take elseChildren, arms: take arms)
 }
 
-fn MatchArm.from(pattern: Int, line: Int, column: Int, length: Int) -> fresh MatchArm {
-    return MatchArm(pattern: pattern, line: line, column: column, length: length)
+fn MatchArm.from(pattern: Int, shape: take String, line: Int, column: Int, length: Int) -> fresh MatchArm {
+    return MatchArm(pattern: pattern, shape: take shape, line: line, column: column, length: length)
 }
 
 fn Param.from(name: take String, effect: take String, typeText: take String, hasDefault: Bool, defaultLine: Int, defaultColumn: Int, defaultLength: Int, line: Int, column: Int, length: Int) -> fresh Param {

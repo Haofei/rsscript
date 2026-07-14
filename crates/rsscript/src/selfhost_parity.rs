@@ -865,6 +865,39 @@ fn selfhost_ast_match_pattern_rule_matches_rs0209_patterns() {
     assert_eq!(oracle, actual, "AST match type diagnostics diverged");
 }
 
+#[test]
+fn selfhost_ast_match_shape_rule_matches_rs0209_patterns() {
+    let source = r#"fn tuple_pattern(value: read Int) -> Unit {
+    match value {
+        (left, right) => return Unit
+    }
+    return Unit
+}
+
+fn list_pattern(value: read String) -> Unit {
+    match value {
+        [item] => return Unit
+    }
+    return Unit
+}
+"#;
+    let oracle = checker_oracle_records("ast-match-shape-rs0209.rss", source, "RS0209");
+    assert_eq!(oracle.len(), 2, "fixture must exercise tuple and list pattern shapes");
+    let exe = compile_selfhost_tool("serialize/control_outline.rss", "AST match shape-rule probe")
+        .expect("AST match shape-rule probe should compile");
+    let output = exe
+        .eval_main_with_args([source.to_string()])
+        .expect("AST match shape-rule probe should run");
+    let actual = parse_checker_records(&output.stdout)
+        .expect("AST match shape-rule probe should emit canonical records");
+    assert_eq!(oracle, actual, "AST match shape diagnostics diverged");
+    let checker_actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0209",
+    );
+    assert_eq!(oracle, checker_actual, "main checker match shape diagnostics diverged");
+}
+
 /// Phase-2 NEGATIVE smoke (non-ignored): the rss parser must REJECT malformed
 /// source, matching the Rust oracle. The accept-only tiny sample above would
 /// still pass if the rss parser degenerated to always printing `OK`; this closes

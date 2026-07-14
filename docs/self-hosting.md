@@ -344,11 +344,12 @@ subjects for known non-iterable types, recurses into nested control blocks with
 branch-local context copies, and appends canonical
 `RS0209` records to `DiagnosticBag`. The rule also handles known `match`
 scrutinees against `Some`/`None`, `Ok`/`Err`, scalar literals, and invalid bare
-names on scalar values. Its focused oracle tests cover nested occurrences and
-spans. `check.rss` now consumes these AST records first; the legacy RS0209
-walker receives their span keys and supplies only unmatched cases, including
-tuple/list patterns, matchability, and arm-value typing. This keeps the full
-family intact while preventing duplicate records during the migration.
+names on scalar values, plus tuple patterns on scalars and list patterns on
+non-lists. Its focused oracle tests cover nested occurrences and spans.
+`check.rss` now consumes these AST records first; the legacy RS0209 walker
+receives their span keys and supplies only unmatched cases, including unknown
+matchability and arm-value typing. This keeps the full family intact while
+preventing duplicate records during the migration.
 
 #### Stage 2 target architecture
 

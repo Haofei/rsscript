@@ -133,7 +133,8 @@ fn parse_match_arms(program: mut Program, toks: read List<Tok>, open: read Int, 
             if arrow >= 0 {
                 let pattern = parse_expression(program: mut program, toks: read toks, start: read i, end: read arrow)
                 let token = List.get<Tok>(list: read toks, index: read i)
-                let arm = MatchArm.from(pattern: pattern, line: token.line, column: token.col, length: token.len)
+                local shape = String.copy(value: read token.text)
+                let arm = MatchArm.from(pattern: pattern, shape: take shape, line: token.line, column: token.col, length: token.len)
                 List.push<MatchArm>(list: mut arms, value: read arm)
             }
             if end > i { i = end } else { i = i + 1 }
