@@ -340,9 +340,11 @@ overloads, and nested expression forms remain outside this slice.
 the current `if`/`while` subset for known non-Bool conditions, recurses into
 nested control blocks with branch-local context copies, and appends canonical
 `RS0209` records to `DiagnosticBag`. Its focused oracle test covers nested
-occurrences and spans. It is intentionally not yet wired into `check.rss`:
-the legacy RS0209 walker still owns `for`, `match`, and pattern cases until
-their AST forms exist, so no partial rule can silently replace the full family.
+occurrences and spans. `check.rss` now consumes these AST records first; the
+legacy RS0209 walker receives their span keys and supplies only unmatched
+conditions plus the still-token-based `for`, `match`, and pattern cases. This
+keeps the full family intact while preventing duplicate records during the
+migration.
 
 #### Stage 2 target architecture
 

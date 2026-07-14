@@ -26,6 +26,7 @@ module selfhost.check
 
 use selfhost.scan.*
 use selfhost.interfaces.*
+use selfhost.semantics.check_types.*
 use selfhost.semantics.diagnostics.*
 use selfhost.syntax.ast.*
 use selfhost.syntax.parser_items.*
@@ -10660,7 +10661,11 @@ fn collect_match_bad_tokens(toks: read List<Tok>, scrutStart: read Int, braceOpe
 }
 
 // RS0209 per-fn walker: `if`/`while` conditions that are non-Bool.
-fn collect_fn_control_flow_mismatch_tokens(toks: read List<Tok>, start: read Int, model: read FileTypeModel, out: mut List<Int>) -> Bool {
+fn condition_site_key(line: Int, column: Int, length: Int) -> String {
+    return String.concat(left: read String.concat(left: read String.concat(left: read String.from_int(value: read line), right: read ":"), right: read String.from_int(value: read column)), right: read String.concat(left: read ":", right: read String.from_int(value: read length)))
+}
+
+fn collect_fn_control_flow_mismatch_tokens(toks: read List<Tok>, start: read Int, model: read FileTypeModel, astConditionSites: read Set<String>, out: mut List<Int>) -> Bool {
     let body = build_body_type_model(toks: read toks, fnStart: read start)
     if body_type_model_ok(body: read body) == false { return false }
     let mut i = body.bodyOpen + 1
@@ -10670,8 +10675,12 @@ fn collect_fn_control_flow_mismatch_tokens(toks: read List<Tok>, start: read Int
             let lo = i + 1
             let ce = cond_expr_end(toks: read toks, start: read lo, limit: read body.bodyClose)
             if ce > lo {
-                let bad = cond_non_bool_token(toks: read toks, start: read lo, end: read ce, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals)
-                if bad >= 0 { List.push<Int>(list: mut out, value: read bad); hit = true }
+                let condition = List.get<Tok>(list: read toks, index: read lo)
+                let key = condition_site_key(line: condition.line, column: condition.col, length: condition.len)
+                if Set.contains<String>(set: read astConditionSites, value: read key) == false {
+                    let bad = cond_non_bool_token(toks: read toks, start: read lo, end: read ce, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals)
+                    if bad >= 0 { List.push<Int>(list: mut out, value: read bad); hit = true }
+                }
             }
         } else if is_kw_text(toks: read toks, i: read i, word: read "match") {
             let mut vs = i + 1
@@ -10711,7 +10720,7 @@ fn collect_fn_control_flow_mismatch_tokens(toks: read List<Tok>, start: read Int
 
 // Collect every RS0209 anchor. Conditions, loop subjects, scrutinees, patterns,
 // and mismatching match arms all use their analyzer-compatible first token.
-fn collect_control_flow_mismatch_tokens(toks: read List<Tok>, out: mut List<Int>) -> Bool {
+fn collect_control_flow_mismatch_tokens(toks: read List<Tok>, astConditionSites: read Set<String>, out: mut List<Int>) -> Bool {
     let ntok = List.len(list: read toks)
     let model = build_file_type_model(toks: read toks)
     let mut i = 0
@@ -10737,7 +10746,7 @@ fn collect_control_flow_mismatch_tokens(toks: read List<Tok>, out: mut List<Int>
                 if r < 0 {
                     running = false
                 } else {
-                    if collect_fn_control_flow_mismatch_tokens(toks: read toks, start: read i, model: read model, out: mut out) { hit = true }
+                    if collect_fn_control_flow_mismatch_tokens(toks: read toks, start: read i, model: read model, astConditionSites: read astConditionSites, out: mut out) { hit = true }
                     i = r
                 }
             } else {
@@ -12029,6 +12038,16 @@ fn main() -> Unit {
     let structured = Args.get_or_default(index: 1, default: read "") == "records"
     let toks = tokenize(source: read source)
     let program = parse_program(toks: read toks)
+    let mut typeDiagnostics = DiagnosticBag.empty()
+    collect_program_type_diagnostics(program: read program, diagnostics: mut typeDiagnostics)
+    let mut astConditionSites = Set<String>.new()
+    let mut astDiagnosticIndex = 0
+    while astDiagnosticIndex < List.len(list: read typeDiagnostics.items) {
+        let diagnostic = List.get<Diagnostic>(list: read typeDiagnostics.items, index: read astDiagnosticIndex)
+        let key = condition_site_key(line: diagnostic.line, column: diagnostic.column, length: diagnostic.length)
+        Set.insert<String>(set: mut astConditionSites, value: read key)
+        astDiagnosticIndex = astDiagnosticIndex + 1
+    }
     let ntok = List.len(list: read toks)
     let mut callable = Set<String>.new()
     let mut types = Set<String>.new()
@@ -12201,7 +12220,8 @@ fn main() -> Unit {
     let operatorOverload = collect_operator_overload_tokens(toks: read toks, out: mut operatorOverloadTokens)
     // RS0209: control-flow type mismatch.
     let mut cfTypeMismatchTokens = List<Int>.new()
-    let cfTypeMismatch = collect_control_flow_mismatch_tokens(toks: read toks, out: mut cfTypeMismatchTokens)
+    let mut cfTypeMismatch = DiagnosticBag.has_code(self: read typeDiagnostics, code: read "RS0209")
+    if collect_control_flow_mismatch_tokens(toks: read toks, astConditionSites: read astConditionSites, out: mut cfTypeMismatchTokens) { cfTypeMismatch = true }
     // RS0901: `take` of a `handle` field.
     let mut takeHandleTokens = List<Int>.new()
     let takeHandle = collect_take_handle_field_tokens(toks: read toks, out: mut takeHandleTokens)
@@ -12600,6 +12620,7 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_records(code: read "RS0207", toks: read toks, tokenIndices: read bindTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0208", toks: read toks, tokenIndices: read retTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0210", toks: read toks, tokenIndices: read opTypeMismatchTokens)
+        emitted = emitted + emit_bag_code(diagnostics: read typeDiagnostics, code: read "RS0209")
         emitted = emitted + emit_diagnostic_records(code: read "RS0209", toks: read toks, tokenIndices: read cfTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: read "RS0201", toks: read toks, tokenIndices: read unnamedArgTokens)
         emitted = emitted + emit_diagnostic_sites(code: read "RS0202", sites: read missingDataEffectSites)
