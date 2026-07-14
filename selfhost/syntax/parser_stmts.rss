@@ -67,9 +67,55 @@ fn block_open(toks: read List<Tok>, start: read Int, limit: read Int) -> Int {
     return -1
 }
 
+fn binary_operator_text(toks: read List<Tok>, i: read Int, end: read Int) -> String {
+    if i >= end { return "" }
+    let tok = List.get(list: read toks, index: read i)
+    if at_symbol(toks: read toks, i: read i, code: read SYM_EQ) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_EQ) { return "==" }
+    if at_symbol(toks: read toks, i: read i, code: read 33) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_EQ) { return "!=" }
+    if at_symbol(toks: read toks, i: read i, code: read SYM_LANGLE) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_EQ) { return "<=" }
+    if at_symbol(toks: read toks, i: read i, code: read SYM_RANGLE) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_EQ) { return ">=" }
+    if at_symbol(toks: read toks, i: read i, code: read 43) || at_symbol(toks: read toks, i: read i, code: read 45) || at_symbol(toks: read toks, i: read i, code: read 42) || at_symbol(toks: read toks, i: read i, code: read 47) || at_symbol(toks: read toks, i: read i, code: read 37) || at_symbol(toks: read toks, i: read i, code: read SYM_LANGLE) || at_symbol(toks: read toks, i: read i, code: read SYM_RANGLE) { return tok.text }
+    return ""
+}
+
+fn binary_operator_width(operator: read String) -> Int {
+    if operator == "==" || operator == "!=" || operator == "<=" || operator == ">=" { return 2 }
+    return 1
+}
+
+fn last_top_binary_operator(toks: read List<Tok>, start: read Int, end: read Int) -> Int {
+    let mut depth = 0
+    let mut found = -1
+    let mut i = start + 1
+    while i < end {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACE) {
+            if depth > 0 { depth = depth - 1 }
+        } else if depth == 0 && String.len(value: read binary_operator_text(toks: read toks, i: read i, end: read end)) > 0 {
+            found = i
+        }
+        i = i + 1
+    }
+    return found
+}
+
 fn parse_expression(program: mut Program, toks: read List<Tok>, start: read Int, end: read Int) -> Int {
     let stop = expression_end(toks: read toks, start: read start, end: read end)
     if start >= stop { return -1 }
+    let binary = last_top_binary_operator(toks: read toks, start: read start, end: read stop)
+    if binary >= 0 {
+        local operator = binary_operator_text(toks: read toks, i: read binary, end: read stop)
+        let width = binary_operator_width(operator: read operator)
+        let left = parse_expression(program: mut program, toks: read toks, start: read start, end: read binary)
+        let right = parse_expression(program: mut program, toks: read toks, start: read (binary + width), end: read stop)
+        let token = List.get(list: read toks, index: read binary)
+        local children = List<Int>.new()
+        if left >= 0 { List.push<Int>(list: mut children, value: read left) }
+        if right >= 0 { List.push<Int>(list: mut children, value: read right) }
+        let expression = Expr.from(kind: EXPR_BINARY, text: take operator, line: token.line, column: token.col, length: token.len, children: take children)
+        return Program.push_expression(self: mut program, expression: read expression)
+    }
     let tok = List.get(list: read toks, index: read start)
     local text = String.copy(value: read tok.text)
     let mut kind = EXPR_UNKNOWN

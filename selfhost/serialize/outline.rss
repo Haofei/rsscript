@@ -39,6 +39,7 @@ fn expression_kind_name(kind: Int) -> String {
     if kind == EXPR_NAME { return "name" }
     if kind == EXPR_LITERAL { return "literal" }
     if kind == EXPR_CALL { return "call" }
+    if kind == EXPR_BINARY { return "binary" }
     return "unknown"
 }
 

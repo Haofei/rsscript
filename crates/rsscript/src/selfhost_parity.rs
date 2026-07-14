@@ -717,7 +717,7 @@ fn work() -> Unit {
     consume(
         value: item
     )
-    if item {
+    if item == 1 {
         return item
     } else {
         return Unit
@@ -741,7 +741,7 @@ fn work() -> Unit {
             "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
             "  stmt\tlet\titem\tInt\tliteral\t1\n",
             "  stmt\texpr\t\t\tcall\tconsume\n",
-            "  stmt\tif\t\t\tname\titem\tthen=1\telse=1\n",
+            "  stmt\tif\t\t\tbinary\t==\tthen=1\telse=1\n",
             "  stmt\treturn\t\t\tname\titem\n",
         )
     );
