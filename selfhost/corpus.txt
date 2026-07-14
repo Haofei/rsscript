@@ -619,8 +619,10 @@ selfhost/samples/ast/x_unclosed_body.rss
 selfhost/samples/ast/x_view.rss
 selfhost/samples/tiny.rss
 selfhost/scan.rss
+selfhost/semantics/check_types.rss
 selfhost/semantics/context.rss
 selfhost/semantics/diagnostics.rss
+selfhost/serialize/control_outline.rss
 selfhost/serialize/outline.rss
 selfhost/serialize/type_outline.rss
 selfhost/syntax/ast.rss

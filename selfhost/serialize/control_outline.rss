@@ -1,0 +1,24 @@
+features: local
+// Test-only AST-backed control-flow type-rule probe.
+
+module selfhost.serialize.control_outline
+
+use selfhost.scan.*
+use selfhost.semantics.check_types.*
+use selfhost.semantics.diagnostics.*
+use selfhost.syntax.parser_items.*
+
+fn main() -> Unit {
+    let source = Args.get_or_default(index: 0, default: read "")
+    let toks = tokenize(source: read source)
+    let program = parse_program(toks: read toks)
+    local diagnostics = DiagnosticBag.empty()
+    collect_program_type_diagnostics(program: read program, diagnostics: mut diagnostics)
+    let mut i = 0
+    while i < List.len(list: read diagnostics.items) {
+        let diagnostic = List.get<Diagnostic>(list: read diagnostics.items, index: read i)
+        Log.write(message: read String.concat(left: read String.concat(left: read String.concat(left: read String.concat(left: read String.concat(left: read diagnostic.code, right: read "\t"), right: read String.from_int(value: read diagnostic.line)), right: read "\t"), right: read String.from_int(value: read diagnostic.column)), right: read String.concat(left: read "\t", right: read String.from_int(value: read diagnostic.length))))
+        i = i + 1
+    }
+    return Unit
+}

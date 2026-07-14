@@ -336,6 +336,14 @@ the context can infer the current body-AST subset. It is not yet the checker's
 general type model: control-flow joins, nominal/generic types, effects,
 overloads, and nested expression forms remain outside this slice.
 
+`selfhost.semantics.check_types` is the first AST-backed rule group. It checks
+the current `if`/`while` subset for known non-Bool conditions, recurses into
+nested control blocks with branch-local context copies, and appends canonical
+`RS0209` records to `DiagnosticBag`. Its focused oracle test covers nested
+occurrences and spans. It is intentionally not yet wired into `check.rss`:
+the legacy RS0209 walker still owns `for`, `match`, and pattern cases until
+their AST forms exist, so no partial rule can silently replace the full family.
+
 #### Stage 2 target architecture
 
 The target dependency direction is:

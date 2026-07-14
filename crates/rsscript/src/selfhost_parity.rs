@@ -783,6 +783,35 @@ fn work(input: read Int) -> Unit {
     );
 }
 
+#[test]
+fn selfhost_ast_control_type_rule_matches_rs0209_conditions() {
+    let source = r#"fn conditions(name: read String, count: read Int) -> Unit {
+    if name {
+        return Unit
+    }
+    while count {
+        return Unit
+    }
+    if true {
+        if count {
+            return Unit
+        }
+    }
+    return Unit
+}
+"#;
+    let oracle = checker_oracle_records("ast-control-rs0209.rss", source, "RS0209");
+    assert_eq!(oracle.len(), 3, "fixture must exercise nested if/while conditions");
+    let exe = compile_selfhost_tool("serialize/control_outline.rss", "AST control type-rule probe")
+        .expect("AST control type-rule probe should compile");
+    let output = exe
+        .eval_main_with_args([source.to_string()])
+        .expect("AST control type-rule probe should run");
+    let actual = parse_checker_records(&output.stdout)
+        .expect("AST control type-rule probe should emit canonical records");
+    assert_eq!(oracle, actual, "AST control type diagnostics diverged");
+}
+
 /// Phase-2 NEGATIVE smoke (non-ignored): the rss parser must REJECT malformed
 /// source, matching the Rust oracle. The accept-only tiny sample above would
 /// still pass if the rss parser degenerated to always printing `OK`; this closes

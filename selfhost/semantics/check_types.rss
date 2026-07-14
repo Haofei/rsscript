@@ -1,0 +1,70 @@
+features: local
+// AST-backed type rules for the materialized body subset. Each rule is
+// deliberately conservative: a missing type is unknown, never an error.
+
+module selfhost.semantics.check_types
+
+use selfhost.semantics.context.*
+use selfhost.semantics.diagnostics.*
+use selfhost.syntax.ast.*
+
+fn copy_function_context(context: read FunctionContext) -> fresh FunctionContext {
+    local bindings = Map<String, String>.new()
+    let keys = Map.keys<String, String>(map: read context.bindings)
+    let mut i = 0
+    while i < List.len(list: read keys) {
+        let key = List.get<String>(list: read keys, index: read i)
+        let value = Map.get_or_default<String, String>(map: read context.bindings, key: read key, default: read "")
+        let ownedKey = String.copy(value: read key)
+        let ownedValue = String.copy(value: read value)
+        Map.insert<String, String>(map: mut bindings, key: read ownedKey, value: read ownedValue)
+        i = i + 1
+    }
+    return FunctionContext(bindings: take bindings)
+}
+
+fn known_non_bool_type(ty: read String) -> Bool {
+    return ty == "Int" || ty == "String" || ty == "Char" || ty == "Float" || ty == "Unit"
+}
+
+fn add_non_bool_condition(program: read Program, statement: read Stmt, context: read FunctionContext, diagnostics: mut DiagnosticBag) -> Unit {
+    if statement.kind != STMT_IF && statement.kind != STMT_WHILE { return Unit }
+    let ty = infer_expression_type(program: read program, context: read context, index: read statement.expression)
+    if known_non_bool_type(ty: read ty) == false { return Unit }
+    if statement.expression < 0 || statement.expression >= List.len(list: read program.expressions) { return Unit }
+    let expression = List.get<Expr>(list: read program.expressions, index: read statement.expression)
+    DiagnosticBag.add(self: mut diagnostics, code: read "RS0209", line: expression.line, column: expression.column, length: expression.length)
+}
+
+fn collect_statement_type_diagnostics(program: read Program, statements: read List<Int>, context: mut FunctionContext, diagnostics: mut DiagnosticBag) -> Unit {
+    let mut i = 0
+    while i < List.len(list: read statements) {
+        let index = List.get<Int>(list: read statements, index: read i)
+        if index >= 0 && index < List.len(list: read program.statements) {
+            let statement = List.get<Stmt>(list: read program.statements, index: read index)
+            add_non_bool_condition(program: read program, statement: read statement, context: read context, diagnostics: mut diagnostics)
+            infer_statement_type(program: read program, context: mut context, index: read index)
+            if statement.kind == STMT_IF || statement.kind == STMT_WHILE || statement.kind == STMT_LOOP {
+                let mut childContext = copy_function_context(context: read context)
+                collect_statement_type_diagnostics(program: read program, statements: read statement.children, context: mut childContext, diagnostics: mut diagnostics)
+                let mut elseContext = copy_function_context(context: read context)
+                collect_statement_type_diagnostics(program: read program, statements: read statement.elseChildren, context: mut elseContext, diagnostics: mut diagnostics)
+            }
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+fn collect_program_type_diagnostics(program: read Program, diagnostics: mut DiagnosticBag) -> Unit {
+    let mut i = 0
+    while i < Program.len(self: read program) {
+        let item = List.get<Item>(list: read program.items, index: read i)
+        if item.kind == ITEM_FUNCTION {
+            let mut context = FunctionContext.from_item(item: read item)
+            collect_statement_type_diagnostics(program: read program, statements: read item.statements, context: mut context, diagnostics: mut diagnostics)
+        }
+        i = i + 1
+    }
+    return Unit
+}
