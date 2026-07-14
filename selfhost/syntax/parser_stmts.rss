@@ -113,7 +113,7 @@ fn parse_expression(program: mut Program, toks: read List<Tok>, start: read Int,
         local children = List<Int>.new()
         if left >= 0 { List.push<Int>(list: mut children, value: read left) }
         if right >= 0 { List.push<Int>(list: mut children, value: read right) }
-        let expression = Expr.from(kind: EXPR_BINARY, text: take operator, line: token.line, column: token.col, length: token.len, children: take children)
+        let expression = Expr.from(kind: EXPR_BINARY, tokenKind: token.kind, text: take operator, line: token.line, column: token.col, length: token.len, children: take children)
         return Program.push_expression(self: mut program, expression: read expression)
     }
     let tok = List.get(list: read toks, index: read start)
@@ -138,7 +138,7 @@ fn parse_expression(program: mut Program, toks: read List<Tok>, start: read Int,
             }
         }
     }
-    let expression = Expr.from(kind: kind, text: take text, line: tok.line, column: tok.col, length: tok.len, children: take children)
+    let expression = Expr.from(kind: kind, tokenKind: tok.kind, text: take text, line: tok.line, column: tok.col, length: tok.len, children: take children)
     return Program.push_expression(self: mut program, expression: read expression)
 }
 

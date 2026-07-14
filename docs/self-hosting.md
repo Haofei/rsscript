@@ -326,6 +326,14 @@ the shared function flags/body marker rather than scanning declaration tokens.
 The remaining checker families are still token-probe based and must migrate one
 semantic group at a time with their existing parity gates.
 
+The next semantic slice is also present. `selfhost.semantics.context` supplies
+per-function parameter and `let` bindings, top-level function return lookup,
+and conservative literal/name/call/binary type inference over the shared
+arenas. `selfhost/serialize/type_outline.rss` is a test-only probe that proves
+the context can infer the current body-AST subset. It is not yet the checker's
+general type model: control-flow joins, nominal/generic types, effects,
+overloads, and nested expression forms remain outside this slice.
+
 #### Stage 2 target architecture
 
 The target dependency direction is:

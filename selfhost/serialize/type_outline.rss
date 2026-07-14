@@ -1,0 +1,40 @@
+// Test-only semantic-context probe for the shared body AST.
+
+module selfhost.serialize.type_outline
+
+use selfhost.scan.*
+use selfhost.semantics.context.*
+use selfhost.syntax.ast.*
+use selfhost.syntax.parser_items.*
+
+fn statement_kind_name(kind: Int) -> String {
+    if kind == STMT_RETURN { return "return" }
+    if kind == STMT_LET { return "let" }
+    if kind == STMT_EXPR { return "expr" }
+    if kind == STMT_IF { return "if" }
+    if kind == STMT_LOOP { return "loop" }
+    return "unknown"
+}
+
+fn main() -> Unit {
+    let source = Args.get_or_default(index: 0, default: read "")
+    let toks = tokenize(source: read source)
+    let program = parse_program(toks: read toks)
+    let mut itemIndex = 0
+    while itemIndex < Program.len(self: read program) {
+        let item = List.get<Item>(list: read program.items, index: read itemIndex)
+        if item.kind == ITEM_FUNCTION {
+            let mut context = FunctionContext.from_item(item: read item)
+            let mut statementIndex = 0
+            while statementIndex < List.len(list: read item.statements) {
+                let index = List.get<Int>(list: read item.statements, index: read statementIndex)
+                let statement = List.get<Stmt>(list: read program.statements, index: read index)
+                let ty = infer_statement_type(program: read program, context: mut context, index: read index)
+                Log.write(message: read String.concat(left: read String.concat(left: read String.concat(left: read item.name, right: read "\t"), right: read statement_kind_name(kind: statement.kind)), right: read String.concat(left: read "\t", right: read ty)))
+                statementIndex = statementIndex + 1
+            }
+        }
+        itemIndex = itemIndex + 1
+    }
+    return Unit
+}

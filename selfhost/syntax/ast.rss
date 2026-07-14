@@ -36,6 +36,7 @@ const STMT_LOOP: Int = 6
 
 struct Expr {
     kind: Int
+    tokenKind: Int
     text: String
     line: Int
     column: Int
@@ -106,8 +107,8 @@ struct Program {
     statements: List<Stmt>
 }
 
-fn Expr.from(kind: Int, text: take String, line: Int, column: Int, length: Int, children: take List<Int>) -> fresh Expr {
-    return Expr(kind: kind, text: take text, line: line, column: column, length: length, children: take children)
+fn Expr.from(kind: Int, tokenKind: Int, text: take String, line: Int, column: Int, length: Int, children: take List<Int>) -> fresh Expr {
+    return Expr(kind: kind, tokenKind: tokenKind, text: take text, line: line, column: column, length: length, children: take children)
 }
 
 fn Stmt.from(kind: Int, name: take String, typeText: take String, line: Int, column: Int, length: Int, expression: Int, children: take List<Int>, elseChildren: take List<Int>) -> fresh Stmt {

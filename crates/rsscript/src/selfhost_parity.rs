@@ -747,6 +747,38 @@ fn work() -> Unit {
     );
 }
 
+#[test]
+fn selfhost_function_context_infers_core_body_types() {
+    let source = r#"fn consume(value: read Int) -> String {
+    return "ok"
+}
+
+fn work(input: read Int) -> Unit {
+    let number = 1
+    let text: String = consume(value: input)
+    if number == input {
+        return Unit
+    }
+    return Unit
+}
+"#;
+    let exe = compile_selfhost_tool("serialize/type_outline.rss", "function-context probe")
+        .expect("function-context probe should compile");
+    let output = exe
+        .eval_main_with_args([source.to_string()])
+        .expect("function-context probe should run");
+    assert_eq!(
+        output.stdout,
+        concat!(
+            "consume\treturn\tString\n",
+            "work\tlet\tInt\n",
+            "work\tlet\tString\n",
+            "work\tif\tBool\n",
+            "work\treturn\t\n",
+        )
+    );
+}
+
 /// Phase-2 NEGATIVE smoke (non-ignored): the rss parser must REJECT malformed
 /// source, matching the Rust oracle. The accept-only tiny sample above would
 /// still pass if the rss parser degenerated to always printing `OK`; this closes
