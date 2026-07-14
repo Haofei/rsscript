@@ -47,6 +47,8 @@ fn infer_expression_type(program: read Program, context: read FunctionContext, i
         if expression.tokenKind == TOK_NUMBER { return "Int" }
         if expression.tokenKind == TOK_STRING { return "String" }
         if expression.tokenKind == TOK_CHAR { return "Char" }
+        if expression.text == "true" || expression.text == "false" { return "Bool" }
+        if expression.text == "Unit" { return "Unit" }
         return ""
     }
     if expression.kind == EXPR_CALL {

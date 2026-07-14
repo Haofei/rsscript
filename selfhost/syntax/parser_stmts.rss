@@ -119,7 +119,10 @@ fn parse_expression(program: mut Program, toks: read List<Tok>, start: read Int,
     let tok = List.get(list: read toks, index: read start)
     local text = String.copy(value: read tok.text)
     let mut kind = EXPR_UNKNOWN
-    if is_ident_tok(toks: read toks, i: read start) { kind = EXPR_NAME }
+    if is_ident_tok(toks: read toks, i: read start) {
+        if text == "true" || text == "false" || text == "Unit" { kind = EXPR_LITERAL }
+        else { kind = EXPR_NAME }
+    }
     else if tk_kind(toks: read toks, i: read start) == TOK_NUMBER || tk_kind(toks: read toks, i: read start) == TOK_STRING || tk_kind(toks: read toks, i: read start) == TOK_CHAR { kind = EXPR_LITERAL }
     local children = List<Int>.new()
     let afterName = take_function_name(toks: read toks, i: read start)
@@ -170,10 +173,12 @@ fn push_statement(program: mut Program, toks: read List<Tok>, start: read Int, e
             typeText = canonical_type_text(toks: read toks, start: read (nameIndex + 2), end: read typeEnd)
         }
     } else if is_word(toks: read toks, i: read start, word: read "if") || is_word(toks: read toks, i: read start, word: read "while") || is_word(toks: read toks, i: read start, word: read "loop") {
-        if is_word(toks: read toks, i: read start, word: read "if") { kind = STMT_IF } else { kind = STMT_LOOP }
+        if is_word(toks: read toks, i: read start, word: read "if") { kind = STMT_IF }
+        else if is_word(toks: read toks, i: read start, word: read "while") { kind = STMT_WHILE }
+        else { kind = STMT_LOOP }
         let open = block_open(toks: read toks, start: read (start + 1), limit: read stop)
         if open >= 0 {
-            if kind == STMT_IF || is_word(toks: read toks, i: read start, word: read "while") {
+            if kind == STMT_IF || kind == STMT_WHILE {
                 expressionStart = start + 1
             } else {
                 expressionStart = open
@@ -190,7 +195,7 @@ fn push_statement(program: mut Program, toks: read List<Tok>, start: read Int, e
         }
     }
     let mut expressionEnd = stop
-    if kind == STMT_IF || kind == STMT_LOOP {
+    if kind == STMT_IF || kind == STMT_WHILE || kind == STMT_LOOP {
         let open = block_open(toks: read toks, start: read (start + 1), limit: read stop)
         if open >= 0 { expressionEnd = open }
     }

@@ -33,6 +33,7 @@ const STMT_LET: Int = 3
 const STMT_EXPR: Int = 4
 const STMT_IF: Int = 5
 const STMT_LOOP: Int = 6
+const STMT_WHILE: Int = 7
 
 struct Expr {
     kind: Int

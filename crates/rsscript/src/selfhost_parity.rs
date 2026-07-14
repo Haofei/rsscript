@@ -759,6 +759,9 @@ fn work(input: read Int) -> Unit {
     if number == input {
         return Unit
     }
+    while false {
+        return Unit
+    }
     return Unit
 }
 "#;
@@ -774,7 +777,8 @@ fn work(input: read Int) -> Unit {
             "work\tlet\tInt\n",
             "work\tlet\tString\n",
             "work\tif\tBool\n",
-            "work\treturn\t\n",
+            "work\twhile\tBool\n",
+            "work\treturn\tUnit\n",
         )
     );
 }

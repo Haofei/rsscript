@@ -12,6 +12,7 @@ fn statement_kind_name(kind: Int) -> String {
     if kind == STMT_LET { return "let" }
     if kind == STMT_EXPR { return "expr" }
     if kind == STMT_IF { return "if" }
+    if kind == STMT_WHILE { return "while" }
     if kind == STMT_LOOP { return "loop" }
     return "unknown"
 }
