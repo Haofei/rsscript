@@ -35,6 +35,33 @@ fn param_line(param: read Param) -> String {
     return String.concat(left: read String.concat(left: read out, right: read "\t"), right: read param.typeText)
 }
 
+fn expression_kind_name(kind: Int) -> String {
+    if kind == EXPR_NAME { return "name" }
+    if kind == EXPR_LITERAL { return "literal" }
+    if kind == EXPR_CALL { return "call" }
+    return "unknown"
+}
+
+fn statement_kind_name(kind: Int) -> String {
+    if kind == STMT_RETURN { return "return" }
+    if kind == STMT_LET { return "let" }
+    if kind == STMT_EXPR { return "expr" }
+    return "unknown"
+}
+
+fn statement_line(program: read Program, statement: read Stmt) -> String {
+    let mut expressionKind = "none"
+    let mut expressionText = ""
+    if statement.expression >= 0 {
+        let expression = List.get<Expr>(list: read program.expressions, index: read statement.expression)
+        expressionKind = expression_kind_name(kind: expression.kind)
+        expressionText = expression.text
+    }
+    let a = String.concat(left: read String.concat(left: read "  stmt\t", right: read statement_kind_name(kind: statement.kind)), right: read String.concat(left: read "\t", right: read statement.name))
+    let b = String.concat(left: read a, right: read String.concat(left: read "\t", right: read statement.typeText))
+    return String.concat(left: read String.concat(left: read b, right: read String.concat(left: read "\t", right: read expressionKind)), right: read String.concat(left: read "\t", right: read expressionText))
+}
+
 fn main() -> Unit {
     let source = Args.get_or_default(index: 0, default: read "")
     let toks = tokenize(source: read source)
@@ -67,6 +94,12 @@ fn main() -> Unit {
                 let pos = String.concat(left: read String.concat(left: read String.from_int(value: effect.line), right: read ":"), right: read String.concat(left: read String.from_int(value: effect.column), right: read String.concat(left: read ":", right: read String.from_int(value: effect.length))))
                 Log.write(message: read String.concat(left: read String.concat(left: read "  effect\t", right: read effect.name), right: read String.concat(left: read "\t", right: read pos)))
                 e = e + 1
+            }
+            let mut s = 0
+            while s < List.len(list: read item.statements) {
+                let statement = List.get<Stmt>(list: read item.statements, index: read s)
+                Log.write(message: read statement_line(program: read program, statement: read statement))
+                s = s + 1
             }
         }
         i = i + 1

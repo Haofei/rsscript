@@ -682,13 +682,16 @@ pub fn pinned_name() -> Unit {
             "const\tLIMIT\t11:1:5\n",
             "function\trun\t12:1:2\n",
             "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
+            "  stmt\treturn\t\t\tname\tUnit\n",
             "type\tPublicBox\t15:1:3\n",
             "function\tasync_run\t18:1:5\n",
             "  header\tpublic=false\tasync=true\tnative=false\tbody=true\treturn=Unit\n",
+            "  stmt\treturn\t\t\tname\tUnit\n",
             "function\teffectful\t21:1:2\n",
             "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
             "  effect\tnoalloc\t21:32:7\n",
             "  effect\tpure\t21:41:4\n",
+            "  stmt\treturn\t\t\tname\tUnit\n",
             "function\texternal\t24:1:3\n",
             "  header\tpublic=true\tasync=false\tnative=true\tbody=false\treturn=fresh Result<Int, String>\n",
             "  generic\tT\tDisplay\n",
@@ -698,6 +701,40 @@ pub fn pinned_name() -> Unit {
             "  default\t24:82:1\n",
             "function\tpinned_name\t25:1:1\n",
             "  header\tpublic=true\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
+            "  stmt\treturn\t\t\tname\tUnit\n",
+        )
+    );
+}
+
+#[test]
+fn selfhost_function_body_ast_outline_is_deterministic() {
+    let source = r#"fn consume(value: read Int) -> Unit {
+    return Unit
+}
+
+fn work() -> Unit {
+    let item: Int = 1
+    consume(value: item)
+    return item
+}
+"#;
+    let exe = compile_selfhost_tool("serialize/outline.rss", "function-body AST outline")
+        .expect("function-body AST outline should compile");
+    let output = exe
+        .eval_main_with_args([source.to_string()])
+        .expect("function-body AST outline should run");
+    assert_eq!(
+        output.stdout,
+        concat!(
+            "function\tconsume\t1:1:2\n",
+            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
+            "  param\tvalue\tread\tInt\n",
+            "  stmt\treturn\t\t\tname\tUnit\n",
+            "function\twork\t5:1:2\n",
+            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
+            "  stmt\tlet\titem\tInt\tliteral\t1\n",
+            "  stmt\texpr\t\t\tcall\tconsume\n",
+            "  stmt\treturn\t\t\tname\titem\n",
         )
     );
 }

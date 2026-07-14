@@ -19,6 +19,37 @@ const ITEM_FEATURES: Int = 11
 const ITEM_PROFILE: Int = 12
 const ITEM_UNKNOWN: Int = 13
 
+// Function bodies use flat arenas. Child relationships are indices into
+// Program.expressions, avoiding recursive value layout in the first shared AST.
+const EXPR_UNKNOWN: Int = 1
+const EXPR_NAME: Int = 2
+const EXPR_LITERAL: Int = 3
+const EXPR_CALL: Int = 4
+
+const STMT_UNKNOWN: Int = 1
+const STMT_RETURN: Int = 2
+const STMT_LET: Int = 3
+const STMT_EXPR: Int = 4
+
+struct Expr {
+    kind: Int
+    text: String
+    line: Int
+    column: Int
+    length: Int
+    children: List<Int>
+}
+
+struct Stmt {
+    kind: Int
+    name: String
+    typeText: String
+    line: Int
+    column: Int
+    length: Int
+    expression: Int
+}
+
 struct Param {
     name: String
     effect: String
@@ -60,11 +91,21 @@ struct Item {
     generics: List<GenericParam>
     params: List<Param>
     effects: List<EffectName>
+    statements: List<Stmt>
     returnType: String
 }
 
 struct Program {
     items: List<Item>
+    expressions: List<Expr>
+}
+
+fn Expr.from(kind: Int, text: take String, line: Int, column: Int, length: Int, children: take List<Int>) -> fresh Expr {
+    return Expr(kind: kind, text: take text, line: line, column: column, length: length, children: take children)
+}
+
+fn Stmt.from(kind: Int, name: take String, typeText: take String, line: Int, column: Int, length: Int, expression: Int) -> fresh Stmt {
+    return Stmt(kind: kind, name: take name, typeText: take typeText, line: line, column: column, length: length, expression: expression)
 }
 
 fn Param.from(name: take String, effect: take String, typeText: take String, hasDefault: Bool, defaultLine: Int, defaultColumn: Int, defaultLength: Int, line: Int, column: Int, length: Int) -> fresh Param {
@@ -80,21 +121,29 @@ fn EffectName.from(name: take String, line: Int, column: Int, length: Int) -> fr
 }
 
 fn Item.plain(kind: Int, name: take String, line: Int, column: Int, length: Int) -> fresh Item {
-    return Item(kind: kind, name: take name, line: line, column: column, length: length, isPublic: false, isAsync: false, isNative: false, hasBody: false, generics: List<GenericParam>.new(), params: List<Param>.new(), effects: List<EffectName>.new(), returnType: "")
+    return Item(kind: kind, name: take name, line: line, column: column, length: length, isPublic: false, isAsync: false, isNative: false, hasBody: false, generics: List<GenericParam>.new(), params: List<Param>.new(), effects: List<EffectName>.new(), statements: List<Stmt>.new(), returnType: "")
 }
 
-fn Item.function(name: take String, line: Int, column: Int, length: Int, isPublic: Bool, isAsync: Bool, isNative: Bool, hasBody: Bool, generics: take List<GenericParam>, params: take List<Param>, effects: take List<EffectName>, returnType: take String) -> fresh Item {
-    return Item(kind: ITEM_FUNCTION, name: take name, line: line, column: column, length: length, isPublic: isPublic, isAsync: isAsync, isNative: isNative, hasBody: hasBody, generics: take generics, params: take params, effects: take effects, returnType: take returnType)
+fn Item.function(name: take String, line: Int, column: Int, length: Int, isPublic: Bool, isAsync: Bool, isNative: Bool, hasBody: Bool, generics: take List<GenericParam>, params: take List<Param>, effects: take List<EffectName>, statements: take List<Stmt>, returnType: take String) -> fresh Item {
+    return Item(kind: ITEM_FUNCTION, name: take name, line: line, column: column, length: length, isPublic: isPublic, isAsync: isAsync, isNative: isNative, hasBody: hasBody, generics: take generics, params: take params, effects: take effects, statements: take statements, returnType: take returnType)
 }
 
 fn Program.empty() -> fresh Program {
-    return Program(items: List<Item>.new())
+    return Program(items: List<Item>.new(), expressions: List<Expr>.new())
 }
 
 fn Program.push(self: mut Program, item: read Item) -> Unit
     effects(retains(item))
 {
     List.push<Item>(list: mut self.items, value: read item)
+}
+
+fn Program.push_expression(self: mut Program, expression: read Expr) -> Int
+    effects(retains(expression))
+{
+    let index = List.len(list: read self.expressions)
+    List.push<Expr>(list: mut self.expressions, value: read expression)
+    return index
 }
 
 fn Program.len(self: read Program) -> Int {

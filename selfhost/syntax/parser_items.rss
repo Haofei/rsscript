@@ -6,6 +6,7 @@ module selfhost.syntax.parser_items
 
 use selfhost.scan.*
 use selfhost.syntax.ast.*
+use selfhost.syntax.parser_stmts.*
 
 // First name token after top-level modifiers. Non-function declarations still
 // use this small normalizer; function headers use the scanner's explicit helper.
@@ -231,8 +232,13 @@ fn push_function_item(program: mut Program, toks: read List<Tok>, start: read In
     local ret = return_type(toks: read toks, start: read nameEnd, end: read sigEnd)
     let bodyOpen = sigEnd
     let hasBody = at_symbol(toks: read toks, i: read bodyOpen, code: read SYM_LBRACE)
+    local statements = List<Stmt>.new()
+    if hasBody {
+        let bodyClose = find_matching(toks: read toks, open: read bodyOpen, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+        if bodyClose >= 0 { parse_body_statements(program: mut program, toks: read toks, open: read bodyOpen, close: read bodyClose, statements: mut statements) }
+    }
     let tok = List.get(list: read toks, index: read start)
-    let item = Item.function(name: take name, line: tok.line, column: tok.col, length: tok.len, isPublic: modifier_present(toks: read toks, start: read start, word: read WORD_PUB), isAsync: modifier_present(toks: read toks, start: read start, word: read WORD_ASYNC), isNative: modifier_present(toks: read toks, start: read start, word: read WORD_NATIVE), hasBody: hasBody, generics: take generics, params: take params, effects: take effects, returnType: take ret)
+    let item = Item.function(name: take name, line: tok.line, column: tok.col, length: tok.len, isPublic: modifier_present(toks: read toks, start: read start, word: read WORD_PUB), isAsync: modifier_present(toks: read toks, start: read start, word: read WORD_ASYNC), isNative: modifier_present(toks: read toks, start: read start, word: read WORD_NATIVE), hasBody: hasBody, generics: take generics, params: take params, effects: take effects, statements: take statements, returnType: take ret)
     Program.push(self: mut program, item: read item)
 }
 
