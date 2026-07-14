@@ -45,10 +45,20 @@ fn main() -> Unit {
         Log.write(message: read item_line(item: read item))
         if item.kind == ITEM_FUNCTION {
             Log.write(message: read String.concat(left: read "  header\tpublic=", right: read String.concat(left: read String.from_bool(value: item.isPublic), right: read String.concat(left: read "\tasync=", right: read String.concat(left: read String.from_bool(value: item.isAsync), right: read String.concat(left: read "\tnative=", right: read String.concat(left: read String.from_bool(value: item.isNative), right: read String.concat(left: read "\tbody=", right: read String.concat(left: read String.from_bool(value: item.hasBody), right: read String.concat(left: read "\treturn=", right: read item.returnType))))))))))
+            let mut g = 0
+            while g < List.len(list: read item.generics) {
+                let generic = List.get<GenericParam>(list: read item.generics, index: read g)
+                Log.write(message: read String.concat(left: read String.concat(left: read "  generic\t", right: read generic.name), right: read String.concat(left: read "\t", right: read generic.boundText)))
+                g = g + 1
+            }
             let mut p = 0
             while p < List.len(list: read item.params) {
                 let param = List.get<Param>(list: read item.params, index: read p)
                 Log.write(message: read param_line(param: read param))
+                if param.hasDefault {
+                    let pos = String.concat(left: read String.concat(left: read String.from_int(value: param.defaultLine), right: read ":"), right: read String.concat(left: read String.from_int(value: param.defaultColumn), right: read String.concat(left: read ":", right: read String.from_int(value: param.defaultLength))))
+                    Log.write(message: read String.concat(left: read "  default\t", right: read pos))
+                }
                 p = p + 1
             }
             let mut e = 0

@@ -306,12 +306,13 @@ it from the shared scanner. `parser.rss` invokes that parser while preserving
 the established recognition protocol. Every item retains declaration kind,
 name, and representative span. Function items additionally retain public,
 async, and native modifiers; body presence; ordered parameter records
-(name, data effect, canonical syntax type, and span); ordered `effects(...)`
-names with spans; and a canonical syntax return type. The parser owns the
+(name, data effect, canonical syntax type, optional default-expression start
+span, and span); ordered generic parameters with syntax bounds; ordered
+`effects(...)` names with spans; and a canonical syntax return type. The parser owns the
 shared function-name, parameter-boundary, and top-level-comma rules, including
 an attribute-led declaration following a body-less function. Signatures still
-lack generic/default AST nodes, and bodies, expressions, and patterns remain to
-be materialized before this
+still lack default-expression AST nodes, and bodies, expressions, and patterns
+remain to be materialized before this
 can replace `astdump.rss` or `check.rss`. `selfhost/serialize/outline.rss` is
 the test-only deterministic serializer for this slice and proves that consumers
 read `Program`, rather than reparsing source text. `check.rss` now consumes

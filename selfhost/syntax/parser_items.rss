@@ -112,8 +112,19 @@ fn push_param(toks: read List<Tok>, start: read Int, end: read Int, params: mut 
     }
     local name = String.copy(value: read nameTok.text)
     local ownedEffect = String.copy(value: read effect)
-    local typeText = canonical_type_text(toks: read toks, start: read typeStart, end: read param_type_end(toks: read toks, start: read typeStart, end: read end))
-    let param = Param.from(name: take name, effect: take ownedEffect, typeText: take typeText, line: nameTok.line, column: nameTok.col, length: nameTok.len)
+    let defaultEq = param_type_end(toks: read toks, start: read typeStart, end: read end)
+    local typeText = canonical_type_text(toks: read toks, start: read typeStart, end: read defaultEq)
+    let hasDefault = defaultEq < end && at_symbol(toks: read toks, i: read defaultEq, code: read SYM_EQ) && (defaultEq + 1) < end
+    let mut defaultLine = 0
+    let mut defaultColumn = 0
+    let mut defaultLength = 0
+    if hasDefault {
+        let defaultTok = List.get(list: read toks, index: read (defaultEq + 1))
+        defaultLine = defaultTok.line
+        defaultColumn = defaultTok.col
+        defaultLength = defaultTok.len
+    }
+    let param = Param.from(name: take name, effect: take ownedEffect, typeText: take typeText, hasDefault: hasDefault, defaultLine: defaultLine, defaultColumn: defaultColumn, defaultLength: defaultLength, line: nameTok.line, column: nameTok.col, length: nameTok.len)
     List.push<Param>(list: mut params, value: read param)
 }
 
@@ -124,6 +135,32 @@ fn parse_params(toks: read List<Tok>, open: read Int, close: read Int, params: m
         let mut end = close
         if comma >= 0 { end = comma }
         push_param(toks: read toks, start: read start, end: read end, params: mut params)
+        if comma < 0 { start = close } else { start = comma + 1 }
+    }
+    return Unit
+}
+
+fn push_generic_param(toks: read List<Tok>, start: read Int, end: read Int, generics: mut List<GenericParam>) -> Unit {
+    if start >= end || is_ident_tok(toks: read toks, i: read start) == false { return Unit }
+    let tok = List.get(list: read toks, index: read start)
+    local name = String.copy(value: read tok.text)
+    let mut boundStart = end
+    if at_symbol(toks: read toks, i: read (start + 1), code: read SYM_COLON) { boundStart = start + 2 }
+    local boundText = canonical_type_text(toks: read toks, start: read boundStart, end: read end)
+    let generic = GenericParam.from(name: take name, boundText: take boundText, line: tok.line, column: tok.col, length: tok.len)
+    List.push<GenericParam>(list: mut generics, value: read generic)
+}
+
+fn parse_generic_params(toks: read List<Tok>, nameEnd: read Int, signatureEnd: read Int, generics: mut List<GenericParam>) -> Unit {
+    if at_symbol(toks: read toks, i: read nameEnd, code: read SYM_LANGLE) == false { return Unit }
+    let close = find_matching(toks: read toks, open: read nameEnd, openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
+    if close < 0 || close >= signatureEnd { return Unit }
+    let mut start = nameEnd + 1
+    while start < close {
+        let comma = split_top_level_comma(toks: read toks, start: read start, end: read close)
+        let mut end = close
+        if comma >= 0 { end = comma }
+        push_generic_param(toks: read toks, start: read start, end: read end, generics: mut generics)
         if comma < 0 { start = close } else { start = comma + 1 }
     }
     return Unit
@@ -181,6 +218,8 @@ fn push_function_item(program: mut Program, toks: read List<Tok>, start: read In
     let nameEnd = take_function_name(toks: read toks, i: read nameStart)
     let sigEnd = function_signature_end(toks: read toks, start: read (nameStart - 1))
     let paramOpen = function_param_open(toks: read toks, from: read nameEnd, end: read sigEnd)
+    local generics = List<GenericParam>.new()
+    parse_generic_params(toks: read toks, nameEnd: read nameEnd, signatureEnd: read sigEnd, generics: mut generics)
     local params = List<Param>.new()
     if paramOpen >= 0 {
         let paramClose = find_matching(toks: read toks, open: read paramOpen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
@@ -193,7 +232,7 @@ fn push_function_item(program: mut Program, toks: read List<Tok>, start: read In
     let bodyOpen = sigEnd
     let hasBody = at_symbol(toks: read toks, i: read bodyOpen, code: read SYM_LBRACE)
     let tok = List.get(list: read toks, index: read start)
-    let item = Item.function(name: take name, line: tok.line, column: tok.col, length: tok.len, isPublic: modifier_present(toks: read toks, start: read start, word: read WORD_PUB), isAsync: modifier_present(toks: read toks, start: read start, word: read WORD_ASYNC), isNative: modifier_present(toks: read toks, start: read start, word: read WORD_NATIVE), hasBody: hasBody, params: take params, effects: take effects, returnType: take ret)
+    let item = Item.function(name: take name, line: tok.line, column: tok.col, length: tok.len, isPublic: modifier_present(toks: read toks, start: read start, word: read WORD_PUB), isAsync: modifier_present(toks: read toks, start: read start, word: read WORD_ASYNC), isNative: modifier_present(toks: read toks, start: read start, word: read WORD_NATIVE), hasBody: hasBody, generics: take generics, params: take params, effects: take effects, returnType: take ret)
     Program.push(self: mut program, item: read item)
 }
 

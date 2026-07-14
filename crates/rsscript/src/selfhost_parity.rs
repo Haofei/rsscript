@@ -659,7 +659,7 @@ async fn async_run() -> Unit {
 fn effectful() -> Unit effects(noalloc, pure) {
     return Unit
 }
-pub native fn external(value: take List<String>, count: mut Int = 1) -> fresh Result<Int, String>
+pub native fn external<T: Display, U>(value: take List<String>, count: mut Int = 1) -> fresh Result<Int, String>
 #lower_name("lowered_named")
 pub fn pinned_name() -> Unit {
     return Unit
@@ -691,8 +691,11 @@ pub fn pinned_name() -> Unit {
             "  effect\tpure\t21:41:4\n",
             "function\texternal\t24:1:3\n",
             "  header\tpublic=true\tasync=false\tnative=true\tbody=false\treturn=fresh Result<Int, String>\n",
+            "  generic\tT\tDisplay\n",
+            "  generic\tU\t\n",
             "  param\tvalue\ttake\tList<String>\n",
             "  param\tcount\tmut\tInt\n",
+            "  default\t24:82:1\n",
             "function\tpinned_name\t25:1:1\n",
             "  header\tpublic=true\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
         )

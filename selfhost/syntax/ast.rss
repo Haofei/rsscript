@@ -23,6 +23,18 @@ struct Param {
     name: String
     effect: String
     typeText: String
+    hasDefault: Bool
+    defaultLine: Int
+    defaultColumn: Int
+    defaultLength: Int
+    line: Int
+    column: Int
+    length: Int
+}
+
+struct GenericParam {
+    name: String
+    boundText: String
     line: Int
     column: Int
     length: Int
@@ -45,6 +57,7 @@ struct Item {
     isAsync: Bool
     isNative: Bool
     hasBody: Bool
+    generics: List<GenericParam>
     params: List<Param>
     effects: List<EffectName>
     returnType: String
@@ -54,8 +67,12 @@ struct Program {
     items: List<Item>
 }
 
-fn Param.from(name: take String, effect: take String, typeText: take String, line: Int, column: Int, length: Int) -> fresh Param {
-    return Param(name: take name, effect: take effect, typeText: take typeText, line: line, column: column, length: length)
+fn Param.from(name: take String, effect: take String, typeText: take String, hasDefault: Bool, defaultLine: Int, defaultColumn: Int, defaultLength: Int, line: Int, column: Int, length: Int) -> fresh Param {
+    return Param(name: take name, effect: take effect, typeText: take typeText, hasDefault: hasDefault, defaultLine: defaultLine, defaultColumn: defaultColumn, defaultLength: defaultLength, line: line, column: column, length: length)
+}
+
+fn GenericParam.from(name: take String, boundText: take String, line: Int, column: Int, length: Int) -> fresh GenericParam {
+    return GenericParam(name: take name, boundText: take boundText, line: line, column: column, length: length)
 }
 
 fn EffectName.from(name: take String, line: Int, column: Int, length: Int) -> fresh EffectName {
@@ -63,11 +80,11 @@ fn EffectName.from(name: take String, line: Int, column: Int, length: Int) -> fr
 }
 
 fn Item.plain(kind: Int, name: take String, line: Int, column: Int, length: Int) -> fresh Item {
-    return Item(kind: kind, name: take name, line: line, column: column, length: length, isPublic: false, isAsync: false, isNative: false, hasBody: false, params: List<Param>.new(), effects: List<EffectName>.new(), returnType: "")
+    return Item(kind: kind, name: take name, line: line, column: column, length: length, isPublic: false, isAsync: false, isNative: false, hasBody: false, generics: List<GenericParam>.new(), params: List<Param>.new(), effects: List<EffectName>.new(), returnType: "")
 }
 
-fn Item.function(name: take String, line: Int, column: Int, length: Int, isPublic: Bool, isAsync: Bool, isNative: Bool, hasBody: Bool, params: take List<Param>, effects: take List<EffectName>, returnType: take String) -> fresh Item {
-    return Item(kind: ITEM_FUNCTION, name: take name, line: line, column: column, length: length, isPublic: isPublic, isAsync: isAsync, isNative: isNative, hasBody: hasBody, params: take params, effects: take effects, returnType: take returnType)
+fn Item.function(name: take String, line: Int, column: Int, length: Int, isPublic: Bool, isAsync: Bool, isNative: Bool, hasBody: Bool, generics: take List<GenericParam>, params: take List<Param>, effects: take List<EffectName>, returnType: take String) -> fresh Item {
+    return Item(kind: ITEM_FUNCTION, name: take name, line: line, column: column, length: length, isPublic: isPublic, isAsync: isAsync, isNative: isNative, hasBody: hasBody, generics: take generics, params: take params, effects: take effects, returnType: take returnType)
 }
 
 fn Program.empty() -> fresh Program {
