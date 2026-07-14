@@ -58,6 +58,14 @@ struct Stmt {
     expression: Int
     children: List<Int>
     elseChildren: List<Int>
+    arms: List<MatchArm>
+}
+
+struct MatchArm {
+    pattern: Int
+    line: Int
+    column: Int
+    length: Int
 }
 
 struct Param {
@@ -115,8 +123,12 @@ fn Expr.from(kind: Int, tokenKind: Int, text: take String, line: Int, column: In
     return Expr(kind: kind, tokenKind: tokenKind, text: take text, line: line, column: column, length: length, children: take children)
 }
 
-fn Stmt.from(kind: Int, name: take String, typeText: take String, line: Int, column: Int, length: Int, expression: Int, children: take List<Int>, elseChildren: take List<Int>) -> fresh Stmt {
-    return Stmt(kind: kind, name: take name, typeText: take typeText, line: line, column: column, length: length, expression: expression, children: take children, elseChildren: take elseChildren)
+fn Stmt.from(kind: Int, name: take String, typeText: take String, line: Int, column: Int, length: Int, expression: Int, children: take List<Int>, elseChildren: take List<Int>, arms: take List<MatchArm>) -> fresh Stmt {
+    return Stmt(kind: kind, name: take name, typeText: take typeText, line: line, column: column, length: length, expression: expression, children: take children, elseChildren: take elseChildren, arms: take arms)
+}
+
+fn MatchArm.from(pattern: Int, line: Int, column: Int, length: Int) -> fresh MatchArm {
+    return MatchArm(pattern: pattern, line: line, column: column, length: length)
 }
 
 fn Param.from(name: take String, effect: take String, typeText: take String, hasDefault: Bool, defaultLine: Int, defaultColumn: Int, defaultLength: Int, line: Int, column: Int, length: Int) -> fresh Param {

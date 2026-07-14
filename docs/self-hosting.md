@@ -316,7 +316,9 @@ arena: `return`, `let`/`local`, expression statements, and `if`/`while`/`loop`
 blocks materialize name/literal/call/top-level-binary expressions and nested statement indices.
 The current expression subset also preserves grouping, `!`, and `&&`/`||`
 conditions, while retaining `while` separately from unconditional `loop`.
-Compound expressions, match/for/with/select, and patterns remain to be
+`for` retains its subject expression, and `match` retains its scrutinee plus a
+flat arm arena with pattern expressions and stable pattern spans. Guards, arm
+values, compound expressions, `with`/`select`, and destructuring patterns remain to be
 materialized before this
 can replace `astdump.rss` or `check.rss`. `selfhost/serialize/outline.rss` is
 the test-only deterministic serializer for this slice and proves that consumers

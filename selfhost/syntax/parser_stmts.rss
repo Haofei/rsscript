@@ -111,6 +111,37 @@ fn last_top_binary_operator(toks: read List<Tok>, start: read Int, end: read Int
     return found
 }
 
+fn top_fat_arrow(toks: read List<Tok>, start: read Int, end: read Int) -> Int {
+    let mut depth = 0
+    let mut i = start
+    while i < end {
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) { depth = depth + 1 }
+        else if at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACE) { if depth > 0 { depth = depth - 1 } }
+        else if depth == 0 && at_symbol(toks: read toks, i: read i, code: read SYM_FATARROW) { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn parse_match_arms(program: mut Program, toks: read List<Tok>, open: read Int, close: read Int, arms: mut List<MatchArm>) -> Unit {
+    let mut i = open + 1
+    while i < close {
+        if at_symbol(toks: read toks, i: read i, code: read 59) || at_symbol(toks: read toks, i: read i, code: read SYM_COMMA) { i = i + 1 }
+        else {
+            let end = next_line_or_block_end(toks: read toks, start: read i, end: read close)
+            let arrow = top_fat_arrow(toks: read toks, start: read i, end: read end)
+            if arrow >= 0 {
+                let pattern = parse_expression(program: mut program, toks: read toks, start: read i, end: read arrow)
+                let token = List.get<Tok>(list: read toks, index: read i)
+                let arm = MatchArm.from(pattern: pattern, line: token.line, column: token.col, length: token.len)
+                List.push<MatchArm>(list: mut arms, value: read arm)
+            }
+            if end > i { i = end } else { i = i + 1 }
+        }
+    }
+    return Unit
+}
+
 fn parse_expression(program: mut Program, toks: read List<Tok>, start: read Int, end: read Int) -> Int {
     let stop = expression_end(toks: read toks, start: read start, end: read end)
     if start >= stop { return -1 }
@@ -179,6 +210,7 @@ fn push_statement(program: mut Program, toks: read List<Tok>, start: read Int, e
     let mut typeText = ""
     local children = List<Int>.new()
     local elseChildren = List<Int>.new()
+    local arms = List<MatchArm>.new()
     if is_word(toks: read toks, i: read start, word: read "return") {
         kind = STMT_RETURN
         expressionStart = start + 1
@@ -216,7 +248,8 @@ fn push_statement(program: mut Program, toks: read List<Tok>, start: read Int, e
             }
             let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
             if close >= 0 {
-                parse_body_statements(program: mut program, toks: read toks, open: read open, close: read close, statements: mut children)
+                if kind == STMT_MATCH { parse_match_arms(program: mut program, toks: read toks, open: read open, close: read close, arms: mut arms) }
+                else { parse_body_statements(program: mut program, toks: read toks, open: read open, close: read close, statements: mut children) }
                 if is_word(toks: read toks, i: read (close + 1), word: read "else") && at_symbol(toks: read toks, i: read (close + 2), code: read SYM_LBRACE) {
                     let elseOpen = close + 2
                     let elseClose = find_matching(toks: read toks, open: read elseOpen, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
@@ -233,7 +266,7 @@ fn push_statement(program: mut Program, toks: read List<Tok>, start: read Int, e
     let expression = parse_expression(program: mut program, toks: read toks, start: read expressionStart, end: read expressionEnd)
     local ownedName = String.copy(value: read name)
     local ownedType = String.copy(value: read typeText)
-    let statement = Stmt.from(kind: kind, name: take ownedName, typeText: take ownedType, line: tok.line, column: tok.col, length: tok.len, expression: expression, children: take children, elseChildren: take elseChildren)
+    let statement = Stmt.from(kind: kind, name: take ownedName, typeText: take ownedType, line: tok.line, column: tok.col, length: tok.len, expression: expression, children: take children, elseChildren: take elseChildren, arms: take arms)
     let index = Program.push_statement(self: mut program, statement: read statement)
     List.push<Int>(list: mut statements, value: read index)
 }
