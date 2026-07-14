@@ -27,10 +27,15 @@ fn known_non_bool_type(ty: read String) -> Bool {
     return ty == "Int" || ty == "String" || ty == "Char" || ty == "Float" || ty == "Unit"
 }
 
-fn add_non_bool_condition(program: read Program, statement: read Stmt, context: read FunctionContext, diagnostics: mut DiagnosticBag) -> Unit {
-    if statement.kind != STMT_IF && statement.kind != STMT_WHILE { return Unit }
+fn known_non_iterable_type(ty: read String) -> Bool {
+    return known_non_bool_type(ty: read ty) || ty == "Bool"
+}
+
+fn add_control_type_diagnostic(program: read Program, statement: read Stmt, context: read FunctionContext, diagnostics: mut DiagnosticBag) -> Unit {
+    if statement.kind != STMT_IF && statement.kind != STMT_WHILE && statement.kind != STMT_FOR { return Unit }
     let ty = infer_expression_type(program: read program, context: read context, index: read statement.expression)
-    if known_non_bool_type(ty: read ty) == false { return Unit }
+    let invalid = (statement.kind == STMT_FOR && known_non_iterable_type(ty: read ty)) || (statement.kind != STMT_FOR && known_non_bool_type(ty: read ty))
+    if invalid == false { return Unit }
     if statement.expression < 0 || statement.expression >= List.len(list: read program.expressions) { return Unit }
     let expression = List.get<Expr>(list: read program.expressions, index: read statement.expression)
     DiagnosticBag.add(self: mut diagnostics, code: read "RS0209", line: expression.line, column: expression.column, length: expression.length)
@@ -42,9 +47,9 @@ fn collect_statement_type_diagnostics(program: read Program, statements: read Li
         let index = List.get<Int>(list: read statements, index: read i)
         if index >= 0 && index < List.len(list: read program.statements) {
             let statement = List.get<Stmt>(list: read program.statements, index: read index)
-            add_non_bool_condition(program: read program, statement: read statement, context: read context, diagnostics: mut diagnostics)
+            add_control_type_diagnostic(program: read program, statement: read statement, context: read context, diagnostics: mut diagnostics)
             infer_statement_type(program: read program, context: mut context, index: read index)
-            if statement.kind == STMT_IF || statement.kind == STMT_WHILE || statement.kind == STMT_LOOP {
+            if statement.kind == STMT_IF || statement.kind == STMT_WHILE || statement.kind == STMT_LOOP || statement.kind == STMT_FOR || statement.kind == STMT_MATCH {
                 let mut childContext = copy_function_context(context: read context)
                 collect_statement_type_diagnostics(program: read program, statements: read statement.children, context: mut childContext, diagnostics: mut diagnostics)
                 let mut elseContext = copy_function_context(context: read context)

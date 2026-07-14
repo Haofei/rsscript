@@ -792,6 +792,9 @@ fn selfhost_ast_control_type_rule_matches_rs0209_conditions() {
     while count {
         return Unit
     }
+    for item in name {
+        Log.write(message: read "item")
+    }
     if true {
         if count {
             return Unit
@@ -801,7 +804,7 @@ fn selfhost_ast_control_type_rule_matches_rs0209_conditions() {
 }
 "#;
     let oracle = checker_oracle_records("ast-control-rs0209.rss", source, "RS0209");
-    assert_eq!(oracle.len(), 3, "fixture must exercise nested if/while conditions");
+    assert_eq!(oracle.len(), 4, "fixture must exercise nested if/while and for subjects");
     let exe = compile_selfhost_tool("serialize/control_outline.rss", "AST control type-rule probe")
         .expect("AST control type-rule probe should compile");
     let output = exe

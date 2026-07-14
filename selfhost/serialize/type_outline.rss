@@ -14,6 +14,8 @@ fn statement_kind_name(kind: Int) -> String {
     if kind == STMT_IF { return "if" }
     if kind == STMT_WHILE { return "while" }
     if kind == STMT_LOOP { return "loop" }
+    if kind == STMT_FOR { return "for" }
+    if kind == STMT_MATCH { return "match" }
     return "unknown"
 }
 

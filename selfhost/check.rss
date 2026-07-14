@@ -10665,7 +10665,7 @@ fn condition_site_key(line: Int, column: Int, length: Int) -> String {
     return String.concat(left: read String.concat(left: read String.concat(left: read String.from_int(value: read line), right: read ":"), right: read String.from_int(value: read column)), right: read String.concat(left: read ":", right: read String.from_int(value: read length)))
 }
 
-fn collect_fn_control_flow_mismatch_tokens(toks: read List<Tok>, start: read Int, model: read FileTypeModel, astConditionSites: read Set<String>, out: mut List<Int>) -> Bool {
+fn collect_fn_control_flow_mismatch_tokens(toks: read List<Tok>, start: read Int, model: read FileTypeModel, astControlSites: read Set<String>, out: mut List<Int>) -> Bool {
     let body = build_body_type_model(toks: read toks, fnStart: read start)
     if body_type_model_ok(body: read body) == false { return false }
     let mut i = body.bodyOpen + 1
@@ -10677,7 +10677,7 @@ fn collect_fn_control_flow_mismatch_tokens(toks: read List<Tok>, start: read Int
             if ce > lo {
                 let condition = List.get<Tok>(list: read toks, index: read lo)
                 let key = condition_site_key(line: condition.line, column: condition.col, length: condition.len)
-                if Set.contains<String>(set: read astConditionSites, value: read key) == false {
+                if Set.contains<String>(set: read astControlSites, value: read key) == false {
                     let bad = cond_non_bool_token(toks: read toks, start: read lo, end: read ce, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals)
                     if bad >= 0 { List.push<Int>(list: mut out, value: read bad); hit = true }
                 }
@@ -10707,8 +10707,12 @@ fn collect_fn_control_flow_mismatch_tokens(toks: read List<Tok>, start: read Int
                 if inPos >= 0 {
                     let ss = inPos + 1
                     if ss < fbo {
-                        let subjTy = return_actual_type(toks: read toks, s0: read ss, e: read fbo, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals)
-                        if is_scalar_root(ty: read subjTy) { List.push<Int>(list: mut out, value: read ss); hit = true }
+                        let subject = List.get<Tok>(list: read toks, index: read ss)
+                        let key = condition_site_key(line: subject.line, column: subject.col, length: subject.len)
+                        if Set.contains<String>(set: read astControlSites, value: read key) == false {
+                            let subjTy = return_actual_type(toks: read toks, s0: read ss, e: read fbo, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals)
+                            if is_scalar_root(ty: read subjTy) { List.push<Int>(list: mut out, value: read ss); hit = true }
+                        }
                     }
                 }
             }
@@ -10720,7 +10724,7 @@ fn collect_fn_control_flow_mismatch_tokens(toks: read List<Tok>, start: read Int
 
 // Collect every RS0209 anchor. Conditions, loop subjects, scrutinees, patterns,
 // and mismatching match arms all use their analyzer-compatible first token.
-fn collect_control_flow_mismatch_tokens(toks: read List<Tok>, astConditionSites: read Set<String>, out: mut List<Int>) -> Bool {
+fn collect_control_flow_mismatch_tokens(toks: read List<Tok>, astControlSites: read Set<String>, out: mut List<Int>) -> Bool {
     let ntok = List.len(list: read toks)
     let model = build_file_type_model(toks: read toks)
     let mut i = 0
@@ -10746,7 +10750,7 @@ fn collect_control_flow_mismatch_tokens(toks: read List<Tok>, astConditionSites:
                 if r < 0 {
                     running = false
                 } else {
-                    if collect_fn_control_flow_mismatch_tokens(toks: read toks, start: read i, model: read model, astConditionSites: read astConditionSites, out: mut out) { hit = true }
+                    if collect_fn_control_flow_mismatch_tokens(toks: read toks, start: read i, model: read model, astControlSites: read astControlSites, out: mut out) { hit = true }
                     i = r
                 }
             } else {
@@ -12040,12 +12044,12 @@ fn main() -> Unit {
     let program = parse_program(toks: read toks)
     let mut typeDiagnostics = DiagnosticBag.empty()
     collect_program_type_diagnostics(program: read program, diagnostics: mut typeDiagnostics)
-    let mut astConditionSites = Set<String>.new()
+    let mut astControlSites = Set<String>.new()
     let mut astDiagnosticIndex = 0
     while astDiagnosticIndex < List.len(list: read typeDiagnostics.items) {
         let diagnostic = List.get<Diagnostic>(list: read typeDiagnostics.items, index: read astDiagnosticIndex)
         let key = condition_site_key(line: diagnostic.line, column: diagnostic.column, length: diagnostic.length)
-        Set.insert<String>(set: mut astConditionSites, value: read key)
+        Set.insert<String>(set: mut astControlSites, value: read key)
         astDiagnosticIndex = astDiagnosticIndex + 1
     }
     let ntok = List.len(list: read toks)
@@ -12221,7 +12225,7 @@ fn main() -> Unit {
     // RS0209: control-flow type mismatch.
     let mut cfTypeMismatchTokens = List<Int>.new()
     let mut cfTypeMismatch = DiagnosticBag.has_code(self: read typeDiagnostics, code: read "RS0209")
-    if collect_control_flow_mismatch_tokens(toks: read toks, astConditionSites: read astConditionSites, out: mut cfTypeMismatchTokens) { cfTypeMismatch = true }
+    if collect_control_flow_mismatch_tokens(toks: read toks, astControlSites: read astControlSites, out: mut cfTypeMismatchTokens) { cfTypeMismatch = true }
     // RS0901: `take` of a `handle` field.
     let mut takeHandleTokens = List<Int>.new()
     let takeHandle = collect_take_handle_field_tokens(toks: read toks, out: mut takeHandleTokens)
