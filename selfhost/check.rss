@@ -10690,7 +10690,16 @@ fn collect_fn_control_flow_mismatch_tokens(toks: read List<Tok>, start: read Int
                 let scrutTy = return_actual_type(toks: read toks, s0: read vs, e: read mbo, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals)
                 let mbc = find_matching(toks: read toks, open: read mbo, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
                 if mbc >= 0 {
-                    if collect_match_bad_tokens(toks: read toks, scrutStart: read vs, braceOpen: read mbo, braceClose: read mbc, scrutTy: read scrutTy, declared: read model.declared, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals, out: mut out) { hit = true }
+                    let mut matchTokens = List<Int>.new()
+                    if collect_match_bad_tokens(toks: read toks, scrutStart: read vs, braceOpen: read mbo, braceClose: read mbc, scrutTy: read scrutTy, declared: read model.declared, popen: read body.paramOpen, pclose: read body.paramClose, bodyOpen: read body.bodyOpen, fnIdx: read model.fnIdx, locals: read body.locals, out: mut matchTokens) { hit = true }
+                    let mut matchTokenIndex = 0
+                    while matchTokenIndex < List.len(list: read matchTokens) {
+                        let tokenIndex = List.get<Int>(list: read matchTokens, index: read matchTokenIndex)
+                        let token = List.get<Tok>(list: read toks, index: read tokenIndex)
+                        let key = condition_site_key(line: token.line, column: token.col, length: token.len)
+                        if Set.contains<String>(set: read astControlSites, value: read key) == false { List.push<Int>(list: mut out, value: read tokenIndex) }
+                        matchTokenIndex = matchTokenIndex + 1
+                    }
                 }
             }
         } else if is_kw_text(toks: read toks, i: read i, word: read "for") {

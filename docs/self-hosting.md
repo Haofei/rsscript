@@ -342,11 +342,13 @@ overloads, and nested expression forms remain outside this slice.
 the current `if`/`while` subset for known non-Bool conditions and `for`
 subjects for known non-iterable types, recurses into nested control blocks with
 branch-local context copies, and appends canonical
-`RS0209` records to `DiagnosticBag`. Its focused oracle test covers nested
-occurrences and spans. `check.rss` now consumes these AST records first; the
-legacy RS0209 walker receives their span keys and supplies only unmatched
-conditions plus the still-token-based `match` and pattern cases. This keeps the
-full family intact while preventing duplicate records during the migration.
+`RS0209` records to `DiagnosticBag`. The rule also handles known `match`
+scrutinees against `Some`/`None`, `Ok`/`Err`, scalar literals, and invalid bare
+names on scalar values. Its focused oracle tests cover nested occurrences and
+spans. `check.rss` now consumes these AST records first; the legacy RS0209
+walker receives their span keys and supplies only unmatched cases, including
+tuple/list patterns, matchability, and arm-value typing. This keeps the full
+family intact while preventing duplicate records during the migration.
 
 #### Stage 2 target architecture
 

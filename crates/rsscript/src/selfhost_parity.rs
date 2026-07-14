@@ -842,6 +842,29 @@ fn selfhost_ast_control_type_rule_matches_rs0209_conditions() {
     assert_eq!(oracle, actual, "AST control type diagnostics diverged");
 }
 
+#[test]
+fn selfhost_ast_match_pattern_rule_matches_rs0209_patterns() {
+    let source = r#"fn patterns(value: read String) -> Unit {
+    match value {
+        Some(item) => return Unit
+        1 => return Unit
+        other => return Unit
+    }
+    return Unit
+}
+"#;
+    let oracle = checker_oracle_records("ast-match-rs0209.rss", source, "RS0209");
+    assert_eq!(oracle.len(), 3, "fixture must exercise variant, literal, and bare-name patterns");
+    let exe = compile_selfhost_tool("serialize/control_outline.rss", "AST match type-rule probe")
+        .expect("AST match type-rule probe should compile");
+    let output = exe
+        .eval_main_with_args([source.to_string()])
+        .expect("AST match type-rule probe should run");
+    let actual = parse_checker_records(&output.stdout)
+        .expect("AST match type-rule probe should emit canonical records");
+    assert_eq!(oracle, actual, "AST match type diagnostics diverged");
+}
+
 /// Phase-2 NEGATIVE smoke (non-ignored): the rss parser must REJECT malformed
 /// source, matching the Rust oracle. The accept-only tiny sample above would
 /// still pass if the rss parser degenerated to always printing `OK`; this closes

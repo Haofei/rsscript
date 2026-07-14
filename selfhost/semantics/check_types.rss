@@ -4,6 +4,7 @@ features: local
 
 module selfhost.semantics.check_types
 
+use selfhost.scan.*
 use selfhost.semantics.context.*
 use selfhost.semantics.diagnostics.*
 use selfhost.syntax.ast.*
@@ -31,6 +32,46 @@ fn known_non_iterable_type(ty: read String) -> Bool {
     return known_non_bool_type(ty: read ty) || ty == "Bool"
 }
 
+fn scalar_type(ty: read String) -> Bool {
+    return known_non_iterable_type(ty: read ty)
+}
+
+fn type_is_option(ty: read String) -> Bool {
+    return String.starts_with(value: read ty, prefix: read "Option<")
+}
+
+fn type_is_result(ty: read String) -> Bool {
+    return String.starts_with(value: read ty, prefix: read "Result<")
+}
+
+fn literal_pattern_mismatches(ty: read String, pattern: read Expr) -> Bool {
+    if pattern.kind != EXPR_LITERAL { return false }
+    if pattern.tokenKind == TOK_NUMBER { return ty != "Int" }
+    if pattern.tokenKind == TOK_STRING { return ty != "String" }
+    if pattern.tokenKind == TOK_CHAR { return ty != "Char" }
+    return false
+}
+
+fn add_match_pattern_diagnostics(program: read Program, statement: read Stmt, context: read FunctionContext, diagnostics: mut DiagnosticBag) -> Unit {
+    if statement.kind != STMT_MATCH { return Unit }
+    let ty = infer_expression_type(program: read program, context: read context, index: read statement.expression)
+    if String.len(value: read ty) == 0 { return Unit }
+    let mut i = 0
+    while i < List.len(list: read statement.arms) {
+        let arm = List.get<MatchArm>(list: read statement.arms, index: read i)
+        if arm.pattern >= 0 && arm.pattern < List.len(list: read program.expressions) {
+            let pattern = List.get<Expr>(list: read program.expressions, index: read arm.pattern)
+            let optionVariant = pattern.text == "Some" || pattern.text == "None"
+            let resultVariant = pattern.text == "Ok" || pattern.text == "Err"
+            let bareScalarName = scalar_type(ty: read ty) && pattern.kind == EXPR_NAME && pattern.text != "_" && pattern.text != "true" && pattern.text != "false" && optionVariant == false && resultVariant == false
+            let invalid = (optionVariant && type_is_option(ty: read ty) == false) || (resultVariant && type_is_result(ty: read ty) == false) || literal_pattern_mismatches(ty: read ty, pattern: read pattern) || bareScalarName
+            if invalid { DiagnosticBag.add(self: mut diagnostics, code: read "RS0209", line: pattern.line, column: pattern.column, length: pattern.length) }
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
 fn add_control_type_diagnostic(program: read Program, statement: read Stmt, context: read FunctionContext, diagnostics: mut DiagnosticBag) -> Unit {
     if statement.kind != STMT_IF && statement.kind != STMT_WHILE && statement.kind != STMT_FOR { return Unit }
     let ty = infer_expression_type(program: read program, context: read context, index: read statement.expression)
@@ -48,6 +89,7 @@ fn collect_statement_type_diagnostics(program: read Program, statements: read Li
         if index >= 0 && index < List.len(list: read program.statements) {
             let statement = List.get<Stmt>(list: read program.statements, index: read index)
             add_control_type_diagnostic(program: read program, statement: read statement, context: read context, diagnostics: mut diagnostics)
+            add_match_pattern_diagnostics(program: read program, statement: read statement, context: read context, diagnostics: mut diagnostics)
             infer_statement_type(program: read program, context: mut context, index: read index)
             if statement.kind == STMT_IF || statement.kind == STMT_WHILE || statement.kind == STMT_LOOP || statement.kind == STMT_FOR || statement.kind == STMT_MATCH {
                 let mut childContext = copy_function_context(context: read context)
