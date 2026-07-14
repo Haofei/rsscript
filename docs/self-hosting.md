@@ -312,9 +312,10 @@ span, and span); ordered generic parameters with syntax bounds; ordered
 shared function-name, parameter-boundary, and top-level-comma rules, including
 an attribute-led declaration following a body-less function. Signatures still
 lack default-expression AST nodes. Function bodies now begin as a flat
-arena: simple `return`, `let`/`local`, and expression statements materialize
-name/literal/call expressions, while control flow, compound expressions, and
-patterns remain to be materialized before this
+arena: `return`, `let`/`local`, expression statements, and `if`/`while`/`loop`
+blocks materialize name/literal/call expressions and nested statement indices.
+Compound expressions, match/for/with/select, and patterns remain to be
+materialized before this
 can replace `astdump.rss` or `check.rss`. `selfhost/serialize/outline.rss` is
 the test-only deterministic serializer for this slice and proves that consumers
 read `Program`, rather than reparsing source text. `check.rss` now consumes

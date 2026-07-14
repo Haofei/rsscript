@@ -46,6 +46,8 @@ fn statement_kind_name(kind: Int) -> String {
     if kind == STMT_RETURN { return "return" }
     if kind == STMT_LET { return "let" }
     if kind == STMT_EXPR { return "expr" }
+    if kind == STMT_IF { return "if" }
+    if kind == STMT_LOOP { return "loop" }
     return "unknown"
 }
 
@@ -59,7 +61,11 @@ fn statement_line(program: read Program, statement: read Stmt) -> String {
     }
     let a = String.concat(left: read String.concat(left: read "  stmt\t", right: read statement_kind_name(kind: statement.kind)), right: read String.concat(left: read "\t", right: read statement.name))
     let b = String.concat(left: read a, right: read String.concat(left: read "\t", right: read statement.typeText))
-    return String.concat(left: read String.concat(left: read b, right: read String.concat(left: read "\t", right: read expressionKind)), right: read String.concat(left: read "\t", right: read expressionText))
+    let mut out = String.concat(left: read String.concat(left: read b, right: read String.concat(left: read "\t", right: read expressionKind)), right: read String.concat(left: read "\t", right: read expressionText))
+    if List.len(list: read statement.children) > 0 || List.len(list: read statement.elseChildren) > 0 {
+        out = String.concat(left: read out, right: read String.concat(left: read "\tthen=", right: read String.concat(left: read String.from_int(value: List.len(list: read statement.children)), right: read String.concat(left: read "\telse=", right: read String.from_int(value: List.len(list: read statement.elseChildren))))))
+    }
+    return out
 }
 
 fn main() -> Unit {

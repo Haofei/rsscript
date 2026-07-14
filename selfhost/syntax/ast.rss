@@ -30,6 +30,8 @@ const STMT_UNKNOWN: Int = 1
 const STMT_RETURN: Int = 2
 const STMT_LET: Int = 3
 const STMT_EXPR: Int = 4
+const STMT_IF: Int = 5
+const STMT_LOOP: Int = 6
 
 struct Expr {
     kind: Int
@@ -48,6 +50,8 @@ struct Stmt {
     column: Int
     length: Int
     expression: Int
+    children: List<Int>
+    elseChildren: List<Int>
 }
 
 struct Param {
@@ -105,8 +109,8 @@ fn Expr.from(kind: Int, text: take String, line: Int, column: Int, length: Int, 
     return Expr(kind: kind, text: take text, line: line, column: column, length: length, children: take children)
 }
 
-fn Stmt.from(kind: Int, name: take String, typeText: take String, line: Int, column: Int, length: Int, expression: Int) -> fresh Stmt {
-    return Stmt(kind: kind, name: take name, typeText: take typeText, line: line, column: column, length: length, expression: expression)
+fn Stmt.from(kind: Int, name: take String, typeText: take String, line: Int, column: Int, length: Int, expression: Int, children: take List<Int>, elseChildren: take List<Int>) -> fresh Stmt {
+    return Stmt(kind: kind, name: take name, typeText: take typeText, line: line, column: column, length: length, expression: expression, children: take children, elseChildren: take elseChildren)
 }
 
 fn Param.from(name: take String, effect: take String, typeText: take String, hasDefault: Bool, defaultLine: Int, defaultColumn: Int, defaultLength: Int, line: Int, column: Int, length: Int) -> fresh Param {
