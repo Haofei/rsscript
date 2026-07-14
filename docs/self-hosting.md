@@ -314,6 +314,8 @@ an attribute-led declaration following a body-less function. Signatures still
 lack default-expression AST nodes. Function bodies now begin as a flat
 arena: `return`, `let`/`local`, expression statements, and `if`/`while`/`loop`
 blocks materialize name/literal/call/top-level-binary expressions and nested statement indices.
+The current expression subset also preserves grouping, `!`, and `&&`/`||`
+conditions, while retaining `while` separately from unconditional `loop`.
 Compound expressions, match/for/with/select, and patterns remain to be
 materialized before this
 can replace `astdump.rss` or `check.rss`. `selfhost/serialize/outline.rss` is

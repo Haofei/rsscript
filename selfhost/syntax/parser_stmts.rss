@@ -71,15 +71,17 @@ fn binary_operator_text(toks: read List<Tok>, i: read Int, end: read Int) -> Str
     if i >= end { return "" }
     let tok = List.get(list: read toks, index: read i)
     if at_symbol(toks: read toks, i: read i, code: read SYM_EQ) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_EQ) { return "==" }
-    if at_symbol(toks: read toks, i: read i, code: read 33) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_EQ) { return "!=" }
+    if at_symbol(toks: read toks, i: read i, code: read SYM_BANG) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_EQ) { return "!=" }
     if at_symbol(toks: read toks, i: read i, code: read SYM_LANGLE) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_EQ) { return "<=" }
     if at_symbol(toks: read toks, i: read i, code: read SYM_RANGLE) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_EQ) { return ">=" }
+    if at_symbol(toks: read toks, i: read i, code: read 124) && at_symbol(toks: read toks, i: read (i + 1), code: read 124) { return "||" }
+    if at_symbol(toks: read toks, i: read i, code: read 38) && at_symbol(toks: read toks, i: read (i + 1), code: read 38) { return "&&" }
     if at_symbol(toks: read toks, i: read i, code: read 43) || at_symbol(toks: read toks, i: read i, code: read 45) || at_symbol(toks: read toks, i: read i, code: read 42) || at_symbol(toks: read toks, i: read i, code: read 47) || at_symbol(toks: read toks, i: read i, code: read 37) || at_symbol(toks: read toks, i: read i, code: read SYM_LANGLE) || at_symbol(toks: read toks, i: read i, code: read SYM_RANGLE) { return tok.text }
     return ""
 }
 
 fn binary_operator_width(operator: read String) -> Int {
-    if operator == "==" || operator == "!=" || operator == "<=" || operator == ">=" { return 2 }
+    if operator == "==" || operator == "!=" || operator == "<=" || operator == ">=" || operator == "&&" || operator == "||" { return 2 }
     return 1
 }
 
@@ -103,6 +105,19 @@ fn last_top_binary_operator(toks: read List<Tok>, start: read Int, end: read Int
 fn parse_expression(program: mut Program, toks: read List<Tok>, start: read Int, end: read Int) -> Int {
     let stop = expression_end(toks: read toks, start: read start, end: read end)
     if start >= stop { return -1 }
+    if at_symbol(toks: read toks, i: read start, code: read SYM_LPAREN) {
+        let close = find_matching(toks: read toks, open: read start, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+        if close == (stop - 1) { return parse_expression(program: mut program, toks: read toks, start: read (start + 1), end: read close) }
+    }
+    if at_symbol(toks: read toks, i: read start, code: read SYM_BANG) {
+        let token = List.get(list: read toks, index: read start)
+        let child = parse_expression(program: mut program, toks: read toks, start: read (start + 1), end: read stop)
+        local children = List<Int>.new()
+        if child >= 0 { List.push<Int>(list: mut children, value: read child) }
+        local operator = "!"
+        let expression = Expr.from(kind: EXPR_UNARY, tokenKind: token.kind, text: take operator, line: token.line, column: token.col, length: token.len, children: take children)
+        return Program.push_expression(self: mut program, expression: read expression)
+    }
     let binary = last_top_binary_operator(toks: read toks, start: read start, end: read stop)
     if binary >= 0 {
         local operator = binary_operator_text(toks: read toks, i: read binary, end: read stop)

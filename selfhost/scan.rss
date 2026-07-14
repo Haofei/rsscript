@@ -65,6 +65,7 @@ const TOK_UNKNOWN: Int = 10
 // Symbol token codes (Tok.val when kind == TOK_SYMBOL): the ASCII code of the
 // single char, or a synthetic code for a multi-char operator.
 const SYM_HASH: Int = 35        // '#'
+const SYM_BANG: Int = 33        // '!'
 const SYM_LPAREN: Int = 40      // '('
 const SYM_RPAREN: Int = 41      // ')'
 const SYM_STAR: Int = 42        // '*'

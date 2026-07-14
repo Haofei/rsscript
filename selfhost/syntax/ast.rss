@@ -26,6 +26,7 @@ const EXPR_NAME: Int = 2
 const EXPR_LITERAL: Int = 3
 const EXPR_CALL: Int = 4
 const EXPR_BINARY: Int = 5
+const EXPR_UNARY: Int = 6
 
 const STMT_UNKNOWN: Int = 1
 const STMT_RETURN: Int = 2

@@ -54,8 +54,9 @@ fn infer_expression_type(program: read Program, context: read FunctionContext, i
     if expression.kind == EXPR_CALL {
         return program_function_return_type(program: read program, name: read expression.text)
     }
+    if expression.kind == EXPR_UNARY && expression.text == "!" { return "Bool" }
     if expression.kind == EXPR_BINARY {
-        if is_comparison_operator(operator: read expression.text) { return "Bool" }
+        if is_comparison_operator(operator: read expression.text) || expression.text == "&&" || expression.text == "||" { return "Bool" }
         if List.len(list: read expression.children) == 2 {
             let left = List.get<Int>(list: read expression.children, index: read 0)
             let right = List.get<Int>(list: read expression.children, index: read 1)

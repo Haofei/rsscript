@@ -756,7 +756,7 @@ fn selfhost_function_context_infers_core_body_types() {
 fn work(input: read Int) -> Unit {
     let number = 1
     let text: String = consume(value: input)
-    if number == input {
+    if !(number == input) || false {
         return Unit
     }
     while false {
