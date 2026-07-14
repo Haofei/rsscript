@@ -3671,6 +3671,15 @@ fn checker_rs0015_edge_parity() {
             false,
         ),
         (
+            "native-function-body.rss",
+            "features: native\n\
+             pub native fn host() -> Unit {\n\
+                 return Unit\n\
+             }\n"
+            .to_string(),
+            true,
+        ),
+        (
             "hostile-malformed/unicode-bidi.rss",
             std::fs::read_to_string(
                 root.join("crates/rsscript/tests/hostile-malformed/unicode-bidi.rss"),

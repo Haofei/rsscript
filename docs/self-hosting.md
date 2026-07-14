@@ -311,7 +311,7 @@ span, and span); ordered generic parameters with syntax bounds; ordered
 `effects(...)` names with spans; and a canonical syntax return type. The parser owns the
 shared function-name, parameter-boundary, and top-level-comma rules, including
 an attribute-led declaration following a body-less function. Signatures still
-still lack default-expression AST nodes. Function bodies now begin as a flat
+lack default-expression AST nodes. Function bodies now begin as a flat
 arena: simple `return`, `let`/`local`, and expression statements materialize
 name/literal/call expressions, while control flow, compound expressions, and
 patterns remain to be materialized before this
@@ -320,9 +320,10 @@ the test-only deterministic serializer for this slice and proves that consumers
 read `Program`, rather than reparsing source text. `check.rss` now consumes
 these function and parameter nodes for RS0002 and RS0003, including their
 structured spans through the initial shared `DiagnosticBag`; the previous two
-token probes were removed. The remaining checker families are still token-probe
-based and must migrate one semantic group at a time with their existing parity
-gates.
+token probes were removed. Its RS0015 native-function-body predicate also reads
+the shared function flags/body marker rather than scanning declaration tokens.
+The remaining checker families are still token-probe based and must migrate one
+semantic group at a time with their existing parity gates.
 
 #### Stage 2 target architecture
 

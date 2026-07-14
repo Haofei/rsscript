@@ -8236,20 +8236,14 @@ fn rs0015_has_bad_match_arm(toks: read List<Tok>) -> Bool {
     return hit
 }
 
-fn rs0015_has_native_body(toks: read List<Tok>) -> Bool {
-    let n = List.len(list: read toks)
+fn rs0015_has_native_body(program: read Program) -> Bool {
     let mut i = 0
-    let mut hit = false
-    while i < n {
-        if at_ident(toks: read toks, i: read i, wid: read WORD_NATIVE) && at_ident(toks: read toks, i: read (i + 1), wid: read WORD_FN) {
-            let sigEnd = function_signature_end(toks: read toks, start: read i)
-            if at_symbol(toks: read toks, i: read sigEnd, code: read SYM_LBRACE) { hit = true }
-            i = sigEnd + 1
-        } else {
-            i = i + 1
-        }
+    while i < Program.len(self: read program) {
+        let item = List.get<Item>(list: read program.items, index: read i)
+        if item.kind == ITEM_FUNCTION && item.isNative && item.hasBody { return true }
+        i = i + 1
     }
-    return hit
+    return false
 }
 
 fn rs0015_has_protocol_default_body(toks: read List<Tok>) -> Bool {
@@ -8317,7 +8311,7 @@ fn rs0015_has_malformed_fn_decl(toks: read List<Tok>) -> Bool {
     return hit
 }
 
-fn has_unsupported_syntax_rs0015(source: read String, toks: read List<Tok>) -> Bool {
+fn has_unsupported_syntax_rs0015(source: read String, toks: read List<Tok>, program: read Program) -> Bool {
     return rs0015_has_unmatched_delimiter(toks: read toks)
         || rs0015_has_unknown_token(toks: read toks)
         || rs0015_has_unterminated_string(source: read source)
@@ -8332,7 +8326,7 @@ fn has_unsupported_syntax_rs0015(source: read String, toks: read List<Tok>) -> B
         || rs0015_has_bad_control_or_binding(toks: read toks)
         || rs0015_has_bad_param_decl(toks: read toks)
         || rs0015_has_bad_match_arm(toks: read toks)
-        || rs0015_has_native_body(toks: read toks)
+        || rs0015_has_native_body(program: read program)
         || rs0015_has_protocol_default_body(toks: read toks)
         || rs0015_has_malformed_fn_decl(toks: read toks)
         || rs0015_has_async_let_outside_task_group(toks: read toks)
@@ -12084,7 +12078,7 @@ fn main() -> Unit {
     let mut invalidTryTokens = List<Int>.new()
     // RS0015: unsupported/malformed syntax covered by the self-hosted frontend
     // parity corpus.
-    let unsupportedSyntax = has_unsupported_syntax_rs0015(source: read source, toks: read toks)
+    let unsupportedSyntax = has_unsupported_syntax_rs0015(source: read source, toks: read toks, program: read program)
     // RS0023: `Fd` in a non-native fn signature or a non-resource type field.
     let mut fdSurface = false
     let mut fdSurfaceTokens = List<Int>.new()
