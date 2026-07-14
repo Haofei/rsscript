@@ -150,6 +150,32 @@ fn return_type(toks: read List<Tok>, start: read Int, end: read Int) -> String {
     return canonical_type_text(toks: read toks, start: read (arrow + 1), end: read typeEnd)
 }
 
+fn collect_effects(toks: read List<Tok>, start: read Int, end: read Int, effects: mut List<EffectName>) -> Unit {
+    let mut i = start
+    let mut open = -1
+    while i < end && open < 0 {
+        if at_ident(toks: read toks, i: read i, wid: read WORD_EFFECTS) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_LPAREN) {
+            open = i + 1
+        }
+        i = i + 1
+    }
+    if open < 0 { return Unit }
+    let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    if close < 0 || close > end { return Unit }
+    let mut segmentStart = open + 1
+    while segmentStart < close {
+        let comma = split_top_level_comma(toks: read toks, start: read segmentStart, end: read close)
+        if is_ident_tok(toks: read toks, i: read segmentStart) {
+            let tok = List.get(list: read toks, index: read segmentStart)
+            local name = String.copy(value: read tok.text)
+            let effect = EffectName.from(name: take name, line: tok.line, column: tok.col, length: tok.len)
+            List.push<EffectName>(list: mut effects, value: read effect)
+        }
+        if comma < 0 { segmentStart = close } else { segmentStart = comma + 1 }
+    }
+    return Unit
+}
+
 fn push_function_item(program: mut Program, toks: read List<Tok>, start: read Int, end: read Int) -> Unit {
     let nameStart = function_decl_name_start(toks: read toks, i: read start)
     let nameEnd = take_function_name(toks: read toks, i: read nameStart)
@@ -160,12 +186,14 @@ fn push_function_item(program: mut Program, toks: read List<Tok>, start: read In
         let paramClose = find_matching(toks: read toks, open: read paramOpen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
         if paramClose >= 0 { parse_params(toks: read toks, open: read paramOpen, close: read paramClose, params: mut params) }
     }
+    local effects = List<EffectName>.new()
+    collect_effects(toks: read toks, start: read nameEnd, end: read sigEnd, effects: mut effects)
     local name = dotted_name(toks: read toks, start: read nameStart, end: read nameEnd)
     local ret = return_type(toks: read toks, start: read nameEnd, end: read sigEnd)
     let bodyOpen = sigEnd
     let hasBody = at_symbol(toks: read toks, i: read bodyOpen, code: read SYM_LBRACE)
     let tok = List.get(list: read toks, index: read start)
-    let item = Item.function(name: take name, line: tok.line, column: tok.col, length: tok.len, isPublic: modifier_present(toks: read toks, start: read start, word: read WORD_PUB), isAsync: modifier_present(toks: read toks, start: read start, word: read WORD_ASYNC), isNative: modifier_present(toks: read toks, start: read start, word: read WORD_NATIVE), hasBody: hasBody, params: take params, returnType: take ret)
+    let item = Item.function(name: take name, line: tok.line, column: tok.col, length: tok.len, isPublic: modifier_present(toks: read toks, start: read start, word: read WORD_PUB), isAsync: modifier_present(toks: read toks, start: read start, word: read WORD_ASYNC), isNative: modifier_present(toks: read toks, start: read start, word: read WORD_NATIVE), hasBody: hasBody, params: take params, effects: take effects, returnType: take ret)
     Program.push(self: mut program, item: read item)
 }
 

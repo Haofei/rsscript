@@ -28,6 +28,13 @@ struct Param {
     length: Int
 }
 
+struct EffectName {
+    name: String
+    line: Int
+    column: Int
+    length: Int
+}
+
 struct Item {
     kind: Int
     name: String
@@ -39,6 +46,7 @@ struct Item {
     isNative: Bool
     hasBody: Bool
     params: List<Param>
+    effects: List<EffectName>
     returnType: String
 }
 
@@ -50,12 +58,16 @@ fn Param.from(name: take String, effect: take String, typeText: take String, lin
     return Param(name: take name, effect: take effect, typeText: take typeText, line: line, column: column, length: length)
 }
 
-fn Item.plain(kind: Int, name: take String, line: Int, column: Int, length: Int) -> fresh Item {
-    return Item(kind: kind, name: take name, line: line, column: column, length: length, isPublic: false, isAsync: false, isNative: false, hasBody: false, params: List<Param>.new(), returnType: "")
+fn EffectName.from(name: take String, line: Int, column: Int, length: Int) -> fresh EffectName {
+    return EffectName(name: take name, line: line, column: column, length: length)
 }
 
-fn Item.function(name: take String, line: Int, column: Int, length: Int, isPublic: Bool, isAsync: Bool, isNative: Bool, hasBody: Bool, params: take List<Param>, returnType: take String) -> fresh Item {
-    return Item(kind: ITEM_FUNCTION, name: take name, line: line, column: column, length: length, isPublic: isPublic, isAsync: isAsync, isNative: isNative, hasBody: hasBody, params: take params, returnType: take returnType)
+fn Item.plain(kind: Int, name: take String, line: Int, column: Int, length: Int) -> fresh Item {
+    return Item(kind: kind, name: take name, line: line, column: column, length: length, isPublic: false, isAsync: false, isNative: false, hasBody: false, params: List<Param>.new(), effects: List<EffectName>.new(), returnType: "")
+}
+
+fn Item.function(name: take String, line: Int, column: Int, length: Int, isPublic: Bool, isAsync: Bool, isNative: Bool, hasBody: Bool, params: take List<Param>, effects: take List<EffectName>, returnType: take String) -> fresh Item {
+    return Item(kind: ITEM_FUNCTION, name: take name, line: line, column: column, length: length, isPublic: isPublic, isAsync: isAsync, isNative: isNative, hasBody: hasBody, params: take params, effects: take effects, returnType: take returnType)
 }
 
 fn Program.empty() -> fresh Program {

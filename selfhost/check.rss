@@ -294,7 +294,8 @@ fn emit_bag_code(diagnostics: read DiagnosticBag, code: read String) -> Int {
     while i < List.len(list: read diagnostics.items) {
         let diagnostic = List.get<Diagnostic>(list: read diagnostics.items, index: read i)
         if diagnostic.code == code {
-            emit_diagnostic_site(code: read diagnostic.code, site: read DiagnosticSite(line: diagnostic.line, column: diagnostic.column, length: diagnostic.length))
+            let site = DiagnosticSite(line: diagnostic.line, column: diagnostic.column, length: diagnostic.length)
+            emit_diagnostic_site(code: read diagnostic.code, site: read site)
             emitted = emitted + 1
         }
         i = i + 1

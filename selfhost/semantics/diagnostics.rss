@@ -18,13 +18,21 @@ struct DiagnosticBag {
     items: List<Diagnostic>
 }
 
+fn Diagnostic.from(code: take String, line: Int, column: Int, length: Int) -> fresh Diagnostic {
+    return Diagnostic(code: take code, line: line, column: column, length: length)
+}
+
+fn Diagnostic.from_copy(code: read String, line: Int, column: Int, length: Int) -> fresh Diagnostic {
+    local ownedCode = String.copy(value: read code)
+    return Diagnostic.from(code: take ownedCode, line: line, column: column, length: length)
+}
+
 fn DiagnosticBag.empty() -> fresh DiagnosticBag {
     return DiagnosticBag(items: List<Diagnostic>.new())
 }
 
 fn DiagnosticBag.add(self: mut DiagnosticBag, code: read String, line: Int, column: Int, length: Int) -> Unit {
-    local ownedCode = String.copy(value: read code)
-    let diagnostic = Diagnostic(code: take ownedCode, line: line, column: column, length: length)
+    let diagnostic = Diagnostic.from_copy(code: read code, line: line, column: column, length: length)
     List.push<Diagnostic>(list: mut self.items, value: read diagnostic)
 }
 

@@ -51,6 +51,13 @@ fn main() -> Unit {
                 Log.write(message: read param_line(param: read param))
                 p = p + 1
             }
+            let mut e = 0
+            while e < List.len(list: read item.effects) {
+                let effect = List.get<EffectName>(list: read item.effects, index: read e)
+                let pos = String.concat(left: read String.concat(left: read String.from_int(value: effect.line), right: read ":"), right: read String.concat(left: read String.from_int(value: effect.column), right: read String.concat(left: read ":", right: read String.from_int(value: effect.length))))
+                Log.write(message: read String.concat(left: read String.concat(left: read "  effect\t", right: read effect.name), right: read String.concat(left: read "\t", right: read pos)))
+                e = e + 1
+            }
         }
         i = i + 1
     }
