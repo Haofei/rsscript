@@ -714,7 +714,9 @@ fn selfhost_function_body_ast_outline_is_deterministic() {
 
 fn work() -> Unit {
     let item: Int = 1
-    consume(value: item)
+    consume(
+        value: item
+    )
     return item
 }
 "#;

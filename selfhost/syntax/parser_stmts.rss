@@ -29,6 +29,27 @@ fn expression_end(toks: read List<Tok>, start: read Int, end: read Int) -> Int {
     return result
 }
 
+// One top-level statement ends at `;` or the first later line after every
+// bracket/block nesting level closes. This keeps multiline calls, literals,
+// and control-flow blocks intact even before each form receives a dedicated
+// statement node.
+fn statement_end(toks: read List<Tok>, start: read Int, limit: read Int) -> Int {
+    let line = tk_line(toks: read toks, i: read start)
+    let mut depth = 0
+    let mut i = start + 1
+    while i < limit {
+        if depth == 0 && at_symbol(toks: read toks, i: read i, code: read 59) { return i }
+        if depth == 0 && tk_line(toks: read toks, i: read i) > line { return i }
+        if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) {
+            depth = depth + 1
+        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACE) {
+            if depth > 0 { depth = depth - 1 }
+        }
+        i = i + 1
+    }
+    return limit
+}
+
 fn parse_expression(program: mut Program, toks: read List<Tok>, start: read Int, end: read Int) -> Int {
     let stop = expression_end(toks: read toks, start: read start, end: read end)
     if start >= stop { return -1 }
@@ -97,7 +118,7 @@ fn parse_body_statements(program: mut Program, toks: read List<Tok>, open: read 
         if at_symbol(toks: read toks, i: read start, code: read 59) {
             start = start + 1
         } else {
-            let end = next_line_or_block_end(toks: read toks, start: read start, end: read close)
+            let end = statement_end(toks: read toks, start: read start, limit: read close)
             push_statement(program: mut program, toks: read toks, start: read start, end: read end, statements: mut statements)
             if end > start { start = end } else { start = start + 1 }
         }
