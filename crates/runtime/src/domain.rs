@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
+#[cfg(feature = "net")]
 use crate::async_runtime::{NativeAsyncPending, run_pending, spawn_tokio_native};
 use crate::channel::{ChannelError, RssStream, stream_from_iterator};
 use std::io::{BufRead, Read};
@@ -453,10 +454,12 @@ pub fn response_body(response: &Response) -> String {
     response.body.clone()
 }
 
+#[cfg(feature = "net")]
 pub fn http_get(url: &str) -> Result<Response, HttpError> {
     run_pending(http_get_async(url))
 }
 
+#[cfg(feature = "net")]
 pub fn http_get_async(url: &str) -> NativeAsyncPending<Result<Response, HttpError>> {
     let url = url.to_string();
     spawn_tokio_native(async move { http_request_async("GET", &url, Vec::new(), None, None).await })
@@ -509,10 +512,12 @@ pub fn http_request_with_header(mut request: HttpRequest, name: &str, value: &st
     request
 }
 
+#[cfg(feature = "net")]
 pub fn http_send_async(request: HttpRequest) -> NativeAsyncPending<Result<Response, HttpError>> {
     spawn_tokio_native(async move { http_request_retry_async(request).await })
 }
 
+#[cfg(feature = "net")]
 pub fn http_get_timeout_async(
     url: &str,
     timeout_ms: i64,
@@ -523,6 +528,7 @@ pub fn http_get_timeout_async(
     })
 }
 
+#[cfg(feature = "net")]
 pub fn http_get_retry_async(
     url: &str,
     timeout_ms: i64,
@@ -536,12 +542,14 @@ pub fn http_get_retry_async(
     spawn_tokio_native(async move { http_request_retry_async(request).await })
 }
 
+#[cfg(feature = "net")]
 pub fn http_post_json(url: &str, _body: &str) -> Result<Response, HttpError> {
     Err(HttpError {
         message: format!("HTTP client runtime is not configured for POST JSON {url}"),
     })
 }
 
+#[cfg(feature = "net")]
 pub fn http_post_json_async(
     url: &str,
     body: &str,
@@ -560,6 +568,7 @@ pub fn http_post_json_async(
     })
 }
 
+#[cfg(feature = "net")]
 pub fn http_post_json_timeout_async(
     url: &str,
     body: &str,
@@ -580,6 +589,7 @@ pub fn http_post_json_timeout_async(
     })
 }
 
+#[cfg(feature = "net")]
 pub fn http_post_json_retry_async(
     url: &str,
     body: &str,
@@ -599,6 +609,7 @@ pub fn http_post_json_retry_async(
     spawn_tokio_native(async move { http_request_retry_async(request).await })
 }
 
+#[cfg(feature = "net")]
 pub fn http_post_json_bearer_retry_async(
     url: &str,
     body: &str,
@@ -622,12 +633,14 @@ pub fn http_post_json_bearer_retry_async(
     spawn_tokio_native(async move { http_request_retry_async(request).await })
 }
 
+#[cfg(feature = "net")]
 pub fn http_post_form(url: &str, _body: &str) -> Result<Response, HttpError> {
     Err(HttpError {
         message: format!("HTTP client runtime is not configured for POST form {url}"),
     })
 }
 
+#[cfg(feature = "net")]
 pub fn http_post_form_async(
     url: &str,
     body: &str,
@@ -646,6 +659,7 @@ pub fn http_post_form_async(
     })
 }
 
+#[cfg(feature = "net")]
 async fn http_request_async(
     method: &str,
     url: &str,
@@ -682,6 +696,7 @@ async fn http_request_async(
     })
 }
 
+#[cfg(feature = "net")]
 async fn http_request_timeout_async(
     method: &str,
     url: &str,
@@ -703,6 +718,7 @@ async fn http_request_timeout_async(
     })?
 }
 
+#[cfg(feature = "net")]
 async fn http_request_retry_async(request: HttpRequest) -> Result<Response, HttpError> {
     let attempts = request.attempts.max(1);
     let backoff_ms = request.backoff_ms.max(0) as u64;

@@ -20,11 +20,13 @@ mod process;
 mod random;
 mod regex;
 mod resource_pool;
+#[cfg(feature = "net")]
 mod socket;
 mod string_helpers;
 mod tempdir;
 mod tensor;
 mod text_edit;
+#[cfg(feature = "net")]
 mod websocket;
 
 pub use self::regex::*;
@@ -47,9 +49,11 @@ pub use metal::*;
 pub use process::*;
 pub use random::*;
 pub use resource_pool::*;
+#[cfg(feature = "net")]
 pub use socket::*;
 pub use string_helpers::*;
 pub use tempdir::*;
 pub use tensor::*;
 pub use text_edit::*;
+#[cfg(feature = "net")]
 pub use websocket::*;

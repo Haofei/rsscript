@@ -6897,11 +6897,13 @@ fn main() -> Unit {
     #[cfg(feature = "native-jit")]
     #[test]
     fn native_heap_transaction_abort_restores_list_set_int_write() {
-        let list: Rc<RefCell<TypedVec>> = Rc::new(RefCell::new(TypedVec::from_values(vec![
-            VmValue::Int(1),
-            VmValue::Int(2),
-            VmValue::Int(3),
-        ])));
+        let mut values = Vec::with_capacity(32);
+        values.extend([1, 2, 3]);
+        let list: Rc<RefCell<TypedVec>> = Rc::new(RefCell::new(TypedVec::Ints(values)));
+        let original_capacity = match &*list.borrow() {
+            TypedVec::Ints(values) => values.capacity(),
+            _ => unreachable!(),
+        };
         let _heap_guard = JitCallCtxGuard::enter();
         JitCallCtx::push_heap_arg(VmValue::List(Rc::clone(&list)));
 
@@ -6921,6 +6923,17 @@ fn main() -> Unit {
             list.borrow().get(1),
             Some(VmValue::Int(2)),
             "abort should restore the pre-native list contents"
+        );
+        let mut restored = list.borrow_mut();
+        let restored_capacity = match &*restored {
+            TypedVec::Ints(values) => values.capacity(),
+            _ => unreachable!(),
+        };
+        assert_eq!(restored_capacity, original_capacity);
+        assert_eq!(
+            restored.checked_push_accounted(VmValue::Int(4)),
+            Ok(0),
+            "interpreter replay must retain spare capacity and avoid a false growth charge",
         );
     }
 

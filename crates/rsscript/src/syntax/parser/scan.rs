@@ -134,8 +134,8 @@ fn is_statement_postfix_token(token: &Token) -> bool {
 ///   silently swallow the next line — that would reintroduce the very
 ///   silent-merge footgun SH-017 fixes).
 /// - `!` is excluded (a leading `!expr` is a valid statement start).
-/// Consequently `==` / `!=` / `<=` / `>=` / `=` cannot wrap across lines — keep
-/// those on one line.
+///   Consequently `==` / `!=` / `<=` / `>=` / `=` cannot wrap across lines — keep
+///   those on one line.
 fn is_continuation_operator(token: &Token) -> bool {
     token.symbol("|")
         || token.symbol("&")

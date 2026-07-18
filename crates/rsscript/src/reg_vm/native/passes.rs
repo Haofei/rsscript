@@ -41,12 +41,14 @@ pub(in crate::reg_vm) enum NativeTy {
 impl NativeTy {
     pub(in crate::reg_vm) fn jit_value_type(self) -> vm_jit::JitValueType {
         match self {
-            // Booleans are stored as `i64` 0/1, like integers.
-            NativeTy::Int | NativeTy::Bool => vm_jit::JitValueType::Int,
+            NativeTy::Int => vm_jit::JitValueType::Int,
+            NativeTy::Bool => vm_jit::JitValueType::Bool,
             NativeTy::Float => vm_jit::JitValueType::Float,
             NativeTy::Handle => vm_jit::JitValueType::Handle,
-            NativeTy::FlatInt | NativeTy::FlatIntMut => vm_jit::JitValueType::FlatInt,
-            NativeTy::FlatFloat | NativeTy::FlatFloatMut => vm_jit::JitValueType::FlatFloat,
+            NativeTy::FlatInt => vm_jit::JitValueType::FlatInt,
+            NativeTy::FlatIntMut => vm_jit::JitValueType::FlatIntMut,
+            NativeTy::FlatFloat => vm_jit::JitValueType::FlatFloat,
+            NativeTy::FlatFloatMut => vm_jit::JitValueType::FlatFloatMut,
         }
     }
 }
@@ -66,10 +68,13 @@ impl NativeHostIntrinsic {
             .iter()
             .map(|ty| match ty {
                 vm_jit::JitValueType::Int => NativeTy::Int,
+                vm_jit::JitValueType::Bool => NativeTy::Bool,
                 vm_jit::JitValueType::Float => NativeTy::Float,
                 vm_jit::JitValueType::Handle => NativeTy::Handle,
                 vm_jit::JitValueType::FlatInt => NativeTy::FlatInt,
+                vm_jit::JitValueType::FlatIntMut => NativeTy::FlatIntMut,
                 vm_jit::JitValueType::FlatFloat => NativeTy::FlatFloat,
+                vm_jit::JitValueType::FlatFloatMut => NativeTy::FlatFloatMut,
             })
             .collect()
     }

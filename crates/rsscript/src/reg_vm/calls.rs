@@ -79,6 +79,8 @@ enum IntPipelineStage {
     Filter(PureBoolExpr),
 }
 
+type IntPipelinePrefix = (Reg, Vec<IntPipelineStage>, Reg, usize, Vec<Reg>);
+
 #[derive(Clone)]
 enum PureIntExpr {
     StateField(usize),
@@ -373,9 +375,11 @@ impl RegVm {
         for index in 0..len {
             let item = list_item_at(&list, index, "List.filter")?;
             let keep = match pure_predicate {
-                Some(ref plan) => {
-                    Self::eval_captureless_pure_closure(plan, &[item.clone()], &mut pure_regs)?
-                }
+                Some(ref plan) => Self::eval_captureless_pure_closure(
+                    plan,
+                    std::slice::from_ref(&item),
+                    &mut pure_regs,
+                )?,
                 None => self.call_closure_one(unit, predicate, item.clone(), base)?,
             };
             if expect_bool_ref(&keep)? {
@@ -468,9 +472,11 @@ impl RegVm {
         for index in 0..len {
             let item = list_item_at(&list, index, "List.map")?;
             let mapped_value = match pure_mapper {
-                Some(ref plan) => {
-                    Self::eval_captureless_pure_closure(plan, &[item.clone()], &mut pure_regs)?
-                }
+                Some(ref plan) => Self::eval_captureless_pure_closure(
+                    plan,
+                    std::slice::from_ref(&item),
+                    &mut pure_regs,
+                )?,
                 None => self.call_closure_one(unit, mapper, item, base)?,
             };
             mapped.push(mapped_value);
@@ -576,7 +582,7 @@ impl RegVm {
         instr: &RegInstr,
         ip: usize,
         base: usize,
-    ) -> Result<Option<(Reg, Vec<IntPipelineStage>, Reg, usize, Vec<Reg>)>, EvalError> {
+    ) -> Result<Option<IntPipelinePrefix>, EvalError> {
         match instr {
             RegInstr::ListMap { dst, list, mapper } => {
                 let Some(RegInstr::ListFilter {

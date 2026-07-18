@@ -444,6 +444,7 @@ fn eval_matches_lowered_rust_for_pure_core_example() {
         .arg("--manifest-path")
         .arg(package_dir.join("Cargo.toml"))
         .env("CARGO_TARGET_DIR", common::generated_target_dir())
+        .env("CARGO_NET_OFFLINE", "true")
         .output()
         .expect("generated Rust package should run");
 
@@ -488,6 +489,7 @@ fn main() -> Unit {
         .arg("--manifest-path")
         .arg(package_dir.join("Cargo.toml"))
         .env("CARGO_TARGET_DIR", common::generated_target_dir())
+        .env("CARGO_NET_OFFLINE", "true")
         .output()
         .expect("generated Rust package should run");
 
@@ -532,6 +534,7 @@ fn eval_matches_backend_for_declared_host_boundary() {
         .arg("--manifest-path")
         .arg(package_dir.join("Cargo.toml"))
         .env("CARGO_TARGET_DIR", common::generated_target_dir())
+        .env("CARGO_NET_OFFLINE", "true")
         .output()
         .expect("generated Rust package should run");
 
@@ -1019,6 +1022,7 @@ pub fn echo(message: &String) -> String {
         .arg("--manifest-path")
         .arg(package_dir.join("Cargo.toml"))
         .env("CARGO_TARGET_DIR", common::generated_target_dir())
+        .env("CARGO_NET_OFFLINE", "true")
         .output()
         .expect("generated Rust package should run");
 

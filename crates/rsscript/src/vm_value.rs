@@ -166,6 +166,22 @@ impl ElemKind {
 }
 
 impl TypedVec {
+    /// Clone values while preserving spare capacity. Heap-transaction rollback
+    /// uses this snapshot so interpreter replay observes the same future growth
+    /// and therefore the same capacity-based memory charges.
+    pub(crate) fn clone_preserving_capacity(&self) -> Self {
+        fn clone_vec<T: Clone>(values: &[T], capacity: usize) -> Vec<T> {
+            let mut cloned = Vec::with_capacity(capacity);
+            cloned.extend_from_slice(values);
+            cloned
+        }
+        match self {
+            TypedVec::Boxed(values) => TypedVec::Boxed(clone_vec(values, values.capacity())),
+            TypedVec::Ints(values) => TypedVec::Ints(clone_vec(values, values.capacity())),
+            TypedVec::Floats(values) => TypedVec::Floats(clone_vec(values, values.capacity())),
+        }
+    }
+
     /// An empty list. Empty lists are `Boxed` — there is no element to specialize
     /// on, and the first `push`/`from_values` of a homogeneous scalar run picks
     /// the kind. (An empty list compares/hashes/displays identically regardless of
@@ -251,9 +267,9 @@ impl TypedVec {
     /// only valid while the backing `Vec` is borrowed and not mutated (the caller's
     /// borrow protocol — see `try_native`).
     #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
-    pub(crate) fn as_ints_slice(&self) -> Option<(*const i64, usize)> {
+    pub(crate) fn as_ints_slice(&self) -> Option<&[i64]> {
         match self {
-            TypedVec::Ints(v) => Some((v.as_ptr(), v.len())),
+            TypedVec::Ints(v) => Some(v.as_slice()),
             _ => None,
         }
     }
@@ -272,9 +288,9 @@ impl TypedVec {
     /// TV2: the raw flat `f64` buffer of a `Floats` list as `(ptr, len)`. `None`
     /// for any other kind.
     #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
-    pub(crate) fn as_floats_slice(&self) -> Option<(*const f64, usize)> {
+    pub(crate) fn as_floats_slice(&self) -> Option<&[f64]> {
         match self {
-            TypedVec::Floats(v) => Some((v.as_ptr(), v.len())),
+            TypedVec::Floats(v) => Some(v.as_slice()),
             _ => None,
         }
     }
@@ -1619,6 +1635,39 @@ mod tests {
             TypedVec::Boxed(vec![]).push_cost(&VmValue::string("x")),
             std::mem::size_of::<VmValue>()
         );
+    }
+
+    #[test]
+    fn transaction_snapshot_preserves_spare_capacity() {
+        let mut ints = Vec::with_capacity(32);
+        ints.extend([1, 2, 3]);
+        let mut floats = Vec::with_capacity(24);
+        floats.extend([1.0, 2.0]);
+        let mut boxed = Vec::with_capacity(16);
+        boxed.push(VmValue::Int(1));
+
+        for value in [
+            TypedVec::Ints(ints),
+            TypedVec::Floats(floats),
+            TypedVec::Boxed(boxed),
+        ] {
+            let snapshot = value.clone_preserving_capacity();
+            match (&value, &snapshot) {
+                (TypedVec::Ints(before), TypedVec::Ints(after)) => {
+                    assert_eq!(after, before);
+                    assert_eq!(after.capacity(), before.capacity());
+                }
+                (TypedVec::Floats(before), TypedVec::Floats(after)) => {
+                    assert_eq!(after, before);
+                    assert_eq!(after.capacity(), before.capacity());
+                }
+                (TypedVec::Boxed(before), TypedVec::Boxed(after)) => {
+                    assert_eq!(after, before);
+                    assert_eq!(after.capacity(), before.capacity());
+                }
+                _ => panic!("snapshot changed TypedVec representation"),
+            }
+        }
     }
 
     #[test]

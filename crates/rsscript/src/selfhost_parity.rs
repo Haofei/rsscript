@@ -9,7 +9,8 @@
 //! the private `crate::lexer` and the VM entry point directly. Divergences are
 //! recorded as `SH-NNN` entries in `docs/self-hosting.md`.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -249,14 +250,33 @@ fn tool_sources(tool: &str) -> Result<Vec<(String, String)>, String> {
     Ok(out)
 }
 
+thread_local! {
+    /// `RegVmExecutable` owns `Rc` state and therefore cannot be shared across
+    /// test threads. Reuse one compiled copy per worker thread instead: the
+    /// self-hosted sources are immutable for the lifetime of this test binary,
+    /// while many focused parity tests invoke the same tool.
+    static SELFHOST_TOOL_CACHE: RefCell<BTreeMap<String, RegVmExecutable>> = const {
+        RefCell::new(BTreeMap::new())
+    };
+}
+
 fn compile_selfhost_tool(tool: &str, label: &str) -> Result<RegVmExecutable, String> {
+    if let Some(executable) = SELFHOST_TOOL_CACHE.with(|cache| cache.borrow().get(tool).cloned()) {
+        return Ok(executable);
+    }
     let sources = tool_sources(tool)?;
     let source_refs = sources
         .iter()
         .map(|(path, source)| (path.as_str(), source.as_str()))
         .collect::<Vec<_>>();
-    reg_vm_compile_sources(&source_refs)
-        .map_err(|e| format!("rss {label} failed to compile: {e:?}"))
+    let executable = reg_vm_compile_sources(&source_refs)
+        .map_err(|e| format!("rss {label} failed to compile: {e:?}"))?;
+    SELFHOST_TOOL_CACHE.with(|cache| {
+        cache
+            .borrow_mut()
+            .insert(tool.to_string(), executable.clone());
+    });
+    Ok(executable)
 }
 
 fn bootstrap_runtime_dir() -> PathBuf {
@@ -803,7 +823,8 @@ fn canonical_ir_parity_samples() {
         .expect("rss canonical IR lowerer should compile");
     let files = canonical_ir_sample_files();
     assert_eq!(
-        files.len(), CANONICAL_IR_SAMPLE_COUNT,
+        files.len(),
+        CANONICAL_IR_SAMPLE_COUNT,
         "canonical IR corpus must be explicit and complete; update the expected count with each reviewed sample change"
     );
     let mut mismatches = Vec::new();

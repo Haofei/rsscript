@@ -203,6 +203,7 @@ fn run_compiled_backend(
         .arg("--manifest-path")
         .arg(package_dir.join("Cargo.toml"))
         .env("CARGO_TARGET_DIR", common::generated_target_dir())
+        .env("CARGO_NET_OFFLINE", "true")
         .env("RUSTFLAGS", "-Awarnings");
     if !args.is_empty() {
         command.arg("--").args(args);
@@ -251,6 +252,7 @@ fn run_compiled_backend_with_return_harness(
         .arg("--manifest-path")
         .arg(package_dir.join("Cargo.toml"))
         .env("CARGO_TARGET_DIR", common::generated_target_dir())
+        .env("CARGO_NET_OFFLINE", "true")
         .env("RUSTFLAGS", "-Awarnings");
     if !args.is_empty() {
         command.arg("--").args(args);

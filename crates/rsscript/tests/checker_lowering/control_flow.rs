@@ -480,7 +480,12 @@ fn main() -> Int {
     );
     assert!(rust.contains("let found = rsscript_runtime::map_get(&names, &(1i64));"));
     assert!(rust.contains("let removed = rsscript_runtime::map_remove(&mut names, &(1i64));"));
-    assert!(rust.contains("rsscript_runtime::map_insert(&mut payloads, &(7i64), &(rsscript_runtime::json_value(&rsscript_runtime::json_object"));
+    assert!(
+        rust.contains(
+            "rsscript_runtime::map_insert(&mut payloads, &(7i64), &(rsscript_runtime::json_object"
+        ),
+        "{rust}"
+    );
 }
 
 #[test]

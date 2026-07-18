@@ -451,8 +451,8 @@ pub(crate) struct RegFunction {
     pub(crate) jit_analysis: std::cell::Cell<Option<(bool, bool)>>,
     /// Cached verdict for the scalar self-recursive fast paths (native `CallSelf`
     /// + tier-0 i64 executor). `None` means not inspected yet; `Some(Ineligible)`
-    /// is the hot-path negative cache for ordinary call-heavy functions; `Int`/`Bool`
-    /// record the i64-representable return kind so the dispatcher wraps the result.
+    ///   is the hot-path negative cache for ordinary call-heavy functions; `Int`/`Bool`
+    ///   record the i64-representable return kind so the dispatcher wraps the result.
     pub(crate) jit_self_recursion_kind: std::cell::Cell<Option<SelfRecursionKind>>,
     /// Cached native-tier verdict, an invariant property of the function:
     /// `0` unknown, `1` known not native-eligible. Lets `try_native` skip all
@@ -1524,13 +1524,13 @@ pub(crate) enum RegIntrinsic {
     JsonEncode,
     JsonErrorMessage,
     JsonField,
+    /// Native-JIT internal: checked `Json.field(...)?` payload helper.
+    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    JsonFieldOk,
     JsonFieldBool,
     JsonFieldInt,
-    /// Native-JIT internal: checked `Json.parse(...)?` payload helper.
-    JsonParseOk,
-    /// Native-JIT internal: checked `Json.field(...)?` payload helper.
-    JsonFieldOk,
     /// Native-JIT internal: checked `Json.field_int(...)?` payload helper.
+    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
     JsonFieldIntOk,
     JsonFieldOptional,
     JsonFieldOptionalBool,
@@ -1548,6 +1548,9 @@ pub(crate) enum RegIntrinsic {
     JsonObjectKeys,
     JsonObjectLen,
     JsonParse,
+    /// Native-JIT internal: checked `Json.parse(...)?` payload helper.
+    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    JsonParseOk,
     JsonParseFile,
     JsonQuoteString,
     JsonRawField,

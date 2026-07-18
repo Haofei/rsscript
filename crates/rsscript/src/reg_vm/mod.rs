@@ -1620,11 +1620,10 @@ impl RegVmExecutable {
     }
 
     /// Like [`Self::eval_main_with_args_native_osr_with_stats`] but under explicit
-    /// [`VmLimits`] (J0.5). With `step_budget`/`cancel` armed (and `mem_budget` off),
-    /// a qualifying hot loop now OSRs into an armed native variant that ticks the step
-    /// budget per instruction and polls `cancel` at every loop header, bailing to the
-    /// interpreter — which enforces the limit. Test/validation entry point: lets a test
-    /// assert the loop genuinely OSR'd (`osr_entries > 0`) AND observed the limit.
+    /// [`VmLimits`]. Any armed step, cancellation, memory, or host-call limit keeps
+    /// OSR on the interpreter until transformed regions carry exact source resource
+    /// costs. Tests use this entry point to verify both the result and that
+    /// `osr_entries == 0` under those modes.
     #[cfg(feature = "native-jit")]
     pub fn eval_main_with_args_native_osr_with_limits(
         &self,
@@ -3100,13 +3099,6 @@ fn jit_set_limits_cell(steps: i64, step_budget: i64, cancel_addr: i64) {
     JIT_LIMITS_CELL.with(|cell| cell.set([steps, step_budget, cancel_addr]));
 }
 
-/// Raw pointer to the J0.5 limits cell, passed as the native ABI `limits_ptr`. Valid
-/// for the duration of the call (thread-local storage does not move).
-#[cfg(feature = "native-jit")]
-fn jit_limits_cell_ptr() -> *const i64 {
-    JIT_LIMITS_CELL.with(|cell| cell.as_ptr() as *const i64)
-}
-
 /// Read the accumulated step count back out of the J0.5 limits cell after an armed OSR
 /// native call (clean completion or deopt both write it back).
 #[cfg(feature = "native-jit")]
@@ -4226,7 +4218,7 @@ fn jit_snapshot_input_list_before_write(list: &Rc<RefCell<TypedVec>>) -> bool {
     JIT_HEAP_WRITE_UNDO.with(|undo| {
         undo.borrow_mut().push(JitHeapWriteUndo::List(
             Rc::clone(list),
-            list.borrow().clone(),
+            list.borrow().clone_preserving_capacity(),
         ));
     });
     true

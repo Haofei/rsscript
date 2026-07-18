@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -113,6 +114,59 @@ fn main() {
     if let Err(error) = write_reg_vm_runtime_intrinsics() {
         panic!("{error}");
     }
+    if let Err(error) = write_compiled_cache_fingerprint() {
+        panic!("{error}");
+    }
+}
+
+/// Generated-Rust parity results are cached on disk by the test harness. Make
+/// their key depend on every lowering source so a compiler edit cannot reuse a
+/// stale executable result from an earlier build.
+fn write_compiled_cache_fingerprint() -> Result<(), String> {
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest dir"));
+    // The generated executable is a result of the complete compiler, not only
+    // the Rust lowerer. Hash the whole source tree so a checker, VM, ABI, or
+    // lowering edit cannot accidentally reuse an earlier result.
+    let roots = [manifest_dir.join("src")];
+    let mut files = Vec::new();
+    for root in &roots {
+        collect_rust_sources(root, &mut files)?;
+    }
+    files.sort();
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    "rsscript-compiled-cache-v3".hash(&mut hasher);
+    for path in files {
+        println!("cargo:rerun-if-changed={}", path.display());
+        path.strip_prefix(&manifest_dir)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .hash(&mut hasher);
+        fs::read(&path)
+            .map_err(|error| format!("failed to read {}: {error}", path.display()))?
+            .hash(&mut hasher);
+    }
+    println!(
+        "cargo:rustc-env=RSSCRIPT_COMPILED_CACHE_FINGERPRINT={:016x}",
+        hasher.finish()
+    );
+    Ok(())
+}
+
+fn collect_rust_sources(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+    if path.is_file() {
+        if path.extension().is_some_and(|extension| extension == "rs") {
+            files.push(path.to_path_buf());
+        }
+        return Ok(());
+    }
+    for entry in
+        fs::read_dir(path).map_err(|error| format!("failed to read {}: {error}", path.display()))?
+    {
+        let entry = entry.map_err(|error| format!("failed to read entry: {error}"))?;
+        collect_rust_sources(&entry.path(), files)?;
+    }
+    Ok(())
 }
 
 fn write_core_package_index() -> Result<(), String> {

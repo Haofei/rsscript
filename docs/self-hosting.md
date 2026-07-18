@@ -689,7 +689,7 @@ not yet a compiler backend for general RSS programs.
 The current bootstrap ABI is intentionally concrete and narrow:
 
 ```text
-input:  rss-ir-v1 / zero-argument Int main plus acyclic pure helpers with zero or one `read Int` parameter / ordered scalar local, scalar assignment, scalar while, scalar if/else, and return instructions
+input:  rss-ir-v1 / zero-argument Int main with ordered scalar locals, assignments, while, if/else, and return instructions; plus acyclic pure helpers with zero or one `read Int` parameter and straight-line scalar locals followed by return
 output: ISO C11 `int main(void)`
 result: decimal Int written to stdout followed by `\n`
 errors: unsupported or malformed IR emits no artifact

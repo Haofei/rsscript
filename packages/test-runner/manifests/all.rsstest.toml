@@ -19,26 +19,53 @@ timeout_ms = 180000
 args = ["check", "--manifest-path"]
 jobs = 1
 paths = [
-  "tests/generated/simple/Cargo.toml",
-  "tests/generated/managed/Cargo.toml",
-  "tests/generated/resource_pool/Cargo.toml",
-  "tests/generated/effects/Cargo.toml",
-  "tests/generated/result/Cargo.toml",
-  "tests/generated/try/Cargo.toml",
-  "tests/generated/runnable/Cargo.toml",
+  "crates/rsscript/tests/generated/simple/Cargo.toml",
+  "crates/rsscript/tests/generated/managed/Cargo.toml",
+  "crates/rsscript/tests/generated/resource_pool/Cargo.toml",
+  "crates/rsscript/tests/generated/effects/Cargo.toml",
+  "crates/rsscript/tests/generated/result/Cargo.toml",
+  "crates/rsscript/tests/generated/try/Cargo.toml",
+  "crates/rsscript/tests/generated/runnable/Cargo.toml",
 ]
 
 [[tests]]
 # Run every workspace crate's tests in one global parallel pool (all cores).
 # Includes the rsscript unit/integration tests, the fast in-process
 # differential/property suites, the runtime and native-abi crates, and the native
-# adapter crates. Run with RSSCRIPT_FULL_BACKEND_PARITY=1 when generated-Rust
-# execution must join every parity case.
+# adapter crates. `selfhost_parity` deliberately runs below in one cargo-test
+# process: nextest otherwise creates a separate process for every case, which
+# prevents its per-thread compiled-tool cache from being reused.
+# Run with RSSCRIPT_FULL_BACKEND_PARITY=1 when generated-Rust execution must
+# join every parity case.
 name = "workspace tests pass (nextest)"
 kind = "command_success"
 command = "cargo"
 timeout_ms = 600000
-args = ["nextest", "run", "--workspace", "--no-fail-fast"]
+args = [
+  "nextest",
+  "run",
+  "--workspace",
+  "--no-fail-fast",
+  "-E",
+  "not test(/selfhost_parity::/)",
+]
+
+[[tests]]
+# Keep all non-ignored self-host parity tests in one process so each RSS tool is
+# compiled once per test worker instead of once per individual assertion.
+name = "self-host parity tests pass"
+kind = "command_success"
+command = "cargo"
+timeout_ms = 600000
+args = [
+  "test",
+  "-p",
+  "rsscript",
+  "--lib",
+  "selfhost_parity::",
+  "--",
+  "--test-threads=4",
+]
 
 [[tests]]
 name = "rss binary builds"
@@ -67,28 +94,13 @@ command = "target/debug/rss"
 args = ["check", "examples/scripts/basic/hello.rss"]
 
 [[tests]]
-name = "core interfaces have no diagnostics"
-kind = "command_success"
-command = "cargo"
-timeout_ms = 180000
-args = [
-  "test",
-  "-q",
-  "--test",
-  "static",
-  "checker_frontend::misc::core_interface_files_have_no_diagnostics",
-  "--",
-  "--exact",
-]
-
-[[tests]]
 name = "rss script examples lint"
 kind = "command_for_each_file"
 directory = "examples/scripts"
 extension = ".rss"
 recursive = true
 command = "target/debug/rss"
-args = ["lint"]
+args = ["check", "--lint"]
 
 [[tests]]
 name = "rss package examples check"
@@ -109,21 +121,6 @@ kind = "command_success"
 command = "target/debug/rss"
 timeout_ms = 60000
 args = ["run", "packages/core-properties"]
-
-[[tests]]
-name = "passing root fixtures have no diagnostics"
-kind = "command_success"
-command = "cargo"
-timeout_ms = 180000
-args = [
-  "test",
-  "-q",
-  "--test",
-  "static",
-  "checker_frontend::misc::pass_fixtures_have_no_diagnostics",
-  "--",
-  "--exact",
-]
 
 [[tests]]
 name = "git diff has no whitespace errors"

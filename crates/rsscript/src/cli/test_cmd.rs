@@ -73,6 +73,12 @@ struct Summary {
     skipped: usize,
 }
 
+struct TestResult {
+    name: String,
+    status: &'static str,
+    duration_ms: u128,
+}
+
 #[derive(Debug)]
 struct Options {
     all: bool,
@@ -152,7 +158,7 @@ pub(crate) fn run_test(args: &[String]) -> ExitCode {
         total: tests.len(),
         ..Summary::default()
     };
-    let mut json_results: Vec<(String, &'static str)> = Vec::new();
+    let mut json_results: Vec<TestResult> = Vec::new();
 
     for test in &tests {
         if !name_matches_filter(&test.name, &options.filter) {
@@ -163,20 +169,33 @@ pub(crate) fn run_test(args: &[String]) -> ExitCode {
         if test.ignored {
             print_line(options.json, "skip", &test.name);
             summary.skipped += 1;
-            json_results.push((test.name.clone(), "skip"));
+            json_results.push(TestResult {
+                name: test.name.clone(),
+                status: "skip",
+                duration_ms: 0,
+            });
             continue;
         }
 
+        let started = Instant::now();
         match run_one(test) {
             Ok(true) => {
                 print_line(options.json, "pass", &test.name);
                 summary.passed += 1;
-                json_results.push((test.name.clone(), "pass"));
+                json_results.push(TestResult {
+                    name: test.name.clone(),
+                    status: "pass",
+                    duration_ms: started.elapsed().as_millis(),
+                });
             }
             Ok(false) => {
                 print_line(options.json, "fail", &test.name);
                 summary.failed += 1;
-                json_results.push((test.name.clone(), "fail"));
+                json_results.push(TestResult {
+                    name: test.name.clone(),
+                    status: "fail",
+                    duration_ms: started.elapsed().as_millis(),
+                });
             }
             Err(error) => {
                 print_line(options.json, "fail", &test.name);
@@ -184,7 +203,11 @@ pub(crate) fn run_test(args: &[String]) -> ExitCode {
                     eprintln!("  {error}");
                 }
                 summary.failed += 1;
-                json_results.push((test.name.clone(), "fail"));
+                json_results.push(TestResult {
+                    name: test.name.clone(),
+                    status: "fail",
+                    duration_ms: started.elapsed().as_millis(),
+                });
             }
         }
     }
@@ -612,15 +635,17 @@ fn summary_line(summary: &Summary) -> String {
     )
 }
 
-fn summary_json(results: &[(String, &'static str)], summary: &Summary) -> String {
+fn summary_json(results: &[TestResult], summary: &Summary) -> String {
     let mut tests = String::from("[");
-    for (index, (name, status)) in results.iter().enumerate() {
+    for (index, result) in results.iter().enumerate() {
         if index > 0 {
             tests.push(',');
         }
         tests.push_str(&format!(
-            "{{\"name\":{},\"status\":\"{status}\"}}",
-            json_string(name)
+            "{{\"name\":{},\"status\":\"{}\",\"duration_ms\":{}}}",
+            json_string(&result.name),
+            result.status,
+            result.duration_ms,
         ));
     }
     tests.push(']');
@@ -846,6 +871,26 @@ mod tests {
         assert_eq!(
             super::summary_line(&summary),
             "rss test summary total=3 selected=2 passed=1 failed=1 skipped=0"
+        );
+    }
+
+    #[test]
+    fn summary_json_includes_per_test_duration() {
+        let summary = super::Summary {
+            total: 1,
+            selected: 1,
+            passed: 1,
+            ..super::Summary::default()
+        };
+        let results = [super::TestResult {
+            name: "fast check".to_string(),
+            status: "pass",
+            duration_ms: 42,
+        }];
+
+        assert_eq!(
+            super::summary_json(&results, &summary),
+            "{\"total\":1,\"selected\":1,\"passed\":1,\"failed\":0,\"skipped\":0,\"tests\":[{\"name\":\"fast check\",\"status\":\"pass\",\"duration_ms\":42}]}"
         );
     }
 

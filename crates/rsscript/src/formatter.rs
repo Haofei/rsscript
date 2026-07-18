@@ -1174,9 +1174,17 @@ fn inline_expr(expr: &Expr) -> Option<String> {
             let needs_parens = matches!(left.as_ref(), Expr::Binary { .. });
             let left = inline_expr(left)?;
             if is_boolean_identity(*op, right) {
-                Some(needs_parens.then(|| format!("({left})")).unwrap_or(left))
+                Some(if needs_parens {
+                    format!("({left})")
+                } else {
+                    left
+                })
             } else if is_boolean_negation(*op, right) {
-                let left = needs_parens.then(|| format!("({left})")).unwrap_or(left);
+                let left = if needs_parens {
+                    format!("({left})")
+                } else {
+                    left
+                };
                 Some(format!("!{left}"))
             } else {
                 Some(format!(

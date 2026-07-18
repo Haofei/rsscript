@@ -1255,6 +1255,27 @@ impl<'a> RustLowerer<'a> {
                 .iter()
                 .enumerate()
                 .map(|(index, arg)| {
+                    if runtime_collection_intrinsic_borrows_arg(
+                        type_root_name(&namespace),
+                        type_root_name(method),
+                        arg.name.as_deref(),
+                        index + 1,
+                    ) {
+                        let value = match &arg.value {
+                            Expr::Effect { value, .. } => value.as_ref(),
+                            value => value,
+                        };
+                        if let Expr::Ident(name, _) = value
+                            && self.read_view_bindings.contains(name)
+                            && self
+                                .value_types
+                                .get(name)
+                                .is_some_and(|ty| !is_copy_type_ref(ty))
+                        {
+                            return rust_value_ident(name);
+                        }
+                        return format!("&({})", self.lower_expr(value));
+                    }
                     if let Some(expected) = self.receiver_call_expected_arg_type(
                         &namespace,
                         method,
@@ -1653,6 +1674,7 @@ impl<'a> RustLowerer<'a> {
     ) -> String {
         let previous_value_types = self.value_types.clone();
         let previous_param_effects = self.param_effects.clone();
+        let previous_read_view_bindings = self.read_view_bindings.clone();
         for (param, ty) in params.iter().zip(expected.fn_params.iter()) {
             self.value_types.insert(param.clone(), ty.clone());
         }
@@ -1665,6 +1687,9 @@ impl<'a> RustLowerer<'a> {
         for (index, param) in params.iter().enumerate() {
             if let Some(effect) = expected.effective_fn_param_effect(index) {
                 self.param_effects.insert(param.clone(), effect);
+                if effect == DataEffect::Read {
+                    self.read_view_bindings.insert(param.clone());
+                }
             }
         }
         // The closure's parameter list must match the stored
@@ -1709,6 +1734,7 @@ impl<'a> RustLowerer<'a> {
             self.current_return_type = previous_return_type;
             self.value_types = previous_value_types;
             self.param_effects = previous_param_effects;
+            self.read_view_bindings = previous_read_view_bindings;
             return lowered;
         }
         let mut out = String::new();
@@ -1718,6 +1744,7 @@ impl<'a> RustLowerer<'a> {
         self.current_return_type = previous_return_type;
         self.value_types = previous_value_types;
         self.param_effects = previous_param_effects;
+        self.read_view_bindings = previous_read_view_bindings;
         out
     }
 
@@ -1870,6 +1897,32 @@ impl<'a> RustLowerer<'a> {
         {
             return self.lower_managed_handle_effect_arg(*effect, value);
         }
+        if runtime_intrinsic_borrows_arg(callee, arg.name.as_deref(), index) {
+            let value = match &arg.value {
+                Expr::Effect { value, .. } => value.as_ref(),
+                value => value,
+            };
+            if let Expr::Ident(name, _) = value
+                && self.read_view_bindings.contains(name)
+                && self
+                    .value_types
+                    .get(name)
+                    .is_some_and(|ty| !is_copy_type_ref(ty))
+            {
+                return rust_value_ident(name);
+            }
+            return format!("&({})", self.lower_expr(value));
+        }
+        // Closure `read Int`/`Bool` parameters are represented as references in
+        // Rust. When static signature lookup is unavailable (for example after
+        // package-level function merging), still pass the scalar value rather
+        // than leaking `&Int` into a by-value helper call.
+        if let Expr::Ident(name, _) = &arg.value
+            && self.read_view_bindings.contains(name)
+            && self.value_types.get(name).is_some_and(is_copy_type_ref)
+        {
+            return format!("*{}", rust_value_ident(name));
+        }
         // A `read`-effect argument passed to a user function's *by-value* `Copy`
         // parameter (declared with no `read`/`mut` effect, so it lowers to e.g.
         // `f64`, not `&f64`) is passed by value, not borrowed. Without this a
@@ -1915,6 +1968,12 @@ impl<'a> RustLowerer<'a> {
         value: &Expr,
         expected: &TypeRef,
     ) -> String {
+        if is_copy_type_ref(expected)
+            && let Expr::Ident(name, _) = value
+            && self.read_view_bindings.contains(name)
+        {
+            return format!("*{}", rust_value_ident(name));
+        }
         if expected.name == "Fn" {
             if let Expr::Closure { params, body, .. } = value {
                 // A closure passed to a function PARAMETER typed `owned Fn` (or

@@ -201,7 +201,7 @@ fn main() -> Result<Unit, JsonError> {
     assert!(rust.contains("let order = rsscript_runtime::ord_compare(&(1i64), &(2i64));"));
     assert!(rust.contains("rsscript_runtime::list_sort(&mut list);"));
     assert!(rust.contains("rsscript_runtime::list_sort_with(&mut list, |left, right| {"));
-    assert!(rust.contains("return item == 10i64;"));
+    assert!(rust.contains("return item.clone() == 10i64;"), "{rust}");
     assert!(rust.contains("let folded = rsscript_runtime::list_fold(&(list), &(CountBox { value: 0i64 }), |state, item| {"));
     assert!(rust.contains("let try_folded = rsscript_runtime::list_try_fold(&(list), &(CountBox { value: 0i64 }), |state, item| {"));
 }

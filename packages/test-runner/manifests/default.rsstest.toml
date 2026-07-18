@@ -5,41 +5,11 @@ command = "cargo"
 args = ["fmt", "--check"]
 
 [[tests]]
-name = "clippy has no warnings"
+name = "rsscript library tests pass"
 kind = "command_success"
 command = "cargo"
 timeout_ms = 60000
-args = ["clippy", "--workspace", "--", "-D", "warnings"]
-
-[[tests]]
-name = "generated Rust packages compile"
-kind = "command_for_each_path"
-command = "cargo"
-args = ["check", "--manifest-path"]
-jobs = 1
-paths = [
-  "tests/generated/simple/Cargo.toml",
-  "tests/generated/managed/Cargo.toml",
-  "tests/generated/resource_pool/Cargo.toml",
-  "tests/generated/effects/Cargo.toml",
-  "tests/generated/result/Cargo.toml",
-  "tests/generated/try/Cargo.toml",
-  "tests/generated/runnable/Cargo.toml",
-]
-
-[[tests]]
-name = "rsscript tests compile"
-kind = "command_success"
-command = "cargo"
-timeout_ms = 60000
-args = ["test", "-p", "rsscript", "--no-run"]
-
-[[tests]]
-name = "runtime tests compile"
-kind = "command_success"
-command = "cargo"
-timeout_ms = 60000
-args = ["test", "-p", "rsscript-runtime", "--no-run"]
+args = ["test", "-p", "rsscript", "--lib"]
 
 [[tests]]
 name = "git diff has no whitespace errors"

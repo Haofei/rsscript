@@ -1,14 +1,6 @@
-# cargo-nextest configuration.
-#
-# nextest schedules every test case across all test binaries in one global
-# parallel pool (cargo test runs binaries serially), so the suite uses all cores.
-# On a 24-core box this runs the rsscript suite in ~100s vs ~240s for cargo test.
-#
-#   cargo nextest run            # all crates, all cores
-#   cargo nextest run -p rsscript
-
+# cargo-nextest configuration. Ordinary tests retain the global parallel pool;
+# only generated-Rust work is bounded below because every case launches Cargo.
 [profile.default]
-# Default test-threads is the logical CPU count; left implicit.
 # Parity tests build the compiled backend, so give slow ones room before warning
 # and only terminate a truly hung test.
 slow-timeout = { period = "120s", terminate-after = 4 }
@@ -19,3 +11,14 @@ fail-fast = false
 # Retry once to absorb rare flakiness in the network-server parity tests.
 retries = 1
 failure-output = "immediate-final"
+
+# Tests that lower RSS to a temporary Rust package and invoke Cargo again share
+# one generated-artifact target directory. Limiting only this class prevents
+# nested Cargo/linker jobs from exhausting memory or contending on Cargo's build
+# lock, while ordinary VM/checker tests keep the default parallelism.
+[test-groups]
+generated-rust = { max-threads = 2 }
+
+[[profile.default.overrides]]
+filter = 'test(/^(vm_eval|vm_eval_parity|backend_differential|file_upload_benchmark_e2e|s3_iam_reir_demo_e2e)::/)'
+test-group = 'generated-rust'

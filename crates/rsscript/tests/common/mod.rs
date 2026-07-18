@@ -154,7 +154,8 @@ pub fn try_run_compiled_source(
 
 fn compiled_cache_key(file: &str, source: &str, args: &[&str]) -> String {
     let mut hasher = DefaultHasher::new();
-    "rsscript-corpus-compiled-cache-v2".hash(&mut hasher);
+    "rsscript-corpus-compiled-cache-v3".hash(&mut hasher);
+    env!("RSSCRIPT_COMPILED_CACHE_FINGERPRINT").hash(&mut hasher);
     file.hash(&mut hasher);
     source.hash(&mut hasher);
     args.hash(&mut hasher);
@@ -729,6 +730,7 @@ pub fn assert_vm_eval_matches_backend_internal(
             .arg("--")
             .args(backend_args)
             .env("CARGO_TARGET_DIR", generated_target_dir())
+            .env("CARGO_NET_OFFLINE", "true")
             .output()
             .expect("generated Rust package should run");
         let stdout = String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n");

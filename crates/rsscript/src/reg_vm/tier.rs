@@ -222,10 +222,13 @@ fn jit_function_scalar_leaf_callable(jit_fn: &vm_jit::JitFunction) -> bool {
         matches!(
             ty,
             vm_jit::JitValueType::Int
+                | vm_jit::JitValueType::Bool
                 | vm_jit::JitValueType::Float
                 | vm_jit::JitValueType::Handle
                 | vm_jit::JitValueType::FlatInt
+                | vm_jit::JitValueType::FlatIntMut
                 | vm_jit::JitValueType::FlatFloat
+                | vm_jit::JitValueType::FlatFloatMut
         )
     }) && jit_fn.code.iter().all(|instr| {
         (matches!(
@@ -807,26 +810,37 @@ impl RegVm {
         base: usize,
         n_regs: usize,
         live: &[vm_jit::DeoptReg],
-    ) {
+        host_ctx: vm_jit::HostCtx,
+    ) -> bool {
+        let mut materialized = Vec::with_capacity(live.len());
         for vm_jit::DeoptReg { reg, value } in live {
-            // Heap-aware deopt (J0.1): every entry in `live` is a TRUE scalar —
-            // `decode_deopt_live` drops `Handle`/`FlatInt`/`FlatFloat` regs — so a
-            // reassigned SCALAR param is safe to restore (no `< n_params` guard).
-            // Heap / flat-pointer params never reach here, so the interpreter frame
-            // keeps its own heap value.
+            // Flat pointers are excluded by vm-jit. Scalars restore directly;
+            // Handle words are table indices and must be materialized while the
+            // top-level call context (and its heap-argument table) is still alive.
             if (*reg as usize) >= n_regs {
                 continue;
             }
             let vm_value = match value {
                 vm_jit::DeoptValue::Int(i) => VmValue::Int(*i),
+                vm_jit::DeoptValue::Bool(b) => VmValue::Bool(*b),
                 vm_jit::DeoptValue::Float(f) => VmValue::Float(*f),
-                // A `Handle` deopt value is a heap-table index, not a VM value; the
-                // interpreter frame already holds the heap `VmValue`, so leave the slot
-                // untouched (the old behavior from when Handle regs were dropped here).
-                vm_jit::DeoptValue::Handle(_) => continue,
+                // Resolve the heap-table index and clone the actual VmValue so moved
+                // Handle locals and child-frame assignments are restored precisely.
+                vm_jit::DeoptValue::Handle(handle) => {
+                    let Some(value) = JitHostCallCtx::from_token(host_ctx)
+                        .and_then(|ctx| ctx.heap_read_handle(*handle, |value| Some(value.clone())))
+                    else {
+                        return false;
+                    };
+                    value
+                }
             };
-            self.set_reg(base + *reg as usize, vm_value);
+            materialized.push((base + *reg as usize, vm_value));
         }
+        for (slot, value) in materialized {
+            self.set_reg(slot, value);
+        }
+        true
     }
 
     #[cfg(feature = "native-jit")]
@@ -837,6 +851,7 @@ impl RegVm {
         caller_base: usize,
         call_ip: usize,
         child: &vm_jit::DeoptFrame,
+        host_ctx: vm_jit::HostCtx,
     ) -> bool {
         let Some(RegInstr::CallKnown {
             dst,
@@ -868,7 +883,9 @@ impl RegVm {
             let value = self.reg(caller_base + *reg).clone();
             self.set_reg(child_base + index, value);
         }
-        self.restore_native_deopt_live_regs(child_base, callee.regs, &child.live);
+        if !self.restore_native_deopt_live_regs(child_base, callee.regs, &child.live, host_ctx) {
+            return false;
+        }
 
         let Some(caller_frame) = self.frames.last_mut() else {
             return false;
@@ -889,6 +906,7 @@ impl RegVm {
                     child_base,
                     child_resume_ip,
                     grandchild,
+                    host_ctx,
                 )
             })
     }
@@ -902,11 +920,15 @@ impl RegVm {
         resume_ip: usize,
         live: &[vm_jit::DeoptReg],
         child: &vm_jit::DeoptFrame,
+        host_ctx: vm_jit::HostCtx,
     ) -> bool {
         let original_len = self.frames.len();
         let original_ip = self.frames.last().map(|frame| frame.ip).unwrap_or_default();
-        self.restore_native_deopt_live_regs(base, func.regs, live);
-        let resumed = self.push_native_child_deopt_frame(unit, func, base, resume_ip, child);
+        if !self.restore_native_deopt_live_regs(base, func.regs, live, host_ctx) {
+            return false;
+        }
+        let resumed =
+            self.push_native_child_deopt_frame(unit, func, base, resume_ip, child, host_ctx);
         if !resumed {
             self.frames.truncate(original_len);
             if let Some(frame) = self.frames.last_mut() {
@@ -929,6 +951,17 @@ impl RegVm {
     #[cfg(feature = "native-jit")]
     #[allow(clippy::wrong_self_convention)]
     pub(super) fn try_native(&mut self, func: &RegFunction, base: usize) -> NativeAttempt {
+        // Host helpers may re-enter the VM, but the native heap tables, transaction,
+        // literals, and deopt state are one top-level frame rather than a frame stack.
+        // Preserve the outer call by interpreting the nested invocation.
+        if JitCallCtx::is_active() {
+            return NativeAttempt::Fallback;
+        }
+        // The current internal ABI carries only a host-stack cap, not the user's
+        // logical frame limit. Custom max_depth therefore remains interpreter-only.
+        if self.limits.max_depth != DEFAULT_MAX_DEPTH {
+            return NativeAttempt::Fallback;
+        }
         // Native limit parity (execution spec §6.2, Model A): Cranelift code polls
         // neither the step budget nor the cancel flag, so a hot, tiered-up function
         // containing an unbounded loop would run natively and bypass `step_budget`
@@ -1266,7 +1299,12 @@ impl RegVm {
         }) || jit_heap_inputs_alias_flat_mut(
             &scratch.heap_input_slots,
             &scratch.flat_mut_owned,
-        );
+        ) || ((!scratch.flat_owned.is_empty())
+            && func.code.iter().any(|instr| {
+                native_instruction_has_heap_write(instr)
+                    || matches!(instr, RegInstr::CallKnown { .. })
+            })
+            && jit_heap_inputs_alias_flat_mut(&scratch.heap_input_slots, &scratch.flat_owned));
         if flat_alias {
             bail_marshal(self);
             scratch.restore(self.native.as_mut());
@@ -1293,39 +1331,47 @@ impl RegVm {
             .iter()
             .map(|rc| rc.borrow_mut())
             .collect();
+        let mut flat_args = Vec::with_capacity(flat_guards.len() + flat_mut_guards.len());
         {
-            let mut next = 0usize;
-            let mut next_mut = 0usize;
+            let mut flat_iter = flat_guards.iter();
+            let mut flat_mut_iter = flat_mut_guards.iter_mut();
             for index in 0..n {
                 match param_types[index] {
                     NativeTy::FlatInt => {
-                        let (ptr, len) = flat_guards[next].as_ints_slice().expect("Ints pinned");
-                        next += 1;
-                        scratch.args[index] = ptr as i64;
-                        scratch.lens[index] = len as i64;
+                        let slice = flat_iter
+                            .next()
+                            .and_then(|v| v.as_ints_slice())
+                            .expect("Ints pinned");
+                        scratch.args[index] = slice.as_ptr() as i64;
+                        scratch.lens[index] = slice.len() as i64;
+                        flat_args.push(vm_jit::FlatBufferArg::Int(slice));
                     }
                     NativeTy::FlatIntMut => {
-                        let slice = flat_mut_guards[next_mut]
-                            .as_ints_mut_slice()
+                        let slice = flat_mut_iter
+                            .next()
+                            .and_then(|v| v.as_ints_mut_slice())
                             .expect("Ints mut pinned");
-                        next_mut += 1;
                         scratch.args[index] = slice.as_mut_ptr() as i64;
                         scratch.lens[index] = slice.len() as i64;
+                        flat_args.push(vm_jit::FlatBufferArg::IntMut(slice));
                     }
                     NativeTy::FlatFloat => {
-                        let (ptr, len) =
-                            flat_guards[next].as_floats_slice().expect("Floats pinned");
-                        next += 1;
-                        scratch.args[index] = ptr as i64;
-                        scratch.lens[index] = len as i64;
+                        let slice = flat_iter
+                            .next()
+                            .and_then(|v| v.as_floats_slice())
+                            .expect("Floats pinned");
+                        scratch.args[index] = slice.as_ptr() as i64;
+                        scratch.lens[index] = slice.len() as i64;
+                        flat_args.push(vm_jit::FlatBufferArg::Float(slice));
                     }
                     NativeTy::FlatFloatMut => {
-                        let slice = flat_mut_guards[next_mut]
-                            .as_floats_mut_slice()
+                        let slice = flat_mut_iter
+                            .next()
+                            .and_then(|v| v.as_floats_mut_slice())
                             .expect("Floats mut pinned");
-                        next_mut += 1;
                         scratch.args[index] = slice.as_mut_ptr() as i64;
                         scratch.lens[index] = slice.len() as i64;
+                        flat_args.push(vm_jit::FlatBufferArg::FloatMut(slice));
                     }
                     _ => {}
                 }
@@ -1354,6 +1400,7 @@ impl RegVm {
                 &scratch.args,
                 &scratch.lens,
                 heap_tx.host_ctx(),
+                &mut flat_args,
             );
             let elapsed = started.map(|started| started.elapsed().as_nanos());
             (result, elapsed)
@@ -1500,6 +1547,7 @@ impl RegVm {
                                 resume_ip as usize,
                                 &live,
                                 child,
+                                heap_tx.host_ctx(),
                             ) {
                                 if let Some(native) = self.native.as_mut()
                                     && native.collect_stats
@@ -1516,7 +1564,15 @@ impl RegVm {
                         // SKIPPING parameter registers: their window slots
                         // `base..base+n_params` are already valid and may hold heap
                         // `VmValue`s the scalar deopt payload cannot represent.
-                        self.restore_native_deopt_live_regs(base, func.regs, &live);
+                        if !self.restore_native_deopt_live_regs(
+                            base,
+                            func.regs,
+                            &live,
+                            heap_tx.host_ctx(),
+                        ) {
+                            scratch.restore(self.native.as_mut());
+                            return NativeAttempt::Fallback;
+                        }
                         // Resume interpretation AT the bailing instruction.
                         self.frames.last_mut().expect("active frame").ip = resume_ip as usize;
                         scratch.restore(self.native.as_mut());
@@ -1594,18 +1650,23 @@ impl RegVm {
 
     #[cfg(feature = "native-jit")]
     pub(super) fn try_osr(&mut self, func: &RegFunction, base: usize, header_ip: usize) -> bool {
-        // Memory parity: an allocating OSR loop runs off the `mem_budget` meter (§7.1
-        // rule 9), and native allocations are not yet charged (J0.5 mem accounting is
-        // future / tied to S4), so refuse OSR while `mem_budget` is armed. `step_budget`
-        // and `cancel` are NOT refused anymore: J0.5 emits the per-instruction step
-        // accumulator + per-header `step_budget` test + `cancel` poll directly in the
-        // armed OSR variant (Exec-Spec §6.2, "enforce or be ineligible" — the *enforce*
-        // branch), bailing to the interpreter which remains the sole limit authority.
-        //
-        // `mem_budget` is no longer a blanket refusal either: a loop that allocates /
-        // mutates nothing charges `mem_budget` exactly zero (identical to the
-        // interpreter), so it runs natively; an ALLOCATING loop still declines after
-        // translation (in-code byte accounting is future) — see `mem_armed` below.
+        if JitCallCtx::is_active() {
+            return false;
+        }
+        // Until transformed instructions carry source step, host-call, and
+        // allocation costs, no armed resource mode is allowed through OSR. The
+        // interpreter remains the semantic authority. Cancellation also stays on
+        // that path even though vm-jit's raw cancel load is now atomic.
+        if self.limits.step_budget.is_some()
+            || self.limits.cancel.is_some()
+            || self.limits.mem_budget.is_some()
+            || self.limits.host_call_budget.is_some()
+        {
+            return false;
+        }
+        // These values remain false after the gate above. Keeping the compile-time
+        // plumbing intact allows a future source-cost implementation to re-enable
+        // proven limit-aware OSR without changing the cache shape again.
         let emit_step = self.limits.step_budget.is_some();
         let emit_cancel = self.limits.cancel.is_some();
         let mem_armed = self.limits.mem_budget.is_some();
@@ -1623,7 +1684,8 @@ impl RegVm {
         // handle-index by the helper spec) is never seeded Handle.
         let param_native_types: Vec<Option<NativeTy>> = (0..func.params)
             .map(|i| match self.reg(base + i) {
-                VmValue::Int(_) | VmValue::Bool(_) => Some(NativeTy::Int),
+                VmValue::Int(_) => Some(NativeTy::Int),
+                VmValue::Bool(_) => Some(NativeTy::Bool),
                 VmValue::Float(_) => Some(NativeTy::Float),
                 VmValue::String(_) | VmValue::Struct(_) | VmValue::Variant(_) | VmValue::Map(_) => {
                     Some(NativeTy::Handle)
@@ -2456,25 +2518,6 @@ impl RegVm {
             scratch.window[field.native_reg] = value;
         }
 
-        if !scratch.flat_owned.is_empty() && !scratch.flat_mut_owned.is_empty() {
-            let old_flat_owned = std::mem::take(&mut scratch.flat_owned);
-            let old_flat_slots = std::mem::take(&mut scratch.flat_slots);
-            for (list, (reg, kind)) in old_flat_owned.into_iter().zip(old_flat_slots) {
-                if kind == NativeTy::FlatInt {
-                    if let Some(index) = scratch
-                        .flat_mut_owned
-                        .iter()
-                        .position(|candidate| Rc::ptr_eq(candidate, &list))
-                    {
-                        scratch.flat_mut_slots.push((index, reg));
-                        continue;
-                    }
-                }
-                scratch.flat_owned.push(list);
-                scratch.flat_slots.push((reg, kind));
-            }
-        }
-
         let flat_alias = scratch
             .flat_mut_owned
             .iter()
@@ -2484,8 +2527,46 @@ impl RegVm {
                 &scratch.flat_mut_owned,
                 base,
                 &heap_input_regs,
-            );
+            )
+            || ((!scratch.flat_owned.is_empty())
+                && func.code.iter().any(|instr| {
+                    native_instruction_has_heap_write(instr)
+                        || matches!(instr, RegInstr::CallKnown { .. })
+                })
+                && jit_selected_heap_inputs_alias_flat_mut(
+                    &scratch.heap_input_slots,
+                    &scratch.flat_owned,
+                    base,
+                    &heap_input_regs,
+                ));
         if flat_alias {
+            bail_osr!();
+        }
+
+        // One Rust borrow proves one unique backing buffer, while multiple native
+        // registers may intentionally carry the same pointer. Validate the slot map
+        // before taking any Ref/RefMut so malformed transform metadata falls back
+        // without panicking inside the marshaller.
+        if scratch.flat_owned.len() != scratch.flat_slots.len()
+            || scratch.flat_mut_slots.iter().any(|(owner, reg)| {
+                *owner >= scratch.flat_mut_owned.len()
+                    || !matches!(
+                        reg_types.get(*reg),
+                        Some(NativeTy::FlatIntMut | NativeTy::FlatFloatMut)
+                    )
+            })
+            || (0..scratch.flat_mut_owned.len()).any(|owner| {
+                let mut slots = scratch
+                    .flat_mut_slots
+                    .iter()
+                    .filter(|(candidate, _)| *candidate == owner);
+                let Some((_, first_reg)) = slots.next() else {
+                    return true;
+                };
+                let first_ty = reg_types.get(*first_reg);
+                slots.any(|(_, reg)| reg_types.get(*reg) != first_ty)
+            })
+        {
             bail_osr!();
         }
 
@@ -2502,34 +2583,69 @@ impl RegVm {
             .iter()
             .map(|rc| rc.borrow_mut())
             .collect();
-        for (i, &(reg, kind)) in scratch.flat_slots.iter().enumerate() {
-            let (ptr, len) = match kind {
+        let mut flat_args = Vec::with_capacity(flat_guards.len() + flat_mut_guards.len());
+        for (guard, (reg, ty)) in flat_guards.iter().zip(&scratch.flat_slots) {
+            match ty {
                 NativeTy::FlatInt => {
-                    let (p, l) = flat_guards[i].as_ints_slice().expect("Ints pinned");
-                    (p as i64, l)
+                    let Some(slice) = guard.as_ints_slice() else {
+                        unreachable!("flat kind validated before pinning")
+                    };
+                    scratch.window[*reg] = slice.as_ptr() as i64;
+                    scratch.lens[*reg] = slice.len() as i64;
+                    flat_args.push(vm_jit::FlatBufferArg::Int(slice));
                 }
-                _ => {
-                    let (p, l) = flat_guards[i].as_floats_slice().expect("Floats pinned");
-                    (p as i64, l)
+                NativeTy::FlatFloat => {
+                    let Some(slice) = guard.as_floats_slice() else {
+                        unreachable!("flat kind validated before pinning")
+                    };
+                    scratch.window[*reg] = slice.as_ptr() as i64;
+                    scratch.lens[*reg] = slice.len() as i64;
+                    flat_args.push(vm_jit::FlatBufferArg::Float(slice));
                 }
-            };
-            scratch.window[reg] = ptr;
-            scratch.lens[reg] = len as i64;
+                _ => unreachable!("shared flat slot has mutable/non-flat type"),
+            }
         }
-        for &(i, reg) in &scratch.flat_mut_slots {
-            let guard = flat_mut_guards.get_mut(i).expect("flat mut slot index");
-            // `flat_mut_slots` carries no element kind; pick the buffer by what the
-            // pinned list actually is (an Int-mut or Float-mut flat list).
-            let (ptr, len) = if let Some(slice) = guard.as_ints_mut_slice() {
-                (slice.as_mut_ptr() as i64, slice.len() as i64)
-            } else {
-                let slice = guard
-                    .as_floats_mut_slice()
-                    .expect("flat mut list is Ints or Floats");
-                (slice.as_mut_ptr() as i64, slice.len() as i64)
-            };
-            scratch.window[reg] = ptr;
-            scratch.lens[reg] = len;
+        for &(owner, reg) in &scratch.flat_mut_slots {
+            let guard = &flat_mut_guards[owner];
+            match reg_types[reg] {
+                NativeTy::FlatIntMut => {
+                    let Some(slice) = guard.as_ints_slice() else {
+                        unreachable!("flat kind validated before pinning")
+                    };
+                    scratch.window[reg] = slice.as_ptr() as i64;
+                    scratch.lens[reg] = slice.len() as i64;
+                }
+                NativeTy::FlatFloatMut => {
+                    let Some(slice) = guard.as_floats_slice() else {
+                        unreachable!("flat kind validated before pinning")
+                    };
+                    scratch.window[reg] = slice.as_ptr() as i64;
+                    scratch.lens[reg] = slice.len() as i64;
+                }
+                _ => unreachable!("mutable flat slot has non-mutable type"),
+            }
+        }
+        for (owner, guard) in flat_mut_guards.iter_mut().enumerate() {
+            let (_, reg) = scratch
+                .flat_mut_slots
+                .iter()
+                .find(|(candidate, _)| *candidate == owner)
+                .expect("mutable owner validated to have a slot");
+            match reg_types[*reg] {
+                NativeTy::FlatIntMut => {
+                    let Some(slice) = guard.as_ints_mut_slice() else {
+                        unreachable!("flat kind validated before pinning")
+                    };
+                    flat_args.push(vm_jit::FlatBufferArg::IntMut(slice));
+                }
+                NativeTy::FlatFloatMut => {
+                    let Some(slice) = guard.as_floats_mut_slice() else {
+                        unreachable!("flat kind validated before pinning")
+                    };
+                    flat_args.push(vm_jit::FlatBufferArg::FloatMut(slice));
+                }
+                _ => unreachable!("mutable flat owner has non-mutable type"),
+            }
         }
 
         // Phase 3: run the OSR loop body natively.
@@ -2565,22 +2681,14 @@ impl RegVm {
         let collect_stats = native_ref.collect_stats;
         let started = collect_stats.then(std::time::Instant::now);
         let _literal_guard = jit_install_string_literals(&string_literals);
-        let result = if armed {
-            native_ref.module.call_with_limits(
-                id,
-                &scratch.window,
-                &scratch.lens,
-                heap_tx.host_ctx(),
-                jit_limits_cell_ptr(),
-            )
-        } else {
-            native_ref.module.call_with_host_ctx(
-                id,
-                &scratch.window,
-                &scratch.lens,
-                heap_tx.host_ctx(),
-            )
-        };
+        debug_assert!(!armed, "armed OSR is rejected before compilation/dispatch");
+        let result = native_ref.module.call_with_host_ctx(
+            id,
+            &scratch.window,
+            &scratch.lens,
+            heap_tx.host_ctx(),
+            &mut flat_args,
+        );
         let elapsed = started.map(|started| started.elapsed().as_nanos());
         // The pinned borrows are no longer needed once the native call returns.
         drop(flat_guards);
@@ -2623,6 +2731,35 @@ impl RegVm {
                     scratch.restore(self.native.as_mut());
                     return false;
                 }
+                // Materialize ordinary Handle live-outs before committing the heap
+                // transaction: commit clears the per-call handle tables. Keep the
+                // cloned VmValues aside until every handle has resolved and the
+                // transaction has committed, so a partial resolution failure cannot
+                // update the interpreter frame.
+                let mut handle_liveouts = Vec::new();
+                for live_reg in &live {
+                    let reg = live_reg.reg as usize;
+                    if reg < func.params
+                        || reg >= func.regs
+                        || !written_regs.get(reg).copied().unwrap_or(false)
+                        || reg_types.get(reg) != Some(&NativeTy::Handle)
+                    {
+                        continue;
+                    }
+                    let vm_jit::DeoptValue::Handle(handle) = live_reg.value else {
+                        heap_tx.abort();
+                        scratch.restore(self.native.as_mut());
+                        return false;
+                    };
+                    let Some(value) = JitHostCallCtx::from_token(heap_tx.host_ctx())
+                        .and_then(|ctx| ctx.heap_read_handle(handle, |value| Some(value.clone())))
+                    else {
+                        heap_tx.abort();
+                        scratch.restore(self.native.as_mut());
+                        return false;
+                    };
+                    handle_liveouts.push((base + reg, value));
+                }
                 let Some(writebacks) =
                     heap_tx.commit_scalar_with_writebacks(&scratch.heap_input_slots)
                 else {
@@ -2631,6 +2768,9 @@ impl RegVm {
                     return false;
                 };
                 for (slot, value) in writebacks {
+                    self.set_reg(slot, value);
+                }
+                for (slot, value) in handle_liveouts {
                     self.set_reg(slot, value);
                 }
                 // J0.5 mem: this is the CLEAN OSR exit (heap writes committed above), so
@@ -2646,6 +2786,7 @@ impl RegVm {
                         (live_reg.reg as usize == field.native_reg).then(|| {
                             match live_reg.value {
                                 vm_jit::DeoptValue::Int(value) => Some(value),
+                                vm_jit::DeoptValue::Bool(_) => None,
                                 vm_jit::DeoptValue::Float(_) => None,
                                 vm_jit::DeoptValue::Handle(_) => None,
                             }
@@ -2679,8 +2820,9 @@ impl RegVm {
                 // loop are already correct in the interpreter window; restoring their
                 // native payload would corrupt heap/list slots whose native word is
                 // only an opaque handle/pointer/zero. Also skip J3-added tag/payload
-                // registers (index >= func.regs) and Handle/flat classes, whose
-                // scalar deopt payload cannot represent a VM heap value.
+                // registers (index >= func.regs). Handle registers were materialized
+                // above while the call's handle table was still alive; flat classes
+                // contain raw pointers and remain loop-invariant.
                 // J0.1(b): rebuild any live-after always-`Ok` Result from its scalar
                 // payload register's live-out value into the original variant slot. The
                 // RESULT-SR pass dissolved the Result to a scalar `payload_reg` and the
@@ -2702,7 +2844,10 @@ impl RegVm {
                         Some(tag_reg) => live
                             .iter()
                             .find(|d| d.reg as usize == *tag_reg)
-                            .map(|d| matches!(d.value, vm_jit::DeoptValue::Int(i) if i != 0))
+                            .map(|d| {
+                                matches!(d.value, vm_jit::DeoptValue::Bool(true))
+                                    || matches!(d.value, vm_jit::DeoptValue::Int(i) if i != 0)
+                            })
                             .unwrap_or(true),
                     };
                     let payload_reg = if is_ok {
@@ -2713,6 +2858,7 @@ impl RegVm {
                     if let Some(dr) = live.iter().find(|d| d.reg as usize == payload_reg) {
                         let payload = match dr.value {
                             vm_jit::DeoptValue::Int(i) => VmValue::Int(i),
+                            vm_jit::DeoptValue::Bool(b) => VmValue::Bool(b),
                             vm_jit::DeoptValue::Float(f) => VmValue::Float(f),
                             // J0.1 heap payload: resolve the captured heap-table index
                             // against the still-live JIT heap (heap_tx is live here, same
@@ -2744,6 +2890,7 @@ impl RegVm {
                     if let Some(dr) = live.iter().find(|d| d.reg as usize == *payload_reg) {
                         let payload = match dr.value {
                             vm_jit::DeoptValue::Int(i) => VmValue::Int(i),
+                            vm_jit::DeoptValue::Bool(b) => VmValue::Bool(b),
                             vm_jit::DeoptValue::Float(f) => VmValue::Float(f),
                             // Always-`Some` Option payloads are validated scalar; a Handle
                             // never reaches here — skip defensively for exhaustiveness.
@@ -2780,6 +2927,7 @@ impl RegVm {
                     }
                     let vm_value = match value {
                         vm_jit::DeoptValue::Int(i) => VmValue::Int(i),
+                        vm_jit::DeoptValue::Bool(b) => VmValue::Bool(b),
                         vm_jit::DeoptValue::Float(f) => VmValue::Float(f),
                         // Handle regs are already skipped above via `reg_types`; this arm
                         // keeps the match exhaustive and never writes a raw index back.
@@ -2929,6 +3077,9 @@ impl RegVm {
         caller_base: usize,
         args: &[usize],
     ) -> Option<VmValue> {
+        if !self.native_limits_unarmed() || self.limits.max_depth != DEFAULT_MAX_DEPTH {
+            return None;
+        }
         let key = func as *const RegFunction as usize;
         let (id, param_tys, ret) = {
             let native = self.native.as_mut()?;
@@ -3011,7 +3162,7 @@ impl RegVm {
             let native = self.native.as_ref()?;
             native
                 .module
-                .call_with_host_ctx(id, &int_args, &lens, heap_tx.host_ctx())
+                .call_with_host_ctx(id, &int_args, &lens, heap_tx.host_ctx(), &mut [])
         };
         match outcome {
             vm_jit::NativeOutcome::Completed(bits) => {
@@ -3051,6 +3202,9 @@ impl RegVm {
         caller_base: usize,
         args: &[usize],
     ) -> Option<VmValue> {
+        if !self.native_limits_unarmed() || self.limits.max_depth != DEFAULT_MAX_DEPTH {
+            return None;
+        }
         let func = unit.functions.get(function_id)?;
         if args.len() != func.params {
             return None;
@@ -3170,7 +3324,7 @@ impl RegVm {
             let native = self.native.as_ref()?;
             native
                 .module
-                .call_with_host_ctx(id, &int_args, &lens, heap_tx.host_ctx())
+                .call_with_host_ctx(id, &int_args, &lens, heap_tx.host_ctx(), &mut [])
         };
         match outcome {
             vm_jit::NativeOutcome::Completed(bits) => {

@@ -9,6 +9,15 @@ license = "MIT OR Apache-2.0"
 name = "rsscript_runtime"
 path = "src/lib.rs"
 
+[features]
+# Generated RSS packages retain the complete runtime by default. The compiler
+# itself depends on `core` only, so its edit/test loop does not compile HTTP,
+# WebSocket, or GPU support it never executes.
+default = ["core", "net", "gpu"]
+core = []
+net = ["tokio/net", "dep:reqwest", "dep:tokio-tungstenite"]
+gpu = ["dep:rss-metal-compute"]
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
@@ -26,9 +35,9 @@ uuid = { version = "1", features = ["v4"] }
 rand = "0.8"
 percent-encoding = "2"
 futures-util = "0.3"
-tokio = { version = "1", features = ["fs", "io-util", "net", "rt-multi-thread", "sync", "time"] }
-tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+tokio = { version = "1", features = ["fs", "io-util", "rt-multi-thread", "sync", "time"] }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
 tracing = "0.1"
 imbl = "7.0.0"
 
@@ -36,6 +45,7 @@ imbl = "7.0.0"
 # is `#![forbid(unsafe_code)]`); off macOS that crate is a stub reporting no GPU.
 [dependencies.rss-metal-compute]
 path = "../metal-compute"
+optional = true
 
 [dev-dependencies]
 static_assertions = "1"

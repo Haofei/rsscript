@@ -122,7 +122,7 @@ fn prop_result_map_ok(value: Int) -> fresh PropertyResult {
 }
 
 fn prop_result_and_then_err_stays_err(value: Int) -> fresh PropertyResult {
-    let input = Err("negative")
+    let input = result_int(value: -1)
     match Result.and_then(
         result: input,
         mapper: |item| {

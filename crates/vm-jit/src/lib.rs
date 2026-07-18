@@ -51,6 +51,17 @@ use cranelift_module::{FuncId, Linkage, Module, default_libcall_names};
 /// just forwards it from [`NativeModule::call`] to every imported host helper.
 pub type HostCtx = i64;
 
+/// Borrow proof for one unique flat buffer passed to generated code. One proof may
+/// validate multiple ABI entries that intentionally alias the same buffer. Safe
+/// callers cannot construct an arbitrary address: `NativeModule` validates every
+/// raw pointer and length against these live slices immediately before the call.
+pub enum FlatBufferArg<'a> {
+    Int(&'a [i64]),
+    IntMut(&'a mut [i64]),
+    Float(&'a [f64]),
+    FloatMut(&'a mut [f64]),
+}
+
 /// `(struct_handle, slot) -> i64`: the struct's `slot`-th field as an `Int`.
 pub type FieldIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
 /// `(struct_handle, slot, value) -> i64`: copy-on-write set of an `Int` field,
@@ -573,7 +584,7 @@ host_helpers! {
         field: list_is_empty,
         symbol: "rss_jit_list_is_empty",
         args: [JitValueType::Handle],
-        result: HostResult::Exact(JitValueType::Int),
+        result: HostResult::Exact(JitValueType::Bool),
         failure: HostFailureMode::BailFlag,
     },
     ListGetInt => {
@@ -755,7 +766,7 @@ host_helpers! {
         field: string_starts_with,
         symbol: "rss_jit_string_starts_with",
         args: [JitValueType::Handle, JitValueType::Handle],
-        result: HostResult::Exact(JitValueType::Int),
+        result: HostResult::Exact(JitValueType::Bool),
         failure: HostFailureMode::BailFlag,
     },
     StringSplitCount => {
@@ -860,14 +871,14 @@ host_helpers! {
         field: map_get_match_found,
         symbol: "rss_jit_map_get_match_found",
         args: [],
-        result: HostResult::Exact(JitValueType::Int),
+        result: HostResult::Exact(JitValueType::Bool),
         failure: HostFailureMode::CannotFail,
     },
     MapContainsInt => {
         field: map_contains_int,
         symbol: "rss_jit_map_contains_int",
         args: [JitValueType::Handle, JitValueType::Int],
-        result: HostResult::Exact(JitValueType::Int),
+        result: HostResult::Exact(JitValueType::Bool),
         failure: HostFailureMode::BailFlag,
     },
     MapLen => {
@@ -881,14 +892,14 @@ host_helpers! {
         field: map_is_empty,
         symbol: "rss_jit_map_is_empty",
         args: [JitValueType::Handle],
-        result: HostResult::Exact(JitValueType::Int),
+        result: HostResult::Exact(JitValueType::Bool),
         failure: HostFailureMode::BailFlag,
     },
     SetInsertInt => {
         field: set_insert_int,
         symbol: "rss_jit_set_insert_int",
         args: [JitValueType::Handle, JitValueType::Int],
-        result: HostResult::Exact(JitValueType::Int),
+        result: HostResult::Exact(JitValueType::Bool),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
     },
@@ -896,7 +907,7 @@ host_helpers! {
         field: set_insert_handle,
         symbol: "rss_jit_set_insert_handle",
         args: [JitValueType::Handle, JitValueType::Handle],
-        result: HostResult::Exact(JitValueType::Int),
+        result: HostResult::Exact(JitValueType::Bool),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
     },
@@ -911,14 +922,14 @@ host_helpers! {
         field: set_is_empty,
         symbol: "rss_jit_set_is_empty",
         args: [JitValueType::Handle],
-        result: HostResult::Exact(JitValueType::Int),
+        result: HostResult::Exact(JitValueType::Bool),
         failure: HostFailureMode::BailFlag,
     },
     SortedSetInsertInt => {
         field: sorted_set_insert_int,
         symbol: "rss_jit_sorted_set_insert_int",
         args: [JitValueType::Handle, JitValueType::Int],
-        result: HostResult::Exact(JitValueType::Int),
+        result: HostResult::Exact(JitValueType::Bool),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
     },
@@ -926,7 +937,7 @@ host_helpers! {
         field: sorted_set_insert_handle,
         symbol: "rss_jit_sorted_set_insert_handle",
         args: [JitValueType::Handle, JitValueType::Handle],
-        result: HostResult::Exact(JitValueType::Int),
+        result: HostResult::Exact(JitValueType::Bool),
         failure: HostFailureMode::BailFlag,
         heap_effect: HostHeapEffect::MutatesInput,
     },
@@ -934,14 +945,14 @@ host_helpers! {
         field: sorted_set_contains_int,
         symbol: "rss_jit_sorted_set_contains_int",
         args: [JitValueType::Handle, JitValueType::Int],
-        result: HostResult::Exact(JitValueType::Int),
+        result: HostResult::Exact(JitValueType::Bool),
         failure: HostFailureMode::BailFlag,
     },
     SortedSetIsEmpty => {
         field: sorted_set_is_empty,
         symbol: "rss_jit_sorted_set_is_empty",
         args: [JitValueType::Handle],
-        result: HostResult::Exact(JitValueType::Int),
+        result: HostResult::Exact(JitValueType::Bool),
         failure: HostFailureMode::BailFlag,
     },
     SortedMapInsertInt => {
@@ -978,21 +989,21 @@ host_helpers! {
         field: sorted_map_get_found,
         symbol: "rss_jit_sorted_map_get_found",
         args: [],
-        result: HostResult::Exact(JitValueType::Int),
+        result: HostResult::Exact(JitValueType::Bool),
         failure: HostFailureMode::CannotFail,
     },
     SortedMapContainsKeyInt => {
         field: sorted_map_contains_key_int,
         symbol: "rss_jit_sorted_map_contains_key_int",
         args: [JitValueType::Handle, JitValueType::Int],
-        result: HostResult::Exact(JitValueType::Int),
+        result: HostResult::Exact(JitValueType::Bool),
         failure: HostFailureMode::BailFlag,
     },
     SortedMapIsEmpty => {
         field: sorted_map_is_empty,
         symbol: "rss_jit_sorted_map_is_empty",
         args: [JitValueType::Handle],
-        result: HostResult::Exact(JitValueType::Int),
+        result: HostResult::Exact(JitValueType::Bool),
         failure: HostFailureMode::BailFlag,
     },
     SortedMapLen => {
@@ -1013,7 +1024,7 @@ host_helpers! {
         field: deque_is_empty,
         symbol: "rss_jit_deque_is_empty",
         args: [JitValueType::Handle],
-        result: HostResult::Exact(JitValueType::Int),
+        result: HostResult::Exact(JitValueType::Bool),
         failure: HostFailureMode::BailFlag,
     },
     DequePushBackInt => {
@@ -1507,6 +1518,8 @@ impl JitInstr {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JitValueType {
     Int,
+    /// Logical boolean stored as an `i64` 0/1 in machine code.
+    Bool,
     Float,
     /// An opaque handle (index into the VM's per-call heap-value table) to a heap
     /// value — a struct/list/etc. — that can't live in a scalar register. Stored
@@ -1516,9 +1529,14 @@ pub enum JitValueType {
     /// the args word) plus its element count (in the parallel `lens` word). Stored
     /// as `i64` (the pointer bits); only valid as the `base` of a `*Direct` read.
     FlatInt,
+    /// Mutable counterpart of [`FlatInt`]. The machine representation is the same,
+    /// but validation requires this type for direct writes.
+    FlatIntMut,
     /// TV2: a flat `List<Float>` param passed as a raw `*const f64` data pointer
     /// plus its element count. Only valid as the `base` of a `*Direct` read.
     FlatFloat,
+    /// Mutable counterpart of [`FlatFloat`].
+    FlatFloatMut,
 }
 
 /// A compilable function: register count, per-register storage class, and the
@@ -1594,10 +1612,13 @@ fn native_scalar_leaf_callable(function: &JitFunction, osr: bool, _returns_handl
         matches!(
             ty,
             JitValueType::Int
+                | JitValueType::Bool
                 | JitValueType::Float
                 | JitValueType::Handle
                 | JitValueType::FlatInt
+                | JitValueType::FlatIntMut
                 | JitValueType::FlatFloat
+                | JitValueType::FlatFloatMut
         )
     }) && function.code.iter().all(|instr| {
         (matches!(
@@ -1695,6 +1716,10 @@ struct CompiledFunc {
     /// Longest native-to-native call chain reachable from this function. A function
     /// with no `CallNative` edges has depth 0; a direct native leaf call has depth 1.
     native_call_depth: u32,
+    /// Conservative host-stack depth cap derived from this function's frame shape.
+    /// A top-level acyclic chain is checked once before entering machine code;
+    /// recursive entries retain a generated dynamic guard.
+    native_depth_cap: u32,
     n_params: usize,
     /// Register count of the source [`JitFunction`] (the width of each site's
     /// register space).
@@ -1702,6 +1727,9 @@ struct CompiledFunc {
     /// Per-safepoint deopt state-map (resume_ip + live registers), built host-side
     /// during `compile`. See [`DeoptMap`].
     deopt_map: DeoptMap,
+    /// Whether generated code reads and writes the non-null limits cell passed to
+    /// the raw entry ABI. Ordinary safe calls must never enter such a function.
+    requires_limits: bool,
     /// OSR-entry (J5.2): when `true`, the function was compiled with
     /// [`compile_osr`](NativeModule::compile_osr). Its `args_ptr` is the
     /// interpreter's full `n_regs`-wide register *window* (indexed by register),
@@ -1717,6 +1745,7 @@ struct CompiledFunc {
     /// never has a top-level `Return` (it exits via `OsrExit`), so it is `false`.
     returns_handle: bool,
     param_types: Vec<JitValueType>,
+    reg_types: Vec<JitValueType>,
     return_type: Option<JitValueType>,
     scalar_leaf_callable: bool,
 }
@@ -1736,10 +1765,11 @@ struct NativeCallee {
 /// `group[group_index]` by its declared-but-not-yet-defined `FuncId`. Non-chaining
 /// (re-run-from-top deopt), so only the callee's shape is needed to marshal the
 /// call and size a (discarded-on-bail) payload slot.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct NativeGroupMember {
     func_id: FuncId,
     n_params: usize,
+    param_types: Vec<JitValueType>,
     deopt_payload_words: usize,
     return_type: JitValueType,
 }
@@ -1868,8 +1898,10 @@ pub struct DeoptMap {
 /// an exact `f64`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DeoptValue {
-    /// An integer (or boolean `0`/`1`) register's value.
+    /// An integer register's value.
     Int(i64),
+    /// A logical boolean register's value.
+    Bool(bool),
     /// A float register's value (decoded from its captured 8-byte bit pattern).
     Float(f64),
     /// A `Handle` register's captured heap-table index. Carries no VM value by itself;
@@ -1941,6 +1973,24 @@ pub enum NativeOutcome {
         live: Vec<DeoptReg>,
         child: Option<Box<DeoptFrame>>,
     },
+}
+
+fn anonymous_deopt() -> NativeOutcome {
+    NativeOutcome::Deopt {
+        safepoint_id: SafepointId::ANONYMOUS,
+        live: Vec::new(),
+        child: None,
+    }
+}
+
+fn is_flat_type(ty: JitValueType) -> bool {
+    matches!(
+        ty,
+        JitValueType::FlatInt
+            | JitValueType::FlatIntMut
+            | JitValueType::FlatFloat
+            | JitValueType::FlatFloatMut
+    )
 }
 
 impl NativeOutcome {
@@ -2139,8 +2189,9 @@ impl NativeModule {
     /// `step_limit`/`cancel_armed` request in-generated-code `VmLimits` enforcement
     /// (J0.5, Exec-Spec §6.2): when set, the loop ticks `step_budget` per instruction
     /// and tests it (plus polls `cancel`) at every header, bailing to the interpreter
-    /// — which then enforces the limit. The caller must pass a non-null `limits` cell
-    /// pointer at call time (see [`call_with_host_ctx`](Self::call_with_host_ctx)).
+    /// — which then enforces the limit. The caller must use the unsafe raw limits
+    /// entry with a valid non-null limits cell; ordinary safe call modes reject this
+    /// compiled entry before executing machine code.
     pub fn compile_osr(
         &mut self,
         function: &JitFunction,
@@ -2227,6 +2278,7 @@ impl NativeModule {
             id,
             &[],
             limit_checks,
+            native_call_depth,
         )?;
 
         self.module
@@ -2254,12 +2306,15 @@ impl NativeModule {
             id,
             code_size_bytes,
             native_call_depth,
+            native_depth_cap: native_recursion_depth_cap(function) as u32,
             n_params: function.n_params as usize,
             n_regs: function.n_regs as usize,
             deopt_map,
+            requires_limits: limit_checks.any(),
             osr: osr_header.is_some(),
             returns_handle,
             param_types: function.reg_types[..function.n_params as usize].to_vec(),
+            reg_types: function.reg_types.clone(),
             return_type,
             scalar_leaf_callable,
         });
@@ -2282,25 +2337,97 @@ impl NativeModule {
         for function in funcs {
             validate(function, false)?;
         }
+        // Complete every contextual check before declaring any Cranelift function.
+        // A declaration cannot be rolled back, so rejecting later would poison this
+        // NativeModule. Ordinary CallNative edges are temporarily unsupported here:
+        // their chained child payload can exceed the n_regs-sized group payload.
+        let return_types: Vec<JitValueType> = funcs
+            .iter()
+            .map(|function| {
+                function
+                    .code
+                    .iter()
+                    .find_map(|instr| match instr {
+                        JitInstr::Return { src } => Some(function.reg_types[*src as usize]),
+                        _ => None,
+                    })
+                    .ok_or_else(|| JitError("recursive group member has no Return".into()))
+            })
+            .collect::<Result<_, _>>()?;
+        for (member_index, function) in funcs.iter().enumerate() {
+            if function
+                .code
+                .iter()
+                .any(|instr| matches!(instr, JitInstr::CallNative { .. }))
+            {
+                return Err(JitError(format!(
+                    "recursive group member {member_index} contains unsupported CallNative"
+                )));
+            }
+            if function.reg_types[..function.n_params as usize]
+                .iter()
+                .any(|ty| {
+                    !matches!(
+                        ty,
+                        JitValueType::Int | JitValueType::Bool | JitValueType::Float
+                    )
+                })
+                || !matches!(
+                    return_types[member_index],
+                    JitValueType::Int | JitValueType::Bool | JitValueType::Float
+                )
+            {
+                return Err(JitError(format!(
+                    "recursive group member {member_index} must use scalar parameters and return"
+                )));
+            }
+            for instr in &function.code {
+                let JitInstr::CallGroup {
+                    group_index,
+                    dst,
+                    args,
+                } = instr
+                else {
+                    continue;
+                };
+                let callee_index = *group_index as usize;
+                let Some(callee) = funcs.get(callee_index) else {
+                    return Err(JitError(format!(
+                        "CallGroup group_index {callee_index} out of range"
+                    )));
+                };
+                if args.len() != callee.n_params as usize {
+                    return Err(JitError(format!(
+                        "CallGroup got {} args, group member {callee_index} expects {}",
+                        args.len(),
+                        callee.n_params
+                    )));
+                }
+                if function.reg_types[*dst as usize] != return_types[callee_index] {
+                    return Err(JitError(format!(
+                        "CallGroup result register {dst} has type {:?}, group member {callee_index} returns {:?}",
+                        function.reg_types[*dst as usize], return_types[callee_index]
+                    )));
+                }
+                for (arg_index, (&arg, expected)) in args
+                    .iter()
+                    .zip(&callee.reg_types[..callee.n_params as usize])
+                    .enumerate()
+                {
+                    let actual = function.reg_types[arg as usize];
+                    if actual != *expected {
+                        return Err(JitError(format!(
+                            "CallGroup arg {arg_index} has type {actual:?}, group member {callee_index} expects {expected:?}"
+                        )));
+                    }
+                }
+            }
+        }
         let ptr_ty = self.module.target_config().pointer_type();
         // Phase 1: declare every member + assemble the group metadata.
         let mut func_ids: Vec<FuncId> = Vec::with_capacity(funcs.len());
         let mut group: Vec<NativeGroupMember> = Vec::with_capacity(funcs.len());
-        let mut return_types: Vec<JitValueType> = Vec::with_capacity(funcs.len());
-        for function in funcs {
-            let return_type = function
-                .code
-                .iter()
-                .find_map(|instr| match instr {
-                    JitInstr::Return { src } => Some(function.reg_types[*src as usize]),
-                    _ => None,
-                })
-                .ok_or_else(|| JitError("recursive group member has no Return".into()))?;
-            if return_type == JitValueType::Handle {
-                return Err(JitError(
-                    "recursive group member returning a heap handle is unsupported".into(),
-                ));
-            }
+        for (function, &return_type) in funcs.iter().zip(&return_types) {
             self.module.clear_context(&mut self.ctx);
             push_compiled_abi_signature(&mut self.ctx.func, ptr_ty);
             let name = format!("rss_jit_{}", self.counter);
@@ -2310,10 +2437,10 @@ impl NativeModule {
                 .declare_function(&name, Linkage::Local, &self.ctx.func.signature)
                 .map_err(|e| err("declare", e))?;
             func_ids.push(id);
-            return_types.push(return_type);
             group.push(NativeGroupMember {
                 func_id: id,
                 n_params: function.n_params as usize,
+                param_types: function.reg_types[..function.n_params as usize].to_vec(),
                 // Members are scalar (CallGroup/CallSelf are non-chaining), so a
                 // member's deopt payload is just its own register window.
                 deopt_payload_words: function.n_regs as usize,
@@ -2339,6 +2466,7 @@ impl NativeModule {
                 func_ids[i],
                 &group,
                 LimitChecks::default(),
+                0,
             )?;
             self.module
                 .define_function(func_ids[i], &mut self.ctx)
@@ -2371,12 +2499,15 @@ impl NativeModule {
                 id: func_ids[i],
                 code_size_bytes: code_sizes[i],
                 native_call_depth: 0,
+                native_depth_cap: native_recursion_depth_cap(function) as u32,
                 n_params: function.n_params as usize,
                 n_regs: function.n_regs as usize,
                 deopt_map: std::mem::take(&mut deopt_maps[i]),
+                requires_limits: false,
                 osr: false,
                 returns_handle: false,
                 param_types: function.reg_types[..function.n_params as usize].to_vec(),
+                reg_types: function.reg_types.clone(),
                 return_type: Some(return_types[i]),
                 scalar_leaf_callable,
             });
@@ -2443,7 +2574,13 @@ impl NativeModule {
                     "CallNative callee has no scalar Return instruction".into(),
                 ));
             };
-            if matches!(return_type, JitValueType::FlatInt | JitValueType::FlatFloat) {
+            if matches!(
+                return_type,
+                JitValueType::FlatInt
+                    | JitValueType::FlatIntMut
+                    | JitValueType::FlatFloat
+                    | JitValueType::FlatFloatMut
+            ) {
                 return Err(JitError(format!(
                     "CallNative callee return type {return_type:?} is not callable"
                 )));
@@ -2482,23 +2619,29 @@ impl NativeModule {
     /// (codegen numbers sites from 1; [`SafepointId::ANONYMOUS`] / `0` means no site
     /// recorded an id, e.g. an id/length mismatch rejected before the call).
     ///
-    /// This is a **fully safe** boundary for scalar/handle args. The bail flag is a
+    /// This is a **fully safe** boundary for scalar/handle args. Functions whose
+    /// entry contains a flat buffer or requires a limits cell are rejected;
+    /// embedders must use a borrow-checked prepared call or the unsafe raw limits
+    /// entry as appropriate.
+    /// The bail flag is a
     /// per-thread `u8` owned by this crate; `call` resets it, passes its own address
     /// into the generated code, and reports a set flag as a fallback.
     ///
-    /// `args` and `lens` are parallel slices indexed by param (both length
-    /// `n_params`). For a TV2 flat-array param the caller places the raw data
-    /// pointer (`*const i64`/`*const f64` reinterpreted as `i64`) in `args[i]` and
-    /// the element count in `lens[i]`. **SAFETY (TV2 borrow protocol — caller
-    /// obligation):** any pointer placed in `args` for a flat-array param must point
-    /// at a buffer that stays allocated, immovable, and unmutated for the entire
-    /// duration of this call. The generated code reads at most `lens[i]` consecutive
-    /// elements from it (every index is bounds-checked against `lens[i]` →
-    /// `signal_bail` on OOB) and never writes or retains it. The VM caller satisfies
-    /// this by pinning a shared `Ref` borrow of the backing `RefCell<TypedVec>` for
-    /// the call (so no `borrow_mut`/realloc can occur); see `try_native`.
+    /// `args` and `lens` are parallel slices indexed by parameter. Scalar entries
+    /// use a zero length. Flat entries cannot pass through this API.
     pub fn call(&self, id: CompiledId, args: &[i64], lens: &[i64]) -> NativeOutcome {
-        self.call_with_host_ctx(id, args, lens, 0)
+        let Some(func) = self.funcs.get(id.index).filter(|_| id.module_id == self.id) else {
+            return anonymous_deopt();
+        };
+        let entry_types = if func.osr {
+            &func.reg_types
+        } else {
+            &func.param_types
+        };
+        if entry_types.iter().any(|ty| is_flat_type(*ty)) {
+            return anonymous_deopt();
+        }
+        self.call_with_host_ctx(id, args, lens, 0, &mut [])
     }
 
     /// Run with a host context (see [`call_with_host_ctx`](Self::call_with_host_ctx))
@@ -2506,7 +2649,13 @@ impl NativeModule {
     /// `[i64; 3]` = `[steps, step_budget, cancel_addr]` for the call's duration: an
     /// armed OSR variant reads `step_budget`/`cancel_addr`, accumulates into and writes
     /// back `steps`. Unarmed variants ignore it (so [`call`](Self::call) passes null).
-    pub fn call_with_limits(
+    /// # Safety
+    ///
+    /// Every flat entry in `args` must be a correctly aligned pointer to a live
+    /// buffer of the logical type and length in `lens`. Mutable flat entries must
+    /// be exclusively borrowed. `limits_ptr` must be null or point to a live limits
+    /// cell required by this compiled OSR entry.
+    pub unsafe fn call_with_limits(
         &self,
         id: CompiledId,
         args: &[i64],
@@ -2531,12 +2680,16 @@ impl NativeModule {
                 // Exhaustive on purpose: a new `JitValueType` must choose a side here.
                 let value = match ty {
                     JitValueType::Int => DeoptValue::Int(bits),
+                    JitValueType::Bool => DeoptValue::Bool(bits != 0),
                     JitValueType::Float => DeoptValue::Float(f64::from_bits(bits as u64)),
                     // A `Handle` carries its heap-table index: the consumer resolves it
                     // against the live JIT heap (J0.1 live-after heap-payload). A flat reg
                     // is a raw borrow-pinned buffer pointer with no such mapping.
                     JitValueType::Handle => DeoptValue::Handle(bits),
-                    JitValueType::FlatInt | JitValueType::FlatFloat => {
+                    JitValueType::FlatInt
+                    | JitValueType::FlatIntMut
+                    | JitValueType::FlatFloat
+                    | JitValueType::FlatFloatMut => {
                         return None;
                     }
                 };
@@ -2591,13 +2744,64 @@ impl NativeModule {
     /// Run a compiled function while forwarding `host_ctx` to every imported host
     /// helper. The context is opaque to `vm-jit`; the embedding VM validates and
     /// interprets it.
+    /// Flat entries are accepted only when `flat_args` contains matching live Rust
+    /// borrows whose addresses and lengths equal the ABI words in `args`/`lens`.
+    /// A mutable proof may satisfy read-only aliases of the same buffer as well as
+    /// mutable entries; the single exclusive borrow remains held for the whole call.
     pub fn call_with_host_ctx(
         &self,
         id: CompiledId,
         args: &[i64],
         lens: &[i64],
         host_ctx: HostCtx,
+        flat_args: &mut [FlatBufferArg<'_>],
     ) -> NativeOutcome {
+        let Some(func) = self.funcs.get(id.index).filter(|_| id.module_id == self.id) else {
+            return anonymous_deopt();
+        };
+        if func.requires_limits {
+            return anonymous_deopt();
+        }
+        let entry_types = if func.osr {
+            &func.reg_types
+        } else {
+            &func.param_types
+        };
+        for (index, ty) in entry_types.iter().copied().enumerate() {
+            if !is_flat_type(ty) {
+                continue;
+            }
+            let expected_ptr = args.get(index).copied();
+            let expected_len = lens.get(index).copied();
+            let proof = flat_args.iter_mut().any(|arg| {
+                let (ptr, len, compatible) = match arg {
+                    FlatBufferArg::Int(values) => (
+                        values.as_ptr() as i64,
+                        values.len() as i64,
+                        ty == JitValueType::FlatInt,
+                    ),
+                    FlatBufferArg::IntMut(values) => (
+                        values.as_mut_ptr() as i64,
+                        values.len() as i64,
+                        matches!(ty, JitValueType::FlatInt | JitValueType::FlatIntMut),
+                    ),
+                    FlatBufferArg::Float(values) => (
+                        values.as_ptr() as i64,
+                        values.len() as i64,
+                        ty == JitValueType::FlatFloat,
+                    ),
+                    FlatBufferArg::FloatMut(values) => (
+                        values.as_mut_ptr() as i64,
+                        values.len() as i64,
+                        matches!(ty, JitValueType::FlatFloat | JitValueType::FlatFloatMut),
+                    ),
+                };
+                compatible && expected_ptr == Some(ptr) && expected_len == Some(len)
+            });
+            if !proof {
+                return anonymous_deopt();
+            }
+        }
         self.call_inner(id, args, lens, host_ctx, std::ptr::null())
     }
 
@@ -2628,6 +2832,15 @@ impl NativeModule {
                 };
             }
         };
+        if func.requires_limits != !limits_ptr.is_null() {
+            return anonymous_deopt();
+        }
+        // Ordinary CallNative edges are static. Checking their maximum chain once
+        // here removes a depth comparison from every hot child call while still
+        // rejecting an acyclic chain before it can exceed the host-stack budget.
+        if func.native_call_depth > func.native_depth_cap {
+            return anonymous_deopt();
+        }
         // The generated entry block reads words from `args_ptr` (and `lens_ptr`)
         // without consulting `n_args`, so a slice shorter than what the entry reads
         // would read out of bounds. A normal compile reads `n_params` packed args; an
@@ -2641,6 +2854,13 @@ impl NativeModule {
                 child: None,
             };
         }
+        let Some(_call_guard) = TopLevelCallGuard::enter() else {
+            return NativeOutcome::Deopt {
+                safepoint_id: SafepointId::ANONYMOUS,
+                live: Vec::new(),
+                child: None,
+            };
+        };
         let f = func.f;
         let returns_handle = func.returns_handle;
         let deopt_map = &func.deopt_map;
@@ -2658,13 +2878,11 @@ impl NativeModule {
                     // memsets, and a bail only ever reads slots the generated code just
                     // wrote (the live-register set), so stale words in other slots are
                     // never observed.
-                    let payload_ptr = {
-                        let mut buf = payload.borrow_mut();
-                        if buf.len() < deopt_map.payload_words {
-                            buf.resize(deopt_map.payload_words, 0);
-                        }
-                        buf.as_mut_ptr()
-                    };
+                    let mut buf = payload.borrow_mut();
+                    if buf.len() < deopt_map.payload_words {
+                        buf.resize(deopt_map.payload_words, 0);
+                    }
+                    let payload_ptr = buf.as_mut_ptr();
                     // SAFETY: `f` was produced by `compile` with the `CompiledAbi`
                     // signature; it reads `args.len()` i64s from `args.as_ptr()` and
                     // `lens.as_ptr()`, writes one i64 to `&mut out`, and only ever loads
@@ -2720,7 +2938,6 @@ impl NativeModule {
                         // A real bail site (id >= 1) names a `sites[id - 1]` entry; an
                         // anonymous bail (id 0, e.g. fell off the end) has no site, so
                         // `live` is empty.
-                        let buf = payload.borrow();
                         let frame = self.decode_deopt_frame(id, safepoint_id, 0, &buf);
                         NativeOutcome::Deopt {
                             safepoint_id,
@@ -2757,7 +2974,31 @@ impl NativeModule {
     }
 }
 
+struct TopLevelCallGuard;
+
+impl TopLevelCallGuard {
+    fn enter() -> Option<Self> {
+        TOP_LEVEL_CALL_ACTIVE.with(|active| {
+            if active.replace(true) {
+                None
+            } else {
+                Some(Self)
+            }
+        })
+    }
+}
+
+impl Drop for TopLevelCallGuard {
+    fn drop(&mut self) {
+        TOP_LEVEL_CALL_ACTIVE.with(|active| active.set(false));
+    }
+}
+
 std::thread_local! {
+    /// A top-level call owns the TLS bail/safepoint/payload cells until machine code
+    /// returns. Generated native-to-native calls do not enter through this guard.
+    static TOP_LEVEL_CALL_ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+
     /// Per-thread bail flag shared between the in-flight compiled call (which loads
     /// it) and the host helpers (which set it via [`signal_bail`]). `call` resets it
     /// before each invocation, so it is only meaningful during a call.
@@ -2839,7 +3080,11 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
     let is_nonscalar = |r: u32| {
         matches!(
             class(r),
-            JitValueType::Handle | JitValueType::FlatInt | JitValueType::FlatFloat
+            JitValueType::Handle
+                | JitValueType::FlatInt
+                | JitValueType::FlatIntMut
+                | JitValueType::FlatFloat
+                | JitValueType::FlatFloatMut
         )
     };
     let check_target = |t: u32| -> Result<(), JitError> {
@@ -2896,12 +3141,12 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
         }
         Ok(())
     };
-    // Comparison: operands share a scalar class, result is an `Int` boolean.
+    // Comparison: operands share a scalar class, result is a logical Bool.
     let compare = |dst: u32, lhs: u32, rhs: u32, op: &str| -> Result<(), JitError> {
         scalar_pair(lhs, rhs, op)?;
         check_reg(dst)?;
-        if class(dst) != JitValueType::Int {
-            return Err(JitError(format!("{op}: boolean result must be Int")));
+        if class(dst) != JitValueType::Bool {
+            return Err(JitError(format!("{op}: boolean result must be Bool")));
         }
         Ok(())
     };
@@ -2924,7 +3169,19 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
     // slot. The host's borrow protocol pins the buffer for the call's duration either
     // way.
     let require_flat_param = |r: u32, want: JitValueType, op: &str| -> Result<(), JitError> {
-        require_class(r, want, op)?;
+        check_reg(r)?;
+        let actual = class(r);
+        let type_matches = actual == want
+            || matches!(
+                (want, actual),
+                (JitValueType::FlatInt, JitValueType::FlatIntMut)
+                    | (JitValueType::FlatFloat, JitValueType::FlatFloatMut)
+            );
+        if !type_matches {
+            return Err(JitError(format!(
+                "{op}: register {r} is {actual:?}, expected {want:?}"
+            )));
+        }
         let window = if osr {
             program.n_regs as usize
         } else {
@@ -2954,7 +3211,7 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
             JitInstr::LoadFloat { dst, .. } => {
                 require_class(*dst, JitValueType::Float, "LoadFloat")?
             }
-            JitInstr::LoadBool { dst, .. } => require_class(*dst, JitValueType::Int, "LoadBool")?,
+            JitInstr::LoadBool { dst, .. } => require_class(*dst, JitValueType::Bool, "LoadBool")?,
             JitInstr::Move { dst, src } => {
                 check_reg(*dst)?;
                 check_reg(*src)?;
@@ -2963,8 +3220,7 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                 // through a temporary (Pending #1). A **flat-array** register (pointer
                 // + length, keyed by reg in the `lens` slice) genuinely cannot be
                 // moved, so those stay rejected.
-                let is_flat =
-                    |r: u32| matches!(class(r), JitValueType::FlatInt | JitValueType::FlatFloat);
+                let is_flat = |r: u32| is_flat_type(class(r));
                 if is_flat(*src) || is_flat(*dst) {
                     return Err(JitError(
                         "Move: flat-array registers cannot be moved".into(),
@@ -3016,7 +3272,13 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                 }
                 match sig.result {
                     HostResult::Exact(result) => {
-                        require_class(*dst, result, &format!("HostCall {helper:?} result"))?;
+                        check_reg(*dst)?;
+                        if class(*dst) != result {
+                            return Err(JitError(format!(
+                                "HostCall {helper:?} result: register {dst} is {:?}, expected {result:?}",
+                                class(*dst)
+                            )));
+                        }
                     }
                     HostResult::IntOrFloatBits => {
                         check_reg(*dst)?;
@@ -3100,7 +3362,7 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
             }
             JitInstr::CallNative { dst, args, .. } => {
                 check_reg(*dst)?;
-                if matches!(class(*dst), JitValueType::FlatInt | JitValueType::FlatFloat) {
+                if is_flat_type(class(*dst)) {
                     return Err(JitError(format!(
                         "CallNative result register {dst} is a flat-array register"
                     )));
@@ -3111,7 +3373,7 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
             }
             JitInstr::CallSelf { dst, args } => {
                 check_reg(*dst)?;
-                if matches!(class(*dst), JitValueType::FlatInt | JitValueType::FlatFloat) {
+                if is_flat_type(class(*dst)) {
                     return Err(JitError(format!(
                         "CallSelf result register {dst} is a flat-array register"
                     )));
@@ -3142,7 +3404,7 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                 // where the group's signatures are known. Here only the local
                 // register references are validated.
                 check_reg(*dst)?;
-                if matches!(class(*dst), JitValueType::FlatInt | JitValueType::FlatFloat) {
+                if is_flat_type(class(*dst)) {
                     return Err(JitError(format!(
                         "CallGroup result register {dst} is a flat-array register"
                     )));
@@ -3217,12 +3479,12 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
             JitInstr::NotEqual { dst, lhs, rhs } => compare(*dst, *lhs, *rhs, "NotEqual")?,
             JitInstr::Jump { target } => check_target(*target)?,
             JitInstr::JumpIfBool { cond, target, .. } => {
-                require_class(*cond, JitValueType::Int, "JumpIfBool")?;
+                require_class(*cond, JitValueType::Bool, "JumpIfBool")?;
                 check_target(*target)?;
                 check_fallthrough()?;
             }
             JitInstr::ProfiledJumpIfBool { cond, target, .. } => {
-                require_class(*cond, JitValueType::Int, "ProfiledJumpIfBool")?;
+                require_class(*cond, JitValueType::Bool, "ProfiledJumpIfBool")?;
                 check_target(*target)?;
                 check_fallthrough()?;
             }
@@ -3265,7 +3527,7 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                 index,
                 value,
             } => {
-                require_flat_param(*base, JitValueType::FlatInt, "ListSetIntDirect base")?;
+                require_flat_param(*base, JitValueType::FlatIntMut, "ListSetIntDirect base")?;
                 require_class(*index, JitValueType::Int, "ListSetIntDirect index")?;
                 require_class(*value, JitValueType::Int, "ListSetIntDirect value")?;
                 require_class(*dst, JitValueType::Int, "ListSetIntDirect result")?;
@@ -3281,7 +3543,7 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                 index,
                 value,
             } => {
-                require_flat_param(*base, JitValueType::FlatFloat, "ListSetFloatDirect base")?;
+                require_flat_param(*base, JitValueType::FlatFloatMut, "ListSetFloatDirect base")?;
                 require_class(*index, JitValueType::Int, "ListSetFloatDirect index")?;
                 require_class(*value, JitValueType::Float, "ListSetFloatDirect value")?;
                 require_class(*dst, JitValueType::Int, "ListSetFloatDirect result")?;
@@ -3290,7 +3552,10 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                 check_reg(*base)?;
                 if !matches!(
                     class(*base),
-                    JitValueType::FlatInt | JitValueType::FlatFloat
+                    JitValueType::FlatInt
+                        | JitValueType::FlatIntMut
+                        | JitValueType::FlatFloat
+                        | JitValueType::FlatFloatMut
                 ) {
                     return Err(JitError(format!(
                         "ListLenDirect base: register {base} is {:?}, expected a flat-array param",
@@ -3313,7 +3578,10 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                 check_reg(*base)?;
                 if !matches!(
                     class(*base),
-                    JitValueType::FlatInt | JitValueType::FlatFloat
+                    JitValueType::FlatInt
+                        | JitValueType::FlatIntMut
+                        | JitValueType::FlatFloat
+                        | JitValueType::FlatFloatMut
                 ) {
                     return Err(JitError(format!(
                         "ListIsEmptyDirect base: register {base} is {:?}, expected a flat-array param",
@@ -3330,8 +3598,7 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                         "ListIsEmptyDirect base: register {base} is not a parameter"
                     )));
                 }
-                // Result is a 0/1 boolean, stored in an Int register like `Equal`.
-                require_class(*dst, JitValueType::Int, "ListIsEmptyDirect result")?;
+                require_class(*dst, JitValueType::Bool, "ListIsEmptyDirect result")?;
             }
             JitInstr::GuardClosureId { base, expected } => {
                 require_class(*base, JitValueType::Handle, "GuardClosureId base")?;
@@ -4122,6 +4389,7 @@ fn build_function(
     self_func_id: FuncId,
     group: &[NativeGroupMember],
     limit_checks: LimitChecks,
+    native_static_call_depth: u32,
 ) -> Result<DeoptMap, JitError> {
     // Definite-assignment ("must") sets per instruction, computed once up front so
     // each bail site can record its live (entry-assigned) registers. Purely
@@ -4406,6 +4674,32 @@ fn build_function(
             .expect("native callee metadata resolved")
     };
 
+    // Dynamic guards are needed only on recursive entries. Ordinary CallNative
+    // edges are statically resolved, so their maximum depth is checked once by the
+    // top-level wrapper. Reserve that known descendant depth when recursion and an
+    // ordinary native edge coexist.
+    if has_call_self || has_call_group {
+        let cap = bcx
+            .ins()
+            .iconst(ptr_ty, native_recursion_depth_cap(program));
+        let at_cap = bcx
+            .ins()
+            .icmp(IntCC::UnsignedGreaterThanOrEqual, native_call_depth, cap);
+        let too_deep = if native_static_call_depth == 0 {
+            at_cap
+        } else {
+            let deepest = bcx
+                .ins()
+                .iadd_imm(native_call_depth, i64::from(native_static_call_depth));
+            let descendants_exceed_cap = bcx.ins().icmp(IntCC::UnsignedGreaterThan, deepest, cap);
+            bcx.ins().bor(at_cap, descendants_exceed_cap)
+        };
+        let cont = bcx.create_block();
+        bcx.ins().brif(too_deep, fallback, &[], cont, &[]);
+        bcx.switch_to_block(cont);
+        bcx.seal_block(cont);
+    }
+
     match osr_header {
         // OSR-entry: begin native execution *inside* the loop at the header block.
         // The header is a backedge target, hence a leader, so its block exists; if a
@@ -4423,30 +4717,6 @@ fn build_function(
             bcx.ins().jump(fallback, &[]);
         }
         None => {
-            // Entry depth guard (native-call-ABI slices 2+4): a self- OR mutually-
-            // recursive function bails to the interpreter (re-run from the top — its
-            // precise resume is off) once the native call depth reaches the cap,
-            // BEFORE the host C stack can overflow. Non-recursive functions emit
-            // nothing here.
-            if has_call_self || has_call_group {
-                let cap = bcx
-                    .ins()
-                    .iconst(ptr_ty, native_recursion_depth_cap(program));
-                let too_deep =
-                    bcx.ins()
-                        .icmp(IntCC::UnsignedGreaterThanOrEqual, native_call_depth, cap);
-                let cont = bail_if(
-                    &mut bcx,
-                    too_deep,
-                    fallback,
-                    safepoint_ptr,
-                    payload_ptr,
-                    &vars,
-                    &mut next_id,
-                    deopt!(0),
-                );
-                bcx.switch_to_block(cont);
-            }
             bcx.ins().jump(block_for[0].unwrap(), &[]);
         }
     }
@@ -4505,7 +4775,7 @@ fn build_function(
             }
             if let Some(cancel_addr_var) = cancel_addr_var {
                 let caddr = bcx.use_var(cancel_addr_var);
-                let flag = bcx.ins().load(types::I8, MemFlags::trusted(), caddr, 0);
+                let flag = bcx.ins().atomic_load(types::I8, MemFlags::trusted(), caddr);
                 let zero = bcx.ins().iconst(types::I8, 0);
                 let cancelled = bcx.ins().icmp(IntCC::NotEqual, flag, zero);
                 trip = Some(match trip {
@@ -4801,11 +5071,6 @@ fn build_function(
                     8,
                     3,
                 ));
-                let bail_slot = bcx.create_sized_stack_slot(StackSlotData::new(
-                    StackSlotKind::ExplicitSlot,
-                    1,
-                    0,
-                ));
                 let safepoint_slot = bcx.create_sized_stack_slot(StackSlotData::new(
                     StackSlotKind::ExplicitSlot,
                     8,
@@ -4818,15 +5083,16 @@ fn build_function(
                 ));
 
                 let zero_i64 = bcx.ins().iconst(types::I64, 0);
-                let zero_i8 = bcx.ins().iconst(types::I8, 0);
-                bcx.ins().stack_store(zero_i8, bail_slot, 0);
                 bcx.ins().stack_store(zero_i64, safepoint_slot, 0);
                 for (i_arg, &arg) in args.iter().enumerate() {
                     let value = bcx.use_var(reg(arg));
                     bcx.ins().stack_store(value, args_slot, (i_arg as i32) * 8);
                     let len = if matches!(
                         meta.param_types[i_arg],
-                        JitValueType::FlatInt | JitValueType::FlatFloat
+                        JitValueType::FlatInt
+                            | JitValueType::FlatIntMut
+                            | JitValueType::FlatFloat
+                            | JitValueType::FlatFloatMut
                     ) {
                         bcx.ins()
                             .load(types::I64, MemFlags::trusted(), lens_ptr, (arg as i32) * 8)
@@ -4838,7 +5104,6 @@ fn build_function(
                 let args_ptr_v = bcx.ins().stack_addr(ptr_ty, args_slot, 0);
                 let lens_ptr_v = bcx.ins().stack_addr(ptr_ty, lens_slot, 0);
                 let out_ptr_v = bcx.ins().stack_addr(ptr_ty, out_slot, 0);
-                let bail_ptr_v = bcx.ins().stack_addr(ptr_ty, bail_slot, 0);
                 let safepoint_ptr_v = bcx.ins().stack_addr(ptr_ty, safepoint_slot, 0);
                 let payload_ptr_v = bcx.ins().stack_addr(ptr_ty, payload_slot, 0);
                 let nargs_v = bcx.ins().iconst(ptr_ty, meta.n_params as i64);
@@ -4854,7 +5119,7 @@ fn build_function(
                         lens_ptr_v,
                         host_ctx,
                         out_ptr_v,
-                        bail_ptr_v,
+                        bail_ptr,
                         safepoint_ptr_v,
                         payload_ptr_v,
                         child_depth,
@@ -4862,7 +5127,7 @@ fn build_function(
                     ],
                 );
                 let completed = bcx.inst_results(call)[0];
-                let child_bail = bcx.ins().stack_load(types::I8, bail_slot, 0);
+                let child_bail = bcx.ins().load(types::I8, MemFlags::trusted(), bail_ptr, 0);
                 let one_i8 = bcx.ins().iconst(types::I8, 1);
                 let zero_i8_again = bcx.ins().iconst(types::I8, 0);
                 let not_completed = bcx.ins().icmp(IntCC::NotEqual, completed, one_i8);
@@ -4979,7 +5244,7 @@ fn build_function(
                 // window, so it gets its own scratch slots (sized to the callee and
                 // discarded on bail). Forward depth+1; the entry guard bounds the stack.
                 let k = *group_index as usize;
-                let member = *group
+                let member = group
                     .get(k)
                     .ok_or_else(|| JitError(format!("CallGroup group_index {k} out of range")))?;
                 if args.len() != member.n_params {
@@ -4988,6 +5253,14 @@ fn build_function(
                         args.len(),
                         member.n_params
                     )));
+                }
+                for (i_arg, (&arg, expected)) in args.iter().zip(&member.param_types).enumerate() {
+                    let actual = program.reg_types[arg as usize];
+                    if actual != *expected {
+                        return Err(JitError(format!(
+                            "CallGroup arg {i_arg} has type {actual:?}, group member {k} expects {expected:?}"
+                        )));
+                    }
                 }
                 let member_ref = group_refs[k];
                 let slot_bytes = |words: usize| (words.max(1) * 8) as u32;
@@ -5006,11 +5279,6 @@ fn build_function(
                     8,
                     3,
                 ));
-                let bail_slot = bcx.create_sized_stack_slot(StackSlotData::new(
-                    StackSlotKind::ExplicitSlot,
-                    1,
-                    0,
-                ));
                 let safepoint_slot = bcx.create_sized_stack_slot(StackSlotData::new(
                     StackSlotKind::ExplicitSlot,
                     8,
@@ -5022,8 +5290,6 @@ fn build_function(
                     3,
                 ));
                 let zero_i64 = bcx.ins().iconst(types::I64, 0);
-                let zero_i8 = bcx.ins().iconst(types::I8, 0);
-                bcx.ins().stack_store(zero_i8, bail_slot, 0);
                 bcx.ins().stack_store(zero_i64, safepoint_slot, 0);
                 for (i_arg, &arg) in args.iter().enumerate() {
                     let value = bcx.use_var(reg(arg));
@@ -5034,7 +5300,6 @@ fn build_function(
                 let args_ptr_v = bcx.ins().stack_addr(ptr_ty, args_slot, 0);
                 let lens_ptr_v = bcx.ins().stack_addr(ptr_ty, lens_slot, 0);
                 let out_ptr_v = bcx.ins().stack_addr(ptr_ty, out_slot, 0);
-                let bail_ptr_v = bcx.ins().stack_addr(ptr_ty, bail_slot, 0);
                 let safepoint_ptr_v = bcx.ins().stack_addr(ptr_ty, safepoint_slot, 0);
                 let payload_ptr_v = bcx.ins().stack_addr(ptr_ty, payload_slot, 0);
                 let nargs_v = bcx.ins().iconst(ptr_ty, member.n_params as i64);
@@ -5048,21 +5313,25 @@ fn build_function(
                         lens_ptr_v,
                         host_ctx,
                         out_ptr_v,
-                        bail_ptr_v,
+                        bail_ptr,
                         safepoint_ptr_v,
                         payload_ptr_v,
                         child_depth,
                         limits_ptr,
                     ],
                 );
-                // Non-chaining: a child bail (its own slots, discarded) shows up as
-                // completed != 1; propagate at this site (re-run-from-top).
+                // Non-chaining: a child bail uses its own safepoint/payload but the
+                // shared helper-bail channel. Propagate at this site (re-run-from-top).
                 let completed = bcx.inst_results(call)[0];
                 let one_i8 = bcx.ins().iconst(types::I8, 1);
                 let not_completed = bcx.ins().icmp(IntCC::NotEqual, completed, one_i8);
+                let child_bail = bcx.ins().load(types::I8, MemFlags::trusted(), bail_ptr, 0);
+                let zero_i8 = bcx.ins().iconst(types::I8, 0);
+                let child_bailed = bcx.ins().icmp(IntCC::NotEqual, child_bail, zero_i8);
+                let failed = bcx.ins().bor(not_completed, child_bailed);
                 let cont = bail_if(
                     &mut bcx,
-                    not_completed,
+                    failed,
                     fallback,
                     safepoint_ptr,
                     payload_ptr,
@@ -7830,21 +8099,28 @@ mod tests {
             .unwrap();
 
         let data = [10i64, 20, 30];
+        let mut flat = [FlatBufferArg::Int(&data)];
         assert_eq!(
-            m.call(caller, &[data.as_ptr() as i64], &[data.len() as i64])
-                .completed(),
+            m.call_with_host_ctx(
+                caller,
+                &[data.as_ptr() as i64],
+                &[data.len() as i64],
+                0,
+                &mut flat,
+            )
+            .completed(),
             Some(3)
         );
     }
 
     #[test]
     fn native_call_can_pass_flat_int_arg_to_mutating_callee() {
-        use JitValueType::{FlatInt, Int};
+        use JitValueType::{FlatIntMut, Int};
         let mut m = module();
         let flat_callee = m
             .compile(&ft(
                 3,
-                vec![FlatInt, Int, Int, Int],
+                vec![FlatIntMut, Int, Int, Int],
                 vec![
                     JitInstr::ListSetIntDirect {
                         dst: 3,
@@ -7859,7 +8135,7 @@ mod tests {
         let caller = m
             .compile(&ft(
                 3,
-                vec![FlatInt, Int, Int, Int, Int],
+                vec![FlatIntMut, Int, Int, Int, Int],
                 vec![
                     JitInstr::CallNative {
                         callee: flat_callee,
@@ -7877,13 +8153,12 @@ mod tests {
             .unwrap();
 
         let mut data = [10i64, 20, 30];
+        let args = [data.as_mut_ptr() as i64, 1, 99];
+        let lens = [data.len() as i64, 0, 0];
+        let mut flat = [FlatBufferArg::IntMut(&mut data)];
         assert_eq!(
-            m.call(
-                caller,
-                &[data.as_mut_ptr() as i64, 1, 99],
-                &[data.len() as i64, 0, 0],
-            )
-            .completed(),
+            m.call_with_host_ctx(caller, &args, &lens, 0, &mut flat,)
+                .completed(),
             Some(99)
         );
         assert_eq!(data, [10, 99, 30]);
@@ -7923,7 +8198,14 @@ mod tests {
             .unwrap();
 
         let data = [1.25f64, 2.5, 3.75];
-        let outcome = m.call(caller, &[data.as_ptr() as i64, 1], &[data.len() as i64, 0]);
+        let mut flat = [FlatBufferArg::Float(&data)];
+        let outcome = m.call_with_host_ctx(
+            caller,
+            &[data.as_ptr() as i64, 1],
+            &[data.len() as i64, 0],
+            0,
+            &mut flat,
+        );
         match outcome {
             NativeOutcome::Completed(bits) => {
                 assert_eq!(f64::from_bits(bits as u64), 2.5);
@@ -8042,7 +8324,7 @@ mod tests {
 
     #[test]
     fn closure_id_dispatch_selects_arm_or_bails() {
-        use JitValueType::{Handle, Int};
+        use JitValueType::{Bool, Handle, Int};
         // `closure_id` is the identity on the handle arg, so the handle value IS the
         // observed function id — the test drives the polymorphic dispatch directly,
         // mirroring the producer's lowering (read id once via ClosureId, then
@@ -8070,7 +8352,7 @@ mod tests {
         let id = m
             .compile(&ft(
                 2,
-                vec![Handle, Int, Int, Int, Int, Int, Int, Int, Int],
+                vec![Handle, Int, Int, Int, Bool, Int, Int, Int, Int],
                 vec![
                     JitInstr::HostCall {
                         helper: HostHelper::ClosureId,
@@ -8151,17 +8433,48 @@ mod tests {
         let ilen = ints.len() as i64;
         // In-bounds reads index directly out of the flat buffer.
         assert_eq!(
-            m.call(id_int, &[ints_ptr, 0], &[ilen, 0]).completed(),
+            m.call_with_host_ctx(
+                id_int,
+                &[ints_ptr, 0],
+                &[ilen, 0],
+                0,
+                &mut [FlatBufferArg::Int(&ints)]
+            )
+            .completed(),
             Some(10)
         );
         assert_eq!(
-            m.call(id_int, &[ints_ptr, 2], &[ilen, 0]).completed(),
+            m.call_with_host_ctx(
+                id_int,
+                &[ints_ptr, 2],
+                &[ilen, 0],
+                0,
+                &mut [FlatBufferArg::Int(&ints)]
+            )
+            .completed(),
             Some(30)
         );
         // OOB (>= len and < 0) → fallback (None), like the helper's bail.
-        assert_eq!(m.call(id_int, &[ints_ptr, 3], &[ilen, 0]).completed(), None);
         assert_eq!(
-            m.call(id_int, &[ints_ptr, -1], &[ilen, 0]).completed(),
+            m.call_with_host_ctx(
+                id_int,
+                &[ints_ptr, 3],
+                &[ilen, 0],
+                0,
+                &mut [FlatBufferArg::Int(&ints)]
+            )
+            .completed(),
+            None
+        );
+        assert_eq!(
+            m.call_with_host_ctx(
+                id_int,
+                &[ints_ptr, -1],
+                &[ilen, 0],
+                0,
+                &mut [FlatBufferArg::Int(&ints)]
+            )
+            .completed(),
             None
         );
 
@@ -8184,9 +8497,15 @@ mod tests {
         let fptr = floats.as_ptr() as i64;
         let flen = floats.len() as i64;
         let read = |i: i64| {
-            m.call(id_f, &[fptr, i], &[flen, 0])
-                .completed()
-                .map(|b| f64::from_bits(b as u64))
+            m.call_with_host_ctx(
+                id_f,
+                &[fptr, i],
+                &[flen, 0],
+                0,
+                &mut [FlatBufferArg::Float(&floats)],
+            )
+            .completed()
+            .map(|b| f64::from_bits(b as u64))
         };
         assert_eq!(read(1), Some(2.5));
         assert_eq!(read(0), Some(1.5));
@@ -8203,7 +8522,17 @@ mod tests {
                 ],
             ))
             .unwrap();
-        assert_eq!(m.call(id_len, &[ints_ptr], &[ilen]).completed(), Some(3));
+        assert_eq!(
+            m.call_with_host_ctx(
+                id_len,
+                &[ints_ptr],
+                &[ilen],
+                0,
+                &mut [FlatBufferArg::Int(&ints)]
+            )
+            .completed(),
+            Some(3)
+        );
     }
 
     #[test]
@@ -8240,7 +8569,13 @@ mod tests {
         // Bail at the FIRST site: x + x overflows, so the `Add` guard fires (id 1)
         // before the list read is ever reached.
         assert!(matches!(
-            m.call(id, &[ints_ptr, i64::MAX, 0], &[ilen, 0, 0]),
+            m.call_with_host_ctx(
+                id,
+                &[ints_ptr, i64::MAX, 0],
+                &[ilen, 0, 0],
+                0,
+                &mut [FlatBufferArg::Int(&ints)]
+            ),
             NativeOutcome::Deopt {
                 safepoint_id: SafepointId(1),
                 ..
@@ -8249,7 +8584,13 @@ mod tests {
         // Pass the first guard (small x, no overflow) but bail at the SECOND site:
         // index 5 is out of bounds, so the direct-read OOB guard fires (id 2).
         assert!(matches!(
-            m.call(id, &[ints_ptr, 1, 5], &[ilen, 0, 0]),
+            m.call_with_host_ctx(
+                id,
+                &[ints_ptr, 1, 5],
+                &[ilen, 0, 0],
+                0,
+                &mut [FlatBufferArg::Int(&ints)]
+            ),
             NativeOutcome::Deopt {
                 safepoint_id: SafepointId(2),
                 ..
@@ -8257,7 +8598,13 @@ mod tests {
         ));
         // Both guards pass → completes (id stays 0 = no bail recorded).
         assert!(matches!(
-            m.call(id, &[ints_ptr, 1, 2], &[ilen, 0, 0]),
+            m.call_with_host_ctx(
+                id,
+                &[ints_ptr, 1, 2],
+                &[ilen, 0, 0],
+                0,
+                &mut [FlatBufferArg::Int(&ints)]
+            ),
             NativeOutcome::Completed(_)
         ));
     }
@@ -8397,12 +8744,12 @@ mod tests {
         //   4:   u(reg4) = a + a               guard here joins both arms
         //   5:   return u
         // regs: 0=a, 1=cond, 2=(unused scratch), 3=t, 4=u.
-        use JitValueType::Int;
+        use JitValueType::{Bool, Int};
         let mut m = module();
         let id = m
             .compile(&ft(
                 2,
-                vec![Int, Int, Int, Int, Int],
+                vec![Int, Bool, Int, Int, Int],
                 vec![
                     JitInstr::JumpIfBool {
                         cond: 1,
@@ -8439,7 +8786,7 @@ mod tests {
         );
         // The params (regs 0 and 1) are assigned on every path → still live.
         assert!(map.sites[1].live.contains(&(0, JitValueType::Int)));
-        assert!(map.sites[1].live.contains(&(1, JitValueType::Int)));
+        assert!(map.sites[1].live.contains(&(1, JitValueType::Bool)));
         // On the fall-through arm's own guard (ip 1) t is also not-yet live.
         assert!(!map.sites[0].live.iter().any(|(r, _)| *r == 3));
     }
@@ -8571,6 +8918,7 @@ mod tests {
                         .find(|r| r.reg == 1)
                         .map(|r| match r.value {
                             DeoptValue::Int(v) => v,
+                            DeoptValue::Bool(_) => panic!("total is Int"),
                             DeoptValue::Float(_) => panic!("total is Int"),
                             DeoptValue::Handle(_) => panic!("total is Int"),
                         })
@@ -8650,7 +8998,7 @@ mod tests {
         window[4] = 1; // one
         let mut lens = [0i64; 6];
         lens[0] = data.len() as i64;
-        match m.call(id, &window, &lens) {
+        match m.call_with_host_ctx(id, &window, &lens, 0, &mut [FlatBufferArg::Int(&data)]) {
             NativeOutcome::Deopt {
                 safepoint_id, live, ..
             } => {
@@ -8661,6 +9009,7 @@ mod tests {
                     .find(|r| r.reg == 3)
                     .map(|r| match r.value {
                         DeoptValue::Int(v) => v,
+                        DeoptValue::Bool(_) => panic!("acc is Int"),
                         DeoptValue::Float(_) => panic!("acc is Int"),
                         DeoptValue::Handle(_) => panic!("acc is Int"),
                     })
@@ -8682,7 +9031,13 @@ mod tests {
         empty_window[4] = 1; // one
         let mut empty_lens = [0i64; 6];
         empty_lens[0] = 0;
-        match m.call(id, &empty_window, &empty_lens) {
+        match m.call_with_host_ctx(
+            id,
+            &empty_window,
+            &empty_lens,
+            0,
+            &mut [FlatBufferArg::Int(&empty)],
+        ) {
             NativeOutcome::Deopt {
                 safepoint_id, live, ..
             } => {
@@ -8690,6 +9045,7 @@ mod tests {
                 assert_eq!(site.resume_ip, 9);
                 let acc = live.iter().find(|r| r.reg == 3).map(|r| match r.value {
                     DeoptValue::Int(v) => v,
+                    DeoptValue::Bool(_) => panic!(),
                     DeoptValue::Float(_) => panic!(),
                     DeoptValue::Handle(_) => panic!(),
                 });
@@ -8753,7 +9109,7 @@ mod tests {
         w2[6] = 8; // bound (> len 4)
         let mut l2 = [0i64; 7];
         l2[0] = data.len() as i64; // lens[xs] = 4 — the bounds-check source
-        match m.call(id2, &w2, &l2) {
+        match m.call_with_host_ctx(id2, &w2, &l2, 0, &mut [FlatBufferArg::Int(&data)]) {
             NativeOutcome::Deopt { safepoint_id, .. } => {
                 let site = m.deopt_map(id2).unwrap().sites[safepoint_id.0 as usize - 1].clone();
                 // The OOB read bails at the ListGetIntDirect ip (6), NOT the exit (10):
@@ -8888,12 +9244,24 @@ mod tests {
 
         // In range: t = 1 + 2 = 3 → xs[3] = 40.
         assert_eq!(
-            m.call(id, &[xs_ptr, 1, 2], &[xlen, 0, 0]),
+            m.call_with_host_ctx(
+                id,
+                &[xs_ptr, 1, 2],
+                &[xlen, 0, 0],
+                0,
+                &mut [FlatBufferArg::Int(&xs)]
+            ),
             NativeOutcome::Completed(40)
         );
 
         // Out of range: t = 3 + 4 = 7 >= len 5 → the direct-read OOB guard bails.
-        let out = m.call(id, &[xs_ptr, 3, 4], &[xlen, 0, 0]);
+        let out = m.call_with_host_ctx(
+            id,
+            &[xs_ptr, 3, 4],
+            &[xlen, 0, 0],
+            0,
+            &mut [FlatBufferArg::Int(&xs)],
+        );
         assert!(matches!(out, NativeOutcome::Deopt { .. }));
         // t (reg 3) was computed before the guard fired and is captured.
         assert_eq!(live_value(&out, 3), Some(DeoptValue::Int(7)));
@@ -8934,7 +9302,13 @@ mod tests {
         let f = 1.5_f64;
 
         // Out of range index 9 → bail; the float g = f + f = 3.0 round-trips exactly.
-        let out = m.call(id, &[xs_ptr, 9, f.to_bits() as i64], &[xlen, 0, 0]);
+        let out = m.call_with_host_ctx(
+            id,
+            &[xs_ptr, 9, f.to_bits() as i64],
+            &[xlen, 0, 0],
+            0,
+            &mut [FlatBufferArg::Int(&xs)],
+        );
         assert!(matches!(out, NativeOutcome::Deopt { .. }));
         assert_eq!(live_value(&out, 3), Some(DeoptValue::Float(f + f)));
         // The float param f itself is captured exactly too.
@@ -9095,7 +9469,13 @@ mod tests {
                 // Force ONLY site k to bail; inputs are chosen so no natural bail fires.
                 let id = m.compile_forcing_bail(&case.func, k).unwrap();
                 let site = m.deopt_map(id).expect("map").sites[(k - 1) as usize].clone();
-                let out = m.call(id, &case.args, &case.lens);
+                let out = m.call_with_host_ctx(
+                    id,
+                    &case.args,
+                    &case.lens,
+                    0,
+                    &mut [FlatBufferArg::Int(&ints)],
+                );
 
                 // The forced site must bail with exactly its id.
                 let live = match &out {
@@ -9140,7 +9520,7 @@ mod tests {
                 // must be absent from the capture.
                 for &(reg, ty) in &site.live {
                     match ty {
-                        JitValueType::Int | JitValueType::Float => {
+                        JitValueType::Int | JitValueType::Bool | JitValueType::Float => {
                             let got = live_value(&out, reg).expect("captured scalar reg present");
                             assert_eq!(
                                 got,
@@ -9151,7 +9531,11 @@ mod tests {
                                 reg
                             );
                         }
-                        JitValueType::Handle | JitValueType::FlatInt | JitValueType::FlatFloat => {
+                        JitValueType::Handle
+                        | JitValueType::FlatInt
+                        | JitValueType::FlatIntMut
+                        | JitValueType::FlatFloat
+                        | JitValueType::FlatFloatMut => {
                             assert!(
                                 live_value(&out, reg).is_none(),
                                 "{}: site {} reg {} (non-scalar) must not be reconstructed",
@@ -9170,7 +9554,13 @@ mod tests {
             // capture an earlier-computed intermediate with its correct value.
             if n >= 2 {
                 let id = m.compile_forcing_bail(&case.func, n as u32).unwrap();
-                let out = m.call(id, &case.args, &case.lens);
+                let out = m.call_with_host_ctx(
+                    id,
+                    &case.args,
+                    &case.lens,
+                    0,
+                    &mut [FlatBufferArg::Int(&ints)],
+                );
                 // reg 3 is the first arithmetic result in cases A and C; it is computed
                 // at an earlier site yet must be captured at the final site.
                 assert_eq!(
@@ -9220,7 +9610,13 @@ mod tests {
             2,
             "test function should have both add-overflow and direct-list guards",
         );
-        let out = m.call(id, &[ptr, 7, 1], &[values.len() as i64, 0, 0]);
+        let out = m.call_with_host_ctx(
+            id,
+            &[ptr, 7, 1],
+            &[values.len() as i64, 0, 0],
+            0,
+            &mut [FlatBufferArg::Int(&values)],
+        );
         match out {
             NativeOutcome::Deopt {
                 safepoint_id, live, ..
@@ -9270,9 +9666,9 @@ mod tests {
     #[test]
     fn compiles_valid_cold_block_hint() {
         let mut m = module();
-        let mut prog = f(
+        let mut prog = ft(
             1,
-            1,
+            vec![JitValueType::Bool],
             vec![
                 JitInstr::JumpIfBool {
                     cond: 0,
@@ -9291,9 +9687,9 @@ mod tests {
     #[test]
     fn rejects_conditional_branch_without_fallthrough() {
         // A trailing conditional branch has no `i + 1` to fall through to.
-        let err = validate(&f(
+        let err = validate(&ft(
             1,
-            1,
+            vec![JitValueType::Bool],
             vec![JitInstr::JumpIfBool {
                 cond: 0,
                 expected: true,
@@ -9435,6 +9831,295 @@ mod tests {
         assert_eq!(m.callt(id, &[2]), None); // too few — must not read past the slice
         assert_eq!(m.callt(id, &[]), None);
         assert_eq!(m.callt(id, &[2, 3, 4]), None); // too many
+    }
+
+    #[test]
+    fn safe_call_rejects_forged_flat_pointer() {
+        use JitValueType::{FlatInt, Int};
+        let mut m = module();
+        let id = m
+            .compile(&ft(
+                1,
+                vec![FlatInt, Int],
+                vec![
+                    JitInstr::ListLenDirect { dst: 1, base: 0 },
+                    JitInstr::Return { src: 1 },
+                ],
+            ))
+            .unwrap();
+        assert!(matches!(
+            m.call(id, &[1], &[100]),
+            NativeOutcome::Deopt {
+                safepoint_id: SafepointId::ANONYMOUS,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn armed_osr_rejects_the_ordinary_call_mode() {
+        let mut m = module();
+        let code = vec![
+            JitInstr::LoadInt { dst: 1, value: 1 },
+            JitInstr::JumpIfIntCompare {
+                lhs: 0,
+                rhs: 1,
+                op: JitCompare::Gt,
+                expected: false,
+                target: 4,
+            },
+            JitInstr::Sub {
+                dst: 0,
+                lhs: 0,
+                rhs: 1,
+            },
+            JitInstr::Jump { target: 1 },
+            JitInstr::OsrExit,
+        ];
+        let id = m.compile_osr(&f(1, 2, code), 1, true, false).unwrap();
+        let window = [3, 1];
+        let lens = [0; 2];
+        assert!(matches!(
+            m.call(id, &window, &lens),
+            NativeOutcome::Deopt {
+                safepoint_id: SafepointId::ANONYMOUS,
+                ..
+            }
+        ));
+        let mut limits = [0, 100, 0];
+        // SAFETY: this test supplies the required live limits cell and no raw flat
+        // arguments. The purpose is to prove the matching raw mode remains usable.
+        let outcome = unsafe { m.call_with_limits(id, &window, &lens, 0, limits.as_mut_ptr()) };
+        assert!(
+            matches!(outcome, NativeOutcome::Deopt { safepoint_id, .. } if safepoint_id != SafepointId::ANONYMOUS)
+        );
+    }
+
+    #[test]
+    fn cancel_uses_atomic_load() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let mut m = module();
+        let code = vec![
+            JitInstr::LoadInt { dst: 1, value: 1 },
+            JitInstr::JumpIfIntCompare {
+                lhs: 0,
+                rhs: 1,
+                op: JitCompare::Gt,
+                expected: false,
+                target: 4,
+            },
+            JitInstr::Sub {
+                dst: 0,
+                lhs: 0,
+                rhs: 1,
+            },
+            JitInstr::Jump { target: 1 },
+            JitInstr::OsrExit,
+        ];
+        let id = m.compile_osr(&f(1, 2, code), 1, false, true).unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let setter = Arc::clone(&cancel);
+        let thread = std::thread::spawn(move || setter.store(true, Ordering::Relaxed));
+        let window = [1_000_000_000, 1];
+        let lens = [0; 2];
+        let mut limits = [0, -1, Arc::as_ptr(&cancel) as i64];
+        // SAFETY: the AtomicBool and limits cell remain live through the native
+        // call, and this program has no flat arguments.
+        let outcome = unsafe { m.call_with_limits(id, &window, &lens, 0, limits.as_mut_ptr()) };
+        thread.join().unwrap();
+        assert!(
+            matches!(outcome, NativeOutcome::Deopt { safepoint_id, .. } if safepoint_id != SafepointId::ANONYMOUS)
+        );
+    }
+
+    #[test]
+    fn precise_deopt_preserves_bool_logical_type() {
+        use JitValueType::{Bool, Int};
+        let mut m = module();
+        let id = m
+            .compile(&ft(
+                3,
+                vec![Bool, Int, Int, Bool, Int],
+                vec![
+                    JitInstr::LoadBool {
+                        dst: 3,
+                        value: true,
+                    },
+                    JitInstr::Add {
+                        dst: 4,
+                        lhs: 1,
+                        rhs: 2,
+                    },
+                    JitInstr::Return { src: 3 },
+                ],
+            ))
+            .unwrap();
+        let NativeOutcome::Deopt { live, .. } = m.call(id, &[0, i64::MAX, 1], &[0; 3]) else {
+            panic!("overflow must deopt");
+        };
+        assert!(
+            live.iter()
+                .any(|reg| reg.reg == 0 && reg.value == DeoptValue::Bool(false))
+        );
+        assert!(
+            live.iter()
+                .any(|reg| reg.reg == 3 && reg.value == DeoptValue::Bool(true))
+        );
+    }
+
+    #[test]
+    fn recursive_group_rejects_external_native_call_before_declaration() {
+        use JitValueType::Int;
+        let mut m = module();
+        let leaf = m
+            .compile(&ft(1, vec![Int], vec![JitInstr::Return { src: 0 }]))
+            .unwrap();
+        let member = ft(
+            1,
+            vec![Int, Int],
+            vec![
+                JitInstr::CallNative {
+                    callee: leaf,
+                    dst: 1,
+                    args: vec![0],
+                },
+                JitInstr::Return { src: 1 },
+            ],
+        );
+        let err = m.compile_recursive_group(&[member]).unwrap_err();
+        assert!(err.0.contains("unsupported CallNative"), "{}", err.0);
+        let after = m
+            .compile(&ft(1, vec![Int], vec![JitInstr::Return { src: 0 }]))
+            .expect("preflight rejection must not poison the module");
+        assert_eq!(m.call(after, &[9], &[0]).completed(), Some(9));
+    }
+
+    #[test]
+    fn deep_acyclic_native_call_chain_deopts_at_cap() {
+        use JitValueType::Int;
+        let mut m = module();
+        let mut callee = m
+            .compile(&ft(1, vec![Int], vec![JitInstr::Return { src: 0 }]))
+            .unwrap();
+        for _ in 0..300 {
+            callee = m
+                .compile(&ft(
+                    1,
+                    vec![Int, Int],
+                    vec![
+                        JitInstr::CallNative {
+                            callee,
+                            dst: 1,
+                            args: vec![0],
+                        },
+                        JitInstr::Return { src: 1 },
+                    ],
+                ))
+                .unwrap();
+        }
+        assert!(matches!(
+            m.call(callee, &[7], &[0]),
+            NativeOutcome::Deopt { .. }
+        ));
+    }
+
+    #[test]
+    fn call_native_helper_bail_chains_child() {
+        use JitValueType::{Handle, Int};
+        extern "C" fn bailing_field(_ctx: HostCtx, _handle: i64, _slot: i64) -> i64 {
+            signal_bail();
+            0
+        }
+        let mut m = NativeModule::new(HostHelpers {
+            field_int: bailing_field,
+            ..host_helpers()
+        })
+        .unwrap();
+        let child = m
+            .compile(&ft(
+                1,
+                vec![Handle, Int],
+                vec![
+                    JitInstr::HostCall {
+                        helper: HostHelper::FieldInt,
+                        dst: 1,
+                        args: vec![HostArg::Reg(0), HostArg::ImmI64(0)],
+                    },
+                    JitInstr::Return { src: 1 },
+                ],
+            ))
+            .unwrap();
+        let parent = m
+            .compile(&ft(
+                1,
+                vec![Handle, Int],
+                vec![
+                    JitInstr::CallNative {
+                        callee: child,
+                        dst: 1,
+                        args: vec![0],
+                    },
+                    JitInstr::Return { src: 1 },
+                ],
+            ))
+            .unwrap();
+        let NativeOutcome::Deopt { child, .. } = m.call(parent, &[0], &[0]) else {
+            panic!("helper bail must deopt parent");
+        };
+        let child = child.expect("child frame must be retained");
+        assert_ne!(child.safepoint_id, SafepointId::ANONYMOUS);
+    }
+
+    #[test]
+    fn reentrant_host_helper_is_rejected_without_corrupting_outer_call() {
+        use JitValueType::{Handle, Int};
+        std::thread_local! {
+            static TARGET: std::cell::Cell<Option<(*const NativeModule, CompiledId)>> =
+                const { std::cell::Cell::new(None) };
+        }
+        extern "C" fn reenter(_ctx: HostCtx, _handle: i64, _slot: i64) -> i64 {
+            TARGET.with(|target| {
+                let (module, id) = target.get().expect("reentry target installed");
+                // SAFETY: the test keeps the module in place and alive across the
+                // outer call. The nested safe call must be rejected by the guard.
+                let outcome = unsafe { (&*module).call(id, &[7], &[0]) };
+                assert!(matches!(
+                    outcome,
+                    NativeOutcome::Deopt {
+                        safepoint_id: SafepointId::ANONYMOUS,
+                        ..
+                    }
+                ));
+            });
+            42
+        }
+        let mut m = NativeModule::new(HostHelpers {
+            field_int: reenter,
+            ..host_helpers()
+        })
+        .unwrap();
+        let nested = m
+            .compile(&ft(1, vec![Int], vec![JitInstr::Return { src: 0 }]))
+            .unwrap();
+        let outer = m
+            .compile(&ft(
+                1,
+                vec![Handle, Int],
+                vec![
+                    JitInstr::HostCall {
+                        helper: HostHelper::FieldInt,
+                        dst: 1,
+                        args: vec![HostArg::Reg(0), HostArg::ImmI64(0)],
+                    },
+                    JitInstr::Return { src: 1 },
+                ],
+            ))
+            .unwrap();
+        TARGET.with(|target| target.set(Some((&m, nested))));
+        assert_eq!(m.call(outer, &[0], &[0]).completed(), Some(42));
+        TARGET.with(|target| target.set(None));
     }
 
     #[test]

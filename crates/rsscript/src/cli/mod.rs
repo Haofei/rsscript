@@ -206,8 +206,12 @@ pub(crate) fn run_input_fingerprint(
     release: bool,
 ) -> Option<String> {
     let mut parts: Vec<String> = Vec::new();
-    // Compiler-version marker: a recompiled `rss` may lower differently.
-    parts.push(format!("rss-version:{}", env!("CARGO_PKG_VERSION")));
+    // The package cache must invalidate on *any* compiler edit, not merely a
+    // version bump. build.rs derives this fingerprint from every source file.
+    parts.push(format!(
+        "rss-compiler:{}",
+        env!("RSSCRIPT_COMPILED_CACHE_FINGERPRINT")
+    ));
     parts.push(format!("runtime:{}", runtime_path.display()));
     parts.push(format!("release:{release}"));
 

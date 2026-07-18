@@ -889,6 +889,36 @@ fn main() -> Unit {
     );
 }
 
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_precise_deopt_restores_moved_handle() {
+    let source = "\
+fn inspect(xs: List<Int>, seed: Int) -> Int {
+    let moved = xs
+    let adjusted = seed + 1
+    return List.len(list: moved) + adjusted
+}
+
+fn main() -> Unit {
+    let mut xs = List<Int>.new()
+    List.push(list: mut xs, value: 7)
+    List.push(list: mut xs, value: 8)
+    Log.write(message: String.from_int(value: inspect(xs: xs, seed: 39)))
+    return Unit
+}
+";
+    let file = "jit-precise-moved-handle.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interpreter");
+    let precise = rsscript::reg_vm_eval_source_main_native_force_all_safepoints(
+        file,
+        source,
+        std::iter::empty::<String>(),
+    )
+    .expect("forced precise deopt");
+    assert_eq!(precise.stdout, interp.stdout);
+    assert_eq!(precise.stdout.trim_end(), "42");
+}
+
 /// Companion success-path check: a native-eligible function whose guards never
 /// fire runs natively to completion (no reconstruction), and a precise-mode run
 /// must still produce the identical value as the interpreter. Locks that turning
@@ -5595,6 +5625,41 @@ fn native_self_recursion_refused_when_step_budget_armed() {
     );
 }
 
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_recursion_obeys_custom_max_depth_via_interpreter() {
+    let exe =
+        rsscript::reg_vm_compile_source("limit-custom-depth.rss", FIB_SELF_SRC).expect("compile");
+    let (out, stats) = exe
+        .eval_main_with_args_native_with_limits(
+            std::iter::empty::<String>(),
+            rsscript::VmLimits {
+                max_depth: 64,
+                ..rsscript::VmLimits::default()
+            },
+        )
+        .expect("custom limit above fib depth");
+    assert_eq!(out.stdout.trim_end(), "317811");
+    assert_eq!(
+        stats.native_calls, 0,
+        "custom language depth must use the exact interpreter frame accounting"
+    );
+
+    let err = exe
+        .eval_main_with_args_native_with_limits(
+            std::iter::empty::<String>(),
+            rsscript::VmLimits {
+                max_depth: 8,
+                ..rsscript::VmLimits::default()
+            },
+        )
+        .expect_err("small custom depth must stop recursion");
+    assert!(
+        matches!(err, rsscript::EvalError::Runtime(ref message) if message.contains("recursion depth limit")),
+        "expected recursion-depth error, got {err:?}"
+    );
+}
+
 /// Mutual-recursion native candidate (`is_even`/`is_odd`) must NOT dispatch natively
 /// while a `step_budget` is armed.
 #[cfg(feature = "native-jit")]
@@ -5684,10 +5749,8 @@ fn main() -> Unit {
 }
 ";
 
-/// J0.5 (in-generated-code `VmLimits`), POSITIVE: with `step_budget` armed but
-/// generous, the hot loop OSRs into the armed native variant (`step_budget` ticked per
-/// instruction, tested at the loop header) and still completes byte-identically to the
-/// interpreter — proving the native step accounting does not falsely trip.
+/// A generous armed `step_budget` keeps OSR interpreted until transformed regions
+/// carry exact source-step costs, while preserving the successful result.
 #[cfg(feature = "native-jit")]
 #[test]
 fn native_osr_completes_under_generous_step_budget() {
@@ -5701,16 +5764,14 @@ fn native_osr_completes_under_generous_step_budget() {
         .expect("generous step budget must not trip");
     // sum(0..5000) = 5000 * 4999 / 2 = 12497500.
     assert_eq!(output.stdout.trim_end(), "begin\n12497500");
-    assert!(
-        stats.osr_entries > 0,
-        "the hot loop must OSR natively under an armed step budget: {stats:?}",
+    assert_eq!(
+        stats.osr_entries, 0,
+        "armed step budgets must stay interpreted"
     );
 }
 
-/// J0.5, ENFORCEMENT: the SAME OSR loop under a tight `step_budget` must trip cleanly —
-/// the armed native variant accumulates the per-instruction tick count, the loop-header
-/// test crosses the budget, native bails, and the interpreter (the sole limit
-/// authority) raises the step-budget error. A native loop must not bypass the budget.
+/// The same loop under a tight `step_budget` must trip cleanly on the interpreter,
+/// which remains the sole resource-limit authority while OSR is declined.
 #[cfg(feature = "native-jit")]
 #[test]
 fn native_osr_trips_tight_step_budget() {
@@ -5732,9 +5793,175 @@ fn native_osr_trips_tight_step_budget() {
     }
 }
 
-/// J0.5, CANCEL: with an ambient `cancel` flag set and OSR forced, the armed native
-/// variant polls the flag at the loop header and bails to the interpreter, which raises
-/// the cancellation error — a native loop must remain interruptible.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_host_call_budget_stays_interpreted_and_enforced() {
+    let source = "\
+fn measure(s: String, n: Int) -> Int {
+    Log.write(message: \"begin\")
+    let mut total = 0
+    let mut i = 0
+    while i < n {
+        total = total + String.len(value: s)
+        i = i + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: String.from_int(value: measure(s: \"abc\", n: 200)))
+    return Unit
+}
+";
+    let exe = rsscript::reg_vm_compile_source("osr-host-budget.rss", source).expect("compile");
+    let (out, stats) = exe
+        .eval_main_with_args_native_osr_with_limits(
+            std::iter::empty::<String>(),
+            rsscript::VmLimits {
+                host_call_budget: Some(10_000),
+                ..rsscript::VmLimits::default()
+            },
+        )
+        .expect("generous host-call budget");
+    assert_eq!(out.stdout.trim_end(), "begin\n600");
+    assert_eq!(
+        stats.osr_entries, 0,
+        "armed host-call budget must decline OSR"
+    );
+
+    let err = exe
+        .eval_main_with_args_native_osr_with_limits(
+            std::iter::empty::<String>(),
+            rsscript::VmLimits {
+                host_call_budget: Some(10),
+                ..rsscript::VmLimits::default()
+            },
+        )
+        .expect_err("tight host-call budget must be enforced by the interpreter");
+    assert!(
+        matches!(err, rsscript::EvalError::Runtime(ref message) if message.contains("host call budget")),
+        "expected host-call-budget error, got {err:?}"
+    );
+}
+
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_materializes_written_handle_live_out() {
+    let source = "\
+fn choose(left: String, right: String, n: Int) -> String {
+    Log.write(message: \"begin\")
+    let mut selected = left
+    let mut i = 0
+    while i < n {
+        selected = right
+        i = i + 1
+    }
+    return selected
+}
+
+fn main() -> Unit {
+    Log.write(message: choose(left: \"wrong\", right: \"right\", n: 200))
+    return Unit
+}
+";
+    let file = "osr-handle-liveout.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interpreter");
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (native, stats) = exe
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("native OSR");
+    assert_eq!(native.stdout, interp.stdout);
+    assert_eq!(native.stdout.trim_end(), "begin\nright");
+    assert!(
+        stats.osr_entries > 0,
+        "handle live-out loop must exercise OSR: {stats:?}"
+    );
+}
+
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_restores_bool_live_out() {
+    let source = "\
+fn final_flag(seed: Bool, n: Int) -> Bool {
+    Log.write(message: \"begin\")
+    let mut flag = false
+    let mut i = 0
+    while i < n {
+        if seed {
+            flag = i % 2 == 0
+        } else {
+            flag = i % 2 != 0
+        }
+        i = i + 1
+    }
+    return flag
+}
+
+fn main() -> Unit {
+    Log.write(message: String.from_bool(value: final_flag(seed: true, n: 201)))
+    return Unit
+}
+";
+    let file = "osr-bool-liveout.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interpreter");
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (native, stats) = exe
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("native OSR");
+    assert_eq!(native.stdout, interp.stdout);
+    assert_eq!(native.stdout.trim_end(), "begin\ntrue");
+    assert!(
+        stats.osr_entries > 0,
+        "Bool live-out loop must exercise OSR: {stats:?}"
+    );
+}
+
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_flat_and_nested_handle_alias_falls_back() {
+    let source = "\
+features: local
+
+struct Holder {
+    items: handle List<Int>
+}
+
+fn update(xs: mut List<Int>, holder: mut Holder, n: Int) -> Int {
+    Log.write(message: \"begin\")
+    let mut total = 0
+    let mut i = 0
+    while i < n {
+        List.set(list: mut xs, index: 0, value: i)
+        total = total + List.get(list: holder.items, index: 0)
+        i = i + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    local xs = List<Int>.new()
+    List.push(list: mut xs, value: 0)
+    local holder = Holder(items: read xs)
+    Log.write(message: String.from_int(value: update(xs: mut xs, holder: mut holder, n: 200)))
+    return Unit
+}
+";
+    let file = "osr-flat-nested-alias.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interpreter");
+    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let (native, stats) = exe
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("native fallback");
+    assert_eq!(native.stdout, interp.stdout);
+    assert_eq!(native.stdout.trim_end(), "begin\n19900");
+    assert_eq!(
+        stats.osr_entries, 0,
+        "nested Handle alias must be rejected before flat buffers are pinned"
+    );
+}
+
+/// With cancellation armed, OSR stays interpreted and the interpreter raises the
+/// cancellation error. A hot loop must never bypass cooperative cancellation.
 #[cfg(feature = "native-jit")]
 #[test]
 fn native_osr_cancel_flag_preempts() {
@@ -5825,10 +6052,8 @@ fn main() -> Unit {
     );
 }
 
-/// J0.5 mem (POSITIVE): a non-allocating hot loop (pure scalar arithmetic) now OSRs
-/// even with `mem_budget` armed — it charges `mem_budget` exactly zero, identical to the
-/// interpreter (which only accounts at allocation/growth sites), so running it natively
-/// without in-code byte accounting is sound. Must match the interpreter byte-for-byte.
+/// Even a non-allocating hot loop stays interpreted while `mem_budget` is armed. This
+/// conservative gate avoids depending on incomplete per-transform allocation effects.
 #[cfg(feature = "native-jit")]
 #[test]
 fn native_osr_nonallocating_loop_runs_under_mem_budget() {
@@ -5842,19 +6067,15 @@ fn native_osr_nonallocating_loop_runs_under_mem_budget() {
         .expect("a non-allocating loop must run under mem_budget");
     // sum(0..5000) = 12497500 (same kernel as the step-budget tests).
     assert_eq!(output.stdout.trim_end(), "begin\n12497500");
-    assert!(
-        stats.osr_entries > 0,
-        "a non-allocating loop must OSR under an armed mem_budget: {stats:?}",
+    assert_eq!(
+        stats.osr_entries, 0,
+        "armed memory budgets must stay interpreted"
     );
 }
 
-/// J0.5 mem (PARITY): a `Map<String,Int>`-insert hot loop now RUNS natively under an
-/// armed `mem_budget` — the interpreter charges map inserts ZERO bytes (its only
-/// per-iteration `account_bytes` sites are `List.push`/`List.append` growth and
-/// list/map LITERAL construction), so a native map-insert loop charges exactly the same
-/// (zero): exact parity, no in-code accounting required. Must OSR and match the
-/// interpreter byte-for-byte. (A `ListPush`-charging loop, by contrast, still declines —
-/// but that case is already vetoed by OSR growth-admissibility for live-in lists.)
+/// A map-insert loop also stays interpreted under `mem_budget`; helper-specific zero
+/// charges are not enough to prove the surrounding transformed region preserves all
+/// allocation accounting.
 #[cfg(feature = "native-jit")]
 #[test]
 fn native_osr_map_insert_loop_runs_under_mem_budget() {
@@ -5890,9 +6111,9 @@ fn main() -> Unit {
         "the map-insert loop must stay interpreter-identical under mem_budget"
     );
     assert_eq!(output.stdout.trim_end(), "begin\n1");
-    assert!(
-        stats.osr_entries > 0,
-        "a map-insert loop must OSR under mem_budget (zero-charge parity): {stats:?}",
+    assert_eq!(
+        stats.osr_entries, 0,
+        "armed memory budgets must stay interpreted"
     );
 }
 
@@ -6710,9 +6931,9 @@ fn main() -> Unit {
         .eval_main_with_args_native_osr_with_limits(std::iter::empty::<String>(), ok)
         .expect("flat list-push loop must run under a generous mem_budget");
     assert_eq!(out.stdout.trim_end(), "20000");
-    assert!(
-        stats.osr_entries > 0,
-        "list-push loop must OSR under mem_budget: {stats:?}"
+    assert_eq!(
+        stats.osr_entries, 0,
+        "armed memory budgets must stay interpreted"
     );
 
     // (B) Tight budget the build exceeds: native must ERROR identically to the interpreter.

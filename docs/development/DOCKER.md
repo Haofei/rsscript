@@ -21,8 +21,11 @@ reproducible across platforms.
 # Build the dev image (first run downloads the toolchain; later runs are cached).
 docker compose build
 
-# Normal edit loop.
-docker compose run --rm dev cargo test -p rsscript
+# Normal edit loop: runs the focused RSScript library suite.
+docker compose run --rm dev cargo run --quiet --bin rss -- test
+
+# Full workspace gate: lint, generated packages, every test target, and examples.
+docker compose run --rm dev cargo run --quiet --bin rss -- test --all
 
 # Pre-commit compile gate with the native-JIT feature set.
 docker compose run --rm dev cargo test -p rsscript --features native-jit --no-run
@@ -38,13 +41,34 @@ Inside the shell (or via `docker compose run --rm dev <cmd>`) every normal
 workflow is available:
 
 ```sh
-cargo test -p rsscript                     # normal edit loop
+cargo run --quiet --bin rss -- test         # focused edit loop
+cargo run --quiet --bin rss -- test --all   # exhaustive workspace gate
 cargo test -p rsscript --no-run            # compile rsscript tests only
 cargo test -p rsscript --features native-jit --no-run
 cargo clippy --all-targets                 # lints
 cargo fmt --all                            # format
 cargo run --bin rss -- <args>              # drive the rss CLI
 ```
+
+## Test feedback budgets
+
+Use `rss test` for the normal edit loop and reserve `rss test --all` for a
+before-push or CI-equivalent gate. The default profile deliberately runs only
+formatting, the `rsscript` library tests, and the whitespace check; it should
+remain a short feedback command. The full profile includes clippy, generated
+Rust package compilation, the workspace nextest suite, self-host parity, and
+example/package checks.
+
+`rss test --json` emits a `duration_ms` field for every manifest item. When a
+full run slows down, use that output to identify the slow item before changing
+parallelism or profiles. The full suite limits only generated-Rust tests to two
+concurrent workers in `.config/nextest.toml`: nested Cargo builds otherwise
+contend on one shared target directory and make the entire gate slower.
+
+The Docker target and Cargo registry volumes are part of the performance
+contract. Do not reset them for normal measurements; use two warm runs and
+compare the second. Database adapters are already separate workspace packages,
+so there is no runtime `db` feature to compile on ordinary compiler tests.
 
 ## How it is wired
 
